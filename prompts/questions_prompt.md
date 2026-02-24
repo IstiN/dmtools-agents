@@ -1,0 +1,1 @@
+Your task is to generate question subtasks for the story. Read all files in the 'input' folder. Write individual description files to outputs/questions/ and the question plan to outputs/questions.json according to instructions.

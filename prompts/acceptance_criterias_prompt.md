@@ -1,0 +1,1 @@
+**IMPORTANT** Your task is to write *Acceptance Criterias* (must be testable) and *User Story* only — not a full description. User request is in 'input' folder, read all files (including existing_questions.json which contains answers) there and do what is requested.
