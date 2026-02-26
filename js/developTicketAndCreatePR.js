@@ -302,6 +302,19 @@ function postErrorCommentToJira(ticketKey, stage, errorMessage) {
  * @returns {Object} Result object with success status
  */
 function action(params) {
+    // Debug: log actual params structure
+    console.log('=== DEBUG: action() params structure ===');
+    console.log('params type:', typeof params);
+    console.log('params keys:', params ? Object.keys(params).join(', ') : 'null');
+    if (params) {
+        console.log('params.ticket:', typeof params.ticket);
+        console.log('params.jobParams:', typeof params.jobParams);
+        if (params.jobParams) {
+            console.log('params.jobParams keys:', Object.keys(params.jobParams).join(', '));
+        }
+    }
+    console.log('========================================');
+
     try {
         // Handle both workflow and standalone dmtools execution
         // In standalone mode, params are wrapped in jobParams
