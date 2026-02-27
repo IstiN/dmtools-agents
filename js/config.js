@@ -22,7 +22,14 @@ const STATUSES = {
     IN_PROGRESS: 'In Progress',                     // transition name → reaches "In Development" on Task/SD tickets
     BLOCKED: 'Blocked',
     TODO: 'To Do',
-    DONE: 'Done'
+    DONE: 'Done',
+    MERGED: 'Merged',                               // PR merged and ticket complete
+    IN_REWORK: 'In Rework',                         // PR review failed, focused fixes needed
+    READY_FOR_TESTING: 'Ready For Testing',          // Test cases generated, ready for QA
+    FAILED: 'Failed',                                // Test automation passed review
+    PASSED: 'Passed',                                // Test automation passed review
+    IN_REVIEW_PASSED: 'In Review - Passed',          // Test ran and passed, awaiting code review
+    IN_REVIEW_FAILED: 'In Review - Failed'           // Test ran and failed, awaiting code review
 };
 
 // Jira Priorities
@@ -47,7 +54,8 @@ const LABELS = {
     SD_API: 'sd_api',
     SD_UI: 'sd_ui',
     NEEDS_API_IMPLEMENTATION: 'needs_api_implementation',
-    NEEDS_CORE_IMPLEMENTATION: 'needs_core_implementation'
+    NEEDS_CORE_IMPLEMENTATION: 'needs_core_implementation',
+    AI_TEST_AUTOMATION: 'ai_test_automation'
 };
 
 // Git Configuration

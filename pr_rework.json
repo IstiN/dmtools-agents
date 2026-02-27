@@ -1,0 +1,31 @@
+{
+  "name" : "Teammate",
+  "params" : {
+    "metadata" : {
+      "contextId" : "pr_rework"
+    },
+    "agentParams" : {
+      "aiRole" : "Senior Developer Engineer focused on code fixes",
+      "instructions" : [
+        "./agents/instructions/rework/rework_instructions.md"
+      ],
+      "knownInfo" : "",
+      "formattingRules" : "./agents/instructions/development/formatting_rules.md",
+      "fewShots" : ""
+    },
+    "cliPrompt" : "./agents/prompts/pr_rework_prompt.md",
+    "cliCommands" : [
+      "./agents/scripts/run-agent.sh"
+    ],
+    "outputType" : "none",
+    "ticketContextDepth" : 1,
+    "attachResponseAsFile" : false,
+    "cleanupInputFolder": false,
+    "skipAIProcessing" : true,
+    "preJSAction" : "agents/js/checkWipLabel.js",
+    "preCliJSAction" : "agents/js/preCliReworkSetup.js",
+    "postJSAction" : "agents/js/pushReworkChanges.js",
+    "inputJql" : "key = JD-107",
+    "initiator" : "712020:2a248756-40e8-49d6-8ddc-6852e518451f"
+  }
+}

@@ -2,31 +2,31 @@
   "name" : "Teammate",
   "params" : {
     "metadata" : {
-      "contextId" : "pr_review"
+      "contextId" : "pr_test_automation_review"
     },
     "agentParams" : {
-      "aiRole" : "Senior Code Reviewer & Security Expert",
+      "aiRole" : "Senior QA Engineer & Code Reviewer",
       "instructions" : [
-        "./agents/instructions/review/pr_review_instructions.md",
+        "./agents/instructions/test_automation/pr_test_review_instructions.md",
         "./agents/instructions/review/pr_review_json_output.md"
       ],
       "knownInfo" : "",
       "formattingRules" : "./agents/instructions/review/pr_review_formatting.md",
       "fewShots" : "./agents/instructions/review/pr_review_few_shots.md"
     },
-    "cliPrompt" : "./agents/prompts/pr_review_prompt.md",
+    "cliPrompt" : "./agents/prompts/pr_test_automation_review_prompt.md",
     "cliCommands" : [
-      "./agents/scripts/run-agent.sh"
+      "./agents/scripts/run-agent.sh --skip"
     ],
     "outputType" : "none",
     "ticketContextDepth" : 1,
     "attachResponseAsFile" : false,
-    "cleanupInputFolder": false,
+    "cleanupInputFolder" : false,
     "skipAIProcessing" : true,
     "preJSAction" : "agents/js/checkWipLabel.js",
-    "preCliJSAction" : "agents/js/preparePRForReview.js",
-    "postJSAction" : "agents/js/postPRReviewComments.js",
-    "inputJql" : "key = JD-107",
+    "preCliJSAction" : "agents/js/prepareTestPRForReview.js",
+    "postJSAction" : "agents/js/postTestReviewComments.js",
+    "inputJql" : "key = JD-111",
     "initiator" : "712020:2a248756-40e8-49d6-8ddc-6852e518451f"
   }
 }

@@ -1,0 +1,26 @@
+{
+  "name" : "TestCasesGenerator",
+  "params" : {
+    "inputJql" : "key = JD-107",
+    "testCasesPriorities" : "High, Medium, Low",
+    "outputType" : "creation",
+    "testCaseIssueType" : "Test Case",
+    "existingTestCasesJql" : "project = JD AND issuetype = 'Test Case'",
+    "testCaseLinkRelationship" : "relates to",
+    "isFindRelated" : true,
+    "isGenerateNew" : true,
+    "isConvertToJiraMarkdown" : false,
+    "isOverridePromptExamples" : true,
+    "includeOtherTicketReferences" : true,
+    "ticketContextDepth" : 1,
+    "confluencePages" : [
+      "https://dmtools.atlassian.net/wiki/spaces/AINA/pages/18186241/Template+Jira+Markdown",
+      "./agents/instructions/test_cases/test_case_creation_rules.md"
+    ],
+    "relatedTestCasesRules" : "./agents/instructions/test_cases/test_case_relation_rules.md",
+    "examples" : "ql(project = JD AND issuetype = 'Test Case' AND labels = \"ai_example\")",
+    "preJSAction" : "agents/js/checkWipLabel.js",
+    "postJSAction" : "agents/js/moveToReadyForTesting.js",
+    "initiator" : "712020:2a248756-40e8-49d6-8ddc-6852e518451f"
+  }
+}

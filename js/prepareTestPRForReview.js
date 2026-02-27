@@ -1,42 +1,53 @@
 /**
- * Prepare PR for Review Action (preCliJSAction for pr_review agent)
- * 1. Finds PR associated with the ticket
- * 2. Checks out the PR branch
- * 3. Writes input folder: pr_info.md, pr_diff.txt, pr_discussions.md, pr_discussions_raw.json
- * 4. Posts "Review Started" comment to Jira
+ * Prepare Test PR For Review Action (preCliJSAction for pr_test_automation_review)
+ * Same as preparePRForReview.js but specifically targets test/{TICKET-KEY} branches,
+ * not feature ai/{TICKET-KEY} branches.
  */
 
 const gh = require('./common/githubHelpers.js');
+
+function findTestPRForTicket(workspace, repository, ticketKey) {
+    try {
+        const branchName = 'test/' + ticketKey;
+        console.log('Searching for PR on branch:', branchName);
+
+        const openPRs = github_list_prs({ workspace: workspace, repository: repository, state: 'open' });
+        const openMatch = openPRs.filter(function(pr) {
+            return pr.head && pr.head.ref && pr.head.ref === branchName;
+        });
+        if (openMatch.length > 0) {
+            console.log('Found open test PR #' + openMatch[0].number);
+            return openMatch[0];
+        }
+
+        console.warn('No open PR found for test branch:', branchName);
+        return null;
+    } catch (e) {
+        console.error('Failed to find test PR:', e);
+        return null;
+    }
+}
 
 function action(params) {
     try {
         const inputFolder = params.inputFolderPath;
         const ticketKey = inputFolder.split('/').pop();
 
-        console.log('=== Preparing PR for review:', ticketKey, '===');
+        console.log('=== Preparing test PR for review:', ticketKey, '===');
 
         // Step 1: GitHub repo info
         const repoInfo = gh.getGitHubRepoInfo();
         if (!repoInfo) {
             const err = 'Could not determine GitHub repository from git remote';
-            try { jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ PR Review Setup Failed\n\n' + err }); } catch (e) {}
+            try { jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Test PR Review Setup Failed\n\n' + err }); } catch (e) {}
             return { success: false, error: err };
         }
 
-        // Step 2: Find PR
-        const pr = gh.findPRForTicket(repoInfo.owner, repoInfo.repo, ticketKey);
+        // Step 2: Find PR on test/{KEY} branch specifically
+        const pr = findTestPRForTicket(repoInfo.owner, repoInfo.repo, ticketKey);
         if (!pr) {
-            const err = 'No Pull Request found for ticket ' + ticketKey;
-            try {
-                jira_post_comment({
-                    key: ticketKey,
-                    comment: 'h3. ⚠️ PR Review Setup Failed\n\n' +
-                        'Could not find a Pull Request associated with this ticket.\n\n' +
-                        'Please ensure:\n' +
-                        '* A PR has been created with ticket key in title or branch name\n' +
-                        '* The PR is open and accessible'
-                });
-            } catch (e) {}
+            const err = 'No test PR found for branch test/' + ticketKey;
+            try { jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Test PR Review Setup Failed\n\n' + err }); } catch (e) {}
             return { success: false, error: err };
         }
 
@@ -46,46 +57,41 @@ function action(params) {
             return { success: false, error: 'Failed to fetch PR details for PR #' + pr.number };
         }
 
-        // Step 4: Checkout PR branch
+        // Step 4: Checkout test branch
         const branchName = prDetails.head ? prDetails.head.ref : null;
         try {
             if (branchName) {
                 gh.checkoutPRBranch(branchName);
             }
         } catch (e) {
-            console.warn('Could not checkout PR branch:', e);
+            console.warn('Could not checkout test branch:', e);
         }
 
-        // Step 5: Diff + discussions (human-readable + raw with IDs)
+        // Step 5: Diff + discussions
         const baseBranch = prDetails.base ? prDetails.base.ref : 'main';
         const diff = gh.getPRDiff(baseBranch, branchName || (prDetails.head && prDetails.head.ref));
 
         console.log('Fetching PR discussions...');
         const discussionData = gh.fetchDiscussionsAndRawData(repoInfo.owner, repoInfo.repo, pr.number);
 
-        // Step 6: Write all context files
+        // Step 6: Write context files
         gh.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
 
         // Step 7: Jira comment
         try {
             jira_post_comment({
                 key: ticketKey,
-                comment: 'h3. 🔍 Automated PR Review Started\n\n' +
+                comment: 'h3. 🧪 Automated Test PR Review Started\n\n' +
                     '*Pull Request*: [PR #' + prDetails.number + '|' + prDetails.html_url + ']\n' +
                     '*Branch*: {code}' + (branchName || 'unknown') + '{code}\n' +
                     '*Files Changed*: ' + (prDetails.changed_files || 0) + '\n\n' +
-                    'AI Code Reviewer is analyzing the pull request for:\n' +
-                    '* 🔒 Security vulnerabilities\n' +
-                    '* 🏗️ Code quality & OOP principles\n' +
-                    '* ✅ Task alignment with requirements\n' +
-                    '* 🧪 Testing adequacy\n\n' +
-                    '_Review results will be posted shortly..._'
+                    '_Test code review results will be posted shortly..._'
             });
         } catch (e) {
-            console.warn('Failed to post review started comment:', e);
+            console.warn('Failed to post Jira comment:', e);
         }
 
-        console.log('✅ PR review setup completed — PR #' + prDetails.number);
+        console.log('✅ Test PR review setup complete — PR #' + prDetails.number);
 
         return {
             success: true,
@@ -97,12 +103,12 @@ function action(params) {
         };
 
     } catch (error) {
-        console.error('❌ Error in preparePRForReview:', error);
+        console.error('❌ Error in prepareTestPRForReview:', error);
         try {
             const ticketKey = params.inputFolderPath.split('/').pop();
             jira_post_comment({
                 key: ticketKey,
-                comment: 'h3. ❌ PR Review Setup Error\n\n{code}' + error.toString() + '{code}'
+                comment: 'h3. ❌ Test PR Review Setup Error\n\n{code}' + error.toString() + '{code}'
             });
         } catch (e) {}
         return { success: false, error: error.toString() };

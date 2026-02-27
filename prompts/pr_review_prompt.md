@@ -6,6 +6,7 @@ The input folder contains all necessary context:
 - `pr_info.md`: Pull Request metadata
 - `pr_diff.txt`: Complete diff of all code changes
 - `pr_files.txt`: List of modified files
+- `pr_discussions.md` *(if present)*: Previous review comments — indicates this is a repeated review
 
 # Your Mission
 Conduct a thorough security-focused code review prioritizing:

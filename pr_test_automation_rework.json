@@ -2,19 +2,20 @@
   "name" : "Teammate",
   "params" : {
     "metadata" : {
-      "contextId" : "test_case_automation"
+      "contextId" : "pr_test_automation_rework"
     },
     "agentParams" : {
-      "aiRole" : "Senior QA Automation Engineer",
+      "aiRole" : "Senior QA Automation Engineer focused on test code fixes",
       "instructions" : [
         "./agents/instructions/test_automation/test_automation_architecture.md",
         "./agents/instructions/test_automation/test_automation_instructions.md",
-        "./agents/instructions/test_automation/test_automation_json_output.md"
+        "./agents/instructions/test_automation/test_automation_json_output.md",
+        "./agents/instructions/rework/rework_instructions.md"
       ],
       "knownInfo" : "",
       "formattingRules" : "./agents/instructions/development/formatting_rules.md"
     },
-    "cliPrompt" : "./agents/prompts/test_case_automation_prompt.md",
+    "cliPrompt" : "./agents/prompts/pr_test_automation_rework_prompt.md",
     "cliCommands" : [
       "./agents/scripts/run-agent.sh"
     ],
@@ -24,9 +25,9 @@
     "cleanupInputFolder" : false,
     "skipAIProcessing" : true,
     "preJSAction" : "agents/js/checkWipLabel.js",
-    "preCliJSAction" : "agents/js/preCliTestAutomationSetup.js",
-    "postJSAction" : "agents/js/postTestAutomationResults.js",
-    "inputJql" : "key = JD-111",
+    "preCliJSAction" : "agents/js/preCliTestReworkSetup.js",
+    "postJSAction" : "agents/js/postTestReworkResults.js",
+    "inputJql" : "project = JD AND issuetype = 'Test Case' AND status = 'In Rework'",
     "initiator" : "712020:2a248756-40e8-49d6-8ddc-6852e518451f"
   }
 }
