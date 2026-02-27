@@ -1,3 +1,5 @@
+**IMPORTANT** If a file named `instruction.md` exists in the repository root, read it before reviewing. Use it as the authoritative reference for the project's approved tech stack, deployment constraints, and frameworks — flag any implementation that deviates from what is defined there.
+
 Read PR context from input folder which contains:
   - ticket.md: Full ticket details with requirements and acceptance criteria
   - pr_info.md: Pull Request metadata (URL, author, title, description)
@@ -41,6 +43,10 @@ Scan for OWASP Top 10 and common vulnerabilities:
   - Separation of concerns
   - Cohesion and coupling
   - Naming conventions and code readability
+  - **ORM usage**: flag any raw SQL queries — database access must go through an ORM or query builder (GORM, TypeORM, Prisma, Hibernate, SQLAlchemy, etc.)
+  - **Modern frameworks**: flag use of outdated or non-idiomatic libraries when a standard modern alternative exists in the project stack
+  - **Repository pattern**: flag business logic or SQL inside controllers, handlers, or UI components — data access belongs in repositories
+  - **Frontend Clean Architecture**: flag violations of layer boundaries — UI components must not call APIs or databases directly; domain logic must not depend on UI frameworks; dependency must only flow inward (Presentation → Domain ← Data)
 
 ## ✅ Task Alignment
   - Verify implementation matches ticket requirements

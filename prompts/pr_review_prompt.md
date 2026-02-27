@@ -35,6 +35,9 @@ Evaluate:
 - Proper abstraction and encapsulation
 - Separation of concerns
 - Naming conventions and readability
+- ORM usage — flag any raw SQL (must use ORM/query builder)
+- Repository pattern — flag data access logic inside controllers or UI
+- Frontend Clean Architecture — flag layer boundary violations (UI calling APIs directly, domain depending on frameworks)
 
 ## Task Alignment
 Verify:
