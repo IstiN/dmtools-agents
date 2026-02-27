@@ -6,11 +6,11 @@
 - Each item must include:
   - `"summary"` — string, max 120 characters
   - `"description"` — string, relative file path (e.g. `"outputs/stories/story-1.md"`)
-  - `"parent"` — real Jira key (e.g. `"JD-5"`), temp ID (e.g. `"temp-1"`), or absent/null for a new Epic
+  - `"parent"` — real Jira key (e.g. `"PROJECT-5"`), temp ID (e.g. `"temp-1"`), or absent/null for a new Epic
   - `"tempId"` — optional string, unique within this array; assign to new Epics so Stories can reference them via `"parent"`
   - `"priority"` — one of: `Highest`, `High`, `Medium`, `Low`, `Lowest`
   - `"storyPoints"` — integer, Stories only (1–2 simple, 3–5 medium, 8–13 complex); max 5 SP — split if larger; omit for Epics
-  - `"blockedBy"` — optional array of tempIds or real Jira keys this story cannot start until they are done. Creates "is blocked by" links and sets status to Blocked. Example: `["temp-1", "JD-5"]`
+  - `"blockedBy"` — optional array of tempIds or real Jira keys this story cannot start until they are done. Creates "is blocked by" links and sets status to Blocked. Example: `["temp-1", "PROJECT-5"]`
   - `"integrates"` — optional array of tempIds or real Jira keys of parallel stories that will be combined with this one. Creates "Relates" links. Use when two parallel streams must eventually be merged. Example: `["temp-2"]`
 - No trailing commas, no comments inside JSON
 

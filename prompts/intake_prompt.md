@@ -1,8 +1,8 @@
 Your task is intake analysis. Read all files in the 'input' folder:
 - The ticket description is in request.md — this is a raw idea or informal input
-- Read existing_epics.json to understand what Epics already exist in the JD project
+- Read existing_epics.json to understand what Epics already exist in the project
 - Read existing_stories.json to understand what Stories already exist — avoid creating duplicates
-- If you need full details of any existing story, run: dmtools jira_get_ticket JD-X
+- If you need full details of any existing story, run: dmtools jira_get_ticket <KEY> (use the real key from existing_epics.json or existing_stories.json)
 
 Analyse the request, break it into structured Jira tickets (Epics or Stories), then:
 1. Write individual description files to outputs/stories/ (story-1.md, story-2.md, ...)

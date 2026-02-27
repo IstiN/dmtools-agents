@@ -1,7 +1,7 @@
 /**
  * Intake Pre-Action
  * 1. Checks for WIP label (returns false to stop processing if found)
- * 2. Fetches existing JD epics and writes them into the input folder
+ * 2. Fetches existing epics and writes them into the input folder
  *    (file_write creates parent dirs, so this runs before dmtools creates input/<KEY>/)
  */
 
@@ -35,15 +35,16 @@ function action(params) {
             console.log('No contextId in metadata, skipping WIP check');
         }
 
-        // --- Fetch existing JD epics into input folder ---
+        // --- Fetch existing epics into input folder ---
         // file_write creates parent directories automatically,
         // so this works even before dmtools creates input/<KEY>/
         var inputFolder = 'input/' + ticketKey;
-        console.log('Fetching existing JD epics for ' + ticketKey + '...');
+        var project = ticketKey.split('-')[0];
+        console.log('Fetching existing epics for ' + ticketKey + '...');
 
         try {
             var rawEpics = jira_search_by_jql({
-                jql: 'project = JD AND issuetype = Epic ORDER BY created DESC',
+                jql: 'project = ' + project + ' AND issuetype = Epic ORDER BY created DESC',
                 fields: ['key', 'summary', 'description', 'priority', 'diagrams', 'parent']
             });
             var epics = [];
@@ -68,7 +69,7 @@ function action(params) {
 
         try {
             var rawStories = jira_search_by_jql({
-                jql: 'project = JD AND issuetype = Story ORDER BY created DESC',
+                jql: 'project = ' + project + ' AND issuetype = Story ORDER BY created DESC',
                 fields: ['key', 'summary', 'status', 'priority', 'diagrams', 'parent']
             });
             var stories = [];

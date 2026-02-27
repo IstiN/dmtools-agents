@@ -1,11 +1,11 @@
 /**
  * Fetch Epics To Input Pre-CLI Action
- * Fetches existing JD epics and writes them to the input folder before CLI agent runs.
+ * Fetches existing epics and writes them to the input folder before CLI agent runs.
  * Receives params.inputFolderPath from DMTools after input folder creation.
  */
 
 /**
- * Pre-CLI action: fetch existing JD epics into input folder
+ * Pre-CLI action: fetch existing epics into input folder
  *
  * @param {Object} params - Parameters from DMTools
  * @param {string} params.inputFolderPath - Path to the input folder for this run
@@ -13,11 +13,13 @@
 function action(params) {
     try {
         const folder = params.inputFolderPath;
-        console.log('Fetching existing JD epics...');
+        var ticketKey = folder ? folder.split('/').pop() : '';
+        var project = ticketKey ? ticketKey.split('-')[0] : '';
+        console.log('Fetching existing epics for project ' + project + '...');
 
         try {
             var rawEpics = jira_search_by_jql({
-                jql: 'project = JD AND issuetype = Epic and key not in (JD-1) ORDER BY created DESC',
+                jql: 'project = ' + project + ' AND issuetype = Epic ORDER BY created DESC',
                 fields: ['key', 'summary', 'description', 'priority', 'diagrams', 'parent']
             });
             var epics = [];
@@ -43,7 +45,7 @@ function action(params) {
 
         try {
             var rawStories = jira_search_by_jql({
-                jql: 'project = JD AND issuetype = Story ORDER BY created DESC',
+                jql: 'project = ' + project + ' AND issuetype = Story ORDER BY created DESC',
                 fields: ['key', 'summary', 'status', 'priority', 'diagrams', 'parent']
             });
             var stories = [];

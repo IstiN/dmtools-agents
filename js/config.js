@@ -15,10 +15,10 @@ const ISSUE_TYPES = {
 // Jira Statuses
 const STATUSES = {
     IN_REVIEW: 'In Review',
-    PO_REVIEW: 'PO REVIEW',                         // transition name → reaches "PO Review" status in JD
-    SOLUTION_ARCHITECTURE: 'SOLUTION ARCHITECTURE', // transition name → reaches "Solution Architecture" status in JD
+    PO_REVIEW: 'PO REVIEW',                         // transition name → reaches "PO Review" status
+    SOLUTION_ARCHITECTURE: 'SOLUTION ARCHITECTURE', // transition name → reaches "Solution Architecture" status
     READY_FOR_DEVELOPMENT: 'Ready For Development',
-    IN_DEVELOPMENT: 'In Development',               // transition name → reaches "In Development" status in JD
+    IN_DEVELOPMENT: 'In Development',               // transition name → reaches "In Development" status
     IN_PROGRESS: 'In Progress',                     // transition name → reaches "In Development" on Task/SD tickets
     BLOCKED: 'Blocked',
     TODO: 'To Do',

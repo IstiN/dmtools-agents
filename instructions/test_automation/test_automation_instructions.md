@@ -27,10 +27,10 @@ Tests go in: `testing/tests/{TICKET-KEY}/`
 
 Each test folder must contain:
 ```
-testing/tests/JD-123/
-├── README.md         # how to run this specific test
-├── config.yaml       # framework, platform, dependencies
-└── test_jd_123.py    # (or appropriate file for the framework)
+testing/tests/{TICKET-KEY}/
+├── README.md              # how to run this specific test
+├── config.yaml            # framework, platform, dependencies
+└── test_{ticket_key}.py   # (or appropriate file for the framework)
 ```
 
 The `README.md` inside the ticket folder is mandatory. It must include:

@@ -55,7 +55,7 @@ Include:
 - Test case ticket key + summary
 - What was tested (1-2 sentences)
 - What passed / what failed (specific, not generic)
-- Test file: `{code}testing/tests/JD-123/test_jd_123.py{code}`
+- Test file: `{code}testing/tests/{TICKET-KEY}/test_{ticket_key}.py{code}`
 
 ### `outputs/pr_body.md` — GitHub PR body (GitHub Markdown format)
 

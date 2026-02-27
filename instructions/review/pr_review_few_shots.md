@@ -85,7 +85,7 @@ Overall code structure is good with proper separation of concerns:
 - ⚠️ Some duplicate validation logic could be extracted to shared utilities
 
 ### ✅ Task Alignment
-All acceptance criteria from ticket JD-123 are implemented:
+All acceptance criteria from ticket PROJECT-123 are implemented:
 - ✅ User registration with email and password
 - ✅ Login with session creation
 - ✅ Logout functionality
