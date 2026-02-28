@@ -26,7 +26,6 @@
     "preJSAction" : "agents/js/checkWipLabel.js",
     "preCliJSAction" : "agents/js/preparePRForReview.js",
     "postJSAction" : "agents/js/postPRReviewComments.js",
-    "inputJql" : "key = JD-107",
-    "initiator" : "712020:2a248756-40e8-49d6-8ddc-6852e518451f"
+    "inputJql" : "key = JD-107"
   }
 }

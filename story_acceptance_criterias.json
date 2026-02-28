@@ -32,8 +32,7 @@
     "preCliJSAction" : "agents/js/fetchQuestionsToInput.js",
     "cleanupInputFolder": false,
     "skipAIProcessing" : true,
-    "inputJql" : "key = JD-82",
-    "initiator" : "712020:2a248756-40e8-49d6-8ddc-6852e518451f",
-    "postJSAction" : "agents/js/assignForSolutionArchitecture.js"
+    "postJSAction" : "agents/js/assignForSolutionArchitecture.js",
+    "inputJql" : "key = JD-82"
   }
 }

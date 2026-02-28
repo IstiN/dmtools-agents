@@ -37,10 +37,9 @@
     "ticketContextDepth" : 0,
     "attachResponseAsFile" : false,
     "skipAIProcessing" : true,
-    "inputJql" : "key in (JD-9)",
-    "initiator" : "712020:2a248756-40e8-49d6-8ddc-6852e518451f",
     "preJSAction" : "agents/js/checkWipLabel.js",
-    "postJSAction" : "agents/js/enhanceSolutionDesignDescriptionAndAssess.js"
+    "postJSAction" : "agents/js/enhanceSolutionDesignDescriptionAndAssess.js",
+    "inputJql" : "key in (JD-9)"
   }
 }
 

@@ -1,7 +1,6 @@
 {
   "name" : "TestCasesGenerator",
   "params" : {
-    "inputJql" : "key = JD-107",
     "testCasesPriorities" : "High, Medium, Low",
     "outputType" : "creation",
     "testCaseIssueType" : "Test Case",
@@ -21,6 +20,6 @@
     "examples" : "ql(project = JD AND issuetype = 'Test Case' AND labels = \"ai_example\")",
     "preJSAction" : "agents/js/checkWipLabel.js",
     "postJSAction" : "agents/js/moveToReadyForTesting.js",
-    "initiator" : "712020:2a248756-40e8-49d6-8ddc-6852e518451f"
+    "inputJql" : "key = JD-107"
   }
 }
