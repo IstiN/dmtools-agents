@@ -7,15 +7,22 @@
       "repo"  : "mytube",
       "rules" : [
         {
-          "description" : "In Review Stories → trigger pr_review",
-          "jql"         : "project = MYTUBE AND issuetype in ('Story') AND status in ('In Review')",
+          "description" : "Ready For Development Bugs → trigger bug_development",
+          "jql"         : "project = MYTUBE AND issuetype in ('Bug') AND status in ('Ready For Development')",
+          "configFile"  : "agents/bug_development.json",
+          "skipIfLabel" : "sm_bug_development_triggered",
+          "addLabel"    : "sm_bug_development_triggered"
+        },
+        {
+          "description" : "In Review Stories & Bugs → trigger pr_review",
+          "jql"         : "project = MYTUBE AND issuetype in ('Story', 'Bug') AND status in ('In Review')",
           "configFile"  : "agents/pr_review.json",
           "skipIfLabel" : "sm_story_review_triggered",
           "addLabel"    : "sm_story_review_triggered"
         },
         {
-          "description" : "In Rework Stories → trigger pr_rework",
-          "jql"         : "project = MYTUBE AND issuetype in ('Story') AND status in ('In Rework')",
+          "description" : "In Rework Stories & Bugs → trigger pr_rework",
+          "jql"         : "project = MYTUBE AND issuetype in ('Story', 'Bug') AND status in ('In Rework')",
           "configFile"  : "agents/pr_rework.json",
           "skipIfLabel" : "sm_story_rework_triggered",
           "addLabel"    : "sm_story_rework_triggered"
@@ -27,6 +34,14 @@
           "configFile"  : "agents/test_cases_generator.json",
           "skipIfLabel" : "sm_test_cases_triggered",
           "addLabel"    : "sm_test_cases_triggered"
+        },
+        {
+          "description" : "Merged Bugs → Ready For Testing",
+          "jql"         : "project = MYTUBE AND issuetype in ('Bug') AND status in ('Merged')",
+          "targetStatus": "Ready For Testing",
+          "configFile"  : "agents/bug_merged.json",
+          "skipIfLabel" : "sm_bug_merged_triggered",
+          "addLabel"    : "sm_bug_merged_triggered"
         },
         {
           "description" : "Backlog Test Cases → In Development + automate",
