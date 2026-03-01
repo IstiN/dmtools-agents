@@ -11,6 +11,7 @@ Provider is controlled by AI_AGENT_PROVIDER environment variable (default: curso
 Providers:
   cursor   - Uses cursor-agent (default)
   codemie  - Uses codemie-claude
+  copilot  - Uses GitHub Copilot CLI (npx @github/copilot)
 
 Example:
   $(basename "$0") "process the input folder"
@@ -19,6 +20,7 @@ Notes:
   - Provide the prompt as a single argument
   - For cursor: all extra arguments before the prompt are passed through to cursor-agent
   - For codemie: requires CODEMIE_API_KEY and CODEMIE_BASE_URL environment variables
+  - For copilot: requires COPILOT_GITHUB_TOKEN or GITHUB_TOKEN environment variable
   - Final response is written to outputs/response.md
 EOF
 }
@@ -96,6 +98,24 @@ if [ "$PROVIDER" = "codemie" ]; then
     --max-turns "${CODEMIE_MAX_TURNS:-50}"
     --dangerously-skip-permissions
     --allowedTools "Bash(*),Read(*),Curl(*)")
+
+elif [ "$PROVIDER" = "copilot" ]; then
+  # Export COPILOT_GITHUB_TOKEN if not set but GITHUB_TOKEN is available
+  if [ -z "${COPILOT_GITHUB_TOKEN:-}" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
+    export COPILOT_GITHUB_TOKEN="${GITHUB_TOKEN}"
+    echo "Using GITHUB_TOKEN as COPILOT_GITHUB_TOKEN"
+  fi
+
+  if [ -z "${COPILOT_GITHUB_TOKEN:-}" ]; then
+    echo "Error: COPILOT_GITHUB_TOKEN or GITHUB_TOKEN environment variable is required for copilot provider" >&2
+    echo "Set it in dmtools.env or as an environment variable" >&2
+    exit 1
+  fi
+
+  echo "Copilot Configuration:"
+  echo "  Model: ${COPILOT_MODEL:-claude-sonnet-4.5}"
+
+  CMD=(npx @github/copilot --allow-all-tools --model "${COPILOT_MODEL:-claude-sonnet-4.5}" -p "$PROMPT")
 
 else
   # Default to cursor
