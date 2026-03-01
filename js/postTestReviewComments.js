@@ -244,6 +244,13 @@ function action(params) {
             jira_remove_label({ key: ticketKey, label: wipLabel });
         } catch (e) {}
 
+        if (params.removeLabel) {
+            try {
+                jira_remove_label({ key: ticketKey, label: params.removeLabel });
+                console.log('✅ Removed SM label:', params.removeLabel);
+            } catch (e) {}
+        }
+
         console.log('✅ Test review workflow complete:', isApproved ? 'APPROVED' : 'CHANGES REQUESTED');
 
         return {

@@ -20,10 +20,10 @@
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function buildEncodedConfig(ticketKey) {
-    return encodeURIComponent(JSON.stringify({
-        params: { inputJql: 'key = ' + ticketKey }
-    }));
+function buildEncodedConfig(ticketKey, rule) {
+    var p = { inputJql: 'key = ' + ticketKey };
+    if (rule && rule.skipIfLabel) p.removeLabel = rule.skipIfLabel;
+    return encodeURIComponent(JSON.stringify({ params: p }));
 }
 
 function triggerWorkflow(repoInfo, ticketKey, rule) {
@@ -37,7 +37,7 @@ function triggerWorkflow(repoInfo, ticketKey, rule) {
             JSON.stringify({
                 concurrency_key: ticketKey,
                 config_file:     rule.configFile,
-                encoded_config:  buildEncodedConfig(ticketKey)
+                encoded_config:  buildEncodedConfig(ticketKey, rule)
             }),
             workflowRef
         );

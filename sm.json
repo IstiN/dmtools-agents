@@ -21,6 +21,13 @@
           "configFile"  : "agents/test_case_automation.json",
           "skipIfLabel" : "sm_test_automation_triggered",
           "addLabel"    : "sm_test_automation_triggered"
+        },
+        {
+          "description" : "In Review Test Cases → trigger pr_test_automation_review",
+          "jql"         : "project = MYTUBE AND issuetype in ('Test Case') AND status in ('In Review - Passed', 'In Review - Failed')",
+          "configFile"  : "agents/pr_test_automation_review.json",
+          "skipIfLabel" : "sm_test_review_triggered",
+          "addLabel"    : "sm_test_review_triggered"
         }
       ]
     }
