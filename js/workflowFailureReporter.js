@@ -79,12 +79,21 @@ function action(params) {
             continue;
         }
 
-        // 3. Create bug
+        // 3. Extract ticket key from run name (format: "config.json : PROJ-123")
+        var ticketKey = null;
+        var ticketMatch = (run.name || '').match(/([A-Z]+-\d+)\s*$/);
+        if (ticketMatch) {
+            ticketKey = ticketMatch[1];
+            console.log('  🎫 Detected ticket: ' + ticketKey);
+        }
+
+        // 4. Create bug
         var runWorkflow = (run.name || workflowId || 'unknown');
         var summary = 'Failed CI: ' + run.name + ' #' + run.run_number +
             (workflowId ? ' [' + workflowId + ']' : '');
         var description =
             'GitHub Actions workflow run failed.\n\n' +
+            (ticketKey ? '*Ticket:* [' + ticketKey + ']\n' : '') +
             '*Workflow:* ' + runWorkflow + '\n' +
             '*Run:* ' + run.name + ' #' + run.run_number + '\n' +
             '*Branch:* ' + (run.head_branch || 'unknown') + '\n' +
@@ -102,11 +111,21 @@ function action(params) {
                 continue;
             }
 
-            // 4. Add idempotency label
+            // 5. Add idempotency label
             try {
                 jira_add_label({ key: newKey, label: label });
             } catch (e) {
                 console.warn('  ⚠️  Failed to add label ' + label + ' to ' + newKey + ': ' + (e.message || e));
+            }
+
+            // 6. Link bug to ticket if detected
+            if (ticketKey) {
+                try {
+                    jira_link_issues({ from: ticketKey, to: newKey, relationship: 'is blocked by' });
+                    console.log('  🔗 Linked ' + ticketKey + ' is blocked by ' + newKey);
+                } catch (e) {
+                    console.warn('  ⚠️  Failed to link ' + newKey + ' to ' + ticketKey + ': ' + (e.message || e));
+                }
             }
 
             console.log('  ✅ Created ' + newKey + ' for run ' + runId);
