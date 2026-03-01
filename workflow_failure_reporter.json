@@ -1,0 +1,14 @@
+{
+  "name" : "JSRunner",
+  "params" : {
+    "jsPath"    : "agents/js/workflowFailureReporter.js",
+    "jobParams" : {
+      "customParams" : {
+        "workspace"   : "ai-teammate",
+        "repository"  : "mytube",
+        "workflowId"  : "ai-teammate.yml",
+        "jiraProject" : "MYTUBE"
+      }
+    }
+  }
+}
