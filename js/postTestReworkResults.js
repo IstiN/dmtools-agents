@@ -167,13 +167,7 @@ function postThreadReplies(workspace, repository, pullRequestId) {
 function createOrUpdateBug(projectKey, bug) {
     try {
         const description = bug.description ? (readFile(bug.description) || bug.summary) : bug.summary;
-        const result = jira_create_ticket({
-            project: projectKey,
-            summary: bug.summary,
-            description: description,
-            issuetype: ISSUE_TYPES.BUG,
-            priority: bug.priority || 'Medium'
-        });
+        const result = jira_create_ticket_basic(projectKey, ISSUE_TYPES.BUG, bug.summary, description);
         const bugKey = result && result.key ? result.key : null;
         if (bugKey) console.log('✅ Created bug:', bugKey);
         return bugKey;
