@@ -244,10 +244,12 @@ function action(params) {
             jira_remove_label({ key: ticketKey, label: wipLabel });
         } catch (e) {}
 
-        if (params.removeLabel) {
+        const customParams = params.jobParams && params.jobParams.customParams;
+        const removeLabel = customParams && customParams.removeLabel;
+        if (removeLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: params.removeLabel });
-                console.log('✅ Removed SM label:', params.removeLabel);
+                jira_remove_label({ key: ticketKey, label: removeLabel });
+                console.log('✅ Removed SM label:', removeLabel);
             } catch (e) {}
         }
 

@@ -27,7 +27,9 @@
     "preJSAction" : "agents/js/checkWipLabel.js",
     "preCliJSAction" : "agents/js/prepareTestPRForReview.js",
     "postJSAction" : "agents/js/postTestReviewComments.js",
-    "removeLabel"  : "sm_test_review_triggered",
+    "customParams" : {
+      "removeLabel" : "sm_test_review_triggered"
+    },
     "inputJql" : "key = JD-111"
   }
 }
