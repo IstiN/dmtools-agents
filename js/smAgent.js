@@ -90,15 +90,15 @@ function processRule(rule, repoInfo, ruleIndex) {
 
     console.log('  Found ' + tickets.length + ' ticket(s)');
 
-    var processed = 0;
-    var skipped   = 0;
+    var processedKeys = [];
+    var skippedKeys   = [];
 
     tickets.forEach(function(ticket) {
         var key = ticket.key;
 
         if (rule.skipIfLabel && hasLabel(ticket, rule.skipIfLabel)) {
             console.log('  ⏭️  ' + key + ' skipped (label: ' + rule.skipIfLabel + ')');
-            skipped++;
+            skippedKeys.push(key);
             return;
         }
 
@@ -112,10 +112,10 @@ function processRule(rule, repoInfo, ruleIndex) {
             try { jira_add_label({ key: key, label: rule.addLabel }); } catch (e) {}
         }
 
-        if (triggered) processed++;
+        if (triggered) processedKeys.push(key);
     });
 
-    return { processed: processed, skipped: skipped };
+    return { processedKeys: processedKeys, skippedKeys: skippedKeys };
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -137,17 +137,27 @@ function action(params) {
     var repoInfo = { owner: p.owner, repo: p.repo };
     console.log('SM Agent — ' + repoInfo.owner + '/' + repoInfo.repo + ' (' + rules.length + ' rules)');
 
-    var totalProcessed = 0;
-    var totalSkipped   = 0;
+    var allProcessedKeys = [];
+    var allSkippedKeys   = [];
 
     rules.forEach(function(rule, i) {
         var result = processRule(rule, repoInfo, i);
-        totalProcessed += result.processed;
-        totalSkipped   += result.skipped;
+        allProcessedKeys = allProcessedKeys.concat(result.processedKeys);
+        allSkippedKeys   = allSkippedKeys.concat(result.skippedKeys);
     });
 
-    console.log('\n══ SM Agent complete — processed: ' + totalProcessed + ', skipped: ' + totalSkipped + ' ══');
-    return { success: true, processed: totalProcessed, skipped: totalSkipped };
+    console.log('\n══ SM Agent complete — processed: ' + allProcessedKeys.length + ' ' +
+        (allProcessedKeys.length ? '[' + allProcessedKeys.join(', ') + ']' : '') +
+        ', skipped: ' + allSkippedKeys.length +
+        (allSkippedKeys.length ? ' [' + allSkippedKeys.join(', ') + ']' : '') + ' ══');
+
+    return {
+        success: true,
+        processed: allProcessedKeys.length,
+        skipped: allSkippedKeys.length,
+        processedKeys: allProcessedKeys,
+        skippedKeys: allSkippedKeys
+    };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
