@@ -20,31 +20,6 @@
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function getGitHubRepoInfo() {
-    try {
-        var remoteUrl = (cli_execute_command({ command: 'git config --get remote.origin.url' }) || '').trim();
-        // strip script wrapper lines
-        remoteUrl = remoteUrl.split('\n').filter(function(l) {
-            return l.indexOf('Script started') === -1 &&
-                   l.indexOf('Script done') === -1 &&
-                   l.indexOf('COMMAND=') === -1 &&
-                   l.indexOf('COMMAND_EXIT_CODE=') === -1;
-        }).join('\n').trim();
-        var match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
-        if (!match) {
-            console.error('Could not parse GitHub URL from: ' + remoteUrl);
-            return null;
-        }
-        var owner = match[1];
-        var repo  = match[2].replace('.git', '');
-        console.log('GitHub repo: ' + owner + '/' + repo);
-        return { owner: owner, repo: repo };
-    } catch (e) {
-        console.error('Failed to get GitHub repo info: ' + (e.message || e));
-        return null;
-    }
-}
-
 function buildEncodedConfig(ticketKey) {
     return encodeURIComponent(JSON.stringify({
         params: { inputJql: 'key = ' + ticketKey }
@@ -102,7 +77,7 @@ function processRule(rule, repoInfo, ruleIndex) {
 
     var tickets = [];
     try {
-        tickets = jira_search_by_jql({ jql: rule.jql, limit: 50 }) || [];
+        tickets = jira_search_by_jql({ jql: rule.jql, limit: 50, fields: ['key', 'labels'] }) || [];
     } catch (e) {
         console.error('  ❌ Jira query failed: ' + (e.message || e));
         return { processed: 0, skipped: 0 };
@@ -153,12 +128,12 @@ function action(params) {
         return { success: false, error: 'No rules defined' };
     }
 
-    var repoInfo = getGitHubRepoInfo();
-    if (!repoInfo) {
-        console.error('❌ Could not detect GitHub repo info');
-        return { success: false, error: 'No GitHub repo info' };
+    if (!params.owner || !params.repo) {
+        console.error('❌ params.owner and params.repo are required');
+        return { success: false, error: 'Missing owner or repo' };
     }
 
+    var repoInfo = { owner: params.owner, repo: params.repo };
     console.log('SM Agent — ' + repoInfo.owner + '/' + repoInfo.repo);
     console.log('Rules to process: ' + rules.length);
 

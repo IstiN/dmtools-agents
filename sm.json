@@ -2,6 +2,8 @@
   "name" : "JSRunner",
   "params" : {
     "script" : "agents/js/smAgent.js",
+    "owner"  : "ai-teammate",
+    "repo"   : "mytube",
     "rules"  : [
       {
         "description" : "Merged Stories → Ready For Testing + generate test cases",
