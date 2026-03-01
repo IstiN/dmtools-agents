@@ -72,7 +72,7 @@ function processRule(rule, repoInfo, ruleIndex) {
 
     if (!rule.jql || !rule.configFile) {
         console.warn('  ⚠️  Skipping rule — jql and configFile are required');
-        return { processed: 0, skipped: 0 };
+        return { processedKeys: [], skippedKeys: [] };
     }
 
     var tickets = [];
@@ -80,12 +80,12 @@ function processRule(rule, repoInfo, ruleIndex) {
         tickets = jira_search_by_jql({ jql: rule.jql, limit: 50, fields: ['key', 'labels'] }) || [];
     } catch (e) {
         console.error('  ❌ Jira query failed: ' + (e.message || e));
-        return { processed: 0, skipped: 0 };
+        return { processedKeys: [], skippedKeys: [] };
     }
 
     if (tickets.length === 0) {
         console.log('  No tickets found.');
-        return { processed: 0, skipped: 0 };
+        return { processedKeys: [], skippedKeys: [] };
     }
 
     console.log('  Found ' + tickets.length + ' ticket(s)');
