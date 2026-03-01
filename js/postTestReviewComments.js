@@ -260,7 +260,7 @@ function action(params) {
             jira_remove_label({ key: ticketKey, label: wipLabel });
         } catch (e) {}
 
-        const customParams = params.jobParams && params.jobParams.customParams;
+        const customParams = params.customParams;
         const removeLabel = customParams && customParams.removeLabel;
         if (removeLabel) {
             try {
