@@ -154,6 +154,7 @@ function action(params) {
         const { prNumber, prUrl } = getPRNumber(params, ticketKey, repoInfo);
 
         // Step 4: Post GitHub comments
+        var mergeSucceeded = false;
         if (prNumber && repoInfo) {
             // General comment
             if (reviewData.generalComment) {
@@ -192,9 +193,10 @@ function action(params) {
                         pullRequestId: String(prNumber),
                         mergeMethod: 'squash'
                     });
+                    mergeSucceeded = true;
                     console.log('✅ PR #' + prNumber + ' merged');
                 } catch (e) {
-                    console.warn('Failed to merge PR:', e);
+                    console.warn('Failed to merge PR (likely conflict):', e);
                 }
             }
         } else {
@@ -212,7 +214,21 @@ function action(params) {
         }
 
         // Step 6: Move ticket status
-        if (isApproved) {
+        if (isApproved && !mergeSucceeded) {
+            // Approved but merge failed — conflict with recently merged changes
+            try {
+                jira_post_comment({
+                    key: ticketKey,
+                    comment: 'h3. ⚠️ Merge Conflict\n\nReview *APPROVED* but PR could not be merged automatically — likely due to conflicts with recently merged changes.\n\nPlease resolve the conflicts and re-push to the test branch.'
+                });
+            } catch (e) {}
+            try {
+                jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REWORK });
+                console.log('✅ Merge conflict — moved', ticketKey, 'to In Rework');
+            } catch (e) {
+                console.warn('Failed to move to In Rework:', e);
+            }
+        } else if (isApproved) {
             // In Review - Passed → Passed, In Review - Failed → Failed
             const finalStatus = (currentStatus === STATUSES.IN_REVIEW_PASSED)
                 ? STATUSES.PASSED
@@ -253,15 +269,22 @@ function action(params) {
             } catch (e) {}
         }
 
-        console.log('✅ Test review workflow complete:', isApproved ? 'APPROVED' : 'CHANGES REQUESTED');
+        var finalStatus;
+        if (isApproved && !mergeSucceeded) {
+            finalStatus = STATUSES.IN_REWORK;
+        } else if (isApproved) {
+            finalStatus = (currentStatus === STATUSES.IN_REVIEW_PASSED) ? STATUSES.PASSED : STATUSES.FAILED;
+        } else {
+            finalStatus = STATUSES.IN_REWORK;
+        }
+        console.log('✅ Test review workflow complete:', isApproved ? (mergeSucceeded ? 'APPROVED' : 'MERGE CONFLICT') : 'CHANGES REQUESTED');
 
         return {
             success: true,
             recommendation: reviewData.recommendation,
             ticketKey: ticketKey,
-            finalStatus: isApproved
-                ? (currentStatus === STATUSES.IN_REVIEW_PASSED ? STATUSES.PASSED : STATUSES.FAILED)
-                : STATUSES.IN_REWORK
+            mergeSucceeded: mergeSucceeded,
+            finalStatus: finalStatus
         };
 
     } catch (error) {

@@ -277,10 +277,12 @@ function postReviewToJira(ticketKey, reviewContent, reviewData, prUrl, merged) {
         const recommendation = reviewData.recommendation || 'REQUEST_CHANGES';
         if (merged) {
             comment += '{panel:bgColor=#E3FCEF|borderColor=#00875A}✅ *APPROVED & MERGED* - PR has been merged successfully{panel}\n\n';
+        } else if (recommendation === 'APPROVE') {
+            comment += '{panel:bgColor=#FFF7E6|borderColor=#FF8B00}⚠️ *APPROVED — MERGE CONFLICT* - Review passed but PR could not be merged automatically. Please resolve conflicts and re-push.{panel}\n\n';
         } else if (recommendation === 'BLOCK') {
             comment += '{panel:bgColor=#FFEBE6|borderColor=#DE350B}🚨 *BLOCKED* - Critical issues must be fixed before merge{panel}\n\n';
         } else {
-            comment += '{panel:bgColor=#FFF7E6|borderColor=#FF991F}⚠️ *CHANGES REQUESTED* - Issues found, ticket returned to In Development{panel}\n\n';
+            comment += '{panel:bgColor=#FFF7E6|borderColor=#FF991F}⚠️ *CHANGES REQUESTED* - Issues found, ticket returned to In Rework{panel}\n\n';
         }
 
         // Add issue summary
@@ -441,13 +443,20 @@ function action(params) {
 
         // Step 7: Update ticket status based on outcome
         try {
-            if (isApproved) {
-                // Merged → move to Merged status
+            if (isApproved && merged) {
+                // Successfully merged → move to Merged
                 jira_move_to_status({
                     key: ticketKey,
                     statusName: STATUSES.MERGED
                 });
                 console.log('✅ Ticket moved to Merged');
+            } else if (isApproved && !merged) {
+                // Approved but merge failed (conflict) → back to In Rework
+                jira_move_to_status({
+                    key: ticketKey,
+                    statusName: STATUSES.IN_REWORK
+                });
+                console.log('✅ Merge conflict — ticket moved to In Rework');
             } else {
                 // Has issues → move to In Rework for focused fixes
                 jira_move_to_status({
