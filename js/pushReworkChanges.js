@@ -303,6 +303,16 @@ function action(params) {
             }
         }
 
+        // Remove SM idempotency label so the ticket can be re-triggered next cycle
+        const customParams = params.jobParams && params.jobParams.customParams;
+        const removeLabel = customParams && customParams.removeLabel;
+        if (removeLabel) {
+            try {
+                jira_remove_label({ key: ticketKey, label: removeLabel });
+                console.log('✅ Removed SM label:', removeLabel);
+            } catch (e) {}
+        }
+
         console.log('✅ Rework workflow completed successfully');
 
         return {

@@ -14,6 +14,13 @@
           "addLabel"    : "sm_story_review_triggered"
         },
         {
+          "description" : "In Rework Stories → trigger pr_rework",
+          "jql"         : "project = MYTUBE AND issuetype in ('Story') AND status in ('In Rework')",
+          "configFile"  : "agents/pr_rework.json",
+          "skipIfLabel" : "sm_story_rework_triggered",
+          "addLabel"    : "sm_story_rework_triggered"
+        },
+        {
           "description" : "Merged Stories → Ready For Testing + generate test cases",
           "jql"         : "project = MYTUBE AND issuetype in ('Story') AND status in ('Merged')",
           "targetStatus": "Ready For Testing",
