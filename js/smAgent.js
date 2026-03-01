@@ -38,7 +38,8 @@ function triggerWorkflow(repoInfo, ticketKey, rule) {
                 concurrency_key: ticketKey,
                 config_file:     rule.configFile,
                 encoded_config:  buildEncodedConfig(ticketKey)
-            })
+            }),
+            workflowRef
         );
         console.log('  ✅ Triggered ' + workflowFile + '@' + workflowRef + ' for ' + ticketKey);
         return true;
