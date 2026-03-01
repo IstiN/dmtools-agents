@@ -28,6 +28,9 @@
     "preJSAction" : "agents/js/checkWipLabel.js",
     "preCliJSAction" : "agents/js/preCliTestReworkSetup.js",
     "postJSAction" : "agents/js/postTestReworkResults.js",
+    "customParams" : {
+      "removeLabel" : "sm_test_rework_triggered"
+    },
     "inputJql" : "project = JD AND issuetype = 'Test Case' AND status = 'In Rework'"
   }
 }

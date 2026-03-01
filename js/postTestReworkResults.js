@@ -294,6 +294,16 @@ function action(params) {
             jira_remove_label({ key: ticketKey, label: wipLabel });
         } catch (e) {}
 
+        // Step 8: Remove SM idempotency label (via customParams)
+        const customParams = params.jobParams && params.jobParams.customParams;
+        const removeLabel = customParams && customParams.removeLabel;
+        if (removeLabel) {
+            try {
+                jira_remove_label({ key: ticketKey, label: removeLabel });
+                console.log('✅ Removed SM label:', removeLabel);
+            } catch (e) {}
+        }
+
         console.log('✅ Test rework complete — re-run:', result.status, '→', targetStatus);
 
         return {

@@ -28,6 +28,13 @@
           "configFile"  : "agents/pr_test_automation_review.json",
           "skipIfLabel" : "sm_test_review_triggered",
           "addLabel"    : "sm_test_review_triggered"
+        },
+        {
+          "description" : "In Rework Test Cases → trigger pr_test_automation_rework",
+          "jql"         : "project = MYTUBE AND issuetype in ('Test Case') AND status in ('In Rework')",
+          "configFile"  : "agents/pr_test_automation_rework.json",
+          "skipIfLabel" : "sm_test_rework_triggered",
+          "addLabel"    : "sm_test_rework_triggered"
         }
       ]
     }
