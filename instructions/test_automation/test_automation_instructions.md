@@ -75,10 +75,24 @@ Before writing a test, check what is already available in GitHub Actions. **You 
 
 ### Also available
 - `RAW_OBJECT_PATH` = `test-videos/test_video.mp4` — relative path within `gs://mytube-raw-uploads/` to a real test video for transcoder tests
+- `FIREBASE_TEST_EMAIL` = `ci-test@mytube.test` (variable) — CI test user, fake domain, no real Gmail
+- `FIREBASE_TEST_UID` = `ci-test-user-001` (variable)
+- `FIREBASE_TEST_PASSWORD` (secret) — password for the CI test user
+- `FIREBASE_TEST_TOKEN` — **generate at CI runtime** (token expires in 1h, never store as secret):
+  ```yaml
+  - name: Get Firebase test token
+    run: |
+      RESP=$(curl -s -X POST \
+        "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${{ vars.FIREBASE_API_KEY }}" \
+        -H "Content-Type: application/json" \
+        -d "{\"email\":\"${{ vars.FIREBASE_TEST_EMAIL }}\",\"password\":\"${{ secrets.FIREBASE_TEST_PASSWORD }}\",\"returnSecureToken\":true}")
+      echo "FIREBASE_TEST_TOKEN=$(echo $RESP | jq -r .idToken)" >> $GITHUB_ENV
+      echo "FIREBASE_TEST_UID=${{ vars.FIREBASE_TEST_UID }}" >> $GITHUB_ENV
+      echo "FIREBASE_TEST_EMAIL=${{ vars.FIREBASE_TEST_EMAIL }}" >> $GITHUB_ENV
+  ```
 
 ### Not yet available (require human setup)
-- `FIREBASE_TEST_EMAIL` / `FIREBASE_TEST_PASSWORD` — dedicated test Firebase user
-- `FIREBASE_TEST_TOKEN` — generated at CI runtime from email+password (see `instruction.md`)
+_All credentials are now provisioned. No blockers remain for Firebase or GCP tests._
 
 ---
 
