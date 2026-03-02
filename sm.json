@@ -7,6 +7,13 @@
       "repo"  : "mytube",
       "rules" : [
         {
+          "description" : "Subtasks with 'q' label → trigger PO refinement",
+          "jql"         : "project = MYTUBE AND issuetype in ('Subtask') AND labels in ('q')",
+          "configFile"  : "agents/po_refinement.json",
+          "skipIfLabel" : "sm_po_refinement_triggered",
+          "addLabel"    : "sm_po_refinement_triggered"
+        },
+        {
           "description" : "Backlog Stories → ask clarification questions",
           "jql"         : "project = MYTUBE AND issuetype in ('Story') AND status in ('Backlog')",
           "configFile"  : "agents/story_questions.json",
