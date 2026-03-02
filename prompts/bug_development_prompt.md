@@ -1,8 +1,9 @@
 User request is in 'input' folder, read all files there and do what is requested.
 
 **IMPORTANT** Before anything else, read inputs in this order:
-1. `request.md` — full bug ticket: description, steps to reproduce, expected vs actual behaviour, environment, any linked commits
-2. `existing_questions.json` — if present, clarification answers from the PO — treat as binding requirements
+1. `instruction.md` (repo root) — **read this first**: project stack, deployment constraints, approved frameworks, and infrastructure access. All implementation decisions must respect the constraints defined here.
+2. `request.md` — full bug ticket: description, steps to reproduce, expected vs actual behaviour, environment, any linked commits
+3. `existing_questions.json` — if present, clarification answers from the PO — treat as binding requirements
 
 ## Your workflow (MUST follow in order)
 
