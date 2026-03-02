@@ -1,0 +1,24 @@
+{
+  "name" : "Teammate",
+  "params" : {
+    "metadata" : {
+      "contextId" : "story_done_check"
+    },
+    "agentParams" : {
+      "aiRole" : "Story completion checker",
+      "instructions" : [],
+      "knownInfo" : "",
+      "formattingRules" : "",
+      "fewShots" : ""
+    },
+    "outputType" : "none",
+    "ticketContextDepth" : 1,
+    "skipAIProcessing" : true,
+    "alwaysPostComments" : true,
+    "postJSAction" : "agents/js/checkStoryTestsPassed.js",
+    "customParams" : {
+      "removeLabel" : "sm_story_done_check_triggered"
+    },
+    "inputJql" : "key = MYTUBE-1"
+  }
+}
