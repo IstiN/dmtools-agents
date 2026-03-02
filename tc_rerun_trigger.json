@@ -1,0 +1,24 @@
+{
+  "name" : "Teammate",
+  "params" : {
+    "metadata" : {
+      "contextId" : "tc_rerun_trigger"
+    },
+    "agentParams" : {
+      "aiRole" : "Test Case re-run coordinator",
+      "instructions" : [],
+      "knownInfo" : "",
+      "formattingRules" : "",
+      "fewShots" : ""
+    },
+    "outputType" : "none",
+    "ticketContextDepth" : 1,
+    "skipAIProcessing" : true,
+    "alwaysPostComments" : true,
+    "postJSAction" : "agents/js/checkTCLinkedBugsInTesting.js",
+    "customParams" : {
+      "removeLabel" : "sm_tc_rerun_trigger_triggered"
+    },
+    "inputJql" : "key = MYTUBE-74"
+  }
+}

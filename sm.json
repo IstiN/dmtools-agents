@@ -127,6 +127,13 @@
           "configFile"  : "agents/pr_test_automation_rework.json",
           "skipIfLabel" : "sm_test_rework_triggered",
           "addLabel"    : "sm_test_rework_triggered"
+        },
+        {
+          "description" : "Failed Test Cases → check if all linked Bugs are In Testing → Re-run",
+          "jql"         : "project = MYTUBE AND issuetype in ('Test Case') AND status in ('Failed')",
+          "configFile"  : "agents/tc_rerun_trigger.json",
+          "skipIfLabel" : "sm_tc_rerun_trigger_triggered",
+          "addLabel"    : "sm_tc_rerun_trigger_triggered"
         }
       ]
     }
