@@ -94,15 +94,15 @@ function action(params) {
             if (alreadyFixed.description) {
                 comment += alreadyFixed.description + '\n\n';
             }
-            comment += 'No new PR required — fix is already in the codebase. Moved to *Ready For Testing*.';
+            comment += 'No new PR required — fix is already in the codebase. Moved to *Merged* so the Solution field and RCA are generated before test cases.';
 
             try { jira_post_comment({ key: ticketKey, comment: comment }); } catch (e) {}
 
             try {
-                jira_move_to_status({ key: ticketKey, statusName: STATUSES.READY_FOR_TESTING });
-                console.log('✅ Moved', ticketKey, 'to Ready For Testing');
+                jira_move_to_status({ key: ticketKey, statusName: STATUSES.MERGED });
+                console.log('✅ Moved', ticketKey, 'to Merged');
             } catch (e) {
-                console.warn('Failed to move to Ready For Testing:', e);
+                console.warn('Failed to move to Merged:', e);
             }
 
             try { jira_add_label({ key: ticketKey, label: LABELS.AI_DEVELOPED }); } catch (e) {}
