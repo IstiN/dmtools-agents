@@ -15,11 +15,17 @@ function action(params) {
             ? params.metadata.contextId + '_wip'
             : null;
 
-        // Assign to initiator
-        jira_assign_ticket_to({
-            key: ticketKey,
-            accountId: initiatorId
-        });
+        // Assign to initiator (skip if accountId is not available)
+        if (initiatorId) {
+            try {
+                jira_assign_ticket_to({
+                    key: ticketKey,
+                    accountId: initiatorId
+                });
+            } catch (e) {
+                console.warn('Failed to assign ticket, continuing:', e);
+            }
+        }
 
         // Move to Solution Architecture
         jira_move_to_status({
