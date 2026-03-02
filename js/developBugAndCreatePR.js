@@ -8,7 +8,8 @@
  *                               → Post Jira comment, move to Blocked, remove labels
  *
  *   outputs/already_fixed.json → Bug was fixed in a prior commit, no new code changes
- *                               → Post Jira comment with commit ref, move to Ready For Testing
+ *                               → Post Jira comment with commit ref, move to Merged
+ *                                 (SM then runs bug_merged → RCA/Solution field → Ready For Testing)
  *
  *   (neither file)             → Normal fix — code changes made
  *                               → Delegate to developTicketAndCreatePR: commit, push, create PR, move to In Review
