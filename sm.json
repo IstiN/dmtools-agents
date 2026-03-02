@@ -14,6 +14,13 @@
           "addLabel"    : "sm_story_ba_check_triggered"
         },
         {
+          "description" : "BA Analysis Stories → generate Acceptance Criterias",
+          "jql"         : "project = MYTUBE AND issuetype in ('Story') AND status in ('BA Analysis')",
+          "configFile"  : "agents/story_acceptance_criterias.json",
+          "skipIfLabel" : "sm_story_acceptance_criterias_triggered",
+          "addLabel"    : "sm_story_acceptance_criterias_triggered"
+        },
+        {
           "description" : "Subtasks with 'q' label → trigger PO refinement",
           "jql"         : "project = MYTUBE AND issuetype in ('Subtask') AND labels in ('q')",
           "configFile"  : "agents/po_refinement.json",
