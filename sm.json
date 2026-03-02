@@ -53,7 +53,8 @@
           "jql"         : "project = MYTUBE AND issuetype in ('Bug') AND status in ('Ready For Development')",
           "configFile"  : "agents/bug_development.json",
           "skipIfLabel" : "sm_bug_development_triggered",
-          "addLabel"    : "sm_bug_development_triggered"
+          "addLabel"    : "sm_bug_development_triggered",
+          "enabled"     : false
         },
         {
           "description" : "In Review Stories & Bugs → trigger pr_review",
@@ -83,14 +84,16 @@
           "targetStatus": "Ready For Testing",
           "configFile"  : "agents/bug_merged.json",
           "skipIfLabel" : "sm_bug_merged_triggered",
-          "addLabel"    : "sm_bug_merged_triggered"
+          "addLabel"    : "sm_bug_merged_triggered",
+          "enabled"     : false
         },
         {
           "description" : "Ready For Testing Bugs → generate test cases",
           "jql"         : "project = MYTUBE AND issuetype in ('Bug') AND status in ('Ready For Testing')",
           "configFile"  : "agents/test_cases_generator.json",
           "skipIfLabel" : "sm_bug_test_cases_triggered",
-          "addLabel"    : "sm_bug_test_cases_triggered"
+          "addLabel"    : "sm_bug_test_cases_triggered",
+          "enabled"     : false
         },
         {
           "description" : "In Testing Stories → check all TCs passed → Done",
@@ -104,7 +107,8 @@
           "jql"         : "project = MYTUBE AND issuetype in ('Bug') AND status in ('In Testing')",
           "configFile"  : "agents/bug_done_check.json",
           "skipIfLabel" : "sm_bug_done_check_triggered",
-          "addLabel"    : "sm_bug_done_check_triggered"
+          "addLabel"    : "sm_bug_done_check_triggered",
+          "enabled"     : false
         },
         {
           "description" : "Backlog Test Cases → In Development + automate",
