@@ -2,6 +2,9 @@
  * Check Subtasks Done For BA — postJSAction for story_ba_check agent.
  *
  * Runs on every SM cycle for each Story in "PO Review".
+ * Uses params.ticket.fields.subtasks (loaded with ticketContextDepth:1) so no
+ * JQL is needed — avoids issues with parent= filter in this Jira instance.
+ *
  * - If all subtasks are Done → moves the Story to "BA Analysis".
  * - Otherwise → removes the SM idempotency label so the SM re-triggers
  *   this check on the next cycle.
@@ -26,44 +29,29 @@ function action(params) {
             }
         }
 
-        // Step 1: Total subtasks
-        const allSubtasksResult = jira_search_by_jql({
-            jql: 'parent = "' + ticketKey + '" AND issuetype = Subtask',
-            maxResults: 1
-        });
+        // Subtasks are included in the ticket fields (ticketContextDepth: 1)
+        const subtasks = (params.ticket.fields && params.ticket.fields.subtasks) || [];
+        console.log('Total subtasks:', subtasks.length);
 
-        const totalSubtasks = allSubtasksResult
-            ? (allSubtasksResult.total || (allSubtasksResult.issues && allSubtasksResult.issues.length) || 0)
-            : 0;
-
-        console.log('Total subtasks:', totalSubtasks);
-
-        if (totalSubtasks === 0) {
+        if (subtasks.length === 0) {
             console.log('No subtasks found — releasing lock, will re-check next cycle');
             releaseLock();
             return { success: true, action: 'no_subtasks', ticketKey };
         }
 
-        // Step 2: Subtasks not yet Done
-        const notDoneResult = jira_search_by_jql({
-            jql: 'parent = "' + ticketKey + '" AND issuetype = Subtask AND status != Done',
-            maxResults: 1
+        const notDone = subtasks.filter(function(st) {
+            return !st.fields || !st.fields.status || st.fields.status.name !== 'Done';
         });
+        console.log('Subtasks not yet Done:', notDone.length, '/', subtasks.length);
 
-        const notDoneCount = notDoneResult
-            ? (notDoneResult.total || (notDoneResult.issues && notDoneResult.issues.length) || 0)
-            : 0;
-
-        console.log('Subtasks not yet Done:', notDoneCount, '/', totalSubtasks);
-
-        if (notDoneCount > 0) {
+        if (notDone.length > 0) {
             console.log('Not all subtasks done — releasing lock, will re-check next cycle');
             releaseLock();
-            return { success: true, action: 'waiting', totalSubtasks, notDoneCount, ticketKey };
+            return { success: true, action: 'waiting', total: subtasks.length, notDone: notDone.length, ticketKey };
         }
 
-        // Step 3: All subtasks Done → move to BA Analysis
-        console.log('All', totalSubtasks, 'subtask(s) done — moving', ticketKey, 'to BA Analysis');
+        // All subtasks Done → move to BA Analysis
+        console.log('All', subtasks.length, 'subtask(s) done — moving', ticketKey, 'to BA Analysis');
 
         jira_move_to_status({
             key: ticketKey,
@@ -73,12 +61,12 @@ function action(params) {
         jira_post_comment({
             key: ticketKey,
             comment: 'h3. ✅ PO Review Complete — Moving to BA Analysis\n\n' +
-                'All *' + totalSubtasks + '* subtask(s) are *Done*.\n\n' +
+                'All *' + subtasks.length + '* subtask(s) are *Done*.\n\n' +
                 'The story has been automatically moved to *BA Analysis*.'
         });
 
         console.log('✅ Story', ticketKey, 'moved to BA Analysis');
-        return { success: true, action: 'moved_to_ba_analysis', totalSubtasks, ticketKey };
+        return { success: true, action: 'moved_to_ba_analysis', total: subtasks.length, ticketKey };
 
     } catch (error) {
         console.error('❌ Error in checkSubtasksDoneForBA:', error);
