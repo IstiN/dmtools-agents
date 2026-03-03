@@ -85,10 +85,16 @@ function processRule(rule, repoInfo, ruleIndex) {
     var jqlLimit = typeof rule.limit === 'number' ? rule.limit : 50;
     var tickets = [];
     try {
-        tickets = jira_search_by_jql({ jql: rule.jql, limit: jqlLimit, fields: ['key', 'labels'] }) || [];
+        tickets = jira_search_by_jql({ jql: rule.jql, limit: jqlLimit, maxResults: jqlLimit, fields: ['key', 'labels'] }) || [];
     } catch (e) {
         console.error('  ❌ Jira query failed: ' + (e.message || e));
         return { processedKeys: [], skippedKeys: [] };
+    }
+
+    // Enforce limit client-side regardless of what jira_search_by_jql returns
+    if (typeof rule.limit === 'number' && tickets.length > rule.limit) {
+        console.log('  Limiting from ' + tickets.length + ' to ' + rule.limit + ' ticket(s)');
+        tickets = tickets.slice(0, rule.limit);
     }
 
     if (tickets.length === 0) {
