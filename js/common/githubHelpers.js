@@ -416,6 +416,99 @@ function writePRContext(inputFolder, prDetails, diff, markdown, rawThreads) {
     console.log('✅ PR context written to', inputFolder);
 }
 
+/**
+ * Detect failed CI checks for the PR head commit.
+ * Uses github_get_commit_check_runs to find failures, then fetches job logs
+ * via github_get_job_logs (job ID extracted from details_url).
+ * Writes ci_failures.md to the input folder when failures are found.
+ *
+ * @param {string} owner       - GitHub owner/organization
+ * @param {string} repo        - GitHub repository name
+ * @param {string} headSha     - PR head commit SHA (prDetails.head.sha)
+ * @param {string} inputFolder - input/{ticketKey} path
+ * @returns {{ name: string, conclusion: string }[]} failed checks (empty when all pass)
+ */
+function detectFailedChecks(owner, repo, headSha, inputFolder) {
+    try {
+        if (!headSha) {
+            console.warn('detectFailedChecks: no headSha provided, skipping');
+            return [];
+        }
+
+        console.log('Checking CI status for commit:', headSha.substring(0, 8) + '...');
+
+        var checkRuns = github_get_commit_check_runs({
+            workspace: owner,
+            repository: repo,
+            commitSha: headSha
+        });
+
+        if (!checkRuns || !checkRuns.length) {
+            console.log('No CI checks found for commit');
+            return [];
+        }
+
+        console.log('Total check runs:', checkRuns.length);
+
+        var failedChecks = checkRuns.filter(function(c) {
+            return c.conclusion === 'failure' || c.conclusion === 'timed_out';
+        });
+
+        if (failedChecks.length === 0) {
+            console.log('✅ All CI checks passed');
+            return [];
+        }
+
+        console.warn('⚠️ ' + failedChecks.length + ' CI check(s) failed:', failedChecks.map(function(c) { return c.name; }).join(', '));
+
+        var md = '# ⚠️ Failed CI Checks — Fix Before Completing Rework\n\n';
+        md += failedChecks.length + ' check(s) failed on commit `' + headSha.substring(0, 8) + '`:\n\n';
+
+        failedChecks.forEach(function(check) {
+            md += '## ❌ ' + check.name + '\n\n';
+            md += '- **Conclusion**: ' + check.conclusion + '\n';
+            if (check.details_url) {
+                md += '- **Details**: ' + check.details_url + '\n';
+            }
+            md += '\n';
+
+            // GitHub Actions details_url format: .../actions/runs/{runId}/jobs/{jobId}
+            var jobIdMatch = check.details_url && check.details_url.match(/\/jobs\/(\d+)/);
+            if (jobIdMatch) {
+                try {
+                    var logs = github_get_job_logs({
+                        workspace: owner,
+                        repository: repo,
+                        jobId: jobIdMatch[1]
+                    });
+                    if (logs) {
+                        // Trim to last 150 lines to keep the file readable
+                        var lines = logs.split('\n');
+                        var snippet = lines.slice(-150).join('\n');
+                        md += '**Error log (last 150 lines)**:\n\n```\n' + snippet + '\n```\n\n';
+                    }
+                } catch (e) {
+                    console.warn('Could not fetch logs for job', jobIdMatch[1], ':', e.message || e);
+                }
+            }
+        });
+
+        md += '---\n\n## Resolution\n\n';
+        md += '1. Read the error log(s) above to identify the root cause\n';
+        md += '2. Fix the underlying code issue(s)\n';
+        md += '3. CI will re-run automatically after the push — all checks must pass\n';
+
+        file_write({ path: inputFolder + '/ci_failures.md', content: md });
+        console.log('✅ Wrote ci_failures.md (' + failedChecks.length + ' failed check(s))');
+
+        return failedChecks.map(function(c) { return { name: c.name, conclusion: c.conclusion }; });
+
+    } catch (e) {
+        console.warn('detectFailedChecks failed (non-fatal):', e.message || e);
+        return [];
+    }
+}
+
 module.exports = {
     cleanCommandOutput: cleanCommandOutput,
     getGitHubRepoInfo: getGitHubRepoInfo,
@@ -425,5 +518,6 @@ module.exports = {
     getPRDiff: getPRDiff,
     fetchDiscussionsAndRawData: fetchDiscussionsAndRawData,
     writePRContext: writePRContext,
-    detectMergeConflicts: detectMergeConflicts
+    detectMergeConflicts: detectMergeConflicts,
+    detectFailedChecks: detectFailedChecks
 };

@@ -6,10 +6,13 @@ You are fixing code issues identified in a Pull Request review.
 3. `pr_info.md` — Pull Request metadata (PR number, URL, branch)
 4. `pr_diff.txt` — Current code changes already in the PR (what was implemented)
 5. `merge_conflicts.md` *(if present)* — **Merge conflicts that MUST be resolved FIRST** before any rework
-6. `pr_discussions.md` — **Review comments that MUST be fixed** (human-readable, your primary task list)
-7. `pr_discussions_raw.json` — Same threads with numeric IDs — use `rootCommentId` and `id` when writing `outputs/review_replies.json`
+6. `ci_failures.md` *(if present)* — **CI check failures with error logs that MUST be fixed**
+7. `pr_discussions.md` — **Review comments that MUST be fixed** (human-readable, your primary task list)
+8. `pr_discussions_raw.json` — Same threads with numeric IDs — use `rootCommentId` and `id` when writing `outputs/review_replies.json`
 
 **If `merge_conflicts.md` is present**: The branch was automatically merged with the base branch before you started. There are unresolved conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) in the listed files. **Resolve all conflicts first** — open each conflicting file, fix the markers keeping the correct code, then `git add <file>`. Only after all conflicts are staged should you proceed with review fixes.
+
+**If `ci_failures.md` is present**: CI checks are currently failing on this PR. Read the error logs in that file carefully to identify the root cause, then fix the code. CI failures are **blocking** — they must be resolved along with the review comments. After pushing, CI will re-run automatically.
 
 Your mission is to address every issue raised in `pr_discussions.md`. For each review thread or comment:
 1. Understand the issue described by the reviewer

@@ -72,21 +72,33 @@ function action(params) {
         // Step 6: Write all context files
         gh.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
 
+        // Step 6.5: Detect failed CI checks
+        var headSha = prDetails.head ? prDetails.head.sha : null;
+        var failedChecks = gh.detectFailedChecks(repoInfo.owner, repoInfo.repo, headSha, inputFolder);
+
         // Step 7: Jira comment
         try {
-            jira_post_comment({
-                key: ticketKey,
-                comment: 'h3. 🔍 Automated PR Review Started\n\n' +
-                    '*Pull Request*: [PR #' + prDetails.number + '|' + prDetails.html_url + ']\n' +
-                    '*Branch*: {code}' + (branchName || 'unknown') + '{code}\n' +
-                    '*Files Changed*: ' + (prDetails.changed_files || 0) + '\n\n' +
-                    'AI Code Reviewer is analyzing the pull request for:\n' +
-                    '* 🔒 Security vulnerabilities\n' +
-                    '* 🏗️ Code quality & OOP principles\n' +
-                    '* ✅ Task alignment with requirements\n' +
-                    '* 🧪 Testing adequacy\n\n' +
-                    '_Review results will be posted shortly..._'
-            });
+            var jiraComment = 'h3. 🔍 Automated PR Review Started\n\n' +
+                '*Pull Request*: [PR #' + prDetails.number + '|' + prDetails.html_url + ']\n' +
+                '*Branch*: {code}' + (branchName || 'unknown') + '{code}\n' +
+                '*Files Changed*: ' + (prDetails.changed_files || 0) + '\n\n';
+
+            if (failedChecks.length > 0) {
+                jiraComment += '{panel:bgColor=#FFEBE6|borderColor=#DE350B}' +
+                    '⚠️ *CI checks failing* — ' + failedChecks.length + ' check(s) did not pass:\n' +
+                    failedChecks.map(function(c) { return '* {code}' + c.name + '{code}'; }).join('\n') +
+                    '\nError logs are in {code}ci_failures.md{code} — reviewer will flag these as blocking issues.' +
+                    '{panel}\n\n';
+            }
+
+            jiraComment += 'AI Code Reviewer is analyzing the pull request for:\n' +
+                '* 🔒 Security vulnerabilities\n' +
+                '* 🏗️ Code quality & OOP principles\n' +
+                '* ✅ Task alignment with requirements\n' +
+                '* 🧪 Testing adequacy\n\n' +
+                '_Review results will be posted shortly..._';
+
+            jira_post_comment({ key: ticketKey, comment: jiraComment });
         } catch (e) {
             console.warn('Failed to post review started comment:', e);
         }

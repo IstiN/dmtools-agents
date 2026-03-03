@@ -5,8 +5,11 @@ Read PR context from input folder which contains:
   - pr_info.md: Pull Request metadata (URL, author, title, description)
   - pr_diff.txt: Complete git diff of all changes
   - pr_files.txt: List of all modified files
+  - ci_failures.md: *(if present)* **CI checks currently failing** — treat each as a 🚨 BLOCKING issue and include in the review
   - pr_discussions.md: *(if present)* Full history of previous review comments and inline threads
   - pr_discussions_raw.json: *(if present)* Structured thread data with IDs — used to populate `resolvedThreadIds`
+
+**If `ci_failures.md` is present**: The PR has failing CI checks. Include each failed check as a 🚨 BLOCKING finding in your review. Describe what the error log shows (it's included in the file) and what needs to be fixed. These are blocking — the PR must not be approved while CI is failing.
 
 ## ⚠️ Repeated Review Notice
 

@@ -6,6 +6,7 @@ The input folder contains all necessary context:
 - `pr_info.md`: Pull Request metadata
 - `pr_diff.txt`: Complete diff of all code changes
 - `pr_files.txt`: List of modified files
+- `ci_failures.md` *(if present)*: **CI checks currently failing on this PR** — treat as 🚨 BLOCKING issues
 - `pr_discussions.md` *(if present)*: Previous review comments — indicates this is a repeated review
 - `pr_discussions_raw.json` *(if present)*: Structured thread data with IDs — for each thread fully fixed in this diff, add its `threadId` to `resolvedThreadIds` in `pr_review.json`
 

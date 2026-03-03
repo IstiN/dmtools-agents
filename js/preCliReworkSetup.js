@@ -59,6 +59,10 @@ function action(params) {
         // If conflicts exist, writes merge_conflicts.md to the input folder.
         const conflictFiles = gh.detectMergeConflicts(baseBranch, inputFolder);
 
+        // Step 4.6: Detect failed CI checks — writes ci_failures.md if any failed
+        const headSha = prDetails.head ? prDetails.head.sha : null;
+        const failedChecks = gh.detectFailedChecks(repoInfo.owner, repoInfo.repo, headSha, inputFolder);
+
         const diff = gh.getPRDiff(baseBranch, branchName);
 
         console.log('Fetching PR discussions...');
@@ -84,6 +88,14 @@ function action(params) {
                 jiraComment += '{panel:bgColor=#FFEBE6|borderColor=#DE350B}' +
                     '⚠️ *Merge conflicts detected* — ' + conflictFiles.length + ' file(s) must be resolved before rework can be applied:\n' +
                     conflictFiles.map(function(f) { return '* {code}' + f + '{code}'; }).join('\n') +
+                    '{panel}\n\n';
+            }
+
+            if (failedChecks.length > 0) {
+                jiraComment += '{panel:bgColor=#FFEBE6|borderColor=#DE350B}' +
+                    '⚠️ *CI checks failing* — ' + failedChecks.length + ' check(s) must pass before merge:\n' +
+                    failedChecks.map(function(c) { return '* {code}' + c.name + '{code}'; }).join('\n') +
+                    '\nError logs written to {code}ci_failures.md{code} — AI will fix the root cause.' +
                     '{panel}\n\n';
             }
 
