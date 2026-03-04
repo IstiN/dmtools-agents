@@ -134,9 +134,9 @@ elif [ "$PROVIDER" = "copilot" ]; then
   fi
 
   echo "Copilot Configuration:"
-  echo "  Model: ${COPILOT_MODEL:-claude-sonnet-4.5}"
+  echo "  Model: ${COPILOT_MODEL:-gpt-5-mini}"
 
-  CMD=(npx @github/copilot --allow-all-tools --model "${COPILOT_MODEL:-claude-sonnet-4.5}" -p "$PROMPT")
+  CMD=(npx @github/copilot --allow-all-tools --model "${COPILOT_MODEL:-gpt-5-mini}" -p "$PROMPT")
 
 else
   # Default to cursor
