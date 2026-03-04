@@ -96,6 +96,74 @@ _All credentials are now provisioned. No blockers remain for Firebase or GCP tes
 
 ---
 
+## Test Data — Self-Sufficient Strategy
+
+When a test requires binary media files (video, audio, image) **do not immediately ask a human**.
+Work through the following steps in order:
+
+### Step 1 — Generate programmatically (preferred for small files)
+
+Use standard CLI tools available in Ubuntu to synthesise minimal valid files:
+
+```bash
+# Minimal valid MP4 (1 second, 1x1 px, silent) — ~5 KB, accepted by most parsers
+ffmpeg -f lavfi -i color=c=black:s=1x1:d=1 -c:v libx264 -t 1 -movflags +faststart /tmp/test_video.mp4
+
+# Minimal valid JPEG (1x1 white pixel) — 631 bytes
+python3 -c "
+import base64, pathlib
+pathlib.Path('/tmp/test_image.jpg').write_bytes(
+  base64.b64decode('/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAARC'
+  'AABAAEDASIA2gABAREA/8QAFgABAQEAAAAAAAAAAAAAAAAABgUE/8QAIxAAAQMEAgMBAAAAAAAAAAAAAQIDBAAFESExQVFh/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAA'
+  'AAAAAAAAAAAAAP/aAAwDAQACEQMRAD8Amk2pa3pVoiu3CqNOmTUoSVJDSwFKA9yBvXisWtd2vMiTHt8B2Q3GdLTi0DYSobBH3rF0/8QAHRABAAICAwEBAAAAAAAAAAAAAQIDBAAR'
+  'ITIUQP/aAAgBAQABPxCk2e63S4SY8aI484y4UOJQNkKHIIPkEf0qw2O0W2wxVxrXEbisuOFxSEb2onk1//2Q==')
+)
+"
+
+# Minimal valid MP3 (silent, ~1 KB) via ffmpeg
+ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -t 1 -q:a 9 -acodec libmp3lame /tmp/test_audio.mp3
+```
+
+### Step 2 — Download from well-known open/public sources
+
+Use `curl` or `wget` to fetch freely-licensed test files:
+
+| Need | URL |
+|------|-----|
+| Small MP4 | `https://www.w3schools.com/html/mov_bbb.mp4` |
+| Small MP4 | `https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4` |
+| Small WebM | `https://www.w3schools.com/html/movie.webm` |
+| Small MP3 | `https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3` |
+| JPEG | `https://www.gstatic.com/webp/gallery/1.jpg` |
+| PNG | `https://www.gstatic.com/webp/gallery/1.png` |
+
+```bash
+curl -L -o /tmp/test_video.mp4 "https://www.w3schools.com/html/mov_bbb.mp4"
+```
+
+Always verify the download succeeded (`curl` exit code 0, file size > 0) before using the file.
+
+### Step 3 — Upload to GCS if the test needs a GCS path
+
+If the test requires a file already in `gs://mytube-raw-uploads/`, upload the generated/downloaded file:
+
+```bash
+gcloud storage cp /tmp/test_video.mp4 gs://mytube-raw-uploads/test-data/{TICKET-KEY}/test_video.mp4 \
+  --project=ai-native-478811
+```
+
+Then use `test-data/{TICKET-KEY}/test_video.mp4` as `RAW_OBJECT_PATH` in the test.
+
+### Step 4 — Only then use `blocked_by_human`
+
+Use `blocked_by_human` for test data **only** if:
+- All generation and download attempts failed (network error, tool unavailable, etc.)
+- The test requires a real user-supplied asset that cannot be synthetically reproduced (e.g. a specific licensed video file)
+
+Always explain in `outputs/response.md` which step failed and why.
+
+---
+
 ## Blocked by Human
 
 If a test **cannot run automatically** because required credentials or test data are not yet available in CI, output `"status": "blocked_by_human"` instead of `"passed"` or `"failed"`.
@@ -104,7 +172,7 @@ If a test **cannot run automatically** because required credentials or test data
 - Required env var or secret does not exist (see "Not yet available" list above)
 - Test needs a real Firebase ID token and `FIREBASE_TEST_EMAIL`/`FIREBASE_TEST_PASSWORD` are not set
 - Test requires pre-existing data in the DB (e.g. a specific user or record not guaranteed to exist)
-- Test requires an external file (e.g. a real video in GCS) not yet uploaded
+- Test requires an external file that could not be generated or downloaded following the **Test Data — Self-Sufficient Strategy** above
 
 ### How to proceed when blocked
 1. Still write the **complete test code** with `pytest.skip()` guards for missing env vars
