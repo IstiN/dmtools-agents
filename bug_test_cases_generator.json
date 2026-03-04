@@ -1,0 +1,26 @@
+{
+  "name" : "TestCasesGenerator",
+  "params" : {
+    "testCasesPriorities" : "High, Medium, Low",
+    "outputType" : "creation",
+    "testCaseIssueType" : "Test Case",
+    "existingTestCasesJql" : "project = MYTUBE AND issuetype = 'Test Case'",
+    "testCaseLinkRelationship" : "relates to",
+    "isFindRelated" : true,
+    "isGenerateNew" : true,
+    "isConvertToJiraMarkdown" : false,
+    "isOverridePromptExamples" : true,
+    "includeOtherTicketReferences" : true,
+    "alwaysPostComments": true,
+    "ticketContextDepth" : 1,
+    "confluencePages" : [
+      "https://dmtools.atlassian.net/wiki/spaces/AINA/pages/18186241/Template+Jira+Markdown",
+      "./agents/instructions/test_cases/test_case_creation_rules.md"
+    ],
+    "relatedTestCasesRules" : "./agents/instructions/test_cases/test_case_relation_rules.md",
+    "examples" : "ql(project = JD AND issuetype = 'Test Case' AND labels = \"ai_example\")",
+    "preJSAction" : "agents/js/moveToReadyForTesting.js",
+    "postJSAction" : "agents/js/moveToDone.js",
+    "inputJql" : "key = JD-107"
+  }
+}

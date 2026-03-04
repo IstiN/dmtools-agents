@@ -91,7 +91,7 @@
         {
           "description" : "Ready For Testing Bugs → generate test cases",
           "jql"         : "project = MYTUBE AND issuetype in ('Bug') AND status in ('Ready For Testing')",
-          "configFile"  : "agents/test_cases_generator.json",
+          "configFile"  : "agents/bug_test_cases_generator.json",
           "skipIfLabel" : "sm_bug_test_cases_triggered",
           "addLabel"    : "sm_bug_test_cases_triggered",
           "enabled"     : true
