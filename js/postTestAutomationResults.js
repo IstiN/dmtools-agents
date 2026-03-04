@@ -68,15 +68,24 @@ function performGitOperations(branchName, commitMessage) {
         console.log('Cleaned git status:', statusOutput || '(empty)');
 
         if (!statusOutput || !statusOutput.trim()) {
-            console.warn('No changes to commit in testing/');
-            // Diagnostic: show full git status
+            console.warn('No new changes to commit in testing/ (files may already exist on main)');
+            // Check if branch exists on remote — we can still create PR from it
+            var remoteBranchCheck = cleanCommandOutput(
+                cli_execute_command({ command: 'git ls-remote --heads origin ' + branchName }) || ''
+            );
+            if (remoteBranchCheck.trim()) {
+                console.log('Branch exists on remote, will try to create PR from existing branch');
+                return { success: true, branchName: branchName, noNewCommit: true };
+            }
+            // No remote branch either — push current branch so PR can be created
+            console.log('No remote branch found, pushing current branch state...');
             try {
-                var fullStatus = cleanCommandOutput(
-                    cli_execute_command({ command: 'git status' }) || ''
-                );
-                console.log('Full git status:', fullStatus);
-            } catch (e) {}
-            return { success: false, error: 'No test files were written' };
+                cli_execute_command({ command: 'git push -u origin ' + branchName + ' --force' });
+                return { success: true, branchName: branchName, noNewCommit: true };
+            } catch (pushErr) {
+                console.warn('Failed to push branch:', pushErr);
+                return { success: false, error: 'No test files were written and could not push branch' };
+            }
         }
 
         console.log('Committing...');
