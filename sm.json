@@ -94,7 +94,7 @@
           "configFile"  : "agents/test_cases_generator.json",
           "skipIfLabel" : "sm_bug_test_cases_triggered",
           "addLabel"    : "sm_bug_test_cases_triggered",
-          "enabled"     : false
+          "enabled"     : true
         },
         {
           "description" : "In Testing Stories → check all TCs passed → Done",
