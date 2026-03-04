@@ -383,21 +383,9 @@ function retryAfterPushFailure(ticketKey, branchName, pushError) {
         console.warn('Could not write push_error.md:', e);
     }
 
-    // Re-invoke the agent with --continue --resume to fix the commit
-    var fixPrompt = 'The git push failed. I have written the details in ' + errorFilePath +
-        ' — please read it and fix the commit. Do NOT push.';
-    console.log('Re-invoking agent with --continue --resume...');
-    try {
-        cli_execute_command({
-            command: './agents/scripts/run-agent.sh --continue --resume "' + fixPrompt.replace(/"/g, '\\"') + '"'
-        });
-    } catch (e) {
-        return { success: false, error: 'Agent fix attempt failed: ' + e.toString() };
-    }
-
-    // Retry push
-    console.log('Retrying push after agent fix...');
-    var retryOutput = cli_execute_command({ command: 'git push -u origin ' + branchName }) || '';
+    // For non-fast-forward: force push (branch diverged from remote, our local is newer)
+    console.log('Retrying with force push...');
+    var retryOutput = cli_execute_command({ command: 'git push -u origin ' + branchName + ' --force' }) || '';
     var retryFailed = retryOutput.indexOf('remote rejected') !== -1 ||
                       retryOutput.indexOf('GH013') !== -1 ||
                       retryOutput.indexOf('error: failed to push') !== -1 ||
