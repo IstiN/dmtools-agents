@@ -481,8 +481,8 @@ function detectFailedChecks(owner, repo, headSha, inputFolder) {
             }
             md += '\n';
 
-            // GitHub Actions details_url format: .../actions/runs/{runId}/jobs/{jobId}
-            var jobIdMatch = check.details_url && check.details_url.match(/\/jobs\/(\d+)/);
+            // GitHub Actions details_url format: .../actions/runs/{runId}/job/{jobId}
+            var jobIdMatch = check.details_url && check.details_url.match(/\/jobs?\/(\d+)/);
             if (jobIdMatch) {
                 try {
                     var rawLogs = github_get_job_logs({
