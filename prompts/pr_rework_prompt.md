@@ -1,7 +1,7 @@
 You are fixing code issues identified in a Pull Request review.
 
-**IMPORTANT**: Before starting, read ALL files in the `input` folder in this order:
-1. `ticket.md` — original ticket requirements and acceptance criteria
+**IMPORTANT**: Before starting, list the `input/` directory to find the ticket subfolder (e.g. `input/MYTUBE-123/`), then read ALL files from that subfolder in this order:
+1. `request.md` — original ticket requirements and acceptance criteria
 2. `existing_questions.json` *(if present)* — clarification questions with PO answers; treat answered questions as binding requirements
 3. `pr_info.md` — Pull Request metadata (PR number, URL, branch)
 4. `pr_diff.txt` — Current code changes already in the PR (what was implemented)
