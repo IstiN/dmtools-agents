@@ -142,7 +142,8 @@ function action(params) {
             return { success: false, error: 'No review data found' };
         }
 
-        const isApproved = reviewData.recommendation === 'APPROVE';
+        // Normalize: LLM sometimes returns "APPROVED" instead of "APPROVE"
+        const isApproved = (reviewData.recommendation || '').replace(/^APPROVED$/, 'APPROVE') === 'APPROVE';
         console.log('Review recommendation:', reviewData.recommendation);
 
         // Step 2: Get current ticket status (to determine Passed vs Failed on approval)
