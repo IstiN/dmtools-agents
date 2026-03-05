@@ -10,10 +10,26 @@ The input folder contains a ticket subfolder (e.g. `input/MYTUBE-123/`). List `i
 - `pr_discussions_raw.json` *(if present)*: Structured thread data with IDs — for each thread fully fixed in this diff, add its `threadId` to `resolvedThreadIds` in `pr_review.json`
 
 # Your Mission
-Conduct a thorough security-focused code review prioritizing:
-1. 🔒 **Security vulnerabilities** (HIGHEST PRIORITY)
-2. 🏗️ **Code quality & OOP principles** (HIGH PRIORITY)
-3. ✅ **Task alignment** with ticket requirements
+Conduct a thorough review. Your **primary goal** is to verify that the changes actually solve the user's problem — not just that the code looks clean.
+
+## ⚠️ CRITICAL: Does this PR actually fix the user's problem?
+
+**Before reviewing code style or security, answer this question:**  
+*"If a real user follows the Steps to Reproduce from `request.md`, will the problem be gone after this PR is merged?"*
+
+To answer it:
+1. Read `request.md` carefully — understand the **actual symptom** the user experiences (not just the ticket title).
+2. Trace the code path that the user triggers: what happens from the user action → through routing/backend/frontend → to the final result.
+3. Check whether the changes in `pr_diff.txt` are on that critical path. If the fix is in a completely different layer than where the symptom occurs — that is a 🚨 BLOCKING issue.
+4. Look at the **surrounding code**, not just the changed lines. A fix can be technically correct in isolation but miss the real problem because of something adjacent (wrong config, missing route, different code path that's actually triggered).
+5. If the PR includes tests — check that the tests actually reproduce the user's symptom, not just a tangentially related scenario.
+
+If you conclude the changes **do not fully solve the user's problem**, raise it as a 🚨 BLOCKING issue with a clear explanation of what is missing.
+
+# Review Priorities
+1. ✅ **Actually solves the user's problem** (HIGHEST PRIORITY — see above)
+2. 🔒 **Security vulnerabilities**
+3. 🏗️ **Code quality & OOP principles**
 4. 🧪 **Testing adequacy**
 5. 📝 **Best practices & maintainability**
 
@@ -45,6 +61,7 @@ Verify:
 - All ticket requirements implemented
 - Acceptance criteria met
 - No out-of-scope changes without justification
+- The fix addresses the root cause, not just a symptom or an adjacent code smell
 
 # Output
 
