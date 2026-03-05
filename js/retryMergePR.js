@@ -135,8 +135,19 @@ function action(params) {
         console.log('✅ PR #' + prNumber + ' merged successfully');
         removeApprovedLabels(owner, repo, prNumber, ticketKey);
         releaseLock(ticketKey, params);
-        jira_move_to_status({ key: ticketKey, statusName: STATUSES.MERGED });
-        console.log('✅ Ticket moved to Merged');
+
+        // For test cases: move to Passed/Failed based on current status; for stories/bugs: Merged
+        const isTestCase = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.testCaseMerge;
+        if (isTestCase) {
+            var ticketDetail = jira_get_ticket({ key: ticketKey });
+            var currentStatus = ticketDetail && ticketDetail.fields && ticketDetail.fields.status && ticketDetail.fields.status.name;
+            var finalStatus = (currentStatus === STATUSES.IN_REVIEW_PASSED) ? STATUSES.PASSED : STATUSES.FAILED;
+            jira_move_to_status({ key: ticketKey, statusName: finalStatus });
+            console.log('✅ Ticket moved to ' + finalStatus);
+        } else {
+            jira_move_to_status({ key: ticketKey, statusName: STATUSES.MERGED });
+            console.log('✅ Ticket moved to Merged');
+        }
         return true;
     } catch (mergeErr) {
         console.warn('Merge failed:', mergeErr);

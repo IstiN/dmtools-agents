@@ -185,40 +185,27 @@ function action(params) {
             // Resolve threads that were fully fixed in this rework
             resolveApprovedThreads(repoInfo, prNumber, reviewData.resolvedThreadIds);
 
-            // Merge if approved
+            // Queue for merge via pr_approved label (same pattern as stories/bugs)
             if (isApproved) {
                 try {
-                    github_merge_pr({
+                    github_add_pr_label({
                         workspace: repoInfo.owner,
                         repository: repoInfo.repo,
                         pullRequestId: String(prNumber),
-                        mergeMethod: 'squash'
+                        label: LABELS.PR_APPROVED
                     });
-                    mergeSucceeded = true;
-                    console.log('✅ PR #' + prNumber + ' merged');
+                    console.log('✅ Added pr_approved label to GitHub PR');
                 } catch (e) {
-                    console.warn('First merge attempt failed (likely conflict) — trying auto-update branch:', e);
-
-                    // Auto-fix: merge latest main into the test branch and retry
-                    try {
-                        try { cli_execute_command({ command: 'git fetch --unshallow' }); } catch (e) {}
-                        cli_execute_command({ command: 'git fetch origin' });
-                        cli_execute_command({ command: 'git merge origin/main --no-edit' });
-                        cli_execute_command({ command: 'git push origin HEAD' });
-                        console.log('✅ Auto-merged main into branch — retrying PR merge');
-
-                        github_merge_pr({
-                            workspace: repoInfo.owner,
-                            repository: repoInfo.repo,
-                            pullRequestId: String(prNumber),
-                            mergeMethod: 'squash'
-                        });
-                        mergeSucceeded = true;
-                        console.log('✅ PR #' + prNumber + ' merged after auto-update');
-                    } catch (retryErr) {
-                        console.warn('Auto-update + retry also failed — real conflict needs rework:', retryErr);
-                    }
+                    console.warn('Failed to add pr_approved to GitHub PR:', e);
                 }
+                try {
+                    jira_add_label({ key: ticketKey, label: LABELS.PR_APPROVED });
+                    console.log('✅ Added pr_approved label to Jira ticket');
+                } catch (e) {
+                    console.warn('Failed to add pr_approved to Jira ticket:', e);
+                }
+                mergeSucceeded = true; // signal "no conflict yet"
+                console.log('✅ PR #' + prNumber + ' queued for merge via pr_approved');
             }
         } else {
             console.warn('No PR info — skipping GitHub comments');
@@ -235,31 +222,9 @@ function action(params) {
         }
 
         // Step 6: Move ticket status
-        if (isApproved && !mergeSucceeded) {
-            // Approved but merge failed — conflict with recently merged changes
-            try {
-                jira_post_comment({
-                    key: ticketKey,
-                    comment: 'h3. ⚠️ Merge Conflict\n\nReview *APPROVED* but PR could not be merged automatically — likely due to conflicts with recently merged changes.\n\nPlease resolve the conflicts and re-push to the test branch.'
-                });
-            } catch (e) {}
-            try {
-                jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REWORK });
-                console.log('✅ Merge conflict — moved', ticketKey, 'to In Rework');
-            } catch (e) {
-                console.warn('Failed to move to In Rework:', e);
-            }
-        } else if (isApproved) {
-            // In Review - Passed → Passed, In Review - Failed → Failed
-            const finalStatus = (currentStatus === STATUSES.IN_REVIEW_PASSED)
-                ? STATUSES.PASSED
-                : STATUSES.FAILED;
-            try {
-                jira_move_to_status({ key: ticketKey, statusName: finalStatus });
-                console.log('✅ Approved — moved', ticketKey, 'to', finalStatus);
-            } catch (e) {
-                console.warn('Failed to move to final status:', e);
-            }
+        if (isApproved) {
+            // Ticket stays in In Review - Passed/Failed until SM merges the PR via pr_approved flow
+            console.log('✅ Ticket stays in', currentStatus, '— SM will merge and move to final status');
         } else {
             try {
                 jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REWORK });

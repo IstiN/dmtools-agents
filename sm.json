@@ -1,183 +1,191 @@
 {
-  "name" : "JSRunner",
-  "params" : {
-    "jsPath"    : "agents/js/smAgent.js",
-    "jobParams" : {
-      "owner" : "ai-teammate",
-      "repo"  : "mytube",
-      "rules" : [
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "agents/js/smAgent.js",
+    "jobParams": {
+      "owner": "ai-teammate",
+      "repo": "mytube",
+      "rules": [
         {
-          "description" : "PO Review Stories with all subtasks Done → BA Analysis",
-          "jql"         : "project = MYTUBE AND issuetype in ('Story') AND status in ('PO Review')",
-          "configFile"  : "agents/story_ba_check.json",
-          "skipIfLabel" : "sm_story_ba_check_triggered",
-          "addLabel"    : "sm_story_ba_check_triggered",
-          "localExecution" : true
+          "description": "PO Review Stories with all subtasks Done → BA Analysis",
+          "jql": "project = MYTUBE AND issuetype in ('Story') AND status in ('PO Review')",
+          "configFile": "agents/story_ba_check.json",
+          "skipIfLabel": "sm_story_ba_check_triggered",
+          "addLabel": "sm_story_ba_check_triggered",
+          "localExecution": true
         },
         {
-          "description" : "BA Analysis Stories → generate Acceptance Criterias",
-          "jql"         : "project = MYTUBE AND issuetype in ('Story') AND status in ('BA Analysis')",
-          "configFile"  : "agents/story_acceptance_criterias.json",
-          "skipIfLabel" : "sm_story_acceptance_criterias_triggered",
-          "addLabel"    : "sm_story_acceptance_criterias_triggered"
+          "description": "BA Analysis Stories → generate Acceptance Criterias",
+          "jql": "project = MYTUBE AND issuetype in ('Story') AND status in ('BA Analysis')",
+          "configFile": "agents/story_acceptance_criterias.json",
+          "skipIfLabel": "sm_story_acceptance_criterias_triggered",
+          "addLabel": "sm_story_acceptance_criterias_triggered"
         },
         {
-          "description" : "Solution Architecture Stories → generate Solution Design",
-          "jql"         : "project = MYTUBE AND issuetype in ('Story') AND status in ('Solution Architecture')",
-          "configFile"  : "agents/story_solution.json",
-          "skipIfLabel" : "sm_story_solution_triggered",
-          "addLabel"    : "sm_story_solution_triggered"
+          "description": "Solution Architecture Stories → generate Solution Design",
+          "jql": "project = MYTUBE AND issuetype in ('Story') AND status in ('Solution Architecture')",
+          "configFile": "agents/story_solution.json",
+          "skipIfLabel": "sm_story_solution_triggered",
+          "addLabel": "sm_story_solution_triggered"
         },
         {
-          "description" : "Subtasks with 'q' label → trigger PO refinement",
-          "jql"         : "project = MYTUBE AND issuetype in ('Subtask') AND labels in ('q')",
-          "configFile"  : "agents/po_refinement.json",
-          "skipIfLabel" : "sm_po_refinement_triggered",
-          "addLabel"    : "sm_po_refinement_triggered"
+          "description": "Subtasks with 'q' label → trigger PO refinement",
+          "jql": "project = MYTUBE AND issuetype in ('Subtask') AND labels in ('q') and status not in (Done)",
+          "configFile": "agents/po_refinement.json",
+          "skipIfLabel": "sm_po_refinement_triggered",
+          "addLabel": "sm_po_refinement_triggered"
         },
         {
-          "description" : "Backlog Stories → ask clarification questions",
-          "jql"         : "project = MYTUBE AND issuetype in ('Story') AND status in ('Backlog')",
-          "configFile"  : "agents/story_questions.json",
-          "skipIfLabel" : "sm_story_questions_triggered",
-          "addLabel"    : "sm_story_questions_triggered"
+          "description": "Backlog Stories → ask clarification questions",
+          "jql": "project = MYTUBE AND issuetype in ('Story') AND status in ('Backlog')",
+          "configFile": "agents/story_questions.json",
+          "skipIfLabel": "sm_story_questions_triggered",
+          "addLabel": "sm_story_questions_triggered"
         },
         {
-          "description" : "Ready For Development Stories → trigger story_development",
-          "jql"         : "project = MYTUBE AND issuetype in ('Story') AND status in ('Ready For Development')",
-          "configFile"  : "agents/story_development.json",
-          "skipIfLabel" : "sm_story_development_triggered",
-          "addLabel"    : "sm_story_development_triggered"
+          "description": "Ready For Development Stories → trigger story_development",
+          "jql": "project = MYTUBE AND issuetype in ('Story') AND status in ('Ready For Development')",
+          "configFile": "agents/story_development.json",
+          "skipIfLabel": "sm_story_development_triggered",
+          "addLabel": "sm_story_development_triggered"
         },
         {
-          "description" : "Ready For Development Bugs → trigger bug_development",
-          "jql"         : "project = MYTUBE AND issuetype in ('Bug') AND status in ('Ready For Development')",
-          "configFile"  : "agents/bug_development.json",
-          "skipIfLabel" : "sm_bug_development_triggered",
-          "addLabel"    : "sm_bug_development_triggered",
-          "enabled"     : true
+          "description": "Ready For Development Bugs → trigger bug_development",
+          "jql": "project = MYTUBE AND issuetype in ('Bug') AND status in ('Ready For Development')",
+          "configFile": "agents/bug_development.json",
+          "skipIfLabel": "sm_bug_development_triggered",
+          "addLabel": "sm_bug_development_triggered",
+          "enabled": true
         },
         {
-          "description" : "In Review Stories & Bugs → trigger pr_review",
-          "jql"         : "project = MYTUBE AND issuetype in ('Story', 'Bug') AND status in ('In Review') AND labels NOT IN ('pr_approved')",
-          "configFile"  : "agents/pr_review.json",
-          "skipIfLabel" : "sm_story_review_triggered",
-          "addLabel"    : "sm_story_review_triggered"
+          "description": "In Review Stories & Bugs → trigger pr_review",
+          "jql": "project = MYTUBE AND issuetype in ('Story', 'Bug') AND status in ('In Review') AND labels NOT IN ('pr_approved')",
+          "configFile": "agents/pr_review.json",
+          "skipIfLabel": "sm_story_review_triggered",
+          "addLabel": "sm_story_review_triggered"
         },
         {
-          "description" : "In Review Stories & Bugs (pr_approved) → retry merge",
-          "jql"         : "project = MYTUBE AND issuetype in ('Story', 'Bug') AND status in ('In Review') AND labels = 'pr_approved'",
-          "configFile"  : "agents/retry_merge.json",
-          "skipIfLabel" : "sm_pr_merge_triggered",
-          "addLabel"    : "sm_pr_merge_triggered",
-          "localExecution" : true
+          "description": "In Review Stories & Bugs (pr_approved) → retry merge",
+          "jql": "project = MYTUBE AND issuetype in ('Story', 'Bug') AND status in ('In Review') AND labels = 'pr_approved'",
+          "configFile": "agents/retry_merge.json",
+          "skipIfLabel": "sm_pr_merge_triggered",
+          "addLabel": "sm_pr_merge_triggered",
+          "localExecution": true
         },
         {
-          "description" : "In Rework Stories & Bugs → trigger pr_rework",
-          "jql"         : "project = MYTUBE AND issuetype in ('Story', 'Bug') AND status in ('In Rework')",
-          "configFile"  : "agents/pr_rework.json",
-          "skipIfLabel" : "sm_story_rework_triggered",
-          "addLabel"    : "sm_story_rework_triggered"
+          "description": "In Review Test Cases (pr_approved) → retry merge",
+          "jql": "project = MYTUBE AND issuetype in ('Test Case') AND status in ('In Review - Passed', 'In Review - Failed') AND labels = 'pr_approved'",
+          "configFile": "agents/retry_merge_test.json",
+          "skipIfLabel": "sm_test_merge_triggered",
+          "addLabel": "sm_test_merge_triggered",
+          "localExecution": true
         },
         {
-          "description" : "Merged Stories → Ready For Testing + generate test cases",
-          "jql"         : "project = MYTUBE AND issuetype in ('Story') AND status in ('Merged')",
+          "description": "In Rework Stories & Bugs → trigger pr_rework",
+          "jql": "project = MYTUBE AND issuetype in ('Story', 'Bug') AND status in ('In Rework')",
+          "configFile": "agents/pr_rework.json",
+          "skipIfLabel": "sm_story_rework_triggered",
+          "addLabel": "sm_story_rework_triggered"
+        },
+        {
+          "description": "Merged Stories → Ready For Testing + generate test cases",
+          "jql": "project = MYTUBE AND issuetype in ('Story') AND status in ('Merged')",
           "targetStatus": "Ready For Testing",
-          "configFile"  : "agents/test_cases_generator.json",
-          "skipIfLabel" : "sm_test_cases_triggered",
-          "addLabel"    : "sm_test_cases_triggered"
+          "configFile": "agents/test_cases_generator.json",
+          "skipIfLabel": "sm_test_cases_triggered",
+          "addLabel": "sm_test_cases_triggered"
         },
         {
-          "description" : "Merged Bugs → Ready For Testing",
-          "jql"         : "project = MYTUBE AND issuetype in ('Bug') AND status in ('Merged')",
+          "description": "Merged Bugs → Ready For Testing",
+          "jql": "project = MYTUBE AND issuetype in ('Bug') AND status in ('Merged')",
           "targetStatus": "Ready For Testing",
-          "configFile"  : "agents/bug_merged.json",
-          "skipIfLabel" : "sm_bug_merged_triggered",
-          "addLabel"    : "sm_bug_merged_triggered",
-          "enabled"     : true,
-          "limit"       : 1,
-          "localExecution" : true
+          "configFile": "agents/bug_merged.json",
+          "skipIfLabel": "sm_bug_merged_triggered",
+          "addLabel": "sm_bug_merged_triggered",
+          "enabled": true,
+          "limit": 1,
+          "localExecution": true
         },
         {
-          "description" : "Ready For Testing Bugs → generate test cases",
-          "jql"         : "project = MYTUBE AND issuetype in ('Bug') AND status in ('Ready For Testing')",
-          "configFile"  : "agents/bug_test_cases_generator.json",
-          "skipIfLabel" : "sm_bug_test_cases_triggered",
-          "addLabel"    : "sm_bug_test_cases_triggered",
-          "enabled"     : true
+          "description": "Ready For Testing Bugs → generate test cases",
+          "jql": "project = MYTUBE AND issuetype in ('Bug') AND status in ('Ready For Testing')",
+          "configFile": "agents/bug_test_cases_generator.json",
+          "skipIfLabel": "sm_bug_test_cases_triggered",
+          "addLabel": "sm_bug_test_cases_triggered",
+          "enabled": true
         },
         {
-          "description" : "In Testing Stories → check all TCs passed → Done",
-          "jql"         : "project = MYTUBE AND issuetype in ('Story') AND status in ('In Testing')",
-          "configFile"  : "agents/story_done_check.json",
-          "skipIfLabel" : "sm_story_done_check_triggered",
-          "addLabel"    : "sm_story_done_check_triggered",
-          "enabled"     : false,
-          "localExecution" : true
+          "description": "In Testing Stories → check all TCs passed → Done",
+          "jql": "project = MYTUBE AND issuetype in ('Story') AND status in ('In Testing')",
+          "configFile": "agents/story_done_check.json",
+          "skipIfLabel": "sm_story_done_check_triggered",
+          "addLabel": "sm_story_done_check_triggered",
+          "enabled": false,
+          "localExecution": true
         },
         {
-          "description" : "In Testing Bugs → check all TCs passed → Done",
-          "jql"         : "project = MYTUBE AND issuetype in ('Bug') AND status in ('In Testing')",
-          "configFile"  : "agents/bug_done_check.json",
-          "skipIfLabel" : "sm_bug_done_check_triggered",
-          "addLabel"    : "sm_bug_done_check_triggered",
-          "enabled"     : false,
-          "localExecution" : true
+          "description": "In Testing Bugs → check all TCs passed → Done",
+          "jql": "project = MYTUBE AND issuetype in ('Bug') AND status in ('In Testing')",
+          "configFile": "agents/bug_done_check.json",
+          "skipIfLabel": "sm_bug_done_check_triggered",
+          "addLabel": "sm_bug_done_check_triggered",
+          "enabled": false,
+          "localExecution": true
         },
         {
-          "description" : "Backlog Test Cases → In Development + automate",
-          "jql"         : "project = MYTUBE AND issuetype in ('Test Case') AND status in ('Backlog')",
+          "description": "Backlog Test Cases → In Development + automate",
+          "jql": "project = MYTUBE AND issuetype in ('Test Case') AND status in ('Backlog')",
           "targetStatus": "In Development",
-          "configFile"  : "agents/test_case_automation.json",
-          "skipIfLabel" : "sm_test_automation_triggered",
-          "addLabel"    : "sm_test_automation_triggered"
+          "configFile": "agents/test_case_automation.json",
+          "skipIfLabel": "sm_test_automation_triggered",
+          "addLabel": "sm_test_automation_triggered"
         },
         {
-          "description" : "In Review Test Cases → trigger pr_test_automation_review",
-          "jql"         : "project = MYTUBE AND issuetype in ('Test Case') AND status in ('In Review - Passed', 'In Review - Failed')",
-          "configFile"  : "agents/pr_test_automation_review.json",
-          "skipIfLabel" : "sm_test_review_triggered",
-          "addLabel"    : "sm_test_review_triggered"
+          "description": "In Review Test Cases → trigger pr_test_automation_review",
+          "jql": "project = MYTUBE AND issuetype in ('Test Case') AND status in ('In Review - Passed', 'In Review - Failed')",
+          "configFile": "agents/pr_test_automation_review.json",
+          "skipIfLabel": "sm_test_review_triggered",
+          "addLabel": "sm_test_review_triggered"
         },
         {
-          "description" : "In Rework Test Cases → trigger pr_test_automation_rework",
-          "jql"         : "project = MYTUBE AND issuetype in ('Test Case') AND status in ('In Rework')",
-          "configFile"  : "agents/pr_test_automation_rework.json",
-          "skipIfLabel" : "sm_test_rework_triggered",
-          "addLabel"    : "sm_test_rework_triggered"
+          "description": "In Rework Test Cases → trigger pr_test_automation_rework",
+          "jql": "project = MYTUBE AND issuetype in ('Test Case') AND status in ('In Rework')",
+          "configFile": "agents/pr_test_automation_rework.json",
+          "skipIfLabel": "sm_test_rework_triggered",
+          "addLabel": "sm_test_rework_triggered"
         },
         {
-          "description" : "Failed Test Cases → create or link bug",
-          "jql"         : "project = MYTUBE AND issuetype in ('Test Case') AND status in ('Failed')",
-          "configFile"  : "agents/bug_creation.json",
-          "skipIfLabel" : "sm_bug_creation_triggered",
-          "addLabel"    : "sm_bug_creation_triggered",
-          "limit"       : 1
+          "description": "Failed Test Cases → create or link bug",
+          "jql": "project = MYTUBE AND issuetype in ('Test Case') AND status in ('Failed')",
+          "configFile": "agents/bug_creation.json",
+          "skipIfLabel": "sm_bug_creation_triggered",
+          "addLabel": "sm_bug_creation_triggered",
+          "limit": 1
         },
         {
-          "description" : "Bug To Fix Test Cases → all linked Bugs Done → move to Backlog",
-          "jql"         : "project = MYTUBE AND issuetype in ('Test Case') AND status in ('Bug To Fix')",
-          "configFile"  : "agents/bug_to_fix_check.json",
-          "skipIfLabel" : "sm_bug_to_fix_check_triggered",
-          "addLabel"    : "sm_bug_to_fix_check_triggered",
-          "localExecution" : true
+          "description": "Bug To Fix Test Cases → all linked Bugs Done → move to Backlog",
+          "jql": "project = MYTUBE AND issuetype in ('Test Case') AND status in ('Bug To Fix')",
+          "configFile": "agents/bug_to_fix_check.json",
+          "skipIfLabel": "sm_bug_to_fix_check_triggered",
+          "addLabel": "sm_bug_to_fix_check_triggered",
+          "localExecution": true
         },
         {
-          "description" : "Failed Test Cases → check if all linked Bugs are In Testing → Re-run",
-          "jql"         : "project = MYTUBE AND issuetype in ('Test Case') AND status in ('Failed')",
-          "configFile"  : "agents/tc_rerun_trigger.json",
-          "skipIfLabel" : "sm_tc_rerun_trigger_triggered",
-          "addLabel"    : "sm_tc_rerun_trigger_triggered",
-          "enabled"     : false,
-          "localExecution" : true
+          "description": "Failed Test Cases → check if all linked Bugs are In Testing → Re-run",
+          "jql": "project = MYTUBE AND issuetype in ('Test Case') AND status in ('Failed')",
+          "configFile": "agents/tc_rerun_trigger.json",
+          "skipIfLabel": "sm_tc_rerun_trigger_triggered",
+          "addLabel": "sm_tc_rerun_trigger_triggered",
+          "enabled": false,
+          "localExecution": true
         },
         {
-          "description" : "Re-run Test Cases → run existing test → Passed / Failed / In Review",
-          "jql"         : "project = MYTUBE AND issuetype in ('Test Case') AND status in ('Re-run')",
-          "configFile"  : "agents/tc_rerun.json",
-          "skipIfLabel" : "sm_tc_rerun_triggered",
-          "addLabel"    : "sm_tc_rerun_triggered",
-          "enabled"     : false
+          "description": "Re-run Test Cases → run existing test → Passed / Failed / In Review",
+          "jql": "project = MYTUBE AND issuetype in ('Test Case') AND status in ('Re-run')",
+          "configFile": "agents/tc_rerun.json",
+          "skipIfLabel": "sm_tc_rerun_triggered",
+          "addLabel": "sm_tc_rerun_triggered",
+          "enabled": false
         }
       ]
     }
