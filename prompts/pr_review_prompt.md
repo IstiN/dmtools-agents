@@ -81,6 +81,8 @@ You MUST write all three files below. Do NOT just write the review as plain text
 ### 1. `outputs/pr_review.json` — REQUIRED (exact format in `pr_review_json_output.md`)
 This is the machine-readable result consumed by the post-action. If it is missing the entire review outcome is lost — the ticket will not be merged, no status will change, and no comments will be posted.
 
+**⚠️ CRITICAL — `recommendation` field**: Use EXACTLY `"APPROVE"`, `"REQUEST_CHANGES"`, or `"BLOCK"`. Never `"APPROVED"` (missing D). Never use `"verdict"` as the field name.
+
 ### 2. `outputs/pr_review_general.md` — REQUIRED
 GitHub-formatted general PR comment (referenced in `pr_review.json` → `generalComment`).
 
