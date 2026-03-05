@@ -30,9 +30,13 @@ In addition to outputs/response.md (Jira-formatted review), you MUST generate:
 }
 ```
 
-### Field Descriptions:
+### ⚠️ CRITICAL: Use `recommendation`, NOT `verdict`
 
-- **recommendation**: Final decision - APPROVE, REQUEST_CHANGES, or BLOCK
+The field MUST be named **`recommendation`** (not `verdict`, not `decision`, not `result`).  
+The value MUST be exactly one of: `APPROVE`, `REQUEST_CHANGES`, `BLOCK` (uppercase, no other values).
+
+❌ Wrong: `"verdict": "APPROVED"`  
+✅ Correct: `"recommendation": "APPROVE"`
 - **summary**: One paragraph overall assessment (plain text)
 - **prNumber**: Leave null (will be filled by JS action)
 - **prUrl**: Leave null (will be filled by JS action)

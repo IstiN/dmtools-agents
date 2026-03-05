@@ -295,7 +295,7 @@ function postReviewToJira(ticketKey, reviewContent, reviewData, prUrl, merged) {
         let comment = 'h2. 🔍 Automated PR Review Completed\n\n';
 
         // Add outcome badge
-        const recommendation = reviewData.recommendation || 'REQUEST_CHANGES';
+        const recommendation = reviewData.recommendation || reviewData.verdict || 'REQUEST_CHANGES';
         if (merged) {
             comment += '{panel:bgColor=#E3FCEF|borderColor=#00875A}✅ *APPROVED & MERGED* - PR has been merged successfully{panel}\n\n';
         } else if (recommendation === 'APPROVE') {
@@ -418,7 +418,7 @@ function action(params) {
 
         // Step 3: Get GitHub repo info (already done above)
 
-        const recommendation = reviewData.recommendation;
+        const recommendation = reviewData.recommendation || reviewData.verdict || 'REQUEST_CHANGES';
         const isApproved = recommendation === 'APPROVE';
         let merged = false;
 
