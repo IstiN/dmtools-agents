@@ -1,0 +1,25 @@
+{
+  "name" : "Teammate",
+  "params" : {
+    "metadata" : {
+      "contextId" : "retry_merge_test"
+    },
+    "agentParams" : {
+      "aiRole" : "PR merge assistant",
+      "instructions" : [],
+      "knownInfo" : "",
+      "formattingRules" : "",
+      "fewShots" : ""
+    },
+    "outputType" : "none",
+    "ticketContextDepth" : 1,
+    "skipAIProcessing" : true,
+    "alwaysPostComments" : true,
+    "postJSAction" : "agents/js/retryMergePR.js",
+    "customParams" : {
+      "removeLabel" : "sm_test_merge_triggered",
+      "testCaseMerge" : true
+    },
+    "inputJql" : "key = MYTUBE-1"
+  }
+}
