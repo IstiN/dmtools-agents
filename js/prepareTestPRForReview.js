@@ -78,28 +78,34 @@ function action(params) {
             }
 
             // Branch exists — create a new PR so review can proceed
+            // Use gh api --input JSON to avoid shell quoting issues with title special chars
             console.log('Branch exists but no PR — creating PR for review...');
             try {
                 const ticket = jira_get_ticket({ key: ticketKey });
                 const summary = ticket && ticket.fields ? (ticket.fields.summary || ticketKey) : ticketKey;
                 const prTitle = ticketKey + ' ' + summary;
-                const prBody = 'Auto-created PR for test automation review.\n\nTicket: ' + ticketKey;
 
-                file_write({ path: '/tmp/review_pr_body_' + ticketKey + '.md', content: prBody });
+                const prData = JSON.stringify({
+                    title: prTitle,
+                    body: 'Auto-created PR for test automation review.\n\nTicket: ' + ticketKey,
+                    head: branchName,
+                    base: 'main'
+                });
+                file_write({ path: '/tmp/pr_create_' + ticketKey + '.json', content: prData });
 
                 const createOutput = cli_execute_command({
-                    command: 'gh pr create --title "' + prTitle.replace(/"/g, '\\"') + '" --body-file "/tmp/review_pr_body_' + ticketKey + '.md" --base main --head ' + branchName + ' --repo ' + repoInfo.owner + '/' + repoInfo.repo
+                    command: 'gh api repos/' + repoInfo.owner + '/' + repoInfo.repo + '/pulls --input /tmp/pr_create_' + ticketKey + '.json'
                 }) || '';
 
-                console.log('gh pr create output:', createOutput);
+                console.log('gh api pr create output length:', createOutput.length);
 
-                const urlMatch = createOutput.match(/https:\/\/github\.com\/[^\s]+/);
-                const prUrl = urlMatch ? urlMatch[0] : null;
-                const prNumMatch = (prUrl || '').match(/\/pull\/(\d+)/);
-                const prNum = prNumMatch ? parseInt(prNumMatch[1], 10) : null;
+                var prJson;
+                try { prJson = JSON.parse(createOutput); } catch (e) { prJson = null; }
+                const prNum = prJson && prJson.number;
+                const prUrl = prJson && prJson.html_url;
 
                 if (!prNum) {
-                    throw new Error('Could not determine PR number from: ' + createOutput.substring(0, 200));
+                    throw new Error('Could not parse PR from API response: ' + createOutput.substring(0, 300));
                 }
 
                 console.log('✅ Created new PR #' + prNum + ' for review');

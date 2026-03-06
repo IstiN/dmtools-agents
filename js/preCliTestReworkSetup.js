@@ -47,20 +47,21 @@ function action(params) {
 
         // Step 2: Find PR on test/{KEY} branch specifically
         var pr = findTestPRForTicket(repoInfo.owner, repoInfo.repo, ticketKey);
+        const testBranchName = 'test/' + ticketKey;
+
         if (!pr) {
-            // No open PR — check if the test branch exists on remote (branch may exist without a PR)
-            const branchName = 'test/' + ticketKey;
-            console.log('No open PR found. Checking if branch exists on remote:', branchName);
+            // No open PR — check if the test branch exists on remote
+            console.log('No open PR found. Checking if branch exists on remote:', testBranchName);
             var branchExists = false;
             try {
-                const lsOutput = cli_execute_command({ command: 'git ls-remote --heads origin ' + branchName }) || '';
-                branchExists = lsOutput.indexOf('refs/heads/' + branchName) !== -1;
+                const lsOutput = cli_execute_command({ command: 'git ls-remote --heads origin ' + testBranchName }) || '';
+                branchExists = lsOutput.indexOf('refs/heads/' + testBranchName) !== -1;
             } catch (e) {
                 console.warn('Could not check remote branch:', e);
             }
 
             if (!branchExists) {
-                const err = 'No test PR and no remote branch found for test/' + ticketKey + '. Cannot start rework — test may need to be re-automated from Backlog.';
+                const err = 'No test PR and no remote branch found for ' + testBranchName + '. Moving to Backlog for re-automation.';
                 try {
                     jira_post_comment({ key: ticketKey, comment: 'h3. ❌ Test Rework Setup Failed\n\n' + err });
                     jira_move_to_status({ key: ticketKey, statusName: 'Backlog' });
@@ -68,47 +69,69 @@ function action(params) {
                 return { success: false, error: err };
             }
 
-            // Branch exists — create a new PR so rework can proceed
-            console.log('Branch exists but no open PR — creating PR for rework...');
+            // Branch exists — ALWAYS checkout first so CLI runs on correct branch
+            // (critical: CLI always runs regardless of preCliJSAction return value)
+            try {
+                gh.checkoutPRBranch(testBranchName);
+                console.log('✅ Checked out branch:', testBranchName);
+            } catch (e) {
+                console.warn('Could not checkout branch (will try fetch+checkout):', e);
+                try {
+                    cli_execute_command({ command: 'git fetch origin ' + testBranchName + ':' + testBranchName });
+                    cli_execute_command({ command: 'git checkout ' + testBranchName });
+                    console.log('✅ Checked out branch via fetch:', testBranchName);
+                } catch (e2) {
+                    console.warn('Branch checkout failed:', e2);
+                }
+            }
+
+            // Use gh api --input JSON to avoid shell quoting issues with title special chars
+            console.log('Creating PR for rework from existing branch...');
             try {
                 const ticket = jira_get_ticket({ key: ticketKey });
                 const summary = ticket && ticket.fields ? (ticket.fields.summary || ticketKey) : ticketKey;
                 const prTitle = ticketKey + ' ' + summary + ' (rework)';
-                const prBody = 'Auto-created PR for rework of test automation.\n\nTicket: ' + ticketKey;
 
-                // Write temp body file
-                file_write({ path: '/tmp/rework_pr_body_' + ticketKey + '.md', content: prBody });
+                const prData = JSON.stringify({
+                    title: prTitle,
+                    body: 'Auto-created PR for rework of test automation.\n\nTicket: ' + ticketKey,
+                    head: testBranchName,
+                    base: 'main'
+                });
+                file_write({ path: '/tmp/pr_create_' + ticketKey + '.json', content: prData });
 
                 const createOutput = cli_execute_command({
-                    command: 'gh pr create --title "' + prTitle.replace(/"/g, '\\"') + '" --body-file "/tmp/rework_pr_body_' + ticketKey + '.md" --base main --head ' + branchName + ' --repo ' + repoInfo.owner + '/' + repoInfo.repo
+                    command: 'gh api repos/' + repoInfo.owner + '/' + repoInfo.repo + '/pulls --input /tmp/pr_create_' + ticketKey + '.json'
                 }) || '';
 
-                console.log('gh pr create output:', createOutput);
+                console.log('gh api pr create output length:', createOutput.length);
 
-                // Extract PR number
-                const urlMatch = createOutput.match(/https:\/\/github\.com\/[^\s]+/);
-                const prUrl = urlMatch ? urlMatch[0] : null;
-                const prNumMatch = (prUrl || '').match(/\/pull\/(\d+)/);
-                const prNum = prNumMatch ? parseInt(prNumMatch[1], 10) : null;
+                var prJson;
+                try { prJson = JSON.parse(createOutput); } catch (e) { prJson = null; }
+                const prNum = prJson && prJson.number;
+                const prUrl = prJson && prJson.html_url;
 
                 if (!prNum) {
-                    throw new Error('Could not determine PR number from: ' + createOutput.substring(0, 200));
+                    throw new Error('Could not parse PR from API response: ' + createOutput.substring(0, 300));
                 }
 
                 console.log('✅ Created new PR #' + prNum + ' for rework');
-
-                // Re-fetch the PR object
-                const openPRs2 = github_list_prs({ workspace: repoInfo.owner, repository: repoInfo.repo, state: 'open' });
-                const matched2 = openPRs2.filter(function(p) { return p.number === prNum; });
-                if (matched2.length > 0) {
-                    pr = matched2[0];
-                } else {
-                    pr = { number: prNum, html_url: prUrl };
-                }
+                pr = { number: prNum, html_url: prUrl, head: { ref: testBranchName } };
             } catch (createErr) {
-                const err = 'Branch test/' + ticketKey + ' exists but could not create PR: ' + createErr.toString();
-                try { jira_post_comment({ key: ticketKey, comment: 'h3. ❌ Test Rework Setup Failed\n\n' + err }); } catch (e) {}
-                return { success: false, error: err };
+                // PR creation failed — CLI is already on correct branch, postTestReworkResults will create PR
+                console.warn('PR auto-creation failed (CLI will run on correct branch, PR will be created post-rework):', createErr.toString());
+                try {
+                    jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ PR Auto-Creation Warning\n\nBranch {code}' + testBranchName + '{code} is checked out and rework will proceed.\nA PR will be created automatically after rework completes.\n\nError: ' + createErr.toString() });
+                } catch (e) {}
+
+                // Write minimal context so CLI knows what to do
+                try {
+                    const ticket2 = jira_get_ticket({ key: ticketKey });
+                    const summary2 = ticket2 && ticket2.fields ? (ticket2.fields.summary || '') : '';
+                    gh.writePRContext(inputFolder, { number: 0, title: ticketKey + ' ' + summary2, html_url: '' }, '', 'No PR exists yet — re-run tests from scratch on this branch.', []);
+                } catch (e) { console.warn('Could not write fallback context:', e); }
+
+                return { success: true, branchName: testBranchName, prNumber: null, noPR: true };
             }
         }
 

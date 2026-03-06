@@ -78,6 +78,11 @@ function commitAndPush(ticketKey, passed) {
     );
     if (!branchName) throw new Error('Could not determine current git branch');
 
+    // Guard: refuse to push directly to main — rework must be on test/ branch
+    if (branchName === 'main' || branchName === 'master') {
+        throw new Error('Refusing to commit rework directly to "' + branchName + '". Expected test/' + ticketKey + ' branch. preCliJSAction may have failed to checkout the correct branch.');
+    }
+
     console.log('Current branch:', branchName);
 
     // Stage only testing/ folder
@@ -87,6 +92,7 @@ function commitAndPush(ticketKey, passed) {
         cli_execute_command({ command: 'git status --porcelain' }) || ''
     );
 
+    var localSha = '';
     if (statusOutput.trim()) {
         const result = passed ? 'fix' : 'update';
         cli_execute_command({
@@ -97,6 +103,11 @@ function commitAndPush(ticketKey, passed) {
         console.warn('No changes to commit in testing/ — pushing existing commits only');
     }
 
+    // Get local HEAD SHA to verify push actually succeeded
+    localSha = cleanCommandOutput(
+        cli_execute_command({ command: 'git rev-parse HEAD' }) || ''
+    ).substring(0, 40);
+
     try {
         cli_execute_command({ command: 'git push -u origin ' + branchName });
     } catch (e) {
@@ -104,13 +115,62 @@ function commitAndPush(ticketKey, passed) {
         cli_execute_command({ command: 'git push -u origin ' + branchName + ' --force' });
     }
 
+    // Verify push succeeded by checking remote SHA matches local HEAD
     const remoteCheck = cleanCommandOutput(
         cli_execute_command({ command: 'git ls-remote --heads origin ' + branchName }) || ''
     );
     if (!remoteCheck.trim()) throw new Error('Branch not found on remote after push');
 
+    const remoteSha = remoteCheck.split(/\s+/)[0] || '';
+    if (localSha && remoteSha && !remoteSha.startsWith(localSha.substring(0, 10))) {
+        throw new Error('Push rejected: local HEAD ' + localSha.substring(0, 10) + ' does not match remote ' + remoteSha.substring(0, 10) + '. Branch protection may have blocked the push.');
+    }
+
     console.log('✅ Pushed to remote branch:', branchName);
     return branchName;
+}
+
+function createPRIfMissing(owner, repo, branchName, ticketKey) {
+    try {
+        const openPRs = github_list_prs({ workspace: owner, repository: repo, state: 'open' });
+        const existing = openPRs.filter(function(pr) {
+            return pr.head && pr.head.ref === branchName;
+        });
+        if (existing.length > 0) {
+            console.log('PR already exists: #' + existing[0].number);
+            return existing[0];
+        }
+
+        console.log('No open PR found — creating one via gh api...');
+        var ticket;
+        try { ticket = jira_get_ticket({ key: ticketKey }); } catch (e) { ticket = null; }
+        const summary = ticket && ticket.fields ? (ticket.fields.summary || ticketKey) : ticketKey;
+        const prTitle = ticketKey + ' ' + summary;
+
+        const prData = JSON.stringify({
+            title: prTitle,
+            body: 'Auto-created PR after test rework.\n\nTicket: ' + ticketKey,
+            head: branchName,
+            base: 'main'
+        });
+        file_write({ path: '/tmp/pr_post_rework_' + ticketKey + '.json', content: prData });
+
+        const createOutput = cli_execute_command({
+            command: 'gh api repos/' + owner + '/' + repo + '/pulls --input /tmp/pr_post_rework_' + ticketKey + '.json'
+        }) || '';
+
+        var prJson;
+        try { prJson = JSON.parse(createOutput); } catch (e) { prJson = null; }
+        if (prJson && prJson.number) {
+            console.log('✅ Created PR #' + prJson.number + ' for', branchName);
+            return prJson;
+        }
+        console.warn('Could not create PR:', createOutput.substring(0, 200));
+        return null;
+    } catch (e) {
+        console.warn('createPRIfMissing error:', e);
+        return null;
+    }
 }
 
 function postThreadReplies(workspace, repository, pullRequestId) {
@@ -203,9 +263,12 @@ function action(params) {
             return { success: false, error: e.toString() };
         }
 
-        // Step 3: Reply to + resolve PR review threads
+        // Step 3: Ensure PR exists; create if missing (e.g. preCliJSAction failed to create it)
         const repoInfo = getGitHubRepoInfo();
-        const pr = repoInfo ? findTestPRForTicket(repoInfo.owner, repoInfo.repo, ticketKey) : null;
+        var pr = repoInfo ? findTestPRForTicket(repoInfo.owner, repoInfo.repo, ticketKey) : null;
+        if (!pr && repoInfo && branchName) {
+            pr = createPRIfMissing(repoInfo.owner, repoInfo.repo, branchName, ticketKey);
+        }
 
         if (pr && repoInfo) {
             postThreadReplies(repoInfo.owner, repoInfo.repo, pr.number);
