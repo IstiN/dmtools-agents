@@ -144,10 +144,21 @@ function action(params) {
             mergeMethod: 'squash'
         });
         console.log('✅ PR #' + prNumber + ' merged successfully');
-        removeApprovedLabels(owner, repo, prNumber, ticketKey);
+
+        // Remove GitHub PR label immediately (cosmetic — PR is closed)
+        try {
+            github_remove_pr_label({ workspace: owner, repository: repo, pullRequestId: String(prNumber), label: LABELS.PR_APPROVED });
+            console.log('Removed pr_approved label from GitHub PR');
+        } catch (e) {
+            console.warn('Could not remove pr_approved from GitHub PR:', e);
+        }
         releaseLock(ticketKey, params);
 
-        // For test cases: move to Passed/Failed based on current status; for stories/bugs: Merged
+        // Move ticket to final status BEFORE removing pr_approved from Jira.
+        // Jira's search index can lag: if the status update hasn't propagated yet when
+        // the next SM rule runs its JQL, the ticket would still appear as "In Review".
+        // Keeping pr_approved on the Jira ticket until after the status move means
+        // the review-trigger rule (JQL: NOT IN pr_approved) naturally skips the ticket.
         const isTestCase = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.testCaseMerge;
         if (isTestCase) {
             var ticketDetail = jira_get_ticket({ key: ticketKey });
@@ -155,12 +166,17 @@ function action(params) {
             var finalStatus = (currentStatus === STATUSES.IN_REVIEW_PASSED) ? STATUSES.PASSED : STATUSES.FAILED;
             jira_move_to_status({ key: ticketKey, statusName: finalStatus });
             console.log('✅ Ticket moved to ' + finalStatus);
-            // Prevent same-cycle review trigger: Jira eventual consistency may still return
-            // the old "In Review" status in the next rule's JQL within the same SM cycle.
-            try { jira_add_label({ key: ticketKey, label: 'sm_test_review_triggered' }); } catch (e) {}
         } else {
             jira_move_to_status({ key: ticketKey, statusName: STATUSES.MERGED });
             console.log('✅ Ticket moved to Merged');
+        }
+
+        // Now safe to remove pr_approved from Jira — status is already updated
+        try {
+            jira_remove_label({ key: ticketKey, label: LABELS.PR_APPROVED });
+            console.log('Removed pr_approved label from Jira ticket');
+        } catch (e) {
+            console.warn('Could not remove pr_approved from Jira ticket:', e);
         }
         return true;
     } catch (mergeErr) {
