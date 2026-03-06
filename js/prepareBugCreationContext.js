@@ -40,22 +40,10 @@ function action(params) {
                 tcContent += '**Description**:\n' + tcFields.description + '\n\n';
             }
             if (tcFields.parent) {
-                tcContent += '**Parent Story**: ' + tcFields.parent.key + ' — ' + (tcFields.parent.fields && tcFields.parent.fields.summary || '') + '\n\n';
-            }
-            // Include last 3 comments — the most recent one always contains the test run result
-            // with the actual failure details and correct root cause analysis.
-            var allComments = (tcFields.comment && tcFields.comment.comments) || [];
-            var recentComments = allComments.slice(-3);
-            if (recentComments.length > 0) {
-                tcContent += '## Recent Test Results (latest comments)\n\n';
-                recentComments.forEach(function(c) {
-                    var author = c.author && c.author.displayName || 'Unknown';
-                    var body = c.body || '';
-                    tcContent += '### Comment by ' + author + '\n\n' + body + '\n\n---\n\n';
-                });
+                tcContent += '**Parent Story**: ' + tcFields.parent.key + ' — ' + (tcFields.parent.fields && tcFields.parent.fields.summary || '') + '\n';
             }
             file_write(inputFolder + '/ticket.md', tcContent);
-            console.log('Wrote ticket.md for', ticketKey, '(with', recentComments.length, 'recent comments)');
+            console.log('Wrote ticket.md for', ticketKey);
         }
 
         // Fetch all open bugs
