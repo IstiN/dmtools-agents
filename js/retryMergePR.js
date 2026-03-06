@@ -155,6 +155,9 @@ function action(params) {
             var finalStatus = (currentStatus === STATUSES.IN_REVIEW_PASSED) ? STATUSES.PASSED : STATUSES.FAILED;
             jira_move_to_status({ key: ticketKey, statusName: finalStatus });
             console.log('✅ Ticket moved to ' + finalStatus);
+            // Prevent same-cycle review trigger: Jira eventual consistency may still return
+            // the old "In Review" status in the next rule's JQL within the same SM cycle.
+            try { jira_add_label({ key: ticketKey, label: 'sm_test_review_triggered' }); } catch (e) {}
         } else {
             jira_move_to_status({ key: ticketKey, statusName: STATUSES.MERGED });
             console.log('✅ Ticket moved to Merged');
