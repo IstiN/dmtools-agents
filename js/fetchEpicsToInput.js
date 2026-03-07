@@ -32,20 +32,24 @@ function action(params) {
         try {
             var rawEpics = jira_search_by_jql({
                 jql: 'project = ' + project + ' AND issuetype = Epic ORDER BY created DESC',
-                fields: ['key', 'summary', 'description', 'priority', 'parent', 'Diagrams']
+                fields: ['key', 'summary', 'description', 'priority', 'parent']
             });
             var epics = [];
             for (var i = 0; i < rawEpics.length; i++) {
-                var issue = rawEpics[i];
-                var f = issue.fields || {};
-                epics.push({
-                    key: issue.key || '',
-                    summary: f.summary || '',
-                    description: f.description || '',
-                    priority: f.priority ? f.priority.name : '',
-                    diagrams: f.Diagrams || f.diagrams || null,
-                    parent: f.parent ? f.parent.key : null
-                });
+                try {
+                    var issue = jira_get_ticket(rawEpics[i].key);
+                    var f = issue.fields || {};
+                    epics.push({
+                        key: issue.key || '',
+                        summary: f.summary || '',
+                        description: f.description || '',
+                        priority: f.priority ? f.priority.name : '',
+                        diagrams: f['Diagrams (customfield_10296)'] || f.Diagrams || null,
+                        parent: f.parent ? f.parent.key : null
+                    });
+                } catch (e) {
+                    console.error('Failed to fetch epic ' + rawEpics[i].key + ':', e);
+                }
             }
             console.log('Found ' + epics.length + ' epics');
             file_write(folder + '/existing_epics.json', '{"epics":' + JSON.stringify(epics, null, 2) + '}');
@@ -57,23 +61,27 @@ function action(params) {
         try {
             var rawStories = jira_search_by_jql({
                 jql: 'project = ' + project + ' AND issuetype = Story ORDER BY created DESC',
-                fields: ['key', 'summary', 'description', 'status', 'priority', 'parent', 'Acceptance Criterias', 'Solution', 'Diagrams']
+                fields: ['key', 'summary', 'status', 'priority', 'parent']
             });
             var stories = [];
             for (var j = 0; j < rawStories.length; j++) {
-                var s = rawStories[j];
-                var sf = s.fields || {};
-                stories.push({
-                    key: s.key || '',
-                    summary: sf.summary || '',
-                    description: sf.description || '',
-                    status: sf.status ? sf.status.name : '',
-                    priority: sf.priority ? sf.priority.name : '',
-                    diagrams: sf.Diagrams || sf.diagrams || null,
-                    acceptanceCriterias: sf['Acceptance Criterias'] || null,
-                    solution: sf.Solution || null,
-                    parent: sf.parent ? sf.parent.key : null
-                });
+                try {
+                    var s = jira_get_ticket(rawStories[j].key);
+                    var sf = s.fields || {};
+                    stories.push({
+                        key: s.key || '',
+                        summary: sf.summary || '',
+                        description: sf.description || '',
+                        status: sf.status ? sf.status.name : '',
+                        priority: sf.priority ? sf.priority.name : '',
+                        diagrams: findField(sf, 'Diagrams') || null,
+                        acceptanceCriterias: findField(sf, 'Acceptance Criterias') || null,
+                        solution: findField(sf, 'Solution') || null,
+                        parent: sf.parent ? sf.parent.key : null
+                    });
+                } catch (e) {
+                    console.error('Failed to fetch story ' + rawStories[j].key + ':', e);
+                }
             }
             console.log('Found ' + stories.length + ' stories');
             file_write(folder + '/existing_stories.json', '{"stories":' + JSON.stringify(stories, null, 2) + '}');
