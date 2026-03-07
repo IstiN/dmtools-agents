@@ -46,7 +46,7 @@ function action(params) {
         try {
             var rawStories = jira_search_by_jql({
                 jql: 'project = ' + project + ' AND issuetype = Story ORDER BY created DESC',
-                fields: ['key', 'summary', 'status', 'priority', 'diagrams', 'parent']
+                fields: ['key', 'summary', 'description', 'status', 'priority', 'diagrams', 'parent', 'Acceptance Criterias', 'Solution', 'Diagrams']
             });
             var stories = [];
             for (var j = 0; j < rawStories.length; j++) {
@@ -55,9 +55,12 @@ function action(params) {
                 stories.push({
                     key: s.key || '',
                     summary: sf.summary || '',
+                    description: sf.description || '',
                     status: sf.status ? sf.status.name : '',
                     priority: sf.priority ? sf.priority.name : '',
-                    diagrams: sf.diagrams || null,
+                    diagrams: sf['Diagrams'] || sf.diagrams || null,
+                    acceptanceCriterias: sf['Acceptance Criterias'] || null,
+                    solution: sf['Solution'] || null,
                     parent: sf.parent ? sf.parent.key : null
                 });
             }
