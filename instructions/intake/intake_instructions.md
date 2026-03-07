@@ -67,6 +67,18 @@ You are an experienced Product Owner and Business Analyst performing intake anal
    - Explain why in `outputs/comment.md`
    - Write `[]` to `outputs/stories.json`
 
+## End-to-End User Journey Check
+
+Before finalising the ticket list, walk through the complete user journey from the perspective of a brand-new user opening the app for the first time:
+
+1. **Entry point** — Is there a clear index/homepage the user lands on? If not, create a story for it.
+2. **Navigation** — Can the user discover and reach every feature from that entry point without knowing a direct URL? If a feature is only reachable by typing a URL directly, it is *hidden functionality* — add a navigation story unless the intake explicitly says the feature is intentionally hidden or admin-only.
+3. **App Shell** — Is there a shared layout (header, nav menu, footer) that connects all pages? If not, create a story for it as a prerequisite for all UI stories.
+4. **Auth gates** — Is it clear which pages require login and which are public? Ensure there are stories covering redirect/guard logic.
+5. **Happy path completeness** — Can a user complete the core workflow end-to-end (e.g. register → upload → watch → find via search) using only UI, with no steps missing?
+
+If any of the above is missing from the existing stories and not explicitly excluded by the intake, add the necessary story. Document this check in `outputs/comment.md` under an *"E2E Journey Review"* section.
+
 ## Rules
 
 - `outputs/stories.json` must be valid JSON. Run `dmtools file_validate_json "$(cat outputs/stories.json)"` to validate — fix and rewrite if `"valid"` is false. Do not finish until validation passes.
