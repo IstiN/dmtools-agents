@@ -225,9 +225,27 @@ function postThreadReplies(workspace, repository, pullRequestId) {
 }
 
 function action(params) {
+    const actualParams = params.ticket ? params : (params.jobParams || params);
+    const ticketKey = actualParams.ticket.key;
+    const customParams = (actualParams.customParams) ||
+        (params.jobParams && params.jobParams.customParams) ||
+        (params.customParams);
+    const removeLabel = customParams && customParams.removeLabel;
+    const wipLabel = actualParams.metadata && actualParams.metadata.contextId
+        ? actualParams.metadata.contextId + '_wip'
+        : 'pr_test_automation_rework_wip';
+
+    function releaseLock() {
+        try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
+        if (removeLabel) {
+            try {
+                jira_remove_label({ key: ticketKey, label: removeLabel });
+                console.log('✅ Removed SM label:', removeLabel);
+            } catch (e) {}
+        }
+    }
+
     try {
-        const actualParams = params.ticket ? params : (params.jobParams || params);
-        const ticketKey = actualParams.ticket.key;
         const fixSummary = actualParams.response || '_(No fix summary)_';
 
         console.log('=== Processing test rework results for', ticketKey, '===');
@@ -239,6 +257,7 @@ function action(params) {
                 key: ticketKey,
                 comment: 'h3. ⚠️ Rework Error\n\nCould not read test_automation_result.json. Check logs.'
             });
+            releaseLock();
             return { success: false, error: 'No test result JSON found' };
         }
 
@@ -260,6 +279,7 @@ function action(params) {
                 key: ticketKey,
                 comment: 'h3. ❌ Rework Push Failed\n\n{code}' + e.toString() + '{code}'
             });
+            releaseLock();
             return { success: false, error: e.toString() };
         }
 
@@ -316,23 +336,8 @@ function action(params) {
             console.warn('Failed to post Jira comment:', e);
         }
 
-        // Step 7: Remove WIP label
-        const wipLabel = actualParams.metadata && actualParams.metadata.contextId
-            ? actualParams.metadata.contextId + '_wip'
-            : 'pr_test_automation_rework_wip';
-        try {
-            jira_remove_label({ key: ticketKey, label: wipLabel });
-        } catch (e) {}
-
-        // Step 8: Remove SM idempotency label (via customParams)
-        const customParams = params.jobParams && params.jobParams.customParams;
-        const removeLabel = customParams && customParams.removeLabel;
-        if (removeLabel) {
-            try {
-                jira_remove_label({ key: ticketKey, label: removeLabel });
-                console.log('✅ Removed SM label:', removeLabel);
-            } catch (e) {}
-        }
+        // Step 7 & 8: Remove WIP label + SM idempotency label
+        releaseLock();
 
         console.log('✅ Test rework complete — re-run:', result.status, '→', targetStatus);
 
@@ -354,6 +359,7 @@ function action(params) {
                 });
             }
         } catch (e) {}
+        releaseLock();
         return { success: false, error: error.toString() };
     }
 }
