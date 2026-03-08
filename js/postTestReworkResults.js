@@ -293,12 +293,13 @@ function action(params) {
         if (pr && repoInfo) {
             postThreadReplies(repoInfo.owner, repoInfo.repo, pr.number);
 
-            // Post PR comment with fix summary + new test result
+            // Post PR comment with fix summary + new test result (GitHub Markdown from pr_body.md)
             try {
                 const statusEmoji = passed ? '✅' : '❌';
+                const prBodyContent = readFile('outputs/pr_body.md') || fixSummary;
                 const prComment = '## 🔧 Test Rework Complete — ' + ticketKey + '\n\n' +
                     '**Re-run result**: ' + statusEmoji + ' ' + result.status.toUpperCase() + '\n\n' +
-                    '---\n\n' + fixSummary;
+                    '---\n\n' + prBodyContent;
                 github_add_pr_comment({
                     workspace: repoInfo.owner,
                     repository: repoInfo.repo,

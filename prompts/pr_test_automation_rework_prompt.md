@@ -27,7 +27,7 @@ Do NOT write them inside `input/`, `input/TICKET-KEY/`, or any subfolder of `inp
 Run `mkdir -p outputs` first to ensure the directory exists.
 
 - `outputs/response.md` — rework summary in **Jira Markdown** (short, factual): what was fixed + new test result
-- `outputs/pr_body.md` — same in **GitHub Markdown** (always required — updates PR description)
+- `outputs/pr_body.md` — same content in **GitHub Markdown** (always required — posted as GitHub PR comment; use standard MD: `##`, `**bold**`, backticks — NOT Jira syntax like `h3.`, `*bold*`, `{code}`)
 - `outputs/test_automation_result.json` — new test result (see instructions for format)
 - `outputs/review_replies.json` — replies per thread: `{ "replies": [{ "inReplyToId": 123, "threadId": "PRRT_...", "reply": "Fixed: ..." }] }`
 - `outputs/bug_description.md` — updated bug description in Jira Markdown (only if test still FAILED)
