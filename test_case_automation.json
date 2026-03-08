@@ -25,6 +25,9 @@
     "cleanupInputFolder": false,
     "skipAIProcessing": true,
     "alwaysPostComments": true,
+    "envVariables": {
+      "CLI_ALLOWED_COMMANDS": "find,ls,cat,mkdir,bash,pytest,python3,pip3,run-agent.sh"
+    },
     "customParams": {
       "removeLabel": "sm_test_automation_triggered"
     },
