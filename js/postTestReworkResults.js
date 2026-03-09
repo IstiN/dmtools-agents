@@ -252,16 +252,23 @@ function action(params) {
 
         // Step 1: Read new test result
         const result = readResultJson();
-        if (!result) {
-            jira_post_comment({
-                key: ticketKey,
-                comment: 'h3. ⚠️ Rework Error\n\nCould not read test_automation_result.json. Check logs.'
-            });
+        if (!result || !result.status) {
+            const errMsg = !result
+                ? 'Could not read outputs/test_automation_result.json — file missing or empty.'
+                : 'outputs/test_automation_result.json is missing required "status" field (got: ' + JSON.stringify(result) + '). The agent must write { "status": "passed" | "failed", ... }.';
+            console.error(errMsg);
+            try {
+                jira_post_comment({
+                    key: ticketKey,
+                    comment: 'h3. ⚠️ Rework Error\n\n' + errMsg + '\n\nCheck CI logs for the agent output.'
+                });
+            } catch (e) {}
             releaseLock();
-            return { success: false, error: 'No test result JSON found' };
+            return { success: false, error: errMsg };
         }
 
-        const passed = (result.status || '').toLowerCase() === 'passed';
+        const testStatus = result.status.toLowerCase();
+        const passed = testStatus === 'passed';
         console.log('Re-run result:', result.status);
 
         // Step 2: Configure git + commit/push testing/ only
@@ -298,7 +305,7 @@ function action(params) {
                 const statusEmoji = passed ? '✅' : '❌';
                 const prBodyContent = readFile('outputs/pr_body.md') || fixSummary;
                 const prComment = '## 🔧 Test Rework Complete — ' + ticketKey + '\n\n' +
-                    '**Re-run result**: ' + statusEmoji + ' ' + result.status.toUpperCase() + '\n\n' +
+                    '**Re-run result**: ' + statusEmoji + ' ' + testStatus.toUpperCase() + '\n\n' +
                     '---\n\n' + prBodyContent;
                 github_add_pr_comment({
                     workspace: repoInfo.owner,
@@ -328,7 +335,7 @@ function action(params) {
         try {
             const statusEmoji = passed ? '✅' : '❌';
             let comment = 'h3. 🔧 Test Rework Completed\n\n';
-            comment += '*Re-run result*: ' + statusEmoji + ' *' + result.status.toUpperCase() + '*\n';
+            comment += '*Re-run result*: ' + statusEmoji + ' *' + testStatus.toUpperCase() + '*\n';
             comment += '*Branch*: {code}' + branchName + '{code}\n';
             if (pr) comment += '*Pull Request*: ' + pr.html_url + '\n';
             comment += '\n' + fixSummary;
@@ -340,11 +347,11 @@ function action(params) {
         // Step 7 & 8: Remove WIP label + SM idempotency label
         releaseLock();
 
-        console.log('✅ Test rework complete — re-run:', result.status, '→', targetStatus);
+        console.log('✅ Test rework complete — re-run:', testStatus, '→', targetStatus);
 
         return {
             success: true,
-            testStatus: result.status,
+            testStatus: testStatus,
             jiraStatus: targetStatus,
             ticketKey: ticketKey
         };

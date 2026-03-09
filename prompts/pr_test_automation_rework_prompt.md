@@ -32,6 +32,14 @@ Run `mkdir -p outputs` first to ensure the directory exists.
 
 - `outputs/response.md` — rework summary in **Jira Markdown** (short, factual): what was fixed + new test result
 - `outputs/pr_body.md` — same content in **GitHub Markdown** (always required — posted as GitHub PR comment; use standard MD: `##`, `**bold**`, backticks — NOT Jira syntax like `h3.`, `*bold*`, `{code}`)
-- `outputs/test_automation_result.json` — new test result (see instructions for format)
+- `outputs/test_automation_result.json` — **MANDATORY — always write this file**, even if the test failed or errored. Use exactly this format:
+  ```json
+  { "status": "passed", "passed": 1, "failed": 0, "skipped": 0, "summary": "1 passed, 0 failed" }
+  ```
+  or for failure:
+  ```json
+  { "status": "failed", "passed": 0, "failed": 1, "skipped": 0, "summary": "0 passed, 1 failed", "error": "AssertionError: <exact error message>" }
+  ```
+  The `"status"` field **must** be exactly `"passed"` or `"failed"` (lowercase). Missing or wrong field name causes the pipeline to break.
 - `outputs/review_replies.json` — replies per thread: `{ "replies": [{ "inReplyToId": 123, "threadId": "PRRT_...", "reply": "Fixed: ..." }] }`
 - `outputs/bug_description.md` — updated bug description in Jira Markdown (only if test still FAILED)

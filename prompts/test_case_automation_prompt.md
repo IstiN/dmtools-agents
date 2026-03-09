@@ -32,7 +32,15 @@ Run `mkdir -p outputs` first to ensure the directory exists.
 
 - `outputs/response.md` — test result summary in **Jira Markdown** (posted as Jira ticket comment)
 - `outputs/pr_body.md` — test result summary in **GitHub Markdown** (used as PR description)
-- `outputs/test_automation_result.json` — structured result JSON (see instructions for exact format)
+- `outputs/test_automation_result.json` — **MANDATORY — always write this file**, even if the test failed or errored. Use exactly this format:
+  ```json
+  { "status": "passed", "passed": 1, "failed": 0, "skipped": 0, "summary": "1 passed, 0 failed" }
+  ```
+  or for failure:
+  ```json
+  { "status": "failed", "passed": 0, "failed": 1, "skipped": 0, "summary": "0 passed, 1 failed", "error": "AssertionError: <exact error message>" }
+  ```
+  The `"status"` field **must** be exactly `"passed"` or `"failed"` (lowercase). Missing or wrong field name causes the pipeline to break.
 - `outputs/bug_description.md` — detailed bug report in Jira Markdown (only if test FAILED)
 
 `response.md` and `pr_body.md` contain the same information but formatted differently — Jira MD vs GitHub MD.
