@@ -113,9 +113,43 @@ function checkoutPRBranch(branchName) {
 function getPRDiff(baseBranch, headBranch) {
     try {
         console.log('Generating diff between', baseBranch, 'and', headBranch);
-        const diff = cli_execute_command({ command: 'git diff ' + baseBranch + '...' + headBranch }) || '';
-        console.log('Diff size:', diff.length, 'chars');
-        return cleanCommandOutput(diff);
+
+        // First try three-dot diff (shows only changes on headBranch since divergence)
+        try {
+            const diff = cli_execute_command({ command: 'git diff ' + baseBranch + '...' + headBranch }) || '';
+            console.log('Diff size:', diff.length, 'chars');
+            return cleanCommandOutput(diff);
+        } catch (e1) {
+            console.warn('Three-dot diff failed (likely no merge base), trying with origin/ prefix:', e1.message || e1);
+        }
+
+        // Fallback: try with explicit origin/ prefix on base branch
+        try {
+            const originBase = baseBranch.indexOf('origin/') === 0 ? baseBranch : 'origin/' + baseBranch;
+            const diff = cli_execute_command({ command: 'git diff ' + originBase + '...' + headBranch }) || '';
+            console.log('Diff size (origin fallback):', diff.length, 'chars');
+            return cleanCommandOutput(diff);
+        } catch (e2) {
+            console.warn('Origin-prefix diff also failed, trying merge-base approach:', e2.message || e2);
+        }
+
+        // Last resort: find explicit merge-base commit and diff from there
+        try {
+            const originBase = baseBranch.indexOf('origin/') === 0 ? baseBranch : 'origin/' + baseBranch;
+            const mergeBase = cleanCommandOutput(
+                cli_execute_command({ command: 'git merge-base ' + originBase + ' ' + headBranch }) || ''
+            );
+            if (mergeBase && mergeBase.trim().length > 0) {
+                const diff = cli_execute_command({ command: 'git diff ' + mergeBase.trim() + '...' + headBranch }) || '';
+                console.log('Diff size (merge-base fallback):', diff.length, 'chars');
+                return cleanCommandOutput(diff);
+            }
+        } catch (e3) {
+            console.warn('Merge-base diff also failed:', e3.message || e3);
+        }
+
+        console.error('All diff strategies failed for', baseBranch, '...', headBranch);
+        return '';
     } catch (e) {
         console.error('Failed to get PR diff:', e);
         return '';
