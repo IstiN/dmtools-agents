@@ -64,6 +64,8 @@ Verify:
 - No out-of-scope changes without justification
 - The fix addresses the root cause, not just a symptom or an adjacent code smell
 
+**⚠️ Merge commits bring noise — do NOT flag as out-of-scope**: This branch may contain `Merge branch 'main'` commits that pull in unrelated files (tests, components) committed to main by other stories. These files will NOT appear in `pr_diff.txt` (the three-dot diff already excludes them), but their commit messages may be visible in `pr_info.md`. **Never flag a file as out-of-scope based on commit messages alone — only flag files that actually appear in `pr_diff.txt`.**
+
 # Output
 
 Categorize all findings as:
