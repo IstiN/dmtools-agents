@@ -358,7 +358,27 @@ function action(params) {
         // Step 1: Read structured review data
         const reviewData = readReviewJson();
         if (!reviewData) {
-            console.error('Failed to read pr_review.json');
+            console.error('Failed to read pr_review.json — CLI likely failed; removing SM label so SM can retry');
+            // Remove SM idempotency label so the next SM cycle will re-trigger the review
+            const customParamsOnFail = params.jobParams && params.jobParams.customParams;
+            const removeLabelOnFail = customParamsOnFail && customParamsOnFail.removeLabel;
+            if (removeLabelOnFail) {
+                try {
+                    jira_remove_label({ key: ticketKey, label: removeLabelOnFail });
+                    console.log('✅ Removed SM label on CLI failure:', removeLabelOnFail);
+                } catch (e) {
+                    console.warn('Could not remove SM label on CLI failure:', e);
+                }
+            }
+            // Post an error comment to Jira so the failure is visible
+            try {
+                jira_add_comment({
+                    key: ticketKey,
+                    comment: 'h3. ⚠️ PR Review — CLI Failure\n\nThe AI review agent ran but produced no output ({code}pr_review.json{code} was not written). This is usually a transient Copilot API/rate-limit issue.\n\nThe SM idempotency label has been removed — the review will be retried automatically on the next SM cycle.'
+                });
+            } catch (e) {
+                console.warn('Could not post CLI failure comment:', e);
+            }
             return {
                 success: false,
                 error: 'No review data found in pr_review.json'

@@ -159,10 +159,18 @@ echo ""
 echo "Running: ${CMD[*]}"
 echo ""
 
-# Execute Command
-"${CMD[@]}"
-
+# Execute Command — capture stderr so failures are visible in CI logs
+STDERR_FILE="$(mktemp)"
+"${CMD[@]}" 2>"$STDERR_FILE"
 exit_code=$?
+
+if [ -s "$STDERR_FILE" ]; then
+  echo ""
+  echo "=== Agent stderr output ==="
+  cat "$STDERR_FILE"
+  echo "=== End of stderr ==="
+fi
+rm -f "$STDERR_FILE"
 
 echo ""
 echo "=== Agent completed with exit code: $exit_code ==="
