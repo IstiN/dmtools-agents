@@ -1,0 +1,26 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "task_done_check"
+    },
+    "agentParams": {
+      "aiRole": "Task completion checker",
+      "instructions": [
+        "./agents/instructions/common/bash_tools.md"
+      ],
+      "knownInfo": "",
+      "formattingRules": "",
+      "fewShots": ""
+    },
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "postJSAction": "agents/js/checkTaskStoriesDone.js",
+    "customParams": {
+      "removeLabel": "sm_task_done_check_triggered"
+    },
+    "inputJql": "key = MYTUBE-1"
+  }
+}

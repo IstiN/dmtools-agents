@@ -42,6 +42,14 @@
           "addLabel": "sm_story_questions_triggered"
         },
         {
+          "description": "Backlog Tasks (children of MYTUBE-1) → run intake agent",
+          "jql": "project = MYTUBE AND issuetype in ('Task') AND status in ('Backlog') AND parent = MYTUBE-1",
+          "targetStatus": "In Development",
+          "configFile": "agents/intake.json",
+          "skipIfLabel": "sm_task_intake_triggered",
+          "addLabel": "sm_task_intake_triggered"
+        },
+        {
           "description": "Ready For Development Stories → trigger story_development",
           "jql": "project = MYTUBE AND issuetype in ('Story') AND status in ('Ready For Development')",
           "configFile": "agents/story_development.json",
@@ -122,6 +130,13 @@
           "configFile": "agents/bug_done_check.json",
           "skipIfLabel": "sm_bug_done_check_triggered",
           "enabled": false,
+          "localExecution": true
+        },
+        {
+          "description": "In Development Tasks (children of MYTUBE-1) → check all Stories Done → Ready For Testing",
+          "jql": "project = MYTUBE AND issuetype in ('Task') AND status in ('In Development') AND parent = MYTUBE-1",
+          "configFile": "agents/task_done_check.json",
+          "skipIfLabel": "sm_task_done_check_triggered",
           "localExecution": true
         },
         {
