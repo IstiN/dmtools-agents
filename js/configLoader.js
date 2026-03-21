@@ -10,7 +10,7 @@
  *   3. Built-in defaults       (backward compatible)
  *
  * Merge strategy:
- *   - jira.statuses, jira.issueTypes, labels: FULL REPLACEMENT when provided
+ *   - jira.statuses, jira.issueTypes, jira.questions, labels: FULL REPLACEMENT when provided
  *   - smRules, smMergeRules: FULL REPLACEMENT when provided
  *   - repository, git, formats, confluence: DEEP MERGE
  *   - additionalInstructions, instructionOverrides: FULL REPLACEMENT per key
@@ -30,7 +30,13 @@ var DEFAULTS = {
         project: '',
         parentTicket: '',
         statuses: DEFAULT_CONFIG.STATUSES,
-        issueTypes: DEFAULT_CONFIG.ISSUE_TYPES
+        issueTypes: DEFAULT_CONFIG.ISSUE_TYPES,
+        questions: {
+            // JQL to fetch question subtasks. {ticketKey} is replaced at runtime.
+            fetchJql: 'parent = {ticketKey} AND issuetype = Subtask ORDER BY created ASC',
+            // Custom Jira field name that holds the answer to a question subtask.
+            answerField: 'Answer'
+        }
     },
 
     git: {
@@ -139,6 +145,9 @@ function mergeProjectConfig(defaults, overrides) {
         }
         if (overrides.jira.issueTypes) {
             result.jira.issueTypes = overrides.jira.issueTypes;
+        }
+        if (overrides.jira.questions) {
+            result.jira.questions = overrides.jira.questions;
         }
     }
     if (overrides.labels) {

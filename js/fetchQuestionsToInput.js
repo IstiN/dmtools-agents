@@ -3,7 +3,13 @@
  * Fetches existing question subtasks for the current story ticket and writes
  * them to the input folder before the CLI agent runs.
  * Receives params.inputFolderPath from DMTools after input folder creation.
+ *
+ * Configurable via .dmtools/config.js:
+ *   jira.questions.fetchJql   — JQL to find question subtasks ({ticketKey} placeholder)
+ *   jira.questions.answerField — Jira custom field name for the answer (default: 'Answer')
  */
+
+var configLoader = require('./configLoader.js');
 
 /**
  * Pre-CLI action: fetch question subtasks into input folder
@@ -18,10 +24,15 @@ function action(params) {
         var ticketKey = folder.split('/').pop();
         console.log('Fetching question subtasks for ' + ticketKey + '...');
 
+        var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+        var questionsConfig = projectConfig.jira.questions;
+        var jql = questionsConfig.fetchJql.replace('{ticketKey}', ticketKey);
+        var answerField = questionsConfig.answerField;
+
         try {
             var rawQuestions = jira_search_by_jql({
-                jql: 'parent = ' + ticketKey + ' AND issuetype = Subtask ORDER BY created ASC',
-                fields: ['key', 'summary', 'description', 'status', 'priority', 'Answer']
+                jql: jql,
+                fields: ['key', 'summary', 'description', 'status', 'priority', answerField]
             });
             var questions = [];
             for (var i = 0; i < rawQuestions.length; i++) {
@@ -33,7 +44,7 @@ function action(params) {
                     description: f.description || '',
                     status: f.status ? f.status.name : '',
                     priority: f.priority ? f.priority.name : '',
-                    answer: f.Answer || f.answer || null
+                    answer: f[answerField] || f[answerField.toLowerCase()] || null
                 });
             }
             console.log('Found ' + questions.length + ' question subtasks');

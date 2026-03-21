@@ -16,7 +16,7 @@
 
 const { extractTicketKey } = require('./common/jiraHelpers.js');
 const { buildSummary } = require('./common/aiResponseParser.js');
-const { ISSUE_TYPES, LABELS, STATUSES } = require('./config.js');
+const configLoader = require('./configLoader.js');
 
 /**
  * Ensure summary starts with [Q] prefix
@@ -74,27 +74,30 @@ function readDescriptionFile(filePath, fallbackSummary) {
  * @param {Object} entry - Entry from questions.json
  * @param {string} parentKey - Parent story ticket key
  * @param {string} projectKey - Jira project key
+ * @param {Object} jiraConfig - Resolved jira config (issueTypes, labels, questions)
  * @returns {string|null} Created ticket key or null on failure
  */
-function createQuestion(entry, parentKey, projectKey) {
+function createQuestion(entry, parentKey, projectKey, jiraConfig) {
     var summary = ensureQPrefix(buildSummary(entry.summary, 0));
     var description = readDescriptionFile(entry.description, entry.summary);
+    var questionIssueType = jiraConfig.issueTypes.SUBTASK;
+    var questionLabel = jiraConfig.labels.QUESTION;
+    var answerField = jiraConfig.questions.answerField;
 
     var fieldsJson = {
         summary: summary,
         description: description,
-        issuetype: { name: ISSUE_TYPES.SUBTASK },
+        issuetype: { name: questionIssueType },
         parent: { key: parentKey },
-        labels: [LABELS.QUESTION]
+        labels: [questionLabel]
     };
 
     if (entry.priority) {
         fieldsJson.priority = { name: entry.priority };
     }
 
-    // Pass Answer field if provided (custom field — adjust key if needed)
     if (entry.answer) {
-        fieldsJson.answer = entry.answer;
+        fieldsJson[answerField] = entry.answer;
     }
 
     try {
@@ -120,6 +123,10 @@ function action(params) {
             ? params.metadata.contextId + '_wip'
             : null;
 
+        var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+        var jiraConfig = projectConfig.jira;
+        var labels = projectConfig.labels;
+
         console.log('Processing question creation for:', ticketKey);
 
         // 1. Read questions.json
@@ -133,7 +140,7 @@ function action(params) {
         // 2. Create question subtasks
         var createdTickets = [];
         questions.forEach(function(entry) {
-            var key = createQuestion(entry, ticketKey, projectKey);
+            var key = createQuestion(entry, ticketKey, projectKey, jiraConfig);
             createdTickets.push({
                 summary: ensureQPrefix(entry.summary || ''),
                 priority: entry.priority,
@@ -146,20 +153,20 @@ function action(params) {
         try {
             jira_add_label({
                 key: ticketKey,
-                label: LABELS.AI_QUESTIONS_ASKED
+                label: labels.AI_QUESTIONS_ASKED
             });
         } catch (labelError) {
-            console.warn('Failed to add ' + LABELS.AI_QUESTIONS_ASKED + ' label:', labelError);
+            console.warn('Failed to add ' + labels.AI_QUESTIONS_ASKED + ' label:', labelError);
         }
 
         // 4. Add ai_generated label
         try {
             jira_add_label({
                 key: ticketKey,
-                label: LABELS.AI_GENERATED
+                label: labels.AI_GENERATED
             });
         } catch (labelError) {
-            console.warn('Failed to add ' + LABELS.AI_GENERATED + ' label:', labelError);
+            console.warn('Failed to add ' + labels.AI_GENERATED + ' label:', labelError);
         }
 
         // 5. Assign to initiator
@@ -177,7 +184,7 @@ function action(params) {
         try {
             jira_move_to_status({
                 key: ticketKey,
-                statusName: STATUSES.PO_REVIEW
+                statusName: jiraConfig.statuses.PO_REVIEW
             });
             console.log('Moved ' + ticketKey + ' to PO Review');
         } catch (statusError) {

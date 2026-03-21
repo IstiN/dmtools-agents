@@ -497,3 +497,64 @@ suite('configLoader: testCaseIssueType', function() {
     });
 
 });
+
+// ── jira.questions config ─────────────────────────────────────────────────────
+
+suite('configLoader: jira.questions', function() {
+
+    test('DEFAULTS include jira.questions with fetchJql and answerField', function() {
+        var q = configLoaderModule.DEFAULTS.jira.questions;
+        assert.ok(q, 'jira.questions exists in DEFAULTS');
+        assert.ok(q.fetchJql, 'fetchJql is set');
+        assert.ok(q.fetchJql.indexOf('{ticketKey}') !== -1, 'fetchJql contains {ticketKey} placeholder');
+        assert.equal(q.answerField, 'Answer', 'default answerField is Answer');
+    });
+
+    test('default fetchJql targets Subtask issuetype', function() {
+        assert.ok(
+            configLoaderModule.DEFAULTS.jira.questions.fetchJql.indexOf('Subtask') !== -1,
+            'default JQL uses Subtask'
+        );
+    });
+
+    test('jira.questions is fully replaced when overridden', function() {
+        var config = configLoaderModule.mergeProjectConfig(configLoaderModule.DEFAULTS, {
+            jira: {
+                questions: {
+                    fetchJql: 'parent = {ticketKey} AND issuetype = "Question"',
+                    answerField: 'CustomAnswer'
+                }
+            }
+        });
+        assert.equal(config.jira.questions.fetchJql, 'parent = {ticketKey} AND issuetype = "Question"', 'fetchJql replaced');
+        assert.equal(config.jira.questions.answerField, 'CustomAnswer', 'answerField replaced');
+    });
+
+    test('jira.questions stays as defaults when not overridden', function() {
+        var config = configLoaderModule.mergeProjectConfig(configLoaderModule.DEFAULTS, {
+            jira: { project: 'PROJ' }
+        });
+        assert.equal(config.jira.questions.answerField, 'Answer', 'answerField unchanged');
+        assert.ok(config.jira.questions.fetchJql.indexOf('{ticketKey}') !== -1, 'fetchJql unchanged');
+    });
+
+    test('BA_ANALYSIS is in default statuses', function() {
+        assert.equal(configLoaderModule.DEFAULTS.jira.statuses.BA_ANALYSIS, 'BA Analysis');
+    });
+
+    test('BA_ANALYSIS can be overridden via statuses replacement', function() {
+        var config = configLoaderModule.mergeProjectConfig(configLoaderModule.DEFAULTS, {
+            jira: {
+                statuses: { BA_ANALYSIS: 'Analysis', PO_REVIEW: 'PO Review', DONE: 'Done' }
+            }
+        });
+        assert.equal(config.jira.statuses.BA_ANALYSIS, 'Analysis', 'custom BA_ANALYSIS applied');
+    });
+
+    test('{ticketKey} placeholder in fetchJql is replaced at call site', function() {
+        var jql = configLoaderModule.DEFAULTS.jira.questions.fetchJql.replace('{ticketKey}', 'PROJ-42');
+        assert.ok(jql.indexOf('PROJ-42') !== -1, 'ticketKey injected');
+        assert.ok(jql.indexOf('{ticketKey}') === -1, 'placeholder removed');
+    });
+
+});
