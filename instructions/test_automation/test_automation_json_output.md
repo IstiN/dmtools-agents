@@ -34,13 +34,13 @@ After running the test, write the structured result to `outputs/test_automation_
       "type": "github_secret",
       "name": "FIREBASE_TEST_EMAIL",
       "description": "Email of a dedicated Firebase test user in project ai-native-478811",
-      "how_to_add": "gh secret set FIREBASE_TEST_EMAIL --body 'test@example.com' --repo ai-teammate/mytube"
+      "how_to_add": "gh secret set FIREBASE_TEST_EMAIL --body 'test@example.com' --repo {owner}/{repo}"
     },
     {
       "type": "github_secret",
       "name": "FIREBASE_TEST_PASSWORD",
       "description": "Password for the Firebase test user",
-      "how_to_add": "gh secret set FIREBASE_TEST_PASSWORD --body 'password' --repo ai-teammate/mytube"
+      "how_to_add": "gh secret set FIREBASE_TEST_PASSWORD --body 'password' --repo {owner}/{repo}"
     }
   ]
 }

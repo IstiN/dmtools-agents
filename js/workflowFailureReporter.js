@@ -5,10 +5,10 @@
  * Uses a label (ci-run-{runId}) for idempotency — skips if a bug with that label exists.
  *
  * customParams:
- *   workspace    — GitHub owner/org       (e.g. "ai-teammate")
- *   repository   — GitHub repo name       (e.g. "mytube")
- *   workflowId   — workflow filename      (optional, e.g. "ai-teammate.yml"; omit for all workflows)
- *   jiraProject  — Jira project key       (e.g. "MYTUBE")
+ *   workspace    — GitHub owner/org       (e.g. "my-org")
+ *   repository   — GitHub repo name       (e.g. "my-repo")
+ *   workflowId   — workflow filename      (optional, e.g. "ci.yml"; omit for all workflows)
+ *   jiraProject  — Jira project key       (e.g. "PROJ")
  *
  * NOTE: Listing runs without workflowId requires dmtools to support the /actions/runs endpoint.
  * If you get a 404 when workflowId is omitted, please report to dmtools:

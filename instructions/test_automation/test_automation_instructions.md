@@ -70,12 +70,12 @@ Before writing a test, check what is already available in GitHub Actions. **You 
 - `DB_USER`, `DB_PASSWORD`, `DB_NAME`
 
 ### Web App
-- Frontend: `https://ai-teammate.github.io/mytube` (default — no env var needed)
-- API: `https://mytube-api-80693608388.us-central1.run.app`
+- Frontend: `{FRONTEND_URL}` (default — no env var needed)
+- API: `{API_URL}`
 
 ### Also available
-- `RAW_OBJECT_PATH` = `test-videos/test_video.mp4` — relative path within `gs://mytube-raw-uploads/` to a real test video for transcoder tests
-- `FIREBASE_TEST_EMAIL` = `ci-test@mytube.test` (variable) — CI test user, fake domain, no real Gmail
+- `RAW_OBJECT_PATH` = `test-videos/test_video.mp4` — relative path within `{GCS_BUCKET}/` to a real test video for transcoder tests
+- `FIREBASE_TEST_EMAIL` = `{TEST_EMAIL}` (variable) — CI test user, fake domain, no real Gmail
 - `FIREBASE_TEST_UID` = `ci-test-user-001` (variable)
 - `FIREBASE_TEST_PASSWORD` (secret) — password for the CI test user
 - `FIREBASE_TEST_TOKEN` — **generate at CI runtime** (token expires in 1h, never store as secret):
@@ -145,10 +145,10 @@ Always verify the download succeeded (`curl` exit code 0, file size > 0) before 
 
 ### Step 3 — Upload to GCS if the test needs a GCS path
 
-If the test requires a file already in `gs://mytube-raw-uploads/`, upload the generated/downloaded file:
+If the test requires a file already in `{GCS_BUCKET}/`, upload the generated/downloaded file:
 
 ```bash
-gcloud storage cp /tmp/test_video.mp4 gs://mytube-raw-uploads/test-data/{TICKET-KEY}/test_video.mp4 \
+gcloud storage cp /tmp/test_video.mp4 {GCS_BUCKET}/test-data/{TICKET-KEY}/test_video.mp4 \
   --project=ai-native-478811
 ```
 

@@ -21,6 +21,6 @@
     "customParams": {
       "removeLabel": "sm_pr_merge_triggered"
     },
-    "inputJql": "key = MYTUBE-1"
+    "inputJql": "key = PROJ-1"
   }
 }

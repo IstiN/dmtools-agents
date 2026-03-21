@@ -69,7 +69,7 @@ If a slightly larger or more realistic file is needed:
 | MP3 | `https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3` |
 | JPEG | `https://www.gstatic.com/webp/gallery/1.jpg` |
 
-If a `curl` download in test setup would suffice → **REQUEST_CHANGES**: include the download snippet and GCS upload command if the test needs the file in `gs://mytube-raw-uploads/`.
+If a `curl` download in test setup would suffice → **REQUEST_CHANGES**: include the download snippet and GCS upload command if the test needs the file in `{GCS_BUCKET}/`.
 
 #### Does it genuinely require a human-supplied asset?
 Only if the test specifically requires a real-world file that cannot be synthesised or downloaded freely (e.g. a licensed video, a file with specific codec characteristics that ffmpeg cannot produce). In this case:

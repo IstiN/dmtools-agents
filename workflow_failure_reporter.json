@@ -4,9 +4,9 @@
     "jsPath"    : "agents/js/workflowFailureReporter.js",
     "jobParams" : {
       "customParams" : {
-        "workspace"   : "ai-teammate",
-        "repository"  : "mytube",
-        "jiraProject" : "MYTUBE"
+        "workspace"   : "{owner}",
+        "repository"  : "{repo}",
+        "jiraProject" : "{jiraProject}"
       }
     }
   }

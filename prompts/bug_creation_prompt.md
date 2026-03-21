@@ -38,7 +38,7 @@ Write `outputs/bug_decision.json` with exactly one of these formats:
 ```json
 {
   "action": "link",
-  "existingKey": "MYTUBE-XXX",
+  "existingKey": "PROJ-XXX",
   "reason": "This bug describes the same issue: <brief explanation>"
 }
 ```

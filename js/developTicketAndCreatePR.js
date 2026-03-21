@@ -454,7 +454,7 @@ function action(params) {
         // ── Early exit: PR already open for this branch ──────────────────────
         // If a PR already exists, a previous run created it but failed to move
         // the ticket to In Review. Move now and skip re-development.
-        const expectedBranch = 'ai/' + ticketKey;
+        const expectedBranch = configLoader.formatBranchName(config.git.branchPrefix.development, ticketKey);
         try {
             const existingPrJson = cli_execute_command({
                 command: 'gh pr list --head ' + expectedBranch + ' --state open --json url,number --jq ".[0]"'

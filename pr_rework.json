@@ -30,6 +30,6 @@
     "customParams": {
       "removeLabel": "sm_story_rework_triggered"
     },
-    "inputJql": "key = MYTUBE-243"
+    "inputJql": "key = PROJ-243"
   }
 }

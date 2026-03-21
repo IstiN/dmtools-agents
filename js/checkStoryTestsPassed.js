@@ -8,11 +8,16 @@
  */
 
 const { STATUSES } = require('./config.js');
+const configLoader = require('./configLoader.js');
 
 function action(params) {
     const ticketKey = params.ticket && params.ticket.key;
     const customParams = params.jobParams && params.jobParams.customParams;
     const removeLabel = customParams && customParams.removeLabel;
+
+    // Load project config to get testCaseIssueType (default: "Test Case")
+    const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+    const testCaseType = projectConfig.jira.issueTypes.TEST_CASE || 'Test Case';
 
     // Helper: remove SM label so the check re-runs on the next SM cycle
     function releaseLock() {
@@ -33,7 +38,7 @@ function action(params) {
         // Step 1: Find all linked Test Cases for this story
         // jira_search_by_jql returns a plain array
         const allTCs = jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "Test Case"',
+            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "' + testCaseType + '"',
             maxResults: 100
         }) || [];
 
@@ -48,7 +53,7 @@ function action(params) {
 
         // Step 2: Find linked Test Cases that are NOT yet Passed
         const notPassedTCs = jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "Test Case" AND status != "Passed"',
+            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "' + testCaseType + '" AND status != "Passed"',
             maxResults: 1
         }) || [];
 

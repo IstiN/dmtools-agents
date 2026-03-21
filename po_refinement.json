@@ -17,7 +17,7 @@
         "./agents/instructions/common/bash_tools.md"
       ],
       "knownInfo": "",
-      "formattingRules": "https://dmtools.atlassian.net/wiki/spaces/AINA/pages/18186241/Template+Jira+Markdown",
+      "formattingRules": "",
       "fewShots": ""
     },
     "cliPrompt": "./agents/prompts/po_refinement_prompt.md",

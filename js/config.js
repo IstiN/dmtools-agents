@@ -9,7 +9,8 @@ const ISSUE_TYPES = {
     TASK: 'Task',
     STORY: 'Story',
     BUG: 'Bug',
-    EPIC: 'Epic'
+    EPIC: 'Epic',
+    TEST_CASE: 'Test Case'
 };
 
 // Jira Statuses
@@ -105,6 +106,30 @@ const JIRA_FIELDS = {
 // Summary Length Constraints
 const SUMMARY_MAX_LENGTH = 120;
 
+// ── Default Confluence URLs ──────────────────────────────────────────────────
+const DEFAULT_CONFLUENCE = {
+    templateStory: 'https://dmtools.atlassian.net/wiki/spaces/AINA/pages/11665485/Template+Story',
+    templateJiraMarkdown: 'https://dmtools.atlassian.net/wiki/spaces/AINA/pages/18186241/Template+Jira+Markdown',
+    templateSolutionDesign: 'https://dmtools.atlassian.net/wiki/spaces/AINA/pages/56754177/Template+Solution+Design',
+    templateQuestions: 'https://dmtools.atlassian.net/wiki/spaces/AINA/pages/11665581/Template+Q'
+};
+
+// ── Default format templates ─────────────────────────────────────────────────
+const DEFAULT_FORMATS = {
+    commitMessage: {
+        development: '{ticketKey} {ticketSummary}',
+        testAutomation: '{ticketKey} test: automate {ticketSummary}',
+        testRework: '{ticketKey} test rework: {result} test after review',
+        rework: '{ticketKey} Rework: address PR review comments',
+        wip: '{ticketKey} WIP: partial analysis (agent interrupted)'
+    },
+    prTitle: {
+        development: '{ticketKey} {ticketSummary}',
+        testAutomation: '{ticketKey} {ticketSummary}',
+        rework: '{ticketKey} {ticketSummary} (rework)'
+    }
+};
+
 // Export all configuration
 module.exports = {
     ISSUE_TYPES,
@@ -117,6 +142,8 @@ module.exports = {
     DIAGRAM_DEFAULTS,
     DIAGRAM_FORMAT,
     JIRA_FIELDS,
-    SUMMARY_MAX_LENGTH
+    SUMMARY_MAX_LENGTH,
+    DEFAULT_CONFLUENCE,
+    DEFAULT_FORMATS
 };
 

@@ -677,3 +677,193 @@ Backlog → Ready For Development → In Development → In Review → [In Rewor
 Backlog → In Development → In Review (Passed or Failed) → [In Rework]
 → Passed / Failed → [Bug To Fix]
 ```
+
+---
+
+## Project Configuration
+
+The agents module supports **project-specific configuration** via `.dmtools/config.js`, enabling reuse across different repositories and Jira projects without forking.
+
+### Configuration File
+
+Place a `config.js` file at `<project-root>/.dmtools/config.js`. The file is a CommonJS module exporting a configuration object.
+
+**Discovery order:**
+1. `customParams.configPath` — explicit path (for cross-repo workflows)
+2. `../.dmtools/config.js` — relative to agents directory (submodule layout)
+3. `.dmtools/config.js` — current working directory
+4. Built-in defaults — backward compatible (no config = current behavior)
+
+### Minimal Configuration
+
+Only specify what differs from defaults:
+
+```js
+// .dmtools/config.js
+module.exports = {
+    repository: {
+        owner: 'your-org',
+        repo: 'your-repo'
+    },
+    jira: {
+        project: 'PROJ',
+        parentTicket: 'PROJ-1'
+    },
+    git: {
+        baseBranch: 'master'  // default is 'main'
+    }
+};
+```
+
+### Full Configuration Reference
+
+```js
+module.exports = {
+    // Repository identity (used for workflow dispatch and PR creation)
+    repository: {
+        owner: 'your-org',
+        repo: 'your-repo'
+    },
+
+    jira: {
+        project: 'PROJ',         // Replaces {jiraProject} in JQL queries
+        parentTicket: 'PROJ-1',  // Replaces {parentTicket} in JQL queries
+
+        // Full replacement — define your project's complete status set
+        statuses: {
+            IN_REVIEW: 'In Review',
+            READY_FOR_DEVELOPMENT: 'Ready For Development',
+            IN_DEVELOPMENT: 'In Development',
+            DONE: 'Done',
+            // ... see config.js for all default status keys
+        },
+
+        // Override issue type names if different
+        issueTypes: {
+            STORY: 'Story',
+            BUG: 'Bug',
+            TASK: 'Task'
+        }
+    },
+
+    git: {
+        baseBranch: 'main',
+        authorName: 'AI Teammate',
+        authorEmail: 'agent.ai.native@gmail.com',
+        branchPrefix: {
+            development: 'ai',      // ai/<TICKET-KEY>
+            feature: 'feature',     // feature/<TICKET-KEY>
+            test: 'test'            // test/<TICKET-KEY>
+        }
+    },
+
+    // Template placeholders: {ticketKey}, {ticketSummary}, {result}
+    formats: {
+        commitMessage: {
+            development: '{ticketKey} {ticketSummary}',
+            testAutomation: '{ticketKey} test: automate {ticketSummary}',
+            testRework: '{ticketKey} test rework: {result} test after review',
+            rework: '{ticketKey} Rework: address PR review comments',
+            wip: '{ticketKey} WIP: partial analysis (agent interrupted)'
+        },
+        prTitle: {
+            development: '{ticketKey} {ticketSummary}',
+            testAutomation: '{ticketKey} {ticketSummary}',
+            rework: '{ticketKey} {ticketSummary} (rework)'
+        }
+    },
+
+    // Full replacement — define your project's complete label set
+    labels: {
+        AI_GENERATED: 'ai_generated',
+        AI_DEVELOPED: 'ai_developed',
+        PR_APPROVED: 'pr_approved'
+        // ... see config.js for all default label keys
+    },
+
+    // Override Confluence page URLs per project
+    confluence: {
+        templateStory: 'https://your-confluence/wiki/spaces/PROJ/pages/123/Template+Story',
+        templateJiraMarkdown: 'https://your-confluence/wiki/spaces/PROJ/pages/456/Jira+Markdown',
+        templateSolutionDesign: 'https://your-confluence/wiki/spaces/PROJ/pages/789/Solution+Design',
+        templateQuestions: 'https://your-confluence/wiki/spaces/PROJ/pages/012/Questions'
+    },
+
+    // Fully replace SM rules for projects with different workflows
+    // Set to null to use default rules with JQL interpolation
+    smRules: null,
+
+    // Add project-specific instructions to agents (appended, not replacing defaults)
+    // Uses dmtools-core's additionalInstructions field
+    additionalInstructions: {
+        story_development: [
+            'https://your-confluence/wiki/spaces/PROJ/pages/100/Dev+Guidelines',
+            './project-instructions/coding-standards.md'
+        ]
+    },
+
+    // Fully replace agent instructions (overrides defaults entirely)
+    instructionOverrides: {
+        // story_development: ['./custom-instructions/dev.md']
+    }
+};
+```
+
+### Merge Strategy
+
+| Section | Behavior | Use case |
+|---------|----------|----------|
+| `repository`, `git`, `formats`, `confluence` | Deep merge | Override individual fields |
+| `jira.statuses`, `jira.issueTypes`, `labels` | Full replacement | Projects with different workflows |
+| `smRules`, `smMergeRules` | Full replacement | Completely different SM rules |
+| `additionalInstructions`, `instructionOverrides` | Full replacement per key | Project-specific agent instructions |
+
+### Deployment Modes
+
+#### Mode 1: Agents as Git Submodule (recommended)
+
+```
+your-project/
+├── .dmtools/
+│   └── config.js          ← project config
+├── agents/                ← git submodule (this repo)
+│   ├── sm.json
+│   ├── js/
+│   └── ...
+└── .github/
+    └── workflows/
+        └── ai-teammate.yml
+```
+
+Agents automatically discover `../.dmtools/config.js`.
+
+#### Mode 2: Isolated Agents Repo (cross-repo workflows)
+
+When agents live in a separate repository and operate on other repos:
+
+```json
+{
+  "customParams": {
+    "targetRepository": {
+      "owner": "your-org",
+      "repo": "target-repo",
+      "baseBranch": "master",
+      "workingDir": "target-repo"
+    }
+  }
+}
+```
+
+The `targetRepository` in `customParams` overrides the config's repository settings at runtime, allowing the same agent to work with different target repositories.
+
+### JQL Parameterization
+
+SM rules in `sm.json` use `{jiraProject}` and `{parentTicket}` placeholders:
+
+```json
+{
+  "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('Backlog')"
+}
+```
+
+These are resolved at runtime from the project config. To fully replace all SM rules for a project with a completely different workflow, set `smRules` in the config to an array of rule objects.

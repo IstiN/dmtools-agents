@@ -21,6 +21,6 @@
     "customParams": {
       "removeLabel": "sm_story_done_check_triggered"
     },
-    "inputJql": "key = MYTUBE-1"
+    "inputJql": "key = PROJ-1"
   }
 }

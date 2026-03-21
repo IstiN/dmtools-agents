@@ -61,7 +61,7 @@ function action(params) {
         // If a PR already exists for this ticket's branch, the previous run created
         // it but failed to move the ticket to In Review (e.g. was interrupted).
         // Move to In Review now and skip development entirely.
-        const expectedBranch = 'ai/' + ticketKey;
+        const expectedBranch = configLoader.formatBranchName(config.git.branchPrefix.development, ticketKey);
         try {
             const existingPrJson = cli_execute_command({
                 command: 'gh pr list --head ' + expectedBranch + ' --state open --json url,number --jq ".[0]"'

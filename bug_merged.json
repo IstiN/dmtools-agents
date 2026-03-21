@@ -21,6 +21,6 @@
     "customParams": {
       "removeLabel": "sm_bug_merged_triggered"
     },
-    "inputJql": "key = MYTUBE-74"
+    "inputJql": "key = PROJ-74"
   }
 }

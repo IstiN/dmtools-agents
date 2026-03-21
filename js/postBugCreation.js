@@ -2,7 +2,7 @@
  * Post Bug Creation Action (postJSAction for bug_creation agent)
  *
  * Reads outputs/bug_decision.json written by the AI:
- *   { "action": "link", "existingKey": "MYTUBE-XXX" }
+ *   { "action": "link", "existingKey": "PROJ-XXX" }
  *   { "action": "create", "summary": "...", "description": "outputs/bug_description.md" }
  *   { "action": "none", "reason": "..." }
  *

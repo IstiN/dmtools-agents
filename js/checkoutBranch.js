@@ -7,6 +7,7 @@
  */
 
 const { GIT_CONFIG } = require('./config.js');
+var configLoader = require('./configLoader.js');
 
 /**
  * Clean command output from script wrapper artifacts
@@ -28,15 +29,16 @@ function cleanCommandOutput(output) {
 
 function action(params) {
     try {
+        var config = configLoader.loadProjectConfig(params.jobParams || params);
         var ticketKey = params.ticket.key;
-        var branchName = 'ai/' + ticketKey;
+        var branchName = configLoader.formatBranchName(config.git.branchPrefix.development, ticketKey);
 
         console.log('Setting up branch for ticket:', ticketKey, '→', branchName);
 
         // Configure git author
         try {
-            cli_execute_command({ command: 'git config user.name "' + GIT_CONFIG.AUTHOR_NAME + '"' });
-            cli_execute_command({ command: 'git config user.email "' + GIT_CONFIG.AUTHOR_EMAIL + '"' });
+            cli_execute_command({ command: 'git config user.name "' + config.git.authorName + '"' });
+            cli_execute_command({ command: 'git config user.email "' + config.git.authorEmail + '"' });
             console.log('Configured git author');
         } catch (e) {
             console.warn('Failed to configure git author:', e);
@@ -79,9 +81,9 @@ function action(params) {
                 cli_execute_command({ command: 'git checkout -b ' + branchName + ' origin/' + branchName });
             } else {
                 // New branch — start from base branch
-                console.log('Creating new branch from', GIT_CONFIG.DEFAULT_BASE_BRANCH + ':', branchName);
-                cli_execute_command({ command: 'git checkout ' + GIT_CONFIG.DEFAULT_BASE_BRANCH });
-                cli_execute_command({ command: 'git pull origin ' + GIT_CONFIG.DEFAULT_BASE_BRANCH });
+                console.log('Creating new branch from', config.git.baseBranch + ':', branchName);
+                cli_execute_command({ command: 'git checkout ' + config.git.baseBranch });
+                cli_execute_command({ command: 'git pull origin ' + config.git.baseBranch });
                 cli_execute_command({ command: 'git checkout -b ' + branchName });
             }
         }

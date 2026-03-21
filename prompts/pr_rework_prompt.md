@@ -1,6 +1,6 @@
 You are fixing code issues identified in a Pull Request review.
 
-**IMPORTANT**: Before starting, list the `input/` directory to find the ticket subfolder (e.g. `input/MYTUBE-123/`), then read ALL files from that subfolder in this order:
+**IMPORTANT**: Before starting, list the `input/` directory to find the ticket subfolder (e.g. `input/PROJ-123/`), then read ALL files from that subfolder in this order:
 1. `request.md` — original ticket requirements and acceptance criteria
 2. `comments.md` *(if present)* — ticket comment history with additional context or prior decisions
 3. `existing_questions.json` *(if present)* — clarification questions with PO answers; treat answered questions as binding requirements

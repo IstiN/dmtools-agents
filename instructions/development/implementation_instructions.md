@@ -38,15 +38,15 @@ Implement code changes based on ticket requirements including:
 **IMPORTANT**: If the implementation requires new environment variables, configuration, or credentials for GitHub Actions (deployments, tests, or other workflows):
   1. **Check what already exists first** — never overwrite without checking:
      ```bash
-     gh secret list --repo ai-teammate/mytube
-     gh variable list --repo ai-teammate/mytube
+     gh secret list --repo {owner}/{repo}
+     gh variable list --repo {owner}/{repo}
      ```
   2. **Add non-sensitive variables** (URLs, project IDs, feature flags, region names, etc.):
      ```bash
-     gh variable set VAR_NAME --body "value" --repo ai-teammate/mytube
+     gh variable set VAR_NAME --body "value" --repo {owner}/{repo}
      ```
   3. **For sensitive secrets** (API keys, passwords, tokens) — you cannot set them automatically as you do not have the actual value. Instead, document them in `outputs/response.md` as:
-     > 🔑 **Human action required**: add secret `SECRET_NAME` to GitHub Actions (`gh secret set SECRET_NAME --body "..." --repo ai-teammate/mytube`)
+     > 🔑 **Human action required**: add secret `SECRET_NAME` to GitHub Actions (`gh secret set SECRET_NAME --body "..." --repo {owner}/{repo}`)
   4. **Update `instruction.md`** — always add the new entry to the appropriate table (GitHub Secrets or GitHub Variables). Mark secrets not yet added with ⚠️.
   5. Secrets and variables set at repo level are available to **all** workflows: `ai-teammate.yml`, `deploy-api.yml`, `deploy-pages.yml`, `unit-tests.yml` and any future workflow.
 

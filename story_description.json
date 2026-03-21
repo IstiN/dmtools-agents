@@ -4,7 +4,6 @@
     "agentParams": {
       "aiRole": "Experienced Business Analyst",
       "instructions": [
-        "https://dmtools.atlassian.net/wiki/spaces/AINA/pages/11665485/Template+Story",
         "You must write response to the request to outputs/response.md according to formatting rules",
         "Don't write Enhanced Story Description of TICKET-XXX, just start from the content.",
         "Content from the response.md file will replace description fully from the ticket, don't include any intro, current ticket reference.",
@@ -19,7 +18,7 @@
         "./agents/instructions/common/bash_tools.md"
       ],
       "knownInfo": "",
-      "formattingRules": "https://dmtools.atlassian.net/wiki/spaces/AINA/pages/18186241/Template+Jira+Markdown",
+      "formattingRules": "",
       "fewShots": ""
     },
     "cliCommands": [

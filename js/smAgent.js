@@ -3,14 +3,22 @@
  *
  * Reads an array of rules from params.rules (defined in agents/sm.json)
  * and for each rule:
- *   1. Queries Jira by rule.jql
+ *   1. Queries Jira by rule.jql (with {jiraProject}/{parentTicket} interpolation)
  *   2. Optionally transitions each ticket to rule.targetStatus
  *   3. Triggers an ai-teammate GitHub Actions workflow for each ticket
  *      OR executes the postJSAction locally (if localExecution: true)
  *
+ * Configuration:
+ *   Loads project config from .dmtools/config.js (via configLoader).
+ *   If config.smRules is provided, uses those instead of params.rules (full override).
+ *   Repository owner/repo from config override params when present.
+ *   JQL placeholders {jiraProject} and {parentTicket} are resolved from config.
+ *
  * Rule fields:
- *   jql            (required) — JQL to find tickets
+ *   jql            (required) — JQL to find tickets (supports {jiraProject}, {parentTicket})
  *   configFile     (required) — agents/*.json to pass as config_file workflow input
+ *   configPath     (optional) — path to a project config (.dmtools/config.js) for this rule
+ *                               overrides the global config; enables multi-project orchestration
  *   description    (optional) — human-readable label shown in logs
  *   targetStatus   (optional) — Jira status to transition tickets to before triggering
  *   workflowFile   (optional) — GitHub Actions workflow file  (default: ai-teammate.yml)
@@ -22,16 +30,84 @@
  *   localExecution (optional) — if true, run postJSAction directly (no runner, no AI/CLI)
  */
 
+var configLoader = require('./configLoader.js');
+
+// Project config loaded once in action() — used as global default for rules without configPath
+var projectConfig = null;
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function buildEncodedConfig(ticketKey) {
+/**
+ * Returns the effective config for a rule.
+ * If rule.configPath is set, loads that config (enables per-rule / multi-project override).
+ * Otherwise falls back to the global projectConfig.
+ */
+function loadRuleConfig(rule) {
+    if (!rule.configPath) return projectConfig;
+    var ruleConfig = configLoader.loadProjectConfig({ configPath: rule.configPath });
+    console.log('  🔧 Rule config: ' + rule.configPath +
+        (ruleConfig.jira.project ? ' (project: ' + ruleConfig.jira.project + ')' : ''));
+    return ruleConfig;
+}
+
+function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
     var p = { inputJql: 'key = ' + ticketKey };
+    var resolvedCf = resolveConfigFile(rule, effectiveConfig);
+
+    if (effectiveConfig && resolvedCf) {
+        var agentName = extractAgentName(resolvedCf);
+        var resolved = configLoader.resolveInstructions(agentName, null, effectiveConfig);
+
+        if (resolved.instructions) {
+            if (!p.agentParams) p.agentParams = {};
+            p.agentParams.instructions = resolved.instructions;
+        }
+        if (resolved.additionalInstructions && resolved.additionalInstructions.length > 0) {
+            p.additionalInstructions = resolved.additionalInstructions;
+        }
+    }
+
+    // Propagate config path so postJSAction scripts in triggered workflows also find the config
+    if (effectiveConfig && effectiveConfig._configPath) {
+        if (!p.customParams) p.customParams = {};
+        p.customParams.configPath = effectiveConfig._configPath;
+    }
+
     return encodeURIComponent(JSON.stringify({ params: p }));
 }
 
-function triggerWorkflow(repoInfo, ticketKey, rule) {
+function extractAgentName(configFile) {
+    if (!configFile) return '';
+    var name = configFile;
+    var slashIdx = name.lastIndexOf('/');
+    if (slashIdx !== -1) name = name.substring(slashIdx + 1);
+    if (name.indexOf('.json') !== -1) name = name.replace('.json', '');
+    return name;
+}
+
+/**
+ * Resolve the full path to an agent config JSON.
+ * If rule.configFile is a bare filename (no "/"), prefix with agentConfigsDir from config.
+ * Example: "TestCasesGenerator.json" + agentConfigsDir "ai_teammate/AITS"
+ *        → "ai_teammate/AITS/TestCasesGenerator.json"
+ */
+function resolveConfigFile(rule, effectiveConfig) {
+    var cf = rule.configFile;
+    if (!cf) return cf;
+    // Already a path (contains "/") — use as-is
+    if (cf.indexOf('/') !== -1) return cf;
+    // Short filename — prefix with agentConfigsDir if available
+    var dir = effectiveConfig && effectiveConfig.agentConfigsDir;
+    if (dir) {
+        return dir.replace(/\/$/, '') + '/' + cf;
+    }
+    return cf;
+}
+
+function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig) {
     var workflowFile = rule.workflowFile || 'ai-teammate.yml';
     var workflowRef  = rule.workflowRef  || 'main';
+    var resolvedCf   = resolveConfigFile(rule, effectiveConfig);
     try {
         github_trigger_workflow(
             repoInfo.owner,
@@ -39,8 +115,8 @@ function triggerWorkflow(repoInfo, ticketKey, rule) {
             workflowFile,
             JSON.stringify({
                 concurrency_key: ticketKey,
-                config_file:     rule.configFile,
-                encoded_config:  buildEncodedConfig(ticketKey)
+                config_file:     resolvedCf,
+                encoded_config:  buildEncodedConfig(ticketKey, rule, effectiveConfig)
             }),
             workflowRef
         );
@@ -69,15 +145,6 @@ function hasLabel(ticket, label) {
 
 // ─── Local execution ──────────────────────────────────────────────────────────
 
-/**
- * Loads a postJSAction JS file and executes its action() function in-process.
- * Uses a module wrapper so that require('./config.js') works inside the loaded file.
- *
- * @param {string} jsPath  - path to the JS file (e.g. "agents/js/checkBugTestsPassed.js")
- * @param {Object} ticket  - full Jira ticket object (from jira_get_ticket)
- * @param {Object} agentParams - params block from the agent config JSON
- * @returns result of action()
- */
 function runLocalAction(jsPath, ticket, agentParams) {
     var actionCode = file_read({ path: jsPath });
     if (!actionCode || !actionCode.trim()) throw new Error('Cannot read: ' + jsPath);
@@ -85,15 +152,23 @@ function runLocalAction(jsPath, ticket, agentParams) {
     var configCode = file_read({ path: 'agents/js/config.js' });
     if (!configCode || !configCode.trim()) throw new Error('Cannot read: agents/js/config.js');
 
-    // Wrap both files as CommonJS modules so require('./config.js') works inside action file
+    var configLoaderCode = file_read({ path: 'agents/js/configLoader.js' });
+
     var script =
         '(function() {\n' +
         '  var _cm = { exports: {} };\n' +
         '  (function(module, exports) {\n' + configCode + '\n  })(_cm, _cm.exports);\n' +
+        '  var _cl = { exports: {} };\n' +
+        (configLoaderCode ?
+        '  (function(module, exports, require) {\n' + configLoaderCode + '\n  })(_cl, _cl.exports, function(id) { return _cm.exports; });\n' :
+        '') +
         '  var _am = { exports: {} };\n' +
         '  (function(module, exports, require) {\n' + actionCode + '\n  })(\n' +
         '    _am, _am.exports,\n' +
-        '    function(id) { return _cm.exports; }\n' +
+        '    function(id) {\n' +
+        '      if (id === "./configLoader.js" || id === "./configLoader") return _cl.exports;\n' +
+        '      return _cm.exports;\n' +
+        '    }\n' +
         '  );\n' +
         '  return _am.exports;\n' +
         '})()';
@@ -105,14 +180,13 @@ function runLocalAction(jsPath, ticket, agentParams) {
     return exported.action({ ticket: ticket, jobParams: agentParams });
 }
 
-/**
- * Processes a rule with localExecution: true.
- * For each matching ticket: fetches full ticket, runs postJSAction in-process.
- */
-function processRuleLocally(rule, ruleIndex) {
+function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
+    var effectiveConfig = loadRuleConfig(rule);
+    var interpolatedJql = configLoader.interpolateJql(rule.jql, effectiveConfig);
+
     var label = rule.description || ('Rule #' + (ruleIndex + 1));
     console.log('\n══ [LOCAL] ' + label + ' ══');
-    console.log('   JQL: ' + rule.jql + (rule.limit ? ' (limit: ' + rule.limit + ')' : ''));
+    console.log('   JQL: ' + interpolatedJql + (rule.limit ? ' (limit: ' + rule.limit + ')' : ''));
 
     if (rule.enabled === false) {
         console.log('  ⏸️  Rule disabled — skipping');
@@ -124,13 +198,13 @@ function processRuleLocally(rule, ruleIndex) {
         return { processedKeys: [], skippedKeys: [] };
     }
 
-    // Read agent config to get postJSAction path and params (customParams, metadata, etc.)
+    var resolvedCf = resolveConfigFile(rule, effectiveConfig);
     var agentConfig;
     try {
-        var raw = file_read({ path: rule.configFile });
+        var raw = file_read({ path: resolvedCf });
         agentConfig = JSON.parse(raw);
     } catch (e) {
-        console.error('  ❌ Cannot read/parse configFile: ' + rule.configFile + ' — ' + e);
+        console.error('  ❌ Cannot read/parse configFile: ' + resolvedCf + ' — ' + e);
         return { processedKeys: [], skippedKeys: [] };
     }
 
@@ -138,13 +212,13 @@ function processRuleLocally(rule, ruleIndex) {
     var postJSActionPath = agentParams.postJSAction;
 
     if (!postJSActionPath) {
-        console.warn('  ⚠️  No postJSAction in ' + rule.configFile + ' — cannot run locally');
+        console.warn('  ⚠️  No postJSAction in ' + resolvedCf + ' — cannot run locally');
         return { processedKeys: [], skippedKeys: [] };
     }
 
     var tickets = [];
     try {
-        tickets = jira_search_by_jql({ jql: rule.jql, fields: ['key', 'labels'] }) || [];
+        tickets = jira_search_by_jql({ jql: interpolatedJql, fields: ['key', 'labels'] }) || [];
     } catch (e) {
         console.error('  ❌ Jira query failed: ' + (e.message || e));
         return { processedKeys: [], skippedKeys: [] };
@@ -178,7 +252,6 @@ function processRuleLocally(rule, ruleIndex) {
             moveStatus(key, rule.targetStatus);
         }
 
-        // Fetch full ticket so action() has all fields available
         var fullTicket;
         try {
             var ticketRaw = jira_get_ticket(key);
@@ -208,14 +281,26 @@ function processRuleLocally(rule, ruleIndex) {
 
 // ─── Rule processor ───────────────────────────────────────────────────────────
 
-function processRule(rule, repoInfo, ruleIndex) {
+function processRule(rule, globalRepoInfo, ruleIndex) {
     if (rule.localExecution) {
-        return processRuleLocally(rule, ruleIndex);
+        return processRuleLocally(rule, globalRepoInfo, ruleIndex);
     }
+
+    // Load per-rule config if rule.configPath is set; otherwise use global projectConfig.
+    // This enables multi-project orchestration: each rule can target a different project.
+    var effectiveConfig = loadRuleConfig(rule);
+
+    // Effective repo: rule config > global config > globalRepoInfo fallback
+    var effectiveOwner = (effectiveConfig.repository && effectiveConfig.repository.owner) || globalRepoInfo.owner;
+    var effectiveRepo  = (effectiveConfig.repository && effectiveConfig.repository.repo)  || globalRepoInfo.repo;
+    var effectiveRepoInfo = { owner: effectiveOwner, repo: effectiveRepo };
+
+    // JQL interpolation per rule using effectiveConfig (so {jiraProject} resolves correctly per project)
+    var interpolatedJql = configLoader.interpolateJql(rule.jql, effectiveConfig);
 
     var label = rule.description || ('Rule #' + (ruleIndex + 1));
     console.log('\n══ ' + label + ' ══');
-    console.log('   JQL: ' + rule.jql + (rule.limit ? ' (limit: ' + rule.limit + ')' : ''));
+    console.log('   JQL: ' + interpolatedJql + (rule.limit ? ' (limit: ' + rule.limit + ')' : ''));
 
     if (rule.enabled === false) {
         console.log('  ⏸️  Rule disabled — skipping');
@@ -229,13 +314,12 @@ function processRule(rule, repoInfo, ruleIndex) {
 
     var tickets = [];
     try {
-        tickets = jira_search_by_jql({ jql: rule.jql, fields: ['key', 'labels'] }) || [];
+        tickets = jira_search_by_jql({ jql: interpolatedJql, fields: ['key', 'labels'] }) || [];
     } catch (e) {
         console.error('  ❌ Jira query failed: ' + (e.message || e));
         return { processedKeys: [], skippedKeys: [] };
     }
 
-    // Enforce limit client-side
     if (typeof rule.limit === 'number' && tickets.length > rule.limit) {
         console.log('  Limiting from ' + tickets.length + ' to ' + rule.limit + ' ticket(s)');
         tickets = tickets.slice(0, rule.limit);
@@ -264,7 +348,7 @@ function processRule(rule, repoInfo, ruleIndex) {
             moveStatus(key, rule.targetStatus);
         }
 
-        var triggered = triggerWorkflow(repoInfo, key, rule);
+        var triggered = triggerWorkflow(effectiveRepoInfo, key, rule, effectiveConfig);
 
         if (triggered && rule.addLabel) {
             try { jira_add_label({ key: key, label: rule.addLabel }); } catch (e) {}
@@ -282,24 +366,43 @@ function action(params) {
     var p     = params.jobParams || params;
     var rules = p.rules;
 
+    // Load global project configuration (used as default when rules have no configPath)
+    projectConfig = configLoader.loadProjectConfig(p);
+
+    // Use smRules from config if provided (full override)
+    if (projectConfig.smRules && Array.isArray(projectConfig.smRules) && projectConfig.smRules.length > 0) {
+        console.log('SM Agent: Using smRules override from project config (' + projectConfig.smRules.length + ' rules)');
+        rules = projectConfig.smRules;
+    }
+
     if (!rules || rules.length === 0) {
-        console.error('❌ No rules defined in jobParams.rules');
+        console.error('❌ No rules defined in jobParams.rules or project config');
         return { success: false, error: 'No rules defined' };
     }
 
-    if (!p.owner || !p.repo) {
-        console.error('❌ jobParams.owner and jobParams.repo are required');
+    // Global repo fallback: used by rules that don't specify their own configPath
+    var owner = (projectConfig.repository.owner) || p.owner;
+    var repo  = (projectConfig.repository.repo)  || p.repo;
+
+    if (!owner || !repo) {
+        console.error('❌ Repository owner and repo are required (set in .dmtools/config.js or jobParams)');
         return { success: false, error: 'Missing owner or repo' };
     }
 
-    var repoInfo = { owner: p.owner, repo: p.repo };
-    console.log('SM Agent — ' + repoInfo.owner + '/' + repoInfo.repo + ' (' + rules.length + ' rules)');
+    var globalRepoInfo = { owner: owner, repo: repo };
+    console.log('SM Agent — ' + globalRepoInfo.owner + '/' + globalRepoInfo.repo + ' (' + rules.length + ' rules)');
+    if (projectConfig.jira.project) {
+        console.log('  Jira project: ' + projectConfig.jira.project);
+    }
+
+    // NOTE: JQL interpolation is now done per-rule inside processRule using each rule's
+    // effective config. Rules with configPath get their own {jiraProject}/{parentTicket} resolved.
 
     var allProcessedKeys = [];
     var allSkippedKeys   = [];
 
     rules.forEach(function(rule, i) {
-        var result = processRule(rule, repoInfo, i);
+        var result = processRule(rule, globalRepoInfo, i);
         allProcessedKeys = allProcessedKeys.concat(result.processedKeys);
         allSkippedKeys   = allSkippedKeys.concat(result.skippedKeys);
     });

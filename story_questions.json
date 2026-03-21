@@ -4,8 +4,6 @@
     "agentParams": {
       "aiRole": "Experienced Business Analyst",
       "instructions": [
-        "https://dmtools.atlassian.net/wiki/spaces/AINA/pages/11665581/Template+Q",
-        "https://dmtools.atlassian.net/wiki/spaces/AINA/pages/18186241/Template+Jira+Markdown",
         "Question descriptions must be in Jira Markdown format",
         "allowed priorities 'Highest', 'High', 'Medium', 'Low', 'Lowest'",
         "You must investigate codebase to understand current functionality regarding the topic to avoid stupid questions.",
