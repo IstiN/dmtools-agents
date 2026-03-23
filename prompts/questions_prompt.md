@@ -6,6 +6,11 @@ Always read these files first if present:
 
 **CRITICAL: Follow ALL instructions found in `request.md` strictly.** The request.md contains the full agent configuration including formatting rules, role, and known info.
 
+**CRITICAL: Read ALL files in the input folder, including images.**
+List the input folder with `ls -la input/MAPC-*/` (or the actual ticket folder) and read every file found:
+- Text/markdown files: read with `cat`
+- Image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`): **view them using the Read tool** — they may contain UI mockups, designs, or screenshots that are essential context. If an image shows a design or UI, describe what you see and use it to avoid asking questions that are already answered by the design.
+
 **CRITICAL: Description files MUST be written in Jira wiki markup format — NOT Markdown.**
 - Use `h2.`, `h3.` for headings (NOT `##`)
 - Use `*bold*` (NOT `**bold**`)
@@ -18,6 +23,6 @@ In addition to functional questions, always check:
 
 *Navigation & discoverability:* How will a user reach this feature? Is there a clear path from the app entry point (homepage / nav menu) to this screen or action? If the route is not obvious or not yet covered by another story, raise a question about it.
 
-*UI styles & visual accessibility:* Does the story involve any UI elements? If so, raise a question to confirm that the design avoids low-contrast combinations (e.g. grey text on white background). Ask for a specific colour palette or reference to design tokens / style guide. Include a suggestion: prefer contrast ratios that meet WCAG AA (4.5:1 for normal text).
+*UI styles & visual accessibility:* Does the story involve any UI elements? If so, raise a question to confirm that the design avoids low-contrast combinations (e.g. grey text on white background). Ask for a specific colour palette or reference to design tokens / style guide. Include a suggestion: prefer contrast ratios that meet WCAG AA (4.5:1 for normal text). **Skip this question if an image/design already shows the colour palette clearly.**
 
 Write individual description files to outputs/questions/ and the question plan to outputs/questions.json according to instructions.
