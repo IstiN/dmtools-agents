@@ -82,26 +82,31 @@ function getPRDetails(workspace, repository, pullRequestId) {
     }
 }
 
-function checkoutPRBranch(branchName) {
+function checkoutPRBranch(branchName, workingDir) {
     console.log('Checking out PR branch:', branchName);
+    var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
 
-    cli_execute_command({ command: 'git config user.name "' + GIT_CONFIG.AUTHOR_NAME + '"' });
-    cli_execute_command({ command: 'git config user.email "' + GIT_CONFIG.AUTHOR_EMAIL + '"' });
-    cli_execute_command({ command: 'git fetch origin --prune' });
+    var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
 
-    const localBranch = cleanCommandOutput(
-        cli_execute_command({ command: 'git branch --list "' + branchName + '"' }) || ''
-    );
+    cmd('git config user.name "' + GIT_CONFIG.AUTHOR_NAME + '"');
+    cmd('git config user.email "' + GIT_CONFIG.AUTHOR_EMAIL + '"');
+    cmd('git fetch origin --prune');
+
+    const localBranch = cleanCommandOutput(cmd('git branch --list "' + branchName + '"') || '');
 
     if (localBranch.trim()) {
-        cli_execute_command({ command: 'git checkout ' + branchName });
-        cli_execute_command({ command: 'git pull origin ' + branchName });
+        cmd('git checkout ' + branchName);
+        cmd('git pull origin ' + branchName);
     } else {
-        const remoteBranch = cleanCommandOutput(
-            cli_execute_command({ command: 'git ls-remote --heads origin ' + branchName }) || ''
-        );
+        const remoteBranch = cleanCommandOutput(cmd('git ls-remote --heads origin ' + branchName) || '');
         if (remoteBranch.trim()) {
-            cli_execute_command({ command: 'git checkout -b ' + branchName + ' origin/' + branchName });
+            try {
+                cmd('git fetch origin ' + branchName + ':' + branchName);
+                cmd('git checkout ' + branchName);
+            } catch (e) {
+                cmd('git fetch origin ' + branchName);
+                cmd('git checkout -b ' + branchName + ' origin/' + branchName);
+            }
         } else {
             throw new Error('Branch not found locally or remotely: ' + branchName);
         }
@@ -110,13 +115,15 @@ function checkoutPRBranch(branchName) {
     console.log('✅ Checked out branch:', branchName);
 }
 
-function getPRDiff(baseBranch, headBranch) {
+function getPRDiff(baseBranch, headBranch, workingDir) {
+    var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
+    var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
     try {
-        console.log('Generating diff between', baseBranch, 'and', headBranch);
+        console.log('Generating diff between', baseBranch, 'and', headBranch, workingDir ? '(in ' + workingDir + ')' : '');
 
         // First try three-dot diff (shows only changes on headBranch since divergence)
         try {
-            const diff = cli_execute_command({ command: 'git diff ' + baseBranch + '...' + headBranch }) || '';
+            const diff = cmd('git diff ' + baseBranch + '...' + headBranch) || '';
             console.log('Diff size:', diff.length, 'chars');
             return cleanCommandOutput(diff);
         } catch (e1) {
@@ -126,7 +133,7 @@ function getPRDiff(baseBranch, headBranch) {
         // Fallback: try with explicit origin/ prefix on base branch
         try {
             const originBase = baseBranch.indexOf('origin/') === 0 ? baseBranch : 'origin/' + baseBranch;
-            const diff = cli_execute_command({ command: 'git diff ' + originBase + '...' + headBranch }) || '';
+            const diff = cmd('git diff ' + originBase + '...' + headBranch) || '';
             console.log('Diff size (origin fallback):', diff.length, 'chars');
             return cleanCommandOutput(diff);
         } catch (e2) {
@@ -136,11 +143,9 @@ function getPRDiff(baseBranch, headBranch) {
         // Last resort: find explicit merge-base commit and diff from there
         try {
             const originBase = baseBranch.indexOf('origin/') === 0 ? baseBranch : 'origin/' + baseBranch;
-            const mergeBase = cleanCommandOutput(
-                cli_execute_command({ command: 'git merge-base ' + originBase + ' ' + headBranch }) || ''
-            );
+            const mergeBase = cleanCommandOutput(cmd('git merge-base ' + originBase + ' ' + headBranch) || '');
             if (mergeBase && mergeBase.trim().length > 0) {
-                const diff = cli_execute_command({ command: 'git diff ' + mergeBase.trim() + '...' + headBranch }) || '';
+                const diff = cmd('git diff ' + mergeBase.trim() + '...' + headBranch) || '';
                 console.log('Diff size (merge-base fallback):', diff.length, 'chars');
                 return cleanCommandOutput(diff);
             }

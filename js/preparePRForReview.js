@@ -64,7 +64,7 @@ function action(params) {
         const branchName = prDetails.head ? prDetails.head.ref : null;
         try {
             if (branchName) {
-                gh.checkoutPRBranch(branchName);
+                gh.checkoutPRBranch(branchName, config.workingDir);
             }
         } catch (e) {
             console.warn('Could not checkout PR branch:', e);
@@ -72,7 +72,7 @@ function action(params) {
 
         // Step 5: Diff + discussions (human-readable + raw with IDs)
         const baseBranch = prDetails.base ? prDetails.base.ref : config.git.baseBranch;
-        const diff = gh.getPRDiff(baseBranch, branchName || (prDetails.head && prDetails.head.ref));
+        const diff = gh.getPRDiff(baseBranch, branchName || (prDetails.head && prDetails.head.ref), config.workingDir);
 
         console.log('Fetching PR discussions...');
         const discussionData = gh.fetchDiscussionsAndRawData(repoInfo.owner, repoInfo.repo, pr.number);
