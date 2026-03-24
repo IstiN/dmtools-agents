@@ -77,6 +77,8 @@ Be thorough, constructive, and specific. Provide file paths and line numbers for
 
 **CRITICAL — Inline comment diff-only rule**: Inline comments can ONLY be placed on lines that appear inside a diff hunk in `pr_diff.txt` (lines changed or added in this PR). If a finding is about a file or line **not touched in this PR**, include it in the general comment as text — do NOT create an inline comment for it. The GitHub API rejects inline comments on lines outside the diff with a 422 error.
 
+**CRITICAL — Threads first, summary second**: Your primary output is `inlineComments` — every finding that can be placed on a diff line MUST be an inline thread. The general comment is just a short summary header. Do NOT repeat findings in the general comment that are already covered by inline threads.
+
 ## ⚠️ MANDATORY OUTPUT FILES — automation will silently fail without these
 
 You MUST write all three files below. Do NOT just write the review as plain text — the post-processing pipeline reads these files directly.
@@ -114,9 +116,15 @@ This is the machine-readable result consumed by the post-action. If it is missin
 - **`inlineComments`** — only lines that appear in the diff hunk. Lines outside the diff → GitHub API rejects with 422.
 
 ### 2. `outputs/pr_review_general.md` — REQUIRED
-GitHub-formatted general PR comment (referenced in `pr_review.json` → `generalComment`).
+Short general PR comment — **5-10 lines maximum**. This is just the header/summary; all details are in the inline threads.
 
-**This is where all technical detail belongs.** Write a comprehensive review here: every finding with file paths, line numbers, code snippets, and clear explanation. Reviewers read this on the PR — give them everything they need.
+Include only:
+- One-line verdict with emoji (✅ APPROVE / ⚠️ REQUEST CHANGES / 🚨 BLOCK)
+- Issue counts (🚨 N blocking · ⚠️ N important · 💡 N suggestions)
+- One sentence per BLOCKING issue (if any) — just enough to orient the developer
+- "See inline comments for details."
+
+Do NOT repeat findings that are already in inline threads.
 
 ### 3. `outputs/response.md` — REQUIRED
 Jira-formatted review summary posted as a ticket comment.
@@ -126,5 +134,3 @@ Jira-formatted review summary posted as a ticket comment.
 - Count of blocking / important / suggestion findings
 - PR link
 - One sentence on the most critical issue (if any)
-
-All technical details belong in `outputs/pr_review_general.md` (GitHub PR comment), not here.

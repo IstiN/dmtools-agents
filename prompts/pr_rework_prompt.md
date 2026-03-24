@@ -30,22 +30,22 @@ Run `mkdir -p outputs` first to ensure the directory exists.
 
 Write two output files:
 
-**`outputs/response.md`** — detailed fix summary posted as a **GitHub PR comment** (this IS a PR conversation, write as much technical detail as needed):
-- For each review thread: what was changed, why, and any trade-offs
-- Any issues you could NOT fix and a clear explanation of why
-- Test status (pass/fail) and any test changes made
-
-**`outputs/review_replies.json`** — concise per-thread reply (posted inline in each discussion thread — 1-3 sentences, just enough to confirm the fix):
+**`outputs/review_replies.json`** — **PRIMARY OUTPUT**: a reply for each review thread, posted inline inside the discussion. This is the main way the developer sees what was fixed. Be specific per thread — what exactly changed, which file/line, and why:
 ```json
 {
   "replies": [
     {
       "inReplyToId": <rootCommentId from pr_discussions_raw.json>,
       "threadId": "<id from pr_discussions_raw.json>",
-      "reply": "Fixed: <1-3 sentence description of what was done>"
+      "reply": "Fixed: <concise but complete description — what changed, in which file, and why>"
     }
   ]
 }
 ```
+
+**`outputs/response.md`** — **SHORT** general PR comment (5-10 lines max). Do NOT repeat what is already in the thread replies. Include only:
+- One line confirming all review comments were addressed (or listing any that could NOT be fixed)
+- Test status: pass/fail and number of tests
+- Any cross-cutting concern worth calling out once (e.g. lint status)
 
 DO NOT create branches, commit, or push — git operations are handled automatically.
