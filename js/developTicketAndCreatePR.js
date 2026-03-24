@@ -217,8 +217,18 @@ function createPullRequest(title, branchName, baseBranch) {
         // Escape special characters in title
         const escapedTitle = title.replace(/"/g, '\\"').replace(/\n/g, ' ');
 
-        // Use outputs/response.md as body-file (must exist before calling this)
-        const bodyFilePath = 'outputs/response.md';
+        // Use outputs/response.md as body-file (must exist before calling this).
+        // When _workingDir is set (e.g. "dependencies/PostNL-commercial-mobileApp"),
+        // gh runs in that subdirectory, so we need to go up to reach the workspace root.
+        var bodyFilePath;
+        if (_workingDir) {
+            var depth = _workingDir.replace(/\/$/, '').split('/').length;
+            var prefix = '';
+            for (var i = 0; i < depth; i++) { prefix += '../'; }
+            bodyFilePath = prefix + 'outputs/response.md';
+        } else {
+            bodyFilePath = 'outputs/response.md';
+        }
 
         console.log('Using PR body file:', bodyFilePath);
         console.log('Using branch:', branchName);
