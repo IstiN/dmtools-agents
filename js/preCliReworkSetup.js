@@ -65,7 +65,7 @@ function action(params) {
         // Step 4.5: Merge base branch and detect conflicts
         // Always merges origin/{baseBranch} so the branch stays up to date.
         // If conflicts exist, writes merge_conflicts.md to the input folder.
-        const conflictFiles = gh.detectMergeConflicts(baseBranch, inputFolder);
+        const conflictFiles = gh.detectMergeConflicts(baseBranch, inputFolder, config.workingDir);
 
         // Step 4.6: Detect failed CI checks — writes ci_failures.md if any failed
         const headSha = prDetails.head ? prDetails.head.sha : null;

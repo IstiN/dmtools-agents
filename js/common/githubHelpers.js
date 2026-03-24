@@ -345,22 +345,20 @@ function fetchDiscussionsAndRawData(workspace, repository, pullRequestId) {
  * @param {string} inputFolder - input/{ticketKey} path
  * @returns {string[]} list of conflicting file paths (empty when clean)
  */
-function detectMergeConflicts(baseBranch, inputFolder) {
+function detectMergeConflicts(baseBranch, inputFolder, workingDir) {
+    var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
+    var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
     try {
-        console.log('Checking for merge conflicts with origin/' + baseBranch + '...');
+        console.log('Checking for merge conflicts with origin/' + baseBranch + (workingDir ? ' in ' + workingDir : '') + '...');
 
-        // Unshallow first so git merge has full history for a correct merge base.
-        // GitHub Actions checks out with --depth=1 by default; without this,
-        // 'git merge --no-commit' may report clean even when real conflicts exist.
         try {
-            cli_execute_command({ command: 'git fetch --unshallow' });
+            cmd('git fetch --unshallow');
             console.log('Unshallowed repository for full merge base detection');
         } catch (e) {
             // Already a complete repo — harmless, continue
         }
 
-        // Attempt the merge without committing
-        cli_execute_command({ command: 'git merge origin/' + baseBranch + ' --no-commit --no-ff' });
+        cmd('git merge origin/' + baseBranch + ' --no-commit --no-ff');
 
         // If we reach here the merge is clean — staged but not committed
         console.log('No merge conflicts — base branch changes staged');
@@ -369,9 +367,7 @@ function detectMergeConflicts(baseBranch, inputFolder) {
     } catch (mergeError) {
         // git merge exits non-zero when there are unresolved conflicts
         try {
-            var statusRaw = cleanCommandOutput(
-                cli_execute_command({ command: 'git status --short' }) || ''
-            );
+            var statusRaw = cleanCommandOutput(cmd('git status --short') || '');
 
             // Lines prefixed UU, AA, DD, AU, UA, DU, UD are conflict markers
             var conflictLines = statusRaw.split('\n').filter(function(line) {
@@ -380,7 +376,7 @@ function detectMergeConflicts(baseBranch, inputFolder) {
 
             if (conflictLines.length === 0) {
                 // Not a conflict error — abort and move on
-                try { cli_execute_command({ command: 'git merge --abort' }); } catch (e) {}
+                try { cmd('git merge --abort'); } catch (e) {}
                 console.warn('Merge failed (non-conflict reason):', mergeError.message || mergeError);
                 return [];
             }
@@ -408,7 +404,7 @@ function detectMergeConflicts(baseBranch, inputFolder) {
 
         } catch (statusError) {
             console.warn('Could not determine merge state after conflict:', statusError);
-            try { cli_execute_command({ command: 'git merge --abort' }); } catch (e) {}
+            try { cmd('git merge --abort'); } catch (e) {}
             return [];
         }
     }

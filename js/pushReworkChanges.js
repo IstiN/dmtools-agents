@@ -80,13 +80,36 @@ function commitAndPush(ticketKey, config) {
     var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
     var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
 
-    const rawBranch = cmd('git branch --show-current') || '';
-    const branchName = cleanCommandOutput(rawBranch);
+    // Read expected branch from pr_info.md (written by preCliReworkSetup).
+    // Do NOT trust git branch --show-current — the CLI agent may have switched branches.
+    var expectedBranch = null;
+    try {
+        var prInfoPath = 'input/' + ticketKey + '/pr_info.md';
+        var prInfo = file_read({ path: prInfoPath }) || '';
+        var branchMatch = prInfo.match(/\*\*Branch\*\*:\s*`([^`]+)`/);
+        if (branchMatch) expectedBranch = branchMatch[1].trim();
+    } catch (e) {
+        console.warn('Could not read pr_info.md for expected branch:', e);
+    }
+
+    var currentBranch = cleanCommandOutput(cmd('git branch --show-current') || '');
+    console.log('Current branch:', currentBranch, '| Expected:', expectedBranch || '(unknown)');
+
+    var branchName = currentBranch;
+    if (expectedBranch && currentBranch !== expectedBranch) {
+        console.warn('⚠️ Branch mismatch — forcing checkout to expected branch:', expectedBranch);
+        try {
+            cmd('git checkout ' + expectedBranch);
+            branchName = expectedBranch;
+            console.log('✅ Switched to expected branch:', branchName);
+        } catch (e) {
+            console.warn('Could not checkout expected branch, using current:', currentBranch, e);
+        }
+    }
 
     if (!branchName) {
-        throw new Error('Could not determine current git branch');
+        throw new Error('Could not determine git branch to commit to');
     }
-    console.log('Current branch:', branchName);
 
     cmd('git add .');
 
