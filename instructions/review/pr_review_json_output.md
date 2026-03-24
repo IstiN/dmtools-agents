@@ -14,11 +14,11 @@ In addition to outputs/response.md (Jira-formatted review), you MUST generate:
   "resolvedThreadIds": [],
   "inlineComments": [
     {
-      "file": "path/to/file.js",
+      "path": "path/to/file.js",
       "line": 42,
       "startLine": 40,
       "side": "RIGHT",
-      "comment": "outputs/pr_review_comments/comment-1.md",
+      "body": "💡 **Suggestion**: comment text written directly here in GitHub Markdown",
       "severity": "BLOCKING|IMPORTANT|SUGGESTION"
     }
   ],
@@ -42,14 +42,14 @@ The value MUST be exactly one of: `APPROVE`, `REQUEST_CHANGES`, `BLOCK` (upperca
 - **prUrl**: Leave null (will be filled by JS action)
 - **generalComment**: Path to markdown file with overall PR review comment (GitHub markdown)
 - **resolvedThreadIds**: Array of GraphQL thread node IDs (from `pr_discussions_raw.json` → `threads[i].threadId`) that were **fully fixed** in this rework and should be marked as resolved on GitHub. Leave empty `[]` on first review or when no prior threads were fixed. Only include threads whose fix you verified in the diff — do NOT resolve threads that are still open or only partially addressed.
-- **inlineComments**: Array of inline code review comments
-  - **file**: Relative path to file from repo root
-  - **line**: Line number to comment on
+- **inlineComments**: Array of inline code review comments — write the text **directly** in the `body` field (do NOT create separate markdown files)
+  - **path**: Relative path to file from repo root (e.g. `src/components/Button.tsx`)
+  - **line**: Line number to comment on (must be within the diff hunk for that file)
   - **startLine**: (Optional) Start line for multi-line comment range
-  - **side**: "RIGHT" for new code (default), "LEFT" for old code
-  - **comment**: Path to markdown file with comment text (GitHub markdown)
-  - **severity**: BLOCKING, IMPORTANT, or SUGGESTION
-- **issueCounts**: Counts of each issue severity
+  - **side**: `"RIGHT"` for new code (default), `"LEFT"` for old code
+  - **body**: Comment text in GitHub Markdown — write it inline here, not as a file path
+  - **severity**: `BLOCKING`, `IMPORTANT`, or `SUGGESTION`
+- **issueCounts**: Counts of each issue severity — **REQUIRED**, count 0 if none
 
 ## outputs/pr_review_general.md
 
