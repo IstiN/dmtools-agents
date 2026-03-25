@@ -297,6 +297,20 @@ function loadProjectConfig(params) {
             config.repository.owner + '/' + config.repository.repo);
     }
 
+    // Apply branchNamingFnPath from customParams — loads a JS file whose module.exports
+    // is a function(ticket, branchRole) → string.  Takes priority over config.git.branchNamingFn.
+    // Uses the same GraalJS-safe loadConfigFile() loader (new Function under the hood).
+    if (customParams.branchNamingFnPath) {
+        var namingFn = loadConfigFile(customParams.branchNamingFnPath);
+        if (typeof namingFn === 'function') {
+            config.git.branchNamingFn = namingFn;
+            console.log('configLoader: Loaded branchNamingFn from ' + customParams.branchNamingFnPath);
+        } else {
+            console.warn('configLoader: branchNamingFnPath "' + customParams.branchNamingFnPath +
+                '" did not export a function — ignoring');
+        }
+    }
+
     return config;
 }
 

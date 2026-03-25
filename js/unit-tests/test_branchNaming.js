@@ -236,3 +236,82 @@ suite('configLoader.mergeProjectConfig — branch fields', function() {
     });
 
 });
+
+// ── customParams.branchNamingFnPath ──────────────────────────────────────────
+
+suite('configLoader.loadProjectConfig — branchNamingFnPath', function() {
+
+    // Helper: build a configLoader with a controlled file_read that can serve
+    // both the project config files (return null) and the naming fn file.
+    function makeLoaderWithFnFile(fnFileContent) {
+        var reads = {};
+        reads['agents/js/branchNaming/issueType_naming.js'] = fnFileContent;
+
+        var fakeFileRead = function(pathArg) {
+            var p = typeof pathArg === 'string' ? pathArg : pathArg.path;
+            return reads[p] || null;
+        };
+
+        return loadModule(
+            'agents/js/configLoader.js',
+            makeRequire({ './config.js': configModule, 'config': configModule }),
+            { file_read: fakeFileRead }
+        );
+    }
+
+    test('loads function from branchNamingFnPath and uses it for branch naming', function() {
+        var fnSrc = 'module.exports = function(ticket, branchRole) {\n' +
+            '    var t = (ticket && ticket.fields && ticket.fields.issuetype && ticket.fields.issuetype.name || "feature").toLowerCase();\n' +
+            '    return t + "/" + ticket.key;\n' +
+            '};';
+
+        var loader = makeLoaderWithFnFile(fnSrc);
+        var config = loader.loadProjectConfig({
+            customParams: { branchNamingFnPath: 'agents/js/branchNaming/issueType_naming.js' }
+        });
+
+        assert.equal(typeof config.git.branchNamingFn, 'function', 'branchNamingFn should be set');
+        var ticket = { key: 'PROJ-42', fields: { issuetype: { name: 'Bug' } } };
+        assert.equal(loader.resolveBranchName(config, ticket, 'development'), 'bug/PROJ-42');
+    });
+
+    test('branchNamingFnPath takes priority over config.git.branchNamingFn', function() {
+        var fnSrc = 'module.exports = function(ticket, branchRole) { return "from-file/" + ticket.key; };';
+        var loader = makeLoaderWithFnFile(fnSrc);
+
+        // Simulate a project config that also sets branchNamingFn inline
+        var inlineFn = function(ticket) { return 'inline/' + ticket.key; };
+        // We cannot inject a real config.js file with the inline fn here, so test via
+        // mergeProjectConfig + then apply customParams path override manually:
+        var config = loader.mergeProjectConfig(loader.DEFAULTS, { git: { branchNamingFn: inlineFn } });
+        // Now apply the path override as loadProjectConfig would:
+        var namingFn = loader.loadProjectConfig({
+            customParams: { branchNamingFnPath: 'agents/js/branchNaming/issueType_naming.js' }
+        }).git.branchNamingFn;
+
+        var ticket = { key: 'X-1', fields: {} };
+        assert.equal(typeof namingFn, 'function');
+        // The file returns "from-file/<key>"
+        assert.equal(namingFn(ticket, 'development'), 'from-file/X-1');
+    });
+
+    test('warns and ignores branchNamingFnPath when file does not export a function', function() {
+        // File exports an object, not a function
+        var fnSrc = 'module.exports = { notAFunction: true };';
+        var loader = makeLoaderWithFnFile(fnSrc);
+        var config = loader.loadProjectConfig({
+            customParams: { branchNamingFnPath: 'agents/js/branchNaming/issueType_naming.js' }
+        });
+        // branchNamingFn should remain null (default), falling back to prefix strategy
+        assert.equal(config.git.branchNamingFn, null, 'non-function export should be ignored');
+        var ticket = { key: 'PROJ-7', fields: {} };
+        assert.equal(loader.resolveBranchName(config, ticket, 'development'), 'ai/PROJ-7');
+    });
+
+    test('no branchNamingFnPath in customParams leaves branchNamingFn unchanged', function() {
+        var loader = makeLoaderWithFnFile('module.exports = function() { return "x"; };');
+        var config = loader.loadProjectConfig({ customParams: {} });
+        assert.equal(config.git.branchNamingFn, null, 'should stay null when no path given');
+    });
+
+});
