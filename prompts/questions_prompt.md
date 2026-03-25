@@ -7,7 +7,7 @@ Always read these files first if present:
 **CRITICAL: Follow ALL instructions found in `request.md` strictly.** The request.md contains the full agent configuration including formatting rules, role, and known info.
 
 **CRITICAL: Read ALL files in the input folder, including images.**
-List the input folder with `ls -la input/MAPC-*/` (or the actual ticket folder) and read every file found:
+List the input folder with `ls -la input/` and then the ticket subfolder (e.g. `ls -la input/TICKET-*/`) and read every file found:
 - Text/markdown files: read with `cat`
 - Image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`): **view them using the Read tool** — they may contain UI mockups, designs, or screenshots that are essential context. If an image shows a design or UI, describe what you see and use it to avoid asking questions that are already answered by the design.
 
@@ -22,7 +22,7 @@ List the input folder with `ls -la input/MAPC-*/` (or the actual ticket folder) 
 **CRITICAL: Description files must NEVER contain a title line.**
 The `summary` field in `questions.json` becomes the Jira subtask title automatically. Writing a title inside the description file creates a duplicate heading visible in Jira.
 
-The MAPC Q Confluence template shows `Title: [Q] ...` — that value goes into the `summary` field of `questions.json`, NOT into the description `.md` file. The `.md` file starts directly with the body content.
+If a question template you are following shows a `Title:` field — that value goes into the `summary` field of `questions.json`, NOT into the description `.md` file. The `.md` file starts directly with the body content.
 
 ✅ CORRECT description file — starts directly with content:
 ```
