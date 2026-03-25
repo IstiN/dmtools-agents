@@ -26,3 +26,32 @@ In addition to functional questions, always check:
 *UI styles & visual accessibility:* Does the story involve any UI elements? If so, raise a question to confirm that the design avoids low-contrast combinations (e.g. grey text on white background). Ask for a specific colour palette or reference to design tokens / style guide. Include a suggestion: prefer contrast ratios that meet WCAG AA (4.5:1 for normal text). **Skip this question if an image/design already shows the colour palette clearly.**
 
 Write individual description files to outputs/questions/ and the question plan to outputs/questions.json according to instructions.
+
+**CRITICAL: `outputs/questions.json` must be a plain JSON array.** The root element MUST be `[` … `]`. Never wrap it in an object.
+
+✅ CORRECT format:
+```json
+[
+  {
+    "summary": "Confirm SOQL query strategy for bulk order retrieval",
+    "priority": "Major",
+    "description": "outputs/questions/question-1.md"
+  },
+  {
+    "summary": "Clarify sharing model for the new custom object",
+    "priority": "Minor",
+    "description": "outputs/questions/question-2.md"
+  }
+]
+```
+
+❌ WRONG — do NOT wrap in an object:
+```json
+{
+  "questions": [
+    { "summary": "...", "priority": "...", "description": "..." }
+  ]
+}
+```
+
+If there are no questions to raise, write an empty array `[]` — not `{"questions": []}`.
