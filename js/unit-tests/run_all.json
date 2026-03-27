@@ -7,7 +7,8 @@
         "agents/js/unit-tests/test_configLoader.js",
         "agents/js/unit-tests/test_smAgent.js",
         "agents/js/unit-tests/test_workingDir.js",
-        "agents/js/unit-tests/test_branchNaming.js"
+        "agents/js/unit-tests/test_branchNaming.js",
+        "agents/js/unit-tests/test_githubHelpers.js"
       ]
     }
   }
