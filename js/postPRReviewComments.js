@@ -212,8 +212,22 @@ function postInlineComment(workspace, repository, pullRequestId, inlineComment) 
         return true;
 
     } catch (error) {
-        console.error('Failed to post inline comment on ' + filePath + ':', error);
-        return false;
+        // 422 = line not in diff hunk — fall back to a regular PR comment so nothing is lost
+        console.warn('Inline comment failed (line not in diff?), falling back to PR comment on ' + filePath + ':' + inlineComment.line);
+        try {
+            var lineRef = filePath + (inlineComment.line ? ':' + inlineComment.line : '');
+            github_add_pr_comment({
+                workspace: workspace,
+                repository: repository,
+                pullRequestId: String(pullRequestId),
+                text: '📍 **`' + lineRef + '`**\n\n' + commentText
+            });
+            console.log('✅ Posted fallback PR comment for ' + lineRef);
+            return true;
+        } catch (fallbackError) {
+            console.error('Failed to post fallback PR comment for ' + filePath + ':', fallbackError);
+            return false;
+        }
     }
 }
 
