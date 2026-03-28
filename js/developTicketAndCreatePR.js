@@ -732,8 +732,10 @@ function action(params) {
                 console.log('ℹ️ autoStartReview: skipped — ticket has pr_approved label');
             } else {
                 try {
-                    const aiOwner = config.repository && config.repository.owner;
-                    const aiRepo  = config.repository && config.repository.repo;
+                    // Use customParams.aiRepository if set (avoids targetRepository override in configLoader)
+                    const aiRepoCfg = customParams && customParams.aiRepository;
+                    const aiOwner = (aiRepoCfg && aiRepoCfg.owner) || (config.repository && config.repository.owner);
+                    const aiRepo  = (aiRepoCfg && aiRepoCfg.repo)  || (config.repository && config.repository.repo);
                     const projectKey = deriveProjectKey(customParams);
                     const encodedCfg = buildAutoStartEncodedConfig(ticketKey, customParams);
                     if (aiOwner && aiRepo) {
