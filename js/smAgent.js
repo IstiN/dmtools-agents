@@ -23,6 +23,10 @@
  *   targetStatus   (optional) — Jira status to transition tickets to before triggering
  *   workflowFile   (optional) — GitHub Actions workflow file  (default: ai-teammate.yml)
  *   workflowRef    (optional) — git ref for dispatch           (default: main)
+ *   projectKey     (optional) — value passed as the `project_key` workflow input so the runner
+ *                               activates the correct project-specific dependency setup (e.g. "mapc",
+ *                               "bice"). Auto-derived from configPath basename when not set
+ *                               (e.g. ".dmtools/configs/mapc.js" → "mapc").
  *   skipIfLabel    (optional) — skip ticket if it already has this label (idempotency)
  *   addLabel       (optional) — add this label after triggering (idempotency marker)
  *   enabled        (optional) — set to false to disable the rule entirely (default: true)
@@ -108,6 +112,16 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig) {
     var workflowFile = rule.workflowFile || 'ai-teammate.yml';
     var workflowRef  = rule.workflowRef  || 'main';
     var resolvedCf   = resolveConfigFile(rule, effectiveConfig);
+
+    // Resolve project_key: explicit rule field takes priority, then auto-derive from configPath
+    // e.g. ".dmtools/configs/mapc.js" → "mapc", ".dmtools/configs/bice.js" → "bice"
+    var projectKey = rule.projectKey || '';
+    if (!projectKey && effectiveConfig && effectiveConfig._configPath) {
+        var cp = effectiveConfig._configPath;
+        var base = cp.substring(cp.lastIndexOf('/') + 1).replace(/\.js$/, '');
+        if (base && base !== 'config') projectKey = base;
+    }
+
     try {
         github_trigger_workflow(
             repoInfo.owner,
@@ -116,11 +130,13 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig) {
             JSON.stringify({
                 concurrency_key: ticketKey,
                 config_file:     resolvedCf,
-                encoded_config:  buildEncodedConfig(ticketKey, rule, effectiveConfig)
+                encoded_config:  buildEncodedConfig(ticketKey, rule, effectiveConfig),
+                project_key:     projectKey
             }),
             workflowRef
         );
-        console.log('  ✅ Triggered ' + workflowFile + '@' + workflowRef + ' for ' + ticketKey);
+        console.log('  ✅ Triggered ' + workflowFile + '@' + workflowRef + ' for ' + ticketKey +
+            (projectKey ? ' [project_key=' + projectKey + ']' : ''));
         return true;
     } catch (e) {
         console.warn('  ⚠️  Workflow trigger failed for ' + ticketKey + ': ' + (e.message || e));
