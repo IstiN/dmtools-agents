@@ -90,21 +90,24 @@ function checkoutPRBranch(branchName, workingDir) {
 
     cmd('git config user.name "' + GIT_CONFIG.AUTHOR_NAME + '"');
     cmd('git config user.email "' + GIT_CONFIG.AUTHOR_EMAIL + '"');
-    cmd('git fetch origin --prune');
+    // Fetch only remote refs (branch list), no objects — fast even on large repos
+    cmd('git fetch origin --prune --filter=blob:none');
 
     const localBranch = cleanCommandOutput(cmd('git branch --list "' + branchName + '"') || '');
 
     if (localBranch.trim()) {
         cmd('git checkout ' + branchName);
-        cmd('git pull origin ' + branchName);
+        // Pull with depth=1 + blobless to avoid downloading full history
+        cmd('git pull --depth=1 --filter=blob:none origin ' + branchName);
     } else {
         const remoteBranch = cleanCommandOutput(cmd('git ls-remote --heads origin ' + branchName) || '');
         if (remoteBranch.trim()) {
             try {
-                cmd('git fetch origin ' + branchName + ':' + branchName);
+                // depth=1 + blobless: fetch only the tip commit, skip unreferenced blobs
+                cmd('git fetch --depth=1 --filter=blob:none origin ' + branchName + ':' + branchName);
                 cmd('git checkout ' + branchName);
             } catch (e) {
-                cmd('git fetch origin ' + branchName);
+                cmd('git fetch --depth=1 --filter=blob:none origin ' + branchName);
                 cmd('git checkout -b ' + branchName + ' origin/' + branchName);
             }
         } else {
