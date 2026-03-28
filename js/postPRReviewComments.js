@@ -12,6 +12,41 @@
 const { LABELS, STATUSES } = require('./config.js');
 
 /**
+ * Derive project key from customParams.configPath or customParams.projectKey.
+ * e.g. ".dmtools/configs/mapc.js" → "mapc"
+ */
+function deriveProjectKey(customParams) {
+    if (!customParams) return '';
+    if (customParams.projectKey) return customParams.projectKey;
+    var cp = customParams.configPath || '';
+    if (!cp) return '';
+    var base = cp.substring(cp.lastIndexOf('/') + 1).replace(/\.js$/, '');
+    return (base && base !== 'config') ? base : '';
+}
+
+/**
+ * Build minimal encoded_config for an auto-started downstream workflow.
+ * Passes inputJql (key = <ticket>) and configPath so the triggered agent
+ * uses the correct project-specific config.
+ */
+function buildAutoStartEncodedConfig(ticketKey, customParams) {
+    var p = { inputJql: 'key = ' + ticketKey };
+    var cp = customParams && customParams.configPath;
+    if (cp) {
+        p.customParams = { configPath: cp };
+    }
+    return encodeURIComponent(JSON.stringify({ params: p }));
+}
+
+/**
+ * Returns true if the Jira ticket has the pr_approved label.
+ */
+function hasPrApprovedLabel(ticket) {
+    var labels = (ticket && ticket.fields && ticket.fields.labels) ? ticket.fields.labels : [];
+    return labels.indexOf(LABELS.PR_APPROVED) !== -1;
+}
+
+/**
  * Read and parse outputs/pr_review.json
  * @returns {Object|null} Parsed review data or null on error
  */
@@ -567,6 +602,43 @@ function action(params) {
             }
         } catch (error) {
             console.warn('Failed to assign ticket:', error);
+        }
+
+        // Step 12: Auto-start pr_rework when changes were requested (opt-in via customParams)
+        if (!isApproved && !merged) {
+            const autoStartRework = customParams && customParams.autoStartRework;
+            const reworkConfigFile = customParams && customParams.autoStartReworkConfigFile;
+            if (autoStartRework && reworkConfigFile) {
+                // Skip if ticket already has pr_approved label (merge in progress)
+                if (hasPrApprovedLabel(params.ticket)) {
+                    console.log('ℹ️ autoStartRework: skipped — ticket has pr_approved label');
+                } else {
+                    try {
+                        const aiOwner = config.repository && config.repository.owner;
+                        const aiRepo  = config.repository && config.repository.repo;
+                        const projectKey = deriveProjectKey(customParams);
+                        const encodedCfg = buildAutoStartEncodedConfig(ticketKey, customParams);
+                        if (aiOwner && aiRepo) {
+                            github_trigger_workflow(
+                                aiOwner, aiRepo, 'ai-teammate.yml',
+                                JSON.stringify({
+                                    concurrency_key: ticketKey,
+                                    config_file:     reworkConfigFile,
+                                    encoded_config:  encodedCfg,
+                                    project_key:     projectKey || ''
+                                }),
+                                'main'
+                            );
+                            console.log('✅ Auto-started pr_rework for', ticketKey,
+                                '[config=' + reworkConfigFile + (projectKey ? ', project=' + projectKey : '') + ']');
+                        } else {
+                            console.warn('⚠️ autoStartRework: config.repository.owner/repo not set — skipping');
+                        }
+                    } catch (e) {
+                        console.warn('⚠️ autoStartRework trigger failed:', e.message || e);
+                    }
+                }
+            }
         }
 
         console.log('✅ PR review workflow completed:', isApproved ? 'MERGED' : 'CHANGES REQUESTED');
