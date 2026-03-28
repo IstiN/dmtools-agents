@@ -724,7 +724,7 @@ function action(params) {
         console.log('✅ Development workflow completed successfully');
 
         // Auto-start pr_review after PR is created and ticket moved to In Review (opt-in)
-        const customParams = actualParams && actualParams.customParams;
+        const customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
         const autoStartReview = customParams && customParams.autoStartReview;
         const reviewConfigFile = customParams && customParams.autoStartReviewConfigFile;
         if (autoStartReview && reviewConfigFile) {
