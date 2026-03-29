@@ -71,8 +71,12 @@ var DEFAULT_CONTEXTS = [
 /**
  * Render all fetched fields of a ticket into a markdown section.
  * Fields from the JQL search result + optionally the full ticket re-fetch.
+ * @param {Object} fields       - ticket fields object
+ * @param {Array}  configFields - field IDs/names requested
+ * @param {Object} fieldLabels  - optional map of fieldId → human-readable label
  */
-function renderFieldsMarkdown(fields, configFields) {
+function renderFieldsMarkdown(fields, configFields, fieldLabels) {
+    var labels = fieldLabels || {};
     var lines = [];
     var skip = { key: true, summary: true, status: true }; // already in header
     for (var i = 0; i < configFields.length; i++) {
@@ -81,7 +85,8 @@ function renderFieldsMarkdown(fields, configFields) {
         var val = fields[fieldName];
         if (val === undefined || val === null || val === '') continue;
         var displayVal = (typeof val === 'object') ? JSON.stringify(val, null, 2) : String(val);
-        var displayName = fieldName.replace(/customfield_\d+/, fieldName); // keep raw name if custom
+        // Use provided label, else strip customfield_ prefix for readability
+        var displayName = labels[fieldName] || fieldName.replace(/^customfield_\d+$/, fieldName);
         lines.push('**' + displayName + ':**\n\n' + displayVal);
     }
     return lines.join('\n\n');
@@ -116,6 +121,7 @@ function action(params) {
         var jqlTemplate = cfg.jql || DEFAULT_JQL;
         var fields      = cfg.fields || DEFAULT_FIELDS;
         var contexts    = cfg.contexts || DEFAULT_CONTEXTS;
+        var fieldLabels = cfg.fieldLabels || {};
 
         // Always ensure base fields are present
         var fetchFields = fields.slice();
@@ -194,7 +200,7 @@ function action(params) {
                 md += '**Status:** ' + (itemFields.status && itemFields.status.name || 'Unknown') + '\n\n';
                 md += '---\n\n';
 
-                var fieldsContent = renderFieldsMarkdown(itemFields, fetchFields);
+                var fieldsContent = renderFieldsMarkdown(itemFields, fetchFields, fieldLabels);
                 md += fieldsContent || '_No content available._';
                 md += '\n';
 
