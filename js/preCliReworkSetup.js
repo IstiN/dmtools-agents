@@ -10,6 +10,7 @@
 var configLoader = require('./configLoader.js');
 const gh = require('./common/githubHelpers.js');
 const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
+const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 
 function action(params) {
     try {
@@ -116,6 +117,13 @@ function action(params) {
         }
 
         console.log('✅ Rework setup complete — branch:', branchName, '| PR #' + prDetails.number);
+
+        // Enrich input with [BA]/[SA]/[VD] context from parent siblings
+        try {
+            fetchParentContextToInput.action(params);
+        } catch (e) {
+            console.warn('fetchParentContextToInput failed (non-fatal):', e);
+        }
 
         return {
             success: true,

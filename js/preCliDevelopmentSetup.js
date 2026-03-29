@@ -12,6 +12,7 @@ var configLoader = require('./configLoader.js');
 const { GIT_CONFIG, STATUSES } = require('./config.js');
 const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchLinkedTestsToInput = require('./fetchLinkedTestsToInput.js');
+const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 
 // Universal working-directory-aware wrapper for cli_execute_command.
 // When config.workingDir is set (via customParams.targetRepository.workingDir),
@@ -189,6 +190,13 @@ function action(params) {
             fetchLinkedTestsToInput.action(actualParams);
         } catch (e) {
             console.warn('fetchLinkedTestsToInput failed (non-fatal):', e);
+        }
+
+        // 5. Fetch [BA]/[SA]/[VD] context from parent siblings into input folder
+        try {
+            fetchParentContextToInput.action(actualParams);
+        } catch (e) {
+            console.warn('fetchParentContextToInput failed (non-fatal):', e);
         }
 
     } catch (error) {
