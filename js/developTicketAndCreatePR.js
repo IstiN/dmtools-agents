@@ -223,6 +223,24 @@ function performGitOperations(branchName, commitMessage) {
                 // Jump straight to push
                 return performPushOnly(branchName);
             }
+
+            // Check if the remote branch already has commits not yet in origin/main
+            // (e.g. agent pushed in a previous run but was interrupted before PR creation)
+            var remoteAheadOutput = '';
+            try {
+                // Fetch remote refs so origin/<branchName> is up to date
+                try { runCmd({ command: 'git fetch origin ' + branchName }); } catch (e) {}
+                remoteAheadOutput = cleanCommandOutput(runCmd({ command: 'git rev-list --count origin/main..origin/' + branchName }) || '');
+            } catch (e) {
+                console.warn('Could not check remote branch commits:', e);
+            }
+            var remoteCommitsAhead = parseInt(remoteAheadOutput, 10) || 0;
+            if (remoteCommitsAhead > 0) {
+                console.log('Remote branch origin/' + branchName + ' is ' + remoteCommitsAhead + ' commit(s) ahead of origin/main — branch already pushed. Skipping push, proceeding to PR creation.');
+                // No push needed — return success so the caller proceeds to PR creation
+                return { success: true, branchName: branchName };
+            }
+
             console.warn('No changes to commit');
             return {
                 success: false,
@@ -309,6 +327,23 @@ function performGitOperations(branchName, commitMessage) {
 function createPullRequest(title, branchName, baseBranch) {
     try {
         console.log('Creating Pull Request...');
+
+        // Check if a PR already exists for this branch before trying to create one
+        try {
+            var existingPrJson = cleanCommandOutput(runCmd({
+                command: 'gh pr list --head ' + branchName + ' --json url,state --jq ".[0]"'
+            }) || '');
+            if (existingPrJson && existingPrJson.startsWith('{')) {
+                var existingPr = null;
+                try { existingPr = JSON.parse(existingPrJson); } catch (e) {}
+                if (existingPr && existingPr.url) {
+                    console.log('✅ PR already exists for branch ' + branchName + ':', existingPr.url, '— skipping creation.');
+                    return { success: true, prUrl: existingPr.url, alreadyExisted: true };
+                }
+            }
+        } catch (prCheckErr) {
+            console.warn('Could not check for existing PR (non-fatal):', prCheckErr);
+        }
 
         // Escape special characters in title
         const escapedTitle = title.replace(/"/g, '\\"').replace(/\n/g, ' ');
