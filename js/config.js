@@ -107,6 +107,28 @@ const JIRA_FIELDS = {
 // Summary Length Constraints
 const SUMMARY_MAX_LENGTH = 120;
 
+/**
+ * Merge default STATUSES with project-specific overrides from customParams.
+ * Allows each project to remap status names without changing agent JS code.
+ *
+ * Usage in JS actions:
+ *   const statuses = resolveStatuses(customParams);
+ *   jira_move_to_status({ key, statusName: statuses.IN_REVIEW });
+ *
+ * Config JSON example (customParams.customStatuses):
+ *   "customStatuses": {
+ *     "IN_DEVELOPMENT": "In Progress",
+ *     "IN_REVIEW": "Ready For Review"
+ *   }
+ *
+ * @param {Object} customParams - customParams from agent config
+ * @returns {Object} STATUSES merged with customStatuses overrides
+ */
+function resolveStatuses(customParams) {
+    if (!customParams || !customParams.customStatuses) return STATUSES;
+    return Object.assign({}, STATUSES, customParams.customStatuses);
+}
+
 // ── Default Confluence URLs ──────────────────────────────────────────────────
 const DEFAULT_CONFLUENCE = {
     templateStory: 'https://dmtools.atlassian.net/wiki/spaces/AINA/pages/11665485/Template+Story',
@@ -145,6 +167,7 @@ module.exports = {
     JIRA_FIELDS,
     SUMMARY_MAX_LENGTH,
     DEFAULT_CONFLUENCE,
-    DEFAULT_FORMATS
+    DEFAULT_FORMATS,
+    resolveStatuses
 };
 

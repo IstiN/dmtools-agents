@@ -9,7 +9,7 @@
  */
 
 var configLoader = require('./configLoader.js');
-const { GIT_CONFIG, STATUSES } = require('./config.js');
+const { GIT_CONFIG, STATUSES, resolveStatuses } = require('./config.js');
 const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchLinkedTestsToInput = require('./fetchLinkedTestsToInput.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
@@ -161,14 +161,16 @@ function action(params) {
         // - Standalone dmtools (JSRunner): params.jobParams.inputFolderPath
         var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
+        var statuses = resolveStatuses(customParams);
 
         var folder = actualParams.inputFolderPath;
         var ticketKey = folder.split('/').pop();
 
         // 1. Move ticket to In Development
         try {
-            jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_DEVELOPMENT });
-            console.log('Moved ' + ticketKey + ' to In Development');
+            jira_move_to_status({ key: ticketKey, statusName: statuses.IN_DEVELOPMENT });
+            console.log('Moved ' + ticketKey + ' to ' + statuses.IN_DEVELOPMENT);
         } catch (e) {
             console.warn('Failed to move ticket to In Development:', e);
         }

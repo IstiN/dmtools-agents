@@ -20,7 +20,7 @@
  */
 
 var configLoader = require('./configLoader.js');
-const { STATUSES, LABELS } = require('./config.js');
+const { STATUSES, LABELS, resolveStatuses } = require('./config.js');
 const developTicket = require('./developTicketAndCreatePR.js');
 
 function readJson(path) {
@@ -54,6 +54,8 @@ function action(params) {
         const actualParams = params.ticket ? params : (params.jobParams || params);
         const ticketKey = actualParams.ticket.key;
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        const _customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
+        const statuses = resolveStatuses(_customParams);
 
         console.log('=== Bug development post-action for', ticketKey, '===');
 
@@ -83,7 +85,7 @@ function action(params) {
                         });
                     } catch (e) {}
                     try {
-                        jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REVIEW });
+                        jira_move_to_status({ key: ticketKey, statusName: statuses.IN_REVIEW });
                         console.log('✅ Moved', ticketKey, 'to In Review');
                     } catch (e) { console.warn('Failed to move to In Review:', e); }
                     removeLabels(ticketKey, params);
@@ -223,7 +225,7 @@ function action(params) {
 
             // Move ticket back to Ready For Development for retry
             try {
-                jira_move_to_status({ key: ticketKeyForCheck, statusName: STATUSES.READY_FOR_DEVELOPMENT });
+                jira_move_to_status({ key: ticketKeyForCheck, statusName: statuses.READY_FOR_DEVELOPMENT });
                 console.log('✅ Moved', ticketKeyForCheck, 'to Ready For Development for retry');
             } catch (e) {
                 console.warn('Failed to move ticket to Ready For Development:', e);

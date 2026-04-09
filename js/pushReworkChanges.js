@@ -8,7 +8,7 @@
  */
 
 var configLoader = require('./configLoader.js');
-const { GIT_CONFIG, STATUSES, LABELS } = require('./config.js');
+const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js');
 
 /**
  * Derive project key from customParams.configPath or customParams.projectKey.
@@ -303,6 +303,8 @@ function action(params) {
         const ticketKey = actualParams.ticket.key;
         const fixSummary = actualParams.response || '_(No fix summary generated)_';
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        const _customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
+        const statuses = resolveStatuses(_customParams);
 
         console.log('=== Push rework changes for:', ticketKey, '===');
 
@@ -348,8 +350,8 @@ function action(params) {
 
         // Move ticket to In Review
         try {
-            jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REVIEW });
-            console.log('✅ Moved', ticketKey, 'to In Review');
+            jira_move_to_status({ key: ticketKey, statusName: statuses.IN_REVIEW });
+            console.log('✅ Moved', ticketKey, 'to', statuses.IN_REVIEW);
         } catch (statusError) {
             console.warn('Failed to move ticket to In Review:', statusError);
         }
