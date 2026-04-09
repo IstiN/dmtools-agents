@@ -139,6 +139,55 @@ function configureGitAuthor(config) {
 }
 
 /**
+ * Push already-committed changes to remote (used when CLI agent committed its own work).
+ */
+function performPushOnly(branchName) {
+    console.log('Pushing pre-committed changes to remote...');
+    var pushOutput = '';
+    var pushThrewException = false;
+    try {
+        pushOutput = runCmd({ command: 'git push -u origin ' + branchName }) || '';
+    } catch (pushErr) {
+        pushOutput = String(pushErr);
+        pushThrewException = true;
+    }
+
+    var pushFailed = pushThrewException ||
+                     pushOutput.indexOf('remote rejected') !== -1 ||
+                     pushOutput.indexOf('GH013') !== -1 ||
+                     pushOutput.indexOf('error: failed to push') !== -1 ||
+                     pushOutput.indexOf('push declined') !== -1 ||
+                     pushOutput.indexOf('non-fast-forward') !== -1 ||
+                     pushOutput.indexOf('rejected') !== -1;
+
+    if (pushFailed) {
+        // Try force push (branch may have diverged from a previous interrupted run)
+        console.log('Push rejected — retrying with --force...');
+        var forceOutput = '';
+        try {
+            forceOutput = runCmd({ command: 'git push -u origin ' + branchName + ' --force' }) || '';
+        } catch (forceErr) {
+            forceOutput = String(forceErr);
+        }
+        var forceFailed = forceOutput.indexOf('remote rejected') !== -1 ||
+                          forceOutput.indexOf('GH013') !== -1 ||
+                          forceOutput.indexOf('error: failed to push') !== -1 ||
+                          forceOutput.indexOf('push declined') !== -1;
+        if (forceFailed) {
+            return { success: false, isPushFailure: true, error: 'Push still rejected after force: ' + forceOutput.substring(0, 300) };
+        }
+    }
+
+    var lsRemote = runCmd({ command: 'git ls-remote --heads origin ' + branchName }) || '';
+    if (lsRemote.indexOf('refs/heads/' + branchName) === -1) {
+        return { success: false, isPushFailure: true, error: 'Branch not found on remote after push' };
+    }
+
+    console.log('✅ Push-only git operations completed successfully');
+    return { success: true, branchName: branchName };
+}
+
+/**
  * Stage changes, commit, and push on current branch
  *
  * @param {string} branchName - Current branch name (already checked out by preCliJSAction)
@@ -160,6 +209,20 @@ function performGitOperations(branchName, commitMessage) {
         const statusOutput = cleanCommandOutput(rawStatusOutput);
 
         if (!statusOutput || !statusOutput.trim()) {
+            // No uncommitted changes — but check if the agent already committed its work
+            // (the CLI agent sometimes commits itself before postJSAction runs)
+            var aheadOutput = '';
+            try {
+                aheadOutput = cleanCommandOutput(runCmd({ command: 'git rev-list --count origin/main..HEAD' }) || '');
+            } catch (e) {
+                console.warn('Could not check commits ahead of origin/main:', e);
+            }
+            var commitsAhead = parseInt(aheadOutput, 10) || 0;
+            if (commitsAhead > 0) {
+                console.log('No uncommitted changes, but branch is ' + commitsAhead + ' commit(s) ahead of origin/main — agent already committed. Skipping commit step.');
+                // Jump straight to push
+                return performPushOnly(branchName);
+            }
             console.warn('No changes to commit');
             return {
                 success: false,
