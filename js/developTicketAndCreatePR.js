@@ -175,15 +175,27 @@ function performGitOperations(branchName, commitMessage) {
 
         // Push to remote
         console.log('Pushing to remote...');
-        const pushOutput = runCmd({
-            command: 'git push -u origin ' + branchName
-        }) || '';
+        var pushOutput = '';
+        var pushThrewException = false;
+        try {
+            pushOutput = runCmd({
+                command: 'git push -u origin ' + branchName
+            }) || '';
+        } catch (pushErr) {
+            // git push exits with non-zero (e.g. non-fast-forward) — cli_execute_command throws
+            pushOutput = String(pushErr);
+            pushThrewException = true;
+        }
 
-        // cli_execute_command exits 0 even for rejected pushes — check output for errors
-        const pushFailed = pushOutput.indexOf('remote rejected') !== -1 ||
+        // Check output text for soft-rejected pushes (exit 0 but error text) AND
+        // exception messages (exit non-zero) — covers both code paths.
+        const pushFailed = pushThrewException ||
+                           pushOutput.indexOf('remote rejected') !== -1 ||
                            pushOutput.indexOf('GH013') !== -1 ||
                            pushOutput.indexOf('error: failed to push') !== -1 ||
-                           pushOutput.indexOf('push declined') !== -1;
+                           pushOutput.indexOf('push declined') !== -1 ||
+                           pushOutput.indexOf('non-fast-forward') !== -1 ||
+                           pushOutput.indexOf('rejected') !== -1;
 
         if (pushFailed) {
             return {
@@ -459,7 +471,12 @@ function retryAfterPushFailure(ticketKey, branchName, pushError) {
 
     // For non-fast-forward: force push (branch diverged from remote, our local is newer)
     console.log('Retrying with force push...');
-    var retryOutput = runCmd({ command: 'git push -u origin ' + branchName + ' --force' }) || '';
+    var retryOutput = '';
+    try {
+        retryOutput = runCmd({ command: 'git push -u origin ' + branchName + ' --force' }) || '';
+    } catch (forceErr) {
+        retryOutput = String(forceErr);
+    }
     var retryFailed = retryOutput.indexOf('remote rejected') !== -1 ||
                       retryOutput.indexOf('GH013') !== -1 ||
                       retryOutput.indexOf('error: failed to push') !== -1 ||
