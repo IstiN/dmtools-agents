@@ -49,34 +49,42 @@ function readResultJson() {
     }
 }
 
-function performGitOperations(branchName, commitMessage) {
+function runInRepo(command, workingDir) {
+    var args = { command: command };
+    if (workingDir) args.workingDirectory = workingDir;
+    return cli_execute_command(args);
+}
+
+function performGitOperations(branchName, commitMessage, workingDir, testFilesPath) {
+    var addPath = testFilesPath || 'testing/';
+    var inspectPath = addPath.replace(/\/$/, '') || '.';
     try {
-        // Diagnostic: list testing/ folder before staging
+        // Diagnostic: list test files before staging
         try {
-            var lsOutput = cli_execute_command({ command: 'find testing/tests/ -type f 2>/dev/null | head -20' }) || '';
-            console.log('Files in testing/tests/:', cleanCommandOutput(lsOutput) || '(empty)');
+            var lsOutput = runInRepo('find ' + inspectPath + ' -type f 2>/dev/null | head -20', workingDir) || '';
+            console.log('Files in ' + inspectPath + ':', cleanCommandOutput(lsOutput) || '(empty)');
         } catch (e) {
-            console.warn('Could not list testing/tests/:', e);
+            console.warn('Could not list ' + inspectPath + ':', e);
         }
 
-        // Stage testing/ folder only (outputs/ is gitignored — test artifacts should not be committed)
-        console.log('Staging testing/ folder...');
-        cli_execute_command({ command: 'git add testing/' });
+        // Stage the configured test path only (outputs/ is gitignored — test artifacts should not be committed)
+        console.log('Staging test path:', addPath);
+        runInRepo('git add ' + addPath, workingDir);
 
         // Check for STAGED changes only (git status --porcelain also includes dirty submodule etc.)
-        var stagedOutput = cleanCommandOutput(cli_execute_command({ command: 'git diff --cached --stat' }) || '');
+        var stagedOutput = cleanCommandOutput(runInRepo('git diff --cached --stat', workingDir) || '');
         console.log('Staged changes:', stagedOutput || '(none)');
 
         if (!stagedOutput || !stagedOutput.trim()) {
-            console.warn('No new staged changes in testing/ (files may already exist on branch)');
+            console.warn('No new staged changes in ' + addPath + ' (files may already exist on branch)');
             // Ensure the branch is pushed to remote so we can create/find a PR
             var remoteBranchCheck = cleanCommandOutput(
-                cli_execute_command({ command: 'git ls-remote --heads origin ' + branchName }) || ''
+                runInRepo('git ls-remote --heads origin ' + branchName, workingDir) || ''
             );
             if (!remoteBranchCheck.trim()) {
                 console.log('No remote branch found, pushing current branch state...');
                 try {
-                    cli_execute_command({ command: 'git push -u origin ' + branchName + ' --force' });
+                    runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
                 } catch (pushErr) {
                     console.warn('Failed to push branch:', pushErr);
                     return { success: false, error: 'No test files were written and could not push branch' };
@@ -89,20 +97,18 @@ function performGitOperations(branchName, commitMessage) {
         }
 
         console.log('Committing...');
-        cli_execute_command({
-            command: 'git commit -m "' + commitMessage.replace(/"/g, '\\"') + '"'
-        });
+        runInRepo('git commit -m "' + commitMessage.replace(/"/g, '\\"') + '"', workingDir);
 
         console.log('Pushing to remote...');
         try {
-            cli_execute_command({ command: 'git push -u origin ' + branchName });
+            runInRepo('git push -u origin ' + branchName, workingDir);
         } catch (e) {
             console.log('Normal push failed, force pushing...');
-            cli_execute_command({ command: 'git push -u origin ' + branchName + ' --force' });
+            runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
         }
 
         const remoteBranch = cleanCommandOutput(
-            cli_execute_command({ command: 'git ls-remote --heads origin ' + branchName }) || ''
+            runInRepo('git ls-remote --heads origin ' + branchName, workingDir) || ''
         );
         if (!remoteBranch.trim()) {
             throw new Error('Branch not found on remote after push');
@@ -117,7 +123,7 @@ function performGitOperations(branchName, commitMessage) {
     }
 }
 
-function createPullRequest(title, branchName, baseBranch) {
+function createPullRequest(title, branchName, baseBranch, workingDir) {
     try {
         console.log('Creating Pull Request...');
         const escapedTitle = title.replace(/"/g, '\\"').replace(/\n/g, ' ');
@@ -127,11 +133,14 @@ function createPullRequest(title, branchName, baseBranch) {
             ? 'outputs/pr_body.md'
             : 'outputs/response.md';
         console.log('Using PR body file:', prBodyFile);
+        const workspaceRoot = cleanCommandOutput(cli_execute_command({ command: 'pwd' }) || '');
+        const absoluteBodyPath = workspaceRoot ? workspaceRoot + '/' + prBodyFile : prBodyFile;
 
         const output = cleanCommandOutput(
-            cli_execute_command({
-                command: 'gh pr create --title "' + escapedTitle + '" --body-file "' + prBodyFile + '" --base ' + baseBranch + ' --head ' + branchName
-            }) || ''
+            runInRepo(
+                'gh pr create --title "' + escapedTitle + '" --body-file "' + absoluteBodyPath + '" --base ' + baseBranch + ' --head ' + branchName,
+                workingDir
+            ) || ''
         );
 
         let prUrl = null;
@@ -145,7 +154,7 @@ function createPullRequest(title, branchName, baseBranch) {
             if (prNumberMatch) {
                 try {
                     const remoteUrl = cleanCommandOutput(
-                        cli_execute_command({ command: 'git config --get remote.origin.url' }) || ''
+                        runInRepo('git config --get remote.origin.url', workingDir) || ''
                     );
                     const repoMatch = remoteUrl.match(/github\.com[:/]([^/]+\/[^/.]+)/);
                     if (repoMatch) {
@@ -158,7 +167,7 @@ function createPullRequest(title, branchName, baseBranch) {
         if (!prUrl) {
             try {
                 const listOutput = cleanCommandOutput(
-                    cli_execute_command({ command: 'gh pr list --head ' + branchName + ' --json url --jq ".[0].url"' }) || ''
+                    runInRepo('gh pr list --head ' + branchName + ' --json url --jq ".[0].url"', workingDir) || ''
                 );
                 if (listOutput && listOutput.startsWith('https://')) prUrl = listOutput;
             } catch (e) {}
@@ -180,6 +189,9 @@ function action(params) {
         const projectKey = ticketKey.split('-')[0];
         const jiraComment = params.response || '';
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var customParams = (params.jobParams || params).customParams || {};
+        var workingDir = config.workingDir || null;
+        var testFilesPath = customParams.testFilesGlob || 'testing/';
 
         console.log('=== Processing test automation results for', ticketKey, '===');
 
@@ -199,14 +211,14 @@ function action(params) {
 
         // Step 2: Configure git author
         try {
-            cli_execute_command({ command: 'git config user.name "' + config.git.authorName + '"' });
-            cli_execute_command({ command: 'git config user.email "' + config.git.authorEmail + '"' });
+            runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
+            runInRepo('git config user.email "' + config.git.authorEmail + '"', workingDir);
         } catch (e) {
             console.warn('Failed to configure git author:', e);
         }
 
         // Step 3: Read current branch (set by preCliTestAutomationSetup)
-        var rawBranch = cli_execute_command({ command: 'git branch --show-current' }) || '';
+        var rawBranch = runInRepo('git branch --show-current', workingDir) || '';
         console.log('Raw branch output length:', rawBranch.length, 'content:', JSON.stringify(rawBranch.substring(0, 200)));
         const branchName = cleanCommandOutput(rawBranch);
         console.log('Cleaned branch name:', JSON.stringify(branchName));
@@ -219,11 +231,11 @@ function action(params) {
         let noCodeChanges = false;
         if (branchName) {
             const commitMessage = configLoader.formatTemplate(config.formats.commitMessage.testAutomation, {ticketKey: ticketKey, ticketSummary: ticketSummary});
-            const gitResult = performGitOperations(branchName, commitMessage);
+            const gitResult = performGitOperations(branchName, commitMessage, workingDir, testFilesPath);
 
             if (gitResult.success && !gitResult.noNewCommit) {
                 const prTitle = configLoader.formatTemplate(config.formats.prTitle.testAutomation, {ticketKey: ticketKey, ticketSummary: ticketSummary});
-                const prResult = createPullRequest(prTitle, branchName, config.git.baseBranch);
+                const prResult = createPullRequest(prTitle, branchName, config.git.baseBranch, workingDir);
                 prUrl = prResult.prUrl;
                 if (!prResult.success || !prUrl) {
                     // PR creation failed — branch has code but no PR; post comment and reset to Backlog for retry

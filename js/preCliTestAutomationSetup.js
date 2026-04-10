@@ -18,25 +18,32 @@ function cleanCommandOutput(output) {
     }).join('\n').trim();
 }
 
+function runGit(command, workingDir) {
+    var args = { command: command };
+    if (workingDir) args.workingDirectory = workingDir;
+    return cli_execute_command(args);
+}
+
 function checkoutBranch(ticketKey, config) {
     var branchName = configLoader.formatBranchName(config.git.branchPrefix.test, ticketKey);
+    var workingDir = config.workingDir || null;
     console.log('Setting up branch:', branchName);
 
     try {
-        cli_execute_command({ command: 'git config user.name "' + config.git.authorName + '"' });
-        cli_execute_command({ command: 'git config user.email "' + config.git.authorEmail + '"' });
+        runGit('git config user.name "' + config.git.authorName + '"', workingDir);
+        runGit('git config user.email "' + config.git.authorEmail + '"', workingDir);
     } catch (e) {
         console.warn('Failed to configure git author:', e);
     }
 
     try {
-        cli_execute_command({ command: 'git fetch origin --prune' });
+        runGit('git fetch origin --prune', workingDir);
     } catch (e) {
         console.warn('Could not fetch remote branches:', e);
     }
 
     var localBranches = cleanCommandOutput(
-        cli_execute_command({ command: 'git branch --list "' + branchName + '"' }) || ''
+        runGit('git branch --list "' + branchName + '"', workingDir) || ''
     );
 
     /**
@@ -52,25 +59,25 @@ function checkoutBranch(ticketKey, config) {
     function syncWithMain() {
         var base = 'origin/' + config.git.baseBranch;
         try {
-            cli_execute_command({ command: 'git rebase ' + base });
+            runGit('git rebase ' + base, workingDir);
             console.log('✅ Rebase succeeded');
         } catch (rebaseErr) {
             console.warn('Rebase failed, attempting auto-resolve for agents submodule conflict:', rebaseErr);
             try {
                 // Auto-resolve: take main's agents pointer (test branches never touch agents)
-                cli_execute_command({ command: 'git checkout --ours agents' });
-                cli_execute_command({ command: 'git add agents' });
-                cli_execute_command({ command: 'git rebase --continue' });
+                runGit('git checkout --ours agents', workingDir);
+                runGit('git add agents', workingDir);
+                runGit('git rebase --continue', workingDir);
                 console.log('✅ Rebase resumed after resolving agents submodule conflict');
             } catch (continueErr) {
                 console.warn('Rebase --continue also failed, falling back to merge:', continueErr);
-                try { cli_execute_command({ command: 'git rebase --abort' }); } catch (_) {}
+                try { runGit('git rebase --abort', workingDir); } catch (_) {}
                 try {
-                    cli_execute_command({ command: 'git merge ' + base + ' --no-edit' });
+                    runGit('git merge ' + base + ' --no-edit', workingDir);
                     console.log('✅ Merged main into branch instead of rebasing');
                 } catch (mergeErr) {
                     console.warn('Merge also failed — branch may need manual attention:', mergeErr);
-                    try { cli_execute_command({ command: 'git merge --abort' }); } catch (_) {}
+                    try { runGit('git merge --abort', workingDir); } catch (_) {}
                 }
             }
         }
@@ -78,22 +85,22 @@ function checkoutBranch(ticketKey, config) {
 
     if (localBranches.trim()) {
         console.log('Branch exists locally, syncing from main:', branchName);
-        cli_execute_command({ command: 'git checkout ' + branchName });
+        runGit('git checkout ' + branchName, workingDir);
         syncWithMain();
     } else {
         var remoteBranches = cleanCommandOutput(
-            cli_execute_command({ command: 'git ls-remote --heads origin ' + branchName }) || ''
+            runGit('git ls-remote --heads origin ' + branchName, workingDir) || ''
         );
 
         if (remoteBranches.trim()) {
             console.log('Branch exists on remote, checking out and syncing from main:', branchName);
-            cli_execute_command({ command: 'git checkout -b ' + branchName + ' origin/' + branchName });
+            runGit('git checkout -b ' + branchName + ' origin/' + branchName, workingDir);
             syncWithMain();
         } else {
             console.log('Creating new branch from', config.git.baseBranch + ':', branchName);
-            cli_execute_command({ command: 'git checkout ' + config.git.baseBranch });
-            cli_execute_command({ command: 'git pull origin ' + config.git.baseBranch });
-            cli_execute_command({ command: 'git checkout -b ' + branchName });
+            runGit('git checkout ' + config.git.baseBranch, workingDir);
+            runGit('git pull origin ' + config.git.baseBranch, workingDir);
+            runGit('git checkout -b ' + branchName, workingDir);
         }
     }
 
