@@ -31,9 +31,12 @@ function deriveProjectKey(customParams) {
  */
 function buildAutoStartEncodedConfig(ticketKey, customParams) {
     var p = { inputJql: 'key = ' + ticketKey };
-    var cp = customParams && customParams.configPath;
-    if (cp) {
-        p.customParams = { configPath: cp };
+    if (customParams) {
+        var nextCustomParams = Object.assign({}, customParams);
+        delete nextCustomParams.removeLabel;             // SM idempotency label — per-agent
+        delete nextCustomParams.autoStartRework;         // review → rework trigger, not needed downstream
+        delete nextCustomParams.autoStartReworkConfigFile;
+        p.customParams = nextCustomParams;
     }
     return encodeURIComponent(JSON.stringify({ params: p }));
 }

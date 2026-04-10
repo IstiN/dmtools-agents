@@ -19,8 +19,16 @@ function deriveProjectKey(customParams) {
 
 function buildAutoStartEncodedConfig(ticketKey, customParams) {
     var p = { inputJql: 'key = ' + ticketKey };
-    var cp = customParams && customParams.configPath;
-    if (cp) { p.customParams = { configPath: cp }; }
+    if (customParams) {
+        // Pass the full customParams to the next agent so it has all config
+        // (autoStartReworkConfigFile, customStatuses, targetRepository, etc.)
+        // Strip fields that are only relevant to the current agent's execution.
+        var nextCustomParams = Object.assign({}, customParams);
+        delete nextCustomParams.removeLabel;   // SM idempotency label — per-agent, not inherited
+        delete nextCustomParams.autoStartReview;             // dev → review trigger, not needed downstream
+        delete nextCustomParams.autoStartReviewConfigFile;   // same
+        p.customParams = nextCustomParams;
+    }
     return encodeURIComponent(JSON.stringify({ params: p }));
 }
 
