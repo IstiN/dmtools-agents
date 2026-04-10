@@ -9,7 +9,7 @@
  * 6. Adds labels to indicate review completion
  */
 
-const { LABELS, STATUSES } = require('./config.js');
+const { LABELS, STATUSES, resolveStatuses } = require('./config.js');
 
 /**
  * Derive project key from customParams.configPath or customParams.projectKey.
@@ -423,6 +423,10 @@ function action(params) {
         console.log('Review recommendation:', reviewData.recommendation);
         console.log('Issue counts:', JSON.stringify(reviewData.issueCounts));
 
+        // Resolve statuses and customParams
+        const customParams = params.jobParams && params.jobParams.customParams;
+        const statuses = resolveStatuses(customParams);
+
         // Step 2: Extract PR info from input folder or find PR using MCP
         let prNumber = null;
         let prUrl = null;
@@ -482,7 +486,27 @@ function action(params) {
 
         // Normalize: LLM sometimes returns "APPROVED" instead of "APPROVE"
         const recommendation = (reviewData.recommendation || reviewData.verdict || 'REQUEST_CHANGES').replace(/^APPROVED$/, 'APPROVE');
-        const isApproved = recommendation === 'APPROVE';
+
+        // Determine if truly approved — block approval when there are open issues/suggestions
+        // unless customParams.allowApproveWithSuggestions = true is explicitly set.
+        // Default behaviour: ANY non-zero issue count (blocking, important, or suggestions)
+        // overrides the agent's APPROVE verdict and forces the ticket back to rework.
+        const issueCounts = reviewData.issueCounts || { blocking: 0, important: 0, suggestions: 0 };
+        const hasOpenIssues = (issueCounts.blocking || 0) > 0 ||
+                              (issueCounts.important || 0) > 0 ||
+                              (issueCounts.suggestions || 0) > 0;
+        const allowApproveWithSuggestions = customParams && customParams.allowApproveWithSuggestions === true;
+        const isApproved = recommendation === 'APPROVE' && (!hasOpenIssues || allowApproveWithSuggestions);
+
+        if (recommendation === 'APPROVE' && hasOpenIssues && !allowApproveWithSuggestions) {
+            console.warn(
+                '⚠️ Agent returned APPROVE but there are open issues ' +
+                '(blocking=' + issueCounts.blocking + ', important=' + issueCounts.important +
+                ', suggestions=' + issueCounts.suggestions + '). ' +
+                'Overriding to REQUEST_CHANGES. Set allowApproveWithSuggestions=true in customParams to allow.'
+            );
+        }
+
         let merged = false;
 
         // Step 4: Post all comments to GitHub PR (always, regardless of outcome)
@@ -548,7 +572,7 @@ function action(params) {
                 // Has issues → move to In Rework for focused fixes
                 jira_move_to_status({
                     key: ticketKey,
-                    statusName: STATUSES.IN_REWORK
+                    statusName: statuses.IN_REWORK
                 });
                 console.log('✅ Ticket moved to In Rework');
             }
@@ -582,7 +606,6 @@ function action(params) {
         }
 
         // Step 10: Remove SM idempotency label (via customParams)
-        const customParams = params.jobParams && params.jobParams.customParams;
         const removeLabel = customParams && customParams.removeLabel;
         if (removeLabel) {
             try {
