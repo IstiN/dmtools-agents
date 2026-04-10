@@ -58,6 +58,35 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
     var p = { inputJql: 'key = ' + ticketKey };
     var resolvedCf = resolveConfigFile(rule, effectiveConfig);
 
+    // Derive project key to resolve project-specific agent JSON (e.g. "agents/pr_review.json" → "ai_teammate/mapc/pr_review.json")
+    var projectKey = rule.projectKey || '';
+    if (!projectKey && effectiveConfig && effectiveConfig._configPath) {
+        var cp = effectiveConfig._configPath;
+        var base = cp.substring(cp.lastIndexOf('/') + 1).replace(/\.js$/, '');
+        if (base && base !== 'config') projectKey = base;
+    }
+
+    // Load target agent's customParams and include them in encoded_config so they survive
+    // regardless of whether dmtools merges or replaces customParams at the job level.
+    if (resolvedCf) {
+        var agentJsonPath = resolvedCf;
+        if (projectKey) {
+            var filename = resolvedCf.replace(/^.*\//, '');
+            var projectSpecific = 'ai_teammate/' + projectKey + '/' + filename;
+            try {
+                var testRaw = file_read({ path: projectSpecific });
+                if (testRaw) agentJsonPath = projectSpecific;
+            } catch (e) { /* file not found — use generic path */ }
+        }
+        try {
+            var agentJson = JSON.parse(file_read({ path: agentJsonPath }));
+            var agentCustomParams = (agentJson.params || {}).customParams;
+            if (agentCustomParams && typeof agentCustomParams === 'object') {
+                p.customParams = Object.assign({}, agentCustomParams);
+            }
+        } catch (e) { /* ignore — agent JSON not readable */ }
+    }
+
     if (effectiveConfig && resolvedCf) {
         var agentName = extractAgentName(resolvedCf);
         var resolved = configLoader.resolveInstructions(agentName, null, effectiveConfig);
@@ -71,7 +100,7 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
         }
     }
 
-    // Propagate config path so postJSAction scripts in triggered workflows also find the config
+    // configPath from effectiveConfig always overrides — so the triggered agent also finds the project config
     if (effectiveConfig && effectiveConfig._configPath) {
         if (!p.customParams) p.customParams = {};
         p.customParams.configPath = effectiveConfig._configPath;
