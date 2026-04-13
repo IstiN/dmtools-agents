@@ -135,8 +135,28 @@ elif [ "$PROVIDER" = "copilot" ]; then
 
   echo "Copilot Configuration:"
   echo "  Model: ${COPILOT_MODEL:-gpt-5-mini}"
+  echo "Working directory: $(pwd)"
+  echo ""
 
-  CMD=(npx @github/copilot --allow-all-tools --model "${COPILOT_MODEL:-gpt-5-mini}" -p "$PROMPT")
+  # For large prompts, passing -p "$PROMPT" as a CLI argument can exceed Linux ARG_MAX
+  # (E2BIG / "Argument list too long"). Use stdin redirect instead: the CLI reads from
+  # stdin when it is not a TTY (e.g. inside CI pipes). The prompt file path is already
+  # available as $PROMPT_ARG when DMTools calls this script with cliPrompt.
+  if [ -f "${PROMPT_ARG}" ]; then
+    PROMPT_BYTES=$(wc -c < "${PROMPT_ARG}")
+    echo "Running: npx @github/copilot --allow-all-tools --model ${COPILOT_MODEL:-gpt-5-mini} (prompt: ${PROMPT_BYTES} bytes via stdin)"
+    echo ""
+    npx @github/copilot --allow-all-tools --model "${COPILOT_MODEL:-gpt-5-mini}" < "${PROMPT_ARG}"
+  else
+    echo "Running: npx @github/copilot --allow-all-tools --model ${COPILOT_MODEL:-gpt-5-mini} -p <inline prompt>"
+    echo ""
+    npx @github/copilot --allow-all-tools --model "${COPILOT_MODEL:-gpt-5-mini}" -p "${PROMPT}"
+  fi
+
+  exit_code=$?
+  echo ""
+  echo "=== Agent completed with exit code: $exit_code ==="
+  exit $exit_code
 
 else
   # Default to cursor
