@@ -7,7 +7,7 @@
 #   CODEMIE_VERSION=latest codemie.sh
 #
 # Cache path: ~/.local/bin (Linux) or ~/.codemie (fallback)
-set -euo pipefail
+set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"

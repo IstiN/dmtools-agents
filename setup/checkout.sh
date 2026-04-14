@@ -29,7 +29,7 @@
 #   repo    (required) — "org/repo-name" on GitHub
 #   branch  (optional) — default "main"
 #   envVar  (optional) — if set, exports {envVar}=<full-cloned-path> to CI
-set -euo pipefail
+set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"

@@ -14,7 +14,7 @@
 # After running, CI cache steps can reference exported env vars:
 #   Bitrise:  key: $DMTOOLS_CACHE_KEY   paths: $DMTOOLS_CACHE_PATH
 #   GHA:      key: ${{ env.DMTOOLS_CACHE_KEY }}   path: ${{ env.DMTOOLS_CACHE_PATH }}
-set -euo pipefail
+set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"

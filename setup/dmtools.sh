@@ -8,7 +8,7 @@
 # Version examples: v1.7.170 (default)
 # Install source: https://raw.githubusercontent.com/epam/dm.ai/main/install
 # Cache path: ~/.dmtools
-set -euo pipefail
+set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"
@@ -29,7 +29,8 @@ fi
 
 # ── Install ───────────────────────────────────────────────────────────────────
 echo "📥 Installing DMtools ${DMTOOLS_VERSION}..."
-curl -fsSL https://raw.githubusercontent.com/epam/dm.ai/main/install | bash
+curl -fsSL "https://raw.githubusercontent.com/epam/dm.ai/${DMTOOLS_VERSION}/install.sh" \
+  | DMTOOLS_VERSION="${DMTOOLS_VERSION}" bash -s -- "${DMTOOLS_VERSION}"
 
 register_path "${DMTOOLS_BIN}"
 export_var "DMTOOLS_HOME" "${DMTOOLS_HOME}"
