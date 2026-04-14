@@ -84,8 +84,8 @@ fi
 INSTALLED=0
 SKIPPED=0
 
-# Clear temp file used by register_path in child processes
-rm -f /tmp/_registered_paths
+# Append to temp file used by register_path (don't clear — accumulate across calls)
+touch /tmp/_registered_paths
 
 for tool in ${TOOL_LIST}; do
   # Apply exclusions
