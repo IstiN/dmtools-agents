@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Install one or more tools. Version can be pinned per tool with a colon.
+# Compatible with bash 3.2+ (macOS system bash).
 #
 # Usage:
 #   install.sh tool1[:version] tool2[:version] ...
@@ -11,15 +12,12 @@
 #   install.sh java:17 dmtools:v1.7.167 node:20 maestro copilot
 #   install.sh all
 #   install.sh all -cursor -codemie
-#
-# Supported tools (install order matters — node before copilot, java before dmtools):
-#   java, dmtools, node, maestro, copilot, codemie, cursor
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"
 
-# Canonical order for "all"
+# Canonical order for "all" (node before copilot, java before dmtools)
 ALL_TOOLS="java node dmtools maestro copilot codemie cursor"
 
 if [ $# -eq 0 ]; then
@@ -29,7 +27,7 @@ if [ $# -eq 0 ]; then
   echo "Supported tools (in install order):"
   echo "  java      — Java (Temurin/OpenJDK). Default version: 17"
   echo "  node      — Node.js via nvm.         Default version: 20"
-  echo "  dmtools   — DMtools CLI.             Default version: v1.7.167"
+  echo "  dmtools   — DMtools CLI.             Default version: v1.7.170"
   echo "  maestro   — Maestro mobile testing.  Default version: latest"
   echo "  copilot   — @github/copilot npm CLI. Default version: latest  (needs node)"
   echo "  codemie   — codemie-claude CLI.      Default version: latest"
@@ -37,32 +35,42 @@ if [ $# -eq 0 ]; then
   echo ""
   echo "Examples:"
   echo "  install.sh dmtools maestro copilot"
-  echo "  install.sh java:17 dmtools:v1.7.167 node:20 maestro copilot"
+  echo "  install.sh java:17 dmtools:v1.7.170 node:20 maestro copilot"
   echo "  install.sh all"
   echo "  install.sh all -cursor -codemie"
   exit 0
 fi
 
 # ── Resolve tool list ─────────────────────────────────────────────────────────
+# bash 3.2 compatible: no associative arrays.
+# Store version overrides as "tool=version" entries in a plain string.
 
-declare -A VERSION_OVERRIDE  # tool → version
+VERSIONS=""   # space-separated "tool=version" pairs
 EXCLUDE=""
 EXPLICIT_TOOLS=""
 USE_ALL=false
 
+# Helper: get version override for a tool (bash 3.2 safe)
+get_version() {
+  local tool="$1"
+  echo "${VERSIONS}" | tr ' ' '\n' | grep "^${tool}=" | cut -d= -f2 | head -1
+}
+
 for arg in "$@"; do
   if [ "${arg}" = "all" ]; then
     USE_ALL=true
-  elif [[ "${arg}" == -* ]]; then
-    # Exclusion: -cursor or --cursor
-    EXCLUDE="${EXCLUDE} ${arg#-*-}"  # strip leading -/--
-    EXCLUDE="${EXCLUDE} ${arg#-}"
+  elif [ "${arg#-}" != "${arg}" ]; then
+    # Exclusion: -cursor or --cursor → strip leading dashes
+    stripped="${arg}"
+    stripped="${stripped#--}"
+    stripped="${stripped#-}"
+    EXCLUDE="${EXCLUDE} ${stripped}"
   else
     TOOL_NAME="${arg%%:*}"
     TOOL_VERSION="${arg#*:}"
     [ "${TOOL_VERSION}" = "${TOOL_NAME}" ] && TOOL_VERSION=""
     EXPLICIT_TOOLS="${EXPLICIT_TOOLS} ${TOOL_NAME}"
-    [ -n "${TOOL_VERSION}" ] && VERSION_OVERRIDE["${TOOL_NAME}"]="${TOOL_VERSION}"
+    [ -n "${TOOL_VERSION}" ] && VERSIONS="${VERSIONS} ${TOOL_NAME}=${TOOL_VERSION}"
   fi
 done
 
@@ -73,7 +81,6 @@ else
 fi
 
 # ── Run installs ──────────────────────────────────────────────────────────────
-
 INSTALLED=0
 SKIPPED=0
 
@@ -97,7 +104,7 @@ for tool in ${TOOL_LIST}; do
   fi
 
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  VERSION="${VERSION_OVERRIDE[${tool}]:-}"
+  VERSION="$(get_version "${tool}")"
   if [ -n "${VERSION}" ]; then
     bash "${SCRIPT}" "${VERSION}"
   else
