@@ -12,7 +12,7 @@
 #   install.sh java:17 dmtools:v1.7.167 node:20 maestro copilot
 #   install.sh all
 #   install.sh all -cursor -codemie
-set -euo pipefail
+set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"
