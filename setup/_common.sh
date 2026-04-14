@@ -34,6 +34,9 @@ register_path() {
   # Export immediately so the rest of this script can use the binary.
   export PATH="${dir}:${PATH}"
 
+  # Persist to a temp file so parent install.sh can accumulate all paths
+  echo "${dir}" >> /tmp/_registered_paths 2>/dev/null || true
+
   case "$(detect_ci)" in
     bitrise)
       # envman REPLACES the variable — pass the full cumulative PATH.

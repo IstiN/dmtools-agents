@@ -84,6 +84,9 @@ fi
 INSTALLED=0
 SKIPPED=0
 
+# Clear temp file used by register_path in child processes
+rm -f /tmp/_registered_paths
+
 for tool in ${TOOL_LIST}; do
   # Apply exclusions
   if echo " ${EXCLUDE} " | grep -qw "${tool}"; then
@@ -114,4 +117,23 @@ for tool in ${TOOL_LIST}; do
 done
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# ── Accumulate PATH from all child processes and call envman once ─────────────
+if [ -f /tmp/_registered_paths ]; then
+  while IFS= read -r dir; do
+    case ":${PATH}:" in
+      *":${dir}:"*) ;;  # already in PATH
+      *) export PATH="${dir}:${PATH}" ;;
+    esac
+  done < /tmp/_registered_paths
+  rm -f /tmp/_registered_paths
+
+  # Single envman call with the full cumulative PATH
+  if [ "$(detect_ci)" = "bitrise" ]; then
+    command -v envman &>/dev/null \
+      && envman add --key PATH --value "${PATH}" \
+      || true
+  fi
+fi
+
 echo "✅ Done: ${INSTALLED} installed, ${SKIPPED} skipped"
