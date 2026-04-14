@@ -36,9 +36,9 @@ register_path() {
 
   case "$(detect_ci)" in
     bitrise)
-      # envman prepends the value; pass only the new dir so PATH doesn't balloon.
+      # envman REPLACES the variable — pass the full cumulative PATH.
       command -v envman &>/dev/null \
-        && envman add --key PATH --value "${dir}" \
+        && envman add --key PATH --value "${PATH}" \
         || true
       ;;
     github)
