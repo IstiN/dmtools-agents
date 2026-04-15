@@ -84,8 +84,15 @@ fi
 INSTALLED=0
 SKIPPED=0
 
-# Append to temp file used by register_path (don't clear — accumulate across calls)
-touch /tmp/_registered_paths
+# Restore paths accumulated by previous install.sh calls (file survives across calls)
+if [ -f /tmp/_registered_paths ]; then
+  while IFS= read -r dir; do
+    case ":${PATH}:" in
+      *":${dir}:"*) ;;
+      *) export PATH="${dir}:${PATH}" ;;
+    esac
+  done < /tmp/_registered_paths
+fi
 
 for tool in ${TOOL_LIST}; do
   # Apply exclusions
@@ -126,7 +133,9 @@ if [ -f /tmp/_registered_paths ]; then
       *) export PATH="${dir}:${PATH}" ;;
     esac
   done < /tmp/_registered_paths
-  rm -f /tmp/_registered_paths
+
+  # DON'T delete — next install.sh call needs these paths too
+  # rm -f /tmp/_registered_paths
 
   # Single envman call with the full cumulative PATH
   if [ "$(detect_ci)" = "bitrise" ]; then
