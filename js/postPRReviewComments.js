@@ -669,6 +669,66 @@ function action(params) {
             }
         }
 
+        // Step 13: On-approved triggers (opt-in via customParams.onApproved)
+        if (isApproved && customParams && customParams.onApproved) {
+            var onApproved = customParams.onApproved;
+
+            // 13a: Trigger Bitrise build (e.g. build_ios_simulator)
+            if (onApproved.bitriseBuild) {
+                try {
+                    var bb = onApproved.bitriseBuild;
+                    var envVars = (bb.envVars || []).slice();
+                    // Always pass the ticket key so the build can reference it
+                    envVars.push({ mapped_to: 'TICKET_KEY', value: ticketKey, is_expand: false });
+                    if (prUrl) {
+                        envVars.push({ mapped_to: 'PR_URL', value: prUrl, is_expand: false });
+                    }
+                    bitrise_trigger_build({
+                        appSlug: bb.appSlug,
+                        workflowId: bb.workflowId,
+                        branch: bb.branch || 'main',
+                        commitMessage: ticketKey + ' — triggered by AI PR review approval',
+                        envVars: JSON.stringify(envVars)
+                    });
+                    console.log('✅ Triggered Bitrise build:', bb.workflowId, 'for', ticketKey);
+                } catch (e) {
+                    console.warn('⚠️ Bitrise build trigger failed:', e.message || e);
+                }
+            }
+
+            // 13b: Trigger TestCasesGenerator via GitHub Actions
+            if (onApproved.testCasesGenerator) {
+                try {
+                    var tcg = onApproved.testCasesGenerator;
+                    var aiRepoCfg = customParams.aiRepository;
+                    var aiOwner = (aiRepoCfg && aiRepoCfg.owner) || (config.repository && config.repository.owner);
+                    var aiRepo  = (aiRepoCfg && aiRepoCfg.repo)  || (config.repository && config.repository.repo);
+                    var projectKey = deriveProjectKey(customParams);
+                    var tcgEncodedCfg = encodeURIComponent(JSON.stringify({
+                        params: { inputJql: 'key = ' + ticketKey }
+                    }));
+                    if (aiOwner && aiRepo) {
+                        github_trigger_workflow(
+                            aiOwner, aiRepo, tcg.workflow || 'ai-teammate.yml',
+                            JSON.stringify({
+                                concurrency_key: ticketKey,
+                                config_file:     tcg.configFile,
+                                encoded_config:  tcgEncodedCfg,
+                                project_key:     projectKey || ''
+                            }),
+                            'main'
+                        );
+                        console.log('✅ Triggered TestCasesGenerator for', ticketKey,
+                            '[config=' + tcg.configFile + ']');
+                    } else {
+                        console.warn('⚠️ TestCasesGenerator: aiRepository owner/repo not set — skipping');
+                    }
+                } catch (e) {
+                    console.warn('⚠️ TestCasesGenerator trigger failed:', e.message || e);
+                }
+            }
+        }
+
         console.log('✅ PR review workflow completed:', isApproved ? 'MERGED' : 'CHANGES REQUESTED');
 
         return {
