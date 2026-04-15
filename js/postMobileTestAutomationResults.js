@@ -30,6 +30,14 @@
 var configLoader = require('./configLoader.js');
 const { STATUSES, LABELS } = require('./config.js');
 
+function parseMcpResult(result) {
+    if (!result) return null;
+    if (typeof result === 'string') {
+        try { return JSON.parse(result); } catch (e) { return null; }
+    }
+    return result;
+}
+
 function cleanCommandOutput(output) {
     if (!output) return '';
     return output.split('\n').filter(function(line) {
@@ -151,7 +159,9 @@ function createAutomationPR(title, branchName, baseBranch, workingDir) {
  */
 function findFeaturePR(ticketKey, owner, repo) {
     try {
-        var prs = github_list_prs({ workspace: owner, repository: repo, state: 'open' });
+        var raw = github_list_prs({ workspace: owner, repository: repo, state: 'open' });
+        var parsed = parseMcpResult(raw);
+        var prs = Array.isArray(parsed) ? parsed : (parsed && parsed.data ? parsed.data : []);
 
         if (!prs || prs.length === 0) {
             console.log('No open PRs found in', owner + '/' + repo);
@@ -193,27 +203,24 @@ function updateFeaturePRLabel(owner, repo, prNumber, passed, labelPassed, labelF
     }
 }
 
-/** Append test result summary to the feature PR description or as a comment. */
+/** Post test result summary as a comment on the feature PR. */
 function updateFeaturePRBody(owner, repo, prNumber) {
     var summaryFile = readFile('outputs/pr_feature_update.md');
     if (!summaryFile) {
-        console.log('No outputs/pr_feature_update.md — skipping feature PR body update');
+        console.log('No outputs/pr_feature_update.md — skipping feature PR comment');
         return;
     }
 
     try {
-        cli_execute_command({
-            command: 'gh pr edit ' + prNumber + ' --body-file "outputs/pr_feature_update.md" --repo ' + owner + '/' + repo
+        github_add_pr_comment({
+            workspace: owner,
+            repository: repo,
+            pullRequestId: prNumber,
+            text: summaryFile
         });
-        console.log('✅ Updated feature PR description');
+        console.log('✅ Posted test summary as PR comment on feature PR #' + prNumber);
     } catch (e) {
-        console.warn('Failed to update PR body, falling back to comment:', e);
-        try {
-            github_add_pr_comment({ workspace: owner, repository: repo, pullRequestId: prNumber, text: summaryFile });
-            console.log('✅ Posted test summary as PR comment');
-        } catch (e2) {
-            console.warn('Also failed to post PR comment:', e2);
-        }
+        console.warn('Failed to post PR comment:', e);
     }
 }
 
