@@ -1,0 +1,126 @@
+/**
+ * Trigger Bitrise build_ios_simulator (manual JSRunner trigger)
+ *
+ * Finds the open feature PR for the trigger ticket, then triggers
+ * build_ios_simulator on the PR's head branch.
+ *
+ * Required jobParams:
+ *   inputJql           — JQL to find the ticket (e.g. "key = MAPC-6815")
+ *   bitriseBuild.appSlug   — Bitrise app slug
+ *   bitriseBuild.workflowId — Bitrise workflow ID (default: build_ios_simulator)
+ *   featurePR.owner    — GitHub owner of the mobile app repo
+ *   featurePR.repo     — GitHub repo name of the mobile app repo
+ */
+
+function action(params) {
+    try {
+        var jobParams = params.jobParams || params;
+        var inputJql = jobParams.inputJql || '';
+        var bb = jobParams.bitriseBuild || {};
+        var appSlug = bb.appSlug;
+        var workflowId = bb.workflowId || 'build_ios_simulator';
+        var featurePRConfig = jobParams.featurePR || {};
+        var featureOwner = featurePRConfig.owner || '';
+        var featureRepo = featurePRConfig.repo || '';
+
+        if (!appSlug) {
+            console.error('❌ jobParams.bitriseBuild.appSlug is required');
+            return { success: false, error: 'Missing bitriseBuild.appSlug' };
+        }
+
+        // ── 1. Fetch ticket by JQL ────────────────────────────────────────────
+        var ticketKey = '';
+        var ticketSummary = '';
+        if (inputJql) {
+            console.log('Fetching ticket by JQL:', inputJql);
+            var results = jira_search_by_jql({ jql: inputJql, maxResults: 1 });
+            var issues = (results && results.issues) ? results.issues : (Array.isArray(results) ? results : []);
+            if (issues.length > 0) {
+                ticketKey = issues[0].key;
+                ticketSummary = (issues[0].fields && issues[0].fields.summary) || ticketKey;
+            }
+        }
+        if (!ticketKey) {
+            console.error('❌ No ticket found for JQL:', inputJql);
+            return { success: false, error: 'No ticket found for: ' + inputJql };
+        }
+
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('🏗️  Bitrise iOS Build Trigger');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('Ticket:', ticketKey, '—', ticketSummary);
+
+        // ── 2. Find open feature PR → get head branch ─────────────────────────
+        var branch = 'develop';
+        var featurePrUrl = '';
+        if (featureOwner && featureRepo) {
+            try {
+                var prs = github_list_prs({ workspace: featureOwner, repository: featureRepo, state: 'open' });
+                if (prs && prs.length > 0) {
+                    for (var i = 0; i < prs.length; i++) {
+                        var pr = prs[i];
+                        var prTitle = pr.title || '';
+                        var prBranch = (pr.head && pr.head.ref) || '';
+                        if (prTitle.indexOf(ticketKey) !== -1 || prBranch.indexOf(ticketKey) !== -1) {
+                            branch = prBranch || branch;
+                            featurePrUrl = pr.html_url || pr.url || '';
+                            console.log('✅ Found feature PR #' + pr.number + ' → branch: ' + branch);
+                            break;
+                        }
+                    }
+                }
+                if (!featurePrUrl) {
+                    console.log('ℹ️ No open feature PR found — triggering on develop');
+                }
+            } catch (e) {
+                console.warn('⚠️ Could not search PRs:', e.message || e);
+            }
+        }
+
+        // ── 3. Trigger Bitrise build ─────────────────────────────────────────
+        var envVars = [
+            { mapped_to: 'TICKET_KEY', value: ticketKey, is_expand: false }
+        ];
+        if (featurePrUrl) {
+            envVars.push({ mapped_to: 'FEATURE_PR_URL', value: featurePrUrl, is_expand: false });
+        }
+
+        var buildResult = bitrise_trigger_build({
+            appSlug:       appSlug,
+            workflowId:    workflowId,
+            branch:        branch,
+            commitMessage: ticketKey + ' — iOS build triggered manually',
+            envVars:       JSON.stringify(envVars)
+        });
+        console.log('✅ Bitrise build triggered:', JSON.stringify(buildResult));
+
+        var buildUrl = (buildResult && buildResult.build_url) ||
+            (buildResult && buildResult.build_slug ? 'https://app.bitrise.io/build/' + buildResult.build_slug : '');
+
+        // ── 4. Post Jira comment ─────────────────────────────────────────────
+        var comment = 'h3. 🏗️ iOS Build Triggered\n\n' +
+            'Bitrise *' + workflowId + '* triggered manually for *' + ticketKey + '*.\n\n' +
+            '| Field | Value |\n|-------|-------|\n' +
+            '| Workflow | ' + workflowId + ' |\n' +
+            '| Branch | ' + branch + ' |';
+        if (buildUrl) comment += '\n| Build | [View on Bitrise|' + buildUrl + '] |';
+        if (featurePrUrl) comment += '\n| Feature PR | ' + featurePrUrl + ' |';
+
+        try {
+            jira_post_comment({ key: ticketKey, comment: comment });
+            console.log('✅ Posted Jira comment');
+        } catch (e) {
+            console.warn('⚠️ Could not post Jira comment:', e.message || e);
+        }
+
+        return { success: true, buildUrl: buildUrl, branch: branch, workflowId: workflowId };
+
+    } catch (error) {
+        console.error('❌ Error in triggerBitriseIosBuild:', error);
+        return { success: false, error: error.toString() };
+    }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { action };
+}
