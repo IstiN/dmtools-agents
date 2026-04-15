@@ -146,3 +146,37 @@ if [ -f /tmp/_registered_paths ]; then
 fi
 
 echo "✅ Done: ${INSTALLED} installed, ${SKIPPED} skipped"
+
+# ── Verify installed tools are on PATH ────────────────────────────────────────
+VERIFY_FAIL=0
+for tool in ${TOOL_LIST}; do
+  # Skip excluded tools
+  echo " ${EXCLUDE} " | grep -qw "${tool}" && continue
+
+  # Map tool name → binary name
+  case "${tool}" in
+    java)    BIN="java" ;;
+    node)    BIN="node" ;;
+    dmtools) BIN="dmtools" ;;
+    maestro) BIN="maestro" ;;
+    copilot) BIN="copilot" ;;
+    codemie) BIN="codemie-claude" ;;
+    cursor)  BIN="cursor-agent" ;;
+    *)       continue ;;
+  esac
+
+  if command -v "${BIN}" &>/dev/null; then
+    LOC="$(command -v "${BIN}")"
+    echo "  ✓ ${BIN} → ${LOC}"
+  else
+    echo "  ✗ ${BIN} — NOT FOUND on PATH" >&2
+    VERIFY_FAIL=1
+  fi
+done
+
+if [ "${VERIFY_FAIL}" -eq 1 ]; then
+  echo "" >&2
+  echo "❌ Some tools are missing from PATH!" >&2
+  echo "   PATH=${PATH}" >&2
+  exit 1
+fi
