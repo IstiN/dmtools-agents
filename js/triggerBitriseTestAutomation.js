@@ -28,10 +28,23 @@ const { STATUSES, LABELS, resolveStatuses } = require('./config.js');
 
 function action(params) {
     try {
+        // JSRunner mode: no ticket context — fetch it from inputJql in jobParams
+        if (!params.ticket && params.jobParams && params.jobParams.inputJql) {
+            var jql = params.jobParams.inputJql;
+            console.log('JSRunner mode — fetching ticket by JQL:', jql);
+            var results = jira_search_by_jql({ jql: jql, maxResults: 1 });
+            var issues = (results && results.issues) ? results.issues : (Array.isArray(results) ? results : []);
+            if (!issues.length) {
+                console.error('❌ No tickets found for JQL:', jql);
+                return { success: false, error: 'No tickets found for JQL: ' + jql };
+            }
+            params = { ticket: issues[0], jobParams: params.jobParams };
+        }
+
         var actualParams = params.ticket ? params : (params.jobParams || params);
         var ticketKey = actualParams.ticket.key;
         var ticketSummary = (actualParams.ticket.fields && actualParams.ticket.fields.summary) || ticketKey;
-        var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams || {};
+        var customParams = (params.jobParams && params.jobParams.customParams) || (params.jobParams && params.jobParams) || actualParams.customParams || {};
         var statuses = resolveStatuses(customParams);
 
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
