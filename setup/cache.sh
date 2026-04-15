@@ -24,7 +24,7 @@ OS_TAG="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
 # ── Per-tool cache definitions ────────────────────────────────────────────────
 
 _cache_dmtools() {
-  local version="${1:-${DMTOOLS_VERSION:-v1.7.171}}"
+  local version="${1:-${DMTOOLS_VERSION:-v1.7.172}}"
   export_var "DMTOOLS_CACHE_PATH" "${HOME}/.dmtools"
   export_var "DMTOOLS_CACHE_KEY"  "dmtools-${version}-${OS_TAG}"
 }
