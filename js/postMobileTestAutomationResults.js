@@ -58,20 +58,26 @@ function readFile(path) {
     }
 }
 
-function readResultJson() {
-    try {
-        var raw = readFile('outputs/test_automation_result.json');
-        if (!raw) {
-            console.warn('outputs/test_automation_result.json is empty or missing');
-            return null;
-        }
-        var parsed = JSON.parse(raw);
-        console.log('Test result status:', parsed.status);
-        return parsed;
-    } catch (e) {
-        console.error('Failed to parse test_automation_result.json:', e);
-        return null;
+function readResultJson(workingDir) {
+    var candidatePaths = ['outputs/test_automation_result.json'];
+    if (workingDir) {
+        // Agent may have written outputs inside the automation repo directory
+        candidatePaths.push(workingDir + '/outputs/test_automation_result.json');
     }
+    for (var i = 0; i < candidatePaths.length; i++) {
+        try {
+            var raw = readFile(candidatePaths[i]);
+            if (raw) {
+                var parsed = JSON.parse(raw);
+                console.log('✅ Read test result from:', candidatePaths[i], '— status:', parsed.status);
+                return parsed;
+            }
+        } catch (e) {
+            console.warn('Could not read/parse ' + candidatePaths[i] + ':', e);
+        }
+    }
+    console.warn('test_automation_result.json not found in any candidate path:', candidatePaths.join(', '));
+    return null;
 }
 
 /** Run a command inside the automation repo directory. */
@@ -292,21 +298,7 @@ function action(params) {
 
         console.log('=== Processing mobile test automation results for', ticketKey, '===');
 
-        // Step 1: Read structured result
-        var result = readResultJson();
-        if (!result) {
-            jira_post_comment({
-                key: ticketKey,
-                comment: 'h3. ⚠️ Test Automation Error\n\nCould not read test result. Check workflow logs.'
-            });
-            return { success: false, error: 'No test result JSON found' };
-        }
-
-        var status = (result.status || '').toLowerCase();
-        var passed = status === 'passed';
-        var blockedByHuman = status === 'blocked_by_human';
-
-        // Step 2: Configure git author in automation repo
+        // Step 1: Configure git author in automation repo
         if (workingDir) {
             try {
                 runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
@@ -316,7 +308,7 @@ function action(params) {
             }
         }
 
-        // Step 3: Get current branch in automation repo
+        // Step 2: Get current branch in automation repo
         var branchName = null;
         if (workingDir) {
             var rawBranch = runInRepo('git branch --show-current', workingDir) || '';
@@ -324,7 +316,7 @@ function action(params) {
             console.log('Automation repo branch:', JSON.stringify(branchName));
         }
 
-        // Step 4: Commit + push + create automation PR
+        // Step 3: Commit + push + create automation PR (ALWAYS — don't lose agent's work)
         var automationPrUrl = null;
         if (branchName && workingDir) {
             var commitMessage = ticketKey + ' test: automate ' + ticketSummary;
@@ -338,6 +330,22 @@ function action(params) {
                 console.warn('Git operations failed:', gitResult.error);
             }
         }
+
+        // Step 4: Read structured result (fallback: workspace root → automation repo outputs)
+        var result = readResultJson(workingDir);
+        if (!result) {
+            console.warn('No test_automation_result.json found — posting error to Jira but keeping git work');
+            try {
+                var errMsg = 'h3. ⚠️ Test Automation Error\n\nFlows may have been written but output JSON is missing. Check workflow logs.';
+                if (automationPrUrl) errMsg += '\n\n*Automation PR*: ' + automationPrUrl;
+                jira_post_comment({ key: ticketKey, comment: errMsg });
+            } catch (e) { console.warn('Failed to post error Jira comment:', e); }
+            return { success: false, error: 'No test result JSON found', automationPrUrl: automationPrUrl };
+        }
+
+        var status = (result.status || '').toLowerCase();
+        var passed = status === 'passed';
+        var blockedByHuman = status === 'blocked_by_human';
 
         // Step 5: Find feature PR and update it
         if (featureOwner && featureRepo && !blockedByHuman) {

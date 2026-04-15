@@ -322,3 +322,62 @@ suite('postMobileTestAutomationResults — Jira updates', function() {
     });
 
 });
+
+// ── Suite: git commit always happens ─────────────────────────────────────────
+
+suite('postMobileTestAutomationResults — git commit resilience', function() {
+
+    test('commits and pushes even when test_automation_result.json is missing', function() {
+        var gitCommands = [];
+        var jiraComments = [];
+        var WORKING_DIR = 'dependencies/PostNL-commercial-mobileApp-automation';
+
+        var m = loadPostCli({
+            file_read: function(opts) {
+                if (opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null; // no result JSON anywhere
+            },
+            cli_execute_command: function(opts) {
+                gitCommands.push(opts.command || '');
+                if ((opts.command || '').indexOf('branch --show-current') !== -1) return 'test/MAPC-6618';
+                return '';
+            },
+            jira_post_comment: function(opts) { jiraComments.push(opts); }
+        });
+
+        m.action(makeParams('MAPC-6618', { targetRepository: { workingDir: WORKING_DIR } }));
+
+        var hasAddOrCommit = gitCommands.some(function(c) {
+            return c.indexOf('git add') !== -1 || c.indexOf('git commit') !== -1;
+        });
+        assert.ok(hasAddOrCommit, 'should attempt git add/commit even with no result JSON');
+        assert.ok(jiraComments.length > 0, 'should still post error Jira comment');
+        assert.ok(jiraComments[0].comment.indexOf('⚠️') !== -1, 'error comment should warn about missing output');
+    });
+
+    test('reads result JSON from automation repo outputs dir as fallback', function() {
+        var statusMoves = [];
+        var WORKING_DIR = 'dependencies/PostNL-commercial-mobileApp-automation';
+
+        var m = loadPostCli({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') return null; // workspace root — missing
+                if (opts.path === WORKING_DIR + '/outputs/test_automation_result.json') return PASSED_RESULT; // fallback
+                if (opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            cli_execute_command: function(opts) {
+                if ((opts.command || '').indexOf('branch --show-current') !== -1) return 'test/MAPC-6618';
+                return '';
+            },
+            jira_move_to_status: function(opts) { statusMoves.push(opts); },
+            jira_post_comment: function() {}
+        });
+
+        m.action(makeParams('MAPC-6618', { targetRepository: { workingDir: WORKING_DIR } }));
+
+        assert.ok(statusMoves.some(function(s) { return s.statusName === 'Passed'; }),
+            'should read result from automation repo fallback path and move to Passed');
+    });
+
+});
