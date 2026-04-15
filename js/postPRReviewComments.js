@@ -686,7 +686,7 @@ function action(params) {
                     bitrise_trigger_build({
                         appSlug: bb.appSlug,
                         workflowId: bb.workflowId,
-                        branch: bb.branch || 'main',
+                        branch: bb.branch || 'develop',
                         commitMessage: ticketKey + ' — triggered by AI PR review approval',
                         envVars: JSON.stringify(envVars)
                     });
