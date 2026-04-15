@@ -14,8 +14,9 @@
 
 function action(params) {
     try {
-        var jobParams = params.jobParams || params;
-        var inputJql = jobParams.inputJql || '';
+        var jobParams = params.jobParams || {};
+        // params.inputJql (from Jira encoded_config) takes priority over jobParams default
+        var inputJql = params.inputJql || jobParams.inputJql || '';
         var bb = jobParams.bitriseBuild || {};
         var appSlug = bb.appSlug;
         var workflowId = bb.workflowId || 'build_ios_simulator';
@@ -111,10 +112,14 @@ function action(params) {
             commitMessage: ticketKey + ' — iOS build triggered manually',
             envVars:       JSON.stringify(envVars)
         });
-        console.log('✅ Bitrise build triggered:', JSON.stringify(buildResult));
 
-        var buildUrl = (buildResult && buildResult.build_url) ||
-            (buildResult && buildResult.build_slug ? 'https://app.bitrise.io/build/' + buildResult.build_slug : '');
+        // bitrise_trigger_build may return a JSON string — parse it
+        var buildData = (typeof buildResult === 'string') ? JSON.parse(buildResult) : buildResult;
+        console.log('✅ Bitrise build triggered: build #' + (buildData.build_number || '?'));
+
+        var buildUrl = buildData.build_url ||
+            (buildData.build_slug ? 'https://app.bitrise.io/build/' + buildData.build_slug : '') ||
+            (buildData.results && buildData.results[0] && buildData.results[0].build_url) || '';
 
         // ── 4. Post Jira comment ─────────────────────────────────────────────
         var comment = 'h3. 🏗️ iOS Build Triggered\n\n' +

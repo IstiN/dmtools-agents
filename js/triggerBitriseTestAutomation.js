@@ -29,8 +29,9 @@ const { STATUSES, LABELS, resolveStatuses } = require('./config.js');
 function action(params) {
     try {
         // JSRunner mode: no ticket context — fetch it from inputJql in jobParams
-        if (!params.ticket && params.jobParams && params.jobParams.inputJql) {
-            var jql = params.jobParams.inputJql;
+        if (!params.ticket) {
+            // params.inputJql (from Jira encoded_config) takes priority over jobParams default
+            var jql = params.inputJql || (params.jobParams && params.jobParams.inputJql) || '';
             var keyMatch = jql.match(/key\s*=\s*([A-Z]+-\d+)/i);
             if (keyMatch) {
                 var ticketKeyFromJql = keyMatch[1].toUpperCase();
@@ -149,12 +150,16 @@ function action(params) {
 
         // ── 4. Build Bitrise build URL from response ─────────────────────────
         var buildUrl = '';
+        var buildNumber = '';
         try {
-            if (buildResult && buildResult.build_slug) {
-                buildUrl = 'https://app.bitrise.io/build/' + buildResult.build_slug;
-            } else if (buildResult && buildResult.build_url) {
-                buildUrl = buildResult.build_url;
-            }
+            // bitrise_trigger_build may return a JSON string — parse it
+            var buildData = (typeof buildResult === 'string') ? JSON.parse(buildResult) : buildResult;
+            var firstResult = buildData.results && buildData.results[0];
+            buildUrl = buildData.build_url ||
+                (firstResult && firstResult.build_url) ||
+                (buildData.build_slug ? 'https://app.bitrise.io/build/' + buildData.build_slug : '') || '';
+            buildNumber = String(buildData.build_number || (firstResult && firstResult.build_number) || '');
+            console.log('✅ Build #' + buildNumber + (buildUrl ? ' → ' + buildUrl : ''));
         } catch (_) {}
 
         // ── 5. Post Jira comment ─────────────────────────────────────────────
@@ -166,7 +171,8 @@ function action(params) {
             '| Branch | ' + branch + ' |';
 
         if (buildUrl) {
-            jiraComment += '\n| Build | [View on Bitrise|' + buildUrl + '] |';
+            var buildLabel = buildNumber ? 'Build #' + buildNumber : 'View on Bitrise';
+            jiraComment += '\n| Build | [' + buildLabel + '|' + buildUrl + '] |';
         }
         if (featurePrUrl) {
             jiraComment += '\n| Feature PR | ' + featurePrUrl + ' |';

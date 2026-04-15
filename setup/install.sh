@@ -27,7 +27,7 @@ if [ $# -eq 0 ]; then
   echo "Supported tools (in install order):"
   echo "  java      — Java (Temurin/OpenJDK). Default version: 17"
   echo "  node      — Node.js via nvm.         Default version: 20"
-  echo "  dmtools   — DMtools CLI.             Default version: v1.7.172"
+  echo "  dmtools   — DMtools CLI.             Default version: v1.7.174"
   echo "  maestro   — Maestro mobile testing.  Default version: latest"
   echo "  copilot   — @github/copilot npm CLI. Default version: latest  (needs node)"
   echo "  codemie   — codemie-claude CLI.      Default version: latest"
@@ -35,7 +35,7 @@ if [ $# -eq 0 ]; then
   echo ""
   echo "Examples:"
   echo "  install.sh dmtools maestro copilot"
-  echo "  install.sh java:17 dmtools:v1.7.172 node:20 maestro copilot"
+  echo "  install.sh java:17 dmtools:v1.7.174 node:20 maestro copilot"
   echo "  install.sh all"
   echo "  install.sh all -cursor -codemie"
   exit 0
