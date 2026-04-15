@@ -433,6 +433,7 @@ function action(params) {
         // Step 2: Extract PR info from input folder or find PR using MCP
         let prNumber = null;
         let prUrl = null;
+        let prBranch = null;
 
         // Try to get repo info — prefer targetRepository from config over git remote
         var repoInfo = null;
@@ -457,12 +458,16 @@ function action(params) {
                 // Extract PR number and URL — format: - **PR #**: 13
                 const numberMatch = prInfo.match(/\*\*PR #\*\*:\s*(\d+)/);
                 const urlMatch = prInfo.match(/\*\*URL\*\*:\s*(https:\/\/[^\s]+)/);
+                const branchMatch = prInfo.match(/\*\*Branch\*\*:\s*([^\s\n]+)/);
 
                 if (numberMatch) {
                     prNumber = parseInt(numberMatch[1], 10);
                 }
                 if (urlMatch) {
                     prUrl = urlMatch[1];
+                }
+                if (branchMatch) {
+                    prBranch = branchMatch[1];
                 }
                 console.log('Found PR info in input folder: #' + prNumber);
             }
@@ -477,6 +482,7 @@ function action(params) {
             if (pr) {
                 prNumber = pr.number;
                 prUrl = pr.html_url;
+                prBranch = pr.head && pr.head.ref ? pr.head.ref : null;
                 console.log('Found PR via GitHub search: #' + prNumber);
             } else {
                 console.warn('Could not find PR for ticket', ticketKey);
@@ -686,11 +692,11 @@ function action(params) {
                     bitrise_trigger_build({
                         appSlug: bb.appSlug,
                         workflowId: bb.workflowId,
-                        branch: bb.branch || 'develop',
+                        branch: prBranch || bb.branch || 'develop',
                         commitMessage: ticketKey + ' — triggered by AI PR review approval',
                         envVars: JSON.stringify(envVars)
                     });
-                    console.log('✅ Triggered Bitrise build:', bb.workflowId, 'for', ticketKey);
+                    console.log('✅ Triggered Bitrise build:', bb.workflowId, 'branch:', prBranch || bb.branch || 'develop', 'for', ticketKey);
                 } catch (e) {
                     console.warn('⚠️ Bitrise build trigger failed:', e.message || e);
                 }
