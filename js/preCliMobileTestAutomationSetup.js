@@ -10,10 +10,15 @@
  * 2. Fetch ALL linked Test Case tickets ("is tested by" relationship)
  * 3. Write linked test case details to input/{KEY}/linked_test_cases.md
  * 4. Create / checkout test/{KEY} branch in the target test automation repo
+ * 5. Download latest successful iOS simulator build artifact from Bitrise
+ *    and write the .app path to input/{KEY}/app_info.md
  *
  * Used by: project-specific test automation agent configs
  * Requires: customParams.targetRepository.workingDir pointing to the
  *           checked-out test automation repository.
+ * Optional: customParams.bitriseBuild.appSlug + workflowId to enable
+ *           artifact download. Also needs customParams.featurePR to
+ *           resolve the feature branch from the Jira ticket's linked PR.
  */
 
 var configLoader = require('./configLoader.js');
@@ -185,12 +190,221 @@ function fetchLinkedTestCases(ticketKey, folder) {
     return linkedTCs.length;
 }
 
+function parseMcpResult(result) {
+    if (!result) return null;
+    if (typeof result === 'string') {
+        try { return JSON.parse(result); } catch (e) { return null; }
+    }
+    return result;
+}
+
+/**
+ * Find the feature branch for ticketKey from open PRs in the featurePR repo.
+ * Returns the branch name string, or null if not found.
+ */
+function findFeatureBranch(ticketKey, featurePR) {
+    if (!featurePR || !featurePR.owner || !featurePR.repo) return null;
+    try {
+        var raw = github_list_prs({
+            workspace: featurePR.owner,
+            repository: featurePR.repo,
+            state: 'open'
+        });
+        var parsed = parseMcpResult(raw);
+        var list = Array.isArray(parsed) ? parsed : (parsed && parsed.data ? parsed.data : []);
+        for (var i = 0; i < list.length; i++) {
+            var pr = list[i];
+            var head = pr.head && pr.head.ref ? pr.head.ref : (pr.branch || pr.source_branch || '');
+            if (head.indexOf(ticketKey) !== -1) {
+                console.log('✅ Found feature branch:', head, '(PR #' + pr.number + ')');
+                return head;
+            }
+        }
+        console.log('No open PR found for', ticketKey, 'in', featurePR.owner + '/' + featurePR.repo);
+    } catch (e) {
+        console.warn('Could not list PRs for feature branch lookup:', e);
+    }
+    return null;
+}
+
+/**
+ * Download the latest successful iOS simulator build artifact from Bitrise.
+ *
+ * Looks for the most recent successful build of workflowId on the feature branch,
+ * downloads the .zip artifact, unzips it, finds the .app bundle, and writes
+ * input/{KEY}/app_info.md with the path for the agent prompt to use.
+ *
+ * @param {string} ticketKey
+ * @param {string} folder       - input folder path, e.g. "input/MAPC-6618"
+ * @param {object} bitriseBuild - { appSlug, workflowId }
+ * @param {string} branch       - feature branch name (may be null → any branch)
+ * @param {string} workingDir   - working directory for cli commands
+ */
+function downloadBitriseApp(ticketKey, folder, bitriseBuild, branch, workingDir) {
+    if (!bitriseBuild || !bitriseBuild.appSlug || !bitriseBuild.workflowId) {
+        console.log('No bitriseBuild config — skipping artifact download');
+        return;
+    }
+
+    var appSlug = bitriseBuild.appSlug;
+    var workflowId = bitriseBuild.workflowId;
+    console.log('🔍 Looking for latest successful', workflowId, 'build' +
+        (branch ? ' on branch ' + branch : '') + ' ...');
+
+    // Find latest successful build
+    var buildSlug = null;
+    try {
+        var listParams = {
+            appSlug: appSlug,
+            workflowId: workflowId,
+            limit: 10
+        };
+        if (branch) listParams.branch = branch;
+
+        var buildsResult = parseMcpResult(bitrise_list_builds(listParams));
+        var builds = buildsResult && buildsResult.data ? buildsResult.data : [];
+
+        // status=1 means success in Bitrise API
+        var successBuilds = builds.filter(function(b) { return b.status === 1 || b.status_text === 'success'; });
+        if (successBuilds.length === 0 && branch) {
+            // Fallback: try without branch filter
+            console.log('No successful builds on branch', branch, '— trying without branch filter');
+            var fallbackResult = parseMcpResult(bitrise_list_builds({ appSlug: appSlug, workflowId: workflowId, limit: 10 }));
+            var fallbackBuilds = fallbackResult && fallbackResult.data ? fallbackResult.data : [];
+            successBuilds = fallbackBuilds.filter(function(b) { return b.status === 1 || b.status_text === 'success'; });
+        }
+
+        if (successBuilds.length === 0) {
+            console.warn('No successful', workflowId, 'builds found — skipping artifact download');
+            return;
+        }
+        buildSlug = successBuilds[0].slug;
+        console.log('✅ Found build #' + successBuilds[0].build_number + ' slug:', buildSlug);
+    } catch (e) {
+        console.warn('Failed to list Bitrise builds:', e);
+        return;
+    }
+
+    // List artifacts
+    var artifactSlug = null;
+    var artifactTitle = null;
+    try {
+        var artifacts = parseMcpResult(bitrise_list_build_artifacts({ appSlug: appSlug, buildSlug: buildSlug }));
+        var artifactList = artifacts && artifacts.data ? artifacts.data : [];
+        // Find .zip or .app artifact
+        var appArtifact = null;
+        for (var ai = 0; ai < artifactList.length; ai++) {
+            var t = (artifactList[ai].title || '').toLowerCase();
+            if (t.indexOf('.zip') !== -1 || t.indexOf('.app') !== -1 || t.indexOf('simulator') !== -1) {
+                appArtifact = artifactList[ai];
+                break;
+            }
+        }
+        if (!appArtifact && artifactList.length > 0) appArtifact = artifactList[0];
+        if (!appArtifact) {
+            console.warn('No artifacts found for build', buildSlug);
+            return;
+        }
+        artifactSlug = appArtifact.slug;
+        artifactTitle = appArtifact.title;
+        console.log('📦 Found artifact:', artifactTitle, '(' + Math.round((appArtifact.file_size_bytes || 0) / 1024 / 1024) + ' MB)');
+    } catch (e) {
+        console.warn('Failed to list artifacts:', e);
+        return;
+    }
+
+    // Get expiring download URL
+    var downloadUrl = null;
+    try {
+        var artifactDetails = parseMcpResult(bitrise_get_build_artifact({
+            appSlug: appSlug,
+            buildSlug: buildSlug,
+            artifactSlug: artifactSlug
+        }));
+        downloadUrl = artifactDetails && artifactDetails.data && artifactDetails.data.expiring_download_url;
+        if (!downloadUrl) {
+            console.warn('No download URL in artifact response');
+            return;
+        }
+    } catch (e) {
+        console.warn('Failed to get artifact download URL:', e);
+        return;
+    }
+
+    // Download and unzip to input folder
+    var appDir = folder + '/app';
+    var zipPath = folder + '/app.zip';
+    try {
+        cli_execute_command({ command: 'mkdir -p "' + appDir + '"' });
+        console.log('⬇️  Downloading artifact to', zipPath, '...');
+        cli_execute_command({
+            command: 'curl -s -L "' + downloadUrl + '" -o "' + zipPath + '"'
+        });
+        console.log('📂 Unzipping to', appDir, '...');
+        cli_execute_command({ command: 'unzip -o "' + zipPath + '" -d "' + appDir + '"' });
+    } catch (e) {
+        console.warn('Failed to download/unzip artifact:', e);
+        return;
+    }
+    // Remove zip after successful unzip (non-fatal if it fails)
+    try { cli_execute_command({ command: 'rm -f "' + zipPath + '"' }); } catch (_) {}
+
+    // Find the .app bundle path
+    var appPath = null;
+    try {
+        var findResult = cleanCommandOutput(
+            cli_execute_command({ command: 'find "' + appDir + '" -name "*.app" -maxdepth 3 -type d' })
+        );
+        if (findResult) {
+            // Filter out .dSYM, pick first real .app
+            var lines = findResult.split('\n').map(function(l) { return l.trim(); }).filter(function(l) {
+                return l.length > 0 && l.indexOf('.dSYM') === -1;
+            });
+            if (lines.length > 0) {
+                appPath = lines[0];
+                console.log('✅ iOS .app found:', appPath);
+            } else {
+                console.warn('Could not find .app bundle after unzip');
+            }
+        }
+    } catch (e) {
+        console.warn('Failed to locate .app bundle:', e);
+    }
+
+    // Write app_info.md for the agent prompt
+    var lines = [];
+    lines.push('# iOS App Build Info\n');
+    lines.push('The iOS simulator app has been downloaded from Bitrise and is ready to use.\n');
+    lines.push('| Field | Value |');
+    lines.push('|-------|-------|');
+    lines.push('| Bitrise Workflow | ' + workflowId + ' |');
+    lines.push('| Build Slug | ' + buildSlug + ' |');
+    lines.push('| Artifact | ' + artifactTitle + ' |');
+    if (branch) lines.push('| Branch | ' + branch + ' |');
+    if (appPath) {
+        lines.push('| App Path | `' + appPath + '` |');
+        lines.push('\n## How to use\n');
+        lines.push('Set `APP_PATH` environment variable or pass `--app-path` to Maestro:\n');
+        lines.push('```bash');
+        lines.push('export APP_PATH="' + appPath + '"');
+        lines.push('maestro test --app-path "$APP_PATH" src/flows/...');
+        lines.push('```');
+    } else {
+        lines.push('| App Dir | `' + appDir + '` |');
+        lines.push('\n> ⚠️ Unzipped to `' + appDir + '` — locate the `.app` bundle manually.');
+    }
+    file_write(folder + '/app_info.md', lines.join('\n'));
+    console.log('✅ Written app_info.md' + (appPath ? ' → ' + appPath : ''));
+}
+
+
 function action(params) {
     try {
         var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
         var folder = actualParams.inputFolderPath;
         var ticketKey = folder.split('/').pop();
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var customParams = (params.jobParams || params).customParams || {};
 
         console.log('=== Mobile test automation setup for:', ticketKey, '===');
 
@@ -218,6 +432,16 @@ function action(params) {
             }
         } else {
             console.warn('No workingDir configured — skipping branch checkout');
+        }
+
+        // Step 4: Download Bitrise iOS simulator build artifact
+        if (customParams.bitriseBuild) {
+            try {
+                var featureBranch = findFeatureBranch(ticketKey, customParams.featurePR);
+                downloadBitriseApp(ticketKey, folder, customParams.bitriseBuild, featureBranch, config.workingDir);
+            } catch (e) {
+                console.warn('Bitrise artifact download failed (non-fatal):', e);
+            }
         }
 
         console.log('✅ Mobile test automation setup complete for', ticketKey);

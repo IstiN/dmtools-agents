@@ -208,7 +208,167 @@ suite('preCliMobileTestAutomationSetup — linked TC fetching', function() {
 
 });
 
-// ── Suite: branch checkout ────────────────────────────────────────────────────
+// ── Suite: Bitrise artifact download ─────────────────────────────────────────
+
+suite('preCliMobileTestAutomationSetup — Bitrise artifact download', function() {
+
+    function makeBitriseMocks(opts) {
+        opts = opts || {};
+        return {
+            jira_move_to_status: function() {},
+            jira_search_by_jql: function() { return []; },
+            file_write: opts.onFileWrite || function() {},
+            cli_execute_command: opts.onCliCommand || function(o) {
+                if (o.command && o.command.indexOf('find') !== -1) return 'input/MAPC-6618/app/PostNL Zakelijk.app\n';
+                return '';
+            },
+            github_list_prs: opts.onListPrs || function() {
+                return JSON.stringify({ data: [
+                    { number: 963, head: { ref: 'story/MAPC-6618' } }
+                ]});
+            },
+            bitrise_list_builds: opts.onListBuilds || function() {
+                return JSON.stringify({ data: [
+                    { slug: 'build-abc', build_number: 10317, status: 1, status_text: 'success', branch: 'story/MAPC-6618' }
+                ]});
+            },
+            bitrise_list_build_artifacts: opts.onListArtifacts || function() {
+                return JSON.stringify({ data: [
+                    { slug: 'artifact-xyz', title: 'PostNL Zakelijk-simulator.zip', file_size_bytes: 32000000 }
+                ]});
+            },
+            bitrise_get_build_artifact: opts.onGetArtifact || function() {
+                return JSON.stringify({ data: { expiring_download_url: 'https://example.com/app.zip', slug: 'artifact-xyz', title: 'PostNL Zakelijk-simulator.zip' } });
+            }
+        };
+    }
+
+    function makeParamsWithBitrise(ticketKey) {
+        return {
+            inputFolderPath: 'input/' + ticketKey,
+            jobParams: {
+                customParams: {
+                    targetRepository: {
+                        owner: 'PostNL-BitDigital',
+                        repo: 'PostNL-commercial-mobileApp-automation',
+                        baseBranch: 'main',
+                        workingDir: '/tmp/automation-repo'
+                    },
+                    featurePR: { owner: 'PostNL-BitDigital', repo: 'PostNL-commercial-mobileApp' },
+                    bitriseBuild: {
+                        appSlug: 'e739ec8c-app-slug',
+                        workflowId: 'build_ios_simulator'
+                    }
+                }
+            }
+        };
+    }
+
+    test('writes app_info.md with App Path when .app found', function() {
+        var writtenFiles = {};
+        var cliCommands = [];
+
+        var m = loadPreCli(makeBitriseMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onCliCommand: function(opts) {
+                cliCommands.push(opts.command);
+                if (opts.command && opts.command.indexOf('find') !== -1) {
+                    return 'input/MAPC-6618/app/PostNL Zakelijk.app\n';
+                }
+                return '';
+            }
+        }));
+
+        m.action(makeParamsWithBitrise('MAPC-6618'));
+
+        var md = writtenFiles['input/MAPC-6618/app_info.md'];
+        assert.ok(md, 'app_info.md should be written');
+        assert.ok(md.indexOf('App Path') !== -1, 'should contain App Path');
+        assert.ok(md.indexOf('PostNL Zakelijk.app') !== -1, 'should contain .app name');
+        assert.ok(md.indexOf('build_ios_simulator') !== -1, 'should contain workflow name');
+    });
+
+    test('downloads artifact using curl and unzips', function() {
+        var cliCommands = [];
+
+        var m = loadPreCli(makeBitriseMocks({
+            onFileWrite: function() {},
+            onCliCommand: function(opts) {
+                cliCommands.push(opts.command);
+                if (opts.command && opts.command.indexOf('find') !== -1) return 'input/MAPC-6618/app/PostNL Zakelijk.app';
+                return '';
+            }
+        }));
+
+        m.action(makeParamsWithBitrise('MAPC-6618'));
+
+        var curlCmd = cliCommands.find(function(c) { return c && c.indexOf('curl') !== -1; });
+        var unzipCmd = cliCommands.find(function(c) { return c && c.indexOf('unzip') !== -1; });
+        assert.ok(curlCmd, 'should run curl to download');
+        assert.ok(curlCmd.indexOf('https://example.com/app.zip') !== -1, 'curl should use the expiring URL');
+        assert.ok(unzipCmd, 'should run unzip');
+    });
+
+    test('finds feature branch from open PRs', function() {
+        var listPrsCalled = false;
+        var listBuildsArgs = [];
+
+        var m = loadPreCli(makeBitriseMocks({
+            onFileWrite: function() {},
+            onListPrs: function(opts) {
+                listPrsCalled = true;
+                assert.equal(opts.workspace, 'PostNL-BitDigital', 'should use workspace param');
+                assert.equal(opts.repository, 'PostNL-commercial-mobileApp', 'should use repository param');
+                return JSON.stringify({ data: [{ number: 963, head: { ref: 'story/MAPC-6618' } }] });
+            },
+            onListBuilds: function(opts) {
+                listBuildsArgs.push(opts);
+                return JSON.stringify({ data: [{ slug: 'build-abc', build_number: 1, status: 1, status_text: 'success' }] });
+            },
+            onListArtifacts: function() { return JSON.stringify({ data: [{ slug: 's', title: 'app.zip', file_size_bytes: 1000 }] }); },
+            onGetArtifact: function() { return JSON.stringify({ data: { expiring_download_url: 'https://x.com/a.zip' } }); }
+        }));
+
+        m.action(makeParamsWithBitrise('MAPC-6618'));
+
+        assert.ok(listPrsCalled, 'should call github_list_prs');
+        assert.ok(listBuildsArgs.length > 0, 'should call bitrise_list_builds');
+        assert.equal(listBuildsArgs[0].branch, 'story/MAPC-6618', 'should filter builds by feature branch');
+    });
+
+    test('skips artifact download when bitriseBuild not configured', function() {
+        var listBuildsCalled = false;
+        var writtenFiles = {};
+
+        var m = loadPreCli(Object.assign(makeBitriseMocks({
+            onListBuilds: function() { listBuildsCalled = true; return JSON.stringify({ data: [] }); },
+            onFileWrite: function(path, content) { writtenFiles[path] = content; }
+        }), { bitrise_list_builds: function() { listBuildsCalled = true; return JSON.stringify({ data: [] }); } }));
+
+        // No bitriseBuild in customParams
+        m.action(makeParams('MAPC-6618', '/tmp/automation-repo'));
+
+        assert.ok(!listBuildsCalled, 'should NOT call bitrise_list_builds when not configured');
+        assert.ok(!writtenFiles['input/MAPC-6618/app_info.md'], 'should NOT write app_info.md');
+    });
+
+    test('does not throw when no successful builds found', function() {
+        var writtenFiles = {};
+
+        var m = loadPreCli(makeBitriseMocks({
+            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onListBuilds: function() { return JSON.stringify({ data: [] }); }
+        }));
+
+        m.action(makeParamsWithBitrise('MAPC-6618'));
+
+        // Should complete without throwing; linked_test_cases.md still written
+        assert.ok(writtenFiles['input/MAPC-6618/linked_test_cases.md'], 'linked_test_cases.md should still be written');
+        assert.ok(!writtenFiles['input/MAPC-6618/app_info.md'], 'app_info.md should NOT be written when no builds');
+    });
+
+});
+
 
 suite('preCliMobileTestAutomationSetup — branch checkout', function() {
 
