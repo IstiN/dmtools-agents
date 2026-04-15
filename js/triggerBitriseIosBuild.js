@@ -32,12 +32,31 @@ function action(params) {
         var ticketKey = '';
         var ticketSummary = '';
         if (inputJql) {
-            console.log('Fetching ticket by JQL:', inputJql);
-            var results = jira_search_by_jql({ jql: inputJql, maxResults: 1 });
-            var issues = (results && results.issues) ? results.issues : (Array.isArray(results) ? results : []);
-            if (issues.length > 0) {
-                ticketKey = issues[0].key;
-                ticketSummary = (issues[0].fields && issues[0].fields.summary) || ticketKey;
+            // Extract ticket key directly from JQL (e.g. "key = MAPC-6815")
+            var keyMatch = inputJql.match(/key\s*=\s*([A-Z]+-\d+)/i);
+            if (keyMatch) {
+                ticketKey = keyMatch[1].toUpperCase();
+                try {
+                    var ticket = jira_get_ticket({ key: ticketKey });
+                    ticketSummary = (ticket && ticket.fields && ticket.fields.summary) || ticketKey;
+                    console.log('✅ Ticket fetched:', ticketKey, '—', ticketSummary);
+                } catch (e) {
+                    console.warn('⚠️ Could not fetch ticket details:', e.message || e);
+                }
+            } else {
+                // Fallback: jira_search_by_jql
+                console.log('Fetching ticket by JQL:', inputJql);
+                try {
+                    var results = jira_search_by_jql({ jql: inputJql, maxResults: 1 });
+                    var parsed = (typeof results === 'string') ? JSON.parse(results) : results;
+                    var issues = (parsed && parsed.issues) ? parsed.issues : (Array.isArray(parsed) ? parsed : []);
+                    if (issues.length > 0) {
+                        ticketKey = issues[0].key;
+                        ticketSummary = (issues[0].fields && issues[0].fields.summary) || ticketKey;
+                    }
+                } catch (e) {
+                    console.warn('⚠️ jira_search_by_jql failed:', e.message || e);
+                }
             }
         }
         if (!ticketKey) {
