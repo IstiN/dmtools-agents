@@ -275,14 +275,12 @@ function downloadBitriseApp(ticketKey, folder, bitriseBuild, branch, workingDir)
         }
 
         if (successBuilds.length === 0) {
-            console.warn('No successful', workflowId, 'builds found — skipping artifact download');
-            return;
+            throw new Error('No successful ' + workflowId + ' builds found for branch ' + (branch || 'any') + '. Trigger a build first, then re-run this automation.');
         }
         buildSlug = successBuilds[0].slug;
         console.log('✅ Found build #' + successBuilds[0].build_number + ' slug:', buildSlug);
     } catch (e) {
-        console.warn('Failed to list Bitrise builds:', e);
-        return;
+        throw new Error('Failed to list Bitrise builds: ' + e);
     }
 
     // List artifacts
@@ -436,18 +434,15 @@ function action(params) {
 
         // Step 4: Download Bitrise iOS simulator build artifact
         if (customParams.bitriseBuild) {
-            try {
-                var featureBranch = findFeatureBranch(ticketKey, customParams.featurePR);
-                downloadBitriseApp(ticketKey, folder, customParams.bitriseBuild, featureBranch, config.workingDir);
-            } catch (e) {
-                console.warn('Bitrise artifact download failed (non-fatal):', e);
-            }
+            var featureBranch = findFeatureBranch(ticketKey, customParams.featurePR);
+            downloadBitriseApp(ticketKey, folder, customParams.bitriseBuild, featureBranch, config.workingDir);
         }
 
         console.log('✅ Mobile test automation setup complete for', ticketKey);
 
     } catch (error) {
         console.error('❌ Error in preCliMobileTestAutomationSetup:', error);
+        throw error;
     }
 }
 

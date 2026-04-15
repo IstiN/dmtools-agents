@@ -352,19 +352,20 @@ suite('preCliMobileTestAutomationSetup — Bitrise artifact download', function(
         assert.ok(!writtenFiles['input/MAPC-6618/app_info.md'], 'should NOT write app_info.md');
     });
 
-    test('does not throw when no successful builds found', function() {
-        var writtenFiles = {};
-
+    test('throws when no successful builds found', function() {
         var m = loadPreCli(makeBitriseMocks({
-            onFileWrite: function(path, content) { writtenFiles[path] = content; },
+            onFileWrite: function() {},
             onListBuilds: function() { return JSON.stringify({ data: [] }); }
         }));
 
-        m.action(makeParamsWithBitrise('MAPC-6618'));
-
-        // Should complete without throwing; linked_test_cases.md still written
-        assert.ok(writtenFiles['input/MAPC-6618/linked_test_cases.md'], 'linked_test_cases.md should still be written');
-        assert.ok(!writtenFiles['input/MAPC-6618/app_info.md'], 'app_info.md should NOT be written when no builds');
+        var threw = false;
+        try {
+            m.action(makeParamsWithBitrise('MAPC-6618'));
+        } catch (e) {
+            threw = true;
+            assert.ok(e.message.indexOf('No successful') !== -1, 'error should mention no successful builds: ' + e.message);
+        }
+        assert.ok(threw, 'should throw when no builds found');
     });
 
 });
