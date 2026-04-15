@@ -61,7 +61,8 @@ const LABELS = {
     NEEDS_API_IMPLEMENTATION: 'needs_api_implementation',
     NEEDS_CORE_IMPLEMENTATION: 'needs_core_implementation',
     AI_TEST_AUTOMATION: 'ai_test_automation',
-    PR_APPROVED: 'pr_approved'              // Added to PR and ticket when AI approves, removed after merge attempt
+    PR_APPROVED: 'pr_approved',             // Added to PR and ticket when AI approves, removed after merge attempt
+    AI_TESTS_GENERATED: 'ai_tests_generated' // Added after TestCasesGenerator runs — guards against re-generation on re-approval
 };
 
 // Git Configuration

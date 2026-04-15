@@ -702,7 +702,7 @@ function action(params) {
                 }
             }
 
-            // 13b: Trigger TestCasesGenerator via GitHub Actions
+            // 13b: Trigger TestCasesGenerator via GitHub Actions (only once per ticket)
             if (onApproved.testCasesGenerator) {
                 try {
                     var tcg = onApproved.testCasesGenerator;
@@ -710,10 +710,15 @@ function action(params) {
                     var aiOwner = (aiRepoCfg && aiRepoCfg.owner) || (config.repository && config.repository.owner);
                     var aiRepo  = (aiRepoCfg && aiRepoCfg.repo)  || (config.repository && config.repository.repo);
                     var projectKey = deriveProjectKey(customParams);
-                    var tcgEncodedCfg = encodeURIComponent(JSON.stringify({
-                        params: { inputJql: 'key = ' + ticketKey }
-                    }));
-                    if (aiOwner && aiRepo) {
+
+                    // Guard: skip if tests were already generated for this ticket
+                    var alreadyGenerated = labels.indexOf(LABELS.AI_TESTS_GENERATED) !== -1;
+                    if (alreadyGenerated) {
+                        console.log('ℹ️ TestCasesGenerator skipped — label "' + LABELS.AI_TESTS_GENERATED + '" already present on ' + ticketKey + ' (tests generated in a previous cycle)');
+                    } else if (aiOwner && aiRepo) {
+                        var tcgEncodedCfg = encodeURIComponent(JSON.stringify({
+                            params: { inputJql: 'key = ' + ticketKey }
+                        }));
                         github_trigger_workflow(
                             aiOwner, aiRepo, tcg.workflow || 'ai-teammate.yml',
                             JSON.stringify({
@@ -726,6 +731,13 @@ function action(params) {
                         );
                         console.log('✅ Triggered TestCasesGenerator for', ticketKey,
                             '[config=' + tcg.configFile + ']');
+                        // Mark ticket so subsequent approvals skip re-generation
+                        try {
+                            jira_add_label({ key: ticketKey, label: LABELS.AI_TESTS_GENERATED });
+                            console.log('✅ Added label "' + LABELS.AI_TESTS_GENERATED + '" to ' + ticketKey);
+                        } catch (labelErr) {
+                            console.warn('⚠️ Could not add ai_tests_generated label:', labelErr.message || labelErr);
+                        }
                     } else {
                         console.warn('⚠️ TestCasesGenerator: aiRepository owner/repo not set — skipping');
                     }
