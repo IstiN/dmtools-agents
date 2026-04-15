@@ -667,6 +667,37 @@ function action(params) {
             console.warn('Could not check existing PRs (non-fatal):', prCheckErr);
         }
 
+        // ── Clean up stale pr_approved labels from previous review cycle ────
+        // When story/bug development is re-triggered (e.g. after rework or manual restart),
+        // the pr_approved label from a prior review must be removed so the new review
+        // cycle starts clean and onApproved triggers don't fire prematurely.
+        if (hasPrApprovedLabel(actualParams.ticket)) {
+            console.log('🧹 Removing stale pr_approved label from', ticketKey);
+            try {
+                jira_remove_label({ key: ticketKey, label: LABELS.PR_APPROVED });
+                console.log('✅ Removed pr_approved from Jira ticket');
+            } catch (e) { console.warn('Could not remove pr_approved from Jira:', e); }
+            // Also try to remove from GitHub PR if branch already has one open
+            try {
+                var targetRepo = _customParams && _customParams.targetRepository;
+                if (targetRepo && targetRepo.owner && targetRepo.repo) {
+                    var prListJson = runCmd({
+                        command: 'gh pr list --head ' + expectedBranch + ' --state open --json number --jq ".[0].number"'
+                    }) || '';
+                    var prNum = parseInt(cleanCommandOutput(prListJson), 10);
+                    if (prNum) {
+                        github_remove_pr_label({
+                            workspace: targetRepo.owner,
+                            repository: targetRepo.repo,
+                            pullRequestId: String(prNum),
+                            label: LABELS.PR_APPROVED
+                        });
+                        console.log('✅ Removed pr_approved from GitHub PR #' + prNum);
+                    }
+                }
+            } catch (e) { console.warn('Could not remove pr_approved from GitHub PR (non-fatal):', e); }
+        }
+
         // Configure git author
         if (!configureGitAuthor(config)) {
             const error = 'Failed to configure git author';

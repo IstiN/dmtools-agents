@@ -3,7 +3,7 @@
 #
 # Usage:
 #   dmtools.sh [version]                # positional arg
-#   DMTOOLS_VERSION=v1.7.170 dmtools.sh # env override
+#   DMTOOLS_VERSION=v1.7.171 dmtools.sh # env override
 #
 # Version examples: v1.7.170 (default)
 # Install source: https://raw.githubusercontent.com/epam/dm.ai/main/install
@@ -13,7 +13,7 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"
 
-DMTOOLS_VERSION="${1:-${DMTOOLS_VERSION:-v1.7.170}}"
+DMTOOLS_VERSION="${1:-${DMTOOLS_VERSION:-v1.7.171}}"
 DMTOOLS_HOME="${HOME}/.dmtools"
 DMTOOLS_BIN="${DMTOOLS_HOME}/bin"
 
