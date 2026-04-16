@@ -74,6 +74,17 @@ Scan for OWASP Top 10 and common vulnerabilities:
   - ⚠️ IMPORTANT issues (code quality, OOP violations, missing tests)
   - 💡 SUGGESTIONS (improvements, optimizations, style)
 
+## 🔄 Exhaustive Pattern Detection (CRITICAL)
+
+**You MUST flag ALL instances of a problem in a single review pass.** Do NOT flag only 1–2 occurrences and leave the rest for later rounds. Each review-rework cycle is expensive (triggers CI, blocks the developer, wastes compute). Minimize cycles by being thorough in one pass.
+
+When you find a pattern issue (e.g., missing `accessibilityLabel`, hardcoded colour, string literal `accessibilityRole`):
+1. Search the **entire diff** for ALL occurrences of the same pattern
+2. Flag every occurrence — either as individual inline comments or list them all in one comment
+3. If the pattern also exists outside the diff (pre-existing code), mention it in the general comment but do NOT create inline comments for lines outside the diff
+
+**Do NOT post "no action required" suggestions.** If a suggestion concludes that the current implementation is correct, acceptable, or "very low priority — no change needed", then do NOT post it. A suggestion must recommend a concrete change. Comments like "Consider X … but current approach is fine" are noise — they waste developer time and trigger unnecessary rework cycles.
+
 ## ⚠️ Inline Comments Policy
 
 **If recommendation is APPROVE**: Do NOT write any inline comments or suggestions. The `inlineComments` array must be empty. The general comment should only briefly confirm the approval — no improvement suggestions, no minor notes.

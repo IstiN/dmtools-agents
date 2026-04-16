@@ -22,7 +22,8 @@ Your mission is to address every issue raised in `pr_discussions.md`. This file 
 1. Understand the issue described by the reviewer
 2. Locate the relevant code in the codebase
 3. Apply the required fix
-4. Write a reply entry in `outputs/review_replies.json`
+4. **Search the entire codebase for the same pattern** and fix ALL similar occurrences — not just the exact line the reviewer flagged. For example, if the reviewer flags a missing `accessibilityLabel`, search all similar components for the same omission and fix them too. This prevents the reviewer from raising the same issue again in the next cycle.
+5. Write a reply entry in `outputs/review_replies.json` — mention all files you fixed (both the flagged one and the similar ones found by search)
 
 **Every thread in `pr_discussions.md` must have exactly one matching entry in `review_replies.json`. Do not skip any thread.**
 

@@ -19,7 +19,7 @@ Do NOT run `git commit` or `git merge --abort` — the commit is handled automat
 ## Approach
 
 1. **Read `pr_discussions.md` first** — list all review comments and threads before touching any code
-2. **Be surgical** — only change what is necessary to address the review. Do not refactor unrelated code, rename unrelated variables, or add unrequested features
+2. **Be surgical but thorough** — fix the exact issue the reviewer flagged, then **search the entire codebase for the same pattern** and fix all similar occurrences. For example, if the reviewer flags a hardcoded `accessibilityRole="button"` string literal, `grep -r 'accessibilityRole="' src/ --include="*.tsx"` and fix ALL matching files — not just the one the reviewer pointed out. This prevents the same issue from being raised in the next review cycle. Do not refactor unrelated code or add unrequested features.
 3. **Address BLOCKING issues first** (security, critical bugs), then IMPORTANT, then SUGGESTIONS
 4. **If a SUGGESTION is minor and time-consuming**, you may skip it but explicitly note it in `outputs/response.md`
 
