@@ -58,26 +58,34 @@ function readFile(path) {
     }
 }
 
-function readResultJson(workingDir) {
-    var candidatePaths = ['outputs/test_automation_result.json'];
+/** Read a file from outputs/, falling back to {workingDir}/outputs/ if not found at workspace root. */
+function readOutputFile(relativePath, workingDir) {
+    var content = readFile(relativePath);
+    if (content) return content;
     if (workingDir) {
-        // Agent may have written outputs inside the automation repo directory
-        candidatePaths.push(workingDir + '/outputs/test_automation_result.json');
-    }
-    for (var i = 0; i < candidatePaths.length; i++) {
-        try {
-            var raw = readFile(candidatePaths[i]);
-            if (raw) {
-                var parsed = JSON.parse(raw);
-                console.log('✅ Read test result from:', candidatePaths[i], '— status:', parsed.status);
-                return parsed;
-            }
-        } catch (e) {
-            console.warn('Could not read/parse ' + candidatePaths[i] + ':', e);
+        content = readFile(workingDir + '/' + relativePath);
+        if (content) {
+            console.log('Read from fallback path:', workingDir + '/' + relativePath);
+            return content;
         }
     }
-    console.warn('test_automation_result.json not found in any candidate path:', candidatePaths.join(', '));
     return null;
+}
+
+function readResultJson(workingDir) {
+    var raw = readOutputFile('outputs/test_automation_result.json', workingDir);
+    if (!raw) {
+        console.warn('test_automation_result.json not found in outputs/ or ' + (workingDir || 'no') + '/outputs/');
+        return null;
+    }
+    try {
+        var parsed = JSON.parse(raw);
+        console.log('✅ Read test result — status:', parsed.status);
+        return parsed;
+    } catch (e) {
+        console.error('Failed to parse test_automation_result.json:', e);
+        return null;
+    }
 }
 
 /** Run a command inside the automation repo directory. */
@@ -129,15 +137,22 @@ function performGitOperations(branchName, commitMessage, workingDir, testFilesPa
 function createAutomationPR(title, branchName, baseBranch, workingDir) {
     try {
         var escapedTitle = title.replace(/"/g, '\\"').replace(/\n/g, ' ');
-        var prBodyFile = readFile('outputs/pr_body.md') ? 'outputs/pr_body.md' : 'outputs/response.md';
-        var absoluteBodyPath = cli_execute_command({ command: 'pwd' }).trim() + '/' + prBodyFile;
+        var prBody = readOutputFile('outputs/pr_body.md', workingDir)
+                  || readOutputFile('outputs/response.md', workingDir)
+                  || 'Automated test flows';
+        // Write body to a temp file in the automation repo dir to avoid path issues
+        var bodyTempPath = workingDir + '/pr_body_tmp.md';
+        file_write(bodyTempPath, prBody);
 
         var output = cleanCommandOutput(
             runInRepo(
-                'gh pr create --title "' + escapedTitle + '" --body-file "' + absoluteBodyPath + '" --base ' + baseBranch + ' --head ' + branchName,
+                'gh pr create --title "' + escapedTitle + '" --body-file pr_body_tmp.md --base ' + baseBranch + ' --head ' + branchName,
                 workingDir
             ) || ''
         );
+
+        // Clean up temp file
+        try { runInRepo('git checkout -- pr_body_tmp.md', workingDir); } catch (_) {}
 
         var prUrl = null;
         var urlMatch = output.match(/https:\/\/github\.com\/[^\s]+/);
@@ -199,10 +214,10 @@ function updateFeaturePRLabel(owner, repo, prNumber, passed, labelPassed, labelF
 
     try {
         try {
-            github_remove_pr_label({ workspace: owner, repository: repo, pullRequestId: prNumber, label: removeLabel });
+            github_remove_pr_label({ workspace: owner, repository: repo, pullRequestId: String(prNumber), label: removeLabel });
         } catch (_) {}
 
-        github_add_pr_label({ workspace: owner, repository: repo, pullRequestId: prNumber, label: addLabel });
+        github_add_pr_label({ workspace: owner, repository: repo, pullRequestId: String(prNumber), label: addLabel });
         console.log('✅ Added label "' + addLabel + '" to feature PR #' + prNumber);
     } catch (e) {
         console.warn('Failed to update feature PR label:', e);
@@ -210,8 +225,8 @@ function updateFeaturePRLabel(owner, repo, prNumber, passed, labelPassed, labelF
 }
 
 /** Post test result summary as a comment on the feature PR. */
-function updateFeaturePRBody(owner, repo, prNumber) {
-    var summaryFile = readFile('outputs/pr_feature_update.md');
+function updateFeaturePRBody(owner, repo, prNumber, workingDir) {
+    var summaryFile = readOutputFile('outputs/pr_feature_update.md', workingDir);
     if (!summaryFile) {
         console.log('No outputs/pr_feature_update.md — skipping feature PR comment');
         return;
@@ -221,7 +236,7 @@ function updateFeaturePRBody(owner, repo, prNumber) {
         github_add_pr_comment({
             workspace: owner,
             repository: repo,
-            pullRequestId: prNumber,
+            pullRequestId: String(prNumber),
             text: summaryFile
         });
         console.log('✅ Posted test summary as PR comment on feature PR #' + prNumber);
@@ -355,14 +370,14 @@ function action(params) {
                 // Inject automation PR URL into feature update markdown if present
                 if (automationPrUrl) {
                     try {
-                        var featureUpdateContent = readFile('outputs/pr_feature_update.md') || '';
+                        var featureUpdateContent = readOutputFile('outputs/pr_feature_update.md', workingDir) || '';
                         if (featureUpdateContent && featureUpdateContent.indexOf(automationPrUrl) === -1) {
                             file_write('outputs/pr_feature_update.md',
                                 featureUpdateContent + '\n> Automation PR: ' + automationPrUrl + '\n');
                         }
                     } catch (_) {}
                 }
-                updateFeaturePRBody(featureOwner, featureRepo, featurePR.number);
+                updateFeaturePRBody(featureOwner, featureRepo, featurePR.number, workingDir);
             }
         }
 

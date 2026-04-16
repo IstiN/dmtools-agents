@@ -103,7 +103,7 @@ suite('postMobileTestAutomationResults — findFeaturePR', function() {
         m.action(makeParams('MAPC-6618'));
 
         assert.ok(labelsCalled.length > 0, 'should add label to found PR');
-        assert.equal(labelsCalled[0].pullRequestId, 963, 'should use correct PR number');
+        assert.equal(labelsCalled[0].pullRequestId, '963', 'should use correct PR number (as string)');
     });
 
     test('finds PR when github_list_prs returns plain array (not wrapped)', function() {
@@ -124,7 +124,7 @@ suite('postMobileTestAutomationResults — findFeaturePR', function() {
         m.action(makeParams('MAPC-6618'));
 
         assert.ok(labelsCalled.length > 0, 'should add label even when PRs returned as array');
-        assert.equal(labelsCalled[0].pullRequestId, 42);
+        assert.equal(labelsCalled[0].pullRequestId, '42');
     });
 
     test('does not throw when no matching PR found', function() {
@@ -246,7 +246,7 @@ suite('postMobileTestAutomationResults — feature PR comment', function() {
         m.action(makeParams('MAPC-6618'));
 
         assert.ok(prComments.length > 0, 'should call github_add_pr_comment');
-        assert.equal(prComments[0].pullRequestId, 963, 'should target correct PR');
+        assert.equal(prComments[0].pullRequestId, '963', 'should target correct PR');
         assert.ok(prComments[0].text.indexOf('All passed') !== -1, 'should contain pr_feature_update content');
 
         var ghPrEdit = cliCommands.find(function(c) { return c.indexOf('gh pr edit') !== -1; });
