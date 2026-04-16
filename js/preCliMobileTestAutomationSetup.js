@@ -393,6 +393,77 @@ function downloadBitriseApp(ticketKey, folder, bitriseBuild, branch, workingDir)
     }
     file_write(folder + '/app_info.md', lines.join('\n'));
     console.log('✅ Written app_info.md' + (appPath ? ' → ' + appPath : ''));
+    return appPath || null;
+}
+
+/**
+ * Install the .app on the already-booted iOS simulator.
+ * The simulator is booted in a prior Bitrise step; SIMULATOR_UDID is in env.
+ *
+ * @param {string} appPath - absolute path to the .app bundle
+ * @param {string} folder  - input folder for writing updated app_info.md
+ */
+function installAppOnSimulator(appPath, folder) {
+    if (!appPath) {
+        console.warn('No app path — skipping simulator install');
+        return;
+    }
+
+    // Read SIMULATOR_UDID from env (set by the "Boot iOS simulator" Bitrise step)
+    var udid = null;
+    try {
+        udid = cleanCommandOutput(
+            cli_execute_command({ command: 'bash -c "echo $SIMULATOR_UDID"' })
+        );
+    } catch (_) {}
+
+    if (!udid) {
+        // Fallback: find already-booted simulator
+        try {
+            var simList = cleanCommandOutput(
+                cli_execute_command({ command: 'xcrun simctl list devices booted' })
+            );
+            var match = simList.match(/[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/);
+            if (match) udid = match[0];
+        } catch (e) {
+            console.warn('Could not list booted simulators:', e);
+        }
+    }
+
+    if (!udid) {
+        console.warn('⚠️ No booted simulator found — agent will write flows only');
+        return;
+    }
+
+    // Install app on the booted simulator
+    try {
+        cli_execute_command({ command: 'xcrun simctl install "' + udid + '" "' + appPath + '"' });
+        console.log('✅ App installed on simulator:', udid);
+    } catch (e) {
+        console.error('Failed to install app on simulator:', e);
+        return;
+    }
+
+    // Append simulator info to app_info.md
+    try {
+        var simInfo = [
+            '\n## Simulator & Maestro\n',
+            '| Field | Value |',
+            '|-------|-------|',
+            '| MAESTRO_DEVICE | `' + udid + '` |',
+            '| APP_ID | `com.postnl.internal.business.customer` |',
+            '',
+            'The simulator is booted and the app is installed. Use `run-flow.sh` to run tests:',
+            '```bash',
+            'MAESTRO_DEVICE="' + udid + '" PLATFORM=ios bash src/scripts/run-flow.sh <flow.yaml> --a11y',
+            '```'
+        ];
+        var existing = '';
+        try { existing = file_read({ path: folder + '/app_info.md' }) || ''; } catch (_) {}
+        file_write(folder + '/app_info.md', existing + '\n' + simInfo.join('\n'));
+    } catch (e) {
+        console.warn('Failed to update app_info.md with simulator info:', e);
+    }
 }
 
 
@@ -433,9 +504,15 @@ function action(params) {
         }
 
         // Step 4: Download Bitrise iOS simulator build artifact
+        var appPath = null;
         if (customParams.bitriseBuild) {
             var featureBranch = findFeatureBranch(ticketKey, customParams.featurePR);
-            downloadBitriseApp(ticketKey, folder, customParams.bitriseBuild, featureBranch, config.workingDir);
+            appPath = downloadBitriseApp(ticketKey, folder, customParams.bitriseBuild, featureBranch, config.workingDir);
+        }
+
+        // Step 5: Install app on the already-booted simulator
+        if (appPath) {
+            installAppOnSimulator(appPath, folder);
         }
 
         console.log('✅ Mobile test automation setup complete for', ticketKey);
