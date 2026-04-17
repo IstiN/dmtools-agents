@@ -510,7 +510,7 @@ function action(params) {
 
             // Resolve environment-specific config if available
             var buildConfig = customParams.bitriseBuild;
-            var testEnvironment = customParams.testEnvironment || 'uat';
+            var testEnvironment = customParams.testEnvironment || 'prod';
             if (buildConfig.environments && buildConfig.environments[testEnvironment]) {
                 var envConfig = buildConfig.environments[testEnvironment];
                 console.log('🌍 Using environment:', testEnvironment);
