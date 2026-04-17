@@ -507,7 +507,37 @@ function action(params) {
         var appPath = null;
         if (customParams.bitriseBuild) {
             var featureBranch = findFeatureBranch(ticketKey, customParams.featurePR);
-            appPath = downloadBitriseApp(ticketKey, folder, customParams.bitriseBuild, featureBranch, config.workingDir);
+
+            // Resolve environment-specific config if available
+            var buildConfig = customParams.bitriseBuild;
+            var testEnvironment = customParams.testEnvironment || 'uat';
+            if (buildConfig.environments && buildConfig.environments[testEnvironment]) {
+                var envConfig = buildConfig.environments[testEnvironment];
+                console.log('🌍 Using environment:', testEnvironment);
+                // Override workflowId from environment config
+                buildConfig = {
+                    appSlug: buildConfig.appSlug,
+                    workflowId: envConfig.workflowId || buildConfig.workflowId
+                };
+                // Write environment info for the agent prompt
+                var envLines = [];
+                envLines.push('# Test Environment: ' + testEnvironment.toUpperCase() + '\n');
+                envLines.push('| Setting | Value |');
+                envLines.push('|---------|-------|');
+                envLines.push('| Environment | ' + testEnvironment + ' |');
+                envLines.push('| Bitrise Workflow | ' + buildConfig.workflowId + ' |');
+                if (envConfig.appId) envLines.push('| APP_ID | `' + envConfig.appId + '` |');
+                envLines.push('\n## Credentials\n');
+                envLines.push('Login credentials are available as environment variables:');
+                envLines.push('- `' + (envConfig.userEnvVar || 'TEST_USER_EMAIL') + '` — user email');
+                envLines.push('- `' + (envConfig.passwordEnvVar || 'TEST_USER_PASSWORD') + '` — password');
+                envLines.push('- `' + (envConfig.pinEnvVar || 'TEST_USER_PIN') + '` — PIN code');
+                envLines.push('\nUse these env var names in Maestro flows for `inputText` steps.');
+                file_write(folder + '/environment.md', envLines.join('\n'));
+                console.log('✅ Written environment.md for', testEnvironment);
+            }
+
+            appPath = downloadBitriseApp(ticketKey, folder, buildConfig, featureBranch, config.workingDir);
         }
 
         // Step 5: Install app on the already-booted simulator
