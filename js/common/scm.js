@@ -39,14 +39,17 @@ function _createGithubProvider(workspace, repository) {
             if (thread.rootCommentId) {
                 return github_reply_to_pr_thread({
                     workspace: workspace, repository: repository,
-                    pullRequestId: String(prId), inReplyToId: thread.rootCommentId, text: text
+                    pullRequestId: String(prId), inReplyToId: String(thread.rootCommentId), text: text
                 });
             }
             return github_add_pr_comment({ workspace: workspace, repository: repository, pullRequestId: String(prId), text: text });
         },
         resolveThread: function(prId, thread) {
             if (thread.threadId) {
-                return github_resolve_pr_thread({ threadId: thread.threadId });
+                return github_resolve_pr_thread({
+                    workspace: workspace, repository: repository,
+                    pullRequestId: String(prId), threadId: thread.threadId
+                });
             }
             console.warn('SCM GitHub: No threadId to resolve');
         },
@@ -74,7 +77,7 @@ function _createGithubProvider(workspace, repository) {
             return github_remove_pr_label({ workspace: workspace, repository: repository, pullRequestId: String(prId), label: label });
         },
         getPrDiff: function(prId) {
-            return github_get_pr_diff({ workspace: workspace, repository: repository, pullRequestID: String(prId) });
+            return github_get_pr_diff({ workspace: workspace, repository: repository, pullRequestId: String(prId) });
         },
         getCommitCheckRuns: function(sha) {
             return github_get_commit_check_runs({ workspace: workspace, repository: repository, commitSha: sha });
@@ -378,10 +381,37 @@ function _createAdoProvider(repository) {
     };
 }
 
+function _detectRepoFromGitRemote(provider) {
+    try {
+        var rawUrl = cli_execute_command({ command: 'git config --get remote.origin.url' }) || '';
+        var remoteUrl = rawUrl.split('\n').filter(function(l) { return l.trim(); }).join('').trim();
+        if (provider === 'ado') {
+            var match = remoteUrl.match(/dev\.azure\.com[/:]([^/]+)\/([^/]+)\/_git\/([^/]+)/);
+            if (match) return { owner: match[1], repo: match[3] };
+            match = remoteUrl.match(/ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/([^/]+)/);
+            if (match) return { owner: match[1], repo: match[3] };
+        } else {
+            var ghMatch = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
+            if (ghMatch) return { owner: ghMatch[1], repo: ghMatch[2].replace('.git', '') };
+        }
+    } catch (e) {}
+    return null;
+}
+
 function createScm(config) {
     var provider = (config && config.scm && config.scm.provider) || 'github';
-    var repo = (config && config.repository && config.repository.repo) || '';
+    var repo  = (config && config.repository && config.repository.repo)  || '';
     var owner = (config && config.repository && config.repository.owner) || '';
+
+    // Auto-detect from git remote when not explicitly configured
+    if (!owner || !repo) {
+        var detected = _detectRepoFromGitRemote(provider);
+        if (detected) {
+            if (!owner) owner = detected.owner;
+            if (!repo)  repo  = detected.repo;
+        }
+    }
+
     if (provider === 'ado') {
         return _createAdoProvider(repo);
     }

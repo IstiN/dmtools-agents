@@ -41,6 +41,10 @@ function action(params) {
     };
     var scm = scmModule.createScm(scmConfig);
     var runsRaw = scm.listWorkflowRuns('failure', workflowId, 50);
+    if (runsRaw == null) {
+        console.warn('⚠️  listWorkflowRuns is not supported by the configured SCM provider.');
+        return { success: false, error: 'listWorkflowRuns not supported by provider: ' + (custom.scmProvider || 'github') };
+    }
     var runs;
     try {
         var parsed = typeof runsRaw === 'string' ? JSON.parse(runsRaw) : runsRaw;
