@@ -41,19 +41,30 @@ function getGitHubRepoInfo() {
     }
 }
 
-function findPRForTicket(workspace, repository, ticketKey) {
-    try {
-        console.log('Searching for PR related to', ticketKey);
+function _isScm(x) {
+    return x !== null && typeof x === 'object' && typeof x.listPrs === 'function';
+}
 
-        const openPRs = github_list_prs({ workspace: workspace, repository: repository, state: 'open' });
+function findPRForTicket(scmOrWorkspace, repositoryOrTicketKey, ticketKeyOpt) {
+    var openPRs, ticketKey;
+    try {
+        if (_isScm(scmOrWorkspace)) {
+            ticketKey = repositoryOrTicketKey;
+            console.log('Searching for PR related to', ticketKey);
+            openPRs = scmOrWorkspace.listPrs('open');
+        } else {
+            ticketKey = ticketKeyOpt;
+            console.log('Searching for PR related to', ticketKey);
+            openPRs = github_list_prs({ workspace: scmOrWorkspace, repository: repositoryOrTicketKey, state: 'open' });
+        }
         console.log('Found', openPRs.length, 'open PRs');
 
-        const match = function(pr) {
+        var match = function(pr) {
             return (pr.title && pr.title.indexOf(ticketKey) !== -1) ||
                    (pr.head && pr.head.ref && pr.head.ref.indexOf(ticketKey) !== -1);
         };
 
-        const openMatch = openPRs.filter(match);
+        var openMatch = openPRs.filter(match);
         if (openMatch.length > 0) {
             console.log('Found open PR #' + openMatch[0].number + ':', openMatch[0].title);
             return openMatch[0];
@@ -67,13 +78,18 @@ function findPRForTicket(workspace, repository, ticketKey) {
     }
 }
 
-function getPRDetails(workspace, repository, pullRequestId) {
+function getPRDetails(scmOrWorkspace, repositoryOrPrId, pullRequestIdOpt) {
     try {
-        const pr = github_get_pr({
-            workspace: workspace,
-            repository: repository,
-            pullRequestId: String(pullRequestId)
-        });
+        var pr;
+        if (_isScm(scmOrWorkspace)) {
+            pr = scmOrWorkspace.getPr(repositoryOrPrId);
+        } else {
+            pr = github_get_pr({
+                workspace: scmOrWorkspace,
+                repository: repositoryOrPrId,
+                pullRequestId: String(pullRequestIdOpt)
+            });
+        }
         console.log('Fetched PR details:', pr.title);
         return pr;
     } catch (e) {
@@ -188,7 +204,15 @@ function getPRDiff(baseBranch, headBranch, workingDir) {
  *
  * Returns { markdown, rawThreads } — either field may be null if no data found.
  */
-function fetchDiscussionsAndRawData(workspace, repository, pullRequestId) {
+function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullRequestIdOpt) {
+    // SCM-object path: delegate to provider
+    if (_isScm(scmOrWorkspace)) {
+        return scmOrWorkspace.fetchDiscussions(repositoryOrPrId);
+    }
+    // String-arg path: original direct implementation (backward compat — tests use this form)
+    var workspace = scmOrWorkspace;
+    var repository = repositoryOrPrId;
+    var pullRequestId = pullRequestIdOpt;
     const prIdStr = String(pullRequestId);
     const sections = [];
     const rawThreads = [];
@@ -202,11 +226,8 @@ function fetchDiscussionsAndRawData(workspace, repository, pullRequestId) {
         });
 
         if (conversations && conversations.length > 0) {
-            // Try to get GraphQL node IDs for resolve.
-            // github_get_pr_review_threads returns a raw GraphQL JSON string — must be parsed.
-            // Match by first-comment databaseId (robust against ordering differences).
-            const reviewThreadByCommentId = {};   // databaseId (int) → GraphQL node ID string
-            const reviewThreadResolvedById = {};   // databaseId (int) → isResolved boolean (from GraphQL)
+            const reviewThreadByCommentId = {};
+            const reviewThreadResolvedById = {};
             try {
                 const raw = github_get_pr_review_threads({
                     workspace: workspace,
@@ -234,8 +255,6 @@ function fetchDiscussionsAndRawData(workspace, repository, pullRequestId) {
                         const dbId = rt.comments.nodes[0].databaseId;
                         if (dbId) {
                             reviewThreadByCommentId[dbId] = rt.id;
-                            // GraphQL isResolved is the authoritative resolved status —
-                            // the REST conversations API does not expose this field.
                             reviewThreadResolvedById[dbId] = rt.isResolved === true;
                         }
                     }
@@ -252,28 +271,20 @@ function fetchDiscussionsAndRawData(workspace, repository, pullRequestId) {
                 const replies = Array.isArray(thread.replies) ? thread.replies : [];
 
                 const rootCommentId = rootComment.id || rootComment.databaseId || null;
-                // Match by root-comment databaseId — robust against ordering differences
                 const graphqlThreadId = rootCommentId ? (reviewThreadByCommentId[rootCommentId] || null) : null;
-                // Prefer GraphQL isResolved (authoritative) — REST conversations API omits this field,
-                // causing resolved threads to appear as open and being incorrectly re-processed.
                 const isResolvedByGraphQL = rootCommentId ? (reviewThreadResolvedById[rootCommentId] === true) : false;
                 const isResolved = thread.resolved === true || thread.isResolved === true || isResolvedByGraphQL;
 
-                // Only inline review comments (with a file path) can be replied to via
-                // github_reply_to_pr_thread. PR-level review comments without a path
-                // will fail with 422 "in_reply_to invalid" — omit rootCommentId for those.
                 rawThreads.push({
                     index: idx + 1,
-                    rootCommentId: thread.path ? rootCommentId : null,  // int → github_reply_to_pr_thread.inReplyToId
-                    threadId: graphqlThreadId,      // GraphQL node ID → github_resolve_pr_thread.threadId
+                    rootCommentId: thread.path ? rootCommentId : null,
+                    threadId: graphqlThreadId,
                     path: thread.path || null,
                     line: thread.line || thread.original_line || null,
                     resolved: isResolved,
                     body: (rootComment.body || '').trim()
                 });
 
-                // Resolved threads are excluded from pr_discussions.md so the reviewer
-                // cannot accidentally re-raise already-fixed issues.
                 if (isResolved) return;
 
                 section += '### Thread ' + (idx + 1);
@@ -308,7 +319,6 @@ function fetchDiscussionsAndRawData(workspace, repository, pullRequestId) {
             const resolvedCount = rawThreads.filter(function(t) { return t.resolved; }).length;
             const openCount = conversations.length - resolvedCount;
 
-            // Prepend summary so reviewer knows how many threads were already resolved
             if (resolvedCount > 0) {
                 section = '> ℹ️ **' + resolvedCount + ' thread(s) already resolved and excluded from this review.**\n\n' + section;
             }
@@ -489,17 +499,26 @@ function writePRContext(inputFolder, prDetails, diff, markdown, rawThreads) {
 
 /**
  * Detect failed CI checks for the PR head commit.
- * Uses github_get_commit_check_runs to find failures, then fetches job logs
- * via github_get_job_logs (job ID extracted from details_url).
+ * Uses github_get_commit_check_runs to find failures, then fetches job logs.
  * Writes ci_failures.md to the input folder when failures are found.
  *
- * @param {string} owner       - GitHub owner/organization
- * @param {string} repo        - GitHub repository name
- * @param {string} headSha     - PR head commit SHA (prDetails.head.sha)
- * @param {string} inputFolder - input/{ticketKey} path
- * @returns {{ name: string, conclusion: string }[]} failed checks (empty when all pass)
+ * Dual-mode: accepts either an SCM object or (owner, repo, headSha, inputFolder) strings.
  */
-function detectFailedChecks(owner, repo, headSha, inputFolder) {
+function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt) {
+    var scm = null;
+    var owner, repo, headSha, inputFolder;
+
+    if (_isScm(scmOrOwner)) {
+        scm = scmOrOwner;
+        headSha = repoOrHeadSha;
+        inputFolder = headShaOrInputFolder;
+    } else {
+        owner = scmOrOwner;
+        repo = repoOrHeadSha;
+        headSha = headShaOrInputFolder;
+        inputFolder = inputFolderOpt;
+    }
+
     try {
         if (!headSha) {
             console.warn('detectFailedChecks: no headSha provided, skipping');
@@ -508,18 +527,24 @@ function detectFailedChecks(owner, repo, headSha, inputFolder) {
 
         console.log('Checking CI status for commit:', headSha.substring(0, 8) + '...');
 
-        var rawResult = github_get_commit_check_runs({
-            workspace: owner,
-            repository: repo,
-            commitSha: headSha
-        });
+        var rawResult;
+        if (scm) {
+            rawResult = scm.getCommitCheckRuns(headSha);
+            if (rawResult === null) {
+                return [];
+            }
+        } else {
+            rawResult = github_get_commit_check_runs({
+                workspace: owner,
+                repository: repo,
+                commitSha: headSha
+            });
+        }
 
-        // Result may be a JSON string — parse it first
         if (typeof rawResult === 'string') {
             try { rawResult = JSON.parse(rawResult); } catch (e) {}
         }
 
-        // API returns { total_count: N, check_runs: [...] } — extract the array
         var checkRuns = Array.isArray(rawResult) ? rawResult
             : (rawResult && rawResult.check_runs ? rawResult.check_runs : []);
 
@@ -552,16 +577,19 @@ function detectFailedChecks(owner, repo, headSha, inputFolder) {
             }
             md += '\n';
 
-            // GitHub Actions details_url format: .../actions/runs/{runId}/job/{jobId}
             var jobIdMatch = check.details_url && check.details_url.match(/\/jobs?\/(\d+)/);
             if (jobIdMatch) {
                 try {
-                    var rawLogs = github_get_job_logs({
-                        workspace: owner,
-                        repository: repo,
-                        jobId: jobIdMatch[1]
-                    });
-                    // Result may be JSON string with {result: "..."} wrapper
+                    var rawLogs;
+                    if (scm) {
+                        rawLogs = scm.getJobLogs(jobIdMatch[1]);
+                    } else {
+                        rawLogs = github_get_job_logs({
+                            workspace: owner,
+                            repository: repo,
+                            jobId: jobIdMatch[1]
+                        });
+                    }
                     var logs = rawLogs;
                     if (typeof rawLogs === 'string') {
                         try {
@@ -570,7 +598,6 @@ function detectFailedChecks(owner, repo, headSha, inputFolder) {
                         } catch (e) { /* use as-is */ }
                     }
                     if (logs) {
-                        // Trim to last 150 lines to keep the file readable
                         var lines = logs.split('\n');
                         var snippet = lines.slice(-150).join('\n');
                         md += '**Error log (last 150 lines)**:\n\n```\n' + snippet + '\n```\n\n';
@@ -600,6 +627,7 @@ function detectFailedChecks(owner, repo, headSha, inputFolder) {
 module.exports = {
     cleanCommandOutput: cleanCommandOutput,
     getGitHubRepoInfo: getGitHubRepoInfo,
+    _isScm: _isScm,
     findPRForTicket: findPRForTicket,
     getPRDetails: getPRDetails,
     checkoutPRBranch: checkoutPRBranch,

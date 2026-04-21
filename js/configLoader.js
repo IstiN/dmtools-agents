@@ -87,7 +87,11 @@ var DEFAULTS = {
     agentConfigsDir: null,
 
     additionalInstructions: {},
-    instructionOverrides: {}
+    instructionOverrides: {},
+
+    scm: {
+        provider: 'github'   // 'github' | 'ado' — source control provider for PR operations
+    }
 };
 
 // Default Confluence URL → config key mapping (for resolving URLs in agent configs)
@@ -319,6 +323,13 @@ function loadProjectConfig(params) {
         console.log('configLoader: Two-branch flow enabled via customParams.featureBranchEnabled');
     }
 
+    // Apply scmProvider override from customParams
+    if (customParams.scmProvider) {
+        config.scm = config.scm || {};
+        config.scm.provider = customParams.scmProvider;
+        console.log('configLoader: SCM provider set to ' + customParams.scmProvider + ' via customParams.scmProvider');
+    }
+
     return config;
 }
 
@@ -470,5 +481,6 @@ module.exports = {
     resolveBranchName: resolveBranchName,
     resolvePRTargetBranch: resolvePRTargetBranch,
     resolveConfluenceUrls: resolveConfluenceUrls,
-    resolveInstructions: resolveInstructions
+    resolveInstructions: resolveInstructions,
+    createScm: require('./common/scm.js').createScm
 };

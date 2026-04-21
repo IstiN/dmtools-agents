@@ -9,12 +9,12 @@ const gh = require('./common/githubHelpers.js');
 const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchLinkedBugsToInput = require('./fetchLinkedBugsToInput.js');
 
-function findTestPRForTicket(workspace, repository, ticketKey) {
+function findTestPRForTicket(scm, ticketKey) {
     try {
         const branchName = 'test/' + ticketKey;
         console.log('Searching for PR on branch:', branchName);
 
-        const openPRs = github_list_prs({ workspace: workspace, repository: repository, state: 'open' });
+        const openPRs = scm.listPrs('open');
         const openMatch = openPRs.filter(function(pr) {
             return pr.head && pr.head.ref && pr.head.ref === branchName;
         });
@@ -37,11 +37,12 @@ function action(params) {
         var inputFolder = actualParams.inputFolderPath;
         var ticketKey = inputFolder.split('/').pop();
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var scm = configLoader.createScm(config);
 
         console.log('=== Test rework setup for:', ticketKey, '===');
 
         // Step 1: GitHub repo info
-        const repoInfo = gh.getGitHubRepoInfo();
+        var repoInfo = scm.getRemoteRepoInfo();
         if (!repoInfo) {
             const err = 'Could not determine GitHub repository from git remote';
             try { jira_post_comment({ key: ticketKey, comment: 'h3. ❌ Test Rework Setup Failed\n\n' + err }); } catch (e) {}
@@ -49,7 +50,7 @@ function action(params) {
         }
 
         // Step 2: Find PR on test/{KEY} branch specifically
-        var pr = findTestPRForTicket(repoInfo.owner, repoInfo.repo, ticketKey);
+        var pr = findTestPRForTicket(scm, ticketKey);
         const testBranchName = 'test/' + ticketKey;
 
         if (!pr) {
@@ -139,7 +140,7 @@ function action(params) {
         }
 
         // Step 3: PR details
-        const prDetails = gh.getPRDetails(repoInfo.owner, repoInfo.repo, pr.number);
+        const prDetails = gh.getPRDetails(scm, pr.number);
         if (!prDetails) {
             return { success: false, error: 'Failed to fetch PR details for PR #' + pr.number };
         }
@@ -164,7 +165,7 @@ function action(params) {
         const diff = gh.getPRDiff(baseBranch, branchName);
 
         console.log('Fetching PR discussions...');
-        const discussionData = gh.fetchDiscussionsAndRawData(repoInfo.owner, repoInfo.repo, pr.number);
+        const discussionData = gh.fetchDiscussionsAndRawData(scm, pr.number);
 
         // Step 6: Write context files
         gh.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);

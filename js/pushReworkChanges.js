@@ -8,6 +8,7 @@
  */
 
 var configLoader = require('./configLoader.js');
+var scmModule = require('./common/scm.js');
 const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js');
 
 /**
@@ -71,13 +72,9 @@ function getGitHubRepoInfo() {
     }
 }
 
-function findPRForTicket(workspace, repository, ticketKey) {
+function findPRForTicket(scm, ticketKey) {
     try {
-        const openPRs = github_list_prs({
-            workspace: workspace,
-            repository: repository,
-            state: 'open'
-        });
+        const openPRs = scm.listPrs('open');
 
         const matching = openPRs.filter(function(pr) {
             return (pr.title && pr.title.indexOf(ticketKey) !== -1) ||
@@ -178,7 +175,7 @@ function commitAndPush(ticketKey, config) {
  *
  * JSON format: { "replies": [{ "inReplyToId": 123, "threadId": "PRRT_...", "reply": "..." }] }
  */
-function postThreadReplies(workspace, repository, pullRequestId) {
+function postThreadReplies(scm, pullRequestId) {
     let repliesJson;
     try {
         repliesJson = file_read({ path: 'outputs/review_replies.json' });
@@ -204,47 +201,23 @@ function postThreadReplies(workspace, repository, pullRequestId) {
     let posted = 0;
     replies.forEach(function(item) {
         const replyText = item.reply || '✅ Addressed.';
+        const thread = { rootCommentId: item.inReplyToId || null, threadId: item.threadId || null };
 
-        if (item.inReplyToId) {
-            // Inline thread reply — post inside the thread
-            try {
-                github_reply_to_pr_thread({
-                    workspace: workspace,
-                    repository: repository,
-                    pullRequestId: String(pullRequestId),
-                    inReplyToId: String(item.inReplyToId),
-                    text: replyText
-                });
+        try {
+            scm.replyToThread(pullRequestId, thread, replyText);
+            if (item.inReplyToId) {
                 console.log('✅ Replied to comment #' + item.inReplyToId);
-                posted++;
-            } catch (e) {
-                console.warn('Failed to reply to comment #' + item.inReplyToId + ':', e.message || e);
-            }
-        } else {
-            // General PR comment (no thread ID) — post as top-level PR comment
-            try {
-                github_add_pr_comment({
-                    workspace: workspace,
-                    repository: repository,
-                    pullRequestId: String(pullRequestId),
-                    text: replyText
-                });
+            } else {
                 console.log('✅ Posted general reply (no threadId)');
-                posted++;
-            } catch (e) {
-                console.warn('Failed to post general reply:', e.message || e);
             }
+            posted++;
+        } catch (e) {
+            console.warn('Failed to post reply:', e.message || e);
         }
 
-        // Resolve the thread (only if we have a threadId)
         if (item.threadId) {
             try {
-                github_resolve_pr_thread({
-                    workspace: workspace,
-                    repository: repository,
-                    pullRequestId: String(pullRequestId),
-                    threadId: item.threadId
-                });
+                scm.resolveThread(pullRequestId, thread);
                 console.log('✅ Resolved thread', item.threadId);
             } catch (e) {
                 console.warn('Failed to resolve thread', item.threadId + ':', e.message || e);
@@ -256,20 +229,13 @@ function postThreadReplies(workspace, repository, pullRequestId) {
     return posted;
 }
 
-function postPRComment(workspace, repository, pullRequestId, fixSummary, ticketKey) {
+function postPRComment(scm, pullRequestId, fixSummary, ticketKey) {
     try {
         const commentText = '## 🔧 Rework Complete — ' + ticketKey + '\n\n' +
             'All PR review comments have been addressed. See fix summary below.\n\n' +
             '---\n\n' +
             fixSummary;
-
-        github_add_pr_comment({
-            workspace: workspace,
-            repository: repository,
-            pullRequestId: String(pullRequestId),
-            text: commentText
-        });
-
+        scm.addComment(pullRequestId, commentText);
         console.log('✅ Posted fix summary to PR #' + pullRequestId);
         return true;
     } catch (error) {
@@ -303,6 +269,7 @@ function action(params) {
         const ticketKey = actualParams.ticket.key;
         const fixSummary = actualParams.response || '_(No fix summary generated)_';
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var scm = scmModule.createScm(config);
         const _customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
         const statuses = resolveStatuses(_customParams);
 
@@ -332,18 +299,18 @@ function action(params) {
             repoInfo = { owner: config.repository.owner, repo: config.repository.repo };
             console.log('Using targetRepository from config:', repoInfo.owner + '/' + repoInfo.repo);
         } else {
-            repoInfo = getGitHubRepoInfo();
+            repoInfo = scm.getRemoteRepoInfo();
         }
-        const pr = repoInfo ? findPRForTicket(repoInfo.owner, repoInfo.repo, ticketKey) : null;
+        const pr = repoInfo ? findPRForTicket(scm, ticketKey) : null;
         let prCommentPosted = false;
 
         if (pr && repoInfo) {
             // Reply to each review thread and resolve it
-            const repliesPosted = postThreadReplies(repoInfo.owner, repoInfo.repo, pr.number);
+            const repliesPosted = postThreadReplies(scm, pr.number);
             console.log('Thread replies posted:', repliesPosted);
 
             // Post general fix summary as a top-level PR comment
-            prCommentPosted = postPRComment(repoInfo.owner, repoInfo.repo, pr.number, fixSummary, ticketKey);
+            prCommentPosted = postPRComment(scm, pr.number, fixSummary, ticketKey);
         } else {
             console.warn('Could not find PR to post comment — skipping GitHub PR comment');
         }
@@ -411,7 +378,7 @@ function action(params) {
                     const projectKey = deriveProjectKey(customParams);
                     const encodedCfg = buildAutoStartEncodedConfig(ticketKey, customParams);
                     if (aiOwner && aiRepo) {
-                        github_trigger_workflow(
+                        scm.triggerWorkflow(
                             aiOwner, aiRepo, 'ai-teammate.yml',
                             JSON.stringify({
                                 concurrency_key: ticketKey,

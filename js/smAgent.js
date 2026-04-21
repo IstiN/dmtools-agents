@@ -35,6 +35,7 @@
  */
 
 var configLoader = require('./configLoader.js');
+var scmModule = require('./common/scm.js');
 
 // Project config loaded once in action() — used as global default for rules without configPath
 var projectConfig = null;
@@ -152,7 +153,8 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig) {
     }
 
     try {
-        github_trigger_workflow(
+        var scm = scmModule.createScm(effectiveConfig);
+        scm.triggerWorkflow(
             repoInfo.owner,
             repoInfo.repo,
             workflowFile,

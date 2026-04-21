@@ -17,6 +17,8 @@
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
+var scmModule = require('./common/scm.js');
+
 function action(params) {
     var custom      = params.jobParams.customParams;
     var workspace   = custom.workspace;
@@ -33,9 +35,12 @@ function action(params) {
         (workflowId ? ' [' + workflowId + ']' : ' [all workflows]'));
 
     // 1. Get failed runs
-    // NOTE: github_list_workflow_runs with null workflowId should use /actions/runs endpoint.
-    // If dmtools doesn't support this yet, a 404/error will be thrown.
-    var runsRaw = github_list_workflow_runs(workspace, repository, 'failure', workflowId, 50);
+    var scmConfig = {
+        repository: { owner: workspace, repo: repository },
+        scm: { provider: custom.scmProvider || 'github' }
+    };
+    var scm = scmModule.createScm(scmConfig);
+    var runsRaw = scm.listWorkflowRuns('failure', workflowId, 50);
     var runs;
     try {
         var parsed = typeof runsRaw === 'string' ? JSON.parse(runsRaw) : runsRaw;
