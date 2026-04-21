@@ -23,7 +23,7 @@
  *   fileMap        - { path: content } for config file discovery (config paths only)
  *   tickets        - tickets returned by jira_search_by_jql (default: [])
  *   fullTicket     - ticket returned by jira_get_ticket
- *   onTrigger      - fn(owner, repo, workflow, inputs, ref) called on github_trigger_workflow
+ *   onTrigger      - fn(owner, repo, workflow, inputs, ref) called on triggerWorkflow
  *   onAddLabel     - fn(opts) called on jira_add_label
  *   onMoveStatus   - fn(opts) called on jira_move_to_status
  */
@@ -70,14 +70,32 @@ function makeSmAgent(opts) {
             capturedStatusMoves.push(moveOpts);
             if (opts.onMoveStatus) opts.onMoveStatus(moveOpts);
         },
-        github_trigger_workflow: function(owner, repo, workflow, inputs, ref) {
-            capturedTriggers.push({ owner: owner, repo: repo, workflow: workflow, inputs: inputs, ref: ref });
-            if (opts.onTrigger) opts.onTrigger(owner, repo, workflow, inputs, ref);
-        },
         cli_execute_command: function() { return ''; },
         encodeURIComponent: encodeURIComponent,
         JSON: JSON,
         eval: eval
+    };
+
+    // SCM mock: intercepts triggerWorkflow so capturedTriggers is populated
+    var mockScmProvider = {
+        triggerWorkflow: function(owner, repo, workflow, inputs, ref) {
+            capturedTriggers.push({ owner: owner, repo: repo, workflow: workflow, inputs: inputs, ref: ref });
+            if (opts.onTrigger) opts.onTrigger(owner, repo, workflow, inputs, ref);
+        },
+        listPrs: function() { return '[]'; },
+        getPr: function() { return '{}'; },
+        getPrComments: function() { return '[]'; },
+        addComment: function() {},
+        replyToThread: function() {},
+        resolveThread: function() {},
+        mergePr: function() {},
+        addLabel: function() {},
+        removeLabel: function() {},
+        fetchDiscussions: function() { return { markdown: '', rawThreads: [] }; },
+        getRemoteRepoInfo: function() { return null; }
+    };
+    var mockScmModule = {
+        createScm: function(config) { return mockScmProvider; }
     };
 
     // CRITICAL: create a fresh configLoader using the SAME file_read mock.
@@ -85,13 +103,13 @@ function makeSmAgent(opts) {
     // would load the actual .dmtools/config.js regardless of what fileMap says.
     var freshConfigLoader = loadModule(
         'agents/js/configLoader.js',
-        makeRequire({ './config.js': configModule }),
+        makeRequire({ './config.js': configModule, './common/scm.js': mockScmModule }),
         { file_read: fileReadMock }
     );
 
     var sm = loadModule(
         'agents/js/smAgent.js',
-        makeRequire({ './configLoader.js': freshConfigLoader }),
+        makeRequire({ './configLoader.js': freshConfigLoader, './common/scm.js': mockScmModule }),
         smMocks
     );
 

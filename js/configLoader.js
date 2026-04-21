@@ -18,6 +18,10 @@
 
 var DEFAULT_CONFIG = require('./config.js');
 
+// Lazy-loaded to keep backward compat with test environments that don't provide scm.js
+var _scmModule = null;
+try { _scmModule = require('./common/scm.js'); } catch (e) { /* optional dep */ }
+
 // ── Default project configuration ────────────────────────────────────────────
 
 var DEFAULTS = {
@@ -482,5 +486,5 @@ module.exports = {
     resolvePRTargetBranch: resolvePRTargetBranch,
     resolveConfluenceUrls: resolveConfluenceUrls,
     resolveInstructions: resolveInstructions,
-    createScm: require('./common/scm.js').createScm
+    createScm: _scmModule ? _scmModule.createScm : function() { throw new Error('scm.js not available in this environment'); }
 };
