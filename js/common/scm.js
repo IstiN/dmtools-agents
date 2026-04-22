@@ -314,8 +314,8 @@ function _createAdoProvider(repository) {
             return null;
         },
         getJobLogs: function(jobId, tailLines) {
-            var opts = { buildId: Number(jobId) };
-            if (tailLines) opts.tailLines = Number(tailLines);
+            var opts = { buildId: parseInt(String(jobId), 10) };
+            if (tailLines) opts.tailLines = parseInt(String(tailLines), 10);
             return ado_get_pipeline_logs(opts);
         },
         listWorkflowRuns: function(status, workflowId, limit) {
@@ -324,11 +324,14 @@ function _createAdoProvider(repository) {
                 console.warn('SCM ADO: listWorkflowRuns — could not resolve pipeline for: ' + workflowId);
                 return null;
             }
-            var opts = { pipelineId: pipelineId };
-            if (limit) opts.top = Number(limit);
+            var opts = { pipelineId: parseInt(String(pipelineId), 10) };
+            if (limit) opts.top = parseInt(String(limit), 10);
             var raw = ado_list_pipeline_runs(opts);
             var parsed = _parseJson(raw);
-            var runs = (parsed && parsed.value) ? parsed.value : (Array.isArray(parsed) ? parsed : []);
+            var rawRuns = (parsed && parsed.value) ? parsed.value : (Array.isArray(parsed) ? parsed : []);
+            // Convert Java list to native JS array for filter/map compat
+            var runs = [];
+            for (var i = 0; i < rawRuns.length; i++) { runs.push(rawRuns[i]); }
             if (status) {
                 // ADO run state: 'inProgress', 'completed', 'canceling', 'unknown'
                 // ADO run result: 'succeeded', 'failed', 'canceled', 'unknown'
@@ -351,7 +354,7 @@ function _createAdoProvider(repository) {
                 console.warn('SCM ADO: triggerWorkflow — could not resolve pipeline for: ' + workflowFile);
                 return null;
             }
-            var opts = { pipelineId: pipelineId };
+            var opts = { pipelineId: parseInt(String(pipelineId), 10) };
             if (ref) opts.branch = ref;
             if (payload && typeof payload === 'object' && Object.keys(payload).length > 0) {
                 opts.variables = JSON.stringify(payload);
