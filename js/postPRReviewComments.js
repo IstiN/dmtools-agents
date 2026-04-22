@@ -10,6 +10,7 @@
  */
 
 const { LABELS, STATUSES, resolveStatuses } = require('./config.js');
+var scmModule = require('./common/scm.js');
 
 /**
  * Derive project key from customParams.configPath or customParams.projectKey.
@@ -124,92 +125,46 @@ function getGitHubRepoInfo() {
     }
 }
 
-/**
- * Find PR associated with ticket using DMTools GitHub MCP tools
- * Searches for open PRs and filters by ticket key in title or branch
- *
- * @param {string} workspace - GitHub owner/organization
- * @param {string} repository - GitHub repository name
- * @param {string} ticketKey - Jira ticket key
- * @returns {Object|null} PR object or null
- */
-function findPRForTicket(workspace, repository, ticketKey) {
+function findPRForTicket(scm, ticketKey) {
     try {
         console.log('Searching for PR related to', ticketKey);
-
-        // Get open PRs using MCP tool (returns JavaScript Array directly)
-        const openPRs = github_list_prs({
-            workspace: workspace,
-            repository: repository,
-            state: 'open'
-        });
-
+        const openPRs = scm.listPrs('open');
         console.log('Found', openPRs.length, 'open PRs');
-
-        // Filter PRs by ticket key in title or branch
         const matchingPRs = openPRs.filter(function(pr) {
             const titleMatch = pr.title && pr.title.indexOf(ticketKey) !== -1;
             const branchMatch = pr.head && pr.head.ref && pr.head.ref.indexOf(ticketKey) !== -1;
             return titleMatch || branchMatch;
         });
-
         if (matchingPRs.length === 0) {
             console.log('No open PRs found mentioning', ticketKey);
             return null;
         }
-
         console.log('Found matching PR:', matchingPRs[0].number);
         return matchingPRs[0];
-
     } catch (error) {
         console.error('Error finding PR:', error);
         return null;
     }
 }
 
-/**
- * Post general review comment to GitHub PR using DMTools MCP tool
- * @param {string} workspace - GitHub owner/organization
- * @param {string} repository - GitHub repository name
- * @param {number} pullRequestId - PR number
- * @param {string} commentPath - Path to comment markdown file
- * @returns {boolean} Success status
- */
-function postGeneralComment(workspace, repository, pullRequestId, commentPath) {
+function postGeneralComment(scm, pullRequestId, commentPath) {
     try {
         const comment = readMarkdownFile(commentPath);
         if (!comment) {
             console.warn('No general comment content found at', commentPath);
             return false;
         }
-
         console.log('Posting general review comment to PR #' + pullRequestId);
-
-        github_add_pr_comment({
-            workspace: workspace,
-            repository: repository,
-            pullRequestId: String(pullRequestId),
-            text: comment
-        });
-
+        scm.addComment(pullRequestId, comment);
         console.log('✅ Posted general review comment');
         return true;
-
     } catch (error) {
         console.error('Failed to post general comment:', error);
         return false;
     }
 }
 
-/**
- * Post inline code review comment to GitHub PR using DMTools MCP tool
- * @param {string} workspace - GitHub owner/organization
- * @param {string} repository - GitHub repository name
- * @param {number} pullRequestId - PR number
- * @param {Object} inlineComment - Inline comment data
- * @returns {boolean} Success status
- */
-function postInlineComment(workspace, repository, pullRequestId, inlineComment) {
+function postInlineComment(scm, pullRequestId, inlineComment) {
     // Accept both spec formats:
     //   old spec: { file, comment: "path/to/file.md" }
     //   agent output: { path, body: "inline text" }
@@ -228,23 +183,10 @@ function postInlineComment(workspace, repository, pullRequestId, inlineComment) 
 
         console.log('Posting inline comment on ' + filePath + ':' + inlineComment.line);
 
-        const params = {
-            workspace: workspace,
-            repository: repository,
-            pullRequestId: String(pullRequestId),
-            path: filePath,
-            line: String(inlineComment.line),
-            text: commentText
-        };
-
-        if (inlineComment.startLine) {
-            params.startLine = String(inlineComment.startLine);
-        }
-        if (inlineComment.side) {
-            params.side = inlineComment.side;
-        }
-
-        github_add_inline_comment(params);
+        scm.addInlineComment(
+            pullRequestId, filePath, inlineComment.line, commentText,
+            inlineComment.startLine || null, inlineComment.side || null
+        );
 
         console.log('✅ Posted inline comment on ' + filePath + ':' + inlineComment.line);
         return true;
@@ -254,12 +196,7 @@ function postInlineComment(workspace, repository, pullRequestId, inlineComment) 
         console.warn('Inline comment failed (line not in diff?), falling back to PR comment on ' + filePath + ':' + inlineComment.line);
         try {
             var lineRef = filePath + (inlineComment.line ? ':' + inlineComment.line : '');
-            github_add_pr_comment({
-                workspace: workspace,
-                repository: repository,
-                pullRequestId: String(pullRequestId),
-                text: '📍 **`' + lineRef + '`**\n\n' + commentText
-            });
+            scm.addComment(pullRequestId, '📍 **`' + lineRef + '`**\n\n' + commentText);
             console.log('✅ Posted fallback PR comment for ' + lineRef);
             return true;
         } catch (fallbackError) {
@@ -269,24 +206,12 @@ function postInlineComment(workspace, repository, pullRequestId, inlineComment) 
     }
 }
 
-/**
- * Resolve previously-raised review threads that were fully fixed in this rework.
- * @param {string} workspace
- * @param {string} repository
- * @param {number} pullRequestId
- * @param {string[]} resolvedThreadIds - GraphQL node IDs from pr_review.json.resolvedThreadIds
- */
-function resolveApprovedThreads(workspace, repository, pullRequestId, resolvedThreadIds) {
+function resolveApprovedThreads(scm, pullRequestId, resolvedThreadIds) {
     if (!resolvedThreadIds || resolvedThreadIds.length === 0) return;
     console.log('Resolving ' + resolvedThreadIds.length + ' fixed review thread(s)...');
     resolvedThreadIds.forEach(function(threadId) {
         try {
-            github_resolve_pr_thread({
-                workspace: workspace,
-                repository: repository,
-                pullRequestId: String(pullRequestId),
-                threadId: threadId
-            });
+            scm.resolveThread(pullRequestId, { threadId: threadId });
             console.log('✅ Resolved thread', threadId);
         } catch (e) {
             console.warn('Failed to resolve thread ' + threadId + ':', e.message || e);
@@ -294,45 +219,21 @@ function resolveApprovedThreads(workspace, repository, pullRequestId, resolvedTh
     });
 }
 
-/**
- * Merge GitHub PR using DMTools MCP tool github_merge_pr
- * @param {string} workspace - GitHub owner/organization
- * @param {string} repository - GitHub repository name
- * @param {number} pullRequestId - PR number
- * @returns {boolean} Success status
- */
-function mergePR(workspace, repository, pullRequestId) {
+function mergePR(scm, pullRequestId) {
     try {
-        console.log('Merging PR #' + pullRequestId + ' via github_merge_pr...');
-
-        github_merge_pr({
-            workspace: workspace,
-            repository: repository,
-            pullRequestId: String(pullRequestId),
-            mergeMethod: 'squash'
-        });
-
+        console.log('Merging PR #' + pullRequestId + '...');
+        scm.mergePr(pullRequestId, 'squash');
         console.log('✅ PR #' + pullRequestId + ' merged successfully');
         return true;
-
     } catch (error) {
         console.warn('First merge attempt failed (likely conflict) — trying auto-update branch:', error);
-
-        // Auto-fix: merge latest main into the branch and retry
         try {
             try { cli_execute_command({ command: 'git fetch --unshallow' }); } catch (e) {}
             cli_execute_command({ command: 'git fetch origin' });
             cli_execute_command({ command: 'git merge origin/main --no-edit' });
             cli_execute_command({ command: 'git push origin HEAD' });
             console.log('✅ Auto-merged main into branch — retrying PR merge');
-
-            github_merge_pr({
-                workspace: workspace,
-                repository: repository,
-                pullRequestId: String(pullRequestId),
-                mergeMethod: 'squash'
-            });
-
+            scm.mergePr(pullRequestId, 'squash');
             console.log('✅ PR #' + pullRequestId + ' merged after auto-update');
             return true;
         } catch (retryErr) {
@@ -410,6 +311,8 @@ function action(params) {
         const jiraReview = params.response || '';
         var configLoader = require('./configLoader.js');
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var scm = scmModule.createScm(config);
+        var labels = (params.ticket && params.ticket.fields && params.ticket.fields.labels) ? params.ticket.fields.labels : [];
 
         console.log('=== Processing PR review results for', ticketKey, '===');
 
@@ -441,7 +344,7 @@ function action(params) {
             repoInfo = { owner: config.repository.owner, repo: config.repository.repo };
             console.log('Using targetRepository from config:', repoInfo.owner + '/' + repoInfo.repo);
         } else {
-            repoInfo = getGitHubRepoInfo();
+            repoInfo = scm.getRemoteRepoInfo();
         }
         if (!repoInfo) {
             console.warn('Could not get GitHub repo info - skipping GitHub comments');
@@ -478,7 +381,7 @@ function action(params) {
         // Fallback: If no PR number found, search for PR using MCP tools
         if (!prNumber && repoInfo) {
             console.log('PR number not found in input folder, searching GitHub...');
-            const pr = findPRForTicket(repoInfo.owner, repoInfo.repo, ticketKey);
+            const pr = findPRForTicket(scm, ticketKey);
             if (pr) {
                 prNumber = pr.number;
                 prUrl = pr.html_url;
@@ -524,7 +427,7 @@ function action(params) {
 
             // Post general comment
             if (reviewData.generalComment) {
-                postGeneralComment(repoInfo.owner, repoInfo.repo, prNumber, reviewData.generalComment);
+                postGeneralComment(scm, prNumber, reviewData.generalComment);
             }
 
             // Post inline comments
@@ -533,12 +436,12 @@ function action(params) {
 
                 reviewData.inlineComments.forEach(function(inlineComment, index) {
                     console.log('Processing inline comment ' + (index + 1) + '/' + reviewData.inlineComments.length);
-                    postInlineComment(repoInfo.owner, repoInfo.repo, prNumber, inlineComment);
+                    postInlineComment(scm, prNumber, inlineComment);
                 });
             }
 
             // Resolve threads that were fully fixed in this rework
-            resolveApprovedThreads(repoInfo.owner, repoInfo.repo, prNumber, reviewData.resolvedThreadIds);
+            resolveApprovedThreads(scm, prNumber, reviewData.resolvedThreadIds);
 
             console.log('✅ Posted all review comments to GitHub PR');
 
@@ -546,12 +449,7 @@ function action(params) {
             if (isApproved) {
                 // STATE 1: APPROVE → label PR and Jira ticket; SM will retry merge when CI passes
                 try {
-                    github_add_pr_label({
-                        workspace: repoInfo.owner,
-                        repository: repoInfo.repo,
-                        pullRequestId: String(prNumber),
-                        label: LABELS.PR_APPROVED
-                    });
+                    scm.addLabel(prNumber, LABELS.PR_APPROVED);
                     console.log('✅ Added pr_approved label to GitHub PR #' + prNumber);
                 } catch (labelErr) {
                     console.warn('Failed to add pr_approved label to GitHub PR:', labelErr);
@@ -653,7 +551,7 @@ function action(params) {
                         const projectKey = deriveProjectKey(customParams);
                         const encodedCfg = buildAutoStartEncodedConfig(ticketKey, customParams);
                         if (aiOwner && aiRepo) {
-                            github_trigger_workflow(
+                            scm.triggerWorkflow(
                                 aiOwner, aiRepo, 'ai-teammate.yml',
                                 JSON.stringify({
                                     concurrency_key: ticketKey,
@@ -719,7 +617,7 @@ function action(params) {
                         var tcgEncodedCfg = encodeURIComponent(JSON.stringify({
                             params: { inputJql: 'key = ' + ticketKey }
                         }));
-                        github_trigger_workflow(
+                        scm.triggerWorkflow(
                             aiOwner, aiRepo, tcg.workflow || 'ai-teammate.yml',
                             JSON.stringify({
                                 concurrency_key: ticketKey,

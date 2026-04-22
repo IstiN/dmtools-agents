@@ -7,12 +7,12 @@
 var configLoader = require('./configLoader.js');
 const gh = require('./common/githubHelpers.js');
 
-function findTestPRForTicket(workspace, repository, ticketKey) {
+function findTestPRForTicket(scm, ticketKey) {
     try {
         const branchName = 'test/' + ticketKey;
         console.log('Searching for PR on branch:', branchName);
 
-        const openPRs = github_list_prs({ workspace: workspace, repository: repository, state: 'open' });
+        const openPRs = scm.listPrs('open');
         const openMatch = openPRs.filter(function(pr) {
             return pr.head && pr.head.ref && pr.head.ref === branchName;
         });
@@ -21,8 +21,7 @@ function findTestPRForTicket(workspace, repository, ticketKey) {
             return { pr: openMatch[0], merged: false };
         }
 
-        // No open PR — check if it was already merged
-        const closedPRs = github_list_prs({ workspace: workspace, repository: repository, state: 'closed' });
+        const closedPRs = scm.listPrs('closed');
         const mergedMatch = closedPRs.filter(function(pr) {
             return pr.head && pr.head.ref && pr.head.ref === branchName && pr.merged_at;
         });
@@ -44,19 +43,20 @@ function action(params) {
         const inputFolder = params.inputFolderPath;
         const ticketKey = inputFolder.split('/').pop();
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var scm = configLoader.createScm(config);
 
         console.log('=== Preparing test PR for review:', ticketKey, '===');
 
         // Step 1: GitHub repo info
-        const repoInfo = gh.getGitHubRepoInfo();
+        var repoInfo = scm.getRemoteRepoInfo();
         if (!repoInfo) {
-            const err = 'Could not determine GitHub repository from git remote';
+            const err = 'Could not determine repository from git remote';
             try { jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Test PR Review Setup Failed\n\n' + err + '\n\n_Review cancelled._' }); } catch (e) {}
             return false;
         }
 
         // Step 2: Find PR on test/{KEY} branch specifically
-        var found = findTestPRForTicket(repoInfo.owner, repoInfo.repo, ticketKey);
+        var found = findTestPRForTicket(scm, ticketKey);
         if (!found) {
             // No open/merged PR — check if the test branch exists on remote
             const branchName = 'test/' + ticketKey;
@@ -144,7 +144,7 @@ function action(params) {
         const pr = found.pr;
 
         // Step 3: PR details
-        const prDetails = gh.getPRDetails(repoInfo.owner, repoInfo.repo, pr.number);
+        const prDetails = gh.getPRDetails(scm, pr.number);
         if (!prDetails) {
             try { jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Test PR Review Setup Failed\n\nCould not fetch details for PR #' + pr.number + '.\n\n_Review cancelled._' }); } catch (e) {}
             return false;
@@ -165,7 +165,7 @@ function action(params) {
         const diff = gh.getPRDiff(baseBranch, branchName || (prDetails.head && prDetails.head.ref));
 
         console.log('Fetching PR discussions...');
-        const discussionData = gh.fetchDiscussionsAndRawData(repoInfo.owner, repoInfo.repo, pr.number);
+        const discussionData = gh.fetchDiscussionsAndRawData(scm, pr.number);
 
         // Step 6: Write context files
         gh.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);

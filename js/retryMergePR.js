@@ -11,6 +11,8 @@
  */
 
 const { STATUSES, LABELS } = require('./config.js');
+var scmModule = require('./common/scm.js');
+var configLoader = require('./configLoader.js');
 
 function getGitHubRepoInfo() {
     try {
@@ -27,11 +29,10 @@ function getGitHubRepoInfo() {
     }
 }
 
-function findPRForTicket(owner, repo, ticketKey) {
+function findPRForTicket(scm, ticketKey) {
     try {
-        const openPRs = github_list_prs({ workspace: owner, repository: repo, state: 'open' });
-        const prList = Array.isArray(openPRs) ? openPRs : [];
-        const matched = prList.find(function(pr) {
+        const prList = scm.listPrs('open');
+        const matched = (Array.isArray(prList) ? prList : []).find(function(pr) {
             const titleMatch = pr.title && pr.title.indexOf(ticketKey) !== -1;
             const branchMatch = pr.head && pr.head.ref && pr.head.ref.indexOf(ticketKey) !== -1;
             return titleMatch || branchMatch;
@@ -43,12 +44,12 @@ function findPRForTicket(owner, repo, ticketKey) {
     }
 }
 
-function removeApprovedLabels(owner, repo, prNumber, ticketKey) {
+function removeApprovedLabels(scm, prNumber, ticketKey) {
     try {
-        github_remove_pr_label({ workspace: owner, repository: repo, pullRequestId: String(prNumber), label: LABELS.PR_APPROVED });
-        console.log('Removed pr_approved label from GitHub PR');
+        scm.removeLabel(prNumber, LABELS.PR_APPROVED);
+        console.log('Removed pr_approved label from PR');
     } catch (e) {
-        console.warn('Could not remove pr_approved from GitHub PR:', e);
+        console.warn('Could not remove pr_approved from PR:', e);
     }
     try {
         jira_remove_label({ key: ticketKey, label: LABELS.PR_APPROVED });
@@ -72,7 +73,10 @@ function action(params) {
         return false;
     }
 
-    const repoInfo = getGitHubRepoInfo();
+    var config = configLoader.loadProjectConfig(params.jobParams || params);
+    var scm = scmModule.createScm(config);
+
+    const repoInfo = scm.getRemoteRepoInfo();
     if (!repoInfo) {
         console.error('Could not determine owner/repo');
         releaseLock(ticketKey, params);
@@ -80,7 +84,7 @@ function action(params) {
     }
     const { owner, repo } = repoInfo;
 
-    const pr = findPRForTicket(owner, repo, ticketKey);
+    const pr = findPRForTicket(scm, ticketKey);
     if (!pr) {
         console.warn('No open PR found for ticket ' + ticketKey + ' — releasing lock');
         releaseLock(ticketKey, params);
@@ -95,7 +99,7 @@ function action(params) {
     let mergeableState = null;
     let mergeable = null;
     try {
-        const prDetail = github_get_pr({ workspace: owner, repository: repo, pullRequestId: String(prNumber) });
+        const prDetail = scm.getPr(prNumber);
         mergeable = prDetail && prDetail.mergeable;
         mergeableState = prDetail && prDetail.mergeable_state;
         console.log('PR mergeable: ' + mergeable + ', state: ' + mergeableState);
@@ -124,7 +128,7 @@ function action(params) {
     // Conflict detected before attempting merge
     if (mergeable === false && mergeableState === 'dirty') {
         console.log('PR has merge conflict — moving ticket to In Rework');
-        removeApprovedLabels(owner, repo, prNumber, ticketKey);
+        removeApprovedLabels(scm, prNumber, ticketKey);
         releaseLock(ticketKey, params);
         jira_post_comment({
             key: ticketKey,
@@ -137,17 +141,12 @@ function action(params) {
 
     // Attempt merge
     try {
-        github_merge_pr({
-            workspace: owner,
-            repository: repo,
-            pullRequestId: String(prNumber),
-            mergeMethod: 'squash'
-        });
+        scm.mergePr(prNumber, 'squash');
         console.log('✅ PR #' + prNumber + ' merged successfully');
 
         // Remove GitHub PR label immediately (cosmetic — PR is closed)
         try {
-            github_remove_pr_label({ workspace: owner, repository: repo, pullRequestId: String(prNumber), label: LABELS.PR_APPROVED });
+            scm.removeLabel(prNumber, LABELS.PR_APPROVED);
             console.log('Removed pr_approved label from GitHub PR');
         } catch (e) {
             console.warn('Could not remove pr_approved from GitHub PR:', e);
@@ -192,7 +191,7 @@ function action(params) {
         }
 
         const reason = isConflict ? 'merge conflict' : 'CI checks failing or PR not mergeable';
-        removeApprovedLabels(owner, repo, prNumber, ticketKey);
+        removeApprovedLabels(scm, prNumber, ticketKey);
         releaseLock(ticketKey, params);
         jira_post_comment({
             key: ticketKey,

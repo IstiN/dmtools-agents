@@ -15,6 +15,7 @@ function action(params) {
         const inputFolder = params.inputFolderPath;
         const ticketKey = inputFolder.split('/').pop();
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var scm = configLoader.createScm(config);
 
         console.log('=== Preparing PR for review:', ticketKey, '===');
         console.log('Input folder:', inputFolder);
@@ -31,7 +32,7 @@ function action(params) {
             console.log('Using targetRepository from config:', repoInfo.owner + '/' + repoInfo.repo);
         } else {
             console.log('Target repository not configured, resolving from git remote...');
-            repoInfo = gh.getGitHubRepoInfo();
+            repoInfo = scm.getRemoteRepoInfo();
         }
         if (!repoInfo) {
             const err = 'Could not determine GitHub repository from git remote';
@@ -43,7 +44,7 @@ function action(params) {
 
         // Step 2: Find PR
         console.log('Searching for open PR associated with ticket:', ticketKey);
-        const pr = gh.findPRForTicket(repoInfo.owner, repoInfo.repo, ticketKey);
+        const pr = gh.findPRForTicket(scm, ticketKey);
         if (!pr) {
             console.warn('No open PR found for ticket:', ticketKey);
             try {
@@ -64,7 +65,7 @@ function action(params) {
 
         // Step 3: PR details
         console.log('Fetching details for PR #' + pr.number + '...');
-        const prDetails = gh.getPRDetails(repoInfo.owner, repoInfo.repo, pr.number);
+        const prDetails = gh.getPRDetails(scm, pr.number);
         if (!prDetails) {
             console.error('Failed to fetch PR details for PR #' + pr.number);
             try {
@@ -101,7 +102,7 @@ function action(params) {
         console.log('Loaded PR diff characters:', diff ? diff.length : 0);
 
         console.log('Fetching PR discussions...');
-        const discussionData = gh.fetchDiscussionsAndRawData(repoInfo.owner, repoInfo.repo, pr.number);
+        const discussionData = gh.fetchDiscussionsAndRawData(scm, pr.number);
         console.log('Fetched PR discussions markdown characters:', discussionData && discussionData.markdown ? discussionData.markdown.length : 0);
         console.log('Fetched PR discussion threads:', discussionData && discussionData.rawThreads ? discussionData.rawThreads.length : 0);
 
@@ -113,7 +114,7 @@ function action(params) {
         // Step 6.5: Detect failed CI checks
         var headSha = prDetails.head ? prDetails.head.sha : null;
         console.log('Detecting failed checks for head SHA:', headSha || '(missing)');
-        var failedChecks = gh.detectFailedChecks(repoInfo.owner, repoInfo.repo, headSha, inputFolder);
+        var failedChecks = gh.detectFailedChecks(scm, headSha, inputFolder);
         console.log('Detected failed checks:', failedChecks.length);
 
         // Step 7: Jira comment

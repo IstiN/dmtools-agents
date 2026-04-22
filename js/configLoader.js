@@ -18,6 +18,10 @@
 
 var DEFAULT_CONFIG = require('./config.js');
 
+// Lazy-loaded to keep backward compat with test environments that don't provide scm.js
+var _scmModule = null;
+try { _scmModule = require('./common/scm.js'); } catch (e) { /* optional dep */ }
+
 // ── Default project configuration ────────────────────────────────────────────
 
 var DEFAULTS = {
@@ -87,7 +91,11 @@ var DEFAULTS = {
     agentConfigsDir: null,
 
     additionalInstructions: {},
-    instructionOverrides: {}
+    instructionOverrides: {},
+
+    scm: {
+        provider: 'github'   // 'github' | 'ado' — source control provider for PR operations
+    }
 };
 
 // Default Confluence URL → config key mapping (for resolving URLs in agent configs)
@@ -319,6 +327,13 @@ function loadProjectConfig(params) {
         console.log('configLoader: Two-branch flow enabled via customParams.featureBranchEnabled');
     }
 
+    // Apply scmProvider override from customParams
+    if (customParams.scmProvider) {
+        config.scm = config.scm || {};
+        config.scm.provider = customParams.scmProvider;
+        console.log('configLoader: SCM provider set to ' + customParams.scmProvider + ' via customParams.scmProvider');
+    }
+
     return config;
 }
 
@@ -470,5 +485,6 @@ module.exports = {
     resolveBranchName: resolveBranchName,
     resolvePRTargetBranch: resolvePRTargetBranch,
     resolveConfluenceUrls: resolveConfluenceUrls,
-    resolveInstructions: resolveInstructions
+    resolveInstructions: resolveInstructions,
+    createScm: _scmModule ? _scmModule.createScm : function() { throw new Error('scm.js not available in this environment'); }
 };

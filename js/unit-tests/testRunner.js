@@ -194,9 +194,13 @@ function action(params) {
     // Pre-load base modules once — test files use these as globals
     try {
         configModule = loadModule('agents/js/config.js');
+        var scmModule = loadModule('agents/js/common/scm.js');
         configLoaderModule = loadModule(
             'agents/js/configLoader.js',
-            makeRequire({ './config.js': configModule, 'config': configModule })
+            makeRequire({
+                './config.js': configModule, 'config': configModule,
+                './common/scm.js': scmModule, 'scm': scmModule
+            })
         );
         console.log('  Base modules loaded ✓');
     } catch (e) {

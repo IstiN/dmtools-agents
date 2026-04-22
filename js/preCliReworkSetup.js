@@ -18,6 +18,7 @@ function action(params) {
         var inputFolder = actualParams.inputFolderPath;
         var ticketKey = inputFolder.split('/').pop();
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var scm = configLoader.createScm(config);
 
         console.log('=== Rework setup for:', ticketKey, '===');
 
@@ -27,7 +28,7 @@ function action(params) {
             repoInfo = { owner: config.repository.owner, repo: config.repository.repo };
             console.log('Using targetRepository from config:', repoInfo.owner + '/' + repoInfo.repo);
         } else {
-            repoInfo = gh.getGitHubRepoInfo();
+            repoInfo = scm.getRemoteRepoInfo();
         }
         if (!repoInfo) {
             const err = 'Could not determine GitHub repository from git remote';
@@ -36,7 +37,7 @@ function action(params) {
         }
 
         // Step 2: Find existing PR
-        const pr = gh.findPRForTicket(repoInfo.owner, repoInfo.repo, ticketKey);
+        const pr = gh.findPRForTicket(scm, ticketKey);
         if (!pr) {
             const err = 'No Pull Request found for ticket ' + ticketKey + '. Cannot start rework without an existing PR.';
             try { jira_post_comment({ key: ticketKey, comment: 'h3. ❌ Rework Setup Failed\n\n' + err }); } catch (e) {}
@@ -44,7 +45,7 @@ function action(params) {
         }
 
         // Step 3: PR details
-        const prDetails = gh.getPRDetails(repoInfo.owner, repoInfo.repo, pr.number);
+        const prDetails = gh.getPRDetails(scm, pr.number);
         if (!prDetails) {
             return { success: false, error: 'Failed to fetch PR details for PR #' + pr.number };
         }
@@ -70,12 +71,12 @@ function action(params) {
 
         // Step 4.6: Detect failed CI checks — writes ci_failures.md if any failed
         const headSha = prDetails.head ? prDetails.head.sha : null;
-        const failedChecks = gh.detectFailedChecks(repoInfo.owner, repoInfo.repo, headSha, inputFolder);
+        const failedChecks = gh.detectFailedChecks(scm, headSha, inputFolder);
 
         const diff = gh.getPRDiff(baseBranch, branchName, config.workingDir);
 
         console.log('Fetching PR discussions...');
-        const discussionData = gh.fetchDiscussionsAndRawData(repoInfo.owner, repoInfo.repo, pr.number);
+        const discussionData = gh.fetchDiscussionsAndRawData(scm, pr.number);
 
         // Step 6: Write all context files
         gh.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
