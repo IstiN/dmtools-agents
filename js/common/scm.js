@@ -232,6 +232,26 @@ function _createGithubProvider(workspace, repository) {
     };
 }
 
+function _adoResolvePipelineId(workflowIdentifier) {
+    if (!workflowIdentifier) return null;
+    var asNum = Number(workflowIdentifier);
+    if (!isNaN(asNum) && asNum > 0) return asNum;
+    // Lookup by name via ado_list_pipelines
+    try {
+        var raw = ado_list_pipelines({});
+        var parsed = _parseJson(raw);
+        var pipelines = (parsed && parsed.value) ? parsed.value : (Array.isArray(parsed) ? parsed : []);
+        var name = String(workflowIdentifier).toLowerCase();
+        var match = pipelines.find(function(p) {
+            return p.name && p.name.toLowerCase() === name;
+        });
+        return match ? match.id : null;
+    } catch (e) {
+        console.warn('SCM ADO: _adoResolvePipelineId failed: ' + e);
+        return null;
+    }
+}
+
 function _createAdoProvider(repository) {
     return {
         listPrs: function(state) {
@@ -290,19 +310,53 @@ function _createAdoProvider(repository) {
             return ado_get_pr_diff({ repository: repository, pullRequestId: String(prId) });
         },
         getCommitCheckRuns: function(sha) {
-            console.warn('SCM ADO: getCommitCheckRuns not supported for ADO');
+            console.warn('SCM ADO: getCommitCheckRuns has no direct ADO equivalent — returning null');
             return null;
         },
-        getJobLogs: function(jobId) {
-            console.warn('SCM ADO: getJobLogs not supported for ADO');
-            return null;
+        getJobLogs: function(jobId, tailLines) {
+            var opts = { buildId: Number(jobId) };
+            if (tailLines) opts.tailLines = Number(tailLines);
+            return ado_get_pipeline_logs(opts);
         },
         listWorkflowRuns: function(status, workflowId, limit) {
-            console.warn('SCM ADO: listWorkflowRuns not supported for ADO');
-            return null;
+            var pipelineId = _adoResolvePipelineId(workflowId);
+            if (!pipelineId) {
+                console.warn('SCM ADO: listWorkflowRuns — could not resolve pipeline for: ' + workflowId);
+                return null;
+            }
+            var opts = { pipelineId: pipelineId };
+            if (limit) opts.top = Number(limit);
+            var raw = ado_list_pipeline_runs(opts);
+            var parsed = _parseJson(raw);
+            var runs = (parsed && parsed.value) ? parsed.value : (Array.isArray(parsed) ? parsed : []);
+            if (status) {
+                // ADO run state: 'inProgress', 'completed', 'canceling', 'unknown'
+                // ADO run result: 'succeeded', 'failed', 'canceled', 'unknown'
+                var filterStatus = status.toLowerCase();
+                runs = runs.filter(function(r) {
+                    var state = (r.state || '').toLowerCase();
+                    var result = (r.result || '').toLowerCase();
+                    if (filterStatus === 'failure' || filterStatus === 'failed') return result === 'failed';
+                    if (filterStatus === 'success' || filterStatus === 'succeeded') return result === 'succeeded';
+                    if (filterStatus === 'in_progress') return state === 'inprogress';
+                    if (filterStatus === 'completed') return state === 'completed';
+                    return state === filterStatus || result === filterStatus;
+                });
+            }
+            return JSON.stringify({ workflow_runs: runs });
         },
         triggerWorkflow: function(owner, repo, workflowFile, payload, ref) {
-            console.warn('SCM ADO: triggerWorkflow not supported for ADO — skipping');
+            var pipelineId = _adoResolvePipelineId(workflowFile);
+            if (!pipelineId) {
+                console.warn('SCM ADO: triggerWorkflow — could not resolve pipeline for: ' + workflowFile);
+                return null;
+            }
+            var opts = { pipelineId: pipelineId };
+            if (ref) opts.branch = ref;
+            if (payload && typeof payload === 'object' && Object.keys(payload).length > 0) {
+                opts.variables = JSON.stringify(payload);
+            }
+            return ado_trigger_pipeline(opts);
         },
         fetchDiscussions: function(prId) {
             var result = ado_get_pr_comments({ repository: repository, pullRequestId: String(prId) });

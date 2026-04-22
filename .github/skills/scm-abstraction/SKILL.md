@@ -115,14 +115,12 @@ Both `GithubProvider` and `AdoProvider` implement 17 methods:
 | `getPrDiff(prId)` | Get PR diff | ✅ |
 | `fetchDiscussions(prId)` | Get review threads (normalised format) | ✅ |
 | `getRemoteRepoInfo()` | Parse owner/repo from git remote URL | ✅ |
-| `getCommitCheckRuns(sha)` | CI check results for a commit | ⚠️ GitHub only |
-| `getJobLogs(jobId)` | CI job logs | ⚠️ GitHub only |
-| `listWorkflowRuns(status, workflowId, limit)` | List workflow runs | ⚠️ GitHub only |
-| `triggerWorkflow(owner, repo, workflow, inputs, ref)` | Trigger CI workflow | ⚠️ GitHub only |
+| `getJobLogs(jobId, tailLines)` | CI job/build logs | ✅ via `ado_get_pipeline_logs` |
+| `listWorkflowRuns(status, workflowId, limit)` | List CI workflow/pipeline runs | ✅ via `ado_list_pipeline_runs` |
+| `triggerWorkflow(owner, repo, workflow, inputs, ref)` | Trigger CI workflow/pipeline | ✅ via `ado_trigger_pipeline` |
+| `getCommitCheckRuns(sha)` | CI check results for a commit | ⚠️ GitHub only (no ADO equivalent) |
 
-> **CI methods** (`getCommitCheckRuns`, `getJobLogs`, `listWorkflowRuns`, `triggerWorkflow`)
-> are currently GitHub-only. On ADO they log a warning and return `null`.
-> Agents that call these require `scm.provider = 'github'`.
+> **ADO pipeline resolution**: `triggerWorkflow` and `listWorkflowRuns` accept a pipeline name (string) or ID (number) as the `workflow`/`workflowId` argument. When a name is passed, the provider calls `ado_list_pipelines` to resolve it to a numeric ID automatically.
 
 ---
 
