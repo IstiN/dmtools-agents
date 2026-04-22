@@ -1,0 +1,36 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "pr_test_automation_review"
+    },
+    "agentParams": {
+      "aiRole": "Senior QA Engineer & Code Reviewer",
+      "instructions": [
+        "./agents/instructions/test_automation/pr_test_review_instructions.md",
+        "./agents/instructions/review/pr_review_json_output.md",
+        "./agents/instructions/common/bash_tools.md"
+      ],
+      "knownInfo": "",
+      "formattingRules": "./agents/instructions/review/pr_review_formatting.md",
+      "fewShots": "./agents/instructions/review/pr_review_few_shots.md"
+    },
+    "cliPrompt": "./agents/prompts/pr_test_automation_review_prompt.md",
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "attachResponseAsFile": false,
+    "cleanupInputFolder": false,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "preJSAction": "agents/js/checkWipLabel.js",
+    "preCliJSAction": "agents/js/prepareTestPRForReview.js",
+    "postJSAction": "agents/js/postTestReviewComments.js",
+    "customParams": {
+      "removeLabel": "sm_test_review_triggered"
+    },
+    "inputJql": "key = JD-111"
+  }
+}

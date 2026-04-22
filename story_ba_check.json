@@ -1,0 +1,26 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "story_ba_check"
+    },
+    "agentParams": {
+      "aiRole": "Story BA readiness checker",
+      "instructions": [
+        "./agents/instructions/common/bash_tools.md"
+      ],
+      "knownInfo": "",
+      "formattingRules": "",
+      "fewShots": ""
+    },
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "postJSAction": "agents/js/checkSubtasksDoneForBA.js",
+    "customParams": {
+      "removeLabel": "sm_story_ba_check_triggered"
+    },
+    "inputJql": "key = PROJ-1"
+  }
+}

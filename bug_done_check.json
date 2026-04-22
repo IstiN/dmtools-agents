@@ -1,0 +1,26 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "bug_done_check"
+    },
+    "agentParams": {
+      "aiRole": "Bug completion checker",
+      "instructions": [
+        "./agents/instructions/common/bash_tools.md"
+      ],
+      "knownInfo": "",
+      "formattingRules": "",
+      "fewShots": ""
+    },
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "postJSAction": "agents/js/checkBugTestsPassed.js",
+    "customParams": {
+      "removeLabel": "sm_bug_done_check_triggered"
+    },
+    "inputJql": "key = PROJ-73"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "bug_development"
+    },
+    "agentParams": {
+      "aiRole": "Senior Developer Engineer specializing in root cause analysis and bug fixing",
+      "instructions": [
+        "./agents/instructions/development/implementation_instructions.md",
+        "./agents/instructions/development/bug_implementation_instructions.md",
+        "./agents/instructions/common/bash_tools.md"
+      ],
+      "knownInfo": "",
+      "formattingRules": "./agents/instructions/development/formatting_rules.md",
+      "fewShots": "./agents/instructions/development/few_shots.md"
+    },
+    "cliPrompt": "./agents/prompts/bug_development_prompt.md",
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "attachResponseAsFile": false,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "preJSAction": "agents/js/checkWipLabel.js",
+    "preCliJSAction": "agents/js/preCliDevelopmentSetup.js",
+    "postJSAction": "agents/js/developBugAndCreatePR.js",
+    "customParams": {
+      "removeLabel": "sm_bug_development_triggered"
+    },
+    "inputJql": "key = PROJ-74"
+  }
+}

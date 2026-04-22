@@ -1,0 +1,31 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "story_development"
+    },
+    "agentParams": {
+      "aiRole": "Senior Developer Engineer",
+      "instructions": [
+        "./agents/instructions/development/implementation_instructions.md",
+        "./agents/instructions/common/bash_tools.md"
+      ],
+      "knownInfo": "",
+      "formattingRules": "./agents/instructions/development/formatting_rules.md",
+      "fewShots": "./agents/instructions/development/few_shots.md"
+    },
+    "cliPrompt": "./agents/prompts/story_development_prompt.md",
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "attachResponseAsFile": false,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "preJSAction": "agents/js/checkWipLabel.js",
+    "preCliJSAction": "agents/js/preCliDevelopmentSetup.js",
+    "postJSAction": "agents/js/developTicketAndCreatePR.js",
+    "inputJql": "key in (JD-82)"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "bug_to_fix_check"
+    },
+    "agentParams": {
+      "aiRole": "Bug to fix checker",
+      "instructions": [
+        "./agents/instructions/common/bash_tools.md"
+      ],
+      "knownInfo": "",
+      "formattingRules": "",
+      "fewShots": ""
+    },
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "postJSAction": "agents/js/checkBugToFixReady.js",
+    "customParams": {
+      "removeLabel": "sm_bug_to_fix_check_triggered"
+    },
+    "inputJql": "key = PROJ-1"
+  }
+}

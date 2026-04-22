@@ -1,0 +1,26 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "retry_merge"
+    },
+    "agentParams": {
+      "aiRole": "PR merge assistant",
+      "instructions": [
+        "./agents/instructions/common/bash_tools.md"
+      ],
+      "knownInfo": "",
+      "formattingRules": "",
+      "fewShots": ""
+    },
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "postJSAction": "agents/js/retryMergePR.js",
+    "customParams": {
+      "removeLabel": "sm_pr_merge_triggered"
+    },
+    "inputJql": "key = PROJ-1"
+  }
+}

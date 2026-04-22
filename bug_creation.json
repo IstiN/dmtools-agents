@@ -1,0 +1,38 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "bug_creation"
+    },
+    "agentParams": {
+      "aiRole": "QA Engineer",
+      "instructions": [
+        "Read all Bug *.md files in the input folder to check for duplicates before creating a new bug.",
+        "If a matching open bug is found — link it. Do NOT create a duplicate.",
+        "Write outputs/bug_decision.json as described in the prompt.",
+        "If action is 'create', also write outputs/bug_description.md in Jira Markdown format.",
+        "./agents/instructions/common/bash_tools.md"
+      ],
+      "knownInfo": "",
+      "formattingRules": "outputs/bug_decision.json must be valid JSON. 'action' must be one of: 'link', 'create', 'none', 'tests_pass'."
+    },
+    "cliPrompt": "./agents/prompts/bug_creation_prompt.md",
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "attachResponseAsFile": false,
+    "cleanupInputFolder": false,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "preJSAction": "agents/js/checkWipLabel.js",
+    "preCliJSAction": "agents/js/prepareBugCreationContext.js",
+    "postJSAction": "agents/js/postBugCreation.js",
+    "customParams": {
+      "openBugsJql": "project = {jiraProject} AND issuetype in (Bug) AND status not in (Done)",
+      "removeLabel": "sm_bug_creation_triggered"
+    },
+    "inputJql": "key = JD-111"
+  }
+}

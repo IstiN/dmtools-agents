@@ -1,0 +1,37 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "pr_test_automation_rework"
+    },
+    "agentParams": {
+      "aiRole": "Senior QA Automation Engineer focused on test code fixes",
+      "instructions": [
+        "./agents/instructions/test_automation/test_automation_architecture.md",
+        "./agents/instructions/test_automation/test_automation_instructions.md",
+        "./agents/instructions/test_automation/test_automation_json_output.md",
+        "./agents/instructions/rework/rework_instructions.md",
+        "./agents/instructions/common/bash_tools.md"
+      ],
+      "knownInfo": "",
+      "formattingRules": "./agents/instructions/development/formatting_rules.md"
+    },
+    "cliPrompt": "./agents/prompts/pr_test_automation_rework_prompt.md",
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "attachResponseAsFile": false,
+    "cleanupInputFolder": false,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "preJSAction": "agents/js/checkWipLabel.js",
+    "preCliJSAction": "agents/js/preCliTestReworkSetup.js",
+    "postJSAction": "agents/js/postTestReworkResults.js",
+    "customParams": {
+      "removeLabel": "sm_test_rework_triggered"
+    },
+    "inputJql": "project = JD AND issuetype = 'Test Case' AND status = 'In Rework'"
+  }
+}

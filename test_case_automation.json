@@ -1,0 +1,39 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "test_case_automation"
+    },
+    "agentParams": {
+      "aiRole": "Senior QA Automation Engineer",
+      "instructions": [
+        "./agents/instructions/test_automation/test_automation_architecture.md",
+        "./agents/instructions/test_automation/test_automation_instructions.md",
+        "./agents/instructions/test_automation/test_automation_json_output.md",
+        "./agents/instructions/common/bash_tools.md"
+      ],
+      "knownInfo": "",
+      "formattingRules": "./agents/instructions/development/formatting_rules.md"
+    },
+    "cliPrompt": "./agents/prompts/test_case_automation_prompt.md",
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "attachResponseAsFile": false,
+    "cleanupInputFolder": false,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "envVariables": {
+      "CLI_ALLOWED_COMMANDS": "find,ls,cat,mkdir,bash,pytest,python3,pip3,run-agent.sh"
+    },
+    "customParams": {
+      "removeLabel": "sm_test_automation_triggered"
+    },
+    "preJSAction": "agents/js/checkWipLabel.js",
+    "preCliJSAction": "agents/js/preCliTestAutomationSetup.js",
+    "postJSAction": "agents/js/postTestAutomationResults.js",
+    "inputJql": "key = JD-111"
+  }
+}
