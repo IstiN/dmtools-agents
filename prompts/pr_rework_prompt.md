@@ -29,6 +29,47 @@ Your mission is to address every issue raised in `pr_discussions.md`. This file 
 
 After fixing all issues, compile and run all tests to confirm they pass. If tests fail, fix them before finishing.
 
+## BICE Project — Maven Build Commands
+
+This is a Java/Maven project using the Cosmo test framework. **Always use `$JAVA_HOME_COSMO`** when running Maven (Java 17, pre-configured by the dependency setup).
+
+**Verify build compiles cleanly** (run this first after any code change):
+```bash
+cd dependencies/PostNL-commercial/tests/cosmo && \
+  JAVA_HOME=$JAVA_HOME_COSMO mvn install -DskipTests --no-transfer-progress 2>&1 | grep -E 'BUILD|ERROR'
+```
+Expected: `[INFO] BUILD SUCCESS`. If you see `[ERROR] COMPILATION ERROR`, fix compile errors before proceeding.
+
+**Run unit tests** (replace `<ModuleName>` and `<TestClassName>` with the actual values):
+```bash
+cd dependencies/PostNL-commercial/tests/cosmo && \
+  JAVA_HOME=$JAVA_HOME_COSMO mvn test -pl <ModuleName> -Dtest=<TestClassName> -Denforcer.skip=true \
+  --no-transfer-progress 2>&1 | tail -30
+```
+Example for `cosmo-core`: `-pl cosmo-core`
+
+**Run all unit tests in a module**:
+```bash
+cd dependencies/PostNL-commercial/tests/cosmo && \
+  JAVA_HOME=$JAVA_HOME_COSMO mvn test -pl cosmo-core -Denforcer.skip=true \
+  --no-transfer-progress 2>&1 | tail -30
+```
+
+**Check E2E test availability** (always check before attempting E2E):
+```bash
+echo "BICE_E2E_AVAILABLE=$BICE_E2E_AVAILABLE"
+```
+
+**Run E2E tests** (only if `BICE_E2E_AVAILABLE=true`):
+```bash
+cd dependencies/PostNL-commercial/tests/cosmo && \
+  JAVA_HOME=$JAVA_HOME_COSMO mvn verify -f cosmo-commercie/pom.xml \
+  -Dcucumber.filter.tags="@TICKET-KEY" -Dtags="@TICKET-KEY" \
+  -DPOSTNL_UI_HEADLESS=true --no-transfer-progress 2>&1 | tail -50
+```
+
+**⚠️ E2E Guice failure diagnosis**: If E2E fails with `Guice Injector creation previously failed` or `Runtime Configuration failed` AND `BICE_E2E_AVAILABLE=true`, this is **NOT** a credentials/secrets issue. Investigate the actual Guice configuration error — it is a real infrastructure or config problem that needs to be diagnosed and reported clearly in `outputs/response.md`.
+
 **⚠️ CRITICAL: All output files MUST be written to `outputs/` at the repository root** (e.g. `/home/runner/work/repo/repo/outputs/`).
 Do NOT write them inside `input/`, `input/TICKET-KEY/`, or any subfolder of `input/`. The post-processing script reads from `outputs/` at the repo root — writing elsewhere means all results will be silently lost.
 

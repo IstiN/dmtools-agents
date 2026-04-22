@@ -93,3 +93,29 @@ See `bug_implementation_instructions.md` for the required format (RCA summary, f
 **OUT OF SCOPE**: E2E automation is not part of this task.
 
 DO NOT create branches or push — focus only on code implementation. You must compile and run tests before finishing.
+
+## BICE Project — Maven Build Commands
+
+This is a Java/Maven project using the Cosmo test framework. **Always use `$JAVA_HOME_COSMO`** when running Maven (Java 17, pre-configured by the dependency setup).
+
+**Verify build compiles cleanly** (run this first after any code change):
+```bash
+cd dependencies/PostNL-commercial/tests/cosmo && \
+  JAVA_HOME=$JAVA_HOME_COSMO mvn install -DskipTests --no-transfer-progress 2>&1 | grep -E 'BUILD|ERROR'
+```
+Expected: `[INFO] BUILD SUCCESS`. If you see `[ERROR] COMPILATION ERROR`, fix compile errors before proceeding.
+
+**Run unit tests** (replace `<ModuleName>` and `<TestClassName>` with the actual values):
+```bash
+cd dependencies/PostNL-commercial/tests/cosmo && \
+  JAVA_HOME=$JAVA_HOME_COSMO mvn test -pl <ModuleName> -Dtest=<TestClassName> -Denforcer.skip=true \
+  --no-transfer-progress 2>&1 | tail -30
+```
+Example for `cosmo-core`: `-pl cosmo-core`
+
+**Run all unit tests in a module**:
+```bash
+cd dependencies/PostNL-commercial/tests/cosmo && \
+  JAVA_HOME=$JAVA_HOME_COSMO mvn test -pl cosmo-core -Denforcer.skip=true \
+  --no-transfer-progress 2>&1 | tail -30
+```
