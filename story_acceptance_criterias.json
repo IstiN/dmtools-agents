@@ -26,7 +26,7 @@
       "./agents/scripts/run-agent.sh"
     ],
     "outputType": "field",
-    "fieldName": "Acceptance Criteria",
+    "fieldName": "Acceptance Criterias",
     "operationType": "Replace",
     "ticketContextDepth": 0,
     "attachResponseAsFile": false,
@@ -38,3 +38,4 @@
     "inputJql": "key = JD-82"
   }
 }
+
