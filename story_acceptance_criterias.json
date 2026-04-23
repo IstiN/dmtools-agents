@@ -26,7 +26,7 @@
       "./agents/scripts/run-agent.sh"
     ],
     "outputType": "field",
-    "fieldName": "Acceptance Criterias",
+    "fieldName": "Acceptance Criteria",
     "operationType": "Replace",
     "ticketContextDepth": 0,
     "attachResponseAsFile": false,
