@@ -40,6 +40,10 @@ var DEFAULTS = {
             fetchJql: 'parent = {ticketKey} AND issuetype = Subtask ORDER BY created ASC',
             // Custom Jira field name that holds the answer to a question subtask.
             answerField: 'Answer'
+        },
+        // Jira field names — override per project in .dmtools/config.js under jira.fields
+        fields: {
+            acceptanceCriteria: 'Acceptance Criterias'
         }
     },
 
@@ -488,3 +492,4 @@ module.exports = {
     resolveInstructions: resolveInstructions,
     createScm: _scmModule ? _scmModule.createScm : function() { throw new Error('scm.js not available in this environment'); }
 };
+
