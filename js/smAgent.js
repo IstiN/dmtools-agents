@@ -99,6 +99,18 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
         if (resolved.additionalInstructions && resolved.additionalInstructions.length > 0) {
             p.additionalInstructions = resolved.additionalInstructions;
         }
+
+        // Inject project-specific field name overrides from jira.fields config
+        var jiraFields = effectiveConfig.jira && effectiveConfig.jira.fields;
+        if (jiraFields) {
+            var fieldMap = {
+                'story_acceptance_criterias': jiraFields.acceptanceCriteria
+            };
+            var override = fieldMap[agentName];
+            if (override) {
+                p.fieldName = override;
+            }
+        }
     }
 
     // configPath from effectiveConfig always overrides — so the triggered agent also finds the project config
@@ -471,3 +483,4 @@ function action(params) {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { action: action };
 }
+
