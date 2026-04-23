@@ -1,0 +1,15 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "agents/js/agentDocSync.js",
+    "jobParams": {
+      "customParams": {
+        "smJsonPath": "agents/sm.json",
+        "confluenceSpace": "{confluenceSpace}",
+        "confluencePageTitle": "{confluencePageTitle}",
+        "confluencePageId": "{confluencePageId}",
+        "confluenceParentId": "{confluenceParentId}"
+      }
+    }
+  }
+}
