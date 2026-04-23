@@ -15,6 +15,7 @@ detect_os() {
 detect_ci() {
   if   [ -n "${BITRISE_BUILD_NUMBER:-}" ]; then echo "bitrise"
   elif [ -n "${GITHUB_ACTIONS:-}" ];       then echo "github"
+  elif [ -n "${BUILD_BUILDID:-}" ];        then echo "ado"
   else                                          echo "local"
   fi
 }
@@ -47,6 +48,9 @@ register_path() {
     github)
       [ -n "${GITHUB_PATH:-}" ] && echo "${dir}" >> "${GITHUB_PATH}" || true
       ;;
+    ado)
+      echo "##vso[task.prependpath]${dir}"
+      ;;
     local) ;;  # already exported above
   esac
 }
@@ -64,6 +68,9 @@ export_var() {
       ;;
     github)
       [ -n "${GITHUB_ENV:-}" ] && echo "${key}=${value}" >> "${GITHUB_ENV}" || true
+      ;;
+    ado)
+      echo "##vso[task.setvariable variable=${key}]${value}"
       ;;
     local) ;;
   esac
