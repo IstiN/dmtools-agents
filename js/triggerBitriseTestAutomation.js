@@ -116,7 +116,54 @@ function action(params) {
             }
         }
 
-        // ── 3. Trigger Bitrise build ─────────────────────────────────────────
+        // ── 3a. Abort any in-flight builds for the same ticket ───────────────
+        // Prevents duplicate concurrent runs when the GitHub Action is triggered
+        // multiple times (e.g. by re-applied Jira label, manual dispatch, etc.).
+        try {
+            var statusesToCheck = ['not_started', 'in_progress'];
+            var abortedCount = 0;
+            for (var si = 0; si < statusesToCheck.length; si++) {
+                var listResultRaw = null;
+                try {
+                    listResultRaw = bitrise_list_builds({
+                        appSlug: appSlug,
+                        workflowId: workflowId,
+                        branch: branch,
+                        status: statusesToCheck[si],
+                        limit: 50
+                    });
+                } catch (listErr) {
+                    console.warn('⚠️ bitrise_list_builds failed for status ' + statusesToCheck[si] + ':', listErr.message || listErr);
+                    continue;
+                }
+                var listParsed = (typeof listResultRaw === 'string') ? JSON.parse(listResultRaw) : listResultRaw;
+                var builds = (listParsed && listParsed.data) ? listParsed.data : (Array.isArray(listParsed) ? listParsed : []);
+                for (var bi = 0; bi < builds.length; bi++) {
+                    var b = builds[bi] || {};
+                    var msg = b.commit_message || '';
+                    if (msg.indexOf(ticketKey) !== -1 && b.slug) {
+                        try {
+                            bitrise_abort_build({
+                                appSlug: appSlug,
+                                buildSlug: b.slug,
+                                reason: 'Superseded by newer trigger for ' + ticketKey
+                            });
+                            abortedCount++;
+                            console.log('🛑 Aborted in-flight build #' + (b.build_number || '?') + ' (' + b.slug + ') for ' + ticketKey);
+                        } catch (abortErr) {
+                            console.warn('⚠️ Could not abort build ' + b.slug + ':', abortErr.message || abortErr);
+                        }
+                    }
+                }
+            }
+            if (abortedCount > 0) {
+                console.log('ℹ️ Aborted ' + abortedCount + ' older build(s) before triggering new one.');
+            }
+        } catch (dedupErr) {
+            console.warn('⚠️ Build dedup check failed (continuing anyway):', dedupErr.message || dedupErr);
+        }
+
+        // ── 3b. Trigger Bitrise build ────────────────────────────────────────
         var envVars = [
             { mapped_to: 'TICKET_KEY',       value: ticketKey,       is_expand: false },
             { mapped_to: 'INPUT_JQL',         value: 'key = ' + ticketKey, is_expand: false },
