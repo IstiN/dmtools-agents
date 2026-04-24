@@ -98,8 +98,12 @@ function action(params) {
         }
 
         // ── 3. Trigger Bitrise build ─────────────────────────────────────────
+        // Pass the mobile branch as MOBILE_BRANCH env var so the build workflow
+        // can clone the correct branch. Use 'main' as the trigger branch because
+        // the AI repo (yml-from-repository source) only has 'main'.
         var envVars = [
-            { mapped_to: 'TICKET_KEY', value: ticketKey, is_expand: false }
+            { mapped_to: 'TICKET_KEY', value: ticketKey, is_expand: false },
+            { mapped_to: 'MOBILE_BRANCH', value: branch, is_expand: false }
         ];
         if (featurePrUrl) {
             envVars.push({ mapped_to: 'FEATURE_PR_URL', value: featurePrUrl, is_expand: false });
@@ -108,8 +112,8 @@ function action(params) {
         var buildResult = bitrise_trigger_build({
             appSlug:       appSlug,
             workflowId:    workflowId,
-            branch:        branch,
-            commitMessage: ticketKey + ' — iOS build triggered manually',
+            branch:        'main',
+            commitMessage: ticketKey + ' — iOS build for ' + branch,
             envVars:       JSON.stringify(envVars)
         });
 
