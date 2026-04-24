@@ -773,7 +773,7 @@ function action(params) {
                 } catch (e) {
                     agentResponse = null;
                 }
-                var wipLabel = actualParams.metadata && actualParams.metadata.contextId
+                var wipLabelIfNoChanges = actualParams.metadata && actualParams.metadata.contextId
                     ? actualParams.metadata.contextId + '_wip' : null;
 
                 if (agentResponse && agentResponse.trim()) {
@@ -793,8 +793,8 @@ function action(params) {
                     } catch (e) {
                         console.warn('Failed to move ticket to ' + statuses.IN_REVIEW + ':', e);
                     }
-                    if (wipLabel) {
-                        try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
+                    if (wipLabelIfNoChanges) {
+                        try { jira_remove_label({ key: ticketKey, label: wipLabelIfNoChanges }); } catch (e) {}
                     }
                     return { success: true, path: 'no-changes-needed', ticketKey: ticketKey };
                 }
@@ -813,8 +813,8 @@ function action(params) {
                 } catch (e) {
                     console.warn('Failed to move ticket to Ready For Development:', e);
                 }
-                if (wipLabel) {
-                    try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
+                if (wipLabelIfNoChanges) {
+                    try { jira_remove_label({ key: ticketKey, label: wipLabelIfNoChanges }); } catch (e) {}
                 }
                 return { success: true, path: 'interrupted', ticketKey: ticketKey };
             } else {
