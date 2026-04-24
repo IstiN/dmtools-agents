@@ -257,10 +257,15 @@ function performGitOperations(branchName, commitMessage, baseBranch) {
             };
         }
 
-        // Commit changes
+        // Commit changes — sanitize message to avoid shell metacharacter rejection
+        var safeMessage = commitMessage
+            .replace(/"/g, '\\"')
+            .replace(/[><|;`$\r\n]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
         console.log('Committing changes...');
         runCmd({
-            command: 'git commit -m "' + commitMessage.replace(/"/g, '\\"') + '"'
+            command: 'git commit -m "' + safeMessage + '"'
         });
 
         // Push to remote
