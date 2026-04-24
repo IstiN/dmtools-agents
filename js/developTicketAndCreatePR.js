@@ -760,9 +760,47 @@ function action(params) {
                 }
                 // Push succeeded after agent fix — continue to PR creation
             } else if (gitResult.error && gitResult.error.indexOf('No changes were made') !== -1) {
-                // CLI agent was interrupted before making any code changes (e.g. rate limit hit
-                // during analysis). Reset ticket to Ready For Development for automatic retry.
-                console.log('No git changes detected — CLI agent was interrupted. Resetting ticket for retry.');
+                // No git changes detected. Distinguish two cases:
+                //   (A) Agent completed successfully and determined no code changes are needed
+                //       (e.g. fix already merged via prior PR). outputs/response.md exists with content.
+                //       → Post the agent's analysis as a comment and move to IN_REVIEW. No retry.
+                //   (B) Agent was interrupted mid-analysis (e.g. rate limit, crash).
+                //       outputs/response.md is missing or empty.
+                //       → Reset to Ready For Development for automatic retry.
+                var agentResponse = null;
+                try {
+                    agentResponse = file_read({ path: 'outputs/response.md' });
+                } catch (e) {
+                    agentResponse = null;
+                }
+                var wipLabel = actualParams.metadata && actualParams.metadata.contextId
+                    ? actualParams.metadata.contextId + '_wip' : null;
+
+                if (agentResponse && agentResponse.trim()) {
+                    // Case A: agent finished successfully, no code changes needed.
+                    console.log('No git changes detected — agent completed successfully (response.md present). Treating as "no change needed".');
+                    try {
+                        jira_post_comment({
+                            key: ticketKey,
+                            comment: 'h3. ℹ️ No Code Changes Needed\n\nThe AI agent completed its analysis and determined no code changes are required (e.g. the fix is already present in the target branch, or the ticket was resolved by a previous change).\n\n*Agent analysis:*\n\n' + agentResponse
+                        });
+                    } catch (e) {
+                        console.warn('Failed to post agent analysis comment:', e);
+                    }
+                    try {
+                        jira_move_to_status({ key: ticketKey, statusName: statuses.IN_REVIEW });
+                        console.log('✅ Moved', ticketKey, 'to', statuses.IN_REVIEW, '(no code changes needed)');
+                    } catch (e) {
+                        console.warn('Failed to move ticket to ' + statuses.IN_REVIEW + ':', e);
+                    }
+                    if (wipLabel) {
+                        try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
+                    }
+                    return { success: true, path: 'no-changes-needed', ticketKey: ticketKey };
+                }
+
+                // Case B: agent was genuinely interrupted — retry.
+                console.log('No git changes detected AND no response.md — CLI agent was interrupted. Resetting ticket for retry.');
                 try {
                     jira_post_comment({
                         key: ticketKey,
@@ -775,8 +813,6 @@ function action(params) {
                 } catch (e) {
                     console.warn('Failed to move ticket to Ready For Development:', e);
                 }
-                const wipLabel = actualParams.metadata && actualParams.metadata.contextId
-                    ? actualParams.metadata.contextId + '_wip' : null;
                 if (wipLabel) {
                     try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
                 }
