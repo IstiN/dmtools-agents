@@ -144,13 +144,13 @@ elif [ "$PROVIDER" = "copilot" ]; then
   # available as $PROMPT_ARG when DMTools calls this script with cliPrompt.
   if [ -f "${PROMPT_ARG}" ]; then
     PROMPT_BYTES=$(wc -c < "${PROMPT_ARG}")
-    echo "Running: npx @github/copilot --allow-all-tools --model ${COPILOT_MODEL:-gpt-5-mini} (prompt: ${PROMPT_BYTES} bytes via stdin)"
+    echo "Running: npx @github/copilot --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} (prompt: ${PROMPT_BYTES} bytes via stdin)"
     echo ""
-    npx @github/copilot --allow-all-tools --model "${COPILOT_MODEL:-gpt-5-mini}" < "${PROMPT_ARG}"
+    npx @github/copilot --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" < "${PROMPT_ARG}"
   else
-    echo "Running: npx @github/copilot --allow-all-tools --model ${COPILOT_MODEL:-gpt-5-mini} -p <inline prompt>"
+    echo "Running: npx @github/copilot --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} -p <inline prompt>"
     echo ""
-    npx @github/copilot --allow-all-tools --model "${COPILOT_MODEL:-gpt-5-mini}" -p "${PROMPT}"
+    npx @github/copilot --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" -p "${PROMPT}"
   fi
 
   exit_code=$?
