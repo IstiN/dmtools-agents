@@ -359,8 +359,19 @@ function createPullRequest(title, branchName, baseBranch) {
             console.warn('Could not check for existing PR (non-fatal):', prCheckErr);
         }
 
-        // Escape special characters in title
-        const escapedTitle = title.replace(/"/g, '\\"').replace(/\n/g, ' ');
+        // Escape special characters in title and strip any shell metacharacters
+        // that DMtools' CliCommandExecutor rejects (;, |, &, <, >, `, $, \r, \n).
+        // Jira titles frequently contain "->" (e.g. "Case subject -> subject extension"),
+        // which contains ">" — the validator would then block the entire gh pr create
+        // command, so we replace ASCII arrow/pipe metachars with Unicode equivalents.
+        const escapedTitle = title
+            .replace(/\r?\n/g, ' ')
+            .replace(/"/g, '\\"')
+            .replace(/->/g, '→')
+            .replace(/<-/g, '←')
+            .replace(/[<>`|&;$]/g, ' ')
+            .replace(/\s{2,}/g, ' ')
+            .trim();
 
         // Resolve --body-file path for gh pr create.
         // gh runs in _workingDir (if set), so paths must be relative to it.
