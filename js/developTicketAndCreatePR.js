@@ -202,7 +202,7 @@ function performPushOnly(branchName) {
  * @param {string} commitMessage - Commit message
  * @returns {Object} Result with success status and branch name
  */
-function performGitOperations(branchName, commitMessage) {
+function performGitOperations(branchName, commitMessage, baseBranch) {
     try {
         // Stage all changes
         console.log('Staging changes...');
@@ -218,16 +218,17 @@ function performGitOperations(branchName, commitMessage) {
 
         if (!statusOutput || !statusOutput.trim()) {
             // No uncommitted changes — but check if the agent already committed its work
-            // (the CLI agent sometimes commits itself before postJSAction runs)
+221.             // (the CLI agent sometimes commits itself before postJSAction runs)
+            var originRef = baseBranch ? 'origin/' + baseBranch : 'origin/main';
             var aheadOutput = '';
             try {
-                aheadOutput = cleanCommandOutput(runCmd({ command: 'git rev-list --count origin/main..HEAD' }) || '');
+                aheadOutput = cleanCommandOutput(runCmd({ command: 'git rev-list --count ' + originRef + '..HEAD' }) || '');
             } catch (e) {
-                console.warn('Could not check commits ahead of origin/main:', e);
+                console.warn('Could not check commits ahead of ' + originRef + ':', e);
             }
             var commitsAhead = parseInt(aheadOutput, 10) || 0;
             if (commitsAhead > 0) {
-                console.log('No uncommitted changes, but branch is ' + commitsAhead + ' commit(s) ahead of origin/main — agent already committed. Skipping commit step.');
+                console.log('No uncommitted changes, but branch is ' + commitsAhead + ' commit(s) ahead of ' + originRef + ' — agent already committed. Skipping commit step.');
                 // Jump straight to push
                 return performPushOnly(branchName);
             }
@@ -238,13 +239,13 @@ function performGitOperations(branchName, commitMessage) {
             try {
                 // Fetch remote refs so origin/<branchName> is up to date
                 try { runCmd({ command: 'git fetch origin ' + branchName }); } catch (e) {}
-                remoteAheadOutput = cleanCommandOutput(runCmd({ command: 'git rev-list --count origin/main..origin/' + branchName }) || '');
+                remoteAheadOutput = cleanCommandOutput(runCmd({ command: 'git rev-list --count ' + originRef + '..origin/' + branchName }) || '');
             } catch (e) {
                 console.warn('Could not check remote branch commits:', e);
             }
             var remoteCommitsAhead = parseInt(remoteAheadOutput, 10) || 0;
             if (remoteCommitsAhead > 0) {
-                console.log('Remote branch origin/' + branchName + ' is ' + remoteCommitsAhead + ' commit(s) ahead of origin/main — branch already pushed. Skipping push, proceeding to PR creation.');
+                console.log('Remote branch origin/' + branchName + ' is ' + remoteCommitsAhead + ' commit(s) ahead of ' + originRef + ' — branch already pushed. Skipping push, proceeding to PR creation.');
                 // No push needed — return success so the caller proceeds to PR creation
                 return { success: true, branchName: branchName };
             }
@@ -742,7 +743,8 @@ function action(params) {
         const commitMessage = configLoader.formatTemplate(config.formats.commitMessage.development, {ticketKey: ticketKey, ticketSummary: ticketSummary});
 
         // Perform git operations
-        const gitResult = performGitOperations(branchName, commitMessage);
+        const prTarget = configLoader.resolvePRTargetBranch(config, params.ticket || actualParams.ticket);
+        const gitResult = performGitOperations(branchName, commitMessage, prTarget);
         if (!gitResult.success) {
             if (gitResult.isPushFailure) {
                 // Push was rejected — ask the agent to fix the commit, then retry
@@ -814,7 +816,6 @@ function action(params) {
 
         // Create Pull Request
         const prTitle = configLoader.formatTemplate(config.formats.prTitle.development, {ticketKey: ticketKey, ticketSummary: ticketSummary});
-        const prTarget = configLoader.resolvePRTargetBranch(config, params.ticket || actualParams.ticket);
         const prResult = createPullRequest(prTitle, branchName, prTarget);
 
         if (!prResult.success) {
