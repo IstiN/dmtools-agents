@@ -93,6 +93,17 @@ function runInRepo(command, workingDir) {
     return cli_execute_command({ command: command, workingDirectory: workingDir });
 }
 
+/** Sanitize text for use in shell commands (git commit -m, gh pr create --title).
+ *  CliCommandExecutor rejects commands containing shell metacharacters: ; \n \r ` $() ${} && || | > <
+ *  Jira titles often contain -> (arrows), <angle brackets>, etc.  */
+function sanitizeForShell(text) {
+    return (text || '')
+        .replace(/->/g, '→').replace(/<-/g, '←')
+        .replace(/[<>|&;$`]/g, ' ')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+}
+
 /** Commit + push test files in the automation repo. */
 function performGitOperations(branchName, commitMessage, workingDir, testFilesPath) {
     var addPath = testFilesPath || 'src/tests/';
@@ -334,11 +345,11 @@ function action(params) {
         // Step 3: Commit + push + create automation PR (ALWAYS — don't lose agent's work)
         var automationPrUrl = null;
         if (branchName && workingDir) {
-            var commitMessage = ticketKey + ' test: automate ' + ticketSummary;
+            var commitMessage = sanitizeForShell(ticketKey + ' test: automate ' + ticketSummary);
             var gitResult = performGitOperations(branchName, commitMessage, workingDir, testFilesPath);
 
             if (gitResult.success) {
-                var prTitle = ticketKey + ' ' + ticketSummary;
+                var prTitle = sanitizeForShell(ticketKey + ' ' + ticketSummary);
                 var prResult = createAutomationPR(prTitle, branchName, config.git.baseBranch, workingDir);
                 automationPrUrl = prResult.prUrl;
             } else {
