@@ -402,8 +402,9 @@ function downloadBitriseApp(ticketKey, folder, bitriseBuild, branch, workingDir)
  *
  * @param {string} appPath - absolute path to the .app bundle
  * @param {string} folder  - input folder for writing updated app_info.md
+ * @param {string} [appId] - bundle identifier (e.g. com.postnl.internal.business.customer)
  */
-function installAppOnSimulator(appPath, folder) {
+function installAppOnSimulator(appPath, folder, appId) {
     if (!appPath) {
         console.warn('No app path — skipping simulator install');
         return;
@@ -445,17 +446,18 @@ function installAppOnSimulator(appPath, folder) {
     }
 
     // Append simulator info to app_info.md
+    var resolvedAppId = appId || 'com.postnl.internal.business.customer';
     try {
         var simInfo = [
             '\n## Simulator & Maestro\n',
             '| Field | Value |',
             '|-------|-------|',
             '| MAESTRO_DEVICE | `' + udid + '` |',
-            '| APP_ID | `com.postnl.internal.business.customer` |',
+            '| APP_ID | `' + resolvedAppId + '` |',
             '',
             'The simulator is booted and the app is installed. Use `run-flow.sh` to run tests:',
             '```bash',
-            'MAESTRO_DEVICE="' + udid + '" PLATFORM=ios bash src/scripts/run-flow.sh <flow.yaml> --a11y',
+            'MAESTRO_DEVICE="' + udid + '" APP_ID="' + resolvedAppId + '" PLATFORM=ios bash src/scripts/run-flow.sh <flow.yaml> --a11y',
             '```'
         ];
         var existing = '';
@@ -540,9 +542,17 @@ function action(params) {
             appPath = downloadBitriseApp(ticketKey, folder, buildConfig, featureBranch, config.workingDir);
         }
 
+        // Resolve appId from environment config
+        var resolvedAppId = null;
+        if (customParams.bitriseBuild && customParams.bitriseBuild.environments) {
+            var testEnv = customParams.testEnvironment || 'prod';
+            var ec = customParams.bitriseBuild.environments[testEnv];
+            if (ec && ec.appId) resolvedAppId = ec.appId;
+        }
+
         // Step 5: Install app on the already-booted simulator
         if (appPath) {
-            installAppOnSimulator(appPath, folder);
+            installAppOnSimulator(appPath, folder, resolvedAppId);
         }
 
         console.log('✅ Mobile test automation setup complete for', ticketKey);
