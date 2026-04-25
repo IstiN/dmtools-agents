@@ -219,30 +219,6 @@ function resolveApprovedThreads(scm, pullRequestId, resolvedThreadIds) {
     });
 }
 
-function mergePR(scm, pullRequestId) {
-    try {
-        console.log('Merging PR #' + pullRequestId + '...');
-        scm.mergePr(pullRequestId, 'squash');
-        console.log('✅ PR #' + pullRequestId + ' merged successfully');
-        return true;
-    } catch (error) {
-        console.warn('First merge attempt failed (likely conflict) — trying auto-update branch:', error);
-        try {
-            try { cli_execute_command({ command: 'git fetch --unshallow' }); } catch (e) {}
-            cli_execute_command({ command: 'git fetch origin' });
-            cli_execute_command({ command: 'git merge origin/main --no-edit' });
-            cli_execute_command({ command: 'git push origin HEAD' });
-            console.log('✅ Auto-merged main into branch — retrying PR merge');
-            scm.mergePr(pullRequestId, 'squash');
-            console.log('✅ PR #' + pullRequestId + ' merged after auto-update');
-            return true;
-        } catch (retryErr) {
-            console.error('Auto-update + retry also failed — real conflict needs rework:', retryErr);
-            return false;
-        }
-    }
-}
-
 /**
  * Post review results to Jira ticket
  * @param {string} ticketKey - Ticket key
@@ -261,7 +237,7 @@ function postReviewToJira(ticketKey, reviewContent, reviewData, prUrl, merged) {
         if (merged) {
             comment += '{panel:bgColor=#E3FCEF|borderColor=#00875A}✅ *APPROVED & MERGED* - PR has been merged successfully{panel}\n\n';
         } else if (recommendation === 'APPROVE') {
-            comment += '{panel:bgColor=#FFF7E6|borderColor=#FF8B00}⚠️ *APPROVED — MERGE CONFLICT* - Review passed but PR could not be merged automatically. Please resolve conflicts and re-push.{panel}\n\n';
+            comment += '{panel:bgColor=#E3FCEF|borderColor=#00875A}✅ *APPROVED* - AI review passed. Awaiting required reviewer approval to merge.{panel}\n\n';
         } else if (recommendation === 'BLOCK') {
             comment += '{panel:bgColor=#FFEBE6|borderColor=#DE350B}🚨 *BLOCKED* - Critical issues must be fixed before merge{panel}\n\n';
         } else {
@@ -419,8 +395,6 @@ function action(params) {
             );
         }
 
-        let merged = false;
-
         // Step 4: Post all comments to GitHub PR (always, regardless of outcome)
         if (prNumber && repoInfo) {
             console.log('Posting review to GitHub PR #' + prNumber + ' (recommendation: ' + recommendation + ')');
@@ -463,8 +437,8 @@ function action(params) {
             console.warn('No PR number or repo info - skipping GitHub comments and merge');
         }
 
-        // Step 6: Post review to Jira ticket
-        postReviewToJira(ticketKey, jiraReview, reviewData, prUrl, merged);
+        // Step 6: Post review to Jira ticket (merge is handled by SM/required reviewers, not by this agent)
+        postReviewToJira(ticketKey, jiraReview, reviewData, prUrl, false);
 
         // Step 7: Update ticket status based on outcome
         try {
