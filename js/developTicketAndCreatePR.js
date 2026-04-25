@@ -688,11 +688,13 @@ function action(params) {
         // When story/bug development is re-triggered (e.g. after rework or manual restart),
         // the pr_approved label from a prior review must be removed so the new review
         // cycle starts clean and onApproved triggers don't fire prematurely.
+        var prApprovedCleaned = false;
         if (hasPrApprovedLabel(actualParams.ticket)) {
             console.log('🧹 Removing stale pr_approved label from', ticketKey);
             try {
                 jira_remove_label({ key: ticketKey, label: LABELS.PR_APPROVED });
                 console.log('✅ Removed pr_approved from Jira ticket');
+                prApprovedCleaned = true;
             } catch (e) { console.warn('Could not remove pr_approved from Jira:', e); }
             // Also try to remove from GitHub PR if branch already has one open
             try {
@@ -939,7 +941,7 @@ function action(params) {
         const autoStartReview = customParams && customParams.autoStartReview;
         const reviewConfigFile = customParams && customParams.autoStartReviewConfigFile;
         if (autoStartReview && reviewConfigFile) {
-            if (hasPrApprovedLabel(actualParams.ticket)) {
+            if (hasPrApprovedLabel(actualParams.ticket) && !prApprovedCleaned) {
                 console.log('ℹ️ autoStartReview: skipped — ticket has pr_approved label');
             } else {
                 try {
