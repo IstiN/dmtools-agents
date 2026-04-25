@@ -309,8 +309,12 @@ function action(params) {
             const repliesPosted = postThreadReplies(scm, pr.number);
             console.log('Thread replies posted:', repliesPosted);
 
-            // Post general fix summary as a top-level PR comment
-            prCommentPosted = postPRComment(scm, pr.number, fixSummary, ticketKey);
+            // Post general fix summary as a top-level PR comment (skip if no replies were posted — nothing was fixed)
+            if (repliesPosted > 0) {
+                prCommentPosted = postPRComment(scm, pr.number, fixSummary, ticketKey);
+            } else {
+                console.log('ℹ️ No thread replies posted — skipping general PR comment (nothing to fix)');
+            }
         } else {
             console.warn('Could not find PR to post comment — skipping GitHub PR comment');
         }

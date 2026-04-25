@@ -1,0 +1,12 @@
+{
+  "name": "Teammate",
+  "params": {
+    "agentParams": {
+      "aiRole": "Developer",
+      "instructions": []
+    },
+    "skipAIProcessing": true,
+    "preJSAction": "agents/restoreDescription.js",
+    "inputJql": "key = MAPC-6815"
+  }
+}

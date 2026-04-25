@@ -266,6 +266,10 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
 
             let section = '## Review Threads (Inline Comments)\n\n';
 
+            // Bot authors whose inline review threads are informational (test results, CI status),
+            // not actionable code-review feedback that requires a code fix.
+            var BOT_AUTHORS = ['github-actions[bot]', 'dependabot[bot]', 'renovate[bot]', 'codecov[bot]'];
+
             conversations.forEach(function(thread, idx) {
                 const rootComment = thread.rootComment || thread;
                 const replies = Array.isArray(thread.replies) ? thread.replies : [];
@@ -275,6 +279,12 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
                 const isResolvedByGraphQL = rootCommentId ? (reviewThreadResolvedById[rootCommentId] === true) : false;
                 const isResolved = thread.resolved === true || thread.isResolved === true || isResolvedByGraphQL;
 
+                // Detect bot-authored threads — treat as informational, not actionable
+                var threadAuthor = rootComment.user ? rootComment.user.login :
+                                   (rootComment.author ? rootComment.author.login : '');
+                var isBot = BOT_AUTHORS.indexOf(threadAuthor) !== -1 ||
+                            (threadAuthor && threadAuthor.indexOf('[bot]') !== -1);
+
                 rawThreads.push({
                     index: idx + 1,
                     rootCommentId: thread.path ? rootCommentId : null,
@@ -282,10 +292,11 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
                     path: thread.path || null,
                     line: thread.line || thread.original_line || null,
                     resolved: isResolved,
+                    bot: isBot,
                     body: (rootComment.body || '').trim()
                 });
 
-                if (isResolved) return;
+                if (isResolved || isBot) return;
 
                 section += '### Thread ' + (idx + 1);
                 if (thread.path) {
@@ -317,14 +328,18 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
             });
 
             const resolvedCount = rawThreads.filter(function(t) { return t.resolved; }).length;
-            const openCount = conversations.length - resolvedCount;
+            const botCount = rawThreads.filter(function(t) { return !t.resolved && t.bot; }).length;
+            const openCount = conversations.length - resolvedCount - botCount;
 
-            if (resolvedCount > 0) {
-                section = '> ℹ️ **' + resolvedCount + ' thread(s) already resolved and excluded from this review.**\n\n' + section;
+            if (resolvedCount > 0 || botCount > 0) {
+                var infoLines = [];
+                if (resolvedCount > 0) infoLines.push(resolvedCount + ' resolved thread(s) excluded');
+                if (botCount > 0) infoLines.push(botCount + ' bot-generated thread(s) excluded (informational only)');
+                section = '> ℹ️ **' + infoLines.join('; ') + '.**\n\n' + section;
             }
 
             sections.push(section);
-            console.log('Discussions: ' + conversations.length + ' threads (' + openCount + ' open, ' + resolvedCount + ' resolved),',
+            console.log('Discussions: ' + conversations.length + ' threads (' + openCount + ' open, ' + resolvedCount + ' resolved, ' + botCount + ' bot),',
                 rawThreads.filter(function(t) { return t.rootCommentId; }).length + ' reply IDs,',
                 rawThreads.filter(function(t) { return t.threadId; }).length + ' resolve IDs');
         }

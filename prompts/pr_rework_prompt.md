@@ -18,7 +18,7 @@ You are fixing code issues identified in a Pull Request review.
 
 **If `ci_failures.md` is present**: CI checks are currently failing on this PR. Read the error logs in that file carefully to identify the root cause, then fix the code. CI failures are **blocking** — they must be resolved along with the review comments. After pushing, CI will re-run automatically.
 
-Your mission is to address every issue raised in `pr_discussions.md`. This file contains ONLY open (unresolved) threads — already-resolved threads are excluded automatically. For each thread:
+Your mission is to address every issue raised in `pr_discussions.md`. This file contains ONLY open (unresolved) threads from **human reviewers** — already-resolved threads and bot-generated threads (e.g. test automation results from `github-actions[bot]`) are excluded automatically. If `pr_discussions.md` contains NO review threads (empty or only informational headers), then there is **nothing to fix** — write a short `outputs/response.md` stating "No open review comments to address" and an empty `outputs/review_replies.json` (`{ "replies": [] }`), then exit. **Do NOT post multiple acknowledgment comments.** For each thread:
 1. Understand the issue described by the reviewer
 2. Locate the relevant code in the codebase
 3. Apply the required fix
