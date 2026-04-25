@@ -8,6 +8,8 @@
  *   inputJql           — JQL to find the ticket (e.g. "key = MAPC-6815")
  *   bitriseBuild.appSlug       — Bitrise app slug
  *   bitriseBuild.workflowId   — Bitrise workflow ID (default: build_ios_simulator)
+ *   bitriseBuild.triggerBranch — branch for Bitrise trigger (use "main" when YAML
+ *                                lives in a different repo than the build target)
  *   featurePR.owner    — GitHub owner of the mobile app repo
  *   featurePR.repo     — GitHub repo name of the mobile app repo
  */
@@ -20,6 +22,7 @@ function action(params) {
         var bb = jobParams.bitriseBuild || {};
         var appSlug = bb.appSlug;
         var workflowId = bb.workflowId || 'build_ios_simulator';
+        var triggerBranch = bb.triggerBranch || '';
         var featurePRConfig = jobParams.featurePR || {};
         var featureOwner = featurePRConfig.owner || '';
         var featureRepo = featurePRConfig.repo || '';
@@ -98,11 +101,12 @@ function action(params) {
         }
 
         // ── 3. Trigger Bitrise build ─────────────────────────────────────────
-        // Always use the feature branch as the Bitrise trigger branch so
-        // the Bitrise API records the correct branch. This allows the test
-        // automation to find the build by branch name later.
+        // triggerBranch (e.g. "main") = branch for Bitrise to fetch the YAML from.
+        // MOBILE_BRANCH env var = the actual mobileApp branch to clone/build.
+        var effectiveBranch = triggerBranch || branch;
         var envVars = [
-            { mapped_to: 'TICKET_KEY', value: ticketKey, is_expand: false }
+            { mapped_to: 'TICKET_KEY', value: ticketKey, is_expand: false },
+            { mapped_to: 'MOBILE_BRANCH', value: branch, is_expand: false }
         ];
         if (featurePrUrl) {
             envVars.push({ mapped_to: 'FEATURE_PR_URL', value: featurePrUrl, is_expand: false });
@@ -111,7 +115,7 @@ function action(params) {
         var buildResult = bitrise_trigger_build({
             appSlug:       appSlug,
             workflowId:    workflowId,
-            branch:        branch,
+            branch:        effectiveBranch,
             commitMessage: ticketKey + ' — iOS build for ' + branch,
             envVars:       JSON.stringify(envVars)
         });

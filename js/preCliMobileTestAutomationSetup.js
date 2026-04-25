@@ -254,35 +254,43 @@ function downloadBitriseApp(ticketKey, folder, bitriseBuild, branch, workingDir)
     // Find latest successful build
     var buildSlug = null;
     try {
+        // Bitrise trigger branch is always "main" (for YAML source), so we
+        // cannot filter by feature branch. Instead, list recent builds for the
+        // workflow and match by commit message which contains the feature branch.
         var listParams = {
             appSlug: appSlug,
             workflowId: workflowId,
-            limit: 10
+            limit: 20
         };
-        if (branch) listParams.branch = branch;
 
         var buildsResult = parseMcpResult(bitrise_list_builds(listParams));
         var builds = buildsResult && buildsResult.data ? buildsResult.data : [];
 
         // status=1 means success in Bitrise API
         var successBuilds = builds.filter(function(b) { return b.status === 1 || b.status_text === 'success'; });
-        if (successBuilds.length === 0 && branch) {
-            // Fallback: try without branch filter but warn loudly
-            console.warn('⚠️ No successful builds on branch', branch,
-                '— falling back to latest build from ANY branch.',
-                'Ensure the build was triggered with the correct branch (not main).');
-            var fallbackResult = parseMcpResult(bitrise_list_builds({ appSlug: appSlug, workflowId: workflowId, limit: 10 }));
-            var fallbackBuilds = fallbackResult && fallbackResult.data ? fallbackResult.data : [];
-            successBuilds = fallbackBuilds.filter(function(b) { return b.status === 1 || b.status_text === 'success'; });
-            if (successBuilds.length > 0) {
-                var fb = successBuilds[0];
-                console.warn('⚠️ Using build #' + fb.build_number + ' from branch "' +
-                    (fb.branch || 'unknown') + '" (requested: "' + branch + '")');
+
+        // If we have a feature branch, find the build whose commit message
+        // mentions it (e.g. "MAPC-6818 — iOS build for bug/MAPC-6818")
+        if (branch && successBuilds.length > 0) {
+            var branchMatched = successBuilds.filter(function(b) {
+                var msg = b.commit_message || b.original_build_params_commit_message || '';
+                return msg.indexOf(branch) !== -1;
+            });
+            if (branchMatched.length > 0) {
+                successBuilds = branchMatched;
+                console.log('✅ Found', branchMatched.length, 'build(s) matching branch', branch);
+            } else {
+                console.warn('⚠️ No builds found with commit message matching "' + branch + '".',
+                    'Using latest successful build instead. Available builds:');
+                for (var si = 0; si < Math.min(successBuilds.length, 5); si++) {
+                    console.warn('   #' + successBuilds[si].build_number + ': "' +
+                        (successBuilds[si].commit_message || '').substring(0, 80) + '"');
+                }
             }
         }
 
         if (successBuilds.length === 0) {
-            throw new Error('No successful ' + workflowId + ' builds found for branch ' + (branch || 'any') + '. Trigger a build first, then re-run this automation.');
+            throw new Error('No successful ' + workflowId + ' builds found. Trigger a build first, then re-run this automation.');
         }
         buildSlug = successBuilds[0].slug;
         console.log('✅ Found build #' + successBuilds[0].build_number + ' slug:', buildSlug);
