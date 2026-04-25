@@ -145,10 +145,12 @@ function commitAndPush(ticketKey, config) {
     const rawStatus = cmd('git status --porcelain') || '';
     const status = cleanCommandOutput(rawStatus);
 
+    var hasChanges = false;
     if (status.trim()) {
         const commitMsg = configLoader.formatTemplate(config.formats.commitMessage.rework, {ticketKey: ticketKey});
         cmd('git commit -m "' + commitMsg + '"');
         console.log('✅ Committed rework changes');
+        hasChanges = true;
     } else {
         console.warn('No file changes detected — pushing existing commits only');
     }
@@ -166,7 +168,7 @@ function commitAndPush(ticketKey, config) {
     }
 
     console.log('✅ Pushed to remote branch:', branchName);
-    return branchName;
+    return { branch: branchName, hasChanges: hasChanges };
 }
 
 /**
@@ -280,8 +282,11 @@ function action(params) {
 
         // Commit and push
         let branchName;
+        let codeChangesCommitted = false;
         try {
-            branchName = commitAndPush(ticketKey, config);
+            const pushResult = commitAndPush(ticketKey, config);
+            branchName = pushResult.branch;
+            codeChangesCommitted = pushResult.hasChanges;
         } catch (gitError) {
             console.error('Git operations failed:', gitError);
             try {
@@ -309,11 +314,12 @@ function action(params) {
             const repliesPosted = postThreadReplies(scm, pr.number);
             console.log('Thread replies posted:', repliesPosted);
 
-            // Post general fix summary as a top-level PR comment (skip if no replies were posted — nothing was fixed)
-            if (repliesPosted > 0) {
+            // Post general fix summary as a top-level PR comment
+            // Post if either: code was committed, or thread replies were posted
+            if (repliesPosted > 0 || codeChangesCommitted) {
                 prCommentPosted = postPRComment(scm, pr.number, fixSummary, ticketKey);
             } else {
-                console.log('ℹ️ No thread replies posted — skipping general PR comment (nothing to fix)');
+                console.log('ℹ️ No thread replies and no code changes — skipping general PR comment');
             }
         } else {
             console.warn('Could not find PR to post comment — skipping GitHub PR comment');
