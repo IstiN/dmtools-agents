@@ -8,8 +8,6 @@
  *   inputJql           — JQL to find the ticket (e.g. "key = MAPC-6815")
  *   bitriseBuild.appSlug       — Bitrise app slug
  *   bitriseBuild.workflowId   — Bitrise workflow ID (default: build_ios_simulator)
- *   bitriseBuild.triggerBranch — (optional) override branch for Bitrise trigger
- *                                (use when yml-from-repo source differs from build repo)
  *   featurePR.owner    — GitHub owner of the mobile app repo
  *   featurePR.repo     — GitHub repo name of the mobile app repo
  */
@@ -22,7 +20,6 @@ function action(params) {
         var bb = jobParams.bitriseBuild || {};
         var appSlug = bb.appSlug;
         var workflowId = bb.workflowId || 'build_ios_simulator';
-        var triggerBranch = bb.triggerBranch || '';
         var featurePRConfig = jobParams.featurePR || {};
         var featureOwner = featurePRConfig.owner || '';
         var featureRepo = featurePRConfig.repo || '';
@@ -101,16 +98,12 @@ function action(params) {
         }
 
         // ── 3. Trigger Bitrise build ─────────────────────────────────────────
-        // When triggerBranch is set, the Bitrise app uses yml-from-repository
-        // from a different repo than the build target. Pass the actual mobile
-        // branch via MOBILE_BRANCH env var so the workflow can clone it.
-        var effectiveBranch = triggerBranch || branch;
+        // Always use the feature branch as the Bitrise trigger branch so
+        // the Bitrise API records the correct branch. This allows the test
+        // automation to find the build by branch name later.
         var envVars = [
             { mapped_to: 'TICKET_KEY', value: ticketKey, is_expand: false }
         ];
-        if (triggerBranch) {
-            envVars.push({ mapped_to: 'MOBILE_BRANCH', value: branch, is_expand: false });
-        }
         if (featurePrUrl) {
             envVars.push({ mapped_to: 'FEATURE_PR_URL', value: featurePrUrl, is_expand: false });
         }
@@ -118,7 +111,7 @@ function action(params) {
         var buildResult = bitrise_trigger_build({
             appSlug:       appSlug,
             workflowId:    workflowId,
-            branch:        effectiveBranch,
+            branch:        branch,
             commitMessage: ticketKey + ' — iOS build for ' + branch,
             envVars:       JSON.stringify(envVars)
         });

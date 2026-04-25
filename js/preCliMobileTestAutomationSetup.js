@@ -267,11 +267,18 @@ function downloadBitriseApp(ticketKey, folder, bitriseBuild, branch, workingDir)
         // status=1 means success in Bitrise API
         var successBuilds = builds.filter(function(b) { return b.status === 1 || b.status_text === 'success'; });
         if (successBuilds.length === 0 && branch) {
-            // Fallback: try without branch filter
-            console.log('No successful builds on branch', branch, '— trying without branch filter');
+            // Fallback: try without branch filter but warn loudly
+            console.warn('⚠️ No successful builds on branch', branch,
+                '— falling back to latest build from ANY branch.',
+                'Ensure the build was triggered with the correct branch (not main).');
             var fallbackResult = parseMcpResult(bitrise_list_builds({ appSlug: appSlug, workflowId: workflowId, limit: 10 }));
             var fallbackBuilds = fallbackResult && fallbackResult.data ? fallbackResult.data : [];
             successBuilds = fallbackBuilds.filter(function(b) { return b.status === 1 || b.status_text === 'success'; });
+            if (successBuilds.length > 0) {
+                var fb = successBuilds[0];
+                console.warn('⚠️ Using build #' + fb.build_number + ' from branch "' +
+                    (fb.branch || 'unknown') + '" (requested: "' + branch + '")');
+            }
         }
 
         if (successBuilds.length === 0) {
