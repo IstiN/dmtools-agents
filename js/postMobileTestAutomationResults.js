@@ -370,8 +370,28 @@ function action(params) {
         }
 
         var status = (result.status || '').toLowerCase();
-        var passed = status === 'passed';
         var blockedByHuman = status === 'blocked_by_human';
+
+        // Check for a11y structural warnings — treat as failure even if Maestro tests passed
+        var hasA11yWarnings = false;
+        if (result.results && Array.isArray(result.results)) {
+            for (var i = 0; i < result.results.length; i++) {
+                var tc = result.results[i];
+                if (tc.a11y_warnings && Array.isArray(tc.a11y_warnings) && tc.a11y_warnings.length > 0) {
+                    hasA11yWarnings = true;
+                    break;
+                }
+            }
+        }
+        // Top-level a11y_warnings array
+        if (!hasA11yWarnings && result.a11y_warnings && Array.isArray(result.a11y_warnings) && result.a11y_warnings.length > 0) {
+            hasA11yWarnings = true;
+        }
+
+        var passed = status === 'passed' && !hasA11yWarnings;
+        if (hasA11yWarnings && status === 'passed') {
+            console.log('⚠️ Maestro tests passed but a11y structural warnings found — marking as FAILED');
+        }
 
         // Step 5: Find feature PR and update it
         if (featureOwner && featureRepo && !blockedByHuman) {
