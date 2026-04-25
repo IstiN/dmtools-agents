@@ -239,7 +239,14 @@ function updateFeaturePRLabel(owner, repo, prNumber, passed, labelPassed, labelF
 function updateFeaturePRBody(owner, repo, prNumber, workingDir) {
     var summaryFile = readOutputFile('outputs/pr_feature_update.md', workingDir);
     if (!summaryFile) {
-        console.log('No outputs/pr_feature_update.md — skipping feature PR comment');
+        // Fallback: use pr_body.md (automation PR description) which has the same test results
+        summaryFile = readOutputFile('outputs/pr_body.md', workingDir);
+        if (summaryFile) {
+            console.log('No outputs/pr_feature_update.md — falling back to outputs/pr_body.md');
+        }
+    }
+    if (!summaryFile) {
+        console.log('No outputs/pr_feature_update.md or pr_body.md — skipping feature PR comment');
         return;
     }
 
@@ -372,7 +379,8 @@ function action(params) {
         var status = (result.status || '').toLowerCase();
         var blockedByHuman = status === 'blocked_by_human';
 
-        // Check for a11y structural warnings — treat as failure even if Maestro tests passed
+        // Check for a11y structural warnings — log but do NOT override test status.
+        // A11y warnings are informational; Maestro tests that pass → tests_passed label.
         var hasA11yWarnings = false;
         if (result.results && Array.isArray(result.results)) {
             for (var i = 0; i < result.results.length; i++) {
@@ -388,9 +396,9 @@ function action(params) {
             hasA11yWarnings = true;
         }
 
-        var passed = status === 'passed' && !hasA11yWarnings;
+        var passed = status === 'passed';
         if (hasA11yWarnings && status === 'passed') {
-            console.log('⚠️ Maestro tests passed but a11y structural warnings found — marking as FAILED');
+            console.log('⚠️ Maestro tests passed with a11y structural warnings (informational — not overriding status)');
         }
 
         // Step 5: Find feature PR and update it

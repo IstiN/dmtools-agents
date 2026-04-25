@@ -253,14 +253,16 @@ suite('postMobileTestAutomationResults — feature PR comment', function() {
         assert.ok(!ghPrEdit, 'should NOT use gh pr edit (would overwrite PR body)');
     });
 
-    test('skips PR comment when pr_feature_update.md missing', function() {
+    test('falls back to pr_body.md when pr_feature_update.md missing', function() {
         var prComments = [];
 
         var m = loadPostCli({
             file_read: function(opts) {
                 if (opts.path === 'outputs/test_automation_result.json') return PASSED_RESULT;
                 if (opts.path.indexOf('.dmtools/config') !== -1) return null;
-                return null; // pr_feature_update.md not present
+                if (opts.path.indexOf('pr_feature_update.md') !== -1) return null;
+                if (opts.path.indexOf('pr_body.md') !== -1) return '## Test Results (from pr_body)\n\nAll passed ✅';
+                return null;
             },
             github_list_prs: function() {
                 return JSON.stringify({ data: [{ number: 963, title: 'MAPC-6618', head: { ref: 'story/MAPC-6618' } }]});
@@ -273,7 +275,8 @@ suite('postMobileTestAutomationResults — feature PR comment', function() {
 
         m.action(makeParams('MAPC-6618'));
 
-        assert.equal(prComments.length, 0, 'should NOT post PR comment when no pr_feature_update.md');
+        assert.equal(prComments.length, 1, 'should post PR comment using pr_body.md fallback');
+        assert.ok(prComments[0].text.indexOf('pr_body') !== -1, 'should contain pr_body content');
     });
 
 });
