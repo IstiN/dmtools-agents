@@ -225,18 +225,16 @@ function resolveApprovedThreads(scm, pullRequestId, resolvedThreadIds) {
  * @param {string} reviewContent - Review content (from outputs/response.md)
  * @param {Object} reviewData - Parsed pr_review.json data
  * @param {string} prUrl - PR URL
- * @param {boolean} merged - Whether PR was merged
+ * @param {string} prUrl - PR URL for linking
  */
-function postReviewToJira(ticketKey, reviewContent, reviewData, prUrl, merged) {
+function postReviewToJira(ticketKey, reviewContent, reviewData, prUrl) {
     try {
         let comment = 'h2. 🔍 Automated PR Review Completed\n\n';
 
         // Add outcome badge
         // Normalize: LLM sometimes returns "APPROVED" instead of "APPROVE"
         const recommendation = (reviewData.recommendation || reviewData.verdict || 'REQUEST_CHANGES').replace(/^APPROVED$/, 'APPROVE');
-        if (merged) {
-            comment += '{panel:bgColor=#E3FCEF|borderColor=#00875A}✅ *APPROVED & MERGED* - PR has been merged successfully{panel}\n\n';
-        } else if (recommendation === 'APPROVE') {
+        if (recommendation === 'APPROVE') {
             comment += '{panel:bgColor=#E3FCEF|borderColor=#00875A}✅ *APPROVED* - AI review passed. Awaiting required reviewer approval to merge.{panel}\n\n';
         } else if (recommendation === 'BLOCK') {
             comment += '{panel:bgColor=#FFEBE6|borderColor=#DE350B}🚨 *BLOCKED* - Critical issues must be fixed before merge{panel}\n\n';
@@ -438,7 +436,7 @@ function action(params) {
         }
 
         // Step 6: Post review to Jira ticket (merge is handled by SM/required reviewers, not by this agent)
-        postReviewToJira(ticketKey, jiraReview, reviewData, prUrl, false);
+        postReviewToJira(ticketKey, jiraReview, reviewData, prUrl);
 
         // Step 7: Update ticket status based on outcome
         try {
@@ -509,7 +507,7 @@ function action(params) {
         }
 
         // Step 12: Auto-start pr_rework when changes were requested (opt-in via customParams)
-        if (!isApproved && !merged) {
+        if (!isApproved) {
             const autoStartRework = customParams && customParams.autoStartRework;
             const reworkConfigFile = customParams && customParams.autoStartReworkConfigFile;
             if (autoStartRework && reworkConfigFile) {
@@ -619,15 +617,14 @@ function action(params) {
             }
         }
 
-        console.log('✅ PR review workflow completed:', isApproved ? 'MERGED' : 'CHANGES REQUESTED');
+        console.log('✅ PR review workflow completed:', isApproved ? 'APPROVED' : 'CHANGES REQUESTED');
 
         return {
             success: true,
-            message: isApproved ? 'PR approved and merged' : 'Changes requested, ticket returned to In Development',
+            message: isApproved ? 'PR approved — awaiting reviewer merge' : 'Changes requested, ticket returned to In Development',
             recommendation: recommendation,
             issueCounts: reviewData.issueCounts,
-            githubCommentsPosted: !!(prNumber && repoInfo),
-            merged: merged
+            githubCommentsPosted: !!(prNumber && repoInfo)
         };
 
     } catch (error) {
