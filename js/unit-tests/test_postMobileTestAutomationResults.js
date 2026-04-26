@@ -383,40 +383,4 @@ suite('postMobileTestAutomationResults — git commit resilience', function() {
             'should read result from automation repo fallback path and move to Passed');
     });
 
-    test('a11y warnings override status=failed to passed when all Maestro tests passed', function() {
-        var labelAdded = [];
-        var A11Y_WARNING_RESULT = JSON.stringify({
-            status: 'failed',
-            summary: '11 passed, 0 failed',
-            results: [
-                { ticket: 'MAPC-TC-1', title: 'Form labels', status: 'passed', a11y_warnings: [{ element: 'Subject', warning: 'no value' }] },
-                { ticket: 'MAPC-TC-2', title: 'Chat input', status: 'passed' }
-            ],
-            a11y_warnings: [{ element: 'Subject dropdown', warning: 'accessibilityText only', impact: 'VoiceOver issue' }]
-        });
-
-        var m = loadPostCli({
-            file_read: function(opts) {
-                if (opts.path === 'outputs/test_automation_result.json') return A11Y_WARNING_RESULT;
-                if (opts.path.indexOf('.dmtools/config') !== -1) return null;
-                return null;
-            },
-            cli_execute_command: function(opts) {
-                if ((opts.command || '').indexOf('branch --show-current') !== -1) return 'test/MAPC-7014';
-                return '';
-            },
-            github_list_prs: function() { return [{ number: 1001, title: 'MAPC-7014 fix', head: { ref: 'bug/MAPC-7014' } }]; },
-            github_add_pr_label: function(opts) { labelAdded.push(opts.label); },
-            github_remove_pr_label: function() {},
-            jira_move_to_status: function() {},
-            jira_post_comment: function() {},
-            github_add_pr_comment: function() {}
-        });
-
-        m.action(makeParams('MAPC-7014'));
-
-        assert.ok(labelAdded.indexOf('tests_passed') !== -1, 'should add tests_passed label when a11y warnings present but all tests pass');
-        assert.ok(labelAdded.indexOf('tests_failed') === -1, 'should NOT add tests_failed label');
-    });
-
 });

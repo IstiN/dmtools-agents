@@ -397,27 +397,7 @@ function action(params) {
         }
 
         var passed = status === 'passed';
-
-        // When CLI agent marks status=failed due to a11y warnings but all individual
-        // Maestro tests actually passed, override to passed.
-        if (!passed && hasA11yWarnings && result.results && Array.isArray(result.results)) {
-            var allTestsPassed = true;
-            var hasResults = false;
-            for (var j = 0; j < result.results.length; j++) {
-                hasResults = true;
-                var testStatus = (result.results[j].status || '').toLowerCase();
-                if (testStatus !== 'passed' && testStatus !== 'skipped') {
-                    allTestsPassed = false;
-                    break;
-                }
-            }
-            if (hasResults && allTestsPassed) {
-                console.log('⚠️ CLI agent reported status=failed due to a11y warnings, but all ' + result.results.length + ' Maestro tests passed — overriding to passed');
-                passed = true;
-                status = 'passed';
-            }
-        }
-        if (hasA11yWarnings && passed) {
+        if (hasA11yWarnings && status === 'passed') {
             console.log('⚠️ Maestro tests passed with a11y structural warnings (informational — not overriding status)');
         }
 
