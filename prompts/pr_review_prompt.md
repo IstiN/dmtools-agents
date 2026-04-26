@@ -69,6 +69,37 @@ Verify:
 
 **⚠️ Merge commits bring noise — do NOT flag as out-of-scope**: This branch may contain `Merge branch 'main'` commits that pull in unrelated files (tests, components) committed to main by other stories. These files will NOT appear in `pr_diff.txt` (the three-dot diff already excludes them), but their commit messages may be visible in `pr_info.md`. **Never flag a file as out-of-scope based on commit messages alone — only flag files that actually appear in `pr_diff.txt`.**
 
+## 🧪 Maestro Test Automation Results Analysis (Critical)
+
+Check `pr_discussions.md` for comments from the test automation bot (comments titled **🤖 Maestro Test Results**). If present, perform a **deep analysis**:
+
+### What to look for
+1. **Failed tests** — read the test case ID, title, and failure reason. Cross-reference with `pr_diff.txt` to determine if the failure is caused by changes in this PR.
+2. **A11y structural warnings** — these are the most important signals. The automation bot captures the **actual iOS accessibility tree** via `maestro hierarchy` on the simulator. Warnings like "accessibilityValue is empty" or "content not exposed to a11y tree" are based on **real runtime data**, not static code analysis.
+3. **Warning vs code mismatch** — if the code adds `accessibilityValue={{ text: ... }}` but the Maestro hierarchy shows `value=''`, the fix is **not working at runtime**. This is a 🚨 BLOCKING issue. Common reasons:
+   - React Native `Pressable` (plain `UIView` on iOS) may not surface `accessibilityValue` to the iOS accessibility tree — use `accessibilityLabel` concatenation instead
+   - `accessibilityValue` works on `TextInput`, `Switch`, `Slider` but may be ignored on container views (`View`, `Pressable`, `TouchableOpacity`)
+   - The component may need `accessible={true}` explicitly set
+4. **Passed with warnings (⚠️)** — these indicate the Maestro flow passed (attributes exist in code) but the **runtime accessibility tree** has issues. Treat as ⚠️ IMPORTANT.
+
+### How to create review comments from Maestro results
+- For each failed test or structural warning, find the **exact line in `pr_diff.txt`** where the accessibility prop is added/changed
+- Place an inline review comment on that line explaining:
+  - What the Maestro hierarchy actually shows at runtime
+  - Why the current approach doesn't work (e.g., "React Native Pressable does not expose accessibilityValue to iOS UIAccessibility tree")
+  - A concrete fix suggestion with code
+- If the problematic line is NOT in the diff, include the finding in the general comment with file path and line number
+
+### Key Maestro attribute mapping (iOS)
+Understanding how React Native props map to Maestro hierarchy attributes:
+- `accessibilityLabel` → Maestro `accessibilityText`
+- `accessibilityValue={{ text: "..." }}` → Maestro `value` (NOT `accessibilityValue`)
+- `accessibilityHint` → Maestro `hintText`
+- `accessibilityRole` → affects element type in hierarchy
+- `testID` → Maestro `resource-id`
+
+If a Maestro warning says `value` is empty but the code sets `accessibilityValue`, this means the iOS accessibility tree genuinely does not contain the value — the fix is broken.
+
 # Output
 
 Categorize all findings as:
