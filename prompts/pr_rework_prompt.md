@@ -37,69 +37,19 @@ For each thread:
 
 **Every human review thread in `pr_discussions.md` must have exactly one matching entry in `review_replies.json`. Do not skip any thread.**
 
-### 🧪 Fixing Maestro Test Automation Results (CRITICAL)
+### 🧪 Fixing Test Automation Results (CRITICAL)
 
-When `pr_discussions.md` contains a **🤖 Maestro Test Results** comment, you MUST analyze it in detail:
+When `pr_discussions.md` contains test automation results (e.g., **🤖 Maestro Test Results**), you MUST analyze them in detail:
 
-1. **Failed tests (❌)** — these indicate real bugs found by running Maestro flows on the iOS simulator with the actual build from this PR branch. The failure reason tells you exactly what's wrong.
+1. **Failed tests (❌)** — these indicate real bugs found by running automation on the actual build from this PR branch. The failure reason tells you exactly what's wrong.
 
-2. **A11y structural warnings (⚠️)** — these are based on the **actual iOS accessibility tree** captured via `maestro hierarchy` at runtime. They are NOT static analysis guesses — they reflect what VoiceOver actually sees. If a warning says "accessibilityValue is empty" or "content not exposed to a11y tree", the fix in the code is **not working at runtime**.
+2. **Structural warnings (⚠️)** — these are based on the **actual runtime state** captured at execution time. They are NOT static analysis guesses — they reflect what the accessibility tree or UI actually looks like. If a warning says "value is empty" or "content not exposed to tree", the fix in the code is **not working at runtime**.
 
-3. **Key Maestro attribute mapping (iOS)** — understand these mappings to correctly interpret warnings:
-   - React Native `accessibilityLabel` → Maestro `accessibilityText`
-   - React Native `accessibilityValue={{ text: "..." }}` → Maestro `value` (the key is `value`, NOT `accessibilityValue`)
-   - React Native `accessibilityHint` → Maestro `hintText`
-   - React Native `testID` → Maestro `resource-id`
+3. **Never trust your own previous rework as evidence.** If you fixed something in a prior rework cycle but automation STILL reports the same issue — your fix did not work. Re-analyze the root cause from scratch. Only **reviewer comments** and **automation runtime data** are sources of truth.
 
-4. **Common pitfalls to fix**:
-   - `accessibilityValue={{ text: ... }}` on `Pressable`/`TouchableOpacity`/`View` — does NOT surface to the iOS accessibility tree. Fix: concatenate the value into `accessibilityLabel` instead (e.g. `` accessibilityLabel={`${label}, ${selectedValue}`} ``)
-   - `accessible={true}` on a container with interactive children — merges all children into one VoiceOver element, making child buttons unreachable. Fix: use `accessible={false}` on the container or restructure
-   - Missing `accessibilityRole` on selection controls (radio buttons, checkboxes) — VoiceOver cannot announce the element type
-
-5. **After fixing Maestro issues**: include a summary in `outputs/response.md` listing what Maestro warnings you addressed and how. Since Maestro comments have no `rootCommentId`, do NOT create a `review_replies.json` entry for them — just fix the code and document in `response.md`.
+4. **After fixing automation issues**: include a summary in `outputs/response.md` listing what warnings you addressed and how. Since automation comments have no `rootCommentId`, do NOT create a `review_replies.json` entry for them — just fix the code and document in `response.md`.
 
 After fixing all issues, compile and run all tests to confirm they pass. If tests fail, fix them before finishing.
-
-## BICE Project — Maven Build Commands
-
-This is a Java/Maven project using the Cosmo test framework. **Always use `$JAVA_HOME_COSMO`** when running Maven (Java 17, pre-configured by the dependency setup).
-
-**Verify build compiles cleanly** (run this first after any code change):
-```bash
-cd dependencies/PostNL-commercial/tests/cosmo && \
-  JAVA_HOME=$JAVA_HOME_COSMO mvn install -DskipTests --no-transfer-progress 2>&1 | grep -E 'BUILD|ERROR'
-```
-Expected: `[INFO] BUILD SUCCESS`. If you see `[ERROR] COMPILATION ERROR`, fix compile errors before proceeding.
-
-**Run unit tests** (replace `<ModuleName>` and `<TestClassName>` with the actual values):
-```bash
-cd dependencies/PostNL-commercial/tests/cosmo && \
-  JAVA_HOME=$JAVA_HOME_COSMO mvn test -pl <ModuleName> -Dtest=<TestClassName> -Denforcer.skip=true \
-  --no-transfer-progress 2>&1 | tail -30
-```
-Example for `cosmo-core`: `-pl cosmo-core`
-
-**Run all unit tests in a module**:
-```bash
-cd dependencies/PostNL-commercial/tests/cosmo && \
-  JAVA_HOME=$JAVA_HOME_COSMO mvn test -pl cosmo-core -Denforcer.skip=true \
-  --no-transfer-progress 2>&1 | tail -30
-```
-
-**Check E2E test availability** (always check before attempting E2E):
-```bash
-echo "BICE_E2E_AVAILABLE=$BICE_E2E_AVAILABLE"
-```
-
-**Run E2E tests** (only if `BICE_E2E_AVAILABLE=true`):
-```bash
-cd dependencies/PostNL-commercial/tests/cosmo && \
-  JAVA_HOME=$JAVA_HOME_COSMO mvn verify -f cosmo-commercie/pom.xml \
-  -Dcucumber.filter.tags="@TICKET-KEY" -Dtags="@TICKET-KEY" \
-  -DPOSTNL_UI_HEADLESS=true --no-transfer-progress 2>&1 | tail -50
-```
-
-**⚠️ E2E Guice failure diagnosis**: If E2E fails with `Guice Injector creation previously failed` or `Runtime Configuration failed` AND `BICE_E2E_AVAILABLE=true`, this is **NOT** a credentials/secrets issue. Investigate the actual Guice configuration error — it is a real infrastructure or config problem that needs to be diagnosed and reported clearly in `outputs/response.md`.
 
 **⚠️ CRITICAL: All output files MUST be written to `outputs/` at the repository root** (e.g. `/home/runner/work/repo/repo/outputs/`).
 Do NOT write them inside `input/`, `input/TICKET-KEY/`, or any subfolder of `input/`. The post-processing script reads from `outputs/` at the repo root — writing elsewhere means all results will be silently lost.

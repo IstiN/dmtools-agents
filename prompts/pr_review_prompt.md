@@ -69,63 +69,54 @@ Verify:
 
 **⚠️ Merge commits bring noise — do NOT flag as out-of-scope**: This branch may contain `Merge branch 'main'` commits that pull in unrelated files (tests, components) committed to main by other stories. These files will NOT appear in `pr_diff.txt` (the three-dot diff already excludes them), but their commit messages may be visible in `pr_info.md`. **Never flag a file as out-of-scope based on commit messages alone — only flag files that actually appear in `pr_diff.txt`.**
 
-## 🧪 Maestro Test Automation Results Analysis (Critical)
+## 🧪 Test Automation Results Analysis (Critical)
 
-Check `pr_discussions.md` for comments from the test automation bot (comments titled **🤖 Maestro Test Results**). If present, perform a **deep analysis**:
+Check `pr_discussions.md` for comments from test automation bots (e.g., comments titled **🤖 Maestro Test Results** or similar). If present, perform a **deep analysis**:
 
-### ⚠️ CRITICAL RULE: Never dismiss Maestro warnings as "tool limitations"
-Maestro captures the **real iOS accessibility tree** at runtime on a simulator — the same tree that VoiceOver uses. If Maestro reports that an element is not in the accessibility tree, VoiceOver will NOT see it either. **Do NOT write** that warnings are "Maestro/simulator limitations" or "likely work with real VoiceOver" — this is incorrect. The iOS simulator accessibility tree is identical to a physical device. If Maestro says content is not exposed, it is a **real bug** that must be fixed.
+### ⚠️ CRITICAL RULE: Never dismiss test automation warnings as "tool limitations"
+Test automation tools capture the **real runtime state** of the application — the actual accessibility tree, UI hierarchy, and behavior. If automation reports that an element is missing from the accessibility tree, screen readers will NOT see it either. **Do NOT write** that warnings are "tool limitations", "simulator limitations", or "likely work on real devices" — test automation runtime data reflects the real behavior.
 
 ### ⚠️ CRITICAL RULE: Evidence hierarchy — runtime data beats code comments
-When evaluating whether an accessibility fix works, follow this strict evidence hierarchy:
+When evaluating whether a fix works, follow this strict evidence hierarchy:
 
-1. **Maestro runtime data** (hierarchy JSON, screenshots) — THIS IS GROUND TRUTH
+1. **Test automation runtime data** (hierarchy dumps, screenshots, runtime assertions) — THIS IS GROUND TRUTH
 2. **Code behavior** (what the code actually does when executed)
 3. **Code comments / developer explanations** (what the developer INTENDED)
 
-**Never trust code comments as evidence that a fix works.** Code comments explain intent, not actual behavior. If a code comment says "accessibilityViewIsModal ensures VoiceOver traverses into child elements" but Maestro shows 0 children — the comment is wrong, the fix doesn't work.
+**Never trust code comments as evidence that a fix works.** Code comments explain intent, not actual behavior. If a code comment says "this ensures accessibility traversal works" but automation shows 0 children — the comment is wrong, the fix doesn't work.
+
+### ⚠️ CRITICAL RULE: Never trust developer rework as evidence
+When reviewing after a rework cycle, the rework agent's code changes and commit messages are NOT evidence that the issue is fixed. **Only two sources of truth exist:**
+1. **Reviewer comments** — the original reviewer who flagged the issue
+2. **Test automation data** — runtime results from the latest build
+
+If the rework claims "Fixed: moved accessibilityViewIsModal to correct location" but test automation STILL reports 0 children — the fix FAILED. Do NOT approve based on the rework's explanation. Do NOT rationalize persistent warnings as "expected behavior" or "architecture limitation".
 
 ### ⚠️ CRITICAL RULE: Partial visibility disproves "cannot traverse"
-If Maestro's hierarchy shows SOME elements inside a container (e.g., "Bottom sheet handle") but other children show 0 children (e.g., calendar content) — this proves Maestro CAN traverse the container. The missing children are genuinely absent from the iOS accessibility tree. **Never claim** "Maestro cannot traverse FullWindowOverlay/UIWindow/animated views" when Maestro clearly DOES see sibling elements in the same container.
-
-**Common false rationalization to watch for:** "FullWindowOverlay creates a separate native UIWindow that Maestro's hierarchy dump cannot traverse" — this is WRONG. Maestro traverses all UIWindows. If handle is visible but content shows 0 children, the content is truly not exposed to VoiceOver.
+If test automation shows SOME elements inside a container (e.g., a handle or header) but other children show 0 children (e.g., content area) — this proves the automation tool CAN traverse the container. The missing children are genuinely absent from the accessibility tree. **Never claim** the tool "cannot traverse" a container when it clearly DOES see sibling elements in the same container.
 
 ### ⚠️ CRITICAL RULE: Detect failed rework fixes
 If this is a re-review after a rework cycle, check whether the rework actually fixed the previously reported issues:
-- If the **previous Maestro results** reported "0 children" or "value is empty"
-- And the **current Maestro results** (after rework) STILL report the same warning
+- If the **previous automation results** reported issues (e.g., "0 children", "value is empty")
+- And the **current automation results** (after rework) STILL report the same warning
 - Then the **rework fix FAILED** — the issue persists despite the code changes
-- Mark this as 🚨 **BLOCKING** with explanation: "Rework attempted to fix [issue] by [approach], but Maestro runtime data still shows [problem]. The fix is insufficient."
+- Mark this as 🚨 **BLOCKING** with explanation: "Rework attempted to fix [issue] by [approach], but automation runtime data still shows [problem]. The fix is insufficient."
 - Do NOT rationalize the persistent warning as "expected behavior" or "architecture limitation"
 
 ### What to look for
 1. **Failed tests** — read the test case ID, title, and failure reason. Cross-reference with `pr_diff.txt` to determine if the failure is caused by changes in this PR.
-2. **A11y structural warnings** — these are the most important signals. The automation bot captures the **actual iOS accessibility tree** via `maestro hierarchy` on the simulator. Warnings like "accessibilityValue is empty" or "content not exposed to a11y tree" are based on **real runtime data**, not static code analysis. They indicate **real bugs** — elements that VoiceOver cannot see or interact with.
-3. **Warning vs code mismatch** — if the code adds `accessibilityValue={{ text: ... }}` but the Maestro hierarchy shows `value=''`, the fix is **not working at runtime**. This is a 🚨 BLOCKING issue. Common reasons:
-   - React Native `Pressable` (plain `UIView` on iOS) may not surface `accessibilityValue` to the iOS accessibility tree — use `accessibilityLabel` concatenation instead
-   - `accessibilityValue` works on `TextInput`, `Switch`, `Slider` but may be ignored on container views (`View`, `Pressable`, `TouchableOpacity`)
-   - The component may need `accessible={true}` explicitly set
-   - Content inside `@gorhom/bottom-sheet` or other gesture-handler-based containers may need explicit accessibility configuration to expose children to the a11y tree — this is a **code bug**, not a framework limitation
-4. **Passed with warnings (⚠️)** — these indicate the Maestro flow passed (attributes exist in code) but the **runtime accessibility tree** has issues. Treat as 🚨 BLOCKING if the PR is specifically about fixing accessibility. Treat as ⚠️ IMPORTANT otherwise.
-5. **Human reviewer comments about Maestro** — if a human reviewer has commented in `pr_discussions.md` that Maestro issues must be fixed (e.g., "ALL MAESTRO REPORTED ISSUES MUST BE FIXED"), this overrides any default severity — treat ALL Maestro warnings as 🚨 BLOCKING.
+2. **Structural warnings** — these are the most important signals. Automation captures the **actual runtime state** (e.g., accessibility tree via hierarchy dump). Warnings like "value is empty" or "content not exposed to tree" are based on **real runtime data**, not static code analysis. They indicate **real bugs**.
+3. **Warning vs code mismatch** — if the code adds a fix but automation still reports the same problem, the fix is **not working at runtime**. This is a 🚨 BLOCKING issue. The code may look correct but the framework/platform may not honor the prop on that specific component type.
+4. **Passed with warnings (⚠️)** — the automation flow passed but the **runtime tree** has issues. Treat as 🚨 BLOCKING if the PR is specifically about fixing accessibility. Treat as ⚠️ IMPORTANT otherwise.
+5. **Human reviewer comments about automation** — if a human reviewer has commented in `pr_discussions.md` that automation issues must be fixed, this overrides any default severity — treat ALL automation warnings as 🚨 BLOCKING.
 
-### How to create review comments from Maestro results
-- For each failed test or structural warning, find the **exact line in `pr_diff.txt`** where the accessibility prop is added/changed
+### How to create review comments from automation results
+- For each failed test or structural warning, find the **exact line in `pr_diff.txt`** where the relevant prop is added/changed
 - Place an inline review comment on that line explaining:
-  - What the Maestro hierarchy actually shows at runtime
-  - Why the current approach doesn't work (e.g., "React Native Pressable does not expose accessibilityValue to iOS UIAccessibility tree")
+  - What the automation runtime data actually shows
+  - Why the current approach doesn't work
   - A concrete fix suggestion with code
 - If the problematic line is NOT in the diff, include the finding in the general comment with file path and line number
-
-### Key Maestro attribute mapping (iOS)
-Understanding how React Native props map to Maestro hierarchy attributes:
-- `accessibilityLabel` → Maestro `accessibilityText`
-- `accessibilityValue={{ text: "..." }}` → Maestro `value` (NOT `accessibilityValue`)
-- `accessibilityHint` → Maestro `hintText`
-- `accessibilityRole` → affects element type in hierarchy
-- `testID` → Maestro `resource-id`
-
-If a Maestro warning says `value` is empty but the code sets `accessibilityValue`, this means the iOS accessibility tree genuinely does not contain the value — the fix is broken.
 
 # Output
 
