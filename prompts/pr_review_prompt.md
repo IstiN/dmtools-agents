@@ -73,14 +73,19 @@ Verify:
 
 Check `pr_discussions.md` for comments from the test automation bot (comments titled **🤖 Maestro Test Results**). If present, perform a **deep analysis**:
 
+### ⚠️ CRITICAL RULE: Never dismiss Maestro warnings as "tool limitations"
+Maestro captures the **real iOS accessibility tree** at runtime on a simulator — the same tree that VoiceOver uses. If Maestro reports that an element is not in the accessibility tree, VoiceOver will NOT see it either. **Do NOT write** that warnings are "Maestro/simulator limitations" or "likely work with real VoiceOver" — this is incorrect. The iOS simulator accessibility tree is identical to a physical device. If Maestro says content is not exposed, it is a **real bug** that must be fixed.
+
 ### What to look for
 1. **Failed tests** — read the test case ID, title, and failure reason. Cross-reference with `pr_diff.txt` to determine if the failure is caused by changes in this PR.
-2. **A11y structural warnings** — these are the most important signals. The automation bot captures the **actual iOS accessibility tree** via `maestro hierarchy` on the simulator. Warnings like "accessibilityValue is empty" or "content not exposed to a11y tree" are based on **real runtime data**, not static code analysis.
+2. **A11y structural warnings** — these are the most important signals. The automation bot captures the **actual iOS accessibility tree** via `maestro hierarchy` on the simulator. Warnings like "accessibilityValue is empty" or "content not exposed to a11y tree" are based on **real runtime data**, not static code analysis. They indicate **real bugs** — elements that VoiceOver cannot see or interact with.
 3. **Warning vs code mismatch** — if the code adds `accessibilityValue={{ text: ... }}` but the Maestro hierarchy shows `value=''`, the fix is **not working at runtime**. This is a 🚨 BLOCKING issue. Common reasons:
    - React Native `Pressable` (plain `UIView` on iOS) may not surface `accessibilityValue` to the iOS accessibility tree — use `accessibilityLabel` concatenation instead
    - `accessibilityValue` works on `TextInput`, `Switch`, `Slider` but may be ignored on container views (`View`, `Pressable`, `TouchableOpacity`)
    - The component may need `accessible={true}` explicitly set
-4. **Passed with warnings (⚠️)** — these indicate the Maestro flow passed (attributes exist in code) but the **runtime accessibility tree** has issues. Treat as ⚠️ IMPORTANT.
+   - Content inside `@gorhom/bottom-sheet` or other gesture-handler-based containers may need explicit accessibility configuration to expose children to the a11y tree — this is a **code bug**, not a framework limitation
+4. **Passed with warnings (⚠️)** — these indicate the Maestro flow passed (attributes exist in code) but the **runtime accessibility tree** has issues. Treat as 🚨 BLOCKING if the PR is specifically about fixing accessibility. Treat as ⚠️ IMPORTANT otherwise.
+5. **Human reviewer comments about Maestro** — if a human reviewer has commented in `pr_discussions.md` that Maestro issues must be fixed (e.g., "ALL MAESTRO REPORTED ISSUES MUST BE FIXED"), this overrides any default severity — treat ALL Maestro warnings as 🚨 BLOCKING.
 
 ### How to create review comments from Maestro results
 - For each failed test or structural warning, find the **exact line in `pr_diff.txt`** where the accessibility prop is added/changed
