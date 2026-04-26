@@ -76,6 +76,28 @@ Check `pr_discussions.md` for comments from the test automation bot (comments ti
 ### ⚠️ CRITICAL RULE: Never dismiss Maestro warnings as "tool limitations"
 Maestro captures the **real iOS accessibility tree** at runtime on a simulator — the same tree that VoiceOver uses. If Maestro reports that an element is not in the accessibility tree, VoiceOver will NOT see it either. **Do NOT write** that warnings are "Maestro/simulator limitations" or "likely work with real VoiceOver" — this is incorrect. The iOS simulator accessibility tree is identical to a physical device. If Maestro says content is not exposed, it is a **real bug** that must be fixed.
 
+### ⚠️ CRITICAL RULE: Evidence hierarchy — runtime data beats code comments
+When evaluating whether an accessibility fix works, follow this strict evidence hierarchy:
+
+1. **Maestro runtime data** (hierarchy JSON, screenshots) — THIS IS GROUND TRUTH
+2. **Code behavior** (what the code actually does when executed)
+3. **Code comments / developer explanations** (what the developer INTENDED)
+
+**Never trust code comments as evidence that a fix works.** Code comments explain intent, not actual behavior. If a code comment says "accessibilityViewIsModal ensures VoiceOver traverses into child elements" but Maestro shows 0 children — the comment is wrong, the fix doesn't work.
+
+### ⚠️ CRITICAL RULE: Partial visibility disproves "cannot traverse"
+If Maestro's hierarchy shows SOME elements inside a container (e.g., "Bottom sheet handle") but other children show 0 children (e.g., calendar content) — this proves Maestro CAN traverse the container. The missing children are genuinely absent from the iOS accessibility tree. **Never claim** "Maestro cannot traverse FullWindowOverlay/UIWindow/animated views" when Maestro clearly DOES see sibling elements in the same container.
+
+**Common false rationalization to watch for:** "FullWindowOverlay creates a separate native UIWindow that Maestro's hierarchy dump cannot traverse" — this is WRONG. Maestro traverses all UIWindows. If handle is visible but content shows 0 children, the content is truly not exposed to VoiceOver.
+
+### ⚠️ CRITICAL RULE: Detect failed rework fixes
+If this is a re-review after a rework cycle, check whether the rework actually fixed the previously reported issues:
+- If the **previous Maestro results** reported "0 children" or "value is empty"
+- And the **current Maestro results** (after rework) STILL report the same warning
+- Then the **rework fix FAILED** — the issue persists despite the code changes
+- Mark this as 🚨 **BLOCKING** with explanation: "Rework attempted to fix [issue] by [approach], but Maestro runtime data still shows [problem]. The fix is insufficient."
+- Do NOT rationalize the persistent warning as "expected behavior" or "architecture limitation"
+
 ### What to look for
 1. **Failed tests** — read the test case ID, title, and failure reason. Cross-reference with `pr_diff.txt` to determine if the failure is caused by changes in this PR.
 2. **A11y structural warnings** — these are the most important signals. The automation bot captures the **actual iOS accessibility tree** via `maestro hierarchy` on the simulator. Warnings like "accessibilityValue is empty" or "content not exposed to a11y tree" are based on **real runtime data**, not static code analysis. They indicate **real bugs** — elements that VoiceOver cannot see or interact with.
