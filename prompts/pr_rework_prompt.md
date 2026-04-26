@@ -18,14 +18,45 @@ You are fixing code issues identified in a Pull Request review.
 
 **If `ci_failures.md` is present**: CI checks are currently failing on this PR. Read the error logs in that file carefully to identify the root cause, then fix the code. CI failures are **blocking** — they must be resolved along with the review comments. After pushing, CI will re-run automatically.
 
-Your mission is to address every issue raised in `pr_discussions.md`. This file contains ONLY open (unresolved) threads from **human reviewers** — already-resolved threads and bot-generated threads (e.g. test automation results from `github-actions[bot]`) are excluded automatically. If `pr_discussions.md` contains NO review threads (empty or only informational headers), then there is **nothing to fix** — write a short `outputs/response.md` stating "No open review comments to address" and an empty `outputs/review_replies.json` (`{ "replies": [] }`), then exit. **Do NOT post multiple acknowledgment comments.** For each thread:
+Your mission is to address every issue raised in `pr_discussions.md`. This includes:
+
+1. **Human review threads** — inline code review comments with `rootCommentId` and `threadId`. These MUST be fixed and replied to in `review_replies.json`.
+2. **🤖 Maestro Test Results** — comments titled "🤖 Maestro Test Results" containing test automation results with a11y structural warnings. These have `rootCommentId: null` because they are PR comments (not review threads), but they contain **real, actionable bugs** that MUST be fixed. See the Maestro analysis section below.
+
+**Ignore only**: bot ticket-link comments (e.g. "MAPC-XXXX ...link..."), previous rework summary comments, and automated code review APPROVE comments — these are informational and require no action.
+
+If `pr_discussions.md` contains NO actionable items (no human review threads AND no Maestro failures/warnings), then there is **nothing to fix** — write a short `outputs/response.md` stating "No open review comments to address" and an empty `outputs/review_replies.json` (`{ "replies": [] }`), then exit. **Do NOT post multiple acknowledgment comments.**
+
+### Fixing human review threads
+For each thread:
 1. Understand the issue described by the reviewer
 2. Locate the relevant code in the codebase
 3. Apply the required fix
 4. **Search the entire codebase for the same pattern** and fix ALL similar occurrences — not just the exact line the reviewer flagged. For example, if the reviewer flags a missing `accessibilityLabel`, search all similar components for the same omission and fix them too. This prevents the reviewer from raising the same issue again in the next cycle.
 5. Write a reply entry in `outputs/review_replies.json` — mention all files you fixed (both the flagged one and the similar ones found by search)
 
-**Every thread in `pr_discussions.md` must have exactly one matching entry in `review_replies.json`. Do not skip any thread.**
+**Every human review thread in `pr_discussions.md` must have exactly one matching entry in `review_replies.json`. Do not skip any thread.**
+
+### 🧪 Fixing Maestro Test Automation Results (CRITICAL)
+
+When `pr_discussions.md` contains a **🤖 Maestro Test Results** comment, you MUST analyze it in detail:
+
+1. **Failed tests (❌)** — these indicate real bugs found by running Maestro flows on the iOS simulator with the actual build from this PR branch. The failure reason tells you exactly what's wrong.
+
+2. **A11y structural warnings (⚠️)** — these are based on the **actual iOS accessibility tree** captured via `maestro hierarchy` at runtime. They are NOT static analysis guesses — they reflect what VoiceOver actually sees. If a warning says "accessibilityValue is empty" or "content not exposed to a11y tree", the fix in the code is **not working at runtime**.
+
+3. **Key Maestro attribute mapping (iOS)** — understand these mappings to correctly interpret warnings:
+   - React Native `accessibilityLabel` → Maestro `accessibilityText`
+   - React Native `accessibilityValue={{ text: "..." }}` → Maestro `value` (the key is `value`, NOT `accessibilityValue`)
+   - React Native `accessibilityHint` → Maestro `hintText`
+   - React Native `testID` → Maestro `resource-id`
+
+4. **Common pitfalls to fix**:
+   - `accessibilityValue={{ text: ... }}` on `Pressable`/`TouchableOpacity`/`View` — does NOT surface to the iOS accessibility tree. Fix: concatenate the value into `accessibilityLabel` instead (e.g. `` accessibilityLabel={`${label}, ${selectedValue}`} ``)
+   - `accessible={true}` on a container with interactive children — merges all children into one VoiceOver element, making child buttons unreachable. Fix: use `accessible={false}` on the container or restructure
+   - Missing `accessibilityRole` on selection controls (radio buttons, checkboxes) — VoiceOver cannot announce the element type
+
+5. **After fixing Maestro issues**: include a summary in `outputs/response.md` listing what Maestro warnings you addressed and how. Since Maestro comments have no `rootCommentId`, do NOT create a `review_replies.json` entry for them — just fix the code and document in `response.md`.
 
 After fixing all issues, compile and run all tests to confirm they pass. If tests fail, fix them before finishing.
 
