@@ -103,7 +103,24 @@ If this is a re-review after a rework cycle, check whether the rework actually f
 - Mark this as 🚨 **BLOCKING** with explanation: "Rework attempted to fix [issue] by [approach], but automation runtime data still shows [problem]. The fix is insufficient."
 - Do NOT rationalize the persistent warning as "expected behavior" or "architecture limitation"
 
-### ⚠️ CRITICAL RULE: Failed tests on ANY platform = BLOCKING
+### ⚠️ CRITICAL RULE: Never rationalize automation failures as "pre-fix" without proof
+The test_case_automation agent ALWAYS writes a template line like *"These flows will pass once the fix for X is applied"* in its results — this is **boilerplate** added regardless of whether the run was pre-fix or post-fix. **DO NOT** use this line as proof that a failing run was "pre-fix".
+
+To classify an automation result as "pre-fix" (and therefore not blocking), you need **explicit timestamp/build evidence**:
+- The automation comment's `Build:` field references a commit SHA that is older than the fix commit, OR
+- The automation comment is timestamped before the fix commit, OR
+- The PR has been re-tested AFTER the fix and the new run shows pass
+
+**Without explicit timestamp/SHA proof**: treat failing automation results as 🚨 **BLOCKING** current failures.
+
+If automation failures exist on a platform that was NEVER re-tested post-fix (e.g., only Android was re-run, iOS shows old failures), you **MUST request a fresh run on that platform** before approval. Issue verdict: 🚨 **BLOCK** with explanation "iOS not verified post-fix — request new automation run on `bug/MAPC-XXXX`".
+
+### ⚠️ CRITICAL RULE: Platform of original bug requires post-fix verification on that same platform
+If the bug ticket describes an issue specific to one platform (iOS-only, Android-only, FullWindowOverlay, gorhom/bottom-sheet, native module), you **CANNOT approve** based on automation results from the OTHER platform alone.
+
+Example: PR fixes iOS calendar bug. Android automation passes 9/9. iOS automation shows failures or no recent run. → **BLOCK** — "iOS-specific bug requires iOS post-fix verification. Android pass does not prove iOS works because the bug originated from iOS-specific code paths (e.g., FullWindowOverlay, BottomSheetView native bindings, accessibilityViewIsModal)."
+
+### ⚠️ CRITICAL RULE: Failed tests on ANY platform = BLOCKING (no cherry-picking)
 If automation results exist for multiple platforms (iOS AND Android), you MUST evaluate EACH platform independently:
 - If iOS shows **5 failed tests** but Android shows **all passed** — this is still 🚨 **BLOCKING**. You cannot approve because one platform passes.
 - **Never cherry-pick** the passing platform as evidence while ignoring the failing platform.
