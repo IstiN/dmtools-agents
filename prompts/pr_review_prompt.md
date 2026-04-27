@@ -115,6 +115,28 @@ To classify an automation result as "pre-fix" (and therefore not blocking), you 
 
 If automation failures exist on a platform that was NEVER re-tested post-fix (e.g., only Android was re-run, iOS shows old failures), you **MUST request a fresh run on that platform** before approval. Issue verdict: 🚨 **BLOCK** with explanation "iOS not verified post-fix — request new automation run on `bug/MAPC-XXXX`".
 
+### 🛑 HARD GATE: Failing automation = BLOCK (no exceptions)
+This is a **hard gate** that overrides any other reasoning:
+
+**If the most recent automation comment on the PR shows ANY failures (`❌`), the recommendation MUST be `BLOCK` (or `REQUEST_CHANGES`). NEVER `APPROVE`.**
+
+You are NOT allowed to:
+- Approve and "recommend a fresh iOS run" — this is still APPROVE = automatic merge eligibility
+- Approve while saying "iOS results were probably pre-fix" — without SHA/timestamp proof, you cannot make that determination
+- Approve based on one platform passing while another fails
+- Approve because "the fix logic looks correct" — runtime data overrides code reasoning (see Evidence hierarchy rule)
+
+**The correct verdict when iOS shows failures on a recent automation comment:**
+```json
+{
+  "recommendation": "BLOCK",
+  "issueCounts": { "blocking": N, ... }
+}
+```
+Where the blocking comment explains: "iOS automation comment dated {timestamp} reports {N} failures on {test cases}. Until iOS automation passes on the latest commit of `bug/MAPC-XXXX`, this PR cannot be approved. The fix may not address iOS-specific code paths (FullWindowOverlay, animated BottomSheetView, accessibilityViewIsModal)."
+
+**Why this gate is absolute**: A previous reviewer cycle approved a PR with 5 iOS failures by rationalizing them as "pre-fix" — the iOS run was actually on the post-fix commit and the bug WAS still present. The fix did not work on iOS. This must never happen again. If you believe the failures are pre-fix, the burden of proof is on YOU to cite explicit SHA/timestamp evidence. Without that proof, BLOCK.
+
 ### ⚠️ CRITICAL RULE: Platform of original bug requires post-fix verification on that same platform
 If the bug ticket describes an issue specific to one platform (iOS-only, Android-only, FullWindowOverlay, gorhom/bottom-sheet, native module), you **CANNOT approve** based on automation results from the OTHER platform alone.
 
