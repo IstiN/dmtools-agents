@@ -103,61 +103,43 @@ If this is a re-review after a rework cycle, check whether the rework actually f
 - Mark this as 🚨 **BLOCKING** with explanation: "Rework attempted to fix [issue] by [approach], but automation runtime data still shows [problem]. The fix is insufficient."
 - Do NOT rationalize the persistent warning as "expected behavior" or "architecture limitation"
 
-### ⚠️ CRITICAL RULE: Never rationalize automation failures as "pre-fix" without proof
-The test_case_automation agent ALWAYS writes a template line like *"These flows will pass once the fix for X is applied"* in its results — this is **boilerplate** added regardless of whether the run was pre-fix or post-fix. **DO NOT** use this line as proof that a failing run was "pre-fix".
+### 🧠 Automation analysis: review is cheaper than re-running automation
+Running automation is expensive (CI time, simulator/emulator, real devices). PR review is cheap. The reviewer's job is to **analyze whether the current code in the PR addresses the failures reported by automation** — not to gatekeep on a fresh post-commit automation run.
 
-To classify an automation result as "pre-fix" (and therefore not blocking), you need **explicit timestamp/build evidence**:
-- The automation comment's `Build:` field references a commit SHA that is older than the fix commit, OR
-- The automation comment is timestamped before the fix commit, OR
-- The PR has been re-tested AFTER the fix and the new run shows pass
+**Workflow**:
+1. Automation runs, posts failures (e.g., "Calendar blank, 0 a11y children on iOS").
+2. Developer pushes a fix.
+3. **Reviewer analyzes the diff** against the automation failure:
+   - Does the new code logically address the reported root cause? (e.g., fix swaps `BottomSheetFlatList` → `RNGH FlatList + nestedScrollEnabled` to address the iOS FullWindowOverlay a11y tree issue → YES, this directly addresses the reported failure.)
+   - Are the unit tests covering the changed logic green?
+   - Does the fix touch the right code path (iOS-specific path for an iOS bug)?
+4. If the analysis shows the fix logically resolves the failure → **APPROVE** with a note: *"Fix analysis: <how code addresses the failure>. Recommend a fresh post-merge automation run to confirm."*
+5. After merge (or before, depending on team policy), automation re-runs to confirm.
 
-**Without explicit timestamp/SHA proof**: treat failing automation results as 🚨 **BLOCKING** current failures.
+**Do NOT BLOCK** simply because "iOS hasn't been re-tested post-fix" if the code analysis clearly shows the fix addresses the iOS-specific failure mode. Block only when:
+- The fix does NOT logically address the reported failure (wrong code path, wrong root cause).
+- The fix is incomplete (e.g., only one of the reported failures is addressed).
+- New issues were introduced (regressions visible in the diff).
+- You genuinely cannot tell if the fix works without runtime data, AND the failure is in code that's hard to reason about statically.
 
-### 📅 ABSOLUTE RULE: Comment timestamp vs commit timestamp
-**If an automation comment was posted AFTER the latest commit on the PR's head branch, it was ALWAYS tested against that commit (post-fix). No exceptions.**
+**Be explicit in the summary**: when approving despite stale failing automation, state:
+> *"Most recent iOS automation (Thread N, dated YYYY-MM-DD HH:MM) was run on commit `<sha>` BEFORE the rework that replaced X with Y at commit `<sha>`. The new code directly addresses the iOS-specific root cause: <one sentence>. APPROVE — recommend fresh iOS automation run to confirm."*
 
-How to verify (do this BEFORE deciding "pre-fix"):
-1. Get the timestamp of the automation comment (`createdAt` field).
-2. Get the timestamp of the latest commit on the PR's head branch (`pull_request_read` → commits).
-3. Compare:
-   - **Comment time > latest commit time** → run was POST-FIX. Failures are CURRENT. → **BLOCK**.
-   - **Comment time < latest commit time** → run was pre-fix on an older commit. Request fresh run.
+This avoids the rework/review loop where rework correctly says "the fix is in place" and review correctly says "but we haven't re-verified". Re-verification is the next stage of the pipeline, not a blocker for approval.
 
-You CANNOT call a run "pre-fix" if the automation comment was posted minutes/hours AFTER the most recent commit — the build that automation downloaded is, by definition, the build produced from that commit. The CI pipeline cannot test code that didn't exist yet.
+### 🛑 BLOCK only when fix does NOT address reported failures
+BLOCK is appropriate when:
+- ❌ Automation reports failure X, but the diff does not change any code related to X.
+- ❌ The diff changes code in a way that contradicts what automation requires (e.g., automation expects an a11y label, diff removes it).
+- ❌ Multiple platforms fail, and the diff only touches code for one platform.
+- ❌ The reported failure is on a code path that the diff did not modify.
 
-This rule overrides any text in the automation comment itself. Even if the comment text says "confirming the bug" or "will pass once fix is applied" — the timestamp is the authoritative evidence. Boilerplate text lies; timestamps don't.
+BLOCK is NOT appropriate when:
+- ✅ The diff logically addresses the reported failure, but a fresh automation run hasn't happened yet — APPROVE with note.
+- ✅ One platform passes, the other has stale failing automation, but the diff addresses both — APPROVE with note.
+- ✅ Boilerplate text in automation comment says "will pass once fix applied" — this is template text, ignore it; analyze the code instead.
 
-If automation failures exist on a platform that was NEVER re-tested post-fix (e.g., only Android was re-run, iOS shows old failures), you **MUST request a fresh run on that platform** before approval. Issue verdict: 🚨 **BLOCK** with explanation "iOS not verified post-fix — request new automation run on `bug/MAPC-XXXX`".
 
-### 🛑 HARD GATE: Failing automation = BLOCK (no exceptions)
-This is a **hard gate** that overrides any other reasoning:
-
-**If the most recent automation comment on the PR shows ANY failures (`❌`), the recommendation MUST be `BLOCK` (or `REQUEST_CHANGES`). NEVER `APPROVE`.**
-
-You are NOT allowed to:
-- Approve and "recommend a fresh iOS run" — this is still APPROVE = automatic merge eligibility
-- Approve while saying "iOS results were probably pre-fix" — without SHA/timestamp proof, you cannot make that determination
-- Approve based on one platform passing while another fails
-- Approve because "the fix logic looks correct" — runtime data overrides code reasoning (see Evidence hierarchy rule)
-
-**The correct verdict when iOS shows failures on a recent automation comment:**
-```json
-{
-  "recommendation": "BLOCK",
-  "issueCounts": { "blocking": N, ... }
-}
-```
-Where the blocking comment explains: "iOS automation comment dated {timestamp} reports {N} failures on {test cases}. Until iOS automation passes on the latest commit of `bug/MAPC-XXXX`, this PR cannot be approved. The fix may not address iOS-specific code paths (FullWindowOverlay, animated BottomSheetView, accessibilityViewIsModal)."
-
-**Why this gate is absolute**: A previous reviewer cycle approved a PR with 5 iOS failures by rationalizing them as "pre-fix" — the iOS run was actually on the post-fix commit and the bug WAS still present. The fix did not work on iOS. This must never happen again. If you believe the failures are pre-fix, the burden of proof is on YOU to cite explicit SHA/timestamp evidence. Without that proof, BLOCK.
-
-### ⚠️ CRITICAL RULE: Platform of original bug requires post-fix verification on that same platform
-If the bug ticket describes an issue specific to one platform (iOS-only, Android-only, FullWindowOverlay, gorhom/bottom-sheet, native module), you **CANNOT approve** based on automation results from the OTHER platform alone.
-
-Example: PR fixes iOS calendar bug. Android automation passes 9/9. iOS automation shows failures or no recent run. → **BLOCK** — "iOS-specific bug requires iOS post-fix verification. Android pass does not prove iOS works because the bug originated from iOS-specific code paths (e.g., FullWindowOverlay, BottomSheetView native bindings, accessibilityViewIsModal)."
-
-### ⚠️ CRITICAL RULE: Failed tests on ANY platform = BLOCKING (no cherry-picking)
-If automation results exist for multiple platforms (iOS AND Android), you MUST evaluate EACH platform independently:
 - If iOS shows **5 failed tests** but Android shows **all passed** — this is still 🚨 **BLOCKING**. You cannot approve because one platform passes.
 - **Never cherry-pick** the passing platform as evidence while ignoring the failing platform.
 - **Never rationalize** failed tests as "ran on old build" or "stale results" unless there is explicit evidence (e.g., a build timestamp proving the test ran before the fix was pushed).
@@ -167,9 +149,9 @@ If automation results exist for multiple platforms (iOS AND Android), you MUST e
 ### ⚠️ CRITICAL RULE: You MUST explicitly address EVERY automation result
 When `pr_discussions.md` contains test automation results, your review MUST:
 1. List each automation result set (e.g., "iOS run: 5 failed, Android run: 9 passed")
-2. For failed tests, explain WHY they failed and whether the PR should fix them
+2. For failed tests, **map each failure to the corresponding code change in `pr_diff.txt`** and judge whether the fix logically addresses it
 3. Never silently skip or ignore a failing automation result
-4. If you approve despite failures, you MUST justify each failure individually — generic statements like "Android confirmed the fix works" are NOT sufficient when iOS shows failures
+4. If approving despite failing automation, the summary MUST include a per-failure mapping: *"Failure A → addressed by code change at file:line because <reason>"*. Generic statements like "Android confirmed the fix works" are NOT sufficient.
 
 ### What to look for
 1. **Failed tests** — read the test case ID, title, and failure reason. Cross-reference with `pr_diff.txt` to determine if the failure is caused by changes in this PR.

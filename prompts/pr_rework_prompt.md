@@ -25,6 +25,16 @@ Your mission is to address every issue raised in `pr_discussions.md`. This inclu
 
 **Ignore only**: bot ticket-link comments (e.g. "MAPC-XXXX ...link..."), previous rework summary comments, and automated code review APPROVE comments — these are informational and require no action.
 
+### 🛑 STALE AUTOMATION LOOP — DO NOT REPEAT YOURSELF
+
+If the only "blocker" is the reviewer asking for fresh post-fix automation, and you have ALREADY explained in a previous rework cycle that the code addresses the failure:
+
+- Do NOT re-write code that's already correct.
+- Do NOT post another "Rework Complete" comment with the same explanation — this triggers another review cycle.
+- Write a short `outputs/response.md` saying *"No new actionable items — fix already in place on commit `<sha>`. Awaiting fresh automation run."* and an empty `outputs/review_replies.json`.
+
+The reviewer's job is to APPROVE based on code analysis (review is cheaper than re-running automation). If you keep posting "Rework Complete" you keep retriggering the reviewer.
+
 If `pr_discussions.md` contains NO actionable items (no human review threads AND no Maestro failures/warnings), then there is **nothing to fix** — write a short `outputs/response.md` stating "No open review comments to address" and an empty `outputs/review_replies.json` (`{ "replies": [] }`), then exit. **Do NOT post multiple acknowledgment comments.**
 
 ### Fixing human review threads
