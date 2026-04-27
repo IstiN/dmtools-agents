@@ -246,14 +246,23 @@ function postPRComment(scm, pullRequestId, fixSummary, ticketKey) {
     }
 }
 
-function postJiraComment(ticketKey, prUrl, branchName, prCommentPosted) {
+function postJiraComment(ticketKey, prUrl, branchName, prCommentPosted, codeChangesCommitted, fixSummary) {
     try {
-        let comment = 'h3. ✅ Rework Completed\n\n';
-        comment += '*Branch*: {code}' + branchName + '{code}\n';
-        if (prUrl) {
-            comment += '*Pull Request*: ' + prUrl + '\n';
+        let comment;
+        if (codeChangesCommitted) {
+            comment = 'h3. ✅ Rework Completed\n\n';
+            comment += '*Branch*: {code}' + branchName + '{code}\n';
+            if (prUrl) {
+                comment += '*Pull Request*: ' + prUrl + '\n';
+            }
+            comment += '\nAI Teammate has addressed all PR review comments and pushed the fixes.\n';
+        } else {
+            comment = 'h3. ✅ Rework Analysis Completed\n\n';
+            if (prUrl) {
+                comment += '*Pull Request*: ' + prUrl + '\n';
+            }
+            comment += '\nAI Teammate analyzed all PR review comments and determined no code changes are required.\n';
         }
-        comment += '\nAI Teammate has addressed all PR review comments and pushed the fixes.\n';
         if (prCommentPosted) {
             comment += 'A fix summary has been posted as a comment on the Pull Request.';
         }
@@ -315,11 +324,13 @@ function action(params) {
             console.log('Thread replies posted:', repliesPosted);
 
             // Post general fix summary as a top-level PR comment
-            // Post if either: code was committed, or thread replies were posted
-            if (repliesPosted > 0 || codeChangesCommitted) {
+            // Post if: code was committed, thread replies were posted, or agent produced a meaningful summary
+            var hasMeaningfulSummary = fixSummary && fixSummary.length > 50
+                && fixSummary !== '_(No fix summary generated)_';
+            if (repliesPosted > 0 || codeChangesCommitted || hasMeaningfulSummary) {
                 prCommentPosted = postPRComment(scm, pr.number, fixSummary, ticketKey);
             } else {
-                console.log('ℹ️ No thread replies and no code changes — skipping general PR comment');
+                console.log('ℹ️ No thread replies, no code changes, and no meaningful summary — skipping general PR comment');
             }
         } else {
             console.warn('Could not find PR to post comment — skipping GitHub PR comment');
@@ -346,7 +357,7 @@ function action(params) {
 
         // Post Jira completion comment
         const prUrl = pr ? pr.html_url : null;
-        postJiraComment(ticketKey, prUrl, branchName, prCommentPosted);
+        postJiraComment(ticketKey, prUrl, branchName, prCommentPosted, codeChangesCommitted, fixSummary);
 
         // Remove WIP label if present
         const wipLabel = actualParams.metadata && actualParams.metadata.contextId
