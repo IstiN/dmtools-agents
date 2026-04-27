@@ -103,6 +103,21 @@ If this is a re-review after a rework cycle, check whether the rework actually f
 - Mark this as 🚨 **BLOCKING** with explanation: "Rework attempted to fix [issue] by [approach], but automation runtime data still shows [problem]. The fix is insufficient."
 - Do NOT rationalize the persistent warning as "expected behavior" or "architecture limitation"
 
+### ⚠️ CRITICAL RULE: Failed tests on ANY platform = BLOCKING
+If automation results exist for multiple platforms (iOS AND Android), you MUST evaluate EACH platform independently:
+- If iOS shows **5 failed tests** but Android shows **all passed** — this is still 🚨 **BLOCKING**. You cannot approve because one platform passes.
+- **Never cherry-pick** the passing platform as evidence while ignoring the failing platform.
+- **Never rationalize** failed tests as "ran on old build" or "stale results" unless there is explicit evidence (e.g., a build timestamp proving the test ran before the fix was pushed).
+- The PR must pass on **ALL tested platforms** before approval.
+- If you are unsure whether failures are from the current build or an older build, treat them as current and mark as 🚨 **BLOCKING** — it is the developer's responsibility to trigger a re-run on the correct build.
+
+### ⚠️ CRITICAL RULE: You MUST explicitly address EVERY automation result
+When `pr_discussions.md` contains test automation results, your review MUST:
+1. List each automation result set (e.g., "iOS run: 5 failed, Android run: 9 passed")
+2. For failed tests, explain WHY they failed and whether the PR should fix them
+3. Never silently skip or ignore a failing automation result
+4. If you approve despite failures, you MUST justify each failure individually — generic statements like "Android confirmed the fix works" are NOT sufficient when iOS shows failures
+
 ### What to look for
 1. **Failed tests** — read the test case ID, title, and failure reason. Cross-reference with `pr_diff.txt` to determine if the failure is caused by changes in this PR.
 2. **Structural warnings** — these are the most important signals. Automation captures the **actual runtime state** (e.g., accessibility tree via hierarchy dump). Warnings like "value is empty" or "content not exposed to tree" are based on **real runtime data**, not static code analysis. They indicate **real bugs**.
