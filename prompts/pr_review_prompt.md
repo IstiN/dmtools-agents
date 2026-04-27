@@ -203,15 +203,28 @@ Include only:
 - One sentence per BLOCKING issue (if any) — just enough to orient the developer
 - "See inline comments for details."
 
+**If automation tests failed**: add a `### 🤖 Automation Failure Analysis` section with:
+- Platform and result count (e.g., "iOS: 5/9 failed, Android: 9/9 passed")
+- **Root cause hypothesis**: WHY did tests fail? Analyze the failure reasons from `pr_discussions.md` and cross-reference with the code diff. Examples:
+  - "Tests ran on pre-fix build (build timestamp X precedes fix commit Y)" — if you can prove this
+  - "Fix works on Android but iOS-specific issue: BottomSheetFlatList gesture conflict not resolved on iOS due to FullWindowOverlay"
+  - "Calendar renders blank because inverted prop still present in FlatList variant at Calendar.tsx:142"
+- **Actionable next step**: what should the developer do? (e.g., "Trigger new iOS automation run on latest commit", "Fix iOS-specific rendering at line X")
+
 Do NOT repeat findings that are already in inline threads.
 
 ### 3. `outputs/response.md` — REQUIRED
 Jira-formatted review summary posted as a ticket comment.
 
-**Keep this SHORT** — 5-8 lines maximum. It is a Jira ticket update, not a technical document. Include only:
+**Keep this SHORT** — 5-8 lines maximum (10-12 if automation failures need analysis). It is a Jira ticket update, not a technical document. Include only:
 - One-line verdict (APPROVE / REQUEST CHANGES / BLOCK)
 - Count of blocking / important / suggestion findings
 - PR link
 - One sentence on the most critical issue (if any)
+
+**If automation tests failed**, add 2-3 lines of root cause analysis:
+- Which platform failed and how many tests
+- Your best assessment of WHY (e.g., "iOS calendar renders blank — fix does not resolve BottomSheetFlatList gesture conflict on iOS" or "Tests ran against stale build — re-run needed")
+- What action is needed next
 
 **CRITICAL IMPORTANT** YOU MUST CHECK IF THE PULL REQUEST DOES EXACTLY WHAT IS ASKED IN TICKET. If there are changes in business logic which are not expected, you must flag it.
