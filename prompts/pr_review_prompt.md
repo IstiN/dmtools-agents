@@ -113,6 +113,20 @@ To classify an automation result as "pre-fix" (and therefore not blocking), you 
 
 **Without explicit timestamp/SHA proof**: treat failing automation results as 🚨 **BLOCKING** current failures.
 
+### 📅 ABSOLUTE RULE: Comment timestamp vs commit timestamp
+**If an automation comment was posted AFTER the latest commit on the PR's head branch, it was ALWAYS tested against that commit (post-fix). No exceptions.**
+
+How to verify (do this BEFORE deciding "pre-fix"):
+1. Get the timestamp of the automation comment (`createdAt` field).
+2. Get the timestamp of the latest commit on the PR's head branch (`pull_request_read` → commits).
+3. Compare:
+   - **Comment time > latest commit time** → run was POST-FIX. Failures are CURRENT. → **BLOCK**.
+   - **Comment time < latest commit time** → run was pre-fix on an older commit. Request fresh run.
+
+You CANNOT call a run "pre-fix" if the automation comment was posted minutes/hours AFTER the most recent commit — the build that automation downloaded is, by definition, the build produced from that commit. The CI pipeline cannot test code that didn't exist yet.
+
+This rule overrides any text in the automation comment itself. Even if the comment text says "confirming the bug" or "will pass once fix is applied" — the timestamp is the authoritative evidence. Boilerplate text lies; timestamps don't.
+
 If automation failures exist on a platform that was NEVER re-tested post-fix (e.g., only Android was re-run, iOS shows old failures), you **MUST request a fresh run on that platform** before approval. Issue verdict: 🚨 **BLOCK** with explanation "iOS not verified post-fix — request new automation run on `bug/MAPC-XXXX`".
 
 ### 🛑 HARD GATE: Failing automation = BLOCK (no exceptions)
