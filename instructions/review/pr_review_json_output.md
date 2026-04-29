@@ -129,3 +129,14 @@ db.query(query, [userId]);
 4. **File locations in JSON**:
    - Use relative paths from outputs/ directory
    - Comment files numbered sequentially: comment-1.md, comment-2.md, etc.
+
+## ✅ JSON Validation (Mandatory Final Step)
+
+**CRITICAL**: After writing `outputs/pr_review.json`, you MUST validate it before stopping:
+
+1. Re-read the full contents of `outputs/pr_review.json`
+2. Verify it is syntactically valid JSON — check for: unclosed brackets/braces, trailing commas, stray characters, truncated content
+3. If the file is malformed or invalid in any way, **rewrite the entire file** with corrected, valid JSON
+4. Do NOT stop until `outputs/pr_review.json` contains valid, parseable JSON
+
+> **Why this matters**: Invalid JSON causes the review to be silently dropped — the post-processing script fails with a `SyntaxError` and the PR receives no comments at all. The review is lost entirely. This validation step is non-negotiable.
