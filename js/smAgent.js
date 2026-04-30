@@ -28,7 +28,9 @@
  *                               "bice"). Auto-derived from configPath basename when not set
  *                               (e.g. ".dmtools/configs/mapc.js" → "mapc").
  *   skipIfLabel    (optional) — skip ticket if it already has this label (idempotency)
+ *   skipIfLabels   (optional) — skip ticket if it already has any of these labels
  *   addLabel       (optional) — add this label after triggering (idempotency marker)
+ *   addLabels      (optional) — add these labels after triggering
  *   enabled        (optional) — set to false to disable the rule entirely (default: true)
  *   limit          (optional) — max number of tickets to process per run (default: 50)
  *   localExecution (optional) — if true, run postJSAction directly (no runner, no AI/CLI)
@@ -81,6 +83,10 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
         }
         try {
             var agentJson = JSON.parse(file_read({ path: agentJsonPath }));
+            var agentParams = (agentJson.params || {}).agentParams;
+            if (agentParams && typeof agentParams === 'object') {
+                p.agentParams = configLoader.deepMerge({}, agentParams);
+            }
             var agentCustomParams = (agentJson.params || {}).customParams;
             if (agentCustomParams && typeof agentCustomParams === 'object') {
                 p.customParams = Object.assign({}, agentCustomParams);
@@ -114,6 +120,7 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
         var jiraFields = effectiveConfig.jira && effectiveConfig.jira.fields;
         if (jiraFields) {
             var fieldMap = {
+                'story_acceptance_criteria': jiraFields.acceptanceCriteria,
                 'story_acceptance_criterias': jiraFields.acceptanceCriteria
             };
             var override = fieldMap[agentName];
@@ -210,6 +217,30 @@ function hasLabel(ticket, label) {
     if (!label) return false;
     var labels = (ticket.fields && ticket.fields.labels) ? ticket.fields.labels : [];
     return labels.indexOf(label) !== -1;
+}
+
+function normalizeLabels(singleLabel, labelList) {
+    var labels = [];
+    if (singleLabel) labels.push(singleLabel);
+    if (Array.isArray(labelList)) {
+        labelList.forEach(function(label) {
+            if (label && labels.indexOf(label) === -1) labels.push(label);
+        });
+    }
+    return labels;
+}
+
+function firstMatchingLabel(ticket, labels) {
+    for (var i = 0; i < labels.length; i++) {
+        if (hasLabel(ticket, labels[i])) return labels[i];
+    }
+    return null;
+}
+
+function addRuleLabels(ticketKey, rule) {
+    normalizeLabels(rule.addLabel, rule.addLabels).forEach(function(label) {
+        try { jira_add_label({ key: ticketKey, label: label }); } catch (e) {}
+    });
 }
 
 // ─── Local execution ──────────────────────────────────────────────────────────
@@ -311,8 +342,9 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
     tickets.forEach(function(ticket) {
         var key = ticket.key;
 
-        if (rule.skipIfLabel && hasLabel(ticket, rule.skipIfLabel)) {
-            console.log('  ⏭️  ' + key + ' skipped (label: ' + rule.skipIfLabel + ')');
+        var skipLabel = firstMatchingLabel(ticket, normalizeLabels(rule.skipIfLabel, rule.skipIfLabels));
+        if (skipLabel) {
+            console.log('  ⏭️  ' + key + ' skipped (label: ' + skipLabel + ')');
             skippedKeys.push(key);
             return;
         }
@@ -337,9 +369,7 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
             console.log('  ✅ ' + key + ' done — action: ' + (result && result.action || JSON.stringify(result).substring(0, 80)));
             processedKeys.push(key);
 
-            if (rule.addLabel) {
-                try { jira_add_label({ key: key, label: rule.addLabel }); } catch (e) {}
-            }
+            addRuleLabels(key, rule);
         } catch (e) {
             console.error('  ❌ Local execution failed for ' + key + ': ' + (e.message || e));
         }
@@ -407,8 +437,9 @@ function processRule(rule, globalRepoInfo, ruleIndex) {
     tickets.forEach(function(ticket) {
         var key = ticket.key;
 
-        if (rule.skipIfLabel && hasLabel(ticket, rule.skipIfLabel)) {
-            console.log('  ⏭️  ' + key + ' skipped (label: ' + rule.skipIfLabel + ')');
+        var skipLabel = firstMatchingLabel(ticket, normalizeLabels(rule.skipIfLabel, rule.skipIfLabels));
+        if (skipLabel) {
+            console.log('  ⏭️  ' + key + ' skipped (label: ' + skipLabel + ')');
             skippedKeys.push(key);
             return;
         }
@@ -419,9 +450,7 @@ function processRule(rule, globalRepoInfo, ruleIndex) {
 
         var triggered = triggerWorkflow(effectiveRepoInfo, key, rule, effectiveConfig);
 
-        if (triggered && rule.addLabel) {
-            try { jira_add_label({ key: key, label: rule.addLabel }); } catch (e) {}
-        }
+        if (triggered) addRuleLabels(key, rule);
 
         if (triggered) processedKeys.push(key);
     });

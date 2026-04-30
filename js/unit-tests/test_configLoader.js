@@ -133,6 +133,14 @@ suite('configLoader.mergeProjectConfig', function() {
         assert.ok(result.jira.statuses.DONE, 'default statuses preserved');
     });
 
+    test('deep merges jira fields for acceptance criteria friendly field name', function() {
+        var result = configLoaderModule.mergeProjectConfig(defaults, {
+            jira: { fields: { acceptanceCriteria: 'Definition of Done' } }
+        });
+        assert.equal(result.jira.fields.acceptanceCriteria, 'Definition of Done');
+        assert.equal(defaults.jira.fields.acceptanceCriteria, 'Acceptance Criteria');
+    });
+
     test('fully replaces labels when provided', function() {
         var customLabels = { MY_LABEL: 'my_label' };
         var result = configLoaderModule.mergeProjectConfig(defaults, {

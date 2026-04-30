@@ -13,3 +13,4 @@ Use the configured formatting rules to write the final output to `outputs/respon
 - Text and icon colours must meet WCAG AA contrast ratio (minimum 4.5:1 for normal text, 3:1 for large text/icons) against their background. No grey-on-white or light-on-light combinations unless contrast ratio is verified.
 - Placeholder text in inputs must be visually distinct from entered text but still readable (minimum 3:1 contrast against input background).
 - All colour and typography choices must follow the project style guide or design tokens; no ad-hoc hex values.
+

@@ -94,7 +94,7 @@ flowchart TD
     s_ba([BA Analysis]):::status
     act_ba --> s_ba
 
-    act_ac["story_acceptance_criterias.json · dispatch<br/>📥 reads Q+A subtasks via fetchQuestionsToInput<br/>📝 writes Acceptance Criteria to Story custom field<br/>🏷️➕ sm_story_acceptance_criterias_triggered · 🏷️➖ after"]:::action
+    act_ac["story_acceptance_criteria.json · dispatch<br/>📥 reads Q+A subtasks via fetchQuestionsToInput<br/>📝 writes Acceptance Criteria to Story custom field<br/>🏷️➕ sm_story_acceptance_criteria_triggered · 🏷️➖ after"]:::action
     s_ba --> act_ac
 
     s_sa([Solution Architecture]):::status
@@ -314,7 +314,7 @@ flowchart TB
 
         s_bl -->|"story_questions<br/>📋 Q subtasks + label q"| s_por
         s_por -->|"story_ba_check<br/>✅ all subtasks Done?"| s_ba
-        s_ba -->|"story_acceptance_criterias<br/>📝 AC to Story field"| s_sa
+        s_ba -->|"story_acceptance_criteria<br/>📝 AC to Story field"| s_sa
         s_sa -->|"story_solution<br/>📐 Solution Design + diagrams"| s_rfd
         s_rfd -->|"story_development<br/>💻 code · 🔀 opens GitHub PR"| s_inr
         s_inr -->|"pr_review · 💬 existing PR<br/>✅ pr_approved"| s_mrg
@@ -418,7 +418,7 @@ All rules are defined in `sm.json`. The SM agent evaluates them in order on ever
 | # | Description | JQL Condition | Config File | Mode | Enabled |
 |---|-------------|--------------|-------------|------|---------|
 | 1 | PO Review Stories with all subtasks Done → BA Analysis | Story status = `PO Review` | `story_ba_check.json` | localExecution | ✅ |
-| 2 | BA Analysis Stories → generate Acceptance Criterias | Story status = `BA Analysis` | `story_acceptance_criterias.json` | dispatch | ✅ |
+| 2 | BA Analysis Stories → generate Acceptance Criteria | Story status = `BA Analysis` | `story_acceptance_criteria.json` | dispatch | ✅ |
 | 3 | Solution Architecture Stories → generate Solution Design | Story status = `Solution Architecture` | `story_solution.json` | dispatch | ✅ |
 | 4 | Subtasks with `q` label → trigger PO refinement | Subtask labels = `q`, status ≠ `Done` | `po_refinement.json` | dispatch | ✅ |
 | 5 | Backlog Stories → ask clarification questions | Story status = `Backlog` | `story_questions.json` | dispatch | ✅ |
@@ -461,7 +461,8 @@ All config files live in the `agents/js/` directory and are consumed by the `ai-
 | `retry_merge.json` | Teammate (skipAI) | Attempt to squash-merge an approved Story/Bug PR and transition ticket to Merged | — | — | `retryMergePR.js` |
 | `retry_merge_test.json` | Teammate (skipAI) | Attempt to squash-merge an approved Test Case PR and transition ticket to Passed or Failed | — | — | `retryMergePR.js` |
 | `sm.json` | JSRunner | SM orchestrator — runs smAgent.js every 20 min via schedule; no AI involved | — | — | `smAgent.js` (jsPath) |
-| `story_acceptance_criterias.json` | Teammate (skipAI) | Generate structured Acceptance Criteria for a story in BA Analysis and move to Solution Architecture | `acceptance_criterias_prompt.md` | `fetchQuestionsToInput.js` | `assignForSolutionArchitecture.js` |
+| `story_acceptance_criteria.json` | Teammate (skipAI) | Generate an enhanced story-ready Acceptance Criteria field for a story in BA Analysis and move to Solution Architecture | `acceptance_criteria_prompt.md` | `fetchQuestionsToInput.js` | `assignForSolutionArchitecture.js` |
+| `story_acceptance_criterias.json` | Teammate (skipAI) | Compatibility alias for older workflows; prefer `story_acceptance_criteria.json` | `acceptance_criteria_prompt.md` | `fetchQuestionsToInput.js` | `assignForSolutionArchitecture.js` |
 | `story_ba_check.json` | Teammate (skipAI) | Verify all subtasks of a PO Review story are Done before advancing to BA Analysis | — | — | `checkSubtasksDoneForBA.js` |
 | `story_development.json` | Teammate (skipAI) | Implement a story on a feature branch following the solution design and open a PR | `story_development_prompt.md` | `checkWipLabel.js` | `developTicketAndCreatePR.js` |
 | `story_done_check.json` | Teammate (skipAI) | Check whether all test cases for a Story in In Testing have passed, then transition to Done | — | — | `checkStoryTestsPassed.js` |
@@ -470,6 +471,37 @@ All config files live in the `agents/js/` directory and are consumed by the `ai-
 | `test_case_automation.json` | Teammate (skipAI) | Write automated test code for a Backlog Test Case and push to a branch for review | `test_case_automation_prompt.md` | `checkWipLabel.js` | `postTestAutomationResults.js` |
 | `test_cases_generator.json` | TestCasesGenerator | Generate structured Jira test cases from a merged Story and move ticket to In Testing | — | `moveToReadyForTesting.js` | `moveToInTesting.js` |
 | `workflow_failure_reporter.json` | JSRunner | Monitor GitHub Actions workflow runs and create/update Jira bugs for CI failures | — | — | `workflowFailureReporter.js` (jsPath) |
+
+---
+
+## Story Template Customization
+
+Story/AC generation separates task instructions from formatting so each repository can customize output safely:
+
+| File | Purpose |
+|------|---------|
+| `prompts/acceptance_criteria_prompt.md` | Runtime task flow: read input, use answered questions, write `outputs/response.md` |
+| `instructions/story/enhanced_story_content_guidelines.md` | Content guidance: story points, business context, testable ACs, business rules, out of scope |
+| `instructions/story/enhanced_story_jira_formatting.md` | Jira-specific output format and section order |
+
+Project repositories can override or append their own guidance from `.dmtools/config.js`:
+
+```js
+module.exports = {
+  additionalInstructions: {
+    story_acceptance_criteria: [
+      './.dmtools/instructions/product/domain_rules.md'
+    ]
+  },
+  agentParamPatches: {
+    story_acceptance_criteria: {
+      formattingRules: './.dmtools/instructions/product/jira_story_template.md'
+    }
+  }
+};
+```
+
+Use `additionalInstructions` for domain/content rules. Use `agentParamPatches.story_acceptance_criteria.formattingRules` when a repository needs a different output format, for example a custom Jira story template.
 
 ---
 
@@ -552,7 +584,8 @@ These labels are added by SM **before** dispatching an agent and removed by the 
 | Label | Set By | Cleared By | Purpose |
 |-------|--------|------------|---------|
 | `sm_story_questions_triggered` | SM (story_questions) | `createQuestionsAndAssignForReview.js` | Prevents duplicate question generation for Backlog stories |
-| `sm_story_acceptance_criterias_triggered` | SM (story_acceptance_criterias) | `assignForSolutionArchitecture.js` | Prevents duplicate AC generation |
+| `sm_story_acceptance_criteria_triggered` | SM (story_acceptance_criteria) | `assignForSolutionArchitecture.js` | Prevents duplicate AC generation |
+| `sm_story_acceptance_criterias_triggered` | SM (legacy story_acceptance_criterias) | `assignForSolutionArchitecture.js` | Legacy duplicate-prevention label; SM still skips tickets with this label |
 | `sm_story_solution_triggered` | SM (story_solution) | `writeSolutionAndDiagrams.js` | Prevents duplicate solution design generation |
 | `sm_story_development_triggered` | SM (story_development) | `developTicketAndCreatePR.js` | Prevents duplicate development runs |
 | `sm_bug_development_triggered` | SM (bug_development) | `developBugAndCreatePR.js` | Prevents duplicate bug fix runs |
