@@ -11,6 +11,39 @@
 
 var configLoader = require('./configLoader.js');
 
+function getAnswerValue(fields, answerField) {
+    if (!fields || !answerField) {
+        return null;
+    }
+
+    var exact = fields[answerField];
+    if (exact) {
+        return exact;
+    }
+
+    var lower = fields[answerField.toLowerCase()];
+    if (lower) {
+        return lower;
+    }
+
+    if (answerField.indexOf('customfield_') === 0) {
+        var suffix = '(' + answerField + ')';
+        for (var key in fields) {
+            if (!Object.prototype.hasOwnProperty.call(fields, key)) {
+                continue;
+            }
+            if (key === answerField || key.toLowerCase() === answerField.toLowerCase()) {
+                return fields[key];
+            }
+            if (key.slice(-suffix.length) === suffix) {
+                return fields[key];
+            }
+        }
+    }
+
+    return null;
+}
+
 /**
  * Pre-CLI action: fetch question subtasks into input folder
  *
@@ -44,7 +77,7 @@ function action(params) {
                     description: f.description || '',
                     status: f.status ? f.status.name : '',
                     priority: f.priority ? f.priority.name : '',
-                    answer: f[answerField] || f[answerField.toLowerCase()] || null
+                    answer: getAnswerValue(f, answerField)
                 });
             }
             console.log('Found ' + questions.length + ' question subtasks');
@@ -60,5 +93,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = { action, getAnswerValue };
 }
