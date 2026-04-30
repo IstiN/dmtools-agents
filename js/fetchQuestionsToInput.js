@@ -16,28 +16,36 @@ function getAnswerValue(fields, answerField) {
         return null;
     }
 
+    var answerFieldLower = answerField.toLowerCase();
     var exact = fields[answerField];
     if (exact) {
         return exact;
     }
 
-    var lower = fields[answerField.toLowerCase()];
+    var lower = fields[answerFieldLower];
     if (lower) {
         return lower;
     }
 
-    if (answerField.indexOf('customfield_') === 0) {
-        var suffix = '(' + answerField + ')';
-        for (var key in fields) {
-            if (!Object.prototype.hasOwnProperty.call(fields, key)) {
-                continue;
-            }
-            if (key === answerField || key.toLowerCase() === answerField.toLowerCase()) {
-                return fields[key];
-            }
-            if (key.slice(-suffix.length) === suffix) {
-                return fields[key];
-            }
+    var customFieldSuffix = answerField.indexOf('customfield_') === 0
+        ? '(' + answerFieldLower + ')'
+        : null;
+    var transformedFriendlyPrefix = answerFieldLower + ' (';
+
+    for (var key in fields) {
+        if (!Object.prototype.hasOwnProperty.call(fields, key)) {
+            continue;
+        }
+
+        var keyLower = key.toLowerCase();
+        if (keyLower === answerFieldLower) {
+            return fields[key];
+        }
+        if (customFieldSuffix && keyLower.slice(-customFieldSuffix.length) === customFieldSuffix) {
+            return fields[key];
+        }
+        if (keyLower.indexOf(transformedFriendlyPrefix) === 0 && keyLower.slice(-1) === ')') {
+            return fields[key];
         }
     }
 

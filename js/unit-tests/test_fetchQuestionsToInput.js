@@ -14,7 +14,7 @@ function loadFetchQuestionsToInput() {
                         jira: {
                             questions: {
                                 fetchJql: 'parent = {ticketKey}',
-                                answerField: 'customfield_10330'
+                                answerField: 'Answer'
                             }
                         }
                     };
@@ -35,17 +35,17 @@ suite('fetchQuestionsToInput.getAnswerValue', function() {
         );
     });
 
-    test('reads transformed Jira key with custom field suffix', function() {
+    test('reads transformed Jira key for a friendly field name', function() {
         var mod = loadFetchQuestionsToInput();
         assert.equal(
-            mod.getAnswerValue({ 'Answer (customfield_10330)': 'Mapped answer' }, 'customfield_10330'),
+            mod.getAnswerValue({ 'Answer (customfield_10330)': 'Mapped answer' }, 'Answer'),
             'Mapped answer'
         );
     });
 
     test('returns null when answer field is absent', function() {
         var mod = loadFetchQuestionsToInput();
-        assert.equal(mod.getAnswerValue({ summary: 'Question' }, 'customfield_10330'), null);
+        assert.equal(mod.getAnswerValue({ summary: 'Question' }, 'Answer'), null);
     });
 
 });
