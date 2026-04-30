@@ -11,20 +11,24 @@
 
 var configLoader = require('./configLoader.js');
 
+function hasAnswerValue(fields, key) {
+    return Object.prototype.hasOwnProperty.call(fields, key)
+        && fields[key] !== undefined
+        && fields[key] !== null;
+}
+
 function getAnswerValue(fields, answerField) {
     if (!fields || !answerField) {
         return null;
     }
 
     var answerFieldLower = answerField.toLowerCase();
-    var exact = fields[answerField];
-    if (exact) {
-        return exact;
+    if (hasAnswerValue(fields, answerField)) {
+        return fields[answerField];
     }
 
-    var lower = fields[answerFieldLower];
-    if (lower) {
-        return lower;
+    if (hasAnswerValue(fields, answerFieldLower)) {
+        return fields[answerFieldLower];
     }
 
     var customFieldSuffix = answerField.indexOf('customfield_') === 0
@@ -38,13 +42,13 @@ function getAnswerValue(fields, answerField) {
         }
 
         var keyLower = key.toLowerCase();
-        if (keyLower === answerFieldLower) {
+        if (keyLower === answerFieldLower && hasAnswerValue(fields, key)) {
             return fields[key];
         }
-        if (customFieldSuffix && keyLower.slice(-customFieldSuffix.length) === customFieldSuffix) {
+        if (customFieldSuffix && keyLower.slice(-customFieldSuffix.length) === customFieldSuffix && hasAnswerValue(fields, key)) {
             return fields[key];
         }
-        if (keyLower.indexOf(transformedFriendlyPrefix) === 0 && keyLower.slice(-1) === ')') {
+        if (keyLower.indexOf(transformedFriendlyPrefix) === 0 && keyLower.slice(-1) === ')' && hasAnswerValue(fields, key)) {
             return fields[key];
         }
     }
@@ -101,5 +105,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, getAnswerValue };
+    module.exports = { action, getAnswerValue, hasAnswerValue };
 }
