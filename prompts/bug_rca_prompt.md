@@ -39,7 +39,7 @@ The root cause must be a **specific code-level finding**: a wrong condition, mis
 
 > **⚠️ CRITICAL — output paths are exact. Do NOT create subdirectories.**
 > Write output to:
-> - `outputs/response.md` — RCA document (Jira wiki markup)
+> - `outputs/response.md` — RCA document in the target tracker format
 > - `outputs/diagram.md` — Mermaid diagram
 >
 > **Do NOT write to `outputs/{ticketKey}/response.md` or any subdirectory.** The post-processing pipeline reads from the root `outputs/` path. Writing to a subdirectory will cause the RCA to be silently discarded and never submitted to Jira.

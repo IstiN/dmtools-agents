@@ -28,7 +28,7 @@ To answer it:
 4. Look at the **surrounding code**, not just the changed lines. A fix can be technically correct in isolation but miss the real problem because of something adjacent (wrong config, missing route, different code path that's actually triggered).
 5. If the PR includes tests — check that the tests actually reproduce the user's symptom, not just a tangentially related scenario.
 
-If you conclude the changes **do not fully solve the user's problem**, raise it as a 🚨 BLOCKING issue with a clear explanation of what is missing.
+If you conclude the changes **do not fully solve the user's problem**, raise it as a 🚨 BLOCKING issue with a clear explanation of what is missing but **if you know and highlight root cause** do it.
 
 # Review Priorities
 1. ✅ **Actually solves the user's problem** (HIGHEST PRIORITY — see above)
@@ -71,10 +71,11 @@ Verify:
 
 ## 🧪 Test Automation Results Analysis (Critical)
 
-Check `pr_discussions.md` for comments from test automation bots (e.g., comments titled **🤖 Maestro Test Results** or similar). If present, perform a **deep analysis**:
+Check `pr_discussions.md` for comments from test automation bots. If present, perform a **deep analysis**:
 
 ### ⚠️ CRITICAL RULE: Never dismiss test automation warnings as "tool limitations"
 Test automation tools capture the **real runtime state** of the application — the actual accessibility tree, UI hierarchy, and behavior. If automation reports that an element is missing from the accessibility tree, screen readers will NOT see it either. **Do NOT write** that warnings are "tool limitations", "simulator limitations", or "likely work on real devices" — test automation runtime data reflects the real behavior.
+Code which is written must be accessible by automation tests executions.
 
 ### ⚠️ CRITICAL RULE: Evidence hierarchy — runtime data beats code comments
 When evaluating whether a fix works, follow this strict evidence hierarchy:
@@ -84,11 +85,13 @@ When evaluating whether a fix works, follow this strict evidence hierarchy:
 3. **Code comments / developer explanations** (what the developer INTENDED)
 
 **Never trust code comments as evidence that a fix works.** Code comments explain intent, not actual behavior. If a code comment says "this ensures accessibility traversal works" but automation shows 0 children — the comment is wrong, the fix doesn't work.
+**IMPORTANT GOAL** confirm the code works as expected and really solves issue. **NEVER TRUST DEVELOPER, CHEKC AND CONFIRM ITSELF**.
 
 ### ⚠️ CRITICAL RULE: Never trust developer rework as evidence
 When reviewing after a rework cycle, the rework agent's code changes and commit messages are NOT evidence that the issue is fixed. **Only two sources of truth exist:**
 1. **Reviewer comments** — the original reviewer who flagged the issue
 2. **Test automation data** — runtime results from the latest build
+**IMPORTANT** ALL THE COMMENTS CAN BE FROM SAME ACCOUNT!
 
 If the rework claims "Fixed: moved accessibilityViewIsModal to correct location" but test automation STILL reports 0 children — the fix FAILED. Do NOT approve based on the rework's explanation. Do NOT rationalize persistent warnings as "expected behavior" or "architecture limitation".
 
@@ -107,7 +110,7 @@ If this is a re-review after a rework cycle, check whether the rework actually f
 Running automation is expensive (CI time, simulator/emulator, real devices). PR review is cheap. The reviewer's job is to **analyze whether the current code in the PR addresses the failures reported by automation** — not to gatekeep on a fresh post-commit automation run.
 
 **Workflow**:
-1. Automation runs, posts failures (e.g., "Calendar blank, 0 a11y children on iOS").
+1. Automation runs, posts failures (e.g., "Profile blank, 0 a11y children on iOS").
 2. Developer pushes a fix.
 3. **Reviewer analyzes the diff** against the automation failure:
    - Does the new code logically address the reported root cause? (e.g., fix swaps `BottomSheetFlatList` → `RNGH FlatList + nestedScrollEnabled` to address the iOS FullWindowOverlay a11y tree issue → YES, this directly addresses the reported failure.)
@@ -212,7 +215,7 @@ This is the machine-readable result consumed by the post-action. If it is missin
       "path": "src/components/Button.tsx",
       "line": 42,
       "side": "RIGHT",
-      "body": "Write your comment text directly here in GitHub Markdown — do NOT use a file path",
+      "body": "Write your comment text directly here in the SCM review-comment format — do NOT use a file path",
       "severity": "BLOCKING|IMPORTANT|SUGGESTION"
     }
   ],

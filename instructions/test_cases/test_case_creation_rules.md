@@ -11,7 +11,7 @@ Examples:
 
 ## Structure
 
-Every test case must contain the following sections in Jira Markdown:
+Every test case must contain the following sections using the target tracker format:
 
 ```
 h4. Objective
@@ -57,7 +57,7 @@ For each acceptance criterion or feature, generate:
 
 Generate test cases that cover:
 - All acceptance criteria listed in the story
-- Main integration points with external systems (Jira, GitHub, AI providers)
+- Main integration points with external systems (tracker, SCM, AI providers, or project services)
 - Error handling and failure scenarios described in the story
 - Security-relevant behaviors (permissions, token handling, unauthorized access)
 

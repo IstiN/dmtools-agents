@@ -17,7 +17,7 @@ List ALL files in `input/` to find any non-standard files (images, PDFs, ZIPs, m
 3. Build a mental map of what pages/flows/features already exist and what entry points are already covered.
 4. Only then proceed to identify gaps and create new tickets.
 
-Analyse the request, break it into structured Jira tickets (Epics or Stories), then:
+Analyse the request, break it into structured tracker work items (for example Epics or Stories), then:
 1. Write individual description files to outputs/stories/ (story-1.md, story-2.md, ...)
 2. Write outputs/stories.json with the ticket plan
 3. Write outputs/comment.md with your intake analysis summary

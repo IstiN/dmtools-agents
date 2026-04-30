@@ -21,7 +21,7 @@ This is the machine-readable result consumed by the post-action. If it is missin
 **⚠️ CRITICAL — `recommendation` field**: Use EXACTLY `"APPROVE"`, `"REQUEST_CHANGES"`, or `"BLOCK"`. Never `"APPROVED"` (with extra D). Never use `"verdict"` as the field name.
 
 ### 2. `outputs/pr_review_general.md` — REQUIRED
-GitHub-formatted general PR comment (referenced in `pr_review.json` → `generalComment`).
+SCM-formatted general PR comment (referenced in `pr_review.json` → `generalComment`).
 
 ### 3. `outputs/response.md` — REQUIRED
-Jira-formatted review summary posted as a ticket comment.
+Tracker-formatted review summary posted as a ticket comment.

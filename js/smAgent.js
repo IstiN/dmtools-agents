@@ -99,6 +99,16 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
         if (resolved.additionalInstructions && resolved.additionalInstructions.length > 0) {
             p.additionalInstructions = resolved.additionalInstructions;
         }
+        if (resolved.cliPrompts && resolved.cliPrompts.length > 0) {
+            p.cliPrompts = resolved.cliPrompts;
+        }
+        if (resolved.cliPrompt) {
+            p.cliPrompt = resolved.cliPrompt;
+        }
+        if (resolved.agentParamPatch) {
+            if (!p.agentParams) p.agentParams = {};
+            p.agentParams = configLoader.deepMerge(p.agentParams, resolved.agentParamPatch);
+        }
 
         // Inject project-specific field name overrides from jira.fields config
         var jiraFields = effectiveConfig.jira && effectiveConfig.jira.fields;
@@ -134,8 +144,8 @@ function extractAgentName(configFile) {
 /**
  * Resolve the full path to an agent config JSON.
  * If rule.configFile is a bare filename (no "/"), prefix with agentConfigsDir from config.
- * Example: "TestCasesGenerator.json" + agentConfigsDir "ai_teammate/AITS"
- *        → "ai_teammate/AITS/TestCasesGenerator.json"
+ * Example: "TestCasesGenerator.json" + agentConfigsDir "projects/alpha"
+ *        → "projects/alpha/TestCasesGenerator.json"
  */
 function resolveConfigFile(rule, effectiveConfig) {
     var cf = rule.configFile;
@@ -483,4 +493,3 @@ function action(params) {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { action: action };
 }
-

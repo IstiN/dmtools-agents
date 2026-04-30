@@ -21,9 +21,9 @@ You are fixing code issues identified in a Pull Request review.
 Your mission is to address every issue raised in `pr_discussions.md`. This includes:
 
 1. **Human review threads** — inline code review comments with `rootCommentId` and `threadId`. These MUST be fixed and replied to in `review_replies.json`.
-2. **🤖 Maestro Test Results** — comments titled "🤖 Maestro Test Results" containing test automation results with a11y structural warnings. These have `rootCommentId: null` because they are PR comments (not review threads), but they contain **real, actionable bugs** that MUST be fixed. See the Maestro analysis section below.
+2. **Automated test results** — PR comments from test automation tools containing failures or structural warnings. These may have `rootCommentId: null` because they are PR comments (not review threads), but they can contain **real, actionable bugs** that MUST be fixed.
 
-**Ignore only**: bot ticket-link comments (e.g. "MAPC-XXXX ...link..."), previous rework summary comments, and automated code review APPROVE comments — these are informational and require no action.
+**Ignore only**: bot ticket-link comments (e.g. "TICKET-123 ...link..."), previous rework summary comments, and automated code review APPROVE comments — these are informational and require no action.
 
 ### 🛑 STALE AUTOMATION LOOP — DO NOT REPEAT YOURSELF
 
@@ -35,7 +35,7 @@ If the only "blocker" is the reviewer asking for fresh post-fix automation, and 
 
 The reviewer's job is to APPROVE based on code analysis (review is cheaper than re-running automation). If you keep posting "Rework Complete" you keep retriggering the reviewer.
 
-If `pr_discussions.md` contains NO actionable items (no human review threads AND no Maestro failures/warnings), then there is **nothing to fix** — write a short `outputs/response.md` stating "No open review comments to address" and an empty `outputs/review_replies.json` (`{ "replies": [] }`), then exit. **Do NOT post multiple acknowledgment comments.**
+If `pr_discussions.md` contains NO actionable items (no human review threads AND no automated test failures/warnings), then there is **nothing to fix** — write a short `outputs/response.md` stating "No open review comments to address" and an empty `outputs/review_replies.json` (`{ "replies": [] }`), then exit. **Do NOT post multiple acknowledgment comments.**
 
 ### Fixing human review threads
 For each thread:
@@ -49,7 +49,7 @@ For each thread:
 
 ### 🧪 Fixing Test Automation Results (CRITICAL)
 
-When `pr_discussions.md` contains test automation results (e.g., **🤖 Maestro Test Results**), you MUST analyze them in detail:
+When `pr_discussions.md` contains automated test results, you MUST analyze them in detail:
 
 1. **Failed tests (❌)** — these indicate real bugs found by running automation on the actual build from this PR branch. The failure reason tells you exactly what's wrong.
 

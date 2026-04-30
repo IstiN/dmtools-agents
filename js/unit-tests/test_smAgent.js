@@ -540,6 +540,40 @@ suite('smAgent: additionalInstructions in encoded_config', function() {
         assert.notOk(decoded.params.additionalInstructions, 'no additionalInstructions when not configured');
     });
 
+    test('injects cliPrompts and agent param patches from config into encoded_config', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js':
+                    'module.exports = {' +
+                    '  jira: { project: "P" },' +
+                    '  repository: { owner: "o", repo: "r" },' +
+                    '  cliPromptOverrides: {' +
+                    '    story_development: "./.dmtools/prompts/main.md"' +
+                    '  },' +
+                    '  cliPrompts: {' +
+                    '    story_development: ["./.dmtools/prompts/role.md", "./.dmtools/prompts/focus.md"]' +
+                    '  },' +
+                    '  agentParamPatches: {' +
+                    '    story_development: { aiRole: "Senior Engineer", customFlag: true }' +
+                    '  }' +
+                    '};'
+            },
+            tickets: [{ key: 'P-2', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", { configFile: 'agents/story_development.json' })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
+        assert.equal(decoded.params.cliPrompt, './.dmtools/prompts/main.md');
+        assert.deepEqual(decoded.params.cliPrompts, ['./.dmtools/prompts/role.md', './.dmtools/prompts/focus.md']);
+        assert.equal(decoded.params.agentParams.aiRole, 'Senior Engineer');
+        assert.equal(decoded.params.agentParams.customFlag, true);
+    });
+
 });
 
 // ── targetStatus ──────────────────────────────────────────────────────────────

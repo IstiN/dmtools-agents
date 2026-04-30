@@ -41,7 +41,7 @@ After all fixes:
 
 ### 1. `outputs/response.md` — Human-readable fix summary (posted as general PR comment)
 
-Write in clear GitHub Markdown:
+Write in clear SCM-compatible Markdown:
 
 ```markdown
 ## Rework Summary

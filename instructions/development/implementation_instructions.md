@@ -13,14 +13,7 @@ Understand existing codebase patterns, architecture, and test structure before i
   - Encapsulation: hide internal state, expose clean interfaces
   - Prefer composition over inheritance
 
-**IMPORTANT** Use modern practices and frameworks appropriate to the language and stack:
-  - **Database access**: always use an ORM or query builder — never write raw SQL. Use the ORM already present in the codebase (e.g. GORM for Go, TypeORM/Prisma for TypeScript/Node.js, Hibernate/Spring Data for Java, SQLAlchemy for Python). If no ORM exists yet, introduce the most idiomatic one for the language.
-  - **Backend**: follow repository pattern — data access logic lives in repositories, not controllers or handlers
-  - **Frontend**: follow Clean Architecture with strict layer separation:
-      - **Domain layer**: entities, use cases, repository interfaces (no framework dependencies)
-      - **Data layer**: repository implementations, API clients, local storage adapters
-      - **Presentation layer**: UI components, view models / state management — depends only on domain use cases
-      - Components must not call APIs or databases directly
+**IMPORTANT** Use the project-approved language, framework, architecture, and tooling. If project or platform instruction files are provided, treat them as binding.
 
 Implement code changes based on ticket requirements including:
   - Source code implementation following existing patterns and architecture
@@ -29,26 +22,7 @@ Implement code changes based on ticket requirements including:
 
 **IMPORTANT**: Before finishing, you MUST run all unit tests and confirm they pass. If tests fail, fix the issues before completing. Do not finish with failing tests.
 
-**IMPORTANT**: Check whether a CI/CD workflow exists that runs unit tests automatically on pull request push or update (e.g. `.github/workflows/` for GitHub). If no such workflow exists, create one. For GitHub, create a workflow file under `.github/workflows/` that:
-  - Triggers on `pull_request` events (opened, synchronize, reopened)
-  - Installs dependencies and runs the unit test suite
-  - Fails the PR check if any tests fail
-  Match the language/build tool already used in the project (e.g. npm test, mvn test, gradle test, pytest, etc.)
-
-**IMPORTANT**: If the implementation requires new environment variables, configuration, or credentials for GitHub Actions (deployments, tests, or other workflows):
-  1. **Check what already exists first** — never overwrite without checking:
-     ```bash
-     gh secret list --repo {owner}/{repo}
-     gh variable list --repo {owner}/{repo}
-     ```
-  2. **Add non-sensitive variables** (URLs, project IDs, feature flags, region names, etc.):
-     ```bash
-     gh variable set VAR_NAME --body "value" --repo {owner}/{repo}
-     ```
-  3. **For sensitive secrets** (API keys, passwords, tokens) — you cannot set them automatically as you do not have the actual value. Instead, document them in `outputs/response.md` as:
-     > 🔑 **Human action required**: add secret `SECRET_NAME` to GitHub Actions (`gh secret set SECRET_NAME --body "..." --repo {owner}/{repo}`)
-  4. **Update `instruction.md`** — always add the new entry to the appropriate table (GitHub Secrets or GitHub Variables). Mark secrets not yet added with ⚠️.
-  5. Secrets and variables set at repo level are available to **all** workflows: `ai-teammate.yml`, `deploy-api.yml`, `deploy-pages.yml`, `unit-tests.yml` and any future workflow.
+**IMPORTANT**: If CI/CD or repository-level configuration changes are required, follow the project-specific SCM/CI instructions. Do not assume a specific provider.
 
 **IMPORTANT**: Before finishing, run `git status` to review every new and modified file. Check for any sensitive files that must NOT be committed:
 - Credential / service-account files (`gha-creds-*.json`, `*-credentials.json`, `*.pem`, `*.key`, `id_rsa`, `keystore.*`)
@@ -67,7 +41,7 @@ Write a short (no water words) development summary to outputs/response.md with t
   - Approach and design decisions made during implementation
   - List of files created or modified with brief explanation
   - Test coverage added (describe what tests were created)
-  - Whether a CI/CD unit test workflow already existed or was created
+  - Whether CI/CD or repository configuration was changed
 
 **IMPORTANT**: The outputs/response.md content will be automatically appended to the Pull Request description
 

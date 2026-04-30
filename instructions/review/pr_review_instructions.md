@@ -47,10 +47,8 @@ Scan for OWASP Top 10 and common vulnerabilities:
   - Separation of concerns
   - Cohesion and coupling
   - Naming conventions and code readability
-  - **ORM usage**: flag any raw SQL queries — database access must go through an ORM or query builder (GORM, TypeORM, Prisma, Hibernate, SQLAlchemy, etc.)
-  - **Modern frameworks**: flag use of outdated or non-idiomatic libraries when a standard modern alternative exists in the project stack
-  - **Repository pattern**: flag business logic or SQL inside controllers, handlers, or UI components — data access belongs in repositories
-  - **Frontend Clean Architecture**: flag violations of layer boundaries — UI components must not call APIs or databases directly; domain logic must not depend on UI frameworks; dependency must only flow inward (Presentation → Domain ← Data)
+  - Project architecture: flag violations of project-approved layering, data access, dependency direction, and framework conventions
+  - Modern framework usage: flag outdated or non-idiomatic libraries only when the project stack clearly has an approved alternative
 
 ## ✅ Task Alignment
   - Verify implementation matches ticket requirements

@@ -126,11 +126,11 @@ Never hardcode credentials in test files.
 - `"status"` = `"passed"` only when ALL TCs pass; `"failed"` if any TC fails; `"blocked_by_human"` if setup is missing
 - `"results"` array: one entry per TC
 
-### `outputs/response.md` — Jira Markdown summary (posted as comment on trigger ticket)
+### `outputs/response.md` — tracker-formatted summary
 
-### `outputs/pr_body.md` — GitHub Markdown summary (automation repo PR description)
+### `outputs/pr_body.md` — SCM-formatted automation PR description
 
-### `outputs/pr_feature_update.md` — GitHub Markdown appended to the feature PR description
+### `outputs/pr_feature_update.md` — SCM-formatted update appended to the feature PR description
 
 Include: TC key | Title | Status table.
 

@@ -13,7 +13,8 @@
  *   - jira.statuses, jira.issueTypes, jira.questions, labels: FULL REPLACEMENT when provided
  *   - smRules, smMergeRules: FULL REPLACEMENT when provided
  *   - repository, git, formats, confluence: DEEP MERGE
- *   - additionalInstructions, instructionOverrides: FULL REPLACEMENT per key
+ *   - additionalInstructions, instructionOverrides, cliPrompts, cliPromptOverrides, agentParamPatches:
+ *     FULL REPLACEMENT per key
  */
 
 var DEFAULT_CONFIG = require('./config.js');
@@ -89,13 +90,16 @@ var DEFAULTS = {
     smRules: null,
     smMergeRules: null,
 
-    // Base directory for agent JSON configs (e.g. "ai_teammate/AITS").
+    // Base directory for agent JSON configs (e.g. "projects/alpha").
     // When set, smRules.configFile values without a "/" are resolved relative to this dir.
     // Allows config.js to own the full picture: repo, jira, rules, and agent paths.
     agentConfigsDir: null,
 
     additionalInstructions: {},
     instructionOverrides: {},
+    cliPrompts: {},
+    cliPromptOverrides: {},
+    agentParamPatches: {},
 
     scm: {
         provider: 'github'   // 'github' | 'ado' — source control provider for PR operations
@@ -180,6 +184,15 @@ function mergeProjectConfig(defaults, overrides) {
     }
     if (overrides.instructionOverrides) {
         result.instructionOverrides = overrides.instructionOverrides;
+    }
+    if (overrides.cliPrompts) {
+        result.cliPrompts = overrides.cliPrompts;
+    }
+    if (overrides.cliPromptOverrides) {
+        result.cliPromptOverrides = overrides.cliPromptOverrides;
+    }
+    if (overrides.agentParamPatches) {
+        result.agentParamPatches = overrides.agentParamPatches;
     }
 
     return result;
@@ -451,11 +464,14 @@ function resolveConfluenceUrls(items, config) {
  * @param {string} agentName - Agent config name (e.g., 'story_development')
  * @param {string[]} defaultInstructions - Default instructions from agent JSON
  * @param {Object} config - Loaded project config
- * @returns {Object} { instructions: string[], additionalInstructions: string[] }
+ * @returns {Object} { instructions: string[], additionalInstructions: string[], cliPrompts: string[], cliPrompt: string|null, agentParamPatch: Object|null }
  */
 function resolveInstructions(agentName, defaultInstructions, config) {
     var instructions = defaultInstructions || [];
     var additional = [];
+    var cliPrompts = [];
+    var cliPrompt = null;
+    var agentParamPatch = null;
 
     // Full override if instructionOverrides has this agent
     if (config.instructionOverrides && config.instructionOverrides[agentName]) {
@@ -470,9 +486,24 @@ function resolveInstructions(agentName, defaultInstructions, config) {
         additional = config.additionalInstructions[agentName];
     }
 
+    if (config.cliPrompts && config.cliPrompts[agentName]) {
+        cliPrompts = config.cliPrompts[agentName];
+    }
+
+    if (config.cliPromptOverrides && config.cliPromptOverrides[agentName]) {
+        cliPrompt = config.cliPromptOverrides[agentName];
+    }
+
+    if (config.agentParamPatches && config.agentParamPatches[agentName]) {
+        agentParamPatch = config.agentParamPatches[agentName];
+    }
+
     return {
         instructions: instructions,
-        additionalInstructions: additional
+        additionalInstructions: additional,
+        cliPrompts: cliPrompts,
+        cliPrompt: cliPrompt,
+        agentParamPatch: agentParamPatch
     };
 }
 
@@ -492,4 +523,3 @@ module.exports = {
     resolveInstructions: resolveInstructions,
     createScm: _scmModule ? _scmModule.createScm : function() { throw new Error('scm.js not available in this environment'); }
 };
-

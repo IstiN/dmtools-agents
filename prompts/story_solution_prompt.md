@@ -14,9 +14,8 @@ List the input folder with `ls -la input/*/` and read every file found:
 **IMPORTANT** Write the solution design to outputs/response.md and the Mermaid diagram to outputs/diagram.md.
 
 **CRITICAL: OUTPUT FORMAT**
-- The output MUST be written in **Jira wiki markup** format. Check `request.md` and `formattingRules` for the exact format — use it strictly.
-- Use `h2.`, `h3.` for headings, `*bold*`, `_italic_`, `||header||` for tables, `* item` for bullet lists, `{code:mermaid}...{code}` for diagrams.
-- Do NOT use Markdown syntax (no `##`, no `**bold**`, no backtick code fences with triple backticks).
+- The output MUST follow the formatting rules provided in `request.md`, `formattingRules`, or provider-specific modules.
+- Do not assume a tracker markup dialect unless it is explicitly specified.
 
 **CRITICAL: NO CODE IN SOLUTION**
 - This is a high-level Solution Design — NOT an implementation guide.

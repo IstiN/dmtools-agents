@@ -17,4 +17,4 @@ List the input folder with `ls -la input/*/` and read every file found:
 
 **IMPORTANT** Before writing, investigate the target codebase and dependencies to understand the current implementation, existing patterns, and any relevant code that relates to the story. Use CLI (`find`, `ls`, `cat`) to explore. Do not make assumptions that can be verified from the code.
 
-**IMPORTANT** Strictly follow the formatting rules provided in instructions or in `request.md`. If Jira Markdown is specified — you MUST write the output in Jira Markdown syntax (e.g. `*bold*`, `_italic_`, `h3.`, `||table||`, `{code}`, `#` for lists). Only use free-form text if no formatting rules are specified anywhere.
+**IMPORTANT** Strictly follow the formatting rules provided in instructions or in `request.md`. Use tracker-specific markup only when that provider format is explicitly specified. Only use free-form text if no formatting rules are specified anywhere.
