@@ -244,6 +244,9 @@ module.exports = {
   // ── Instruction overrides ────────────────────────────────────────────────
   // additionalInstructions: appended to agent's base instructions
   additionalInstructions: {
+    story_acceptance_criteria: [
+      './.dmtools/instructions/product/ac_content_rules.md'
+    ],
     story_description: [
       'https://my-wiki/pages/story-template'
     ],
@@ -277,7 +280,9 @@ module.exports = {
   workflowFile:   "ai-teammate.yml",     // optional — default: ai-teammate.yml
   workflowRef:    "main",                // optional — default: main
   skipIfLabel:    "sm_dev_triggered",    // optional — idempotency: skip if ticket has label
+  skipIfLabels:   ["sm_dev_triggered"],   // optional — skip if ticket has any listed label
   addLabel:       "sm_dev_triggered",    // optional — add after trigger
+  addLabels:      ["sm_dev_triggered"],   // optional — add several labels after trigger
   enabled:        true,                  // optional — false to disable without deleting
   limit:          10,                    // optional — max tickets per run
   localExecution: false                  // optional — run postJSAction in-process (no GitHub trigger)
@@ -300,6 +305,35 @@ module.exports = {
 The resolved `_configPath` is propagated into `encoded_config.customParams.configPath`
 when smAgent triggers downstream workflows — so postJSAction scripts also find
 the correct project config automatically.
+
+---
+
+## Customizing Story Templates
+
+The story acceptance criteria agent separates task flow, content guidance, and output formatting:
+
+- `prompts/acceptance_criteria_prompt.md` — task flow and required input files.
+- `instructions/story/enhanced_story_content_guidelines.md` — content rules such as story points, business context, testable ACs, business rules, and out of scope.
+- `instructions/story/enhanced_story_jira_formatting.md` — Jira wiki-style output structure.
+
+Use project `.dmtools/config.js` to customize by repository without changing shared agent defaults:
+
+```js
+module.exports = {
+  additionalInstructions: {
+    story_acceptance_criteria: [
+      './.dmtools/instructions/product/domain_rules.md'
+    ]
+  },
+  agentParamPatches: {
+    story_acceptance_criteria: {
+      formattingRules: './.dmtools/instructions/product/jira_story_template.md'
+    }
+  }
+};
+```
+
+Use `additionalInstructions` for domain/content rules. Use `agentParamPatches.story_acceptance_criteria.formattingRules` for repository-specific Jira formatting.
 
 ---
 

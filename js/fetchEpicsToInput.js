@@ -75,7 +75,7 @@ function action(params) {
                         status: sf.status ? sf.status.name : '',
                         priority: sf.priority ? sf.priority.name : '',
                         diagrams: findField(sf, 'Diagrams') || null,
-                        acceptanceCriterias: findField(sf, 'Acceptance Criterias') || null,
+                        acceptanceCriteria: findField(sf, 'Acceptance Criteria') || findField(sf, 'Acceptance Criterias') || null,
                         solution: findField(sf, 'Solution') || null,
                         parent: sf.parent ? sf.parent.key : null
                     });

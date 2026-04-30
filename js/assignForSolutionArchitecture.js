@@ -7,6 +7,11 @@
 const { extractTicketKey } = require('./common/jiraHelpers.js');
 const { LABELS, STATUSES } = require('./config.js');
 
+const ACCEPTANCE_CRITERIA_TRIGGER_LABELS = [
+    'sm_story_acceptance_criteria_triggered',
+    'sm_story_acceptance_criterias_triggered'
+];
+
 function action(params) {
     try {
         var ticketKey = params.ticket.key;
@@ -50,6 +55,15 @@ function action(params) {
                 console.warn('Failed to remove WIP label:', e);
             }
         }
+
+        ACCEPTANCE_CRITERIA_TRIGGER_LABELS.forEach(function(label) {
+            try {
+                jira_remove_label({ key: ticketKey, label: label });
+                console.log('Removed trigger label "' + label + '" from ' + ticketKey);
+            } catch (e) {
+                console.warn('Failed to remove trigger label "' + label + '":', e);
+            }
+        });
 
         return {
             success: true,

@@ -12,11 +12,14 @@
           "localExecution": true
         },
         {
-          "description": "BA Analysis Stories → generate Acceptance Criterias",
+          "description": "BA Analysis Stories → generate Acceptance Criteria",
           "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('BA Analysis')",
-          "configFile": "agents/story_acceptance_criterias.json",
-          "skipIfLabel": "sm_story_acceptance_criterias_triggered",
-          "addLabel": "sm_story_acceptance_criterias_triggered"
+          "configFile": "agents/story_acceptance_criteria.json",
+          "skipIfLabels": [
+            "sm_story_acceptance_criteria_triggered",
+            "sm_story_acceptance_criterias_triggered"
+          ],
+          "addLabel": "sm_story_acceptance_criteria_triggered"
         },
         {
           "description": "Solution Architecture Stories → generate Solution Design",

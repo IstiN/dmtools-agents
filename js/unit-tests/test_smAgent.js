@@ -442,6 +442,48 @@ suite('smAgent: skipIfLabel', function() {
         assert.equal(sm.capturedLabels.length, 0, 'no label added for skipped ticket');
     });
 
+    test('skips ticket that has any skipIfLabels entry', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [
+                { key: 'T-old', fields: { labels: ['sm_story_acceptance_criterias_triggered'] } },
+                { key: 'T-new', fields: { labels: ['sm_story_acceptance_criteria_triggered'] } },
+                { key: 'T-open', fields: { labels: [] } }
+            ]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", {
+                skipIfLabels: [
+                    'sm_story_acceptance_criteria_triggered',
+                    'sm_story_acceptance_criterias_triggered'
+                ]
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'only unlabeled ticket triggered');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.contains(inputs.encoded_config, 'T-open', 'T-open was triggered');
+    });
+
+    test('adds all configured addLabels after successful trigger', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'T-20', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", {
+                addLabel: 'primary_label',
+                addLabels: ['secondary_label']
+            })
+        ]));
+
+        assert.equal(sm.capturedLabels.length, 2);
+        assert.equal(sm.capturedLabels[0].label, 'primary_label');
+        assert.equal(sm.capturedLabels[1].label, 'secondary_label');
+    });
+
 });
 
 // ── Rule enabled flag ─────────────────────────────────────────────────────────

@@ -12,7 +12,7 @@
  * Merge strategy:
  *   - jira.statuses, jira.issueTypes, jira.questions, labels: FULL REPLACEMENT when provided
  *   - smRules, smMergeRules: FULL REPLACEMENT when provided
- *   - repository, git, formats, confluence: DEEP MERGE
+ *   - repository, git, formats, confluence, jira.fields: DEEP MERGE
  *   - additionalInstructions, instructionOverrides, cliPrompts, cliPromptOverrides, agentParamPatches:
  *     FULL REPLACEMENT when provided
  */
@@ -44,7 +44,7 @@ var DEFAULTS = {
         },
         // Jira field names — override per project in .dmtools/config.js under jira.fields
         fields: {
-            acceptanceCriteria: 'Acceptance Criterias'
+            acceptanceCriteria: 'Acceptance Criteria'
         }
     },
 
