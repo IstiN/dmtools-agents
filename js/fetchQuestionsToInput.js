@@ -11,6 +11,51 @@
 
 var configLoader = require('./configLoader.js');
 
+function hasAnswerValue(fields, key) {
+    return Object.prototype.hasOwnProperty.call(fields, key)
+        && fields[key] !== undefined
+        && fields[key] !== null;
+}
+
+function getAnswerValue(fields, answerField) {
+    if (!fields || !answerField) {
+        return null;
+    }
+
+    var answerFieldLower = answerField.toLowerCase();
+    if (hasAnswerValue(fields, answerField)) {
+        return fields[answerField];
+    }
+
+    if (hasAnswerValue(fields, answerFieldLower)) {
+        return fields[answerFieldLower];
+    }
+
+    var customFieldSuffix = answerField.indexOf('customfield_') === 0
+        ? '(' + answerFieldLower + ')'
+        : null;
+    var transformedFriendlyPrefix = answerFieldLower + ' (';
+
+    for (var key in fields) {
+        if (!Object.prototype.hasOwnProperty.call(fields, key)) {
+            continue;
+        }
+
+        var keyLower = key.toLowerCase();
+        if (keyLower === answerFieldLower && hasAnswerValue(fields, key)) {
+            return fields[key];
+        }
+        if (customFieldSuffix && keyLower.slice(-customFieldSuffix.length) === customFieldSuffix && hasAnswerValue(fields, key)) {
+            return fields[key];
+        }
+        if (keyLower.indexOf(transformedFriendlyPrefix) === 0 && keyLower.slice(-1) === ')' && hasAnswerValue(fields, key)) {
+            return fields[key];
+        }
+    }
+
+    return null;
+}
+
 /**
  * Pre-CLI action: fetch question subtasks into input folder
  *
@@ -44,7 +89,7 @@ function action(params) {
                     description: f.description || '',
                     status: f.status ? f.status.name : '',
                     priority: f.priority ? f.priority.name : '',
-                    answer: f[answerField] || f[answerField.toLowerCase()] || null
+                    answer: getAnswerValue(f, answerField)
                 });
             }
             console.log('Found ' + questions.length + ' question subtasks');
@@ -60,5 +105,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = { action, getAnswerValue, hasAnswerValue };
 }
