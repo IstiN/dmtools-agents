@@ -333,6 +333,7 @@ suite('configLoader.resolveInstructions', function() {
         var defaultInstructions = ['./agents/instructions/default.md', 'some text'];
         var result = configLoaderModule.resolveInstructions('story_development', defaultInstructions, config);
         assert.deepEqual(result.instructions, defaultInstructions);
+        assert.equal(result.instructionsOverridden, false);
         assert.deepEqual(result.additionalInstructions, []);
     });
 
@@ -348,6 +349,7 @@ suite('configLoader.resolveInstructions', function() {
             config
         );
         assert.deepEqual(result.instructions, ['./custom/dev-instructions.md']);
+        assert.equal(result.instructionsOverridden, true);
     });
 
     test('applies additionalInstructions — appended separately', function() {
@@ -413,6 +415,7 @@ suite('configLoader.resolveInstructions', function() {
         var base = ['./base.md'];
         var result = configLoaderModule.resolveInstructions('story_development', base, config);
         assert.deepEqual(result.instructions, base);
+        assert.equal(result.instructionsOverridden, false);
         assert.deepEqual(result.additionalInstructions, []);
     });
 

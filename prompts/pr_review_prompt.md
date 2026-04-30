@@ -28,7 +28,7 @@ To answer it:
 4. Look at the **surrounding code**, not just the changed lines. A fix can be technically correct in isolation but miss the real problem because of something adjacent (wrong config, missing route, different code path that's actually triggered).
 5. If the PR includes tests — check that the tests actually reproduce the user's symptom, not just a tangentially related scenario.
 
-If you conclude the changes **do not fully solve the user's problem**, raise it as a 🚨 BLOCKING issue with a clear explanation of what is missing but **if you know and highlight root cause** do it.
+If you conclude the changes **do not fully solve the user's problem**, raise it as a 🚨 BLOCKING issue. Explain what is missing, and when the root cause is identifiable from the context, state that root cause explicitly.
 
 # Review Priorities
 1. ✅ **Actually solves the user's problem** (HIGHEST PRIORITY — see above)
@@ -85,7 +85,7 @@ When evaluating whether a fix works, follow this strict evidence hierarchy:
 3. **Code comments / developer explanations** (what the developer INTENDED)
 
 **Never trust code comments as evidence that a fix works.** Code comments explain intent, not actual behavior. If a code comment says "this ensures accessibility traversal works" but automation shows 0 children — the comment is wrong, the fix doesn't work.
-**IMPORTANT GOAL** confirm the code works as expected and really solves issue. **NEVER TRUST DEVELOPER, CHEKC AND CONFIRM ITSELF**.
+**IMPORTANT GOAL:** confirm that the code works as expected and really solves the issue. Never rely on developer claims alone; check the evidence and verify the behavior yourself.
 
 ### ⚠️ CRITICAL RULE: Never trust developer rework as evidence
 When reviewing after a rework cycle, the rework agent's code changes and commit messages are NOT evidence that the issue is fixed. **Only two sources of truth exist:**

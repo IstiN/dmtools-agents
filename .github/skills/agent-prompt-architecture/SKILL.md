@@ -106,6 +106,86 @@ Use:
 | `instructionOverrides.<agent>` | Replace `agentParams.instructions` |
 | `additionalInstructions.<agent>` | Non-CLI/DMtools AI context, not the main CLI prompt channel |
 
+## Creating a new CLI Teammate JSON
+
+Use `Teammate` configs for CLI-agent workflows where dmtools prepares context,
+the CLI agent performs the work, and post-actions publish the result.
+
+The JSON `"name"` is a dmtools job class name. Keep it exactly `"Teammate"`.
+
+Minimal pattern:
+
+```json
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "story_development"
+    },
+    "agentParams": {
+      "aiRole": "Senior Software Engineer",
+      "instructions": [
+        "./agents/instructions/development/implementation_instructions.md",
+        "./agents/instructions/common/bash_tools.md"
+      ],
+      "knownInfo": "",
+      "formattingRules": "",
+      "fewShots": ""
+    },
+    "cliPrompt": "./agents/prompts/story_development_prompt.md",
+    "cliPrompts": [],
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
+    "outputType": "none",
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "ticketContextDepth": 1,
+    "inputJql": "key = WORK-123"
+  }
+}
+```
+
+Best practices:
+
+- Keep generic JSON in `agents/`; put project-specific prompt composition in the
+  target repo's `.dmtools/config.js`.
+- Keep `agentParams` small and compatibility-focused.
+- Put role, project context, provider format, and platform focus in
+  `cliPrompts` files instead of long inline strings.
+- Use `metadata.contextId` to identify the workflow in logs and output.
+- Keep `cliCommands` stable and delegate project behavior to prompt/config files.
+- Add `preJSAction`, `preCliJSAction`, and `postJSAction` only when runtime
+  behavior is required.
+- Never copy a production JSON config only to change prompts. Prefer
+  `cliPrompts`, `cliPromptOverrides`, or `agentParamPatches`.
+- Validate JSON after every edit.
+
+## Output JSON discipline
+
+Agents often write JSON output files that are consumed by post-actions or CI.
+Treat those files as machine contracts.
+
+Rules:
+
+- Always write valid JSON when a JSON output file is required.
+- Validate generated JSON before finishing the agent run.
+- Keep JSON compact: status, counters, paths, IDs, and short summaries.
+- Do not put large markdown bodies, stack traces, logs, or generated reports
+  directly inside JSON fields.
+- If a large markdown/text body is needed, write it to a separate `.md` or `.txt`
+  file and put only the file path/reference in JSON.
+- Prefer:
+  ```json
+  {
+    "status": "failed",
+    "summary": "1 failing scenario",
+    "detailsFile": "outputs/bug_description.md"
+  }
+  ```
+  over embedding the full bug report in `"summary"` or `"details"`.
+- If JSON parsing fails, fix the JSON before any post-action consumes it.
+
 ## Path stability
 
 Do not move production JSON config paths unless the workflow/Jira/ADO entrypoints
@@ -158,5 +238,7 @@ GraalJS-compatible.
    project config/prompt folder.
 5. Wire small prompt files through `cliPrompts`.
 6. Keep JSON config paths stable unless explicitly migrating workflows.
-7. Run JSON parse checks and existing JS unit tests.
-8. Search for accidental project leakage before opening a PR.
+7. Validate changed agent JSON configs.
+8. Validate required output JSON contracts if the agent writes JSON files.
+9. Run existing JS unit tests.
+10. Search for accidental project leakage before opening a PR.

@@ -538,6 +538,7 @@ suite('smAgent: additionalInstructions in encoded_config', function() {
         var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
         var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
         assert.notOk(decoded.params.additionalInstructions, 'no additionalInstructions when not configured');
+        assert.equal(decoded.params.agentParams.instructions.length, 2, 'default agent instructions preserved');
     });
 
     test('injects cliPrompts and agent param patches from config into encoded_config', function() {

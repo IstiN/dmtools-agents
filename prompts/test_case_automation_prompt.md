@@ -43,7 +43,7 @@ Run `mkdir -p outputs` first to ensure the directory exists.
   The `"status"` field **must** be exactly `"passed"` or `"failed"` (lowercase). Missing or wrong field name causes the pipeline to break.
 - `outputs/bug_description.md` — detailed tracker-formatted bug report (only if test FAILED)
 
-`response.md` and `pr_body.md` contain the same information but formatted differently — Jira MD vs GitHub MD.
+`response.md` and `pr_body.md` contain the same information but are formatted for different consumers: tracker comment vs SCM pull request body.
 
 ## ⚠️ CRITICAL: When the test FAILS — write a detailed bug report
 

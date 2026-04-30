@@ -92,7 +92,7 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
         var agentName = extractAgentName(resolvedCf);
         var resolved = configLoader.resolveInstructions(agentName, null, effectiveConfig);
 
-        if (resolved.instructions) {
+        if (resolved.instructionsOverridden) {
             if (!p.agentParams) p.agentParams = {};
             p.agentParams.instructions = resolved.instructions;
         }

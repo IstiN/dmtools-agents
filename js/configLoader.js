@@ -14,7 +14,7 @@
  *   - smRules, smMergeRules: FULL REPLACEMENT when provided
  *   - repository, git, formats, confluence: DEEP MERGE
  *   - additionalInstructions, instructionOverrides, cliPrompts, cliPromptOverrides, agentParamPatches:
- *     FULL REPLACEMENT per key
+ *     FULL REPLACEMENT when provided
  */
 
 var DEFAULT_CONFIG = require('./config.js');
@@ -464,10 +464,11 @@ function resolveConfluenceUrls(items, config) {
  * @param {string} agentName - Agent config name (e.g., 'story_development')
  * @param {string[]} defaultInstructions - Default instructions from agent JSON
  * @param {Object} config - Loaded project config
- * @returns {Object} { instructions: string[], additionalInstructions: string[], cliPrompts: string[], cliPrompt: string|null, agentParamPatch: Object|null }
+ * @returns {Object} { instructions: string[], instructionsOverridden: boolean, additionalInstructions: string[], cliPrompts: string[], cliPrompt: string|null, agentParamPatch: Object|null }
  */
 function resolveInstructions(agentName, defaultInstructions, config) {
     var instructions = defaultInstructions || [];
+    var instructionsOverridden = false;
     var additional = [];
     var cliPrompts = [];
     var cliPrompt = null;
@@ -476,6 +477,7 @@ function resolveInstructions(agentName, defaultInstructions, config) {
     // Full override if instructionOverrides has this agent
     if (config.instructionOverrides && config.instructionOverrides[agentName]) {
         instructions = config.instructionOverrides[agentName];
+        instructionsOverridden = true;
     } else {
         // Resolve Confluence URLs in default instructions
         instructions = resolveConfluenceUrls(instructions, config);
@@ -500,6 +502,7 @@ function resolveInstructions(agentName, defaultInstructions, config) {
 
     return {
         instructions: instructions,
+        instructionsOverridden: instructionsOverridden,
         additionalInstructions: additional,
         cliPrompts: cliPrompts,
         cliPrompt: cliPrompt,
