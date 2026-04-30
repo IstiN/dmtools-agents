@@ -30,8 +30,8 @@ Do NOT write them inside `input/`, `input/TICKET-KEY/`, or any subfolder of `inp
 
 Run `mkdir -p outputs` first to ensure the directory exists.
 
-- `outputs/response.md` — test result summary in **Jira Markdown** (posted as Jira ticket comment)
-- `outputs/pr_body.md` — test result summary in **GitHub Markdown** (used as PR description)
+- `outputs/response.md` — tracker-formatted test result summary
+- `outputs/pr_body.md` — SCM-formatted test result summary
 - `outputs/test_automation_result.json` — **MANDATORY — always write this file**, even if the test failed or errored. Use exactly this format:
   ```json
   { "status": "passed", "passed": 1, "failed": 0, "skipped": 0, "summary": "1 passed, 0 failed" }
@@ -41,9 +41,9 @@ Run `mkdir -p outputs` first to ensure the directory exists.
   { "status": "failed", "passed": 0, "failed": 1, "skipped": 0, "summary": "0 passed, 1 failed", "error": "AssertionError: <exact error message>" }
   ```
   The `"status"` field **must** be exactly `"passed"` or `"failed"` (lowercase). Missing or wrong field name causes the pipeline to break.
-- `outputs/bug_description.md` — detailed bug report in Jira Markdown (only if test FAILED)
+- `outputs/bug_description.md` — detailed tracker-formatted bug report (only if test FAILED)
 
-`response.md` and `pr_body.md` contain the same information but formatted differently — Jira MD vs GitHub MD.
+`response.md` and `pr_body.md` contain the same information but are formatted for different consumers: tracker comment vs SCM pull request body.
 
 ## ⚠️ CRITICAL: When the test FAILS — write a detailed bug report
 

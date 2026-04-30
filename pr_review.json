@@ -16,9 +16,6 @@
       "fewShots": "./agents/instructions/review/pr_review_few_shots.md"
     },
     "cliPrompt": "./agents/prompts/pr_review_prompt.md",
-    "cliPrompts": [
-      "./cliPrompts/pr_review_mapc.md"
-    ],
     "cliCommands": [
       "./agents/scripts/run-agent.sh"
     ],

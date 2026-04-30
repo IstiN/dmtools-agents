@@ -11,16 +11,10 @@ List the input folder with `ls -la input/` and then the ticket subfolder (e.g. `
 - Text/markdown files: read with `cat`
 - Image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`): **view them using the Read tool** — they may contain UI mockups, designs, or screenshots that are essential context. If an image shows a design or UI, describe what you see and use it to avoid asking questions that are already answered by the design.
 
-**CRITICAL: Description files MUST be written in Jira wiki markup format — NOT Markdown.**
-- Use `h2.`, `h3.` for headings (NOT `##`)
-- Use `*bold*` (NOT `**bold**`)
-- Use `_italic_` (NOT `_italic_` with underscores in Markdown sense)
-- Use `* item` for bullet lists (NOT `-`)
-- Use `||col1||col2||` for table headers, `|val1|val2|` for rows
-- Do NOT use triple backticks — use `{code}...{code}` or `{noformat}...{noformat}`
+**CRITICAL: Description files must follow the tracker-specific formatting rules provided in `request.md`, formatting instructions, or provider modules.**
 
 **CRITICAL: Description files must NEVER contain a title line.**
-The `summary` field in `questions.json` becomes the Jira subtask title automatically. Writing a title inside the description file creates a duplicate heading visible in Jira.
+The `summary` field in `questions.json` becomes the generated subtask title automatically. Writing a title inside the description file creates a duplicate heading in the tracker.
 
 If a question template you are following shows a `Title:` field — that value goes into the `summary` field of `questions.json`, NOT into the description `.md` file. The `.md` file starts directly with the body content.
 
@@ -58,7 +52,7 @@ Write individual description files to outputs/questions/ and the question plan t
 ```json
 [
   {
-    "summary": "Confirm SOQL query strategy for bulk order retrieval",
+    "summary": "Confirm query strategy for bulk data retrieval",
     "priority": "Major",
     "description": "outputs/questions/question-1.md"
   },

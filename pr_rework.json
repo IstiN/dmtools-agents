@@ -15,9 +15,6 @@
       "fewShots": ""
     },
     "cliPrompt": "./agents/prompts/pr_rework_prompt.md",
-    "cliPrompts": [
-      "./cliPrompts/pr_rework_mapc.md"
-    ],
     "cliCommands": [
       "./agents/scripts/run-agent.sh"
     ],

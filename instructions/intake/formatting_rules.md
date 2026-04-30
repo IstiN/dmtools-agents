@@ -6,12 +6,12 @@
 - Each item must include:
   - `"summary"` — string, max 120 characters
   - `"description"` — string, relative file path (e.g. `"outputs/stories/story-1.md"`)
-  - `"parent"` — real Jira key (e.g. `"PROJECT-5"`), temp ID (e.g. `"temp-1"`), or absent/null for a new Epic
+  - `"parent"` — real tracker key (e.g. `"PROJECT-5"`), temp ID (e.g. `"temp-1"`), or absent/null for a new Epic
   - `"tempId"` — optional string, unique within this array; assign to new Epics so Stories can reference them via `"parent"`
   - `"priority"` — one of: `Highest`, `High`, `Medium`, `Low`, `Lowest`
   - `"storyPoints"` — integer, Stories only (1–2 simple, 3–5 medium, 8–13 complex); max 5 SP — split if larger; omit for Epics
-  - `"blockedBy"` — optional array of tempIds or real Jira keys this story cannot start until they are done. Creates "is blocked by" links and sets status to Blocked. Example: `["temp-1", "PROJECT-5"]`
-  - `"integrates"` — optional array of tempIds or real Jira keys of parallel stories that will be combined with this one. Creates "Relates" links. Use when two parallel streams must eventually be merged. Example: `["temp-2"]`
+  - `"blockedBy"` — optional array of tempIds or real tracker keys this story cannot start until they are done. Creates dependency links and sets status to Blocked where supported. Example: `["temp-1", "PROJECT-5"]`
+  - `"integrates"` — optional array of tempIds or real tracker keys of parallel stories that will be combined with this one. Creates relation links where supported. Use when two parallel streams must eventually be merged. Example: `["temp-2"]`
 - **Bug entries** — use when the intake describes a broken/malfunctioning existing feature (not a new feature):
   - `"type": "Bug"` — required, signals this is a bug ticket
   - No `"parent"` — bugs are top-level tickets
@@ -23,14 +23,14 @@
 
 ## outputs/comment.md
 
-- Use Jira Markdown only: `h3.`, `*bold*`, `* bullet`, `[text|url]`
+- Use the target tracker format
 - No HTML tags
 - Sections: intake summary, decomposition decisions, planned ticket list, assumptions/open questions
 
 ## outputs/stories/story-N.md and epic-N.md
 
 - Start directly with content — no introductory header or preamble
-- Use Jira Markdown
+- Use the target tracker format
 - Do NOT write Acceptance Criteria — that is handled by a separate agent
 - No filler, no water — be specific
 

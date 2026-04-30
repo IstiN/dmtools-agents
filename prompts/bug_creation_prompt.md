@@ -69,7 +69,7 @@ Write `outputs/bug_decision.json` with exactly one of these formats:
 }
 ```
 
-If action is `create`, also write `outputs/bug_description.md` with a clear bug **CRITICAL IMPORTANT** description in Jira Markdown format:
+If action is `create`, also write `outputs/bug_description.md` with a clear bug **CRITICAL IMPORTANT** description in the target tracker format:
 - Steps to reproduce (from the Test Case steps)
 - Expected result
 - Actual result (what the test detected)

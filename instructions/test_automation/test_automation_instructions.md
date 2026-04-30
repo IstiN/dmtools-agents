@@ -2,7 +2,7 @@
 
 ## Your Role
 
-You are a Senior QA Automation Engineer. Your task is to automate a single Jira Test Case ticket.
+You are a Senior QA Automation Engineer. Your task is to automate a single test case work item.
 
 The feature code is **already implemented and deployed** on the main branch. You do NOT write feature code — you write automated tests that verify the feature works as described in the Test Case.
 
@@ -51,48 +51,9 @@ The `README.md` inside the ticket folder is mandatory. It must include:
 
 ## Available CI Credentials
 
-Before writing a test, check what is already available in GitHub Actions. **You do NOT need to request these — they are already configured.**
+Before writing a test, read project-specific CI, credential, and environment instructions if they are provided.
 
-### GCP (Google Cloud)
-- **Authentication**: `GCP_SA_KEY` secret → sets up ADC via `google-github-actions/auth@v2` → `GOOGLE_APPLICATION_CREDENTIALS` is available automatically
-- `GCP_PROJECT_ID` = `ai-native-478811`
-- `GCP_REGION` = `us-central1`
-- `GCP_DB_USER_SECRET`, `GCP_DB_PASSWORD_SECRET` — Secret Manager secret names
-- `CLOUD_SQL_CONNECTION_NAME` — Cloud SQL instance connection name
-
-### Firebase
-- `FIREBASE_PROJECT_ID` = `ai-native-478811`
-- `FIREBASE_API_KEY` — Firebase web API key (public)
-- `FIREBASE_AUTH_DOMAIN` = `ai-native-478811.firebaseapp.com`
-- `FIREBASE_APP_ID`, `FIREBASE_STORAGE_BUCKET`, `FIREBASE_MESSAGING_SENDER_ID`
-
-### Database
-- `DB_USER`, `DB_PASSWORD`, `DB_NAME`
-
-### Web App
-- Frontend: `{FRONTEND_URL}` (default — no env var needed)
-- API: `{API_URL}`
-
-### Also available
-- `RAW_OBJECT_PATH` = `test-videos/test_video.mp4` — relative path within `{GCS_BUCKET}/` to a real test video for transcoder tests
-- `FIREBASE_TEST_EMAIL` = `{TEST_EMAIL}` (variable) — CI test user, fake domain, no real Gmail
-- `FIREBASE_TEST_UID` = `ci-test-user-001` (variable)
-- `FIREBASE_TEST_PASSWORD` (secret) — password for the CI test user
-- `FIREBASE_TEST_TOKEN` — **generate at CI runtime** (token expires in 1h, never store as secret):
-  ```yaml
-  - name: Get Firebase test token
-    run: |
-      RESP=$(curl -s -X POST \
-        "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${{ vars.FIREBASE_API_KEY }}" \
-        -H "Content-Type: application/json" \
-        -d "{\"email\":\"${{ vars.FIREBASE_TEST_EMAIL }}\",\"password\":\"${{ secrets.FIREBASE_TEST_PASSWORD }}\",\"returnSecureToken\":true}")
-      echo "FIREBASE_TEST_TOKEN=$(echo $RESP | jq -r .idToken)" >> $GITHUB_ENV
-      echo "FIREBASE_TEST_UID=${{ vars.FIREBASE_TEST_UID }}" >> $GITHUB_ENV
-      echo "FIREBASE_TEST_EMAIL=${{ vars.FIREBASE_TEST_EMAIL }}" >> $GITHUB_ENV
-  ```
-
-### Not yet available (require human setup)
-_All credentials are now provisioned. No blockers remain for Firebase or GCP tests._
+Do not assume a CI provider, cloud provider, project ID, secret name, or test account. If required credentials or test data are missing, report the exact missing item in `outputs/test_automation_result.json`.
 
 ---
 
@@ -143,13 +104,12 @@ curl -L -o /tmp/test_video.mp4 "https://www.w3schools.com/html/mov_bbb.mp4"
 
 Always verify the download succeeded (`curl` exit code 0, file size > 0) before using the file.
 
-### Step 3 — Upload to GCS if the test needs a GCS path
+### Step 3 — Upload to object storage if the test needs a stored file path
 
-If the test requires a file already in `{GCS_BUCKET}/`, upload the generated/downloaded file:
+If the test requires a file already in object storage, upload the generated/downloaded file using the project-approved storage tooling and bucket/container:
 
 ```bash
-gcloud storage cp /tmp/test_video.mp4 {GCS_BUCKET}/test-data/{TICKET-KEY}/test_video.mp4 \
-  --project=ai-native-478811
+<storage-cli> cp /tmp/test_video.mp4 <bucket-or-container>/test-data/{TICKET-KEY}/test_video.mp4
 ```
 
 Then use `test-data/{TICKET-KEY}/test_video.mp4` as `RAW_OBJECT_PATH` in the test.
@@ -170,7 +130,7 @@ If a test **cannot run automatically** because required credentials or test data
 
 ### When to use `blocked_by_human`
 - Required env var or secret does not exist (see "Not yet available" list above)
-- Test needs a real Firebase ID token and `FIREBASE_TEST_EMAIL`/`FIREBASE_TEST_PASSWORD` are not set
+- Test needs a real authenticated user token and the required test-account credentials are not set
 - Test requires pre-existing data in the DB (e.g. a specific user or record not guaranteed to exist)
 - Test requires an external file that could not be generated or downloaded following the **Test Data — Self-Sufficient Strategy** above
 
@@ -201,7 +161,7 @@ After writing the test:
 Always write two output files:
 
 ### 1. `outputs/response.md`
-Jira-formatted summary of what was tested and the result.
+Tracker-formatted summary of what was tested and the result.
 
 ### 2. `outputs/test_automation_result.json`
 Structured result JSON — see `agents/instructions/test_automation/test_automation_json_output.md` for exact format.
@@ -209,4 +169,4 @@ Structured result JSON — see `agents/instructions/test_automation/test_automat
 If the test **failed**, also write:
 
 ### 3. `outputs/bug_description.md`
-Detailed Jira-formatted bug description including reproduction steps, expected vs actual result, and error logs.
+Detailed tracker-formatted bug description including reproduction steps, expected vs actual result, and error logs.
