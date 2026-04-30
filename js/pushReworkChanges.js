@@ -118,11 +118,14 @@ function commitAndPush(ticketKey, config) {
         var branchMatch = prInfo.match(/\*\*Branch\*\*:\s*`([^`]+)`/);
         if (branchMatch) expectedBranch = branchMatch[1].trim();
     } catch (e) {
-        console.warn('Could not read pr_info.md for expected branch:', e);
+        throw new Error('Missing PR context file input/' + ticketKey + '/pr_info.md. Rework setup did not find or checkout a PR; refusing to commit or push.');
+    }
+    if (!expectedBranch) {
+        throw new Error('Could not determine expected PR branch from input/' + ticketKey + '/pr_info.md; refusing to commit or push.');
     }
 
     var currentBranch = cleanCommandOutput(cmd('git branch --show-current') || '');
-    console.log('Current branch:', currentBranch, '| Expected:', expectedBranch || '(unknown)');
+    console.log('Current branch:', currentBranch, '| Expected:', expectedBranch);
 
     var branchName = currentBranch;
     if (expectedBranch && currentBranch !== expectedBranch) {
@@ -134,10 +137,6 @@ function commitAndPush(ticketKey, config) {
         } catch (e) {
             console.warn('Could not checkout expected branch, using current:', currentBranch, e);
         }
-    }
-
-    if (!branchName) {
-        throw new Error('Could not determine git branch to commit to');
     }
 
     cmd('git add .');

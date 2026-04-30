@@ -12,6 +12,24 @@ const gh = require('./common/githubHelpers.js');
 const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 
+function failSetup(ticketKey, inputFolder, message) {
+    try {
+        file_write({
+            path: inputFolder + '/rework_setup_failed.md',
+            content: '# Rework Setup Failed\n\n' + message + '\n'
+        });
+    } catch (e) {
+        console.warn('Failed to write rework setup failure marker:', e);
+    }
+    try {
+        jira_post_comment({
+            key: ticketKey,
+            comment: 'h3. ❌ Rework Setup Failed\n\n' + message
+        });
+    } catch (e) {}
+    throw new Error(message);
+}
+
 function action(params) {
     try {
         var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
@@ -39,26 +57,28 @@ function action(params) {
         // Step 2: Find existing PR
         const pr = gh.findPRForTicket(scm, ticketKey);
         if (!pr) {
-            const err = 'No Pull Request found for ticket ' + ticketKey + '. Cannot start rework without an existing PR.';
-            try { jira_post_comment({ key: ticketKey, comment: 'h3. ❌ Rework Setup Failed\n\n' + err }); } catch (e) {}
-            return { success: false, error: err };
+            failSetup(
+                ticketKey,
+                inputFolder,
+                'No Pull Request found for ticket ' + ticketKey + '. Cannot start rework without an existing PR.'
+            );
         }
 
         // Step 3: PR details
         const prDetails = gh.getPRDetails(scm, pr.number);
         if (!prDetails) {
-            return { success: false, error: 'Failed to fetch PR details for PR #' + pr.number };
+            failSetup(ticketKey, inputFolder, 'Failed to fetch PR details for PR #' + pr.number);
         }
 
         // Step 4: Checkout PR branch
         const branchName = prDetails.head ? prDetails.head.ref : null;
         if (!branchName) {
-            return { success: false, error: 'Could not determine branch from PR details' };
+            failSetup(ticketKey, inputFolder, 'Could not determine branch from PR details');
         }
         try {
             gh.checkoutPRBranch(branchName, config.workingDir);
         } catch (e) {
-            return { success: false, error: 'Failed to checkout branch: ' + e.toString() };
+            failSetup(ticketKey, inputFolder, 'Failed to checkout branch: ' + e.toString());
         }
 
         // Step 5: Diff + discussions (human-readable + raw with IDs)
