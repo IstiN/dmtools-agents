@@ -28,7 +28,10 @@
     "preCliJSAction": "agents/js/preCliReworkSetup.js",
     "postJSAction": "agents/js/pushReworkChanges.js",
     "customParams": {
-      "removeLabel": "sm_story_rework_triggered"
+      "removeLabels": [
+        "sm_story_rework_triggered",
+        "sm_story_review_triggered"
+      ]
     },
     "inputJql": "key = PROJ-243"
   }

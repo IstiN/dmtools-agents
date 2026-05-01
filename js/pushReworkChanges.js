@@ -43,6 +43,29 @@ function hasPrApprovedLabel(ticket) {
     return labels.indexOf(LABELS.PR_APPROVED) !== -1;
 }
 
+function normalizeLabels(singleLabel, labelList) {
+    var labels = [];
+    if (singleLabel) labels.push(singleLabel);
+    if (Array.isArray(labelList)) {
+        labelList.forEach(function(label) {
+            if (label && labels.indexOf(label) === -1) labels.push(label);
+        });
+    }
+    return labels;
+}
+
+function removeConfiguredLabels(ticketKey, customParams) {
+    normalizeLabels(customParams && customParams.removeLabel, customParams && customParams.removeLabels)
+        .forEach(function(label) {
+            try {
+                jira_remove_label({ key: ticketKey, label: label });
+                console.log('✅ Removed SM label:', label);
+            } catch (e) {
+                console.warn('Failed to remove SM label ' + label + ':', e);
+            }
+        });
+}
+
 function cleanCommandOutput(output) {
     if (!output) {
         return '';
@@ -373,13 +396,7 @@ function action(params) {
 
         // Remove SM idempotency label so the ticket can be re-triggered next cycle
         const customParams = params.jobParams && params.jobParams.customParams;
-        const removeLabel = customParams && customParams.removeLabel;
-        if (removeLabel) {
-            try {
-                jira_remove_label({ key: ticketKey, label: removeLabel });
-                console.log('✅ Removed SM label:', removeLabel);
-            } catch (e) {}
-        }
+        removeConfiguredLabels(ticketKey, customParams);
 
         // Auto-start pr_review after rework is pushed to In Review (opt-in via customParams)
         const autoStartReview = customParams && customParams.autoStartReview;
