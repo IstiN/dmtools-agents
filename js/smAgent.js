@@ -83,6 +83,14 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
         }
         try {
             var agentJson = JSON.parse(file_read({ path: agentJsonPath }));
+            var agentParamsRoot = agentJson.params || {};
+            Object.keys(agentParamsRoot).forEach(function(paramKey) {
+                var value = agentParamsRoot[paramKey];
+                if (typeof value === 'string' &&
+                    (value.indexOf('{jiraProject}') !== -1 || value.indexOf('{parentTicket}') !== -1)) {
+                    p[paramKey] = configLoader.interpolateJql(value, effectiveConfig);
+                }
+            });
             var agentParams = (agentJson.params || {}).agentParams;
             if (agentParams && typeof agentParams === 'object') {
                 p.agentParams = configLoader.deepMerge({}, agentParams);

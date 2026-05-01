@@ -355,6 +355,32 @@ suite('smAgent: ticket dispatch', function() {
         assert.contains(decoded.params.inputJql, 'P-42', 'ticket key in inputJql');
     });
 
+    test('interpolates project placeholders from target agent params into encoded config', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js':
+                    'module.exports = { jira: { project: "DMC", parentTicket: "DMC-101" }, repository: { owner: "o", repo: "r" } };',
+                'agents/test_cases_generator.json': JSON.stringify({
+                    name: 'TestCasesGenerator',
+                    params: {
+                        existingTestCasesJql: "project = {jiraProject} AND issuetype = 'Test Case'",
+                        relatedStoriesJql: "parent = {parentTicket}"
+                    }
+                })
+            },
+            tickets: [{ key: 'DMC-857', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", { configFile: 'agents/test_cases_generator.json' })
+        ]));
+
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
+        assert.equal(decoded.params.existingTestCasesJql, "project = DMC AND issuetype = 'Test Case'");
+        assert.equal(decoded.params.relatedStoriesJql, 'parent = DMC-101');
+    });
+
     test('no triggers when no tickets found', function() {
         var sm = makeSmAgent({
             fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
