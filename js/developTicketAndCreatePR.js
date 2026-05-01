@@ -5,6 +5,7 @@
 
 // Import common helper functions
 const { extractTicketKey } = require('./common/jiraHelpers.js');
+const prHelper = require('./common/pullRequest.js');
 var configLoader = require('./configLoader.js');
 const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js');
 
@@ -54,19 +55,7 @@ function runCmd(args) {
  * @returns {string} Cleaned output
  */
 function cleanCommandOutput(output) {
-    if (!output) {
-        return '';
-    }
-
-    // Remove "Script started" and "Script done" lines
-    const lines = output.split('\n').filter(function(line) {
-        return line.indexOf('Script started') === -1 &&
-               line.indexOf('Script done') === -1 &&
-               line.indexOf('COMMAND=') === -1 &&
-               line.indexOf('COMMAND_EXIT_CODE=') === -1;
-    });
-
-    return lines.join('\n').trim();
+    return prHelper.cleanCommandOutput(output);
 }
 
 /**
@@ -339,166 +328,20 @@ function performGitOperations(branchName, commitMessage, baseBranch) {
  * @returns {Object} Result with success status and PR URL
  */
 function createPullRequest(title, branchName, baseBranch) {
-    try {
-        console.log('Creating Pull Request...');
-
-        // Check if a PR already exists for this branch before trying to create one
-        try {
-            var existingPrJson = cleanCommandOutput(runCmd({
-                command: 'gh pr list --head ' + branchName + ' --json url,state --jq ".[0]"'
-            }) || '');
-            if (existingPrJson && existingPrJson.startsWith('{')) {
-                var existingPr = null;
-                try { existingPr = JSON.parse(existingPrJson); } catch (e) {}
-                if (existingPr && existingPr.url) {
-                    console.log('✅ PR already exists for branch ' + branchName + ':', existingPr.url, '— skipping creation.');
-                    return { success: true, prUrl: existingPr.url, alreadyExisted: true };
-                }
-            }
-        } catch (prCheckErr) {
-            console.warn('Could not check for existing PR (non-fatal):', prCheckErr);
+    console.log('Creating Pull Request...');
+    return prHelper.createPullRequest({
+        title: title,
+        branchName: branchName,
+        baseBranch: baseBranch,
+        workingDir: _workingDir,
+        bodyFileCandidates: ['outputs/response.md'],
+        defaultBody: 'Development changes.',
+        runCommand: function(command, workingDir) {
+            var args = { command: command };
+            if (workingDir) args.workingDirectory = workingDir;
+            return cli_execute_command(args);
         }
-
-        // Escape special characters in title and strip any shell metacharacters
-        // that DMtools' CliCommandExecutor rejects (;, |, &, <, >, `, $, \r, \n).
-        // Jira titles frequently contain "->" (e.g. "Case subject -> subject extension"),
-        // which contains ">" — the validator would then block the entire gh pr create
-        // command, so we replace ASCII arrow/pipe metachars with Unicode equivalents.
-        const escapedTitle = title
-            .replace(/\r?\n/g, ' ')
-            .replace(/"/g, '\\"')
-            .replace(/->/g, '→')
-            .replace(/<-/g, '←')
-            .replace(/[<>`|&;$]/g, ' ')
-            .replace(/\s{2,}/g, ' ')
-            .trim();
-
-        // Resolve --body-file path for gh pr create.
-        // gh runs in _workingDir (if set), so paths must be relative to it.
-        // We probe two locations (workspace root first, then workingDir itself)
-        // and use whichever exists.
-        var bodyFilePath = 'outputs/response.md'; // default: same dir as gh's CWD
-        if (_workingDir) {
-            // Compute relative path from workingDir back to workspace root
-            var depth = _workingDir.replace(/\/$/, '').split('/').length;
-            var prefix = '';
-            for (var i = 0; i < depth; i++) { prefix += '../'; }
-            var rootRelativePath = prefix + 'outputs/response.md';
-
-            // Probe workspace root via file_read (always resolves from workspace root)
-            var foundAtRoot = false;
-            try { file_read({ path: 'outputs/response.md' }); foundAtRoot = true; } catch (e) {}
-
-            if (foundAtRoot) {
-                bodyFilePath = rootRelativePath;
-                console.log('outputs/response.md found at workspace root, using:', bodyFilePath);
-            } else {
-                // Fall back: file may be inside workingDir itself
-                bodyFilePath = 'outputs/response.md';
-                console.log('outputs/response.md not at workspace root, trying workingDir-relative path:', bodyFilePath);
-            }
-        }
-
-        console.log('Using PR body file:', bodyFilePath);
-        console.log('Using branch:', branchName);
-
-        // Create PR using gh CLI with body-file
-        // Explicitly specify --head to prevent interactive prompts in headless environment
-        const output = runCmd({
-            command: 'gh pr create --title "' + escapedTitle + '" --body-file "' + bodyFilePath + '" --base ' + baseBranch + ' --head ' + branchName
-        }) || '';
-
-        console.log('Raw gh pr create output (length=' + output.length + '):');
-        console.log('---START---');
-        console.log(output);
-        console.log('---END---');
-
-        // Extract PR URL from output - try multiple patterns
-        let prUrl = null;
-
-        // Pattern 1: Full URL
-        let urlMatch = output.match(/https:\/\/github\.com\/[^\s]+/);
-        if (urlMatch) {
-            prUrl = urlMatch[0];
-            console.log('Found URL via pattern 1 (full URL):', prUrl);
-        }
-
-        // Pattern 2: If not found, try to get PR number and construct URL
-        if (!prUrl) {
-            const prNumberMatch = output.match(/#(\d+)/);
-            if (prNumberMatch) {
-                // Get repo info from git remote
-                try {
-                    const remoteUrl = runCmd({
-                        command: 'git config --get remote.origin.url'
-                    }) || '';
-                    const repoMatch = remoteUrl.match(/github\.com[:/]([^/]+\/[^/.]+)/);
-                    if (repoMatch) {
-                        const repo = repoMatch[1].replace('.git', '');
-                        prUrl = 'https://github.com/' + repo + '/pull/' + prNumberMatch[1];
-                        console.log('Constructed URL from PR number #' + prNumberMatch[1] + ':', prUrl);
-                    }
-                } catch (e) {
-                    console.warn('Failed to construct URL from PR number:', e);
-                }
-            }
-        }
-
-        // Pattern 3: If still not found, query gh pr list for this branch
-        if (!prUrl) {
-            try {
-                const prListOutput = runCmd({
-                    command: 'gh pr list --head ' + branchName + ' --json url --jq ".[0].url"'
-                }) || '';
-                const cleanedUrl = cleanCommandOutput(prListOutput);
-                if (cleanedUrl && cleanedUrl.startsWith('https://')) {
-                    prUrl = cleanedUrl;
-                    console.log('Found URL via gh pr list:', prUrl);
-                }
-            } catch (e) {
-                console.warn('Failed to get URL via gh pr list:', e);
-            }
-        }
-
-        if (!prUrl) {
-            console.warn('PR created but could not extract URL from output');
-        }
-
-        console.log('✅ Pull Request created:', prUrl || '(URL not found in output)');
-
-        return {
-            success: true,
-            prUrl: prUrl,
-            output: output
-        };
-
-    } catch (error) {
-        const errMsg = error.toString();
-        console.error('Failed to create Pull Request:', errMsg);
-
-        // If PR already exists for this branch — find it and treat as success
-        // (happens when development was interrupted after PR creation but before status move)
-        if (errMsg.indexOf('already exists') !== -1 || errMsg.indexOf('pull request for branch') !== -1) {
-            console.log('PR already exists for branch', branchName, '— looking up existing PR URL...');
-            try {
-                const existingPrUrl = runCmd({
-                    command: 'gh pr list --head ' + branchName + ' --json url --jq ".[0].url"'
-                }) || '';
-                const cleanedExistingUrl = cleanCommandOutput(existingPrUrl);
-                if (cleanedExistingUrl && cleanedExistingUrl.startsWith('https://')) {
-                    console.log('✅ Found existing PR:', cleanedExistingUrl);
-                    return { success: true, prUrl: cleanedExistingUrl, alreadyExisted: true };
-                }
-            } catch (lookupErr) {
-                console.warn('Failed to look up existing PR URL:', lookupErr);
-            }
-        }
-
-        return {
-            success: false,
-            error: errMsg
-        };
-    }
+    });
 }
 
 /**

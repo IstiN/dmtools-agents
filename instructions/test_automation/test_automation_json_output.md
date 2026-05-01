@@ -70,32 +70,18 @@ After running the test, write the structured result to `outputs/test_automation_
 
 ## Required output files
 
-Always write **both** files:
+Always write:
 
-### `outputs/response.md` — tracker comment
+- `outputs/test_automation_result.json` — machine-readable status from this document.
+- `outputs/jira_comment.md` — Jira wiki markup comment for the Test Case ticket.
+- `outputs/pr_body.md` — GitHub Markdown body for the automation Pull Request.
+- `outputs/response.md` — short backward-compatible GitHub Markdown summary.
 
-**Keep it short and factual. No filler, no repetition, no "In conclusion" paragraphs.**
+The structure and destination-specific formatting rules are defined in
+`agents/instructions/test_automation/test_automation_output_files.md`.
 
-Use the tracker-specific format provided by the project or provider instructions.
-
-Include:
-- Status: `✅ PASSED` or `❌ FAILED`
-- Test case ticket key + summary
-- What was tested (1-2 sentences)
-- What passed / what failed (specific, not generic)
-- Test file: `{code}testing/tests/{TICKET-KEY}/test_{ticket_key}.py{code}`
-
-### `outputs/pr_body.md` — SCM PR body
-
-**Keep it short and factual. No filler, no repetition, no "In conclusion" paragraphs.**
-
-Use the SCM-specific format provided by the project or provider instructions.
-
-Include:
-- Status: `✅ PASSED` or `❌ FAILED`
-- What was automated (1-2 sentences)
-- How to run: the exact command
-- Source test case link
+Do not put GitHub Markdown into `outputs/jira_comment.md`.
+Do not put Jira wiki markup into `outputs/pr_body.md`.
 
 ### `outputs/bug_description.md` — Bug description (only when FAILED)
 

@@ -2,7 +2,7 @@
  * Post Test Automation Results Action (postJSAction for test_case_automation)
  * 1. Reads outputs/test_automation_result.json
  * 2. Stages testing/ folder, commits, pushes, creates PR to main
- * 3. Posts Jira comment from outputs/response.md
+ * 3. Posts Jira comment from outputs/jira_comment.md
  * 4. If passed:          moves ticket to In Review - Passed
  * 5. If failed:          moves Test Case to In Review - Failed (bug created by bug_creation agent on Failed)
  * 6. If blocked_by_human: moves ticket to Blocked, posts what credentials/data are needed,
@@ -11,16 +11,11 @@
  */
 
 var configLoader = require('./configLoader.js');
+var prHelper = require('./common/pullRequest.js');
 const { GIT_CONFIG, STATUSES, LABELS } = require('./config.js');
 
 function cleanCommandOutput(output) {
-    if (!output) return '';
-    return output.split('\n').filter(function(line) {
-        return line.indexOf('Script started') === -1 &&
-               line.indexOf('Script done') === -1 &&
-               line.indexOf('COMMAND=') === -1 &&
-               line.indexOf('COMMAND_EXIT_CODE=') === -1;
-    }).join('\n').trim();
+    return prHelper.cleanCommandOutput(output);
 }
 
 function readFile(path) {
@@ -47,6 +42,38 @@ function readResultJson() {
         console.error('Failed to parse test_automation_result.json:', e);
         return null;
     }
+}
+
+function markdownToJiraWiki(markdown) {
+    if (!markdown) return '';
+
+    var text = String(markdown);
+
+    text = text.replace(/```(\w+)?\n([\s\S]*?)```/g, function(_, language, code) {
+        return '{code' + (language ? ':' + language : '') + '}\n' + code.trim() + '\n{code}';
+    });
+
+    text = text
+        .replace(/^####\s+(.+)$/gm, 'h4. $1')
+        .replace(/^###\s+(.+)$/gm, 'h3. $1')
+        .replace(/^##\s+(.+)$/gm, 'h2. $1')
+        .replace(/^#\s+(.+)$/gm, 'h1. $1')
+        .replace(/^\s*-\s+/gm, '* ')
+        .replace(/\*\*([^*\n]+)\*\*/g, '*$1*')
+        .replace(/`([^`\n]+)`/g, '{{$1}}')
+        .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '[$1|$2]');
+
+    return text.trim();
+}
+
+function readJiraComment(params) {
+    var jiraComment = readFile('outputs/jira_comment.md');
+    if (jiraComment) return jiraComment;
+
+    jiraComment = readFile('outputs/comment.md');
+    if (jiraComment) return jiraComment;
+
+    return markdownToJiraWiki(params.response || readFile('outputs/response.md') || '');
 }
 
 function runInRepo(command, workingDir) {
@@ -124,62 +151,17 @@ function performGitOperations(branchName, commitMessage, workingDir, testFilesPa
 }
 
 function createPullRequest(title, branchName, baseBranch, workingDir) {
-    try {
-        console.log('Creating Pull Request...');
-        const escapedTitle = title.replace(/"/g, '\\"').replace(/\n/g, ' ');
-
-        // Use pr_body.md (GitHub MD) if present, fallback to response.md
-        const prBodyFile = readFile('outputs/pr_body.md')
-            ? 'outputs/pr_body.md'
-            : 'outputs/response.md';
-        console.log('Using PR body file:', prBodyFile);
-        const workspaceRoot = cleanCommandOutput(cli_execute_command({ command: 'pwd' }) || '');
-        const absoluteBodyPath = workspaceRoot ? workspaceRoot + '/' + prBodyFile : prBodyFile;
-
-        const output = cleanCommandOutput(
-            runInRepo(
-                'gh pr create --title "' + escapedTitle + '" --body-file "' + absoluteBodyPath + '" --base ' + baseBranch + ' --head ' + branchName,
-                workingDir
-            ) || ''
-        );
-
-        let prUrl = null;
-        const urlMatch = output.match(/https:\/\/github\.com\/[^\s]+/);
-        if (urlMatch) {
-            prUrl = urlMatch[0];
-        }
-
-        if (!prUrl) {
-            const prNumberMatch = output.match(/#(\d+)/);
-            if (prNumberMatch) {
-                try {
-                    const remoteUrl = cleanCommandOutput(
-                        runInRepo('git config --get remote.origin.url', workingDir) || ''
-                    );
-                    const repoMatch = remoteUrl.match(/github\.com[:/]([^/]+\/[^/.]+)/);
-                    if (repoMatch) {
-                        prUrl = 'https://github.com/' + repoMatch[1].replace('.git', '') + '/pull/' + prNumberMatch[1];
-                    }
-                } catch (e) {}
-            }
-        }
-
-        if (!prUrl) {
-            try {
-                const listOutput = cleanCommandOutput(
-                    runInRepo('gh pr list --head ' + branchName + ' --json url --jq ".[0].url"', workingDir) || ''
-                );
-                if (listOutput && listOutput.startsWith('https://')) prUrl = listOutput;
-            } catch (e) {}
-        }
-
-        console.log('✅ PR created:', prUrl || '(URL not found)');
-        return { success: true, prUrl: prUrl };
-
-    } catch (error) {
-        console.error('Failed to create PR:', error);
-        return { success: false, error: error.toString() };
-    }
+    console.log('Creating Pull Request...');
+    return prHelper.createPullRequest({
+        title: title,
+        branchName: branchName,
+        baseBranch: baseBranch,
+        workingDir: workingDir,
+        bodyFileCandidates: ['outputs/pr_body.md', 'outputs/response.md'],
+        defaultBody: 'Automated test automation changes.',
+        runCommand: runInRepo,
+        readFile: readFile
+    });
 }
 
 function action(params) {
@@ -187,7 +169,7 @@ function action(params) {
         const ticketKey = params.ticket.key;
         const ticketSummary = params.ticket.fields ? params.ticket.fields.summary : ticketKey;
         const projectKey = ticketKey.split('-')[0];
-        const jiraComment = params.response || '';
+        const jiraComment = readJiraComment(params);
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var customParams = (params.jobParams || params).customParams || {};
         var workingDir = config.workingDir || null;

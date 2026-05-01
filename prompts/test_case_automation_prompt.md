@@ -19,7 +19,8 @@ The feature code is **already implemented** in the `main` branch and **deployed*
 3. **Check if test already exists** in `testing/tests/{TICKET-KEY}/`. If it does, reuse and update it rather than rewriting from scratch. Only modify what is necessary.
 4. Write the automated test in `testing/tests/{TICKET-KEY}/` following the architecture rules in `agents/instructions/test_automation/test_automation_architecture.md`.
 5. **Run the test** and capture the result.
-6. Write output files.
+6. Perform a real human-style verification of the scenario from the user's perspective.
+7. Write output files.
 
 **You may ONLY write code inside the `testing/` folder.**
 
@@ -30,8 +31,9 @@ Do NOT write them inside `input/`, `input/TICKET-KEY/`, or any subfolder of `inp
 
 Run `mkdir -p outputs` first to ensure the directory exists.
 
-- `outputs/response.md` — tracker-formatted test result summary
-- `outputs/pr_body.md` — SCM-formatted test result summary
+- `outputs/jira_comment.md` — Jira wiki markup test result summary
+- `outputs/pr_body.md` — GitHub Markdown PR body
+- `outputs/response.md` — backward-compatible Markdown summary
 - `outputs/test_automation_result.json` — **MANDATORY — always write this file**, even if the test failed or errored. Use exactly this format:
   ```json
   { "status": "passed", "passed": 1, "failed": 0, "skipped": 0, "summary": "1 passed, 0 failed" }
@@ -43,7 +45,27 @@ Run `mkdir -p outputs` first to ensure the directory exists.
   The `"status"` field **must** be exactly `"passed"` or `"failed"` (lowercase). Missing or wrong field name causes the pipeline to break.
 - `outputs/bug_description.md` — detailed tracker-formatted bug report (only if test FAILED)
 
-`response.md` and `pr_body.md` contain the same information but are formatted for different consumers: tracker comment vs SCM pull request body.
+`jira_comment.md` and `pr_body.md` contain the same facts but are formatted for different consumers: Jira wiki markup vs GitHub Markdown. Do not put GitHub Markdown into `jira_comment.md`.
+
+## Real human-style verification
+
+In addition to automated assertions, verify the behavior as a user would experience it.
+
+For UI and content-heavy cases, this is especially important:
+- Check visible text, labels, headings, descriptions, validation messages, placeholders, button text, empty states, and error messages.
+- Verify the text is shown in the correct place and state, not merely present somewhere in HTML/source/API output.
+- Prefer user-facing selectors and observations (role, label, visible text, screenshots/logs) over implementation details.
+- If the test case is about content correctness, compare the meaningful text precisely enough to catch wording regressions.
+
+For API/background cases:
+- Verify the observable outcome that a user, UI, or integrated client depends on.
+- Do not mark the test passed only because an internal call returned success if the expected user-facing result was not confirmed.
+
+Document this verification in `outputs/jira_comment.md` and `outputs/pr_body.md`:
+- what was checked by automation;
+- what was checked as a real user/human-style scenario;
+- what was observed;
+- whether it matched the expected result.
 
 ## ⚠️ CRITICAL: When the test FAILS — write a detailed bug report
 
@@ -66,6 +88,6 @@ If the test fails, `outputs/bug_description.md` **must** contain enough detail f
 
 5. **Screenshots or logs** — if Playwright, attach screenshot path; paste relevant log lines.
 
-The same level of detail applies to `response.md` — the Jira comment must clearly state **which step failed and why**, not just "FAILED".
+The same level of detail applies to `outputs/jira_comment.md` — the Jira comment must clearly state **which step failed and why**, not just "FAILED".
 
 Do NOT create branches or push. Do NOT modify any code outside `testing/`.

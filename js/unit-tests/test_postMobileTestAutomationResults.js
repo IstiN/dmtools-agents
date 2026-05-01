@@ -21,6 +21,11 @@ function loadPostCli(mocks) {
         makeRequire({ './config.js': configModule }),
         { file_read: fileReadMock }
     );
+    var prHelper = loadModule(
+        'agents/js/common/pullRequest.js',
+        makeRequire({}),
+        {}
+    );
 
     var defaults = {
         jira_post_comment: function() {},
@@ -42,7 +47,8 @@ function loadPostCli(mocks) {
         'agents/js/postMobileTestAutomationResults.js',
         makeRequire({
             './configLoader.js': freshConfigLoader,
-            './config.js': configModule
+            './config.js': configModule,
+            './common/pullRequest.js': prHelper
         }),
         allMocks
     );

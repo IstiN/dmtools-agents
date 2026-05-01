@@ -149,24 +149,45 @@ If a test **cannot run automatically** because required credentials or test data
 After writing the test:
 1. Install required dependencies (if any)
 2. Run the test
-3. Capture the result (passed / failed / skipped due to missing credentials)
-4. If failed: capture the full error output and logs
+3. Perform a real user-style verification of the scenario before finalizing the result
+4. Capture the result (passed / failed / skipped due to missing credentials)
+5. If failed: capture the full error output and logs
 
 **Do not mark a test as passed without actually running it.**
 
 ---
 
+## Real User-Style Verification
+
+Automated assertions are required, but they are not enough. Also validate the scenario the way a real user would experience it.
+
+For UI, UX, and content-heavy test cases:
+- Open or exercise the actual user-facing flow, not only internal APIs or mocks.
+- Verify visible labels, messages, headings, button text, validation text, empty states, and error text exactly enough to catch content regressions.
+- Check that the tested text appears in the right context, not merely anywhere in the page/source.
+- Prefer accessibility/user-facing locators when available (role, label, text visible to the user).
+- If the scenario cannot be viewed directly in the current environment, state why and cover the closest observable user-facing behavior.
+
+For API or background scenarios:
+- Verify the externally observable outcome a user or integrated client would rely on.
+- Do not stop at "request returned 200" if the test case expects a specific user-visible message, state, generated content, or side effect.
+
+Include the human-style verification in the output summaries: what was checked manually/as a user, what was observed, and whether it matched the expected result.
+
+---
+
 ## Output
 
-Always write two output files:
+Always write the required output files described in `agents/instructions/test_automation/test_automation_output_files.md`.
 
-### 1. `outputs/response.md`
-Tracker-formatted summary of what was tested and the result.
+At minimum, include the automation result and the real user-style verification result in:
+- `outputs/jira_comment.md` — Jira wiki markup
+- `outputs/pr_body.md` — GitHub Markdown
+- `outputs/test_automation_result.json` — machine-readable status
 
-### 2. `outputs/test_automation_result.json`
-Structured result JSON — see `agents/instructions/test_automation/test_automation_json_output.md` for exact format.
+`outputs/response.md` may be written as a backward-compatible Markdown summary, but Jira comments must use `outputs/jira_comment.md`.
 
 If the test **failed**, also write:
 
-### 3. `outputs/bug_description.md`
+### `outputs/bug_description.md`
 Detailed tracker-formatted bug description including reproduction steps, expected vs actual result, and error logs.

@@ -83,6 +83,14 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
         }
         try {
             var agentJson = JSON.parse(file_read({ path: agentJsonPath }));
+            var agentParamsRoot = agentJson.params || {};
+            Object.keys(agentParamsRoot).forEach(function(paramKey) {
+                var value = agentParamsRoot[paramKey];
+                if (typeof value === 'string' &&
+                    (value.indexOf('{jiraProject}') !== -1 || value.indexOf('{parentTicket}') !== -1)) {
+                    p[paramKey] = configLoader.interpolateJql(value, effectiveConfig);
+                }
+            });
             var agentParams = (agentJson.params || {}).agentParams;
             if (agentParams && typeof agentParams === 'object') {
                 p.agentParams = configLoader.deepMerge({}, agentParams);
@@ -252,21 +260,27 @@ function runLocalAction(jsPath, ticket, agentParams) {
     var configCode = file_read({ path: 'agents/js/config.js' });
     if (!configCode || !configCode.trim()) throw new Error('Cannot read: agents/js/config.js');
 
+    var scmCode = file_read({ path: 'agents/js/common/scm.js' });
+    if (!scmCode || !scmCode.trim()) throw new Error('Cannot read: agents/js/common/scm.js');
+
     var configLoaderCode = file_read({ path: 'agents/js/configLoader.js' });
 
     var script =
         '(function() {\n' +
         '  var _cm = { exports: {} };\n' +
         '  (function(module, exports) {\n' + configCode + '\n  })(_cm, _cm.exports);\n' +
+        '  var _scm = { exports: {} };\n' +
+        '  (function(module, exports, require) {\n' + scmCode + '\n  })(_scm, _scm.exports, function(id) { return _cm.exports; });\n' +
         '  var _cl = { exports: {} };\n' +
         (configLoaderCode ?
-        '  (function(module, exports, require) {\n' + configLoaderCode + '\n  })(_cl, _cl.exports, function(id) { return _cm.exports; });\n' :
+        '  (function(module, exports, require) {\n' + configLoaderCode + '\n  })(_cl, _cl.exports, function(id) { return id.indexOf("scm.js") !== -1 ? _scm.exports : _cm.exports; });\n' :
         '') +
         '  var _am = { exports: {} };\n' +
         '  (function(module, exports, require) {\n' + actionCode + '\n  })(\n' +
         '    _am, _am.exports,\n' +
         '    function(id) {\n' +
         '      if (id === "./configLoader.js" || id === "./configLoader") return _cl.exports;\n' +
+        '      if (id.indexOf("scm.js") !== -1) return _scm.exports;\n' +
         '      return _cm.exports;\n' +
         '    }\n' +
         '  );\n' +

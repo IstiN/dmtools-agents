@@ -355,6 +355,32 @@ suite('smAgent: ticket dispatch', function() {
         assert.contains(decoded.params.inputJql, 'P-42', 'ticket key in inputJql');
     });
 
+    test('interpolates project placeholders from target agent params into encoded config', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js':
+                    'module.exports = { jira: { project: "DMC", parentTicket: "DMC-101" }, repository: { owner: "o", repo: "r" } };',
+                'agents/test_cases_generator.json': JSON.stringify({
+                    name: 'TestCasesGenerator',
+                    params: {
+                        existingTestCasesJql: "project = {jiraProject} AND issuetype = 'Test Case'",
+                        relatedStoriesJql: "parent = {parentTicket}"
+                    }
+                })
+            },
+            tickets: [{ key: 'DMC-857', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", { configFile: 'agents/test_cases_generator.json' })
+        ]));
+
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
+        assert.equal(decoded.params.existingTestCasesJql, "project = DMC AND issuetype = 'Test Case'");
+        assert.equal(decoded.params.relatedStoriesJql, 'parent = DMC-101');
+    });
+
     test('no triggers when no tickets found', function() {
         var sm = makeSmAgent({
             fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
@@ -383,6 +409,44 @@ suite('smAgent: ticket dispatch', function() {
 
         assert.equal(sm.capturedTriggers[0].workflow, 'custom-workflow.yml');
         assert.equal(sm.capturedTriggers[0].ref, 'develop');
+    });
+
+});
+
+// ── localExecution module loading ─────────────────────────────────────────────
+
+suite('smAgent: localExecution module loading', function() {
+
+    test('local post action can require common/scm.js', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                'agents/local_scm_test.json': JSON.stringify({
+                    name: 'JSRunner',
+                    params: {
+                        postJSAction: 'agents/js/unit-tests/_fixtures/local_scm_check.js'
+                    }
+                }),
+                'agents/js/unit-tests/_fixtures/local_scm_check.js':
+                    'var scmModule = require("./common/scm.js");\n' +
+                    'function action(params) {\n' +
+                    '  if (!scmModule || typeof scmModule.createScm !== "function") throw new Error("createScm missing");\n' +
+                    '  return { success: true, action: "scm ok" };\n' +
+                    '}\n' +
+                    'module.exports = { action: action };'
+            },
+            tickets: [{ key: 'T-1', fields: { labels: [] } }],
+            fullTicket: { key: 'T-1', fields: { labels: [], summary: 'Ticket' } }
+        });
+
+        var result = sm.action(baseParams('o', 'r', [
+            makeRule('project = X', {
+                configFile: 'agents/local_scm_test.json',
+                localExecution: true
+            })
+        ]));
+
+        assert.equal(result.processed, 1, 'local action processed ticket');
+        assert.deepEqual(result.processedKeys, ['T-1']);
     });
 
 });
