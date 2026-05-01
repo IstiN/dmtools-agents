@@ -24,13 +24,21 @@ function loadPostTestAutomation(mocks) {
         file_write: function() {}
     };
 
+    var allMocks = Object.assign({}, defaults, mocks);
+    var prHelper = loadModule(
+        'agents/js/common/pullRequest.js',
+        null,
+        allMocks
+    );
+
     return loadModule(
         'agents/js/postTestAutomationResults.js',
         makeRequire({
             './configLoader.js': freshConfigLoader,
-            './config.js': configModule
+            './config.js': configModule,
+            './common/pullRequest.js': prHelper
         }),
-        Object.assign({}, defaults, mocks)
+        allMocks
     );
 }
 

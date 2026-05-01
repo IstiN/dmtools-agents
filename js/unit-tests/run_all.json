@@ -10,6 +10,7 @@
         "agents/js/unit-tests/test_workingDir.js",
         "agents/js/unit-tests/test_branchNaming.js",
         "agents/js/unit-tests/test_githubHelpers.js",
+        "agents/js/unit-tests/test_pullRequestHelper.js",
         "agents/js/unit-tests/test_fetchParentContextToInput.js",
         "agents/js/unit-tests/test_testsGeneratedGuard.js",
         "agents/js/unit-tests/test_postTestAutomationResults.js",

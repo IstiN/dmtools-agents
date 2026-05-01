@@ -29,6 +29,7 @@
 
 var configLoader = require('./configLoader.js');
 const { STATUSES, LABELS } = require('./config.js');
+var prHelper = require('./common/pullRequest.js');
 
 function parseMcpResult(result) {
     if (!result) return null;
@@ -39,13 +40,7 @@ function parseMcpResult(result) {
 }
 
 function cleanCommandOutput(output) {
-    if (!output) return '';
-    return output.split('\n').filter(function(line) {
-        return line.indexOf('Script started') === -1 &&
-               line.indexOf('Script done') === -1 &&
-               line.indexOf('COMMAND=') === -1 &&
-               line.indexOf('COMMAND_EXIT_CODE=') === -1;
-    }).join('\n').trim();
+    return prHelper.cleanCommandOutput(output);
 }
 
 function readFile(path) {
@@ -93,7 +88,7 @@ function runInRepo(command, workingDir) {
     return cli_execute_command({ command: command, workingDirectory: workingDir });
 }
 
-/** Sanitize text for use in shell commands (git commit -m, gh pr create --title).
+/** Sanitize text for use in shell command arguments such as git commit messages.
  *  CliCommandExecutor rejects commands containing shell metacharacters: ; \n \r ` $() ${} && || | > <
  *  Jira titles often contain -> (arrows), <angle brackets>, etc.  */
 function sanitizeForShell(text) {
@@ -146,43 +141,19 @@ function performGitOperations(branchName, commitMessage, workingDir, testFilesPa
 
 /** Create PR in the automation repo (or find existing). */
 function createAutomationPR(title, branchName, baseBranch, workingDir) {
-    try {
-        var escapedTitle = title.replace(/"/g, '\\"').replace(/\n/g, ' ');
-        var prBody = readOutputFile('outputs/pr_body.md', workingDir)
-                  || readOutputFile('outputs/response.md', workingDir)
-                  || 'Automated test flows';
-        // Write body to a temp file in the automation repo dir to avoid path issues
-        var bodyTempPath = workingDir + '/pr_body_tmp.md';
-        file_write(bodyTempPath, prBody);
-
-        var output = cleanCommandOutput(
-            runInRepo(
-                'gh pr create --title "' + escapedTitle + '" --body-file pr_body_tmp.md --base ' + baseBranch + ' --head ' + branchName,
-                workingDir
-            ) || ''
-        );
-
-        // Clean up temp file
-        try { runInRepo('git checkout -- pr_body_tmp.md', workingDir); } catch (_) {}
-
-        var prUrl = null;
-        var urlMatch = output.match(/https:\/\/github\.com\/[^\s]+/);
-        if (urlMatch) prUrl = urlMatch[0];
-
-        if (!prUrl) {
-            var listOutput = cleanCommandOutput(
-                runInRepo('gh pr list --head ' + branchName + ' --json url --jq ".[0].url"', workingDir) || ''
-            );
-            if (listOutput && listOutput.startsWith('https://')) prUrl = listOutput;
-        }
-
-        console.log('✅ Automation PR:', prUrl || '(URL not found)');
-        return { success: true, prUrl: prUrl };
-
-    } catch (error) {
-        console.error('Failed to create automation PR:', error);
-        return { success: false, error: error.toString() };
-    }
+    var result = prHelper.createPullRequest({
+        title: title,
+        branchName: branchName,
+        baseBranch: baseBranch,
+        workingDir: workingDir,
+        runCommand: runInRepo,
+        readFile: function(path) { return readOutputFile(path, workingDir); },
+        writeFile: file_write,
+        bodyFileCandidates: ['outputs/pr_body.md', 'outputs/response.md'],
+        defaultBody: 'Automated test flows'
+    });
+    if (result.success) console.log('✅ Automation PR:', result.prUrl || '(URL not found)');
+    return result;
 }
 
 /**

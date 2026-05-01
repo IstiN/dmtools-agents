@@ -203,7 +203,7 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
         if (args.command.indexOf('git diff --cached --stat') === 0) return ' tests/FooTest.php | 1 +';
         if (args.command.indexOf('git ls-remote --heads origin') === 0) return 'abc123\trefs/heads/test/AITS-1';
         if (args.command.indexOf('gh pr create') === 0) return 'https://github.com/Postnl-Production/api-client-sdk/pull/1';
-        if (args.command.indexOf('gh pr list --head') === 0) return 'https://github.com/Postnl-Production/api-client-sdk/pull/1';
+        if (args.command.indexOf('gh pr list --head') === 0) return '';
         if (args.command.indexOf('git config --get remote.origin.url') === 0) return 'git@github.com:Postnl-Production/api-client-sdk.git';
         return '';
     };
@@ -225,20 +225,30 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
         { file_read: fileReadMock }
     );
 
+    var allMocks = {
+        cli_execute_command: mockCli,
+        file_read: fileReadMock,
+        file_write: function() {},
+        jira_post_comment: function() {},
+        jira_move_to_status: function() {},
+        jira_add_label: function() {},
+        jira_remove_label: function() {}
+    };
+
+    var prHelper = loadModule(
+        'agents/js/common/pullRequest.js',
+        null,
+        allMocks
+    );
+
     var mod = loadModule(
         'agents/js/postTestAutomationResults.js',
         makeRequire({
             './configLoader.js': freshConfigLoader,
-            './config.js': configModule
+            './config.js': configModule,
+            './common/pullRequest.js': prHelper
         }),
-        {
-            cli_execute_command: mockCli,
-            file_read: fileReadMock,
-            jira_post_comment: function() {},
-            jira_move_to_status: function() {},
-            jira_add_label: function() {},
-            jira_remove_label: function() {}
-        }
+        allMocks
     );
 
     return {
@@ -307,7 +317,7 @@ suite('postTestAutomationResults > workingDir', function() {
         assert.equal(addCall.workingDirectory, 'dependencies/api-client-sdk');
     });
 
-    test('uses an absolute PR body path when creating PR from workingDir', function() {
+    test('uses shared PR helper temp body file when creating PR from workingDir', function() {
         var loaded = loadPostTestAutomation('dependencies/api-client-sdk', 'tests/');
         loaded.mod.action(loaded.params);
 
@@ -320,7 +330,8 @@ suite('postTestAutomationResults > workingDir', function() {
         }
 
         assert.ok(prCreateCall, 'gh pr create was called');
-        assert.contains(prCreateCall.command, '--body-file "/workspace/outputs/response.md"', 'uses absolute PR body path');
+        assert.contains(prCreateCall.command, '--body-file "pr_body_tmp.md"', 'uses shared temp PR body path');
+        assert.notContains(prCreateCall.command, '/workspace/outputs/response.md', 'does not depend on pwd output');
     });
 
 });

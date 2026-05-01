@@ -11,16 +11,11 @@
  */
 
 var configLoader = require('./configLoader.js');
+var prHelper = require('./common/pullRequest.js');
 const { GIT_CONFIG, STATUSES, LABELS } = require('./config.js');
 
 function cleanCommandOutput(output) {
-    if (!output) return '';
-    return output.split('\n').filter(function(line) {
-        return line.indexOf('Script started') === -1 &&
-               line.indexOf('Script done') === -1 &&
-               line.indexOf('COMMAND=') === -1 &&
-               line.indexOf('COMMAND_EXIT_CODE=') === -1;
-    }).join('\n').trim();
+    return prHelper.cleanCommandOutput(output);
 }
 
 function readFile(path) {
@@ -124,70 +119,17 @@ function performGitOperations(branchName, commitMessage, workingDir, testFilesPa
 }
 
 function createPullRequest(title, branchName, baseBranch, workingDir) {
-    try {
-        console.log('Creating Pull Request...');
-        const escapedTitle = title.replace(/"/g, '\\"').replace(/\n/g, ' ');
-
-        // Use pr_body.md (GitHub MD) if present, fallback to response.md
-        const prBody = readFile('outputs/pr_body.md')
-            || readFile('outputs/response.md')
-            || 'Automated test automation changes.';
-        const bodyTempPath = workingDir ? workingDir + '/pr_body_tmp.md' : 'pr_body_tmp.md';
-        file_write(bodyTempPath, prBody);
-        console.log('Using PR body temp file:', bodyTempPath);
-
-        const existingPrOutput = cleanCommandOutput(
-            runInRepo('gh pr list --head ' + branchName + ' --json url --jq ".[0].url"', workingDir) || ''
-        );
-        if (existingPrOutput && existingPrOutput.startsWith('https://')) {
-            console.log('✅ Existing PR found:', existingPrOutput);
-            return { success: true, prUrl: existingPrOutput };
-        }
-
-        const output = cleanCommandOutput(
-            runInRepo(
-                'gh pr create --title "' + escapedTitle + '" --body-file pr_body_tmp.md --base ' + baseBranch + ' --head ' + branchName,
-                workingDir
-            ) || ''
-        );
-
-        let prUrl = null;
-        const urlMatch = output.match(/https:\/\/github\.com\/[^\s]+/);
-        if (urlMatch) {
-            prUrl = urlMatch[0];
-        }
-
-        if (!prUrl) {
-            const prNumberMatch = output.match(/#(\d+)/);
-            if (prNumberMatch) {
-                try {
-                    const remoteUrl = cleanCommandOutput(
-                        runInRepo('git config --get remote.origin.url', workingDir) || ''
-                    );
-                    const repoMatch = remoteUrl.match(/github\.com[:/]([^/]+\/[^/.]+)/);
-                    if (repoMatch) {
-                        prUrl = 'https://github.com/' + repoMatch[1].replace('.git', '') + '/pull/' + prNumberMatch[1];
-                    }
-                } catch (e) {}
-            }
-        }
-
-        if (!prUrl) {
-            try {
-                const listOutput = cleanCommandOutput(
-                    runInRepo('gh pr list --head ' + branchName + ' --json url --jq ".[0].url"', workingDir) || ''
-                );
-                if (listOutput && listOutput.startsWith('https://')) prUrl = listOutput;
-            } catch (e) {}
-        }
-
-        console.log('✅ PR created:', prUrl || '(URL not found)');
-        return { success: true, prUrl: prUrl };
-
-    } catch (error) {
-        console.error('Failed to create PR:', error);
-        return { success: false, error: error.toString() };
-    }
+    console.log('Creating Pull Request...');
+    return prHelper.createPullRequest({
+        title: title,
+        branchName: branchName,
+        baseBranch: baseBranch,
+        workingDir: workingDir,
+        bodyFileCandidates: ['outputs/pr_body.md', 'outputs/response.md'],
+        defaultBody: 'Automated test automation changes.',
+        runCommand: runInRepo,
+        readFile: readFile
+    });
 }
 
 function action(params) {
