@@ -2,7 +2,7 @@
  * Post Test Automation Results Action (postJSAction for test_case_automation)
  * 1. Reads outputs/test_automation_result.json
  * 2. Stages testing/ folder, commits, pushes, creates PR to main
- * 3. Posts Jira comment from outputs/response.md
+ * 3. Posts Jira comment from outputs/jira_comment.md
  * 4. If passed:          moves ticket to In Review - Passed
  * 5. If failed:          moves Test Case to In Review - Failed (bug created by bug_creation agent on Failed)
  * 6. If blocked_by_human: moves ticket to Blocked, posts what credentials/data are needed,
@@ -42,6 +42,38 @@ function readResultJson() {
         console.error('Failed to parse test_automation_result.json:', e);
         return null;
     }
+}
+
+function markdownToJiraWiki(markdown) {
+    if (!markdown) return '';
+
+    var text = String(markdown);
+
+    text = text.replace(/```(\w+)?\n([\s\S]*?)```/g, function(_, language, code) {
+        return '{code' + (language ? ':' + language : '') + '}\n' + code.trim() + '\n{code}';
+    });
+
+    text = text
+        .replace(/^####\s+(.+)$/gm, 'h4. $1')
+        .replace(/^###\s+(.+)$/gm, 'h3. $1')
+        .replace(/^##\s+(.+)$/gm, 'h2. $1')
+        .replace(/^#\s+(.+)$/gm, 'h1. $1')
+        .replace(/^\s*-\s+/gm, '* ')
+        .replace(/\*\*([^*\n]+)\*\*/g, '*$1*')
+        .replace(/`([^`\n]+)`/g, '{{$1}}')
+        .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '[$1|$2]');
+
+    return text.trim();
+}
+
+function readJiraComment(params) {
+    var jiraComment = readFile('outputs/jira_comment.md');
+    if (jiraComment) return jiraComment;
+
+    jiraComment = readFile('outputs/comment.md');
+    if (jiraComment) return jiraComment;
+
+    return markdownToJiraWiki(params.response || readFile('outputs/response.md') || '');
 }
 
 function runInRepo(command, workingDir) {
@@ -137,7 +169,7 @@ function action(params) {
         const ticketKey = params.ticket.key;
         const ticketSummary = params.ticket.fields ? params.ticket.fields.summary : ticketKey;
         const projectKey = ticketKey.split('-')[0];
-        const jiraComment = params.response || '';
+        const jiraComment = readJiraComment(params);
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var customParams = (params.jobParams || params).customParams || {};
         var workingDir = config.workingDir || null;

@@ -86,3 +86,76 @@ suite('postTestAutomationResults: PR creation', function() {
     });
 
 });
+
+suite('postTestAutomationResults: Jira comment formatting', function() {
+
+    test('posts outputs/jira_comment.md instead of Markdown response', function() {
+        var comments = [];
+        var module = loadPostTestAutomation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') {
+                    return JSON.stringify({ status: 'passed' });
+                }
+                if (opts.path === 'outputs/jira_comment.md') {
+                    return 'h3. Test Automation Result\n\n*Status:* ✅ PASSED';
+                }
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            jira_post_comment: function(args) {
+                comments.push(args.comment);
+            },
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git branch --show-current') return '';
+                return '';
+            }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-895', fields: { summary: 'Automate test case' } },
+            response: '## Issues/Notes\n\n- **Status:** `FAILED`',
+            jobParams: { customParams: {} }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(comments.length, 1);
+        assert.equal(comments[0], 'h3. Test Automation Result\n\n*Status:* ✅ PASSED');
+    });
+
+    test('converts Markdown response fallback to Jira wiki markup', function() {
+        var comments = [];
+        var module = loadPostTestAutomation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') {
+                    return JSON.stringify({ status: 'failed' });
+                }
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            jira_post_comment: function(args) {
+                comments.push(args.comment);
+            },
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git branch --show-current') return '';
+                return '';
+            }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-895', fields: { summary: 'Automate test case' } },
+            response: '## Issues/Notes\n\n- **Status:** `FAILED`\n\n```bash\nnode testing/tests/DMC-895/test.js\n```\n\n[PR](https://github.com/org/repo/pull/1)',
+            jobParams: { customParams: {} }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0], 'h2. Issues/Notes');
+        assert.contains(comments[0], '* *Status:* {{FAILED}}');
+        assert.contains(comments[0], '{code:bash}');
+        assert.contains(comments[0], 'node testing/tests/DMC-895/test.js');
+        assert.contains(comments[0], '[PR|https://github.com/org/repo/pull/1]');
+        assert.notContains(comments[0], '## Issues/Notes');
+        assert.notContains(comments[0], '```');
+    });
+
+});
