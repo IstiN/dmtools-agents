@@ -647,7 +647,7 @@ suite('smAgent: additionalInstructions in encoded_config', function() {
         assert.equal(decoded.params.agentParams.instructions.length, 2, 'default agent instructions preserved');
     });
 
-    test('injects cliPrompts and agent param patches from config into encoded_config', function() {
+    test('injects cliPrompts and agent/job param patches from config into encoded_config', function() {
         var sm = makeSmAgent({
             fileMap: {
                 '../.dmtools/config.js':
@@ -662,6 +662,9 @@ suite('smAgent: additionalInstructions in encoded_config', function() {
                     '  },' +
                     '  agentParamPatches: {' +
                     '    story_development: { aiRole: "Senior Engineer", customFlag: true }' +
+                    '  },' +
+                    '  jobParamPatches: {' +
+                    '    story_development: { confluencePages: ["./.dmtools/instructions/project.md"], isGenerateNew: false }' +
                     '  }' +
                     '};'
             },
@@ -679,6 +682,8 @@ suite('smAgent: additionalInstructions in encoded_config', function() {
         assert.deepEqual(decoded.params.cliPrompts, ['./.dmtools/prompts/role.md', './.dmtools/prompts/focus.md']);
         assert.equal(decoded.params.agentParams.aiRole, 'Senior Engineer');
         assert.equal(decoded.params.agentParams.customFlag, true);
+        assert.deepEqual(decoded.params.confluencePages, ['./.dmtools/instructions/project.md']);
+        assert.equal(decoded.params.isGenerateNew, false);
     });
 
 });

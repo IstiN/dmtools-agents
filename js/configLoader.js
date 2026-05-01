@@ -13,7 +13,7 @@
  *   - jira.statuses, jira.issueTypes, jira.questions, labels: FULL REPLACEMENT when provided
  *   - smRules, smMergeRules: FULL REPLACEMENT when provided
  *   - repository, git, formats, confluence, jira.fields: DEEP MERGE
- *   - additionalInstructions, instructionOverrides, cliPrompts, cliPromptOverrides, agentParamPatches:
+ *   - additionalInstructions, instructionOverrides, cliPrompts, cliPromptOverrides, agentParamPatches, jobParamPatches:
  *     FULL REPLACEMENT when provided
  */
 
@@ -100,6 +100,7 @@ var DEFAULTS = {
     cliPrompts: {},
     cliPromptOverrides: {},
     agentParamPatches: {},
+    jobParamPatches: {},
 
     scm: {
         provider: 'github'   // 'github' | 'ado' — source control provider for PR operations
@@ -193,6 +194,9 @@ function mergeProjectConfig(defaults, overrides) {
     }
     if (overrides.agentParamPatches) {
         result.agentParamPatches = overrides.agentParamPatches;
+    }
+    if (overrides.jobParamPatches) {
+        result.jobParamPatches = overrides.jobParamPatches;
     }
 
     return result;
@@ -464,7 +468,7 @@ function resolveConfluenceUrls(items, config) {
  * @param {string} agentName - Agent config name (e.g., 'story_development')
  * @param {string[]} defaultInstructions - Default instructions from agent JSON
  * @param {Object} config - Loaded project config
- * @returns {Object} { instructions: string[], instructionsOverridden: boolean, additionalInstructions: string[], cliPrompts: string[], cliPrompt: string|null, agentParamPatch: Object|null }
+ * @returns {Object} { instructions: string[], instructionsOverridden: boolean, additionalInstructions: string[], cliPrompts: string[], cliPrompt: string|null, agentParamPatch: Object|null, jobParamPatch: Object|null }
  */
 function resolveInstructions(agentName, defaultInstructions, config) {
     var instructions = defaultInstructions || [];
@@ -473,6 +477,7 @@ function resolveInstructions(agentName, defaultInstructions, config) {
     var cliPrompts = [];
     var cliPrompt = null;
     var agentParamPatch = null;
+    var jobParamPatch = null;
 
     // Full override if instructionOverrides has this agent
     if (config.instructionOverrides && config.instructionOverrides[agentName]) {
@@ -499,6 +504,9 @@ function resolveInstructions(agentName, defaultInstructions, config) {
     if (config.agentParamPatches && config.agentParamPatches[agentName]) {
         agentParamPatch = config.agentParamPatches[agentName];
     }
+    if (config.jobParamPatches && config.jobParamPatches[agentName]) {
+        jobParamPatch = config.jobParamPatches[agentName];
+    }
 
     return {
         instructions: instructions,
@@ -506,7 +514,8 @@ function resolveInstructions(agentName, defaultInstructions, config) {
         additionalInstructions: additional,
         cliPrompts: cliPrompts,
         cliPrompt: cliPrompt,
-        agentParamPatch: agentParamPatch
+        agentParamPatch: agentParamPatch,
+        jobParamPatch: jobParamPatch
     };
 }
 

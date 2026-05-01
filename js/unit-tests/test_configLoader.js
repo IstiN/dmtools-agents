@@ -416,6 +416,22 @@ suite('configLoader.resolveInstructions', function() {
         });
     });
 
+    test('resolves jobParamPatches per agent', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            jobParamPatches: {
+                test_cases_generator: {
+                    confluencePages: ['./.dmtools/instructions/test_cases/project_rules.md'],
+                    isGenerateNew: true
+                }
+            }
+        });
+        var result = configLoaderModule.resolveInstructions('test_cases_generator', [], config);
+        assert.deepEqual(result.jobParamPatch, {
+            confluencePages: ['./.dmtools/instructions/test_cases/project_rules.md'],
+            isGenerateNew: true
+        });
+    });
+
     test('agent not in overrides returns default + empty additional', function() {
         var config = configLoaderModule.mergeProjectConfig(defaults, {
             instructionOverrides: { other_agent: ['./other.md'] }

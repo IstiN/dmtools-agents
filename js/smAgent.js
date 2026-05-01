@@ -123,6 +123,9 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
             if (!p.agentParams) p.agentParams = {};
             p.agentParams = configLoader.deepMerge(p.agentParams, resolved.agentParamPatch);
         }
+        if (resolved.jobParamPatch) {
+            p = configLoader.deepMerge(p, resolved.jobParamPatch);
+        }
 
         // Inject project-specific field name overrides from jira.fields config
         var jiraFields = effectiveConfig.jira && effectiveConfig.jira.fields;
