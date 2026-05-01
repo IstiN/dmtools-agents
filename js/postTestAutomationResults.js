@@ -129,16 +129,24 @@ function createPullRequest(title, branchName, baseBranch, workingDir) {
         const escapedTitle = title.replace(/"/g, '\\"').replace(/\n/g, ' ');
 
         // Use pr_body.md (GitHub MD) if present, fallback to response.md
-        const prBodyFile = readFile('outputs/pr_body.md')
-            ? 'outputs/pr_body.md'
-            : 'outputs/response.md';
-        console.log('Using PR body file:', prBodyFile);
-        const workspaceRoot = cleanCommandOutput(cli_execute_command({ command: 'pwd' }) || '');
-        const absoluteBodyPath = workspaceRoot ? workspaceRoot + '/' + prBodyFile : prBodyFile;
+        const prBody = readFile('outputs/pr_body.md')
+            || readFile('outputs/response.md')
+            || 'Automated test automation changes.';
+        const bodyTempPath = workingDir ? workingDir + '/pr_body_tmp.md' : 'pr_body_tmp.md';
+        file_write(bodyTempPath, prBody);
+        console.log('Using PR body temp file:', bodyTempPath);
+
+        const existingPrOutput = cleanCommandOutput(
+            runInRepo('gh pr list --head ' + branchName + ' --json url --jq ".[0].url"', workingDir) || ''
+        );
+        if (existingPrOutput && existingPrOutput.startsWith('https://')) {
+            console.log('✅ Existing PR found:', existingPrOutput);
+            return { success: true, prUrl: existingPrOutput };
+        }
 
         const output = cleanCommandOutput(
             runInRepo(
-                'gh pr create --title "' + escapedTitle + '" --body-file "' + absoluteBodyPath + '" --base ' + baseBranch + ' --head ' + branchName,
+                'gh pr create --title "' + escapedTitle + '" --body-file pr_body_tmp.md --base ' + baseBranch + ' --head ' + branchName,
                 workingDir
             ) || ''
         );
