@@ -387,6 +387,44 @@ suite('smAgent: ticket dispatch', function() {
 
 });
 
+// ── localExecution module loading ─────────────────────────────────────────────
+
+suite('smAgent: localExecution module loading', function() {
+
+    test('local post action can require common/scm.js', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                'agents/local_scm_test.json': JSON.stringify({
+                    name: 'JSRunner',
+                    params: {
+                        postJSAction: 'agents/js/unit-tests/_fixtures/local_scm_check.js'
+                    }
+                }),
+                'agents/js/unit-tests/_fixtures/local_scm_check.js':
+                    'var scmModule = require("./common/scm.js");\n' +
+                    'function action(params) {\n' +
+                    '  if (!scmModule || typeof scmModule.createScm !== "function") throw new Error("createScm missing");\n' +
+                    '  return { success: true, action: "scm ok" };\n' +
+                    '}\n' +
+                    'module.exports = { action: action };'
+            },
+            tickets: [{ key: 'T-1', fields: { labels: [] } }],
+            fullTicket: { key: 'T-1', fields: { labels: [], summary: 'Ticket' } }
+        });
+
+        var result = sm.action(baseParams('o', 'r', [
+            makeRule('project = X', {
+                configFile: 'agents/local_scm_test.json',
+                localExecution: true
+            })
+        ]));
+
+        assert.equal(result.processed, 1, 'local action processed ticket');
+        assert.deepEqual(result.processedKeys, ['T-1']);
+    });
+
+});
+
 // ── skipIfLabel ───────────────────────────────────────────────────────────────
 
 suite('smAgent: skipIfLabel', function() {
