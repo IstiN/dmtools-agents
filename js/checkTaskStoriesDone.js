@@ -1,11 +1,11 @@
 /**
  * Check Task Stories Done — postJSAction for task_done_check agent.
  *
- * Runs on every SM cycle for each Task in "In Development".
- * Finds all child Stories (parent = ticketKey) and checks if they are all Done.
+ * Runs on every SM cycle for each intake/in-development Task.
+ * Finds all linked Stories/Bugs and checks if they are all Done.
  *
- * - If all child Stories are Done → moves the Task to "Ready For Testing".
- * - If no Stories exist yet → releases lock (intake may still be running).
+ * - If all linked Stories/Bugs are Done → moves the Task to "Ready For Testing".
+ * - If no linked Stories/Bugs exist yet → releases lock (intake may still be running).
  * - Otherwise → removes the SM idempotency label so the SM re-triggers
  *   this check on the next cycle.
  */

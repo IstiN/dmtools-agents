@@ -134,8 +134,8 @@
           "localExecution": true
         },
         {
-          "description": "In Development Tasks (children of parent ticket) → check all Stories Done → Ready For Testing",
-          "jql": "project = {jiraProject} AND issuetype in ('Task') AND status in ('In Development') AND parent = {parentTicket}",
+          "description": "Intake/In Development Tasks → all linked Stories/Bugs Done → Ready For Testing",
+          "jql": "project = {jiraProject} AND issuetype in ('Task') AND status in ('In Development', 'In Progress') AND (parent = {parentTicket} OR labels in ('ai_intake'))",
           "configFile": "agents/task_done_check.json",
           "skipIfLabel": "sm_task_done_check_triggered",
           "localExecution": true
