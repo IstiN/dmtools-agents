@@ -58,8 +58,8 @@
           "addLabel": "sm_story_development_triggered"
         },
         {
-          "description": "Ready For Development Bugs → trigger bug_development",
-          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('Ready For Development')",
+          "description": "Backlog / Ready For Development Bugs → trigger bug_development",
+          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('Backlog', 'Ready For Development')",
           "configFile": "agents/bug_development.json",
           "skipIfLabel": "sm_bug_development_triggered",
           "addLabel": "sm_bug_development_triggered",
