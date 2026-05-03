@@ -67,6 +67,16 @@ Verify:
 - No out-of-scope changes without justification
 - The fix addresses the root cause, not just a symptom or an adjacent code smell
 
+### 🧪 Protected testing folder scope for standard development/rework PRs
+
+This is the standard `pr_review` flow for development/rework PRs, not the dedicated test automation review flow. If `pr_files.txt` or `pr_diff.txt` shows changes under the top-level `testing/` folder:
+
+1. Check `request.md`, `pr_info.md`, `comments.md`, and `pr_discussions.md` for an explicit reason.
+2. The reason must clearly explain why this non-testing PR needs to touch `testing/`, and the change must be directly tied to the ticket or to fixing a test harness issue caused by the implementation.
+3. Vague statements like "updated tests", "fixed automation", or "cleanup" are not sufficient.
+4. If there is no clear reason, raise a 🚨 BLOCKING scope issue: development/rework agents must not modify `testing/` without explicit justification. Use an inline comment on a changed `testing/` line when possible; otherwise include it in the general comment.
+5. If there is a clear reason, review the `testing/` changes for correctness and minimality; still flag broad or unrelated rewrites.
+
 **⚠️ Merge commits bring noise — do NOT flag as out-of-scope**: This branch may contain `Merge branch 'main'` commits that pull in unrelated files (tests, components) committed to main by other stories. These files will NOT appear in `pr_diff.txt` (the three-dot diff already excludes them), but their commit messages may be visible in `pr_info.md`. **Never flag a file as out-of-scope based on commit messages alone — only flag files that actually appear in `pr_diff.txt`.**
 
 ## 🧪 Test Automation Results Analysis (Critical)

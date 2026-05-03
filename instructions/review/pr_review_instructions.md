@@ -56,6 +56,16 @@ Scan for OWASP Top 10 and common vulnerabilities:
   - Identify any missing functionality from ticket scope
   - Flag any out-of-scope changes
 
+### 🧪 Protected testing folder scope
+
+This standard PR review is for development and rework agents, not test automation agents. Treat changes under the top-level `testing/` folder as protected-scope changes:
+
+- If `pr_files.txt` or `pr_diff.txt` includes any path under `testing/`, look for a clear reason in `request.md`, `pr_info.md`, `comments.md`, or `pr_discussions.md`.
+- A clear reason must explain why this non-testing PR needs to change the testing framework/assets/tests, and the change must be directly tied to the ticket or to fixing a broken test harness caused by the implementation.
+- Generic statements like "updated tests", "fixed automation", or "cleanup" are not enough.
+- If no clear reason exists, raise a 🚨 BLOCKING scope issue: development/rework agents must not modify `testing/` without explicit justification. Prefer an inline comment on the changed `testing/` line when possible; otherwise include it in the general comment.
+- If a clear reason exists, review the `testing/` changes normally for correctness and minimality, and still flag unrelated broad rewrites.
+
 ## 🧪 Testing & Quality Assurance
   - Test coverage adequacy
   - Edge cases and error scenarios handling
