@@ -84,4 +84,25 @@ suite('pullRequest helper', function() {
         assert.equal(createCalled, false, 'gh pr create should not run when PR exists');
     });
 
+    test('builds PR URL from dotted repository remote when gh returns only a PR number', function() {
+        var pr = loadPullRequestHelper();
+
+        var result = pr.createPullRequest({
+            title: 'DMC-3 Example',
+            branchName: 'feature/DMC-3',
+            baseBranch: 'main',
+            bodyContent: 'body',
+            runCommand: function(command) {
+                if (command.indexOf('gh pr list --head feature/DMC-3') === 0) return '';
+                if (command === 'git config --get remote.origin.url') return 'git@github.com:epam/dm.ai.git';
+                if (command.indexOf('gh pr create') === 0) return 'Created pull request #789';
+                return '';
+            },
+            writeFile: function() {}
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.prUrl, 'https://github.com/epam/dm.ai/pull/789');
+    });
+
 });

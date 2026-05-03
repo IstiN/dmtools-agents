@@ -49,9 +49,9 @@ function getGitHubRepoInfo() {
         const remoteUrl = cleanCommandOutput(
             cli_execute_command({ command: 'git config --get remote.origin.url' }) || ''
         );
-        const match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
+        const match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/?#\s]+)/);
         if (!match) return null;
-        return { owner: match[1], repo: match[2].replace('.git', '') };
+        return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
     } catch (e) {
         return null;
     }

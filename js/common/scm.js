@@ -222,11 +222,12 @@ function _createGithubProvider(workspace, repository) {
         getRemoteRepoInfo: function() {
             try {
                 var rawUrl = cli_execute_command({ command: 'git config --get remote.origin.url' }) || '';
-                var lines = rawUrl.split('\n').filter(function(l) { return l.trim(); });
-                var remoteUrl = lines.join('').trim();
-                var match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
+                var remoteUrl = rawUrl.split('\n')
+                    .map(function(l) { return l.trim(); })
+                    .filter(function(l) { return l.indexOf('github.com') !== -1 || l.indexOf('dev.azure.com') !== -1 || l.indexOf('ssh.dev.azure.com') !== -1; })[0] || '';
+                var match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/?#\s]+)/);
                 if (!match) return null;
-                return { owner: match[1], repo: match[2].replace('.git', '') };
+                return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
             } catch (e) { return null; }
         }
     };
@@ -441,15 +442,17 @@ function _createAdoProvider(repository) {
 function _detectRepoFromGitRemote(provider) {
     try {
         var rawUrl = cli_execute_command({ command: 'git config --get remote.origin.url' }) || '';
-        var remoteUrl = rawUrl.split('\n').filter(function(l) { return l.trim(); }).join('').trim();
+        var remoteUrl = rawUrl.split('\n')
+            .map(function(l) { return l.trim(); })
+            .filter(function(l) { return l.indexOf('github.com') !== -1 || l.indexOf('dev.azure.com') !== -1 || l.indexOf('ssh.dev.azure.com') !== -1; })[0] || '';
         if (provider === 'ado') {
             var match = remoteUrl.match(/dev\.azure\.com[/:]([^/]+)\/([^/]+)\/_git\/([^/]+)/);
             if (match) return { owner: match[1], repo: match[3] };
             match = remoteUrl.match(/ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/([^/]+)/);
             if (match) return { owner: match[1], repo: match[3] };
         } else {
-            var ghMatch = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
-            if (ghMatch) return { owner: ghMatch[1], repo: ghMatch[2].replace('.git', '') };
+            var ghMatch = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/?#\s]+)/);
+            if (ghMatch) return { owner: ghMatch[1], repo: ghMatch[2].replace(/\.git$/, '') };
         }
     } catch (e) {}
     return null;

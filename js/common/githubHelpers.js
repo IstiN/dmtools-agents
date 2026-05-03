@@ -26,13 +26,13 @@ function getGitHubRepoInfo() {
         const remoteUrl = cleanCommandOutput(
             cli_execute_command({ command: 'git config --get remote.origin.url' }) || ''
         );
-        const match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
+        const match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/?#\s]+)/);
         if (!match) {
             console.error('Could not parse GitHub URL from:', remoteUrl);
             return null;
         }
         const owner = match[1];
-        const repo = match[2].replace('.git', '');
+        const repo = match[2].replace(/\.git$/, '');
         console.log('GitHub repo:', owner + '/' + repo);
         return { owner: owner, repo: repo };
     } catch (e) {

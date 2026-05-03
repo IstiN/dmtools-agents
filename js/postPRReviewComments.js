@@ -107,14 +107,14 @@ function getGitHubRepoInfo() {
             .filter(function(l) { return l.indexOf('github.com') !== -1; })[0] || '';
 
         // Parse GitHub URL (https://github.com/owner/repo.git or git@github.com:owner/repo.git)
-        const match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/.?\s]+)/);
+        const match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/?#\s]+)/);
         if (!match) {
             console.error('Could not parse GitHub URL from:', remoteUrl);
             return null;
         }
 
         const owner = match[1];
-        const repo = match[2].replace('.git', '');
+        const repo = match[2].replace(/\.git$/, '');
 
         console.log('GitHub repo:', owner + '/' + repo);
         return { owner: owner, repo: repo };

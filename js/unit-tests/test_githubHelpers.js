@@ -18,6 +18,14 @@ function loadGithubHelpers(mocks) {
     );
 }
 
+function loadScm(mocks) {
+    return loadModule(
+        'agents/js/common/scm.js',
+        null,
+        mocks || {}
+    );
+}
+
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
 function makeConversation(opts) {
@@ -60,6 +68,59 @@ function makeGraphQLResponse(nodes) {
 }
 
 // ── Suite: resolved status from GraphQL ──────────────────────────────────────
+
+suite('github repo remote parsing', function() {
+
+    [
+        {
+            name: 'https URL with dotted repo',
+            remote: 'https://github.com/epam/dm.ai',
+            expected: { owner: 'epam', repo: 'dm.ai' }
+        },
+        {
+            name: 'https URL with dotted repo and .git suffix',
+            remote: 'https://github.com/epam/dm.ai.git',
+            expected: { owner: 'epam', repo: 'dm.ai' }
+        },
+        {
+            name: 'ssh URL with dotted repo and .git suffix',
+            remote: 'git@github.com:epam/dm.ai.git',
+            expected: { owner: 'epam', repo: 'dm.ai' }
+        }
+    ].forEach(function(tc) {
+        test('githubHelpers.getGitHubRepoInfo parses ' + tc.name, function() {
+            var gh = loadGithubHelpers({
+                cli_execute_command: function() {
+                    return tc.remote + '\nCOMMAND_EXIT_CODE=0';
+                }
+            });
+
+            assert.deepEqual(gh.getGitHubRepoInfo(), tc.expected);
+        });
+    });
+
+    test('scm createScm auto-detects dotted GitHub repository names', function() {
+        var calls = [];
+        var scmModule = loadScm({
+            cli_execute_command: function() {
+                return 'git@github.com:epam/dm.ai.git\nCOMMAND_EXIT_CODE=0';
+            },
+            github_list_prs: function(args) {
+                calls.push(args);
+                return [];
+            }
+        });
+
+        var scm = scmModule.createScm({});
+        scm.listPrs('open');
+
+        assert.deepEqual(calls[0], {
+            workspace: 'epam',
+            repository: 'dm.ai',
+            state: 'open'
+        });
+    });
+});
 
 suite('githubHelpers.fetchDiscussionsAndRawData — resolved thread detection', function() {
 
@@ -195,7 +256,7 @@ suite('githubHelpers.fetchDiscussionsAndRawData — resolved thread detection', 
 
         var result = gh.fetchDiscussionsAndRawData('org', 'repo', '42');
 
-        assert.contains(result.markdown, '1 thread(s) already resolved', 'summary note should mention resolved count');
+        assert.contains(result.markdown, '1 resolved thread(s) excluded', 'summary note should mention resolved count');
     });
 
     test('GraphQL threadId is correctly set on open thread', function() {

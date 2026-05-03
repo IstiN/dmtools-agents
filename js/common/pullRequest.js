@@ -35,9 +35,9 @@ function extractPrUrl(output, runCommand, branchName, workingDir) {
     if (prNumberMatch) {
         try {
             var remoteUrl = cleanCommandOutput(runCommand('git config --get remote.origin.url', workingDir) || '');
-            var repoMatch = remoteUrl.match(/github\.com[:/]([^/]+\/[^/.]+)/);
+            var repoMatch = remoteUrl.match(/github\.com[:/]([^/?#\s]+\/[^/?#\s]+)/);
             if (repoMatch) {
-                return 'https://github.com/' + repoMatch[1].replace('.git', '') + '/pull/' + prNumberMatch[1];
+                return 'https://github.com/' + repoMatch[1].replace(/\.git$/, '') + '/pull/' + prNumberMatch[1];
             }
         } catch (e) {}
     }
