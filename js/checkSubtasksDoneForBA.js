@@ -4,7 +4,7 @@
  * Runs on every SM cycle for each Story in "PO Review".
  * Fetches subtasks via JQL (jira_search_by_jql returns a plain array).
  *
- * - If all subtasks are Done → moves the Story to "BA Analysis".
+ * - If no clarification subtasks exist, or all subtasks are Done → moves the Story to "BA Analysis".
  * - Otherwise → removes the SM idempotency label so the SM re-triggers
  *   this check on the next cycle.
  *
@@ -50,9 +50,22 @@ function action(params) {
         console.log('Total subtasks:', totalSubtasks);
 
         if (totalSubtasks === 0) {
-            console.log('No subtasks found — releasing lock, will re-check next cycle');
-            releaseLock();
-            return { success: true, action: 'no_subtasks', ticketKey };
+            console.log('No subtasks found — no PO clarifications are required, moving', ticketKey, 'to', baAnalysisStatus);
+
+            jira_move_to_status({
+                key: ticketKey,
+                statusName: baAnalysisStatus
+            });
+
+            jira_post_comment({
+                key: ticketKey,
+                comment: 'h3. ✅ PO Review Complete — Moving to ' + baAnalysisStatus + '\n\n' +
+                    'No clarification subtasks were created for this story, so there is nothing waiting for PO answers.\n\n' +
+                    'The story has been automatically moved to *' + baAnalysisStatus + '*.'
+            });
+
+            console.log('✅ Story', ticketKey, 'moved to BA Analysis (no subtasks required)');
+            return { success: true, action: 'moved_to_ba_analysis_no_subtasks', total: totalSubtasks, ticketKey };
         }
 
         // Step 2: Find subtasks NOT yet Done via JQL (more reliable than client-side field check)
