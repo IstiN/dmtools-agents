@@ -85,6 +85,51 @@ suite('postTestAutomationResults: PR creation', function() {
         assert.notOk(commands.some(function(command) { return command === 'pwd'; }), 'pwd command not used');
     });
 
+    test('skips PR and moves directly to Passed when existing branch has no new test changes', function() {
+        var commands = [];
+        var statuses = [];
+        var comments = [];
+        var module = loadPostTestAutomation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') {
+                    return JSON.stringify({ status: 'passed', summary: 'Test already covered' });
+                }
+                if (opts.path === 'outputs/jira_comment.md') return 'h3. Test Automation Result\n\n*Status:* ✅ PASSED';
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            jira_move_to_status: function(args) {
+                statuses.push(args.statusName);
+            },
+            jira_post_comment: function(args) {
+                comments.push(args.comment);
+            },
+            cli_execute_command: function(opts) {
+                var command = opts.command;
+                commands.push(command);
+                if (command === 'git branch --show-current') return 'test/DMC-968';
+                if (command.indexOf('find testing') === 0) return 'testing/tests/DMC-968/test_dmc_968.py';
+                if (command === 'git diff --cached --stat') return '';
+                if (command.indexOf('git ls-remote --heads origin test/DMC-968') === 0) return 'abc\trefs/heads/test/DMC-968';
+                if (command.indexOf('gh pr create') === 0) throw new Error('gh pr create must not be called without branch diff');
+                return '';
+            }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-968', fields: { summary: 'Already automated installer rerun' } },
+            jobParams: { customParams: { removeLabel: 'sm_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.prUrl, null);
+        assert.ok(commands.some(function(command) { return command === 'git diff --cached --stat'; }), 'checked staged diff');
+        assert.notOk(commands.some(function(command) { return command.indexOf('gh pr create') === 0; }), 'PR creation skipped');
+        assert.ok(statuses.indexOf('Passed') !== -1, 'moved directly to Passed');
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0], 'Test code unchanged from previous run');
+    });
+
 });
 
 suite('postTestAutomationResults: Jira comment formatting', function() {

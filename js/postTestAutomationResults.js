@@ -119,8 +119,7 @@ function performGitOperations(branchName, commitMessage, workingDir, testFilesPa
             } else {
                 console.log('Branch exists on remote — test files unchanged, will create/find PR from existing branch');
             }
-            // Return with branch name; main flow will create/find the PR and go to In Review - Passed/Failed
-            return { success: true, branchName: branchName };
+            return { success: true, branchName: branchName, noNewCommit: true };
         }
 
         console.log('Committing...');
