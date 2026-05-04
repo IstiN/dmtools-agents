@@ -8,6 +8,7 @@
  *   solutionField — Jira field name for solution content (default: JIRA_FIELDS.SOLUTION)
  *   diagramField  — Jira field name for diagram (default: JIRA_FIELDS.DIAGRAMS).
  *                   If empty string or not set, diagram is prepended to solution as {code:mermaid}.
+ *   requireDiagram — when true, fail the post-action if outputs/diagram.md is missing.
  *   outputType    — "replace" (default): overwrite solutionField with generated content.
  *                   "append": read current value of solutionField, append generated content after a separator.
  *                   Useful for tickets (e.g. bugs) where the field already has content that must be preserved.
@@ -28,6 +29,7 @@ function action(params) {
         var solutionField = customParams.solutionField || JIRA_FIELDS.SOLUTION;
         var diagramField  = (customParams.diagramField !== undefined) ? customParams.diagramField : JIRA_FIELDS.DIAGRAMS;
         var outputType    = customParams.outputType || 'replace'; // 'replace' | 'append'
+        var requireDiagram = customParams.requireDiagram === true || customParams.requireDiagram === 'true';
 
         console.log('Processing solution and diagrams for:', ticketKey);
         console.log('Solution field: ' + solutionField + ', Diagram field: ' + (diagramField || '(none — will prepend to solution)') + ', outputType: ' + outputType);
@@ -59,7 +61,12 @@ function action(params) {
 
         // 2. Read diagram from outputs/diagram.md (or outputs/{ticketKey}/diagram.md)
         var diagram = readOutput('diagram.md');
-        if (!diagram) console.warn('No diagram.md found, skipping diagram update');
+        if (!diagram) {
+            console.warn('No diagram.md found, skipping diagram update');
+            if (requireDiagram) {
+                return { success: false, error: 'outputs/diagram.md is required but empty' };
+            }
+        }
 
         // 3. If no dedicated diagram field — prepend diagram as Jira code block to solution
         if (diagram && !diagramField) {
