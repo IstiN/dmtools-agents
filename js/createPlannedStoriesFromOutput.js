@@ -143,7 +143,7 @@ function fetchExistingStoriesByParent(parentKey, issueTypeName) {
 function createStory(entry, resolvedParentKey, params, config) {
     var summary = buildSummary(entry.summary, 0);
     var description = readDescriptionFile(entry.description, summary);
-    var projectKey = resolvedParentKey.split('-')[0];
+    var projectKey = config.projectKey || resolvedParentKey.split('-')[0];
     var priority = resolveStoryPriority(entry, params, config);
     var issueTypeName = getJiraIssueTypeName(config);
 
@@ -155,7 +155,7 @@ function createStory(entry, resolvedParentKey, params, config) {
     };
 
     if (priority) {
-        fieldsJson.priority = priority;
+        fieldsJson.priority = { name: priority };
     }
 
     var result = jira_create_ticket_with_json({

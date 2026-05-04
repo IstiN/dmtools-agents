@@ -52,6 +52,7 @@ function makeParams(customStoryPlanConfig, overrides) {
                     summaryCommentTitle: 'Planned Stories',
                     blockedByRelationship: 'is blocked by',
                     blockedStatusName: 'Blocked',
+                    projectKey: 'MAPC',
                     issueTypeName: 'Task',
                     additionalLinks: [
                         { target: 'sourceTicket', relationship: 'Relates', includeExisting: true }
@@ -137,11 +138,12 @@ suite('createPlannedStoriesFromOutput — creation flow', function() {
 
         assert.equal(result.success, true, 'action succeeds');
         assert.equal(createCalls.length, 2, 'two stories created');
+        assert.equal(createCalls[0].project, 'MAPC', 'creation project can differ from parent project');
         assert.equal(createCalls[0].fieldsJson.issuetype.name, 'Task', 'issue type can be configured');
         assert.equal(createCalls[0].fieldsJson.parent.key, 'PARENT-100', 'mobile parent resolved from source parent');
         assert.equal(createCalls[1].fieldsJson.parent.key, 'PARENT-100', 'sf parent resolved from source parent');
-        assert.equal(createCalls[0].fieldsJson.priority, 'High', 'mobile story inherits source priority when missing');
-        assert.equal(createCalls[1].fieldsJson.priority, 'Medium', 'explicit story priority is preserved');
+        assert.equal(createCalls[0].fieldsJson.priority.name, 'High', 'mobile story inherits source priority when missing');
+        assert.equal(createCalls[1].fieldsJson.priority.name, 'Medium', 'explicit story priority is preserved');
         assert.equal(updateCalls.length, 1, 'story points updated once');
         assert.equal(updateCalls[0].key, 'PROJ-2001', 'story points set on mobile story');
         assert.equal(linkCalls.length, 4, 'two source links + integrates + blocks');
