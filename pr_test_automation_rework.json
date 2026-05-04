@@ -10,8 +10,7 @@
         "./agents/instructions/test_automation/test_automation_architecture.md",
         "./agents/instructions/test_automation/test_automation_instructions.md",
         "./agents/instructions/test_automation/test_automation_json_output.md",
-        "./agents/instructions/rework/rework_instructions.md",
-        "./agents/instructions/common/bash_tools.md"
+        "./agents/instructions/rework/rework_instructions.md"
       ],
       "knownInfo": "",
       "formattingRules": "./agents/instructions/development/formatting_rules.md"
@@ -32,6 +31,9 @@
     "customParams": {
       "removeLabel": "sm_test_rework_triggered"
     },
-    "inputJql": "project = JD AND issuetype = 'Test Case' AND status = 'In Rework'"
+    "inputJql": "project = JD AND issuetype = 'Test Case' AND status = 'In Rework'",
+    "cliPrompts": [
+      "./agents/prompts/bash_tools.md"
+    ]
   }
 }

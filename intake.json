@@ -10,8 +10,7 @@
         "./agents/instructions/intake/intake_instructions.md",
         "./agents/instructions/common/no_development.md",
         "./agents/instructions/common/error_handling.md",
-        "outputs/stories.json must be a valid JSON array. After writing it, run: dmtools file_validate_json \"$(cat outputs/stories.json)\" — fix and rewrite if valid is false. Do not finish until validation passes.",
-        "./agents/instructions/common/bash_tools.md"
+        "outputs/stories.json must be a valid JSON array. After writing it, run: dmtools file_validate_json \"$(cat outputs/stories.json)\" — fix and rewrite if valid is false. Do not finish until validation passes."
       ],
       "knownInfo": "",
       "formattingRules": "./agents/instructions/intake/formatting_rules.md",
@@ -30,6 +29,9 @@
     "preJSAction": "agents/js/checkWipLabel.js",
     "preCliJSAction": "agents/js/fetchEpicsToInput.js",
     "postJSAction": "agents/js/createIntakeTickets.js",
-    "inputJql": "key in (PROJ-357)"
+    "inputJql": "key in (PROJ-357)",
+    "cliPrompts": [
+      "./agents/prompts/bash_tools.md"
+    ]
   }
 }

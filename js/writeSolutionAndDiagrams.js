@@ -149,3 +149,7 @@ function action(params) {
         return { success: false, error: error.toString() };
     }
 }
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { action: action };
+}

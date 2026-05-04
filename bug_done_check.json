@@ -6,9 +6,6 @@
     },
     "agentParams": {
       "aiRole": "Bug completion checker",
-      "instructions": [
-        "./agents/instructions/common/bash_tools.md"
-      ],
       "knownInfo": "",
       "formattingRules": "",
       "fewShots": ""
@@ -21,6 +18,9 @@
     "customParams": {
       "removeLabel": "sm_bug_done_check_triggered"
     },
-    "inputJql": "key = PROJ-73"
+    "inputJql": "key = PROJ-73",
+    "cliPrompts": [
+      "./agents/prompts/bash_tools.md"
+    ]
   }
 }

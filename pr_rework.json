@@ -7,8 +7,7 @@
     "agentParams": {
       "aiRole": "Senior Developer Engineer focused on code fixes",
       "instructions": [
-        "./agents/instructions/rework/rework_instructions.md",
-        "./agents/instructions/common/bash_tools.md"
+        "./agents/instructions/rework/rework_instructions.md"
       ],
       "knownInfo": "",
       "formattingRules": "./agents/instructions/development/formatting_rules.md",
@@ -33,6 +32,9 @@
         "sm_story_review_triggered"
       ]
     },
-    "inputJql": "key = PROJ-243"
+    "inputJql": "key = PROJ-243",
+    "cliPrompts": [
+      "./agents/prompts/bash_tools.md"
+    ]
   }
 }

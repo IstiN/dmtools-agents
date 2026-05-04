@@ -7,8 +7,7 @@
     "agentParams": {
       "aiRole": "Senior Developer Engineer",
       "instructions": [
-        "./agents/instructions/development/implementation_instructions.md",
-        "./agents/instructions/common/bash_tools.md"
+        "./agents/instructions/development/implementation_instructions.md"
       ],
       "knownInfo": "",
       "formattingRules": "./agents/instructions/development/formatting_rules.md",
@@ -26,6 +25,9 @@
     "preJSAction": "agents/js/checkWipLabel.js",
     "preCliJSAction": "agents/js/preCliDevelopmentSetup.js",
     "postJSAction": "agents/js/developTicketAndCreatePR.js",
-    "inputJql": "key in (JD-82)"
+    "inputJql": "key in (JD-82)",
+    "cliPrompts": [
+      "./agents/prompts/bash_tools.md"
+    ]
   }
 }

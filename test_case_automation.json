@@ -11,8 +11,7 @@
         "./agents/instructions/test_automation/test_automation_instructions.md",
         "./agents/instructions/test_automation/test_automation_output_files.md",
         "./agents/instructions/test_automation/test_automation_json_output.md",
-        "./agents/instructions/tracker/jira_comment_format.md",
-        "./agents/instructions/common/bash_tools.md"
+        "./agents/instructions/tracker/jira_comment_format.md"
       ],
       "knownInfo": "",
       "formattingRules": "./agents/instructions/test_automation/test_automation_output_files.md"
@@ -36,6 +35,9 @@
     "preJSAction": "agents/js/checkWipLabel.js",
     "preCliJSAction": "agents/js/preCliTestAutomationSetup.js",
     "postJSAction": "agents/js/postTestAutomationResults.js",
-    "inputJql": "key = JD-111"
+    "inputJql": "key = JD-111",
+    "cliPrompts": [
+      "./agents/prompts/bash_tools.md"
+    ]
   }
 }

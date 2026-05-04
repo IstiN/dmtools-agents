@@ -8,8 +8,7 @@
       "aiRole": "Senior Developer Engineer specializing in root cause analysis and bug fixing",
       "instructions": [
         "./agents/instructions/development/bug_implementation_instructions.md",
-        "./agents/instructions/development/bug_implementation_instructions.md",
-        "./agents/instructions/common/bash_tools.md"
+        "./agents/instructions/development/bug_implementation_instructions.md"
       ],
       "knownInfo": "",
       "formattingRules": "./agents/instructions/development/formatting_rules.md",
@@ -30,6 +29,9 @@
     "customParams": {
       "removeLabel": "sm_bug_development_triggered"
     },
-    "inputJql": "key = PROJ-74"
+    "inputJql": "key = PROJ-74",
+    "cliPrompts": [
+      "./agents/prompts/bash_tools.md"
+    ]
   }
 }

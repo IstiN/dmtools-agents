@@ -16,7 +16,9 @@
         "agents/js/unit-tests/test_testsGeneratedGuard.js",
         "agents/js/unit-tests/test_postTestAutomationResults.js",
         "agents/js/unit-tests/test_preCliMobileTestAutomationSetup.js",
-        "agents/js/unit-tests/test_postMobileTestAutomationResults.js"
+        "agents/js/unit-tests/test_postMobileTestAutomationResults.js",
+        "agents/js/unit-tests/test_writeSolutionAndDiagrams.js",
+        "agents/js/unit-tests/test_createPlannedStoriesFromOutput.js"
       ]
     }
   }
