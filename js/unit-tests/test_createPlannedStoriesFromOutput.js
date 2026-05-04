@@ -231,4 +231,58 @@ suite('createPlannedStoriesFromOutput — reuse and guards', function() {
         assert.equal(result.skipped, true, 'marked as skipped');
         assert.equal(createCalls.length, 0, 'no tickets created');
     });
+
+    test('continues in reuse mode when source label is already present', function() {
+        var createCalls = [];
+        var linkCalls = [];
+        var storiesJson = JSON.stringify([
+            {
+                tempId: 'mobile-story',
+                type: 'Story',
+                summary: 'Updated mobile implementation story',
+                description: 'outputs/stories/mobile_story.md'
+            }
+        ]);
+
+        var m = loadStoryPlanAction({
+            file_read: function(arg) {
+                var path = typeof arg === 'string' ? arg : arg.path;
+                if (path === 'outputs/stories.json') return storiesJson;
+                if (path === 'outputs/stories/mobile_story.md') return 'Updated mobile description';
+                throw new Error('unexpected file_read: ' + path);
+            },
+            jira_search_by_jql: function(args) {
+                if (args.jql === 'parent = PARENT-100 AND issuetype = "Story" ORDER BY created ASC') {
+                    return [];
+                }
+                throw new Error('unexpected jql: ' + args.jql);
+            },
+            jira_create_ticket_with_json: function(args) {
+                createCalls.push(args);
+                return { key: 'PROJ-2001' };
+            },
+            jira_link_issues: function(args) {
+                linkCalls.push(args);
+            },
+            jira_post_comment: function() {},
+            jira_add_label: function() {}
+        });
+
+        var result = m.action(makeParams({ skipIfLabelMode: 'reuse' }, {
+            ticket: {
+                key: 'SRC-101',
+                fields: {
+                    summary: 'Source ticket summary',
+                    labels: ['ai_story_plan_created'],
+                    priority: { name: 'High' },
+                    parent: { key: 'PARENT-100' }
+                }
+            }
+        }));
+
+        assert.equal(result.success, true, 'action succeeds');
+        assert.equal(result.skipped, undefined, 'not marked as skipped');
+        assert.equal(createCalls.length, 1, 'story is still created');
+        assert.equal(linkCalls.length, 1, 'created story linked to source');
+    });
 });

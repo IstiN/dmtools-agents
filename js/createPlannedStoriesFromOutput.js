@@ -285,9 +285,14 @@ function action(params) {
             return { success: false, error: 'Missing source ticket key' };
         }
 
-        if (config.skipIfLabel && sourceLabels.indexOf(config.skipIfLabel) !== -1) {
+        var skipLabelPresent = config.skipIfLabel && sourceLabels.indexOf(config.skipIfLabel) !== -1;
+        var skipIfLabelMode = config.skipIfLabelMode || 'strict';
+        if (skipLabelPresent && skipIfLabelMode !== 'reuse') {
             console.log('Story plan creation skipped for ' + sourceTicketKey + ' because label "' + config.skipIfLabel + '" is present');
             return { success: true, skipped: true, message: 'Skip label present' };
+        }
+        if (skipLabelPresent) {
+            console.log('Story plan label "' + config.skipIfLabel + '" is present on ' + sourceTicketKey + ', continuing in reuse mode');
         }
 
         var outputFile = config.outputFile || 'outputs/stories.json';
