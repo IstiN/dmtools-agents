@@ -81,16 +81,51 @@ function getDefaultParentKey(params, config) {
     return null;
 }
 
+function getSourcePriorityName(params) {
+    var priority = params && params.ticket && params.ticket.fields ? params.ticket.fields.priority : null;
+    if (!priority) return null;
+    if (typeof priority === 'string') return priority;
+    return priority.name || null;
+}
+
+function normalizePriorityName(priority) {
+    if (!priority) return null;
+    if (typeof priority === 'string') return priority;
+    return priority.name || null;
+}
+
+function resolveStoryPriority(entry, params, config) {
+    var entryPriority = entry ? normalizePriorityName(entry.priority) : null;
+    if (entryPriority) {
+        return entryPriority;
+    }
+
+    var defaultPriority = config ? normalizePriorityName(config.defaultPriority) : null;
+    if (defaultPriority) {
+        return defaultPriority;
+    }
+
+    if (config && config.inheritSourcePriority === false) {
+        return null;
+    }
+
+    return getSourcePriorityName(params);
+}
+
+function getJiraIssueTypeName(config) {
+    return (config && config.issueTypeName) ? config.issueTypeName : ISSUE_TYPES.STORY;
+}
+
 function isStoryEntry(entry) {
     return !entry.type || entry.type === ISSUE_TYPES.STORY || entry.type === 'Story';
 }
 
-function fetchExistingStoriesByParent(parentKey) {
+function fetchExistingStoriesByParent(parentKey, issueTypeName) {
     var summaryToKey = {};
     if (!parentKey) return summaryToKey;
 
     var issues = jira_search_by_jql({
-        jql: 'parent = ' + parentKey + ' AND issuetype = "' + ISSUE_TYPES.STORY + '" ORDER BY created ASC',
+        jql: 'parent = ' + parentKey + ' AND issuetype = "' + issueTypeName + '" ORDER BY created ASC',
         fields: ['key', 'summary']
     }) || [];
 
@@ -105,20 +140,22 @@ function fetchExistingStoriesByParent(parentKey) {
     return summaryToKey;
 }
 
-function createStory(entry, resolvedParentKey) {
+function createStory(entry, resolvedParentKey, params, config) {
     var summary = buildSummary(entry.summary, 0);
     var description = readDescriptionFile(entry.description, summary);
     var projectKey = resolvedParentKey.split('-')[0];
+    var priority = resolveStoryPriority(entry, params, config);
+    var issueTypeName = getJiraIssueTypeName(config);
 
     var fieldsJson = {
         summary: summary,
         description: description,
-        issuetype: { name: ISSUE_TYPES.STORY },
+        issuetype: { name: issueTypeName },
         parent: { key: resolvedParentKey }
     };
 
-    if (entry.priority) {
-        fieldsJson.priority = { name: entry.priority };
+    if (priority) {
+        fieldsJson.priority = priority;
     }
 
     var result = jira_create_ticket_with_json({
@@ -131,8 +168,8 @@ function createStory(entry, resolvedParentKey) {
         throw new Error('Could not extract Jira key from create response');
     }
 
-    if (entry.priority) {
-        setTicketPriority(createdKey, entry.priority);
+    if (priority) {
+        setTicketPriority(createdKey, priority);
     }
 
     if (entry.storyPoints != null && !isNaN(entry.storyPoints)) {
@@ -274,6 +311,7 @@ function action(params) {
         }
 
         var defaultParentKey = getDefaultParentKey(params, config);
+        var issueTypeName = getJiraIssueTypeName(config);
         var existingByParent = {};
         var keyMap = {};
         var results = [];
@@ -306,7 +344,7 @@ function action(params) {
             }
 
             if (!existingByParent[resolvedParentKey]) {
-                existingByParent[resolvedParentKey] = fetchExistingStoriesByParent(resolvedParentKey);
+                existingByParent[resolvedParentKey] = fetchExistingStoriesByParent(resolvedParentKey, issueTypeName);
             }
 
             var existingKey = existingByParent[resolvedParentKey][summary] || null;
@@ -326,7 +364,7 @@ function action(params) {
             }
 
             try {
-                var createdKey = createStory(entry, resolvedParentKey);
+                var createdKey = createStory(entry, resolvedParentKey, params, config);
                 entry._createdKey = createdKey;
                 existingByParent[resolvedParentKey][summary] = createdKey;
                 if (entry.tempId) keyMap[entry.tempId] = createdKey;
