@@ -53,7 +53,7 @@ function makeParams(customStoryPlanConfig, overrides) {
                     blockedByRelationship: 'is blocked by',
                     blockedStatusName: 'Blocked',
                     projectKey: 'MAPC',
-                    issueTypeName: 'Task',
+                    issueTypeName: 'Story',
                     additionalLinks: [
                         { target: 'sourceTicket', relationship: 'Relates', includeExisting: true }
                     ]
@@ -101,7 +101,7 @@ suite('createPlannedStoriesFromOutput — creation flow', function() {
                 throw new Error('unexpected file_read: ' + path);
             },
             jira_search_by_jql: function(args) {
-                if (args.jql === 'parent = PARENT-100 AND issuetype = "Task" ORDER BY created ASC') {
+                if (args.jql === 'parent = PARENT-100 AND issuetype = "Story" ORDER BY created ASC') {
                     return [];
                 }
                 throw new Error('unexpected jql: ' + args.jql);
@@ -139,7 +139,7 @@ suite('createPlannedStoriesFromOutput — creation flow', function() {
         assert.equal(result.success, true, 'action succeeds');
         assert.equal(createCalls.length, 2, 'two stories created');
         assert.equal(createCalls[0].project, 'MAPC', 'creation project can differ from parent project');
-        assert.equal(createCalls[0].fieldsJson.issuetype.name, 'Task', 'issue type can be configured');
+        assert.equal(createCalls[0].fieldsJson.issuetype.name, 'Story', 'issue type can be configured');
         assert.equal(createCalls[0].fieldsJson.parent.key, 'PARENT-100', 'mobile parent resolved from source parent');
         assert.equal(createCalls[1].fieldsJson.parent.key, 'PARENT-100', 'sf parent resolved from source parent');
         assert.equal(createCalls[0].fieldsJson.priority.name, 'High', 'mobile story inherits source priority when missing');
@@ -179,7 +179,7 @@ suite('createPlannedStoriesFromOutput — reuse and guards', function() {
                 throw new Error('unexpected file_read: ' + path);
             },
             jira_search_by_jql: function(args) {
-                if (args.jql === 'parent = PARENT-100 AND issuetype = "Task" ORDER BY created ASC') {
+                if (args.jql === 'parent = PARENT-100 AND issuetype = "Story" ORDER BY created ASC') {
                     return [{ key: 'PROJ-1999', fields: { summary: 'Mobile implementation story' } }];
                 }
                 throw new Error('unexpected jql: ' + args.jql);
