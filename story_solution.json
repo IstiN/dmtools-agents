@@ -12,6 +12,8 @@
         "./agents/instructions/common/media_handling.md",
         "./agents/instructions/common/jira_context.md",
         "**IMPORTANT** Read 'input/existing_questions.json' to see existing question subtasks for this story (fields: key, summary, description, status, answer). Use answered questions as context for the solution.",
+        "./agents/instructions/enhancement/solution_design_ac_referencing.md",
+        "./agents/instructions/tracker/jira_ac_reference_format.md",
         "**IMPORTANT** Your task is to write a high-level Solution Design for the story — not implementation details. Focus on architecture, components, data flow, and integration points.",
         "**IMPORTANT** Before proposing a solution, evaluate technology choices: analyse the existing codebase stack, consider alternatives, weigh trade-offs (complexity, performance, maintainability, compatibility), and explicitly justify why the chosen technology or approach best fits the requirements. Do not default to a technology without reasoning.",
         "**IMPORTANT** If a file named 'instruction.md' exists in the repository root, read it before writing the solution. Use it as the authoritative reference for the project's tech stack, deployment constraints, and configuration — ensure your solution aligns with what is defined there.",
@@ -35,7 +37,7 @@
     "skipAIProcessing": true,
     "alwaysPostComments": true,
     "preJSAction": "agents/js/checkWipLabel.js",
-    "preCliJSAction": "agents/js/fetchQuestionsToInput.js",
+    "preCliJSAction": "agents/js/preCliSolutionSetup.js",
     "postJSAction": "agents/js/writeSolutionAndDiagrams.js",
     "inputJql": "key = JD-82",
     "cliPrompts": [

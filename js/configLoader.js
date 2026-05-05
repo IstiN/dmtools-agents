@@ -42,6 +42,9 @@ var DEFAULTS = {
             // Custom Jira field name that holds the answer to a question subtask.
             answerField: 'Answer'
         },
+        parentContextFetch: {
+            enabled: false
+        },
         // Jira field names — override per project in .dmtools/config.js under jira.fields
         fields: {
             acceptanceCriteria: 'Acceptance Criteria'

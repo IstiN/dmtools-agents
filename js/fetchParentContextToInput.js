@@ -2,7 +2,8 @@
  * Fetch Parent Context To Input
  *
  * Opt-in, fully configurable context enrichment for pre-CLI agents.
- * Activated only when `customParams.parentContextFetch` is defined.
+ * Activated by project config (`jira.parentContextFetch.enabled`) or by SM/job
+ * overrides (`customParams.parentContextFetch`).
  *
  * Workflow:
  *   1. Resolve the current ticket's parent key (from ticket.fields.parent).
@@ -11,19 +12,23 @@
  *   4. Match each result against configured contexts (by summary prefix).
  *   5. Write one markdown file per matched context into the input folder.
  *
- * Configuration (all fields optional except being present at all):
+ * Project configuration (preferred; use human-readable field names):
+ *
+ *   jira: {
+ *     fields: {
+ *       acceptanceCriteria: 'Acceptance Criteria'
+ *     },
+ *     parentContextFetch: {
+ *       enabled: true
+ *     }
+ *   }
+ *
+ * Optional SM/job override:
  *
  *   customParams.parentContextFetch = {
- *     // JQL to find context siblings. {parentKey} is replaced at runtime.
- *     jql: 'parent = {parentKey} AND (summary ~ "[BA]" OR summary ~ "[SA]" OR summary ~ "[VD]") ORDER BY created ASC',
+ *     fields: ['key', 'summary', 'description', 'status', 'Acceptance Criteria', 'comment'],
+ *     resolveFieldNames: false, // optional; true resolves human Jira names to customfield_* IDs at runtime
  *
- *     // Jira fields to fetch for each matched ticket.
- *     fields: ['key', 'summary', 'description', 'status', 'customfield_10001'],
- *
- *     // fieldLabels: optional map of fieldId → human-readable display name.
- *     fieldLabels: { 'customfield_11700': 'Acceptance Criteria' },
- *
- *     // Contexts: how to match and name each file.
  *     contexts: [
  *       {
  *         prefix: '[BA]',                   // case-insensitive match in summary
@@ -43,9 +48,12 @@
  *     }
  *   }
  *
- * If `customParams.parentContextFetch` is absent → function is a no-op.
+ * If parent context fetching is not enabled in config/overrides → function is a no-op.
  * All errors are non-fatal; missing parent or empty results → silent skip.
  */
+
+var configLoader = null;
+try { configLoader = require('./configLoader.js'); } catch (e) { /* optional in unit tests */ }
 
 var DEFAULT_JQL = 'parent = {parentKey} AND (summary ~ "\\[BA\\]" OR summary ~ "\\[SA\\]" OR summary ~ "\\[VD\\]") ORDER BY created ASC';
 
@@ -74,6 +82,100 @@ var DEFAULT_CONTEXTS = [
             'Align the implementation with the expected look and feel described here.'
     }
 ];
+
+function mergeObjects(base, override) {
+    var result = {};
+    var key;
+    for (key in (base || {})) {
+        if (Object.prototype.hasOwnProperty.call(base, key)) result[key] = base[key];
+    }
+    for (key in (override || {})) {
+        if (Object.prototype.hasOwnProperty.call(override, key)) result[key] = override[key];
+    }
+    return result;
+}
+
+function buildDefaultFields(projectConfig) {
+    var fields = DEFAULT_FIELDS.slice();
+    var acField = projectConfig && projectConfig.jira && projectConfig.jira.fields
+        ? projectConfig.jira.fields.acceptanceCriteria
+        : null;
+    if (acField && fields.indexOf(acField) === -1) {
+        fields.splice(4, 0, acField);
+    }
+    return fields;
+}
+
+function resolveParentContextConfig(projectConfig, customParams) {
+    var projectCfg = projectConfig && projectConfig.jira
+        ? projectConfig.jira.parentContextFetch
+        : null;
+    var legacyDirectCfg = customParams && (customParams.jql || customParams.fields || customParams.contexts || customParams.childQuestions)
+        ? customParams
+        : null;
+    var overrideCfg = customParams && (customParams.parentContextFetch || legacyDirectCfg);
+
+    if (!projectCfg && !overrideCfg) return null;
+
+    if (overrideCfg) {
+        if (overrideCfg.enabled === false) return null;
+        var overrideMergedCfg = mergeObjects(projectCfg || {}, overrideCfg);
+        // Presence of the SM/job override is enough to enable this feature unless
+        // it explicitly sets enabled:false. This preserves the old customParams API.
+        if (overrideMergedCfg.enabled === false) overrideMergedCfg.enabled = true;
+        return overrideMergedCfg;
+    }
+
+    if (!projectCfg || projectCfg.enabled !== true) return null;
+    return projectCfg;
+}
+
+function isSystemField(fieldName) {
+    return fieldName === 'key' ||
+        fieldName === 'summary' ||
+        fieldName === 'description' ||
+        fieldName === 'status' ||
+        fieldName === 'comment';
+}
+
+function resolveFieldName(fieldName, projectKey, fieldLabels, shouldResolve) {
+    if (!fieldName || isSystemField(fieldName) || fieldName.indexOf('customfield_') === 0) {
+        return fieldName;
+    }
+
+    if (!shouldResolve) {
+        return fieldName;
+    }
+
+    if (typeof jira_get_field_custom_code !== 'function') {
+        return fieldName;
+    }
+
+    try {
+        var resolved = jira_get_field_custom_code({ project: projectKey, fieldName: fieldName });
+        if (resolved && typeof resolved === 'object' && resolved.result) resolved = resolved.result;
+        if (resolved && typeof resolved === 'string' && resolved.indexOf('customfield_') === 0) {
+            fieldLabels[resolved] = fieldName;
+            return resolved;
+        }
+    } catch (e) {
+        console.warn('fetchParentContextToInput: could not resolve field "' + fieldName + '" — using as provided');
+    }
+
+    return fieldName;
+}
+
+function resolveFetchFields(fields, projectKey, fieldLabels, shouldResolve) {
+    var resolved = [];
+    for (var i = 0; i < fields.length; i++) {
+        var fieldName = fields[i];
+        var resolvedName = resolveFieldName(fieldName, projectKey, fieldLabels, shouldResolve);
+        if (resolved.indexOf(resolvedName) === -1) {
+            resolved.push(resolvedName);
+        }
+    }
+    return resolved;
+}
 
 /**
  * Render all fetched fields of a ticket into a markdown section.
@@ -133,17 +235,20 @@ function renderCommentsMarkdown(commentField) {
 
 /**
  * Main action — called from pre-CLI setup scripts.
- * No-op when customParams.parentContextFetch is absent.
+ * No-op when parent context fetching is not enabled in project config or overrides.
  */
 function action(params) {
     try {
         var jobParams  = params.jobParams || params;
         var actualParams = params.inputFolderPath ? params : jobParams;
         var customParams = (jobParams.customParams) || {};
-        var cfg = customParams.parentContextFetch;
+        var projectConfig = configLoader && configLoader.loadProjectConfig
+            ? configLoader.loadProjectConfig(jobParams)
+            : null;
+        var cfg = resolveParentContextConfig(projectConfig, customParams);
 
         if (!cfg) {
-            // Feature not configured for this agent — silent no-op
+            // Feature not enabled for this project/agent — silent no-op
             return;
         }
 
@@ -155,19 +260,6 @@ function action(params) {
             console.warn('fetchParentContextToInput: cannot determine ticketKey — skipping');
             return;
         }
-
-        // Resolve configured options with defaults
-        var jqlTemplate = cfg.jql || DEFAULT_JQL;
-        var fields      = cfg.fields || DEFAULT_FIELDS;
-        var contexts    = cfg.contexts || DEFAULT_CONTEXTS;
-        var fieldLabels = cfg.fieldLabels || {};
-        var childQuestionsCfg = cfg.childQuestions || null;
-
-        // Always ensure base fields are present
-        var fetchFields = fields.slice();
-        ['key', 'summary', 'status'].forEach(function(f) {
-            if (fetchFields.indexOf(f) === -1) fetchFields.unshift(f);
-        });
 
         // 1. Get parent key
         var ticketFields = ticket && ticket.fields;
@@ -186,6 +278,24 @@ function action(params) {
             console.log('fetchParentContextToInput: ' + ticketKey + ' has no parent — skipping');
             return;
         }
+
+        // Resolve configured options with defaults after parent is known so human-readable
+        // custom fields can be resolved by project key when Jira requires customfield_* IDs.
+        var jqlTemplate = cfg.jql || DEFAULT_JQL;
+        var fields      = cfg.fields || buildDefaultFields(projectConfig);
+        var contexts    = cfg.contexts || DEFAULT_CONTEXTS;
+        var fieldLabels = cfg.fieldLabels || {};
+        var childQuestionsCfg = cfg.childQuestions || null;
+        var projectKey = (projectConfig && projectConfig.jira && projectConfig.jira.project) ||
+            parentKey.split('-')[0] ||
+            ticketKey.split('-')[0];
+
+        // Always ensure base fields are present
+        var fetchFields = fields.slice();
+        ['key', 'summary', 'status'].forEach(function(f) {
+            if (fetchFields.indexOf(f) === -1) fetchFields.unshift(f);
+        });
+        fetchFields = resolveFetchFields(fetchFields, projectKey, fieldLabels, cfg.resolveFieldNames === true);
 
         // 2. Run JQL with {parentKey} replaced
         var jql = jqlTemplate.replace(/\{parentKey\}/g, parentKey);
@@ -214,6 +324,7 @@ function action(params) {
 
                 // Re-fetch full ticket if any requested field is missing in search result
                 var needsFullFetch = fetchFields.some(function(f) {
+                    if (f === 'key') return false; // key lives on the issue object, not fields
                     return !(f in itemFields) || itemFields[f] === undefined;
                 });
                 if (needsFullFetch) {
