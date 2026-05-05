@@ -329,8 +329,14 @@ function loadProjectConfig(params) {
             config.repository.owner + '/' + config.repository.repo);
     }
 
+    // Keep customParams available to extension hooks such as branchNamingFn.
+    // This lets project-specific naming functions read explicit, non-generic
+    // settings without hardcoding them in the shared agents repo.
+    config.customParams = customParams;
+
     // Apply branchNamingFnPath from customParams — loads a JS file whose module.exports
-    // is a function(ticket, branchRole) → string.  Takes priority over config.git.branchNamingFn.
+    // is a function(ticket, branchRole, config) → string.  Takes priority over config.git.branchNamingFn.
+    // Existing two-argument functions remain compatible because JavaScript ignores extra args.
     // Uses the same GraalJS-safe loadConfigFile() loader (new Function under the hood).
     if (customParams.branchNamingFnPath) {
         var namingFn = loadConfigFile(customParams.branchNamingFnPath);
@@ -415,7 +421,7 @@ function formatBranchName(prefix, ticketKey) {
  */
 function resolveBranchName(config, ticket, branchRole) {
     if (config.git.branchNamingFn && typeof config.git.branchNamingFn === 'function') {
-        return config.git.branchNamingFn(ticket, branchRole);
+        return config.git.branchNamingFn(ticket, branchRole, config);
     }
     var prefix = (config.git.branchPrefix && config.git.branchPrefix[branchRole])
               || config.git.branchPrefix.development;
