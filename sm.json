@@ -36,6 +36,12 @@
           "addLabel": "sm_po_refinement_triggered"
         },
         {
+          "description": "Blocked Stories → all blocker tickets Done → Backlog",
+          "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('Blocked')",
+          "configFile": "agents/blocked_story_check.json",
+          "localExecution": true
+        },
+        {
           "description": "Backlog Stories → ask clarification questions",
           "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('Backlog')",
           "configFile": "agents/story_questions.json",

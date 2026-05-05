@@ -1,0 +1,26 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "blocked_story_check"
+    },
+    "agentParams": {
+      "aiRole": "Blocked story checker",
+      "instructions": [
+        "./agents/instructions/common/bash_tools.md"
+      ],
+      "knownInfo": "",
+      "formattingRules": "",
+      "fewShots": ""
+    },
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "postJSAction": "agents/js/checkBlockedStoryReady.js",
+    "customParams": {
+      "targetStatus": "Backlog"
+    },
+    "inputJql": "key = PROJ-1"
+  }
+}

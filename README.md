@@ -150,7 +150,10 @@ flowchart TD
     act_done --> s_don
 
     s_blocked([Blocked ⛔]):::status
-    s_blocked -.->|"👤 human unblocks"| s_bl
+    act_blocked["blocked_story_check.json · localExecution<br/>✅ checks blocker tickets = Done"]:::action
+    s_blocked --> act_blocked
+    act_blocked -->|"all blockers Done → Story → Backlog"| s_bl
+    act_blocked -->|"waiting"| s_blocked
 ```
 
 ```mermaid
@@ -311,7 +314,11 @@ flowchart TB
         s_int([In Testing]):::status
         s_don([Done ✅]):::status
         s_blocked([Blocked ⛔]):::status
+        s_blocked_check["blocked_story_check<br/>✅ all blocker tickets Done?"]:::action
 
+        s_blocked --> s_blocked_check
+        s_blocked_check -->|"Yes → Backlog"| s_bl
+        s_blocked_check -->|"No → wait"| s_blocked
         s_bl -->|"story_questions<br/>📋 Q subtasks + label q"| s_por
         s_por -->|"story_ba_check<br/>✅ all subtasks Done?"| s_ba
         s_ba -->|"story_acceptance_criteria<br/>📝 AC to Story field"| s_sa
@@ -388,7 +395,7 @@ flowchart TB
     %% ─── HUMAN TOUCHPOINT ────────────────────────────────────────────────
     subgraph HUMAN["👤 Human Touchpoint"]
         direction LR
-        h_blocked["👤 Human reviews Blocked tickets<br/>only place where manual intervention<br/>is expected in the pipeline"]:::humanInput
+        h_blocked["👤 Human reviews Blocked tickets<br/>when linked blockers are not Done<br/>or the blocker is not represented by a Jira link"]:::humanInput
     end
 
     %% ─── CROSS-PIPELINE CONNECTIONS ──────────────────────────────────────
@@ -405,7 +412,7 @@ flowchart TB
     b_don -->|"bug_to_fix_check<br/>TC → Backlog"| tc_bl
 
     tc_blocked -->|"needs investigation"| h_blocked
-    s_blocked -->|"needs investigation"| h_blocked
+    s_blocked -->|"linked blockers not Done / missing link"| h_blocked
     b_blocked -->|"needs investigation"| h_blocked
 ```
 
@@ -421,23 +428,24 @@ All rules are defined in `sm.json`. The SM agent evaluates them in order on ever
 | 2 | BA Analysis Stories → generate Acceptance Criteria | Story status = `BA Analysis` | `story_acceptance_criteria.json` | dispatch | ✅ |
 | 3 | Solution Architecture Stories → generate Solution Design | Story status = `Solution Architecture` | `story_solution.json` | dispatch | ✅ |
 | 4 | Subtasks with `q` label → trigger PO refinement | Subtask labels = `q`, status ≠ `Done` | `po_refinement.json` | dispatch | ✅ |
-| 5 | Backlog Stories → ask clarification questions | Story status = `Backlog` | `story_questions.json` | dispatch | ✅ |
-| 6 | Ready For Development Stories → trigger story_development | Story status = `Ready For Development` | `story_development.json` | dispatch | ✅ |
-| 7 | Ready For Development Bugs → trigger bug_development | Bug status = `Ready For Development` | `bug_development.json` | dispatch | ✅ |
-| 8 | In Review Stories & Bugs (no `pr_approved`) → trigger pr_review | Story\|Bug status = `In Review` AND labels NOT IN `pr_approved` | `pr_review.json` | dispatch | ✅ |
-| 9 | In Review Stories & Bugs (`pr_approved`) → retry merge | Story\|Bug status = `In Review` AND labels = `pr_approved` | `retry_merge.json` | localExecution | ✅ |
-| 10 | In Review Test Cases (`pr_approved`) → retry merge | Test Case status = `In Review-Passed\|Failed` AND labels = `pr_approved` | `retry_merge_test.json` | localExecution | ✅ |
-| 11 | In Rework Stories & Bugs → trigger pr_rework | Story\|Bug status = `In Rework` | `pr_rework.json` | dispatch | ✅ |
-| 12 | Merged Stories → Ready For Testing + generate test cases | Story status = `Merged` | `test_cases_generator.json` | dispatch | ✅ |
-| 13 | Merged Bugs → Ready For Testing | Bug status = `Merged` | `bug_merged.json` | localExecution (limit 1) | ✅ |
-| 14 | Ready For Testing Bugs → generate test cases | Bug status = `Ready For Testing` | `bug_test_cases_generator.json` | dispatch | ✅ |
-| 15 | In Testing Stories → check all TCs passed → Done | Story status = `In Testing` | `story_done_check.json` | localExecution | ✅ |
-| 16 | In Testing Bugs → check all TCs passed → Done | Bug status = `In Testing` | `bug_done_check.json` | localExecution | ❌ disabled |
-| 17 | Backlog Test Cases → In Development + automate | Test Case status = `Backlog` | `test_case_automation.json` | dispatch | ✅ |
-| 18 | In Review Test Cases (no `pr_approved`) → trigger pr_test_automation_review | Test Case status = `In Review-Passed\|Failed` AND labels NOT IN `pr_approved` | `pr_test_automation_review.json` | dispatch | ✅ |
-| 19 | In Rework Test Cases → trigger pr_test_automation_rework | Test Case status = `In Rework` | `pr_test_automation_rework.json` | dispatch | ✅ |
-| 20 | Failed Test Cases → create or link bug | Test Case status = `Failed` | `bug_creation.json` | dispatch (limit 1) | ✅ |
-| 21 | Bug To Fix Test Cases → all linked Bugs Done → move to Backlog | Test Case status = `Bug To Fix` | `bug_to_fix_check.json` | localExecution | ✅ |
+| 5 | Blocked Stories → all blocker tickets Done → Backlog | Story status = `Blocked` | `blocked_story_check.json` | localExecution | ✅ |
+| 6 | Backlog Stories → ask clarification questions | Story status = `Backlog` | `story_questions.json` | dispatch | ✅ |
+| 7 | Ready For Development Stories → trigger story_development | Story status = `Ready For Development` | `story_development.json` | dispatch | ✅ |
+| 8 | Ready For Development Bugs → trigger bug_development | Bug status = `Ready For Development` | `bug_development.json` | dispatch | ✅ |
+| 9 | In Review Stories & Bugs (no `pr_approved`) → trigger pr_review | Story\|Bug status = `In Review` AND labels NOT IN `pr_approved` | `pr_review.json` | dispatch | ✅ |
+| 10 | In Review Stories & Bugs (`pr_approved`) → retry merge | Story\|Bug status = `In Review` AND labels = `pr_approved` | `retry_merge.json` | localExecution | ✅ |
+| 11 | In Review Test Cases (`pr_approved`) → retry merge | Test Case status = `In Review-Passed\|Failed` AND labels = `pr_approved` | `retry_merge_test.json` | localExecution | ✅ |
+| 12 | In Rework Stories & Bugs → trigger pr_rework | Story\|Bug status = `In Rework` | `pr_rework.json` | dispatch | ✅ |
+| 13 | Merged Stories → Ready For Testing + generate test cases | Story status = `Merged` | `test_cases_generator.json` | dispatch | ✅ |
+| 14 | Merged Bugs → Ready For Testing | Bug status = `Merged` | `bug_merged.json` | localExecution (limit 1) | ✅ |
+| 15 | Ready For Testing Bugs → generate test cases | Bug status = `Ready For Testing` | `bug_test_cases_generator.json` | dispatch | ✅ |
+| 16 | In Testing Stories → check all TCs passed → Done | Story status = `In Testing` | `story_done_check.json` | localExecution | ✅ |
+| 17 | In Testing Bugs → check all TCs passed → Done | Bug status = `In Testing` | `bug_done_check.json` | localExecution | ❌ disabled |
+| 18 | Backlog Test Cases → In Development + automate | Test Case status = `Backlog` | `test_case_automation.json` | dispatch | ✅ |
+| 19 | In Review Test Cases (no `pr_approved`) → trigger pr_test_automation_review | Test Case status = `In Review-Passed\|Failed` AND labels NOT IN `pr_approved` | `pr_test_automation_review.json` | dispatch | ✅ |
+| 20 | In Rework Test Cases → trigger pr_test_automation_rework | Test Case status = `In Rework` | `pr_test_automation_rework.json` | dispatch | ✅ |
+| 21 | Failed Test Cases → create or link bug | Test Case status = `Failed` | `bug_creation.json` | dispatch (limit 1) | ✅ |
+| 22 | Bug To Fix Test Cases → all linked Bugs Done → move to Backlog | Test Case status = `Bug To Fix` | `bug_to_fix_check.json` | localExecution | ✅ |
 
 ---
 
@@ -452,6 +460,7 @@ All config files live in the `agents/js/` directory and are consumed by the `ai-
 | `bug_done_check.json` | Teammate (skipAI) | Check whether all test cases for a Bug in In Testing have passed, then transition to Done | — | — | `checkBugTestsPassed.js` |
 | `bug_merged.json` | Teammate (skipAI) | Handle a Bug that has been merged — transition to Ready For Testing and populate RCA/Solution via Gemini | — | — | `notifyBugMerged.js` |
 | `bug_test_cases_generator.json` | TestCasesGenerator | Generate structured Jira test cases from a Bug description after it moves to Ready For Testing | — | `moveToReadyForTesting.js` | `moveToDone.js` |
+| `blocked_story_check.json` | Teammate (skipAI) | Check if all tickets blocking a "Blocked" Story are Done; if so, move Story to the configured target status | — | — | `checkBlockedStoryReady.js` |
 | `bug_to_fix_check.json` | Teammate (skipAI) | Check if all bugs linked to a "Bug To Fix" Test Case are Done; if so, move TC back to Backlog | — | — | `checkBugToFixReady.js` |
 | `po_refinement.json` | Teammate (skipAI) | Answer open questions (label `q`) on subtasks by running a PO refinement AI pass | `po_refinement_prompt.md` | — | `closeQuestionTicket.js` |
 | `pr_review.json` | Teammate (skipAI) | Review an open PR, post inline comments, and either approve (add `pr_approved`) or move to In Rework | `pr_review_prompt.md` | `checkWipLabel.js` | `postPRReviewComments.js` |
