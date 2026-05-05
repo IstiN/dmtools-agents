@@ -154,6 +154,20 @@ function checkoutBranch(ticketKey, config, ticket) {
     console.log('Branch ready:', branchName);
 }
 
+function postSetupErrorToJira(ticketKey, stage, errorMessage) {
+    try {
+        jira_post_comment({
+            key: ticketKey,
+            comment: 'h3. *Development Setup Error*\n\n' +
+                '*Stage:* ' + stage + '\n' +
+                '*Error:* {code}' + errorMessage + '{code}\n\n' +
+                'Development was stopped before code generation because the target git branch could not be prepared.'
+        });
+    } catch (commentError) {
+        console.warn('Failed to post setup error comment:', commentError);
+    }
+}
+
 function action(params) {
     try {
         // Handle both Teammate workflow and standalone dmtools execution
@@ -180,7 +194,10 @@ function action(params) {
             var ticket = params.ticket || actualParams.ticket || { key: ticketKey, fields: {} };
             checkoutBranch(ticketKey, config, ticket);
         } catch (e) {
-            console.error('Branch checkout failed (non-fatal):', e);
+            var branchError = e && e.toString ? e.toString() : String(e);
+            console.error('Branch checkout failed:', branchError);
+            postSetupErrorToJira(ticketKey, 'Git Branch Setup', branchError);
+            throw new Error('Git branch setup failed: ' + branchError);
         }
 
         // 3. Fetch questions with answers into input folder
@@ -203,5 +220,6 @@ function action(params) {
 
     } catch (error) {
         console.error('Error in preCliDevelopmentSetup:', error);
+        throw error;
     }
 }

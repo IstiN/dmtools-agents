@@ -329,6 +329,34 @@ function performGitOperations(branchName, commitMessage, baseBranch) {
  */
 function createPullRequest(title, branchName, baseBranch) {
     console.log('Creating Pull Request...');
+
+    function remoteBranchExists(branch) {
+        var output = runCmd({ command: 'git ls-remote --heads origin ' + branch }) || '';
+        return output.indexOf('refs/heads/' + branch) !== -1;
+    }
+
+    try {
+        if (!remoteBranchExists(baseBranch)) {
+            return {
+                success: false,
+                error: 'PR base branch does not exist on remote: ' + baseBranch +
+                    '. In two-branch mode the release/target branch must be pushed before PR creation.'
+            };
+        }
+        if (!remoteBranchExists(branchName)) {
+            return {
+                success: false,
+                error: 'PR head branch does not exist on remote: ' + branchName +
+                    '. The development branch push did not complete successfully.'
+            };
+        }
+    } catch (verifyErr) {
+        return {
+            success: false,
+            error: 'Could not verify remote PR branches before PR creation: ' + verifyErr.toString()
+        };
+    }
+
     return prHelper.createPullRequest({
         title: title,
         branchName: branchName,
