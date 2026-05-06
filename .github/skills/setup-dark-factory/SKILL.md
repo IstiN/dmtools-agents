@@ -2,11 +2,11 @@
 name: setup-dark-factory
 description: >
   Runbook for setting up a Dark Factory: an automated development repository
-  where Jira intake, dmtools agents, GitHub workflows, branch protections,
-  required quality gates, labels, and merge automation work together to deliver
-  changes through PRs. Use when bootstrapping a new repo for autonomous
-  development agents or troubleshooting why SM/intake/development agents did
-  not start.
+  where tracker intake (Jira is the common example), dmtools agents, GitHub
+  workflows, branch protections, required quality gates, labels, and merge
+  automation work together to deliver changes through PRs. Use when
+  bootstrapping a new repo for autonomous development agents or troubleshooting
+  why SM/intake/development agents did not start.
 ---
 
 # Setup Dark Factory
@@ -125,40 +125,66 @@ module.exports = {
 
 Create or choose:
 
-- A Jira project key.
-- An intake parent ticket, usually an Epic or parent Task.
+- A tracker project key. Jira is the reference example in this skill.
+- An intake parent ticket, usually an Epic or parent Task in Jira terms.
 - Workflow statuses used by `agents/sm.json`.
 - Required issue types: Task, Story, Bug, Subtask, Test Case.
 - Custom fields required by your agents, e.g. Acceptance Criteria, Solution,
   Answer, Diagrams.
 
-The default SM rules expect statuses similar to:
+The default SM rules currently use these tracker statuses:
 
 ```text
 Backlog
+To Do
 PO Review
 BA Analysis
 Solution Architecture
 Ready For Development
+In Development
+In Progress
 In Review
+In Review - Passed
+In Review - Failed
 In Rework
 Merged
 Ready For Testing
 In Testing
+Failed
+Bug To Fix
 Done
 ```
 
-For intake, verify the exact JQL before expecting agents to start:
+Required issue types:
+
+```text
+Task
+Story
+Bug
+Subtask
+Test Case
+```
+
+Notes:
+
+- `Task` is used for intake work under the parent ticket.
+- `Story` and `Bug` are used for implementation work.
+- `Subtask` is used for PO/BA clarification questions.
+- `Test Case` is used for generated/automated testing work. If your tracker
+  uses a different issue type name, override it in project config.
+
+For Jira intake, verify the exact JQL before expecting agents to start:
 
 ```jql
 project = PROJ
 AND issuetype in ('Task')
-AND status in ('Backlog')
+AND status in ('Backlog', 'To Do')
 AND parent = PROJ-1
 ```
 
-If your Jira starts new tasks in `To Do`, either move the task to `Backlog` or
-override the SM rule in project config to include `To Do`.
+`Backlog` and `To Do` are both accepted for intake tasks. If your tracker uses
+another default status, override the SM rule in project config or align the
+project workflow statuses.
 
 ### 5. Add GitHub workflows
 
@@ -173,7 +199,8 @@ This is the worker workflow. SM dispatches it with:
 
 It must provide:
 
-- Jira credentials.
+- Tracker credentials. For Jira, this normally means `JIRA_EMAIL` and
+  `JIRA_API_TOKEN`.
 - GitHub PAT credentials.
 - AI provider credentials.
 - `SOURCE_GITHUB_WORKSPACE`.
@@ -181,7 +208,8 @@ It must provide:
 - `DMTOOLS_INTEGRATIONS`.
 - `CLI_ALLOWED_COMMANDS`.
 
-Use `DMTOOLS_INTEGRATIONS` narrowly. For GitHub + Jira automation:
+Use `DMTOOLS_INTEGRATIONS` narrowly. For GitHub + Jira-backed tracker
+automation:
 
 ```yaml
 DMTOOLS_INTEGRATIONS: "jira,github,file"
@@ -240,7 +268,8 @@ Expect this to skip fork PRs or conflicted PRs.
 
 #### Required quality gates
 
-Create a project-specific required-check workflow. Examples:
+Create a project-specific required-check workflow. The stack-specific commands
+below are examples, not a strict template:
 
 - Flutter: `flutter pub get`, `flutter analyze`, `flutter test --coverage`,
   golden tests, `flutter build web`.
@@ -250,7 +279,7 @@ Create a project-specific required-check workflow. Examples:
 Use a stable job name because branch protection references the job/check name,
 not just the workflow filename.
 
-Example:
+Example for a Flutter project:
 
 ```yaml
 name: Flutter Required Checks
@@ -267,7 +296,9 @@ jobs:
       # setup, analyze, test, build
 ```
 
-The required status check in branch protection is `Flutter checks`.
+In this example, the required status check in branch protection is
+`Flutter checks`. A Java, Node, Python, Go, or other project should use its own
+stable job/check name.
 
 ### 6. Configure GitHub secrets and variables
 
@@ -275,8 +306,8 @@ Secrets:
 
 ```text
 PAT_TOKEN
-JIRA_EMAIL
-JIRA_API_TOKEN
+TRACKER_EMAIL              # Jira example: JIRA_EMAIL
+TRACKER_API_TOKEN          # Jira example: JIRA_API_TOKEN
 GEMINI_API_KEY              # or other selected AI provider secret
 COPILOT_GITHUB_TOKEN        # if using Copilot provider
 FIGMA_TOKEN                 # only if Figma agents need it
@@ -285,11 +316,11 @@ FIGMA_TOKEN                 # only if Figma agents need it
 Variables:
 
 ```text
-JIRA_BASE_PATH
-JIRA_AUTH_TYPE
-JIRA_TRANSFORM_CUSTOM_FIELDS_TO_NAMES
-JIRA_EXTRA_FIELDS_PROJECT
-JIRA_EXTRA_FIELDS
+TRACKER_BASE_PATH                         # Jira example: JIRA_BASE_PATH
+TRACKER_AUTH_TYPE                         # Jira example: JIRA_AUTH_TYPE
+TRACKER_TRANSFORM_CUSTOM_FIELDS_TO_NAMES  # Jira example: JIRA_TRANSFORM_CUSTOM_FIELDS_TO_NAMES
+TRACKER_EXTRA_FIELDS_PROJECT              # Jira example: JIRA_EXTRA_FIELDS_PROJECT
+TRACKER_EXTRA_FIELDS                      # Jira example: JIRA_EXTRA_FIELDS
 DMTOOLS_CACHE_ENABLED
 GEMINI_MODEL
 GEMINI_DEFAULT_MODEL
@@ -348,12 +379,12 @@ Check the JQL directly:
 
 ```bash
 dmtools jira_search_by_jql \
-  "project = PROJ AND issuetype in ('Task') AND status in ('Backlog') AND parent = PROJ-1"
+  "project = PROJ AND issuetype in ('Task') AND status in ('Backlog', 'To Do') AND parent = PROJ-1"
 ```
 
 Common causes:
 
-- Ticket is in `To Do`, but SM rule expects `Backlog`.
+- Ticket is in a tracker status not covered by the SM rule.
 - Ticket is not a Task.
 - Ticket is linked to the intake Epic but not a child via Jira `parent`.
 - `.dmtools/config.js` points to the wrong `jira.project` or `parentTicket`.
@@ -425,9 +456,10 @@ Set values from a trusted local env file or secret manager.
 ## Typical mistakes
 
 - Building a nice app/demo but leaving production data mocked.
-- Copying project-specific Jira keys, statuses, repo names, or business rules
+- Copying project-specific tracker keys, statuses, repo names, or business rules
   into `agents/` instead of `.dmtools/config.js`.
-- Forgetting that `To Do` and `Backlog` are different Jira statuses.
+- Forgetting that tracker default statuses differ by project. For Jira, `To Do`
+  and `Backlog` are separate statuses even when they look similar in the board.
 - Creating an Epic/intake ticket but not making child Tasks use it as `parent`.
 - Leaving ADO variables/integrations in a GitHub-only repo.
 - Requiring human PR approvals while the intended approval mechanism is a label.
@@ -450,7 +482,7 @@ A Dark Factory setup is not complete until:
 - `.dmtools/config.js` resolves the correct repo, project, and intake parent.
 - GitHub secrets/variables are present and verified without printing values.
 - `ai-teammate.yml` can run manually for one config.
-- `sm.yml` can run manually and scan Jira successfully.
+- `sm.yml` can run manually and scan the tracker successfully.
 - Required PR checks block and then unblock a test PR.
 - `merge-trigger.yml` runs after required checks pass.
 - `auto-update-prs.yml` runs after `main` changes.
