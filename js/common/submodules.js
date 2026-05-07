@@ -65,18 +65,25 @@ function quoteCommitMessage(message) {
 }
 
 function prepareSubmoduleBranch(run, cleanOutput, path, branch, hasDirtyChanges, hasLocalCommits) {
+    var stashed = false;
     if (hasDirtyChanges) {
         run('git -C ' + path + ' stash push -u -m ' + quoteCommitMessage('dmtools managed submodule changes'));
+        stashed = true;
     }
 
-    run('git -C ' + path + ' checkout -B ' + branch + ' HEAD');
+    try {
+        run('git -C ' + path + ' checkout -B ' + branch + ' HEAD');
 
-    if (hasDirtyChanges || hasLocalCommits) {
-        run('git -C ' + path + ' rebase origin/' + branch);
+        if (hasDirtyChanges || hasLocalCommits) {
+            run('git -C ' + path + ' rebase origin/' + branch);
+        }
+    } finally {
+        if (stashed) {
+            run('git -C ' + path + ' stash pop');
+        }
     }
 
     if (hasDirtyChanges) {
-        run('git -C ' + path + ' stash pop');
         return cleanOutput(run('git -C ' + path + ' status --porcelain') || '');
     }
 
@@ -131,7 +138,7 @@ function pushManagedSubmodules(options) {
         }
 
         console.log('Publishing managed submodule changes:', path, '-> origin/' + branch);
-        status = prepareSubmoduleBranch(run, cleanOutput, path, branch, status.trim(), aheadCount > 0) || status;
+        status = prepareSubmoduleBranch(run, cleanOutput, path, branch, status.trim(), aheadCount > 0);
 
         if (config.git && config.git.authorName) {
             run('git -C ' + path + ' config user.name ' + quoteCommitMessage(config.git.authorName));

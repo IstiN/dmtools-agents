@@ -105,6 +105,73 @@ suite('submodule helper', function() {
         assert.ok(commands.indexOf('git -C trackstate-setup push origin HEAD:main') !== -1, 'ahead submodule should be pushed');
     });
 
+    test('does not reuse stale dirty status after stash pop leaves tree clean', function() {
+        var helper = loadSubmoduleHelper();
+        var commands = [];
+        var statusCalls = 0;
+        helper.pushManagedSubmodules({
+            customParams: {
+                managedSubmodules: [{ path: 'trackstate-setup', branch: 'main' }]
+            },
+            ticketKey: 'TS-23',
+            cleanOutput: function(output) { return output || ''; },
+            run: function(command) {
+                commands.push(command);
+                if (command.indexOf('git config --file .gitmodules --get-regexp') === 0) {
+                    return 'submodule.trackstate-setup.path trackstate-setup';
+                }
+                if (command === 'git -C trackstate-setup status --porcelain') {
+                    statusCalls++;
+                    return statusCalls === 1 ? ' M README.md' : '';
+                }
+                if (command === 'git -C trackstate-setup rev-list --count origin/main..HEAD') {
+                    return '0';
+                }
+                return '';
+            }
+        });
+
+        assert.ok(commands.indexOf('git -C trackstate-setup add .') === -1, 'clean tree after stash pop should not be staged');
+        assert.ok(commands.every(function(command) {
+            return command.indexOf('git -C trackstate-setup commit -m') === -1;
+        }), 'clean tree after stash pop should not be committed');
+        assert.ok(commands.indexOf('git -C trackstate-setup push origin HEAD:main') !== -1, 'submodule should still be pushed');
+    });
+
+    test('restores stashed dirty changes when rebase fails', function() {
+        var helper = loadSubmoduleHelper();
+        var commands = [];
+
+        assert.throws(function() {
+            helper.pushManagedSubmodules({
+                customParams: {
+                    managedSubmodules: [{ path: 'trackstate-setup', branch: 'main' }]
+                },
+                ticketKey: 'TS-23',
+                cleanOutput: function(output) { return output || ''; },
+                run: function(command) {
+                    commands.push(command);
+                    if (command.indexOf('git config --file .gitmodules --get-regexp') === 0) {
+                        return 'submodule.trackstate-setup.path trackstate-setup';
+                    }
+                    if (command === 'git -C trackstate-setup status --porcelain') {
+                        return ' M README.md';
+                    }
+                    if (command === 'git -C trackstate-setup rev-list --count origin/main..HEAD') {
+                        return '0';
+                    }
+                    if (command === 'git -C trackstate-setup rebase origin/main') {
+                        throw new Error('rebase failed');
+                    }
+                    return '';
+                }
+            });
+        }, 'rebase failure should be propagated');
+
+        assert.ok(commands.indexOf('git -C trackstate-setup stash push -u -m "dmtools managed submodule changes"') !== -1, 'dirty changes should be stashed before rebase');
+        assert.ok(commands.indexOf('git -C trackstate-setup stash pop') !== -1, 'dirty changes should be restored after rebase failure');
+    });
+
     test('rejects unregistered managed submodule paths', function() {
         var helper = loadSubmoduleHelper();
 
