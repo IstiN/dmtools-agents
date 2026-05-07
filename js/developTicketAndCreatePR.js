@@ -190,6 +190,10 @@ function performPushOnly(branchName) {
  *
  * @param {string} branchName - Current branch name (already checked out by preCliJSAction)
  * @param {string} commitMessage - Commit message
+ * @param {string} baseBranch - Base branch used to detect existing local/remote commits
+ * @param {Object} config - Resolved project config, including optional managed submodules
+ * @param {Object} customParams - Runtime custom params, including optional managed submodules
+ * @param {string} ticketKey - Ticket key used for managed submodule commit messages
  * @returns {Object} Result with success status and branch name
  */
 function performGitOperations(branchName, commitMessage, baseBranch, config, customParams, ticketKey) {
