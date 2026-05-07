@@ -12,6 +12,7 @@
 
 var configLoader = require('./configLoader.js');
 var prHelper = require('./common/pullRequest.js');
+var autoStart = require('./common/autoStart.js');
 const { GIT_CONFIG, STATUSES, LABELS } = require('./config.js');
 
 function cleanCommandOutput(output) {
@@ -161,6 +162,34 @@ function createPullRequest(title, branchName, baseBranch, workingDir) {
         runCommand: runInRepo,
         readFile: readFile
     });
+}
+
+function autoStartTestReview(ticketKey, config, customParams, noCodeChanges) {
+    if (noCodeChanges) {
+        console.log('ℹ️ autoStartReview: skipped — no test code changes to review');
+        return false;
+    }
+    if (!customParams || !customParams.autoStartReview || !customParams.autoStartReviewConfigFile) {
+        return false;
+    }
+
+    try {
+        return autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: ticketKey,
+            customParams: customParams,
+            config: config,
+            configFile: customParams.autoStartReviewConfigFile,
+            label: 'pr_test_automation_review',
+            stripKeys: [
+                'removeLabel',
+                'autoStartReview',
+                'autoStartReviewConfigFile'
+            ]
+        });
+    } catch (e) {
+        console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
+        return false;
+    }
 }
 
 function action(params) {
@@ -343,6 +372,10 @@ function action(params) {
             } catch (e) {
                 console.warn('Failed to move to Failed:', e);
             }
+        }
+
+        if (!blockedByHuman) {
+            autoStartTestReview(ticketKey, config, customParams, noCodeChanges);
         }
 
         // Step 7: Add label

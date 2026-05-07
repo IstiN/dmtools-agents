@@ -11,6 +11,7 @@
  */
 
 var configLoader = require('./configLoader.js');
+var autoStart = require('./common/autoStart.js');
 const { GIT_CONFIG, STATUSES, LABELS } = require('./config.js');
 
 function cleanCommandOutput(output) {
@@ -349,6 +350,25 @@ function action(params) {
 
         // Step 7 & 8: Remove WIP label + SM idempotency label
         releaseLock();
+
+        if (customParams && customParams.autoStartReview && customParams.autoStartReviewConfigFile) {
+            try {
+                autoStart.triggerConfiguredWorkflowForTicket({
+                    ticketKey: ticketKey,
+                    customParams: customParams,
+                    config: config,
+                    configFile: customParams.autoStartReviewConfigFile,
+                    label: 'pr_test_automation_review',
+                    stripKeys: [
+                        'removeLabel',
+                        'autoStartReview',
+                        'autoStartReviewConfigFile'
+                    ]
+                });
+            } catch (e) {
+                console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
+            }
+        }
 
         console.log('✅ Test rework complete — re-run:', testStatus, '→', targetStatus);
 
