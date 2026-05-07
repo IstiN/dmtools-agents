@@ -9,6 +9,7 @@
 
 var configLoader = require('./configLoader.js');
 var scmModule = require('./common/scm.js');
+var submoduleHelper = require('./common/submodules.js');
 const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js');
 
 /**
@@ -127,75 +128,6 @@ function configureGitAuthor(config) {
     }
 }
 
-function collectIgnoredDirtySubmodulePaths(config, customParams) {
-    var paths = [];
-    function addMany(value) {
-        if (!value) return;
-        if (typeof value === 'string') {
-            paths.push(value);
-        } else if (Array.isArray(value)) {
-            value.forEach(function(path) {
-                if (path) paths.push(String(path));
-            });
-        }
-    }
-
-    addMany(customParams && customParams.ignoredDirtySubmodulePaths);
-    addMany(customParams && customParams.ignoreDirtySubmodulePaths);
-    addMany(customParams && customParams.ignoredDirtyPaths);
-    addMany(config && config.git && config.git.ignoredDirtySubmodulePaths);
-    addMany(config && config.git && config.git.ignoreDirtySubmodulePaths);
-
-    return paths.filter(function(path, index) {
-        return paths.indexOf(path) === index;
-    });
-}
-
-function isSafeRelativePath(path) {
-    return path &&
-        path[0] !== '/' &&
-        path.indexOf('..') === -1 &&
-        /^[A-Za-z0-9._/-]+$/.test(path);
-}
-
-function isSafeGitConfigName(name) {
-    return name && /^[A-Za-z0-9._/-]+$/.test(name);
-}
-
-function resolveSubmoduleName(cmd, path) {
-    try {
-        var output = cleanCommandOutput(cmd("git config --file .gitmodules --get-regexp '^submodule\\..*\\.path$'") || '');
-        var lines = output.split('\n');
-        for (var i = 0; i < lines.length; i++) {
-            var parts = lines[i].trim().split(/\s+/);
-            if (parts.length >= 2 && parts[1] === path) {
-                return parts[0].replace(/^submodule\./, '').replace(/\.path$/, '');
-            }
-        }
-    } catch (e) {
-        console.warn('Could not resolve submodule name for ignored path ' + path + ':', e.message || e);
-    }
-    return path;
-}
-
-function applyIgnoredDirtySubmodules(cmd, config, customParams) {
-    collectIgnoredDirtySubmodulePaths(config, customParams).forEach(function(path) {
-        if (!isSafeRelativePath(path)) {
-            console.warn('Skipping unsafe ignored dirty submodule path:', path);
-            return;
-        }
-
-        var submoduleName = resolveSubmoduleName(cmd, path);
-        if (!isSafeGitConfigName(submoduleName)) {
-            console.warn('Skipping unsafe ignored dirty submodule name:', submoduleName);
-            return;
-        }
-
-        cmd('git config submodule.' + submoduleName + '.ignore dirty');
-        console.log('Configured dirty submodule ignore for rework commit:', path);
-    });
-}
-
 function commitAndPush(ticketKey, config, customParams) {
     var workingDir = config.workingDir || null;
     var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
@@ -231,7 +163,13 @@ function commitAndPush(ticketKey, config, customParams) {
         }
     }
 
-    applyIgnoredDirtySubmodules(cmd, config, customParams);
+    submoduleHelper.pushManagedSubmodules({
+        run: cmd,
+        cleanOutput: cleanCommandOutput,
+        config: config,
+        customParams: customParams,
+        ticketKey: ticketKey
+    });
 
     cmd('git add .');
 
