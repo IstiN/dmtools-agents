@@ -74,6 +74,29 @@ function findTestPRForTicket(workspace, repository, ticketKey) {
     }
 }
 
+function updatePullRequestBody(workspace, repository, prNumber, ticketKey, testStatus, bodyContent) {
+    if (!bodyContent) return false;
+
+    try {
+        const body = '## ' + ticketKey + ' Result: ' + testStatus.toUpperCase() + '\n\n' +
+            '**Latest rework result:** `' + testStatus.toUpperCase() + '`\n\n' +
+            '---\n\n' + bodyContent;
+        const payloadPath = 'pr_rework_body_' + ticketKey.replace(/[^A-Za-z0-9_-]/g, '_') + '.json';
+        file_write({
+            path: payloadPath,
+            content: JSON.stringify({ body: body })
+        });
+        cli_execute_command({
+            command: 'gh api --method PATCH repos/' + workspace + '/' + repository + '/pulls/' + prNumber + ' --input ' + payloadPath
+        });
+        console.log('✅ Updated PR body with latest test rework result');
+        return true;
+    } catch (e) {
+        console.warn('Failed to update PR body with latest rework result:', e.message || e);
+        return false;
+    }
+}
+
 function commitAndPush(ticketKey, passed, config) {
     const branchName = cleanCommandOutput(
         cli_execute_command({ command: 'git branch --show-current' }) || ''
@@ -308,6 +331,7 @@ function action(params) {
             try {
                 const statusEmoji = passed ? '✅' : '❌';
                 const prBodyContent = readFile('outputs/pr_body.md') || fixSummary;
+                updatePullRequestBody(repoInfo.owner, repoInfo.repo, pr.number, ticketKey, testStatus, prBodyContent);
                 const prComment = '## 🔧 Test Rework Complete — ' + ticketKey + '\n\n' +
                     '**Re-run result**: ' + statusEmoji + ' ' + testStatus.toUpperCase() + '\n\n' +
                     '---\n\n' + prBodyContent;
