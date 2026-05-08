@@ -64,30 +64,29 @@ function quoteCommitMessage(message) {
         .trim() + '"';
 }
 
-function prepareSubmoduleBranch(run, cleanOutput, path, branch, hasDirtyChanges, hasLocalCommits) {
-    var stashed = false;
-    if (hasDirtyChanges) {
-        run('git -C ' + path + ' stash push -u -m ' + quoteCommitMessage('dmtools managed submodule changes'));
-        stashed = true;
+function isAncestor(run, path, ancestor, descendant) {
+    try {
+        run('git -C ' + path + ' merge-base --is-ancestor ' + ancestor + ' ' + descendant);
+        return true;
+    } catch (e) {
+        return false;
     }
+}
+
+function prepareDirtySubmoduleBranch(run, cleanOutput, path, branch) {
+    var stashed = false;
+    run('git -C ' + path + ' stash push -u -m ' + quoteCommitMessage('dmtools managed submodule changes'));
+    stashed = true;
 
     try {
-        run('git -C ' + path + ' checkout -B ' + branch + ' HEAD');
-
-        if (hasDirtyChanges || hasLocalCommits) {
-            run('git -C ' + path + ' rebase origin/' + branch);
-        }
+        run('git -C ' + path + ' checkout -B ' + branch + ' origin/' + branch);
     } finally {
         if (stashed) {
             run('git -C ' + path + ' stash pop');
         }
     }
 
-    if (hasDirtyChanges) {
-        return cleanOutput(run('git -C ' + path + ' status --porcelain') || '');
-    }
-
-    return '';
+    return cleanOutput(run('git -C ' + path + ' status --porcelain') || '');
 }
 
 function pushManagedSubmodules(options) {
@@ -132,13 +131,32 @@ function pushManagedSubmodules(options) {
             console.warn('Could not check managed submodule commits ahead for ' + path + ':', e.message || e);
         }
 
-        if (!status.trim() && aheadCount === 0) {
+        var hasDirtyChanges = !!status.trim();
+        var remoteRef = 'origin/' + branch;
+        var localIncludedInRemote = isAncestor(run, path, 'HEAD', remoteRef);
+        var remoteIncludedInLocal = isAncestor(run, path, remoteRef, 'HEAD');
+
+        if (!hasDirtyChanges && aheadCount === 0) {
             console.log('No managed submodule changes detected in', path);
             return;
         }
 
+        if (!hasDirtyChanges && localIncludedInRemote) {
+            console.log('Managed submodule HEAD is already included in origin/' + branch + ', skipping publish:', path);
+            return;
+        }
+
+        if (!hasDirtyChanges && aheadCount > 0 && !remoteIncludedInLocal) {
+            console.log('Managed submodule has clean divergent gitlink state; skipping publish to avoid rebasing stale generated commits:', path);
+            return;
+        }
+
         console.log('Publishing managed submodule changes:', path, '-> origin/' + branch);
-        status = prepareSubmoduleBranch(run, cleanOutput, path, branch, status.trim(), aheadCount > 0);
+        if (hasDirtyChanges) {
+            status = prepareDirtySubmoduleBranch(run, cleanOutput, path, branch);
+        } else if (aheadCount > 0) {
+            run('git -C ' + path + ' checkout -B ' + branch + ' HEAD');
+        }
 
         if (config.git && config.git.authorName) {
             run('git -C ' + path + ' config user.name ' + quoteCommitMessage(config.git.authorName));
