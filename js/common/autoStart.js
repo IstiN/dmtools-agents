@@ -25,6 +25,46 @@ function buildAutoStartEncodedConfig(ticketKey, customParams, stripKeys) {
     return encodeURIComponent(JSON.stringify({ params: p }));
 }
 
+function parseWorkflowRuns(raw) {
+    if (!raw) return [];
+    try {
+        var parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (Array.isArray(parsed)) return parsed;
+        return parsed.workflow_runs || [];
+    } catch (e) {
+        console.warn('autoStart: failed to parse workflow runs:', e.message || e);
+        return [];
+    }
+}
+
+function hasActiveTargetRun(scm, configFile, ticketKey, workflowFile) {
+    var expectedName = configFile + ' : ' + ticketKey;
+    var statuses = ['queued', 'in_progress'];
+
+    for (var i = 0; i < statuses.length; i++) {
+        var runsRaw = null;
+        try {
+            runsRaw = scm.listWorkflowRuns(statuses[i], workflowFile, 50);
+        } catch (e) {
+            console.warn('autoStart: could not list ' + statuses[i] + ' workflow runs:', e.message || e);
+            continue;
+        }
+
+        var runs = parseWorkflowRuns(runsRaw);
+        for (var j = 0; j < runs.length; j++) {
+            var run = runs[j] || {};
+            var name = run.display_title || run.displayTitle || run.name || '';
+            if (name === expectedName) {
+                console.log('autoStart: skipped duplicate ' + expectedName + ' because run #' +
+                    (run.run_number || run.runNumber || run.id || '?') + ' is ' + (run.status || statuses[i]));
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 function triggerConfiguredWorkflowForTicket(options) {
     var ticketKey = options.ticketKey;
     var customParams = options.customParams || {};
@@ -53,6 +93,10 @@ function triggerConfiguredWorkflowForTicket(options) {
     var projectKey = deriveProjectKey(customParams);
     var encodedCfg = buildAutoStartEncodedConfig(ticketKey, customParams, stripKeys);
 
+    if (hasActiveTargetRun(scm, configFile, ticketKey, workflowFile)) {
+        return false;
+    }
+
     scm.triggerWorkflow(
         aiOwner,
         aiRepo,
@@ -74,5 +118,6 @@ function triggerConfiguredWorkflowForTicket(options) {
 module.exports = {
     deriveProjectKey: deriveProjectKey,
     buildAutoStartEncodedConfig: buildAutoStartEncodedConfig,
-    triggerConfiguredWorkflowForTicket: triggerConfiguredWorkflowForTicket
+    triggerConfiguredWorkflowForTicket: triggerConfiguredWorkflowForTicket,
+    hasActiveTargetRun: hasActiveTargetRun
 };

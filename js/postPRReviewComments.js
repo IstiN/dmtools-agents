@@ -11,6 +11,7 @@
 
 const { LABELS, STATUSES, resolveStatuses } = require('./config.js');
 var scmModule = require('./common/scm.js');
+var autoStart = require('./common/autoStart.js');
 
 /**
  * Derive project key from customParams.configPath or customParams.projectKey.
@@ -516,28 +517,19 @@ function action(params) {
                     console.log('ℹ️ autoStartRework: skipped — ticket has pr_approved label');
                 } else {
                     try {
-                        // Use customParams.aiRepository if set (avoids targetRepository override in configLoader)
-                        const aiRepoCfg = customParams && customParams.aiRepository;
-                        const aiOwner = (aiRepoCfg && aiRepoCfg.owner) || (config.repository && config.repository.owner);
-                        const aiRepo  = (aiRepoCfg && aiRepoCfg.repo)  || (config.repository && config.repository.repo);
-                        const projectKey = deriveProjectKey(customParams);
-                        const encodedCfg = buildAutoStartEncodedConfig(ticketKey, customParams);
-                        if (aiOwner && aiRepo) {
-                            scm.triggerWorkflow(
-                                aiOwner, aiRepo, 'ai-teammate.yml',
-                                JSON.stringify({
-                                    concurrency_key: ticketKey,
-                                    config_file:     reworkConfigFile,
-                                    encoded_config:  encodedCfg,
-                                    project_key:     projectKey || ''
-                                }),
-                                'main'
-                            );
-                            console.log('✅ Auto-started pr_rework for', ticketKey,
-                                '[config=' + reworkConfigFile + (projectKey ? ', project=' + projectKey : '') + ']');
-                        } else {
-                            console.warn('⚠️ autoStartRework: config.repository.owner/repo not set — skipping');
-                        }
+                        autoStart.triggerConfiguredWorkflowForTicket({
+                            ticketKey: ticketKey,
+                            customParams: customParams,
+                            config: config,
+                            configFile: reworkConfigFile,
+                            label: 'pr_rework',
+                            scm: scm,
+                            stripKeys: [
+                                'removeLabel',
+                                'autoStartRework',
+                                'autoStartReworkConfigFile'
+                            ]
+                        });
                     } catch (e) {
                         console.warn('⚠️ autoStartRework trigger failed:', e.message || e);
                     }
