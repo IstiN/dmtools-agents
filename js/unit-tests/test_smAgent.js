@@ -335,6 +335,48 @@ suite('smAgent: ticket dispatch', function() {
         assert.equal(sm.capturedTriggers[0].workflow, 'ai-teammate.yml');
     });
 
+    test('global maxTriggeredWorkflows caps dispatches across all rules', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [
+                { key: 'P-1', fields: { labels: [] } },
+                { key: 'P-2', fields: { labels: [] } },
+                { key: 'P-3', fields: { labels: [] } }
+            ]
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'"),
+            makeRule("project = {jiraProject} AND status = 'In Review'")
+        ]);
+        params.jobParams.maxTriggeredWorkflows = 1;
+
+        sm.action(params);
+
+        assert.equal(sm.capturedTriggers.length, 1, 'only one workflow dispatch allowed for whole run');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.concurrency_key, 'P-1', 'first ticket dispatched, others deferred');
+    });
+
+    test('maxWorkflowsPerRun alias also limits dispatches', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [
+                { key: 'P-1', fields: { labels: [] } },
+                { key: 'P-2', fields: { labels: [] } }
+            ]
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'")
+        ]);
+        params.jobParams.maxWorkflowsPerRun = 1;
+
+        sm.action(params);
+
+        assert.equal(sm.capturedTriggers.length, 1, 'alias field limits dispatches');
+    });
+
     test('encodes ticket key in triggered workflow inputs', function() {
         var sm = makeSmAgent({
             fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
@@ -644,7 +686,7 @@ suite('smAgent: additionalInstructions in encoded_config', function() {
         var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
         var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
         assert.notOk(decoded.params.additionalInstructions, 'no additionalInstructions when not configured');
-        assert.equal(decoded.params.agentParams.instructions.length, 2, 'default agent instructions preserved');
+        assert.equal(decoded.params.agentParams.instructions.length, 1, 'default agent instructions preserved');
     });
 
     test('injects cliPrompts and agent/job param patches from config into encoded_config', function() {

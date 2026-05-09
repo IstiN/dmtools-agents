@@ -3,6 +3,7 @@
   "params": {
     "jsPath": "agents/js/smAgent.js",
     "jobParams": {
+      "maxTriggeredWorkflows": 1,
       "rules": [
         {
           "description": "PO Review Stories with all subtasks Done → BA Analysis",
