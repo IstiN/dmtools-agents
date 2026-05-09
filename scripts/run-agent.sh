@@ -155,13 +155,13 @@ elif [ "$PROVIDER" = "copilot" ]; then
   # stdin when it is not a TTY (e.g. inside CI pipes). The prompt file path is already
   # available as $PROMPT_ARG when DMTools calls this script with cliPrompt.
   if [ -f "${PROMPT_ARG}" ]; then
-    echo "Running: npx @github/copilot --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} (prompt: ${PROMPT_BYTES} bytes via stdin)"
+    echo "Running: npx @github/copilot --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} ${PASS_ARGS[*]:-} (prompt: ${PROMPT_BYTES} bytes via stdin)"
     echo ""
-    npx @github/copilot --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" < "${PROMPT_ARG}"
+    npx @github/copilot --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" "${PASS_ARGS[@]}" < "${PROMPT_ARG}"
   else
-    echo "Running: npx @github/copilot --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} -p <inline prompt>"
+    echo "Running: npx @github/copilot --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} ${PASS_ARGS[*]:-} -p <inline prompt>"
     echo ""
-    npx @github/copilot --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" -p "${PROMPT}"
+    npx @github/copilot --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" "${PASS_ARGS[@]}" -p "${PROMPT}"
   fi
 
   exit_code=$?

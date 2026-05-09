@@ -12,6 +12,7 @@
 
 var configLoader = require('./configLoader.js');
 var autoStart = require('./common/autoStart.js');
+var feedbackLoop = require('./common/feedbackLoop.js');
 const { GIT_CONFIG, STATUSES, LABELS } = require('./config.js');
 
 function cleanCommandOutput(output) {
@@ -304,11 +305,30 @@ function action(params) {
             cli_execute_command({ command: 'git config user.email "' + config.git.authorEmail + '"' });
         } catch (e) {}
 
+        var gateResult = feedbackLoop.runQualityGates({
+            ticketKey: ticketKey,
+            customParams: customParams,
+            section: 'qualityGates'
+        });
+        if (!gateResult.success) {
+            throw new Error('Quality gate failed before test rework publish: ' + gateResult.failedGate + '\n' + gateResult.error);
+        }
+
         let branchName;
         try {
             branchName = commitAndPush(ticketKey, passed, config);
         } catch (e) {
             console.error('Git operations failed:', e);
+            var resume = feedbackLoop.resumeAgent({
+                ticketKey: ticketKey,
+                customParams: customParams,
+                section: 'postAction',
+                stage: 'test_rework_git_operations',
+                error: e.toString()
+            });
+            if (resume.attempted) {
+                return action(params);
+            }
             jira_post_comment({
                 key: ticketKey,
                 comment: 'h3. ❌ Rework Push Failed\n\n{code}' + e.toString() + '{code}'
@@ -408,6 +428,16 @@ function action(params) {
         try {
             const key = (params.ticket || (params.jobParams && params.jobParams.ticket) || {}).key;
             if (key) {
+                var resume = feedbackLoop.resumeAgent({
+                    ticketKey: key,
+                    customParams: customParams,
+                    section: 'postAction',
+                    stage: 'test_rework_post_action',
+                    error: error.toString()
+                });
+                if (resume.attempted) {
+                    return action(params);
+                }
                 jira_post_comment({
                     key: key,
                     comment: 'h3. ❌ Test Rework Error\n\n{code}' + error.toString() + '{code}'

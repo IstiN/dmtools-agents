@@ -11,6 +11,7 @@ var configLoader = require('./configLoader.js');
 var scmModule = require('./common/scm.js');
 var submoduleHelper = require('./common/submodules.js');
 var prHelper = require('./common/pullRequest.js');
+var feedbackLoop = require('./common/feedbackLoop.js');
 const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js');
 
 /**
@@ -340,6 +341,15 @@ function action(params) {
         // Configure git
         configureGitAuthor(config);
 
+        var gateResult = feedbackLoop.runQualityGates({
+            ticketKey: ticketKey,
+            customParams: _customParams,
+            section: 'qualityGates'
+        });
+        if (!gateResult.success) {
+            throw new Error('Quality gate failed before rework push: ' + gateResult.failedGate + '\n' + gateResult.error);
+        }
+
         // Commit and push
         let branchName;
         let codeChangesCommitted = false;
@@ -349,6 +359,16 @@ function action(params) {
             codeChangesCommitted = pushResult.hasChanges;
         } catch (gitError) {
             console.error('Git operations failed:', gitError);
+            var resume = feedbackLoop.resumeAgent({
+                ticketKey: ticketKey,
+                customParams: _customParams,
+                section: 'postAction',
+                stage: 'rework_git_operations',
+                error: gitError.toString()
+            });
+            if (resume.attempted) {
+                return action(params);
+            }
             try {
                 jira_post_comment({
                     key: ticketKey,
@@ -478,8 +498,19 @@ function action(params) {
     } catch (error) {
         console.error('❌ Error in pushReworkChanges:', error);
         try {
-            const actualParams = params.jobParams || params;
+            const actualParams = params.ticket ? params : (params.jobParams || params);
             if (actualParams && actualParams.ticket && actualParams.ticket.key) {
+                const customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
+                var resume = feedbackLoop.resumeAgent({
+                    ticketKey: actualParams.ticket.key,
+                    customParams: customParams,
+                    section: 'postAction',
+                    stage: 'rework_post_action',
+                    error: error.toString()
+                });
+                if (resume.attempted) {
+                    return action(params);
+                }
                 jira_post_comment({
                     key: actualParams.ticket.key,
                     comment: 'h3. ❌ Rework Workflow Error\n\n{code}' + error.toString() + '{code}'

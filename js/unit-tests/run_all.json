@@ -15,6 +15,7 @@
         "agents/js/unit-tests/test_pullRequestHelper.js",
         "agents/js/unit-tests/test_developTicketAndCreatePR.js",
         "agents/js/unit-tests/test_autoStart.js",
+        "agents/js/unit-tests/test_feedbackLoop.js",
         "agents/js/unit-tests/test_fetchParentContextToInput.js",
         "agents/js/unit-tests/test_testsGeneratedGuard.js",
         "agents/js/unit-tests/test_postTestAutomationResults.js",

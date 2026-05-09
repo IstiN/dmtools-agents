@@ -9,6 +9,10 @@ function loadDevelopTicketAndCreatePR(mocks) {
             './common/jiraHelpers.js': { extractTicketKey: function(key) { return key; } },
             './common/pullRequest.js': { cleanCommandOutput: function(output) { return (output || '').trim(); } },
             './common/submodules.js': {},
+            './common/feedbackLoop.js': {
+                runQualityGates: function() { return { success: true }; },
+                resumeAgent: function() { return { attempted: false }; }
+            },
             './configLoader.js': configLoaderModule,
             './config.js': configModule
         }),

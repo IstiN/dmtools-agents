@@ -7,6 +7,7 @@
 const { extractTicketKey } = require('./common/jiraHelpers.js');
 const prHelper = require('./common/pullRequest.js');
 const submoduleHelper = require('./common/submodules.js');
+const feedbackLoop = require('./common/feedbackLoop.js');
 var configLoader = require('./configLoader.js');
 const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js');
 
@@ -513,6 +514,16 @@ function resetDevelopmentForRetry(ticketKey, statuses, customParams, metadata, s
     });
 }
 
+function resumeDevelopmentAgent(params, ticketKey, customParams, stage, errorMessage) {
+    return feedbackLoop.resumeAgent({
+        ticketKey: ticketKey,
+        customParams: customParams,
+        section: 'postAction',
+        stage: stage,
+        error: errorMessage
+    }).attempted;
+}
+
 /**
  * Retry push after asking the agent to fix the commit
  * Used when push is rejected (e.g. GitHub push protection blocked a secret)
@@ -715,6 +726,17 @@ function action(params) {
         // Prepare commit message
         const commitMessage = configLoader.formatTemplate(config.formats.commitMessage.development, {ticketKey: ticketKey, ticketSummary: ticketSummary});
 
+        var gateResult = feedbackLoop.runQualityGates({
+            ticketKey: ticketKey,
+            customParams: _customParams,
+            section: 'qualityGates'
+        });
+        if (!gateResult.success) {
+            const error = 'Quality gate failed before development publish: ' + gateResult.failedGate + '\n' + gateResult.error;
+            resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Quality Gate', error);
+            return { success: true, path: 'development-reset-for-retry', error: error };
+        }
+
         // Perform git operations
         const prTarget = configLoader.resolvePRTargetBranch(config, params.ticket || actualParams.ticket);
         const gitResult = performGitOperations(branchName, commitMessage, prTarget, config, _customParams, ticketKey);
@@ -723,6 +745,9 @@ function action(params) {
                 // Push was rejected — ask the agent to fix the commit, then retry
                 const retryResult = retryAfterPushFailure(ticketKey, branchName, gitResult.error);
                 if (!retryResult.success) {
+                    if (resumeDevelopmentAgent(params, ticketKey, _customParams, 'development_git_push', retryResult.error)) {
+                        return action(params);
+                    }
                     resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Git Push (after retry)', retryResult.error);
                     return { success: true, path: 'development-reset-for-retry', error: 'Git push failed even after retry: ' + retryResult.error };
                 }
@@ -786,6 +811,9 @@ function action(params) {
                 }
                 return { success: true, path: 'interrupted', ticketKey: ticketKey };
             } else {
+                if (resumeDevelopmentAgent(params, ticketKey, _customParams, 'development_git_operations', gitResult.error)) {
+                    return action(params);
+                }
                 resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Git Operations', gitResult.error);
                 return { success: true, path: 'development-reset-for-retry', error: 'Git operations failed: ' + gitResult.error };
             }
@@ -828,6 +856,9 @@ function action(params) {
         const prResult = createPullRequest(prTitle, branchName, prTarget);
 
         if (!prResult.success) {
+            if (resumeDevelopmentAgent(params, ticketKey, _customParams, 'development_pr_creation', prResult.error)) {
+                return action(params);
+            }
             resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Pull Request Creation', prResult.error);
             return {
                 success: true,
@@ -945,6 +976,15 @@ function action(params) {
             if (actualParams && actualParams.ticket && actualParams.ticket.key) {
                 const customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
                 const statuses = resolveStatuses(customParams);
+                if (resumeDevelopmentAgent(
+                    params,
+                    actualParams.ticket.key,
+                    customParams,
+                    'development_post_action',
+                    error.toString()
+                )) {
+                    return action(params);
+                }
                 resetDevelopmentForRetry(
                     actualParams.ticket.key,
                     statuses,
