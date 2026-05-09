@@ -11,13 +11,13 @@ suite('submodule helper', function() {
     test('normalizes and deduplicates managed submodule config', function() {
         var helper = loadSubmoduleHelper();
         var modules = helper.collectManagedSubmodules(
-            { git: { managedSubmodules: [{ path: 123, branch: 456, commitMessage: 789 }] } },
+            { git: { managedSubmodules: [{ path: 123, branch: 456, commitMessage: 789, tagPrefix: 'stable' }] } },
             { managedSubmodules: ['trackstate-setup', { path: 'trackstate-setup', branch: 'main' }] }
         );
 
         assert.deepEqual(modules, [
             { path: 'trackstate-setup' },
-            { path: '123', branch: '456', commitMessage: '789' }
+            { path: '123', branch: '456', commitMessage: '789', tagPrefix: 'stable' }
         ]);
     });
 
@@ -70,6 +70,41 @@ suite('submodule helper', function() {
             return command.indexOf('git -C trackstate-setup commit -m "TS-23 Update trackstate-setup assets"') === 0;
         }), 'dirty submodule should be committed');
         assert.ok(commands.indexOf('git -C trackstate-setup push origin HEAD:main') !== -1, 'submodule should be pushed');
+    });
+
+    test('publishes stable tag when tag prefix is configured', function() {
+        var helper = loadSubmoduleHelper();
+        var commands = [];
+        helper.pushManagedSubmodules({
+            customParams: {
+                managedSubmodules: [{ path: 'trackstate-setup', branch: 'main', tagPrefix: 'stable' }]
+            },
+            ticketKey: 'TS-86',
+            cleanOutput: function(output) { return output || ''; },
+            run: function(command) {
+                commands.push(command);
+                if (command.indexOf('git config --file .gitmodules --get-regexp') === 0) {
+                    return 'submodule.trackstate-setup.path trackstate-setup';
+                }
+                if (command === 'git -C trackstate-setup status --porcelain') {
+                    return '';
+                }
+                if (command === 'git -C trackstate-setup rev-list --count origin/main..HEAD') {
+                    return '2';
+                }
+                if (command === 'git -C trackstate-setup merge-base --is-ancestor HEAD origin/main') {
+                    throw new Error('local ahead of remote');
+                }
+                if (command === 'git -C trackstate-setup rev-parse --short=12 HEAD') {
+                    return '2b4b84712bfa';
+                }
+                return '';
+            }
+        });
+
+        assert.ok(commands.indexOf('git -C trackstate-setup push origin HEAD:main') !== -1, 'submodule should be pushed');
+        assert.ok(commands.indexOf('git -C trackstate-setup tag -f stable-2b4b84712bfa HEAD') !== -1, 'stable tag should be created at HEAD');
+        assert.ok(commands.indexOf('git -C trackstate-setup push origin refs/tags/stable-2b4b84712bfa:refs/tags/stable-2b4b84712bfa --force') !== -1, 'stable tag should be pushed');
     });
 
     test('pushes clean submodule when HEAD is ahead of remote', function() {

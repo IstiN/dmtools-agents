@@ -17,6 +17,9 @@ function addManySubmodules(target, value) {
         if (value.commitMessage !== undefined && value.commitMessage !== null) {
             module.commitMessage = String(value.commitMessage);
         }
+        if (value.tagPrefix !== undefined && value.tagPrefix !== null) {
+            module.tagPrefix = String(value.tagPrefix);
+        }
         target.push(module);
     }
 }
@@ -141,12 +144,16 @@ function pushManagedSubmodules(options) {
     collectManagedSubmodules(config, customParams).forEach(function(module) {
         var path = module.path;
         var branch = module.branch || module.targetBranch || 'main';
+        var tagPrefix = module.tagPrefix || null;
 
         if (!isSafeRelativePath(path)) {
             throw new Error('Unsafe managed submodule path: ' + path);
         }
         if (!isSafeRefName(branch)) {
             throw new Error('Unsafe managed submodule branch for ' + path + ': ' + branch);
+        }
+        if (tagPrefix && !isSafeRefName(tagPrefix)) {
+            throw new Error('Unsafe managed submodule tag prefix for ' + path + ': ' + tagPrefix);
         }
 
         var registeredPath = cleanOutput(run('git config --file .gitmodules --get-regexp "^submodule\\..*\\.path$"') || '')
@@ -220,6 +227,20 @@ function pushManagedSubmodules(options) {
 
         run('git -C ' + path + ' push origin HEAD:' + branch);
         console.log('Managed submodule pushed:', path, '-> origin/' + branch);
+
+        if (tagPrefix) {
+            var headSha = cleanOutput(run('git -C ' + path + ' rev-parse --short=12 HEAD') || '').trim();
+            if (!headSha) {
+                throw new Error('Could not resolve managed submodule HEAD for tag publishing: ' + path);
+            }
+            var tagName = tagPrefix + '-' + headSha;
+            if (!isSafeRefName(tagName)) {
+                throw new Error('Unsafe managed submodule tag name for ' + path + ': ' + tagName);
+            }
+            run('git -C ' + path + ' tag -f ' + tagName + ' HEAD');
+            run('git -C ' + path + ' push origin refs/tags/' + tagName + ':refs/tags/' + tagName + ' --force');
+            console.log('Managed submodule tag pushed:', path, '->', tagName);
+        }
     });
 }
 
