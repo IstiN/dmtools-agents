@@ -120,25 +120,49 @@ function resolveApprovedThreads(repoInfo, prNumber, resolvedThreadIds) {
 }
 
 function postInlineComment(repoInfo, prNumber, inlineComment) {
+    const filePath = inlineComment.path || inlineComment.file;
+    const commentText = inlineComment.body || readFile(inlineComment.comment);
+
     try {
-        const comment = readFile(inlineComment.comment);
-        if (!comment) return;
+        if (!commentText) {
+            console.warn('No comment content found for inline comment on', filePath);
+            return false;
+        }
+        if (!filePath) {
+            console.warn('No file path found for inline comment');
+            return false;
+        }
 
         const params = {
             workspace: repoInfo.owner,
             repository: repoInfo.repo,
             pullRequestId: String(prNumber),
-            path: inlineComment.file,
+            path: filePath,
             line: String(inlineComment.line),
-            text: comment
+            text: commentText
         };
         if (inlineComment.startLine) params.startLine = String(inlineComment.startLine);
         if (inlineComment.side) params.side = inlineComment.side;
 
         github_add_inline_comment(params);
-        console.log('✅ Inline comment on ' + inlineComment.file + ':' + inlineComment.line);
+        console.log('✅ Inline comment on ' + filePath + ':' + inlineComment.line);
+        return true;
     } catch (e) {
-        console.warn('Failed to post inline comment:', e);
+        console.warn('Inline comment failed (line not in diff?), falling back to PR comment on ' + filePath + ':' + inlineComment.line);
+        try {
+            var lineRef = filePath + (inlineComment.line ? ':' + inlineComment.line : '');
+            github_add_pr_comment({
+                workspace: repoInfo.owner,
+                repository: repoInfo.repo,
+                pullRequestId: String(prNumber),
+                text: '📍 **`' + lineRef + '`**\n\n' + commentText
+            });
+            console.log('✅ Posted fallback PR comment for ' + lineRef);
+            return true;
+        } catch (fallbackError) {
+            console.warn('Failed to post fallback PR comment:', fallbackError);
+            return false;
+        }
     }
 }
 
