@@ -115,9 +115,73 @@ function triggerConfiguredWorkflowForTicket(options) {
     return true;
 }
 
+/**
+ * Trigger SM Agent when the system is idle.
+ *
+ * Called by post-actions that do NOT have a direct autoStart configured.
+ * Checks whether any other AI Teammate runs are queued/in_progress.
+ * If the system is idle (≤1 active run — this one) → dispatches sm.yml
+ * so SM can immediately evaluate what to do next without waiting for cron.
+ *
+ * options:
+ *   config          — job config (needs config.repository.owner / repo)
+ *   customParams    — optional; smFallback=false disables this trigger
+ *   smWorkflowFile  — SM workflow file name (default 'sm.yml')
+ *   agentWorkflowFile — AI teammate workflow to check (default 'ai-teammate.yml')
+ *   scm             — optional pre-built scm instance
+ */
+function triggerSmIfIdle(options) {
+    var config = options.config || {};
+    var customParams = options.customParams || {};
+    var smWorkflowFile = options.smWorkflowFile || 'sm.yml';
+    var agentWorkflowFile = options.agentWorkflowFile || 'ai-teammate.yml';
+
+    if (customParams.smFallback === false) {
+        console.log('SM fallback: disabled via smFallback=false');
+        return false;
+    }
+
+    var aiOwner = (config.repository && config.repository.owner);
+    var aiRepo = (config.repository && config.repository.repo);
+    if (!aiOwner || !aiRepo) {
+        console.warn('SM fallback: config.repository.owner/repo not set — skipping');
+        return false;
+    }
+
+    var scm = options.scm || scmModule.createScm(config);
+
+    var activeCount = 0;
+    var statuses = ['queued', 'in_progress'];
+    for (var i = 0; i < statuses.length; i++) {
+        try {
+            var runsRaw = scm.listWorkflowRuns(statuses[i], agentWorkflowFile, 50);
+            var runs = parseWorkflowRuns(runsRaw);
+            activeCount += runs.length;
+        } catch (e) {
+            console.warn('SM fallback: could not list ' + statuses[i] + ' runs:', e.message || e);
+        }
+    }
+
+    // ≤1 means only the current (finishing) run is active
+    if (activeCount > 1) {
+        console.log('SM fallback: ' + activeCount + ' active agent runs — skipping SM trigger');
+        return false;
+    }
+
+    try {
+        scm.triggerWorkflow(aiOwner, aiRepo, smWorkflowFile, '{}', 'main');
+        console.log('✅ SM fallback: system idle — triggered ' + smWorkflowFile);
+        return true;
+    } catch (e) {
+        console.warn('SM fallback: failed to trigger ' + smWorkflowFile + ':', e.message || e);
+        return false;
+    }
+}
+
 module.exports = {
     deriveProjectKey: deriveProjectKey,
     buildAutoStartEncodedConfig: buildAutoStartEncodedConfig,
     triggerConfiguredWorkflowForTicket: triggerConfiguredWorkflowForTicket,
-    hasActiveTargetRun: hasActiveTargetRun
+    hasActiveTargetRun: hasActiveTargetRun,
+    triggerSmIfIdle: triggerSmIfIdle
 };

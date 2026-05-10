@@ -451,6 +451,7 @@ function action(params) {
         removeConfiguredLabels(ticketKey, _customParams);
 
         // Auto-start pr_review after rework is pushed to In Review (opt-in via customParams)
+        var reviewStarted = false;
         const autoStartReview = _customParams && _customParams.autoStartReview;
         const reviewConfigFile = _customParams && _customParams.autoStartReviewConfigFile;
         if (autoStartReview && reviewConfigFile) {
@@ -460,7 +461,7 @@ function action(params) {
                 console.log('ℹ️ autoStartReview: skipped — ticket has pr_approved label');
             } else {
                 try {
-                    autoStart.triggerConfiguredWorkflowForTicket({
+                    reviewStarted = autoStart.triggerConfiguredWorkflowForTicket({
                         ticketKey: ticketKey,
                         customParams: _customParams,
                         config: config,
@@ -477,6 +478,9 @@ function action(params) {
                     console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
                 }
             }
+        }
+        if (!reviewStarted) {
+            autoStart.triggerSmIfIdle({ config: config, customParams: _customParams, scm: scm });
         }
 
         console.log('✅ Rework workflow completed successfully');

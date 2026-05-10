@@ -327,11 +327,14 @@ function action(params) {
         if (isApproved) {
             // Ticket stays in In Review - Passed/Failed until SM merges the PR via pr_approved flow
             console.log('✅ Ticket stays in', currentStatus, '— SM will merge and move to final status');
+            autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
         } else {
             try {
                 jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REWORK });
                 console.log('✅ Changes requested — moved', ticketKey, 'to In Rework');
-                triggerReworkIfConfigured(ticketKey, config, customParams);
+                if (!triggerReworkIfConfigured(ticketKey, config, customParams)) {
+                    autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
+                }
             } catch (e) {
                 console.warn('Failed to move to In Rework:', e);
             }

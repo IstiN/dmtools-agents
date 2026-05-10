@@ -87,3 +87,103 @@ suite('autoStart helper', function() {
     });
 
 });
+
+suite('triggerSmIfIdle', function() {
+
+    test('triggers SM when no other agent runs are active', function() {
+        var triggeredWorkflow = null;
+        var autoStart = loadAutoStartHelper({
+            github_list_workflow_runs: function() {
+                return JSON.stringify({ workflow_runs: [] });
+            },
+            github_trigger_workflow: function(owner, repo, workflowFile, payload, ref) {
+                triggeredWorkflow = { owner: owner, repo: repo, workflowFile: workflowFile, ref: ref };
+            }
+        });
+
+        var result = autoStart.triggerSmIfIdle({
+            config: { repository: { owner: 'IstiN', repo: 'trackstate' } }
+        });
+
+        assert.equal(result, true, 'should trigger SM when idle');
+        assert.equal(triggeredWorkflow.workflowFile, 'sm.yml');
+        assert.equal(triggeredWorkflow.owner, 'IstiN');
+        assert.equal(triggeredWorkflow.repo, 'trackstate');
+        assert.equal(triggeredWorkflow.ref, 'main');
+    });
+
+    test('triggers SM when only 1 run active (the current finishing one)', function() {
+        var triggered = false;
+        var autoStart = loadAutoStartHelper({
+            github_list_workflow_runs: function(workspace, repository, status) {
+                if (status === 'in_progress') {
+                    return JSON.stringify({ workflow_runs: [{ name: 'agents/pr_rework.json : TS-99', status: 'in_progress' }] });
+                }
+                return JSON.stringify({ workflow_runs: [] });
+            },
+            github_trigger_workflow: function() { triggered = true; }
+        });
+
+        var result = autoStart.triggerSmIfIdle({
+            config: { repository: { owner: 'IstiN', repo: 'trackstate' } }
+        });
+
+        assert.equal(result, true, 'should trigger SM when only 1 run (current) is active');
+        assert.equal(triggered, true);
+    });
+
+    test('skips SM when multiple agent runs are active', function() {
+        var triggered = false;
+        var autoStart = loadAutoStartHelper({
+            github_list_workflow_runs: function(workspace, repository, status) {
+                if (status === 'in_progress') {
+                    return JSON.stringify({
+                        workflow_runs: [
+                            { name: 'agents/pr_rework.json : TS-99', status: 'in_progress' },
+                            { name: 'agents/test_case.json : TS-100', status: 'in_progress' }
+                        ]
+                    });
+                }
+                return JSON.stringify({ workflow_runs: [] });
+            },
+            github_trigger_workflow: function() { triggered = true; }
+        });
+
+        var result = autoStart.triggerSmIfIdle({
+            config: { repository: { owner: 'IstiN', repo: 'trackstate' } }
+        });
+
+        assert.equal(result, false, 'should not trigger SM when other agents are running');
+        assert.equal(triggered, false);
+    });
+
+    test('skips SM when smFallback is explicitly false', function() {
+        var triggered = false;
+        var autoStart = loadAutoStartHelper({
+            github_list_workflow_runs: function() { return JSON.stringify({ workflow_runs: [] }); },
+            github_trigger_workflow: function() { triggered = true; }
+        });
+
+        var result = autoStart.triggerSmIfIdle({
+            config: { repository: { owner: 'IstiN', repo: 'trackstate' } },
+            customParams: { smFallback: false }
+        });
+
+        assert.equal(result, false, 'should skip SM when smFallback=false');
+        assert.equal(triggered, false);
+    });
+
+    test('skips SM when config.repository is missing', function() {
+        var triggered = false;
+        var autoStart = loadAutoStartHelper({
+            github_list_workflow_runs: function() { return JSON.stringify({ workflow_runs: [] }); },
+            github_trigger_workflow: function() { triggered = true; }
+        });
+
+        var result = autoStart.triggerSmIfIdle({ config: {} });
+
+        assert.equal(result, false);
+        assert.equal(triggered, false);
+    });
+
+});

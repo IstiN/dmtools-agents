@@ -421,9 +421,10 @@ function action(params) {
         // Step 7 & 8: Remove WIP label + SM idempotency label
         releaseLock();
 
+        var autoStarted = false;
         if (customParams && customParams.autoStartReview && customParams.autoStartReviewConfigFile) {
             try {
-                autoStart.triggerConfiguredWorkflowForTicket({
+                autoStarted = autoStart.triggerConfiguredWorkflowForTicket({
                     ticketKey: ticketKey,
                     customParams: customParams,
                     config: config,
@@ -438,6 +439,9 @@ function action(params) {
             } catch (e) {
                 console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
             }
+        }
+        if (!autoStarted) {
+            autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
         }
 
         console.log('✅ Test rework complete — re-run:', testStatus, '→', targetStatus);

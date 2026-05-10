@@ -413,7 +413,9 @@ function action(params) {
         }
 
         if (!blockedByHuman) {
-            autoStartTestReview(ticketKey, config, customParams, noCodeChanges);
+            if (!autoStartTestReview(ticketKey, config, customParams, noCodeChanges)) {
+                autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
+            }
         }
 
         // Step 7: Add label

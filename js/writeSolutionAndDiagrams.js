@@ -156,9 +156,10 @@ function action(params) {
         var autoStartDevelopment = customParams.autoStartDevelopment === true ||
             customParams.autoStartDevelopment === 'true';
         var developmentConfigFile = customParams.autoStartDevelopmentConfigFile;
+        var devStarted = false;
         if (autoStartDevelopment && developmentConfigFile) {
             try {
-                autoStart.triggerConfiguredWorkflowForTicket({
+                devStarted = autoStart.triggerConfiguredWorkflowForTicket({
                     scm: scmModule.createScm(projectConfig),
                     config: projectConfig,
                     ticketKey: ticketKey,
@@ -170,6 +171,9 @@ function action(params) {
             } catch (e) {
                 console.warn('⚠️ autoStartDevelopment trigger failed:', e.message || e);
             }
+        }
+        if (!devStarted) {
+            autoStart.triggerSmIfIdle({ config: projectConfig, customParams: customParams });
         }
 
         return { success: true, message: ticketKey + ' solution written, moved to Ready For Development' };

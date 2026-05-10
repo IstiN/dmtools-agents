@@ -527,6 +527,7 @@ function action(params) {
         }
 
         // Step 12: Auto-start pr_rework when changes were requested (opt-in via customParams)
+        var reworkStarted = false;
         if (!isApproved) {
             const autoStartRework = customParams && customParams.autoStartRework;
             const reworkConfigFile = customParams && customParams.autoStartReworkConfigFile;
@@ -536,7 +537,7 @@ function action(params) {
                     console.log('ℹ️ autoStartRework: skipped — ticket has pr_approved label');
                 } else {
                     try {
-                        autoStart.triggerConfiguredWorkflowForTicket({
+                        reworkStarted = autoStart.triggerConfiguredWorkflowForTicket({
                             ticketKey: ticketKey,
                             customParams: customParams,
                             config: config,
@@ -553,6 +554,9 @@ function action(params) {
                         console.warn('⚠️ autoStartRework trigger failed:', e.message || e);
                     }
                 }
+            }
+            if (!reworkStarted) {
+                autoStart.triggerSmIfIdle({ config: config, customParams: customParams, scm: scm });
             }
         }
 
@@ -626,6 +630,11 @@ function action(params) {
                     console.warn('⚠️ TestCasesGenerator trigger failed:', e.message || e);
                 }
             }
+        }
+
+        // SM fallback for approved PRs — SM needs to merge via pr_approved flow
+        if (isApproved) {
+            autoStart.triggerSmIfIdle({ config: config, customParams: customParams, scm: scm });
         }
 
         console.log('✅ PR review workflow completed:', isApproved ? 'APPROVED' : 'CHANGES REQUESTED');

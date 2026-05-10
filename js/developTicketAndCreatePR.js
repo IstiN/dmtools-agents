@@ -9,6 +9,7 @@ const prHelper = require('./common/pullRequest.js');
 const submoduleHelper = require('./common/submodules.js');
 const feedbackLoop = require('./common/feedbackLoop.js');
 var configLoader = require('./configLoader.js');
+var autoStart = require('./common/autoStart.js');
 const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js');
 
 function deriveProjectKey(customParams) {
@@ -936,6 +937,7 @@ function action(params) {
         const customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
         const autoStartReview = customParams && customParams.autoStartReview;
         const reviewConfigFile = customParams && customParams.autoStartReviewConfigFile;
+        var reviewStarted = false;
         if (autoStartReview && reviewConfigFile) {
             if (hasPrApprovedLabel(actualParams.ticket) && !prApprovedCleaned) {
                 console.log('ℹ️ autoStartReview: skipped — ticket has pr_approved label');
@@ -958,6 +960,7 @@ function action(params) {
                             }),
                             'main'
                         );
+                        reviewStarted = true;
                         console.log('✅ Auto-started pr_review for', ticketKey,
                             '[config=' + reviewConfigFile + (projectKey ? ', project=' + projectKey : '') + ']');
                     } else {
@@ -967,6 +970,9 @@ function action(params) {
                     console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
                 }
             }
+        }
+        if (!reviewStarted) {
+            autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
         }
 
         return {
