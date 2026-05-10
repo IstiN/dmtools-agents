@@ -180,6 +180,46 @@ function resolveConfigFile(rule, effectiveConfig) {
     return cf;
 }
 
+function parseWorkflowRuns(raw) {
+    if (!raw) return [];
+    var parsed = raw;
+    if (typeof raw === 'string') {
+        try { parsed = JSON.parse(raw); } catch (e) { return []; }
+    }
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && Array.isArray(parsed.workflow_runs)) return parsed.workflow_runs;
+    if (parsed && Array.isArray(parsed.runs)) return parsed.runs;
+    return [];
+}
+
+function hasActiveTargetWorkflowRun(scm, workflowFile, configFile, ticketKey) {
+    if (!scm || typeof scm.listWorkflowRuns !== 'function') return false;
+
+    var expectedRunName = configFile + ' : ' + ticketKey;
+    var statuses = ['queued', 'in_progress'];
+
+    for (var i = 0; i < statuses.length; i++) {
+        var runs = [];
+        try {
+            runs = parseWorkflowRuns(scm.listWorkflowRuns(statuses[i], workflowFile, 50));
+        } catch (e) {
+            console.warn('  ⚠️  Could not inspect active workflow runs (' + statuses[i] + '): ' + (e.message || e));
+            continue;
+        }
+
+        for (var j = 0; j < runs.length; j++) {
+            var run = runs[j] || {};
+            var runName = run.name || run.display_title || '';
+            if (runName === expectedRunName) {
+                console.log('  ⏭️  ' + ticketKey + ' skipped (active workflow already exists: ' + expectedRunName + ')');
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig) {
     var workflowFile = rule.workflowFile || 'ai-teammate.yml';
     var workflowRef  = rule.workflowRef  || 'main';
@@ -196,6 +236,9 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig) {
 
     try {
         var scm = scmModule.createScm(effectiveConfig);
+        if (hasActiveTargetWorkflowRun(scm, workflowFile, resolvedCf, ticketKey)) {
+            return false;
+        }
         scm.triggerWorkflow(
             repoInfo.owner,
             repoInfo.repo,

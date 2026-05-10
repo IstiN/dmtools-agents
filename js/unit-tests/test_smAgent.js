@@ -26,6 +26,7 @@
  *   onTrigger      - fn(owner, repo, workflow, inputs, ref) called on triggerWorkflow
  *   onAddLabel     - fn(opts) called on jira_add_label
  *   onMoveStatus   - fn(opts) called on jira_move_to_status
+ *   workflowRuns   - { queued: [], in_progress: [] } active workflow runs by status
  */
 function makeSmAgent(opts) {
     opts = opts || {};
@@ -92,6 +93,10 @@ function makeSmAgent(opts) {
         addLabel: function() {},
         removeLabel: function() {},
         fetchDiscussions: function() { return { markdown: '', rawThreads: [] }; },
+        listWorkflowRuns: function(status) {
+            var byStatus = opts.workflowRuns || {};
+            return JSON.stringify({ workflow_runs: byStatus[status] || [] });
+        },
         getRemoteRepoInfo: function() { return null; }
     };
     var mockScmModule = {
@@ -451,6 +456,28 @@ suite('smAgent: ticket dispatch', function() {
 
         assert.equal(sm.capturedTriggers[0].workflow, 'custom-workflow.yml');
         assert.equal(sm.capturedTriggers[0].ref, 'develop');
+    });
+
+    test('skips dispatch when matching workflow is already active', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-42', fields: { labels: [] } }],
+            workflowRuns: {
+                in_progress: [
+                    { name: 'agents/pr_rework.json : P-42', status: 'in_progress' }
+                ]
+            }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/pr_rework.json',
+                addLabel: 'sm_story_rework_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 0, 'duplicate active workflow should not be dispatched');
+        assert.equal(sm.capturedLabels.length, 0, 'skip label should not be added for skipped duplicate');
     });
 
 });
