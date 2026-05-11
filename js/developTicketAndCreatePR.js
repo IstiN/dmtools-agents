@@ -829,6 +829,22 @@ function action(params) {
             }
         }
 
+        var postPublishGateResult = feedbackLoop.runPostPublishGates({
+            ticketKey: ticketKey,
+            customParams: _customParams,
+            section: 'postPublishGates',
+            workingDir: _workingDir
+        });
+        if (!postPublishGateResult.success) {
+            const error = 'Post-publish quality gate failed: ' +
+                postPublishGateResult.failedGate + '\n' + postPublishGateResult.error;
+            if (postPublishGateResult.resumeAttempted) {
+                return action(params);
+            }
+            resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Post-Publish Quality Gate', error);
+            return { success: true, path: 'development-reset-for-retry', error: error };
+        }
+
         // Verify outputs/response.md exists (must be created by cursor-agent or workflow)
         let responseContent;
         try {

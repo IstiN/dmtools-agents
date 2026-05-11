@@ -168,4 +168,45 @@ suite('feedbackLoop helper', function() {
         assert.contains(loaded.files['outputs/feedback/TS-4_policy_gate_theme-token-lint.md'], 'hardcoded color');
     });
 
+    test('post-publish gates run in working directory and return after resume', function() {
+        var loaded = loadFeedbackLoop({
+            cli_execute_command: function(args) {
+                loaded.commands.push(args);
+                if (args.command === 'yarn lint:a11y') {
+                    assert.equal(args.workingDirectory, 'dependencies/PostNL-commercial-mobileApp');
+                    throw new Error('a11y failed');
+                }
+                return '';
+            }
+        });
+
+        var result = loaded.mod.runPostPublishGates({
+            ticketKey: 'TS-5',
+            workingDir: 'dependencies/PostNL-commercial-mobileApp',
+            customParams: {
+                feedbackLoop: {
+                    postPublishGates: {
+                        enabled: true,
+                        maxAttempts: 1,
+                        gates: [{ name: 'accessibility-lint', command: 'yarn lint:a11y' }]
+                    }
+                }
+            }
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.resumeAttempted, true);
+        assert.equal(loaded.commands.length, 3);
+        assert.equal(loaded.commands[0].command, 'yarn lint:a11y');
+        assert.equal(loaded.commands[1].command, 'mkdir -p outputs/feedback');
+        assert.equal(
+            loaded.commands[2].command,
+            'bash agents/scripts/run-agent.sh --continue --resume outputs/feedback/TS-5_post_publish_gate_accessibility-lint.md'
+        );
+        assert.contains(
+            loaded.files['outputs/feedback/TS-5_post_publish_gate_accessibility-lint.md'],
+            'Working directory: dependencies/PostNL-commercial-mobileApp'
+        );
+    });
+
 });

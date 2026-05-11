@@ -382,6 +382,27 @@ function action(params) {
             return { success: false, error: gitError.toString() };
         }
 
+        var postPublishGateResult = feedbackLoop.runPostPublishGates({
+            ticketKey: ticketKey,
+            customParams: _customParams,
+            section: 'postPublishGates',
+            workingDir: config.workingDir || null
+        });
+        if (!postPublishGateResult.success) {
+            var gateError = 'Post-publish quality gate failed: ' +
+                postPublishGateResult.failedGate + '\n' + postPublishGateResult.error;
+            if (postPublishGateResult.resumeAttempted) {
+                return action(params);
+            }
+            try {
+                jira_post_comment({
+                    key: ticketKey,
+                    comment: 'h3. ❌ Rework Quality Gate Failed\n\n{code}' + gateError + '{code}\n\nThe branch was pushed before running this gate. Please check the logs and retry.'
+                });
+            } catch (e) {}
+            return { success: false, error: gateError };
+        }
+
         // Find PR to post comment — prefer targetRepository from config over git remote
         var repoInfo = null;
         if (config.repository && config.repository.owner && config.repository.repo) {

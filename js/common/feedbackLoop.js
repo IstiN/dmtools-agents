@@ -12,8 +12,10 @@ function readFile(path) {
     try { return file_read({ path: path }); } catch (e) { return null; }
 }
 
-function runCommand(command) {
-    return cli_execute_command({ command: command });
+function runCommand(command, workingDir) {
+    var args = { command: command };
+    if (workingDir) args.workingDirectory = workingDir;
+    return cli_execute_command(args);
 }
 
 function ensureFeedbackDir() {
@@ -143,6 +145,7 @@ function runConfiguredGates(options, section, stagePrefix) {
     stagePrefix = stagePrefix || 'quality_gate';
     var gateType = section === 'policyGates' ? 'policy gate' : 'quality gate';
     var customParams = options.customParams || {};
+    var config = normalizeConfig(customParams, options.section || section);
     var gates = getConfiguredGates(customParams, options.section || section, section);
     var results = [];
 
@@ -152,6 +155,7 @@ function runConfiguredGates(options, section, stagePrefix) {
         var name = gate.name || ('gate_' + (i + 1));
         var command = gate.command ? String(gate.command).replace(/\{ticketKey\}/g, options.ticketKey || '') : null;
         if (!command) continue;
+        var workingDir = gate.workingDir || options.workingDir || config.workingDir || null;
 
         var attempts = 0;
         var maxAttempts = gate.maxAttempts;
@@ -162,7 +166,7 @@ function runConfiguredGates(options, section, stagePrefix) {
             attempts += 1;
             try {
                 console.log('Running ' + gateType + ' "' + name + '": ' + command);
-                var output = runCommand(command) || '';
+                var output = runCommand(command, workingDir) || '';
                 results.push({ name: name, success: true, attempts: attempts, output: output });
                 break;
             } catch (e) {
@@ -188,13 +192,24 @@ function runConfiguredGates(options, section, stagePrefix) {
                     customParams: feedbackLoopConfig,
                     section: section,
                     stage: stagePrefix + '_' + name,
-                    error: 'Command failed: ' + command + '\n\n' + errorText
+                    error: 'Command failed: ' + command +
+                        (workingDir ? '\nWorking directory: ' + workingDir : '') +
+                        '\n\n' + errorText
                 });
                 if (!resume.attempted) {
                     return {
                         success: false,
                         failedGate: name,
                         error: errorText,
+                        results: results
+                    };
+                }
+                if (options.returnAfterResume || config.returnAfterResume || gate.returnAfterResume) {
+                    return {
+                        success: false,
+                        failedGate: name,
+                        error: errorText,
+                        resumeAttempted: true,
                         results: results
                     };
                 }
@@ -213,11 +228,18 @@ function runPolicyGates(options) {
     return runConfiguredGates(options || {}, 'policyGates', 'policy_gate');
 }
 
+function runPostPublishGates(options) {
+    options = options || {};
+    options.returnAfterResume = options.returnAfterResume !== false;
+    return runConfiguredGates(options, 'postPublishGates', 'post_publish_gate');
+}
+
 module.exports = {
     DEFAULT_MAX_ATTEMPTS: DEFAULT_MAX_ATTEMPTS,
     resumeAgent: resumeAgent,
     runQualityGates: runQualityGates,
     runPolicyGates: runPolicyGates,
+    runPostPublishGates: runPostPublishGates,
     normalizeConfig: normalizeConfig,
     isFeedbackEnabled: isFeedbackEnabled,
     sanitizeId: sanitizeId

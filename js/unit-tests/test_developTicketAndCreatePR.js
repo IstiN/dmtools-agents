@@ -12,6 +12,7 @@ function loadDevelopTicketAndCreatePR(mocks) {
             './common/feedbackLoop.js': {
                 runQualityGates: function() { return { success: true }; },
                 runPolicyGates: function() { return { success: true }; },
+                runPostPublishGates: function() { return { success: true }; },
                 resumeAgent: function() { return { attempted: false }; }
             },
             './configLoader.js': configLoaderModule,
