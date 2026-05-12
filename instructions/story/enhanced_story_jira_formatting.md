@@ -52,6 +52,7 @@ AC 3 - [Category Name]
 - Do not omit any top-level section. If there is no confirmed content for a mandatory section, write a concise explicit fallback such as `- Not identified from available context.`.
 - Omit placeholder-only bullets only after replacing the section with real content or an explicit `Not identified from available context.` bullet.
 - Keep AC numbering sequential: `AC 1`, `AC 2`, `AC 3`.
+- Never write AC identifiers in the form `AC-1`, `AC-2`, etc. (uppercase letters, hyphen, digits with no trailing colon). Jira's Smart Link engine matches `[A-Z]+-[0-9]+` and, because `AC` is a real project key, every such token is auto-rendered as an inline ticket card inside the Acceptance Criteria section. Always use the space-separated form `AC 1`, `AC 2`, `AC 3` instead.
 - Use plain bullets under each AC category.
 - Do not add an introduction, conclusion, ticket key heading, or "Acceptance Criteria for ..." prefix.
 - If critical information is missing, put the blocker at the top and keep any useful existing context below it.
