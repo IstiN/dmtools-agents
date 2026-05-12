@@ -191,3 +191,161 @@ If the test **failed**, also write:
 
 ### `outputs/bug_description.md`
 Detailed tracker-formatted bug description including reproduction steps, expected vs actual result, and error logs.
+
+---
+
+## TrackState Project-Specific Hardening Rules
+
+These rules are derived from recurring review comments on past PRs. **Violating any of these will result in REQUEST_CHANGES and an extra review cycle.**
+
+### Rule 1 — README.md is mandatory and must be created FIRST
+
+Create `testing/tests/{TICKET-KEY}/README.md` **before writing any test code**. The README must include:
+- How to install dependencies
+- The exact command to run the test
+- Required environment variables or config
+- Expected output when the test passes
+
+Do NOT submit a PR without a README. This is the most common rejection reason.
+
+### Rule 2 — No widget/finder/selector logic inside ticket test files
+
+**For Flutter/Dart tests**: All `WidgetTester`, `Finder`, `find.widgetWithText`, `find.bySemanticsLabel`, `tester.tap()`, and similar widget interaction calls must live inside a Robot class (e.g., `SettingsScreenRobot`, `AuthScreenRobot`) under `testing/components/screens/`.
+
+The ticket test file must only call high-level Robot methods:
+```dart
+// ❌ WRONG — raw widget interaction in ticket test
+await tester.tap(find.widgetWithText(ElevatedButton, 'Save'));
+
+// ✅ CORRECT — robot abstraction in ticket test
+await settingsRobot.tapSave();
+```
+
+Before writing any UI interaction code in a test file, check if a Robot class exists in `testing/components/screens/` and extend it.
+
+### Rule 3 — Architecture direction: no component imports inside frameworks
+
+Framework classes under `testing/frameworks/` must NEVER import or instantiate classes from `testing/components/services/` directly. This violates the `tests → components → frameworks → core` direction.
+
+```python
+# ❌ WRONG — framework importing a component service
+from testing.components.services.live_setup_repository_service import LiveSetupRepositoryService
+
+class MyFramework:
+    def __init__(self):
+        self.repo = LiveSetupRepositoryService()  # ← VIOLATION
+```
+
+Always define a contract in `testing/core/interfaces/` and inject the concrete implementation via the constructor:
+```python
+# ✅ CORRECT — inject via constructor, depend on interface
+class MyFramework:
+    def __init__(self, repo_client: IRepositoryClient):
+        self.repo = repo_client
+```
+
+### Rule 4 — Shared helpers via neutral base class, not unrelated inheritance
+
+Never extend an unrelated framework class just to reuse its helper methods. Extract shared helpers into a neutral utility/base class and have both frameworks inherit from or compose it.
+
+```python
+# ❌ WRONG — inheriting Jira-search framework to get CLI helpers
+class MyAttachmentFramework(PythonTrackStateCliJiraSearchFramework):
+    ...
+
+# ✅ CORRECT — extract shared CLI helpers into neutral base
+class TrackStateCliCompiledLocalFramework:
+    """Shared CLI compile/run/file/git helpers."""
+    ...
+
+class MyAttachmentFramework(TrackStateCliCompiledLocalFramework):
+    ...
+```
+
+### Rule 5 — Dart CLI tests: always run from repository root
+
+When testing the TrackState Dart CLI, **always run `dart run trackstate <command>` from the repository root**. Pass the target path via the `--path` flag, never via `cwd`:
+
+```python
+# ❌ WRONG — running from a temp dir breaks package resolution
+subprocess.run(['dart', 'run', '/abs/path/bin/trackstate.dart', 'jira_execute_request'],
+               cwd='/tmp/empty_dir')
+
+# ✅ CORRECT — run from repo root, use --path for target
+subprocess.run(['dart', 'run', 'trackstate', 'jira_execute_request', '--path', '/tmp/empty_dir'],
+               cwd=REPO_ROOT)
+```
+
+### Rule 6 — Precondition validation before any UI flow
+
+Before opening a browser or launching a UI flow, **assert that your fixture data satisfies every ticket precondition**. A clear precondition failure must be distinguishable from a product defect.
+
+```python
+# ✅ CORRECT — guard preconditions before UI
+assert len(issue_fixture.attachment_paths) >= 2, (
+    f"Fixture setup error: AC3 requires ≥2 attachments, found {len(issue_fixture.attachment_paths)}"
+)
+# Now open the browser
+```
+
+### Rule 7 — Assert the full error contract, not just exit_code
+
+When a ticket expects an error response, assert **all fields** in the error object — not only `exit_code` or `process.returncode`. This prevents regressions where the process code is fixed but the JSON contract remains broken.
+
+```python
+# ❌ WRONG — only checking exit code
+assert observation.result.exit_code == config.expected_exit_code
+
+# ✅ CORRECT — checking all contract fields
+assert observation.result.exit_code == config.expected_exit_code
+assert error.get("exitCode") == config.expected_exit_code
+assert error.get("code") == config.expected_error_code
+```
+
+### Rule 8 — Never hardcode example text from the ticket as exact assertions
+
+Ticket descriptions often show example strings like `"Add a comment..."` or `"Enter status name"` to illustrate expected behavior. Do NOT use these verbatim as assertion strings unless the product spec explicitly requires that exact copy.
+
+```dart
+// ❌ WRONG — brittle assertion on example wording from ticket
+expect(find.text('Add a comment...'), findsOneWidget);
+
+// ✅ CORRECT — assert the behavior (placeholder exists, is accessible)
+final hints = find.byWidgetPredicate((w) => w is EditableText && w.controller.text.isEmpty);
+expect(hints, findsAtLeastNWidgets(1));
+```
+
+### Rule 9 — Teardown must restore ALL test-created state
+
+Your cleanup/teardown must delete or restore **every artifact the test creates or modifies**. Use a snapshot-before-modify approach: record the state before the test, then restore it exactly.
+
+```python
+# ✅ CORRECT — include all created paths in the cleanup scope
+fixture_paths = [
+    issue_fixture.issue_path,
+    issue_fixture.attachment_path,   # ← include even on "should not exist" scenarios
+    issue_fixture.comment_path,
+]
+for path in fixture_paths:
+    if repo.exists(path):
+        repo.delete(path)
+```
+
+If the test verifies that a path is NOT created (e.g. blocked upload), still include it in teardown as a safety net — the product may be fixed in future runs.
+
+### Rule 10 — Execute the exact command from the ticket
+
+When a ticket specifies a CLI command (e.g. `trackstate attachment upload --issue TS-22 --file file1.png --file file2.png --target local`), the test must run **that exact command**, not a close variant. Seed required files at the locations the command expects:
+
+```python
+# ❌ WRONG — files in subdirectory, command differs
+subprocess.run(['trackstate', 'attachment', 'upload', '--issue', 'TS-22',
+                '--file', 'files/file1.png', '--file', 'files/file2.png'])
+
+# ✅ CORRECT — seed files at repo root, run exact ticket command
+shutil.copy(test_file, repo_root / 'file1.png')
+shutil.copy(test_file, repo_root / 'file2.png')
+subprocess.run(['trackstate', 'attachment', 'upload', '--issue', 'TS-22',
+                '--file', 'file1.png', '--file', 'file2.png', '--target', 'local'],
+               cwd=repo_root)
+```
