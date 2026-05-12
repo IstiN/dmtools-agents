@@ -107,27 +107,6 @@ For failed tests, **APPROVE** when the failure is a genuine product defect or pr
 
 **Thread resolution rule**: When `pr_discussions.md` is present (repeated review after rework), for each prior thread you confirmed is **fully fixed** in this diff, add its `threadId` (from `pr_discussions_raw.json` → `threads[i].threadId`) to `resolvedThreadIds` in `pr_review.json`. Resolved threads will be automatically marked as resolved on GitHub. Only add threads whose fix you verified in the diff — do NOT resolve threads that are still open or only partially addressed.
 
-## TrackState Mandatory Checklist (check ALL in every review pass)
-
-Before writing your recommendation, verify each item below. These are the most common rejection reasons in this project — find them in **one pass** to avoid multi-round review cycles.
-
-| # | Check | Where to look |
-|---|-------|---------------|
-| 1 | `testing/tests/{TICKET-KEY}/README.md` exists | `pr_files.txt` — must contain `README.md` |
-| 2 | `testing/tests/{TICKET-KEY}/config.yaml` exists | `pr_files.txt` — both files required |
-| 3 | No raw `find.*`, `tester.tap()`, `WidgetTester` calls inside ticket test — all in Robot class | `pr_diff.txt` under `testing/tests/` |
-| 4 | No `testing/components/services/` import inside `testing/frameworks/` files | `pr_diff.txt` imports at top of framework files |
-| 5 | No unrelated class inheritance used solely for shared helpers | `pr_diff.txt` class definitions in frameworks |
-| 6 | Dart CLI tests run from repo root (`cwd=REPO_ROOT`), path via `--path` flag | `pr_diff.txt` subprocess calls |
-| 7 | Precondition assertions appear BEFORE any browser/UI launch | `pr_diff.txt` — `assert len(...)` before `driver.get()` |
-| 8 | Error assertions cover ALL contract fields, not just `exit_code` | `pr_diff.txt` — error assertions |
-| 9 | No exact example strings from ticket description used as assertion values | `pr_diff.txt` — `find.text(...)`, `assert ... == '...'` |
-| 10 | Teardown deletes ALL paths the test creates or modifies, including "should not exist" paths | `pr_diff.txt` — teardown/cleanup methods |
-| 11 | CLI command matches the exact command specified in the ticket | `pr_diff.txt` — subprocess call vs ticket step |
-
-**If any item is missing → REQUEST_CHANGES with an inline comment on the relevant line.**
-**Search the entire diff for ALL occurrences of each pattern before writing the review.**
-
 ## Output format
 
 Same format as standard PR review — see `pr_review_json_output.md`.

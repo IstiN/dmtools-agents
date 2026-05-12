@@ -8,8 +8,7 @@
       "aiRole": "Senior Developer Engineer specializing in root cause analysis and bug fixing",
       "instructions": [
         "./agents/instructions/development/bug_implementation_instructions.md",
-        "./agents/instructions/development/implementation_instructions.md",
-        "./agents/instructions/development/ts_flutter_rules.md"
+        "./agents/instructions/development/bug_implementation_instructions.md"
       ],
       "knownInfo": "",
       "formattingRules": "./agents/instructions/development/formatting_rules.md",
