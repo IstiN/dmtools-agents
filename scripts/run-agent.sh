@@ -12,6 +12,7 @@ Providers:
   cursor   - Uses cursor-agent (default)
   codemie  - Uses codemie-claude
   copilot  - Uses GitHub Copilot CLI (npx @github/copilot)
+  codex    - Uses Codex CLI
 
 Example:
   $(basename "$0") "process the input folder"
@@ -23,6 +24,8 @@ Notes:
   - For codemie: requires CODEMIE_API_KEY and CODEMIE_BASE_URL environment variables
   - For copilot: requires COPILOT_GITHUB_TOKEN or GITHUB_TOKEN environment variable
   - For cursor: optional CURSOR_MODEL env var (default: auto)
+  - For codex: optional CODEX_MODEL, CODEX_REASONING_EFFORT,
+    CODEX_SANDBOX, and CODEX_APPROVAL_POLICY env vars
   - Final response is written to outputs/response.md
 EOF
 }
@@ -168,6 +171,77 @@ elif [ "$PROVIDER" = "copilot" ]; then
     echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} ${PASS_ARGS[*]:-} -p <inline prompt>"
     echo ""
     "${COPILOT_CMD[@]}" --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}"
+  fi
+
+  exit_code=$?
+  echo ""
+  echo "=== Agent completed with exit code: $exit_code ==="
+  exit $exit_code
+
+elif [ "$PROVIDER" = "codex" ]; then
+  if ! command -v codex >/dev/null 2>&1; then
+    echo "Error: codex not found in PATH" >&2
+    exit 127
+  fi
+
+  mkdir -p outputs
+
+  CODEX_SANDBOX_VALUE="${CODEX_SANDBOX:-danger-full-access}"
+  CODEX_APPROVAL_VALUE="${CODEX_APPROVAL_POLICY:-never}"
+  echo "Codex Configuration:"
+  echo "  Model: ${CODEX_MODEL:-default}"
+  echo "  Sandbox: ${CODEX_SANDBOX_VALUE}"
+  echo "  Approval policy: ${CODEX_APPROVAL_VALUE}"
+
+  CODEX_BASE=(codex
+    --cd "$(pwd)"
+    --sandbox "${CODEX_SANDBOX_VALUE}"
+    --ask-for-approval "${CODEX_APPROVAL_VALUE}")
+
+  if [ -n "${CODEX_MODEL:-}" ]; then
+    CODEX_BASE+=(--model "${CODEX_MODEL}")
+  fi
+
+  if [ -n "${CODEX_REASONING_EFFORT:-}" ]; then
+    CODEX_BASE+=(-c "reasoning_effort=\"${CODEX_REASONING_EFFORT}\"")
+  fi
+
+  CODEX_RESUME=false
+  CODEX_FORWARD_ARGS=()
+  if [ ${#PASS_ARGS[@]} -gt 0 ]; then
+    for arg in "${PASS_ARGS[@]}"; do
+      case "$arg" in
+        --continue|--resume)
+          CODEX_RESUME=true
+          ;;
+        *)
+          CODEX_FORWARD_ARGS+=("$arg")
+          ;;
+      esac
+    done
+  fi
+
+  if [ "$CODEX_RESUME" = true ]; then
+    CMD=("${CODEX_BASE[@]}" exec resume --last -o outputs/response.md)
+  else
+    CMD=("${CODEX_BASE[@]}" exec -o outputs/response.md)
+  fi
+
+  if [ ${#CODEX_FORWARD_ARGS[@]} -gt 0 ]; then
+    CMD+=("${CODEX_FORWARD_ARGS[@]}")
+  fi
+
+  echo "Working directory: $(pwd)"
+  echo ""
+
+  if [ -f "${PROMPT_ARG}" ]; then
+    echo "Running: ${CMD[*]} - (prompt: ${PROMPT_BYTES} bytes via stdin)"
+    echo ""
+    "${CMD[@]}" - < "${PROMPT_ARG}"
+  else
+    echo "Running: ${CMD[*]} <inline prompt>"
+    echo ""
+    "${CMD[@]}" "$PROMPT"
   fi
 
   exit_code=$?

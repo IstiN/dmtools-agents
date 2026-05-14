@@ -58,7 +58,7 @@ The SM agent (`smAgent.js`) is the central orchestrator. Every 20 minutes:
 
 | Type | Description |
 |------|-------------|
-| **Teammate** | Runs a CLI agent (Cursor / GitHub Copilot / Codemie) with a markdown prompt file. `skipAI: true` means AI is driven by the CLI tool, not DMTools AI directly. |
+| **Teammate** | Runs a CLI agent (Cursor / GitHub Copilot / Codemie / Codex) with a markdown prompt file. `skipAI: true` means AI is driven by the CLI tool, not DMTools AI directly. |
 | **TestCasesGenerator** | A specialized DMTools job that reads a Jira story/bug and generates structured Test Case tickets (issue type: Test Case) in Jira. |
 | **JSRunner** | Executes a pure JavaScript file (`jsPath`) with no AI involvement. Used for orchestration (`smAgent.js`) and reporting (`workflowFailureReporter.js`). |
 
@@ -642,7 +642,7 @@ ai-teammate.yml (GitHub Actions)
 │     └─ If wip label found → abort early, release lock
 ├─ 5. Run preCliJSAction (optional, e.g., fetchQuestionsToInput.js)
 │     └─ Fetches extra context and injects into prompt variables
-├─ 6. Invoke CLI Agent (Cursor / GitHub Copilot / Codemie)
+├─ 6. Invoke CLI Agent (Cursor / GitHub Copilot / Codemie / Codex)
 │     └─ Uses cliPrompt markdown file as the task specification
 │     └─ CLI agent reads Jira ticket, writes code, runs commands
 ├─ 7. Run postJSAction (e.g., developTicketAndCreatePR.js)
