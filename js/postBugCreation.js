@@ -79,6 +79,9 @@ function action(params) {
                 comment: 'h3. ⚠️ Bug Creation Error\n\nCould not read bug_decision.json. Check workflow logs.'
             });
             try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
+            if (smTriggerLabel) {
+                try { jira_remove_label({ key: ticketKey, label: smTriggerLabel }); } catch (e) {}
+            }
             return { success: false, error: 'No bug_decision.json' };
         }
 
@@ -114,6 +117,9 @@ function action(params) {
             if (!summary) {
                 jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Bug Creation Skipped\n\nNo summary provided in bug_decision.json.' });
                 try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
+                if (smTriggerLabel) {
+                    try { jira_remove_label({ key: ticketKey, label: smTriggerLabel }); } catch (e) {}
+                }
                 return { success: false, error: 'No bug summary' };
             }
 
