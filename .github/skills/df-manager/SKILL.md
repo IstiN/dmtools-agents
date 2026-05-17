@@ -79,6 +79,15 @@ AND labels in (
 ORDER BY updated ASC
 ```
 
+Useful failed-test-case query:
+
+```jql
+project = TS
+AND issuetype = "Test Case"
+AND status = "Failed"
+ORDER BY updated ASC
+```
+
 ## Anomaly patterns
 
 ### Stale SM trigger label
@@ -142,6 +151,30 @@ Action:
 2. Add a regression unit test.
 3. Remove stale label for affected tickets and trigger SM.
 
+### Failed test queue blocked by first stuck ticket
+
+Symptoms:
+
+- The failed test case rule uses a low `limit` such as `1`.
+- One of the oldest failed test cases still has `sm_bug_creation_triggered`.
+- SM keeps scanning the same failed ticket and never reaches the rest of the
+  failed queue.
+- The latest ticket comments or run logs show an early bug-creation failure such
+  as missing `outputs/bug_decision.json` or a decision without a bug summary.
+
+Action:
+
+1. Query all failed test cases and count how many still have
+   `sm_bug_creation_triggered`.
+2. Inspect the oldest blocked failed ticket first; with a small `limit`, that
+   one ticket can starve the whole queue.
+3. Verify there is no active run for that ticket before removing only the stale
+   `sm_bug_creation_triggered` label.
+4. Fix the shared post action so early bug-creation failures also clear the SM
+   trigger label, then add a regression unit test.
+5. Trigger `sm.yml` and monitor until the blocked count returns to `0` and the
+   previously stuck failed ticket advances to `Bug To Fix` or gets a linked bug.
+
 ### Main CI failed after merge
 
 Symptoms:
@@ -194,4 +227,24 @@ Manual SM trigger:
 
 ```bash
 gh -R OWNER/REPO workflow run sm.yml
+```
+
+Quick failed-test queue audit:
+
+```bash
+dmtools jira_search_by_jql \
+  "project = TS AND issuetype = 'Test Case' AND status = 'Failed' ORDER BY updated ASC"
+```
+
+Factory watch loop:
+
+```bash
+while true; do
+  date -u
+  dmtools jira_search_by_jql \
+    "project = TS AND issuetype = 'Test Case' AND status = 'Failed' AND labels = sm_bug_creation_triggered ORDER BY updated ASC"
+  gh -R OWNER/REPO run list --limit 20 \
+    --json displayTitle,status,conclusion,workflowName,headBranch,url
+  sleep 300
+done
 ```
