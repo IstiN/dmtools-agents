@@ -29,7 +29,8 @@
         "agents/js/unit-tests/test_postMobileTestAutomationResults.js",
         "agents/js/unit-tests/test_writeSolutionAndDiagrams.js",
         "agents/js/unit-tests/test_createPlannedStoriesFromOutput.js",
-        "agents/js/unit-tests/test_releaseArtefacts.js"
+        "agents/js/unit-tests/test_releaseArtefacts.js",
+        "agents/js/unit-tests/test_timerAutoCommitAndSave.js"
       ]
     }
   }
