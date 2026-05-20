@@ -104,7 +104,7 @@ function action(params) {
                     var targetRepo = customParams.targetRepository;
                     if (targetRepo && targetRepo.owner && targetRepo.repo) {
                         // Find open PR for this ticket
-                        var prsJson = github_list_pull_requests({
+                        var prsJson = github_list_prs({
                             workspace: targetRepo.owner,
                             repository: targetRepo.repo,
                             state: 'open'
