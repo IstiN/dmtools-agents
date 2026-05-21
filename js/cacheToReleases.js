@@ -120,10 +120,10 @@ function action(params) {
                                 workspace: targetRepo.owner,
                                 repository: targetRepo.repo,
                                 pullRequestId: String(matchingPr.number),
-                                comment: '## 📦 Artefact: ' + asset.name + '\n\n' +
-                                         'Folder `' + releaseArtefacts.resolveTemplate(asset.fromFolder, ticketKey) +
-                                         '` has been archived to GitHub Release.\n\n' +
-                                         '**Release:** ' + result.releaseUrl
+                                text: '## 📦 Artefact: ' + asset.name + '\n\n' +
+                                      'Folder `' + releaseArtefacts.resolveTemplate(asset.fromFolder, ticketKey) +
+                                      '` has been archived to GitHub Release.\n\n' +
+                                      '**Release:** ' + result.releaseUrl
                             });
                             console.log('✅ Posted release link to PR #' + matchingPr.number + ' for "' + asset.name + '"');
                         } else {
