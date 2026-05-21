@@ -172,7 +172,7 @@
           "configFile": "agents/bug_creation.json",
           "skipIfLabel": "sm_bug_creation_triggered",
           "addLabel": "sm_bug_creation_triggered",
-          "limit": 1
+          "limit": 5
         },
         {
           "description": "Bug To Fix Test Cases → all linked Bugs Done → move to Backlog",
