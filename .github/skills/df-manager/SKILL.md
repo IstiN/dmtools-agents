@@ -63,6 +63,23 @@ Always collect all three layers:
 3. **GitHub Actions**: active runs, failed runs, run titles, branches, workflow
    names, URLs, failed job logs.
 
+## Quality signals
+
+Watch for repeat patterns that usually mean the automation is learning the wrong
+lesson:
+
+- Same ticket key processed multiple times by the same workflow without a status
+  change.
+- Failed runs that keep coming back after a `none` / no-op decision.
+- One ticket monopolizing the queue while newer tickets stay untouched.
+- PRs that are clean but never merge, or that keep bouncing between review and
+  rework.
+- Labels that disappear while the ticket is still in the source state.
+
+When you see one of these patterns, prefer fixing the shared agent logic first.
+Keep TrackState-specific labels, status names, and queue rules in project
+instructions under `.dmtools/`.
+
 Useful Jira query:
 
 ```jql

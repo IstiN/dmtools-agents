@@ -400,6 +400,56 @@ function detectDuplicateRuns(context) {
     });
 }
 
+function detectRepeatedFailureLoops(context) {
+    var grouped = {};
+
+    context.failedRuns.forEach(function(run) {
+        var key = extractTicketKey(runText(run));
+        if (!key) return;
+        if (!grouped[key]) {
+            grouped[key] = {
+                total: 0,
+                workflows: {},
+                urls: []
+            };
+        }
+
+        var bucket = grouped[key];
+        var workflow = run.workflowName || run.name || 'unknown-workflow';
+        bucket.total += 1;
+        bucket.workflows[workflow] = (bucket.workflows[workflow] || 0) + 1;
+        var url = runUrl(run);
+        if (url) bucket.urls.push(url);
+    });
+
+    Object.keys(grouped).forEach(function(key) {
+        var bucket = grouped[key];
+        if (bucket.total < 3) return;
+
+        var ticket = context.ticketByKey[key];
+        var status = ticketStatus(ticket);
+        var labelCount = ticketLabels(ticket).filter(function(label) {
+            return context.smLabelSet[label] === true;
+        }).length;
+        var workflows = Object.keys(bucket.workflows).map(function(name) {
+            return name + '×' + bucket.workflows[name];
+        }).join(', ');
+
+        appendAnomaly(context.anomalies, {
+            type: 'repeated-failure-loop',
+            severity: (status === 'Failed' || labelCount > 0 || bucket.total >= 5) ? 'blocking' : 'warning',
+            ticketKey: key,
+            workflowRuns: bucket.total,
+            workflows: bucket.workflows,
+            runUrls: uniq(bucket.urls),
+            status: status,
+            message: 'Ticket has ' + bucket.total + ' failed workflow runs' +
+                (workflows ? ' (' + workflows + ')' : '') +
+                (status ? ' while still in ' + status + '.' : '.')
+        });
+    });
+}
+
 function triggerSmWorkflow(context, reason) {
     if (context.recoveryState.smTriggered) return;
     context.scm.triggerWorkflow(
@@ -507,6 +557,7 @@ function action(params) {
     detectPrMergeGaps(context);
     detectFailedRuns(context);
     detectDuplicateRuns(context);
+    detectRepeatedFailureLoops(context);
     applySafeRecovery(context);
 
     var report = {

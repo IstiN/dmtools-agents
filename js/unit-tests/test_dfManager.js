@@ -131,6 +131,65 @@ suite('dfManager', function() {
         assert.ok(df.written.length > 0, 'report should be written');
     });
 
+    test('flags repeated failure loops on the same ticket', function() {
+        var df = makeDfManager({
+            tickets: [
+                {
+                    key: 'TS-909',
+                    fields: {
+                        status: { name: 'Failed' },
+                        labels: ['sm_bug_creation_triggered'],
+                        updated: '2026-05-09T16:59:00.000Z'
+                    }
+                }
+            ],
+            runsByStatus: {
+                completed: [
+                    {
+                        status: 'completed',
+                        conclusion: 'failure',
+                        workflowName: 'bug_creation',
+                        display_title: 'agents/bug_creation.json : TS-909'
+                    },
+                    {
+                        status: 'completed',
+                        conclusion: 'failure',
+                        workflowName: 'bug_creation',
+                        display_title: 'agents/bug_creation.json : TS-909'
+                    },
+                    {
+                        status: 'completed',
+                        conclusion: 'failure',
+                        workflowName: 'bug_creation',
+                        display_title: 'agents/bug_creation.json : TS-909'
+                    }
+                ]
+            }
+        });
+
+        var report = df.action({
+            jobParams: {
+                customParams: {
+                    nowMs: Date.parse('2026-05-09T17:00:00.000Z'),
+                    staleMinutes: 45
+                }
+            }
+        });
+
+        var repeated = null;
+        for (var i = 0; i < report.anomalies.length; i++) {
+            if (report.anomalies[i].type === 'repeated-failure-loop') {
+                repeated = report.anomalies[i];
+                break;
+            }
+        }
+
+        assert.ok(repeated, 'should report repeated failure loop');
+        assert.equal(repeated.ticketKey, 'TS-909');
+        assert.equal(repeated.workflowRuns, 3);
+        assert.equal(repeated.severity, 'blocking');
+    });
+
     test('does not report stale labels while matching run is active', function() {
         var df = makeDfManager({
             tickets: [
