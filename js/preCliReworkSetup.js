@@ -11,6 +11,7 @@ var configLoader = require('./configLoader.js');
 const gh = require('./common/githubHelpers.js');
 const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
+var restoreFromReleases = require('./restoreFromReleases.js');
 
 function failSetup(ticketKey, inputFolder, message) {
     try {
@@ -37,6 +38,9 @@ function action(params) {
         var ticketKey = inputFolder.split('/').pop();
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var scm = configLoader.createScm(config);
+
+        // Restore configured artefacts (e.g. cosmo test reports) from GitHub Release — non-fatal
+        try { restoreFromReleases.action(params); } catch (e) { console.warn('⚠️ restoreFromReleases failed (non-fatal):', e); }
 
         console.log('=== Rework setup for:', ticketKey, '===');
 

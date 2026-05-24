@@ -13,8 +13,7 @@
         "For each question write a separate description file to outputs/questions/ (question-1.md, question-2.md, ...) following the Jira Markdown template from instructions.",
         "Write outputs/questions.json with the question plan. After writing, run 'dmtools file_validate_json \"$(cat outputs/questions.json)\"' and check the result. If 'valid' is false, fix the JSON and rewrite before continuing.",
         "If you don't have questions, or all needed questions are already created and everything is crystal clear, write [] to outputs/questions.json",
-        "**IMPORTANT** If the story involves any visual elements (icons, graphics, illustrations, UI components), raise questions about their appearance and structure. For icons: ask about style (outline vs filled, stroke weight, corner radius, color palette) and provide 2–3 concrete style suggestions with brief rationale. For layout and structure: if the story introduces new UI screens or components, ask about the preferred layout (e.g. grid vs list, sidebar vs tabs, card vs row) and propose 2–3 options. Keep each such question focused and include your recommendation.",
-        "./agents/instructions/common/bash_tools.md"
+        "**IMPORTANT** If the story involves any visual elements (icons, graphics, illustrations, UI components), raise questions about their appearance and structure. For icons: ask about style (outline vs filled, stroke weight, corner radius, color palette) and provide 2–3 concrete style suggestions with brief rationale. For layout and structure: if the story introduces new UI screens or components, ask about the preferred layout (e.g. grid vs list, sidebar vs tabs, card vs row) and propose 2–3 options. Keep each such question focused and include your recommendation."
       ],
       "knownInfo": "",
       "formattingRules": "outputs/questions.json must be a valid JSON array. Each item: \"summary\" (string, <=120 chars, do NOT include [Q] prefix — it is added automatically), \"priority\" (one of Highest, High, Medium, Low, Lowest), \"description\" (relative path to the .md file, e.g. \"outputs/questions/question-1.md\"). Avoid trailing commas. The description .md file must NOT repeat or restate the question summary — the summary is already the ticket title. Start the description directly with context, background, or details that support the question.",
@@ -31,6 +30,9 @@
     "alwaysPostComments": true,
     "preCliJSAction": "agents/js/fetchQuestionsToInput.js",
     "postJSAction": "agents/js/createQuestionsAndAssignForReview.js",
-    "inputJql": "key = JD-82"
+    "inputJql": "key = JD-82",
+    "cliPrompts": [
+      "./agents/prompts/bash_tools.md"
+    ]
   }
 }

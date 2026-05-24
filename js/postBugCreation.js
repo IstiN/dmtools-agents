@@ -79,9 +79,8 @@ function action(params) {
                 comment: 'h3. ⚠️ Bug Creation Error\n\nCould not read bug_decision.json. Check workflow logs.'
             });
             try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
-            if (smTriggerLabel) {
-                try { jira_remove_label({ key: ticketKey, label: smTriggerLabel }); } catch (e) {}
-            }
+            // KEEP sm_bug_creation_triggered label — TC stays in Failed, removing
+            // the label would cause SM to re-trigger in an infinite loop.
             return { success: false, error: 'No bug_decision.json' };
         }
 
@@ -117,9 +116,7 @@ function action(params) {
             if (!summary) {
                 jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Bug Creation Skipped\n\nNo summary provided in bug_decision.json.' });
                 try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
-                if (smTriggerLabel) {
-                    try { jira_remove_label({ key: ticketKey, label: smTriggerLabel }); } catch (e) {}
-                }
+                // KEEP sm_bug_creation_triggered — TC stays Failed, prevent re-fire loop.
                 return { success: false, error: 'No bug summary' };
             }
 
@@ -170,10 +167,9 @@ function action(params) {
 
             try { jira_post_comment({ key: ticketKey, comment: comment }); } catch (e) {}
             try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
-            if (smTriggerLabel) {
-                try { jira_remove_label({ key: ticketKey, label: smTriggerLabel }); } catch (e) {}
-            }
-            console.log('ℹ️ No action taken for', ticketKey, '— TC stays in Failed');
+            // KEEP sm_bug_creation_triggered label — TC stays in Failed, removing
+            // the label would cause SM to re-trigger bug_creation in an infinite loop.
+            console.log('ℹ️ No action taken for', ticketKey, '— TC stays in Failed (trigger label kept to prevent re-fire)');
             return { success: true, ticketKey: ticketKey, bugKey: null, action: 'none' };
         }
 

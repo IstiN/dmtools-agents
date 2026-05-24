@@ -36,7 +36,12 @@ function loadPostTestAutomation(mocks) {
         makeRequire({
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
-            './common/pullRequest.js': prHelper
+            './common/pullRequest.js': prHelper,
+            './common/autoStart.js': {
+                triggerNextAgent: function() {
+                    return { success: true };
+                }
+            }
         }),
         allMocks
     );
@@ -128,6 +133,74 @@ suite('postTestAutomationResults: PR creation', function() {
         assert.ok(statuses.indexOf('Passed') !== -1, 'moved directly to Passed');
         assert.equal(comments.length, 1);
         assert.contains(comments[0], 'Test code unchanged from previous run');
+    });
+
+});
+
+suite('postTestAutomationResults: failure cleanup', function() {
+
+    test('moves ticket back to Backlog and removes trigger label when result JSON is missing', function() {
+        var comments = [];
+        var statuses = [];
+        var removedLabels = [];
+        var module = loadPostTestAutomation({
+            file_read: function(opts) {
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            jira_post_comment: function(args) {
+                comments.push(args.comment);
+            },
+            jira_move_to_status: function(args) {
+                statuses.push(args.statusName);
+            },
+            jira_remove_label: function(args) {
+                removedLabels.push(args.label);
+            }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-999', fields: { summary: 'Missing result should retry' } },
+            metadata: { contextId: 'test_case_automation' },
+            jobParams: { customParams: { removeLabel: 'sm_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.error, 'No test result JSON found');
+        assert.ok(statuses.indexOf('Backlog') !== -1, 'moved to Backlog for retry');
+        assert.ok(removedLabels.indexOf('sm_test_automation_triggered') !== -1, 'removed SM trigger label');
+        assert.ok(removedLabels.indexOf('test_case_automation_wip') !== -1, 'removed WIP label');
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0], 'Ticket moved back to *Backlog*');
+    });
+
+    test('reads result JSON from configured workingDir outputs fallback', function() {
+        var reads = [];
+        var module = loadPostTestAutomation({
+            file_read: function(opts) {
+                reads.push(opts.path);
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                if (opts.path === '/tmp/repo/outputs/test_automation_result.json') {
+                    return JSON.stringify({ status: 'passed', summary: 'Read from working directory' });
+                }
+                if (opts.path === '/tmp/repo/outputs/jira_comment.md') {
+                    return 'h3. Test Automation Result\n\n*Status:* ✅ PASSED';
+                }
+                return null;
+            },
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git branch --show-current') return '';
+                return '';
+            }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-1000', fields: { summary: 'Working dir output' } },
+            jobParams: { customParams: { targetRepository: { workingDir: '/tmp/repo' } } }
+        });
+
+        assert.equal(result.success, true);
+        assert.ok(reads.indexOf('/tmp/repo/outputs/test_automation_result.json') !== -1, 'checked workingDir fallback path');
     });
 
 });

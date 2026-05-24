@@ -9,31 +9,12 @@
 
 var configLoader = require('./configLoader.js');
 var scmModule = require('./common/scm.js');
+var submoduleHelper = require('./common/submodules.js');
+var prHelper = require('./common/pullRequest.js');
+var feedbackLoop = require('./common/feedbackLoop.js');
+var autoStart = require('./common/autoStart.js');
 const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js');
-
-/**
- * Derive project key from customParams.configPath or customParams.projectKey.
- */
-function deriveProjectKey(customParams) {
-    if (!customParams) return '';
-    if (customParams.projectKey) return customParams.projectKey;
-    var cp = customParams.configPath || '';
-    if (!cp) return '';
-    var base = cp.substring(cp.lastIndexOf('/') + 1).replace(/\.js$/, '');
-    return (base && base !== 'config') ? base : '';
-}
-
-/**
- * Build minimal encoded_config for an auto-started downstream workflow.
- */
-function buildAutoStartEncodedConfig(ticketKey, customParams) {
-    var p = { inputJql: 'key = ' + ticketKey };
-    var cp = customParams && customParams.configPath;
-    if (cp) {
-        p.customParams = { configPath: cp };
-    }
-    return encodeURIComponent(JSON.stringify({ params: p }));
-}
+var cacheToReleases = require('./cacheToReleases.js');
 
 /**
  * Returns true if the Jira ticket has the pr_approved label.
@@ -64,6 +45,26 @@ function removeConfiguredLabels(ticketKey, customParams) {
                 console.warn('Failed to remove SM label ' + label + ':', e);
             }
         });
+}
+
+function resolveCustomParams(params, actualParams, config) {
+    var merged = {};
+    var patch = configLoader.resolveInstructions(
+        'pr_rework',
+        null,
+        config
+    ).jobParamPatch;
+    if (patch && patch.customParams) {
+        Object.assign(merged, patch.customParams);
+    }
+    Object.assign(
+        merged,
+        (params.jobParams && params.jobParams.customParams) ||
+            (actualParams && actualParams.customParams) ||
+            params.customParams ||
+            {}
+    );
+    return merged;
 }
 
 function cleanCommandOutput(output) {
@@ -127,7 +128,7 @@ function configureGitAuthor(config) {
     }
 }
 
-function commitAndPush(ticketKey, config) {
+function commitAndPush(ticketKey, config, customParams) {
     var workingDir = config.workingDir || null;
     var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
     var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
@@ -146,6 +147,11 @@ function commitAndPush(ticketKey, config) {
     if (!expectedBranch) {
         throw new Error('Could not determine expected PR branch from input/' + ticketKey + '/pr_info.md; refusing to commit or push.');
     }
+    var baseBranch = (config.git && config.git.baseBranch) || 'main';
+    try {
+        var baseMatch = prInfo.match(/\*\*Branch\*\*:\s*`[^`]+`\s*→\s*`([^`]+)`/);
+        if (baseMatch && baseMatch[1]) baseBranch = baseMatch[1].trim();
+    } catch (e) {}
 
     var currentBranch = cleanCommandOutput(cmd('git branch --show-current') || '');
     console.log('Current branch:', currentBranch, '| Expected:', expectedBranch);
@@ -162,10 +168,17 @@ function commitAndPush(ticketKey, config) {
         }
     }
 
+    submoduleHelper.pushManagedSubmodules({
+        run: cmd,
+        cleanOutput: cleanCommandOutput,
+        config: config,
+        customParams: customParams,
+        ticketKey: ticketKey
+    });
+
     cmd('git add .');
 
-    const rawStatus = cmd('git status --porcelain') || '';
-    const status = cleanCommandOutput(rawStatus);
+    const status = prHelper.readStagedDiffStat(cmd, workingDir);
 
     var hasChanges = false;
     if (status.trim()) {
@@ -175,6 +188,20 @@ function commitAndPush(ticketKey, config) {
         hasChanges = true;
     } else {
         console.warn('No file changes detected — pushing existing commits only');
+    }
+
+    var syncResult = prHelper.syncBranchWithBase({
+        branchName: branchName,
+        baseBranch: baseBranch,
+        workingDir: workingDir,
+        runCommand: function(command, dir) {
+            var args = { command: command };
+            if (dir) args.workingDirectory = dir;
+            return cli_execute_command(args);
+        }
+    });
+    if (!syncResult.success) {
+        throw new Error('Could not sync PR branch with origin/' + baseBranch + ' before rework push: ' + syncResult.error);
     }
 
     try {
@@ -303,7 +330,7 @@ function action(params) {
         const fixSummary = actualParams.response || '_(No fix summary generated)_';
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var scm = scmModule.createScm(config);
-        const _customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
+        const _customParams = resolveCustomParams(params, actualParams, config);
         const statuses = resolveStatuses(_customParams);
 
         console.log('=== Push rework changes for:', ticketKey, '===');
@@ -311,15 +338,42 @@ function action(params) {
         // Configure git
         configureGitAuthor(config);
 
+        var gateResult = feedbackLoop.runQualityGates({
+            ticketKey: ticketKey,
+            customParams: _customParams,
+            section: 'qualityGates'
+        });
+        if (!gateResult.success) {
+            throw new Error('Quality gate failed before rework push: ' + gateResult.failedGate + '\n' + gateResult.error);
+        }
+        var policyResult = feedbackLoop.runPolicyGates({
+            ticketKey: ticketKey,
+            customParams: _customParams,
+            section: 'policyGates'
+        });
+        if (!policyResult.success) {
+            throw new Error('Policy gate failed before rework push: ' + policyResult.failedGate + '\n' + policyResult.error);
+        }
+
         // Commit and push
         let branchName;
         let codeChangesCommitted = false;
         try {
-            const pushResult = commitAndPush(ticketKey, config);
+            const pushResult = commitAndPush(ticketKey, config, _customParams);
             branchName = pushResult.branch;
             codeChangesCommitted = pushResult.hasChanges;
         } catch (gitError) {
             console.error('Git operations failed:', gitError);
+            var resume = feedbackLoop.resumeAgent({
+                ticketKey: ticketKey,
+                customParams: _customParams,
+                section: 'postAction',
+                stage: 'rework_git_operations',
+                error: gitError.toString()
+            });
+            if (resume.attempted) {
+                return action(params);
+            }
             try {
                 jira_post_comment({
                     key: ticketKey,
@@ -327,6 +381,27 @@ function action(params) {
                 });
             } catch (e) {}
             return { success: false, error: gitError.toString() };
+        }
+
+        var postPublishGateResult = feedbackLoop.runPostPublishGates({
+            ticketKey: ticketKey,
+            customParams: _customParams,
+            section: 'postPublishGates',
+            workingDir: config.workingDir || null
+        });
+        if (!postPublishGateResult.success) {
+            var gateError = 'Post-publish quality gate failed: ' +
+                postPublishGateResult.failedGate + '\n' + postPublishGateResult.error;
+            if (postPublishGateResult.resumeAttempted) {
+                return action(params);
+            }
+            try {
+                jira_post_comment({
+                    key: ticketKey,
+                    comment: 'h3. ❌ Rework Quality Gate Failed\n\n{code}' + gateError + '{code}\n\nThe branch was pushed before running this gate. Please check the logs and retry.'
+                });
+            } catch (e) {}
+            return { success: false, error: gateError };
         }
 
         // Find PR to post comment — prefer targetRepository from config over git remote
@@ -395,12 +470,12 @@ function action(params) {
         }
 
         // Remove SM idempotency label so the ticket can be re-triggered next cycle
-        const customParams = params.jobParams && params.jobParams.customParams;
-        removeConfiguredLabels(ticketKey, customParams);
+        removeConfiguredLabels(ticketKey, _customParams);
 
         // Auto-start pr_review after rework is pushed to In Review (opt-in via customParams)
-        const autoStartReview = customParams && customParams.autoStartReview;
-        const reviewConfigFile = customParams && customParams.autoStartReviewConfigFile;
+        var reviewStarted = false;
+        const autoStartReview = _customParams && _customParams.autoStartReview;
+        const reviewConfigFile = _customParams && _customParams.autoStartReviewConfigFile;
         if (autoStartReview && reviewConfigFile) {
             // Skip if ticket already has pr_approved label (already approved, merge pending)
             const ticket = actualParams.ticket || (params.jobParams && params.jobParams.ticket);
@@ -408,33 +483,30 @@ function action(params) {
                 console.log('ℹ️ autoStartReview: skipped — ticket has pr_approved label');
             } else {
                 try {
-                    // Use customParams.aiRepository if set (avoids targetRepository override in configLoader)
-                    const aiRepoCfg = customParams && customParams.aiRepository;
-                    const aiOwner = (aiRepoCfg && aiRepoCfg.owner) || (config.repository && config.repository.owner);
-                    const aiRepo  = (aiRepoCfg && aiRepoCfg.repo)  || (config.repository && config.repository.repo);
-                    const projectKey = deriveProjectKey(customParams);
-                    const encodedCfg = buildAutoStartEncodedConfig(ticketKey, customParams);
-                    if (aiOwner && aiRepo) {
-                        scm.triggerWorkflow(
-                            aiOwner, aiRepo, 'ai-teammate.yml',
-                            JSON.stringify({
-                                concurrency_key: ticketKey,
-                                config_file:     reviewConfigFile,
-                                encoded_config:  encodedCfg,
-                                project_key:     projectKey || ''
-                            }),
-                            'main'
-                        );
-                        console.log('✅ Auto-started pr_review for', ticketKey,
-                            '[config=' + reviewConfigFile + (projectKey ? ', project=' + projectKey : '') + ']');
-                    } else {
-                        console.warn('⚠️ autoStartReview: config.repository.owner/repo not set — skipping');
-                    }
+                    reviewStarted = autoStart.triggerConfiguredWorkflowForTicket({
+                        ticketKey: ticketKey,
+                        customParams: _customParams,
+                        config: config,
+                        configFile: reviewConfigFile,
+                        label: 'pr_review',
+                        scm: scm,
+                        stripKeys: [
+                            'removeLabel',
+                            'autoStartReview',
+                            'autoStartReviewConfigFile'
+                        ]
+                    });
                 } catch (e) {
                     console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
                 }
             }
         }
+        if (!reviewStarted) {
+            autoStart.triggerSmIfIdle({ config: config, customParams: _customParams, scm: scm });
+        }
+
+        // Cache configured artefacts (e.g. cosmo test reports) to GitHub Release — non-fatal
+        try { cacheToReleases.action(params); } catch (e) { console.warn('⚠️ cacheToReleases failed (non-fatal):', e); }
 
         console.log('✅ Rework workflow completed successfully');
 
@@ -449,8 +521,19 @@ function action(params) {
     } catch (error) {
         console.error('❌ Error in pushReworkChanges:', error);
         try {
-            const actualParams = params.jobParams || params;
+            const actualParams = params.ticket ? params : (params.jobParams || params);
             if (actualParams && actualParams.ticket && actualParams.ticket.key) {
+                const customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
+                var resume = feedbackLoop.resumeAgent({
+                    ticketKey: actualParams.ticket.key,
+                    customParams: customParams,
+                    section: 'postAction',
+                    stage: 'rework_post_action',
+                    error: error.toString()
+                });
+                if (resume.attempted) {
+                    return action(params);
+                }
                 jira_post_comment({
                     key: actualParams.ticket.key,
                     comment: 'h3. ❌ Rework Workflow Error\n\n{code}' + error.toString() + '{code}'
@@ -462,5 +545,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = { action, resolveCustomParams };
 }

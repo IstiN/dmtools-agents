@@ -23,6 +23,33 @@ Do NOT run `git commit` or `git merge --abort` — the commit is handled automat
 3. **Address BLOCKING issues first** (security, critical bugs), then IMPORTANT, then SUGGESTIONS
 4. **If a SUGGESTION is minor and time-consuming**, you may skip it but explicitly note it in `outputs/response.md`
 
+## Rework Decision Flow
+
+Use this flow before changing code so approved PRs that are only waiting for CI or merge checks do not enter a stale rework loop:
+
+```mermaid
+flowchart TD
+    A[Start PR rework] --> B{rework_setup_failed.md exists?}
+    B -->|Yes| C[Write setup failure response and empty replies]
+    B -->|No| D{merge_conflicts.md exists?}
+    D -->|Yes| E[Resolve conflicts first]
+    D -->|No| F{ci_failures.md exists?}
+    E --> F
+    F -->|Yes| G[Fix CI root cause]
+    F -->|No| H{pr_discussions.md has open actionable items?}
+    G --> H
+    H -->|Yes| I[Fix every thread and write matching replies]
+    H -->|No| J{Only waiting for fresh review, checks, or merge?}
+    J -->|Yes| K[Write no-action response and empty replies]
+    J -->|No| L[Write no-open-review-comments response]
+    I --> M[Run relevant checks]
+    M --> N[Write outputs/response.md and outputs/review_replies.json]
+    K --> N
+    L --> N
+```
+
+Approved PRs with no unresolved review threads are not rework candidates. If the PR is approved and required checks are still running, do not post another "Rework Complete" comment; the correct state is to wait for CI or merge automation.
+
 ## What You Must NOT Do
 
 - Do not introduce new logic unrelated to fixing review comments

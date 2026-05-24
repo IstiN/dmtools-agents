@@ -4,15 +4,15 @@
     "testCasesPriorities": "High, Medium, Low",
     "outputType": "creation",
     "testCaseIssueType": "Test Case",
-    "existingTestCasesJql": "project = {jiraProject} AND issuetype = 'Test Case'",
+    "existingTestCasesJql": "project = {jiraProject} AND issuetype = 'Test Case' ORDER BY created DESC",
     "testCaseLinkRelationship": "relates to",
     "isFindRelated": true,
     "isGenerateNew": true,
     "isConvertToJiraMarkdown": false,
     "isOverridePromptExamples": true,
-    "includeOtherTicketReferences": true,
+    "includeOtherTicketReferences": false,
     "alwaysPostComments": true,
-    "ticketContextDepth": 1,
+    "ticketContextDepth": 0,
     "confluencePages": [
       "./agents/instructions/test_cases/test_case_creation_rules.md"
     ],

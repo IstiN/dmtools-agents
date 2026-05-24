@@ -13,8 +13,7 @@
         "Answer the question clearly and concisely from a Product Owner perspective. Focus on business intent, expected behaviour, and scope boundaries.",
         "Write your answer to outputs/response.md. Start directly with the answer — no intro, no 'Answer:' prefix.",
         "If the question cannot be answered without more information, state clearly what is missing and what assumptions you are making.",
-        "**IMPORTANT** if you can't read file yourself for instance images you must use the terminal (CLI) command \"dmtools gemini_ai_chat_with_files --data '{\"message\": \"Your request what you need to understand from file\", \"filePaths\": [\"/path/to/image.png\"]}'\"",
-        "./agents/instructions/common/bash_tools.md"
+        "**IMPORTANT** if you can't read file yourself for instance images you must use the terminal (CLI) command \"dmtools gemini_ai_chat_with_files --data '{\"message\": \"Your request what you need to understand from file\", \"filePaths\": [\"/path/to/image.png\"]}'\""
       ],
       "knownInfo": "",
       "formattingRules": "",
@@ -32,6 +31,9 @@
     "skipAIProcessing": true,
     "alwaysPostComments": true,
     "postJSAction": "agents/js/closeQuestionTicket.js",
-    "inputJql": "key = JD-95"
+    "inputJql": "key = JD-95",
+    "cliPrompts": [
+      "./agents/prompts/bash_tools.md"
+    ]
   }
 }

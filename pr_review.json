@@ -8,8 +8,7 @@
       "aiRole": "Senior Code Reviewer & Security Expert",
       "instructions": [
         "./agents/instructions/review/pr_review_instructions.md",
-        "./agents/instructions/review/pr_review_json_output.md",
-        "./agents/instructions/common/bash_tools.md"
+        "./agents/instructions/review/pr_review_json_output.md"
       ],
       "knownInfo": "",
       "formattingRules": "./agents/instructions/review/pr_review_formatting.md",
@@ -31,6 +30,9 @@
     "customParams": {
       "removeLabel": "sm_story_review_triggered"
     },
-    "inputJql": "key = JD-107"
+    "inputJql": "key = JD-107",
+    "cliPrompts": [
+      "./agents/prompts/bash_tools.md"
+    ]
   }
 }

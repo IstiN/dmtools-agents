@@ -12,6 +12,8 @@
         "./agents/instructions/common/media_handling.md",
         "./agents/instructions/common/jira_context.md",
         "**IMPORTANT** Read 'input/existing_questions.json' to see existing question subtasks for this story (fields: key, summary, description, status, answer). Use answered questions as context for the solution.",
+        "./agents/instructions/enhancement/solution_design_ac_referencing.md",
+        "./agents/instructions/tracker/jira_ac_reference_format.md",
         "**IMPORTANT** Your task is to write a high-level Solution Design for the story — not implementation details. Focus on architecture, components, data flow, and integration points.",
         "**IMPORTANT** Before proposing a solution, evaluate technology choices: analyse the existing codebase stack, consider alternatives, weigh trade-offs (complexity, performance, maintainability, compatibility), and explicitly justify why the chosen technology or approach best fits the requirements. Do not default to a technology without reasoning.",
         "**IMPORTANT** If a file named 'instruction.md' exists in the repository root, read it before writing the solution. Use it as the authoritative reference for the project's tech stack, deployment constraints, and configuration — ensure your solution aligns with what is defined there.",
@@ -19,8 +21,7 @@
         "**IMPORTANT** Write the solution design content to outputs/response.md following the Solution Design template from Confluence.",
         "**IMPORTANT** Write a valid Mermaid diagram to outputs/diagram.md showing the technical architecture, component relationships, or workflow. Use proper Mermaid syntax: graph TD, flowchart TD, sequenceDiagram, classDiagram, etc.",
         "if you can't read file yourself for instance images you must use the terminal (CLI) command \"dmtools gemini_ai_chat_with_files --data '{\"message\": \"Your request what you need to understand from file\", \"filePaths\": [\"/path/to/image.png\"]}'",
-        "Use the terminal (cli) command to get png file of figma designs and then read it via gemini_ai_chat_with_files: dmtools figma_download_image_of_file <<EOF\n{\n  \"href\": \"https://www.figma.com/design/asdsadasdasdasd/Business-App?m=auto&node-id=NODEID&t=ASdasdsadas-1\"\n}\nEOF",
-        "./agents/instructions/common/bash_tools.md"
+        "Use the terminal (cli) command to get png file of figma designs and then read it via gemini_ai_chat_with_files: dmtools figma_download_image_of_file <<EOF\n{\n  \"href\": \"https://www.figma.com/design/asdsadasdasdasd/Business-App?m=auto&node-id=NODEID&t=ASdasdsadas-1\"\n}\nEOF"
       ],
       "knownInfo": "",
       "formattingRules": "./agents/instructions/enhancement/solution_design_formatting_rules.md",
@@ -36,8 +37,11 @@
     "skipAIProcessing": true,
     "alwaysPostComments": true,
     "preJSAction": "agents/js/checkWipLabel.js",
-    "preCliJSAction": "agents/js/fetchQuestionsToInput.js",
+    "preCliJSAction": "agents/js/preCliSolutionSetup.js",
     "postJSAction": "agents/js/writeSolutionAndDiagrams.js",
-    "inputJql": "key = JD-82"
+    "inputJql": "key = JD-82",
+    "cliPrompts": [
+      "./agents/prompts/bash_tools.md"
+    ]
   }
 }

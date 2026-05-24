@@ -23,6 +23,14 @@ The feature code is **already in main branch**. Your job is to:
 
 **You may ONLY write code inside the `testing/` folder.**
 
+## Product defects discovered during rework
+
+If a reviewer asks for behavior that cannot be implemented from `testing/` because the production code, public API, repository service, CLI command, schema, or workflow does not expose the required capability, do **not** create a synthetic passing fixture and do **not** modify code outside `testing/`.
+
+Instead, keep or adjust the test so it exercises the closest production-visible action allowed by the Test Case, let it fail for the real product gap, and write `outputs/test_automation_result.json` with `"status": "failed"`. Also write `outputs/bug_description.md` with enough detail for the downstream bug creation flow to create or link a Bug: reproduction steps, expected result, actual result, exact missing/broken production capability, and the failing command/output.
+
+This is not `blocked_by_human`: missing product behavior is a failed test/product bug. The correct workflow is failed Test Case -> bug creation, not fake green test code.
+
 ## Output files
 
 **⚠️ CRITICAL: All output files MUST be written to `outputs/` at the repository root** (e.g. `/home/runner/work/repo/repo/outputs/`).

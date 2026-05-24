@@ -21,8 +21,7 @@
         "**IMPORTANT** Create a valid Mermaid diagram showing the technical architecture, component relationships, or workflow for the solution design implementation",
         "The diagram should visualize key components, data flow, integration points, and architectural patterns mentioned in the enhanced description",
         "Use proper Mermaid syntax: graph TD, flowchart TD, sequenceDiagram, classDiagram, etc. based on what best represents the technical solution",
-        "Content from the response.md and diagram.md files will be used for automated description and diagram update",
-        "./agents/instructions/common/bash_tools.md"
+        "Content from the response.md and diagram.md files will be used for automated description and diagram update"
       ],
       "knownInfo": "",
       "formattingRules": "./agents/instructions/enhancement/solution_design_formatting_rules.md",
@@ -38,6 +37,9 @@
     "alwaysPostComments": true,
     "preJSAction": "agents/js/checkWipLabel.js",
     "postJSAction": "agents/js/enhanceSolutionDesignDescriptionAndAssess.js",
-    "inputJql": "key in (JD-9)"
+    "inputJql": "key in (JD-9)",
+    "cliPrompts": [
+      "./agents/prompts/bash_tools.md"
+    ]
   }
 }

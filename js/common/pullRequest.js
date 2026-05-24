@@ -71,6 +71,91 @@ function defaultWriteFile(path, content) {
     return file_write(path, content);
 }
 
+function buildOriginFetchCommand(refSpec) {
+    return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+}
+
+function readTrackedStatus(runCommand, workingDir) {
+    return cleanCommandOutput(
+        runCommand('git status --porcelain --ignore-submodules=dirty', workingDir) || ''
+    );
+}
+
+function readStagedDiffStat(runCommand, workingDir) {
+    return cleanCommandOutput(
+        runCommand('git diff --cached --stat', workingDir) || ''
+    );
+}
+
+function syncBranchWithBase(options) {
+    options = options || {};
+    var branchName = options.branchName;
+    var baseBranch = options.baseBranch || 'main';
+    var workingDir = options.workingDir || null;
+    var runCommand = options.runCommand || defaultRunCommand;
+
+    if (!branchName) return { success: false, error: 'branchName is required' };
+
+    try {
+        console.log('Synchronizing ' + branchName + ' with origin/' + baseBranch + ' before publishing...');
+        runCommand(buildOriginFetchCommand(baseBranch), workingDir);
+
+        var upToDate = false;
+        try {
+            runCommand('git merge-base --is-ancestor origin/' + baseBranch + ' HEAD', workingDir);
+            upToDate = true;
+        } catch (ancestorError) {
+            upToDate = false;
+        }
+        if (upToDate) {
+            console.log('✅ Branch already contains origin/' + baseBranch);
+            return { success: true, updated: false };
+        }
+
+        var status = readTrackedStatus(runCommand, workingDir);
+        if (status.trim()) {
+            try {
+                runCommand('git submodule update --init --recursive', workingDir);
+                status = readTrackedStatus(runCommand, workingDir);
+            } catch (submoduleError) {
+                console.warn('Could not realign submodules before syncing with base:', submoduleError.message || submoduleError);
+            }
+        }
+        if (status.trim()) {
+            return {
+                success: false,
+                error: 'Cannot sync with origin/' + baseBranch + ' because the working tree is not clean:\n' + status
+            };
+        }
+
+        runCommand('git merge --no-edit origin/' + baseBranch, workingDir);
+        console.log('✅ Merged origin/' + baseBranch + ' into ' + branchName);
+        return { success: true, updated: true };
+    } catch (error) {
+        var conflictFiles = [];
+        try {
+            var statusRaw = cleanCommandOutput(runCommand('git status --short', workingDir) || '');
+            conflictFiles = statusRaw.split('\n')
+                .filter(function(line) { return /^(UU|AA|DD|AU|UA|DU|UD) /.test(line.trim()); })
+                .map(function(line) { return line.trim().substring(3).trim(); });
+        } catch (statusError) {}
+
+        try { runCommand('git merge --abort', workingDir); } catch (abortError) {}
+
+        var message = error && error.message ? error.message : String(error);
+        if (conflictFiles.length > 0) {
+            message = 'Merge conflict while syncing with origin/' + baseBranch + ': ' + conflictFiles.join(', ');
+        }
+        console.warn('Could not synchronize branch with base:', message);
+        return {
+            success: false,
+            conflict: conflictFiles.length > 0,
+            conflictFiles: conflictFiles,
+            error: message
+        };
+    }
+}
+
 function resolveBodyContent(options) {
     if (options.bodyContent) return options.bodyContent;
 
@@ -137,5 +222,9 @@ function createPullRequest(options) {
 module.exports = {
     cleanCommandOutput: cleanCommandOutput,
     sanitizeTitle: sanitizeTitle,
+    buildOriginFetchCommand: buildOriginFetchCommand,
+    readTrackedStatus: readTrackedStatus,
+    readStagedDiffStat: readStagedDiffStat,
+    syncBranchWithBase: syncBranchWithBase,
     createPullRequest: createPullRequest
 };

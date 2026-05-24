@@ -22,6 +22,7 @@ Notes:
   - Useful for resume: $(basename "$0") --continue --resume "fix the push error"
   - For codemie: requires CODEMIE_API_KEY and CODEMIE_BASE_URL environment variables
   - For copilot: requires COPILOT_GITHUB_TOKEN or GITHUB_TOKEN environment variable
+  - For cursor: optional CURSOR_MODEL env var (default: auto)
   - Final response is written to outputs/response.md
 EOF
 }
@@ -57,9 +58,11 @@ fi
 # Extract prompt (last argument).
 # When cliPrompt is used, DMTools passes the prompt as a temp file path — read it if so.
 PROMPT_ARG="${!#}"
+PROMPT_SOURCE="inline-argument"
 
 if [ -f "$PROMPT_ARG" ]; then
   PROMPT="$(cat "$PROMPT_ARG")"
+  PROMPT_SOURCE="$PROMPT_ARG"
 else
   PROMPT="$PROMPT_ARG"
 fi
@@ -69,6 +72,16 @@ if [ -z "$PROMPT" ]; then
   usage
   exit 1
 fi
+
+PROMPT_BYTES=$(printf "%s" "$PROMPT" | wc -c | tr -d ' ')
+echo "=== AGENT PROMPT START ==="
+echo "Prompt source: ${PROMPT_SOURCE}"
+echo "Prompt size: ${PROMPT_BYTES} bytes"
+echo ""
+printf "%s\n" "$PROMPT"
+echo ""
+echo "=== AGENT PROMPT END ==="
+echo ""
 
 # Extract extra arguments (everything except the last — the prompt)
 # These are passed through to the agent to support flags like --continue --resume
@@ -113,7 +126,7 @@ if [ "$PROVIDER" = "codemie" ]; then
       --api-key "${CODEMIE_API_KEY}"
       --model "${CODEMIE_MODEL:-claude-4-5-sonnet}"
       --provider "litellm"
-      "${PASS_ARGS[@]}"
+      ${PASS_ARGS[@]+"${PASS_ARGS[@]}"}
       -p "$PROMPT"
       --max-turns "${CODEMIE_MAX_TURNS:-50}"
       --dangerously-skip-permissions
@@ -142,15 +155,19 @@ elif [ "$PROVIDER" = "copilot" ]; then
   # (E2BIG / "Argument list too long"). Use stdin redirect instead: the CLI reads from
   # stdin when it is not a TTY (e.g. inside CI pipes). The prompt file path is already
   # available as $PROMPT_ARG when DMTools calls this script with cliPrompt.
+  # PASS_ARGS support: flags like --continue --resume are forwarded to the copilot CLI.
+  COPILOT_CMD=(copilot)
+  if ! command -v copilot >/dev/null 2>&1; then
+    COPILOT_CMD=(npx @github/copilot@1.0.44)
+  fi
   if [ -f "${PROMPT_ARG}" ]; then
-    PROMPT_BYTES=$(wc -c < "${PROMPT_ARG}")
-    echo "Running: npx @github/copilot --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} (prompt: ${PROMPT_BYTES} bytes via stdin)"
+    echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} ${PASS_ARGS[*]:-} (prompt: ${PROMPT_BYTES} bytes via stdin)"
     echo ""
-    npx @github/copilot --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" < "${PROMPT_ARG}"
+    "${COPILOT_CMD[@]}" --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${PROMPT_ARG}"
   else
-    echo "Running: npx @github/copilot --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} -p <inline prompt>"
+    echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} ${PASS_ARGS[*]:-} -p <inline prompt>"
     echo ""
-    npx @github/copilot --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" -p "${PROMPT}"
+    "${COPILOT_CMD[@]}" --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}"
   fi
 
   exit_code=$?
@@ -165,9 +182,13 @@ else
     exit 127
   fi
 
+  CURSOR_MODEL_VALUE="${CURSOR_MODEL:-auto}"
+  echo "Cursor Configuration:"
+  echo "  Model: ${CURSOR_MODEL_VALUE}"
+
   # Build command with defaults if no options provided
   if [ ${#PASS_ARGS[@]} -eq 0 ]; then
-    CMD=(cursor-agent --force --print --model 'composer 1.5' --output-format=text "$PROMPT")
+    CMD=(cursor-agent --force --print --model "${CURSOR_MODEL_VALUE}" --output-format=text "$PROMPT")
   else
     CMD=(cursor-agent "${PASS_ARGS[@]}" --output-format=text "$PROMPT")
   fi

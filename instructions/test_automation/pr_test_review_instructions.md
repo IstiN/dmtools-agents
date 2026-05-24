@@ -36,6 +36,10 @@ You are reviewing a Pull Request that contains **automated test code** for a spe
 ### 4. Test result validity
 - If test PASSED: verify the assertions are meaningful (not trivially true)
 - If test FAILED: verify the failure is genuine (not caused by a broken test setup or wrong assertion)
+- If test FAILED because the production-visible behavior required by the Test Case is missing or broken, and the test demonstrates that through an allowed public surface, treat this as a valid failed test. Do not request rework just to make the test pass.
+- If the required production-visible action does not exist yet (for example the repository/service API has no method needed by the Test Case), a test that reaches that missing boundary and fails with a clear product-gap error is a valid failed test. Do not require later expected-result assertions that are unreachable until the product bug is fixed.
+- A valid failed test must include a useful `outputs/bug_description.md` (or equivalent PR/Jira summary) with reproduction steps, expected vs actual behavior, and the exact missing/broken production capability. This allows the downstream bug creation flow to create or link a Bug from the failed Test Case.
+- Do not accept a synthetic PASS that pre-authors the expected final state in fixtures instead of exercising the production-visible action required by the ticket.
 
 ### 5. Test data — self-sufficiency check
 
@@ -90,6 +94,8 @@ Only if the test specifically requires a real-world file that cannot be synthesi
 - **APPROVE**: Test correctly implements the ticket, code is clean, result is valid
 - **REQUEST_CHANGES**: Issues found that affect correctness or maintainability
 - **BLOCK**: Test is fundamentally wrong or cannot be trusted
+
+For failed tests, **APPROVE** when the failure is a genuine product defect or product/API gap and the test is otherwise correct. Approval of a valid failed test is how the workflow reaches the Test Case `Failed` state so the bug creation agent can create or link the Bug. Use **REQUEST_CHANGES** only when the test itself is wrong, incomplete, flaky, synthetic, or missing the bug evidence needed for a developer to fix the product defect. Do not use **BLOCK** merely because the product defect prevents the test from reaching all later assertions; that is the bug to be created.
 
 ## ⚠️ Inline Comments Policy
 

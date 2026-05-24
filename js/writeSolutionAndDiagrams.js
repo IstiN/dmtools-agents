@@ -8,12 +8,16 @@
  *   solutionField — Jira field name for solution content (default: JIRA_FIELDS.SOLUTION)
  *   diagramField  — Jira field name for diagram (default: JIRA_FIELDS.DIAGRAMS).
  *                   If empty string or not set, diagram is prepended to solution as {code:mermaid}.
+ *   requireDiagram — when true, fail the post-action if outputs/diagram.md is missing.
  *   outputType    — "replace" (default): overwrite solutionField with generated content.
  *                   "append": read current value of solutionField, append generated content after a separator.
  *                   Useful for tickets (e.g. bugs) where the field already has content that must be preserved.
  */
 
 const { LABELS, DIAGRAM_FORMAT, JIRA_FIELDS, STATUSES } = require('./config.js');
+const configLoader = require('./configLoader.js');
+const scmModule = require('./common/scm.js');
+const autoStart = require('./common/autoStart.js');
 
 function action(params) {
     try {
@@ -25,9 +29,11 @@ function action(params) {
 
         // Resolve field names from customParams if provided
         var customParams = (params.customParams) || (params.jobParams && params.jobParams.customParams) || {};
+        var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
         var solutionField = customParams.solutionField || JIRA_FIELDS.SOLUTION;
         var diagramField  = (customParams.diagramField !== undefined) ? customParams.diagramField : JIRA_FIELDS.DIAGRAMS;
         var outputType    = customParams.outputType || 'replace'; // 'replace' | 'append'
+        var requireDiagram = customParams.requireDiagram === true || customParams.requireDiagram === 'true';
 
         console.log('Processing solution and diagrams for:', ticketKey);
         console.log('Solution field: ' + solutionField + ', Diagram field: ' + (diagramField || '(none — will prepend to solution)') + ', outputType: ' + outputType);
@@ -59,7 +65,12 @@ function action(params) {
 
         // 2. Read diagram from outputs/diagram.md (or outputs/{ticketKey}/diagram.md)
         var diagram = readOutput('diagram.md');
-        if (!diagram) console.warn('No diagram.md found, skipping diagram update');
+        if (!diagram) {
+            console.warn('No diagram.md found, skipping diagram update');
+            if (requireDiagram) {
+                return { success: false, error: 'outputs/diagram.md is required but empty' };
+            }
+        }
 
         // 3. If no dedicated diagram field — prepend diagram as Jira code block to solution
         if (diagram && !diagramField) {
@@ -142,10 +153,37 @@ function action(params) {
             }
         }
 
+        var autoStartDevelopment = customParams.autoStartDevelopment === true ||
+            customParams.autoStartDevelopment === 'true';
+        var developmentConfigFile = customParams.autoStartDevelopmentConfigFile;
+        var devStarted = false;
+        if (autoStartDevelopment && developmentConfigFile) {
+            try {
+                devStarted = autoStart.triggerConfiguredWorkflowForTicket({
+                    scm: scmModule.createScm(projectConfig),
+                    config: projectConfig,
+                    ticketKey: ticketKey,
+                    customParams: customParams,
+                    configFile: developmentConfigFile,
+                    label: 'development',
+                    stripKeys: ['autoStartDevelopment', 'autoStartDevelopmentConfigFile']
+                });
+            } catch (e) {
+                console.warn('⚠️ autoStartDevelopment trigger failed:', e.message || e);
+            }
+        }
+        if (!devStarted) {
+            autoStart.triggerSmIfIdle({ config: projectConfig, customParams: customParams });
+        }
+
         return { success: true, message: ticketKey + ' solution written, moved to Ready For Development' };
 
     } catch (error) {
         console.error('Error in writeSolutionAndDiagrams:', error);
         return { success: false, error: error.toString() };
     }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { action: action };
 }

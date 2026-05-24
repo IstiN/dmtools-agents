@@ -81,7 +81,7 @@ function action(params) {
             } catch (e) {
                 console.warn('Could not checkout branch (will try fetch+checkout):', e);
                 try {
-                    cli_execute_command({ command: 'git fetch origin ' + testBranchName + ':' + testBranchName });
+                    cli_execute_command({ command: gh.buildOriginFetchCommand(testBranchName + ':' + testBranchName) });
                     cli_execute_command({ command: 'git checkout ' + testBranchName });
                     console.log('✅ Checked out branch via fetch:', testBranchName);
                 } catch (e2) {

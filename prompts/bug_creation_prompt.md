@@ -20,9 +20,14 @@ Each file represents an open bug with its key, summary, and description.
 
 If `input/no_open_bugs.md` exists — there are no open bugs, skip to Step 3 directly.
 
+### Matching criteria — treat as duplicate if ANY of the following:
+- The bug summary describes the **same component** AND the **same failure symptom**
+- The first 60 characters of the summaries are functionally identical (ignoring minor wording differences)
+- The bug description steps overlap ≥70% with the failed Test Case steps
+
 ## Step 3 — Make a decision
 
-**Case A — Matching bug found**: If an existing open bug clearly describes the same underlying issue as this Test Case failure, link to it. Do NOT create duplicates.
+**Case A — Matching open bug found**: If an existing open bug clearly describes the same underlying issue as this Test Case failure, link to it. Do NOT create duplicates.
 
 **Case B — No match found**: Create a new bug ticket that describes the root cause of the test failure.
 

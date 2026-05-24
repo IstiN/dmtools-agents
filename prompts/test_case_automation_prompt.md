@@ -24,6 +24,12 @@ The feature code is **already implemented** in the `main` branch and **deployed*
 
 **You may ONLY write code inside the `testing/` folder.**
 
+## Product defects and missing production capabilities
+
+If the Test Case requires behavior that is missing or broken in the current production code on `main`, do not fake a passing result by pre-authoring the expected final state in fixtures or by weakening the assertions. Write the best test-only reproduction you can through the production-visible UI, CLI, service, repository API, or file format that the Test Case targets.
+
+When that reproduction fails because production behavior is missing or broken, set `outputs/test_automation_result.json` to `"status": "failed"` and write a detailed `outputs/bug_description.md`. Missing product behavior is a failed test/product bug, not `blocked_by_human`; the downstream workflow creates or links a Bug from the failed Test Case.
+
 ## Output files
 
 **⚠️ CRITICAL: All output files MUST be written to `outputs/` at the repository root** (e.g. `/home/runner/work/repo/repo/outputs/`).

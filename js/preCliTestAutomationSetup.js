@@ -5,6 +5,7 @@
  */
 
 var configLoader = require('./configLoader.js');
+var prHelper = require('./common/pullRequest.js');
 const { GIT_CONFIG, STATUSES } = require('./config.js');
 const fetchLinkedBugsToInput = require('./fetchLinkedBugsToInput.js');
 
@@ -37,7 +38,7 @@ function checkoutBranch(ticketKey, config) {
     }
 
     try {
-        runGit('git fetch origin --prune', workingDir);
+        runGit(prHelper.buildOriginFetchCommand('--prune'), workingDir);
     } catch (e) {
         console.warn('Could not fetch remote branches:', e);
     }

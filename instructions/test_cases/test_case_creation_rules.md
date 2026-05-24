@@ -65,7 +65,32 @@ Generate test cases that cover:
 
 When the ticket type is *Bug*, the *Solution* field contains a structured RCA written by the development agent (Root Cause, Fix Applied, Prevention).
 
-Use the bug description and the Solution field to understand what broke and how it was fixed. Generate whatever test cases are needed to ensure this bug cannot recur undetected — covering the exact scenario that triggered it, the conditions around the root cause, and any prevention points noted in the Solution field.
+Use the bug description and the Solution field to understand what broke and how it was fixed.
+
+### Strict limits for bug-sourced test cases
+
+**Create at most 2 new test cases per bug ticket:**
+
+1. *Regression test* (mandatory) — the exact scenario that triggered the bug. This verifies the specific failure cannot silently recur.
+2. *Prevention test* (optional, only if mechanically distinct) — a test that targets the root cause fix directly and covers a scenario not already tested by the regression test.
+
+**Do NOT generate for bugs:**
+- Positive/happy-path scenarios (these belong to the original story)
+- Negative or boundary variants of the bug scenario (one regression test is sufficient)
+- Tests for related bugs found via ticket links — only test THIS bug's scenario
+- Multiple tests for different prevention points listed in the RCA — pick the most critical one
+
+**Before creating any test case for a bug:**
+1. Check the existing test cases listed in the context.
+2. If an existing test case title shares 5 or more meaningful words with your proposed title, skip creation and link the existing one instead.
+3. If the existing test case covers the same component + same failure symptom, link it — do not create a new one.
 
 For bug test case names use the format:
 *Test: [Scenario that triggered the bug] — [Expected correct behaviour]*
+
+### Deduplication check (mandatory before creating)
+
+Before creating any test case (for bugs or stories), scan the existing test case list for semantic overlap:
+- If an existing TC verifies the same component/feature AND the same expected outcome → link it, skip creation.
+- If the existing TC summary shares the same subject + verb + component → link it, skip creation.
+- When in doubt, link the closest existing TC and add a note explaining the overlap.

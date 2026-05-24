@@ -22,6 +22,7 @@
  */
 
 var configLoader = require('./configLoader.js');
+var prHelper = require('./common/pullRequest.js');
 const { STATUSES } = require('./config.js');
 
 function cleanCommandOutput(output) {
@@ -58,7 +59,7 @@ function checkoutAutomationBranch(ticketKey, config) {
     }
 
     try {
-        runInRepo('git fetch origin --prune', workingDir);
+        runInRepo(prHelper.buildOriginFetchCommand('--prune'), workingDir);
     } catch (e) {
         console.warn('Could not fetch remote branches:', e);
     }

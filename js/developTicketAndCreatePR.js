@@ -6,8 +6,12 @@
 // Import common helper functions
 const { extractTicketKey } = require('./common/jiraHelpers.js');
 const prHelper = require('./common/pullRequest.js');
+const submoduleHelper = require('./common/submodules.js');
+const feedbackLoop = require('./common/feedbackLoop.js');
 var configLoader = require('./configLoader.js');
+var autoStart = require('./common/autoStart.js');
 const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js');
+var cacheToReleases = require('./cacheToReleases.js');
 
 function deriveProjectKey(customParams) {
     if (!customParams) return '';
@@ -70,7 +74,7 @@ function generateUniqueBranchName(branchPrefix, ticketKey) {
         // Fetch latest remote branches without pulling
         try {
             runCmd({
-                command: 'git fetch origin --prune'
+                command: prHelper.buildOriginFetchCommand('--prune')
             });
         } catch (fetchError) {
             console.warn('Could not fetch remote branches:', fetchError);
@@ -138,8 +142,22 @@ function configureGitAuthor(config) {
 /**
  * Push already-committed changes to remote (used when CLI agent committed its own work).
  */
-function performPushOnly(branchName) {
+function performPushOnly(branchName, baseBranch) {
     console.log('Pushing pre-committed changes to remote...');
+    var syncResult = prHelper.syncBranchWithBase({
+        branchName: branchName,
+        baseBranch: baseBranch || 'main',
+        workingDir: _workingDir,
+        runCommand: function(command, workingDir) {
+            var args = { command: command };
+            if (workingDir) args.workingDirectory = workingDir;
+            return cli_execute_command(args);
+        }
+    });
+    if (!syncResult.success) {
+        return { success: false, isMergeSyncFailure: true, error: syncResult.error };
+    }
+
     var pushOutput = '';
     var pushThrewException = false;
     try {
@@ -189,10 +207,24 @@ function performPushOnly(branchName) {
  *
  * @param {string} branchName - Current branch name (already checked out by preCliJSAction)
  * @param {string} commitMessage - Commit message
+ * @param {string} baseBranch - Base branch used to detect existing local/remote commits
+ * @param {Object} config - Resolved project config, including optional managed submodules
+ * @param {Object} customParams - Runtime custom params, including optional managed submodules
+ * @param {string} ticketKey - Ticket key used for managed submodule commit messages
  * @returns {Object} Result with success status and branch name
  */
-function performGitOperations(branchName, commitMessage, baseBranch) {
+function performGitOperations(branchName, commitMessage, baseBranch, config, customParams, ticketKey) {
     try {
+        submoduleHelper.pushManagedSubmodules({
+            run: function(command) {
+                return runCmd({ command: command });
+            },
+            cleanOutput: cleanCommandOutput,
+            config: config,
+            customParams: customParams,
+            ticketKey: ticketKey
+        });
+
         // Stage all changes
         console.log('Staging changes...');
         runCmd({
@@ -200,10 +232,9 @@ function performGitOperations(branchName, commitMessage, baseBranch) {
         });
 
         // Check if there are changes to commit
-        const rawStatusOutput = runCmd({
-            command: 'git status --porcelain'
-        });
-        const statusOutput = cleanCommandOutput(rawStatusOutput);
+        const statusOutput = prHelper.readStagedDiffStat(function(command) {
+            return runCmd({ command: command });
+        }, _workingDir);
 
         if (!statusOutput || !statusOutput.trim()) {
             // No uncommitted changes — but check if the agent already committed its work
@@ -218,8 +249,8 @@ function performGitOperations(branchName, commitMessage, baseBranch) {
             var commitsAhead = parseInt(aheadOutput, 10) || 0;
             if (commitsAhead > 0) {
                 console.log('No uncommitted changes, but branch is ' + commitsAhead + ' commit(s) ahead of ' + originRef + ' — agent already committed. Skipping commit step.');
-                // Jump straight to push
-                return performPushOnly(branchName);
+                // Jump straight to push after syncing with the latest base branch.
+                return performPushOnly(branchName, baseBranch);
             }
 
             // Check if the remote branch already has commits not yet in origin/main
@@ -227,7 +258,7 @@ function performGitOperations(branchName, commitMessage, baseBranch) {
             var remoteAheadOutput = '';
             try {
                 // Fetch remote refs so origin/<branchName> is up to date
-                try { runCmd({ command: 'git fetch origin ' + branchName }); } catch (e) {}
+                try { runCmd({ command: prHelper.buildOriginFetchCommand(branchName) }); } catch (e) {}
                 remoteAheadOutput = cleanCommandOutput(runCmd({ command: 'git rev-list --count ' + originRef + '..origin/' + branchName }) || '');
             } catch (e) {
                 console.warn('Could not check remote branch commits:', e);
@@ -256,6 +287,24 @@ function performGitOperations(branchName, commitMessage, baseBranch) {
         runCmd({
             command: 'git commit -m "' + safeMessage + '"'
         });
+
+        var syncResult = prHelper.syncBranchWithBase({
+            branchName: branchName,
+            baseBranch: baseBranch || 'main',
+            workingDir: _workingDir,
+            runCommand: function(command, workingDir) {
+                var args = { command: command };
+                if (workingDir) args.workingDirectory = workingDir;
+                return cli_execute_command(args);
+            }
+        });
+        if (!syncResult.success) {
+            return {
+                success: false,
+                isMergeSyncFailure: true,
+                error: syncResult.error
+            };
+        }
 
         // Push to remote
         console.log('Pushing to remote...');
@@ -329,6 +378,34 @@ function performGitOperations(branchName, commitMessage, baseBranch) {
  */
 function createPullRequest(title, branchName, baseBranch) {
     console.log('Creating Pull Request...');
+
+    function remoteBranchExists(branch) {
+        var output = runCmd({ command: 'git ls-remote --heads origin ' + branch }) || '';
+        return output.indexOf('refs/heads/' + branch) !== -1;
+    }
+
+    try {
+        if (!remoteBranchExists(baseBranch)) {
+            return {
+                success: false,
+                error: 'PR base branch does not exist on remote: ' + baseBranch +
+                    '. In two-branch mode the release/target branch must be pushed before PR creation.'
+            };
+        }
+        if (!remoteBranchExists(branchName)) {
+            return {
+                success: false,
+                error: 'PR head branch does not exist on remote: ' + branchName +
+                    '. The development branch push did not complete successfully.'
+            };
+        }
+    } catch (verifyErr) {
+        return {
+            success: false,
+            error: 'Could not verify remote PR branches before PR creation: ' + verifyErr.toString()
+        };
+    }
+
     return prHelper.createPullRequest({
         title: title,
         branchName: branchName,
@@ -400,6 +477,52 @@ function postErrorCommentToJira(ticketKey, stage, errorMessage) {
     } catch (error) {
         console.error('Failed to post error comment to Jira:', error);
     }
+}
+
+function labelsToRemove(customParams, metadata) {
+    var labels = [];
+    if (customParams && customParams.removeLabel) labels.push(customParams.removeLabel);
+    if (customParams && Array.isArray(customParams.removeLabels)) {
+        customParams.removeLabels.forEach(function(label) { labels.push(label); });
+    }
+    if (metadata && metadata.contextId) labels.push(metadata.contextId + '_wip');
+
+    var seen = {};
+    return labels.filter(function(label) {
+        if (!label || seen[label]) return false;
+        seen[label] = true;
+        return true;
+    });
+}
+
+function resetDevelopmentForRetry(ticketKey, statuses, customParams, metadata, stage, errorMessage) {
+    postErrorCommentToJira(ticketKey, stage, errorMessage);
+
+    try {
+        jira_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
+        console.log('✅ Moved', ticketKey, 'to', statuses.READY_FOR_DEVELOPMENT, 'after development workflow error');
+    } catch (e) {
+        console.warn('Failed to move ' + ticketKey + ' to ' + statuses.READY_FOR_DEVELOPMENT + ':', e);
+    }
+
+    labelsToRemove(customParams, metadata).forEach(function(label) {
+        try {
+            jira_remove_label({ key: ticketKey, label: label });
+            console.log('✅ Removed retry-blocking label:', label);
+        } catch (e) {
+            console.warn('Failed to remove retry-blocking label ' + label + ':', e);
+        }
+    });
+}
+
+function resumeDevelopmentAgent(params, ticketKey, customParams, stage, errorMessage) {
+    return feedbackLoop.resumeAgent({
+        ticketKey: ticketKey,
+        customParams: customParams,
+        section: 'postAction',
+        stage: stage,
+        error: errorMessage
+    }).attempted;
 }
 
 /**
@@ -563,9 +686,10 @@ function action(params) {
         // Configure git author
         if (!configureGitAuthor(config)) {
             const error = 'Failed to configure git author';
-            postErrorCommentToJira(ticketKey, 'Git Configuration', error);
+            resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Git Configuration', error);
             return {
-                success: false,
+                success: true,
+                path: 'development-reset-for-retry',
                 error: error
             };
         }
@@ -593,8 +717,8 @@ function action(params) {
                     console.log('✅ Created and switched to branch:', expectedBranch);
                 } catch (createErr) {
                     const error = 'Could not checkout expected branch "' + expectedBranch + '": ' + createErr;
-                    postErrorCommentToJira(ticketKey, 'Git Branch Checkout', error);
-                    return { success: false, error: error };
+                    resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Git Branch Checkout', error);
+                    return { success: true, path: 'development-reset-for-retry', error: error };
                 }
             }
         }
@@ -603,16 +727,40 @@ function action(params) {
         // Prepare commit message
         const commitMessage = configLoader.formatTemplate(config.formats.commitMessage.development, {ticketKey: ticketKey, ticketSummary: ticketSummary});
 
+        var gateResult = feedbackLoop.runQualityGates({
+            ticketKey: ticketKey,
+            customParams: _customParams,
+            section: 'qualityGates'
+        });
+        if (!gateResult.success) {
+            const error = 'Quality gate failed before development publish: ' + gateResult.failedGate + '\n' + gateResult.error;
+            resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Quality Gate', error);
+            return { success: true, path: 'development-reset-for-retry', error: error };
+        }
+        var policyResult = feedbackLoop.runPolicyGates({
+            ticketKey: ticketKey,
+            customParams: _customParams,
+            section: 'policyGates'
+        });
+        if (!policyResult.success) {
+            const error = 'Policy gate failed before development publish: ' + policyResult.failedGate + '\n' + policyResult.error;
+            resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Policy Gate', error);
+            return { success: true, path: 'development-reset-for-retry', error: error };
+        }
+
         // Perform git operations
         const prTarget = configLoader.resolvePRTargetBranch(config, params.ticket || actualParams.ticket);
-        const gitResult = performGitOperations(branchName, commitMessage, prTarget);
+        const gitResult = performGitOperations(branchName, commitMessage, prTarget, config, _customParams, ticketKey);
         if (!gitResult.success) {
             if (gitResult.isPushFailure) {
                 // Push was rejected — ask the agent to fix the commit, then retry
                 const retryResult = retryAfterPushFailure(ticketKey, branchName, gitResult.error);
                 if (!retryResult.success) {
-                    postErrorCommentToJira(ticketKey, 'Git Push (after retry)', retryResult.error);
-                    return { success: false, error: 'Git push failed even after retry: ' + retryResult.error };
+                    if (resumeDevelopmentAgent(params, ticketKey, _customParams, 'development_git_push', retryResult.error)) {
+                        return action(params);
+                    }
+                    resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Git Push (after retry)', retryResult.error);
+                    return { success: true, path: 'development-reset-for-retry', error: 'Git push failed even after retry: ' + retryResult.error };
                 }
                 // Push succeeded after agent fix — continue to PR creation
             } else if (gitResult.error && gitResult.error.indexOf('No changes were made') !== -1) {
@@ -674,9 +822,28 @@ function action(params) {
                 }
                 return { success: true, path: 'interrupted', ticketKey: ticketKey };
             } else {
-                postErrorCommentToJira(ticketKey, 'Git Operations', gitResult.error);
-                return { success: false, error: 'Git operations failed: ' + gitResult.error };
+                if (resumeDevelopmentAgent(params, ticketKey, _customParams, 'development_git_operations', gitResult.error)) {
+                    return action(params);
+                }
+                resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Git Operations', gitResult.error);
+                return { success: true, path: 'development-reset-for-retry', error: 'Git operations failed: ' + gitResult.error };
             }
+        }
+
+        var postPublishGateResult = feedbackLoop.runPostPublishGates({
+            ticketKey: ticketKey,
+            customParams: _customParams,
+            section: 'postPublishGates',
+            workingDir: _workingDir
+        });
+        if (!postPublishGateResult.success) {
+            const error = 'Post-publish quality gate failed: ' +
+                postPublishGateResult.failedGate + '\n' + postPublishGateResult.error;
+            if (postPublishGateResult.resumeAttempted) {
+                return action(params);
+            }
+            resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Post-Publish Quality Gate', error);
+            return { success: true, path: 'development-reset-for-retry', error: error };
         }
 
         // Verify outputs/response.md exists (must be created by cursor-agent or workflow)
@@ -716,9 +883,13 @@ function action(params) {
         const prResult = createPullRequest(prTitle, branchName, prTarget);
 
         if (!prResult.success) {
-            postErrorCommentToJira(ticketKey, 'Pull Request Creation', prResult.error);
+            if (resumeDevelopmentAgent(params, ticketKey, _customParams, 'development_pr_creation', prResult.error)) {
+                return action(params);
+            }
+            resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Pull Request Creation', prResult.error);
             return {
-                success: false,
+                success: true,
+                path: 'development-reset-for-retry',
                 error: 'PR creation failed: ' + prResult.error
             };
         }
@@ -783,6 +954,7 @@ function action(params) {
         const customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
         const autoStartReview = customParams && customParams.autoStartReview;
         const reviewConfigFile = customParams && customParams.autoStartReviewConfigFile;
+        var reviewStarted = false;
         if (autoStartReview && reviewConfigFile) {
             if (hasPrApprovedLabel(actualParams.ticket) && !prApprovedCleaned) {
                 console.log('ℹ️ autoStartReview: skipped — ticket has pr_approved label');
@@ -805,6 +977,7 @@ function action(params) {
                             }),
                             'main'
                         );
+                        reviewStarted = true;
                         console.log('✅ Auto-started pr_review for', ticketKey,
                             '[config=' + reviewConfigFile + (projectKey ? ', project=' + projectKey : '') + ']');
                     } else {
@@ -815,6 +988,12 @@ function action(params) {
                 }
             }
         }
+        if (!reviewStarted) {
+            autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
+        }
+
+        // Cache configured artefacts (e.g. cosmo test reports) to GitHub Release — non-fatal
+        try { cacheToReleases.action(params); } catch (e) { console.warn('⚠️ cacheToReleases failed (non-fatal):', e); }
 
         return {
             success: true,
@@ -826,29 +1005,37 @@ function action(params) {
     } catch (error) {
         console.error('❌ Error in development workflow:', error);
 
-        // Try to post error comment to ticket
+        // Try to reset ticket for retry instead of leaving it stuck In Development.
         try {
-            const actualParams = params.jobParams || params;
+            const actualParams = params.ticket ? params : (params.jobParams || params);
             if (actualParams && actualParams.ticket && actualParams.ticket.key) {
-                postErrorCommentToJira(actualParams.ticket.key, 'Workflow Execution', error.toString());
+                const customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
+                const statuses = resolveStatuses(customParams);
+                if (resumeDevelopmentAgent(
+                    params,
+                    actualParams.ticket.key,
+                    customParams,
+                    'development_post_action',
+                    error.toString()
+                )) {
+                    return action(params);
+                }
+                resetDevelopmentForRetry(
+                    actualParams.ticket.key,
+                    statuses,
+                    customParams,
+                    actualParams.metadata,
+                    'Workflow Execution',
+                    error.toString()
+                );
             }
         } catch (commentError) {
-            console.error('Failed to post error comment:', commentError);
+            console.error('Failed to reset development ticket after error:', commentError);
         }
 
-        // Always remove SM idempotency label on failure to prevent permanent lock
-        try {
-            const actualParams = params.jobParams || params;
-            const customParams = actualParams && actualParams.customParams;
-            const removeLabel = customParams && customParams.removeLabel;
-            if (removeLabel && actualParams.ticket && actualParams.ticket.key) {
-                jira_remove_label({ key: actualParams.ticket.key, label: removeLabel });
-                console.log('✅ Removed SM label on failure:', removeLabel);
-            }
-        } catch (e) {}
-
         return {
-            success: false,
+            success: true,
+            path: 'development-reset-for-retry',
             error: error.toString()
         };
     }

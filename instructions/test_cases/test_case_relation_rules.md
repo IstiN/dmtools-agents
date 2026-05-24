@@ -35,6 +35,22 @@ If an existing test case covers the same scenario as a new test case being gener
 - Link the existing test case instead
 - Note in the comment that the existing test case covers this scenario
 
+### Semantic overlap rules (apply to all tickets, especially bugs)
+
+Treat two test cases as duplicates if ANY of the following match:
+- Their summaries share 5 or more consecutive meaningful words
+- They test the same **component/feature** AND the same **outcome**
+- One is a slightly reworded version of the other with no additional scenario coverage
+
+When uncertain, always prefer linking the existing test case over creating a new one.
+
+### Bug deduplication — existing regression tests
+
+If generating test cases for a *Bug* ticket, and an existing test case in the project already tests the exact regression scenario (even if its status is Failed or Done):
+- Do *not* create a new test case for the same scenario
+- Link the existing one with relationship "relates to"
+- Add a comment noting it is the canonical regression test for this bug
+
 ## Link Relationship
 
 Use relationship *"relates to"* for all linked test cases.

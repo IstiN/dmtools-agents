@@ -105,4 +105,78 @@ suite('pullRequest helper', function() {
         assert.equal(result.prUrl, 'https://github.com/epam/dm.ai/pull/789');
     });
 
+    test('syncs branch with base before publishing when behind', function() {
+        var commands = [];
+        var pr = loadPullRequestHelper();
+
+        var result = pr.syncBranchWithBase({
+            branchName: 'feature/DMC-4',
+            baseBranch: 'main',
+            workingDir: 'repo',
+            runCommand: function(command, workingDir) {
+                commands.push({ command: command, workingDirectory: workingDir || null });
+                if (command.indexOf('git merge-base --is-ancestor') === 0) throw new Error('not ancestor');
+                if (command === 'git status --porcelain --ignore-submodules=dirty') return '';
+                return '';
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.updated, true);
+        assert.deepEqual(commands, [
+            { command: 'git -c fetch.recurseSubmodules=no fetch origin main', workingDirectory: 'repo' },
+            { command: 'git merge-base --is-ancestor origin/main HEAD', workingDirectory: 'repo' },
+            { command: 'git status --porcelain --ignore-submodules=dirty', workingDirectory: 'repo' },
+            { command: 'git merge --no-edit origin/main', workingDirectory: 'repo' }
+        ]);
+    });
+
+    test('does not merge base when branch already contains it', function() {
+        var commands = [];
+        var pr = loadPullRequestHelper();
+
+        var result = pr.syncBranchWithBase({
+            branchName: 'feature/DMC-5',
+            baseBranch: 'release',
+            runCommand: function(command) {
+                commands.push(command);
+                if (command.indexOf('git merge-base --is-ancestor') === 0) return 'up_to_date';
+                return '';
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.updated, false);
+        assert.deepEqual(commands, [
+            'git -c fetch.recurseSubmodules=no fetch origin release',
+            'git merge-base --is-ancestor origin/release HEAD'
+        ]);
+    });
+
+    test('ignores dirty unmanaged submodule worktrees during branch sync', function() {
+        var commands = [];
+        var pr = loadPullRequestHelper();
+
+        var result = pr.syncBranchWithBase({
+            branchName: 'feature/DMC-6',
+            baseBranch: 'main',
+            workingDir: 'repo',
+            runCommand: function(command, workingDir) {
+                commands.push({ command: command, workingDirectory: workingDir || null });
+                if (command.indexOf('git merge-base --is-ancestor') === 0) throw new Error('not ancestor');
+                if (command === 'git status --porcelain --ignore-submodules=dirty') return '';
+                return '';
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.updated, true);
+        assert.deepEqual(commands, [
+            { command: 'git -c fetch.recurseSubmodules=no fetch origin main', workingDirectory: 'repo' },
+            { command: 'git merge-base --is-ancestor origin/main HEAD', workingDirectory: 'repo' },
+            { command: 'git status --porcelain --ignore-submodules=dirty', workingDirectory: 'repo' },
+            { command: 'git merge --no-edit origin/main', workingDirectory: 'repo' }
+        ]);
+    });
+
 });

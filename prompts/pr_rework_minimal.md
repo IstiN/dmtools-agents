@@ -10,5 +10,17 @@ Required flow:
 4. Run relevant checks for changed files.
 5. Write required files in `outputs/`.
 
-Do not commit, push, or create branches.
+Decision shortcut:
 
+```mermaid
+flowchart TD
+    A[Rework input] --> B{Conflicts or failed CI?}
+    B -->|Yes| C[Fix blockers]
+    B -->|No| D{Open actionable discussions?}
+    D -->|Yes| E[Fix and reply to each thread]
+    D -->|No| F{Approved or only waiting for checks?}
+    F -->|Yes| G[Do not rework; write empty replies and waiting response]
+    F -->|No| H[Write no-open-comments response]
+```
+
+Do not commit, push, or create branches.

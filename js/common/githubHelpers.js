@@ -10,6 +10,7 @@
  */
 
 const { GIT_CONFIG } = require('../config.js');
+const prHelper = require('./pullRequest.js');
 
 function cleanCommandOutput(output) {
     if (!output) return '';
@@ -107,7 +108,7 @@ function checkoutPRBranch(branchName, workingDir) {
     cmd('git config user.name "' + GIT_CONFIG.AUTHOR_NAME + '"');
     cmd('git config user.email "' + GIT_CONFIG.AUTHOR_EMAIL + '"');
     // Update remote refs; blobless repos already have the commit graph
-    cmd('git fetch origin --prune');
+    cmd(prHelper.buildOriginFetchCommand('--prune'));
 
     const localBranch = cleanCommandOutput(cmd('git branch --list "' + branchName + '"') || '');
 
@@ -118,10 +119,10 @@ function checkoutPRBranch(branchName, workingDir) {
         const remoteBranch = cleanCommandOutput(cmd('git ls-remote --heads origin ' + branchName) || '');
         if (remoteBranch.trim()) {
             try {
-                cmd('git fetch origin ' + branchName + ':' + branchName);
+                cmd(prHelper.buildOriginFetchCommand(branchName + ':' + branchName));
                 cmd('git checkout ' + branchName);
             } catch (e) {
-                cmd('git fetch origin ' + branchName);
+                cmd(prHelper.buildOriginFetchCommand(branchName));
                 cmd('git checkout -b ' + branchName + ' origin/' + branchName);
             }
         } else {
@@ -641,6 +642,7 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
 
 module.exports = {
     cleanCommandOutput: cleanCommandOutput,
+    buildOriginFetchCommand: prHelper.buildOriginFetchCommand,
     getGitHubRepoInfo: getGitHubRepoInfo,
     _isScm: _isScm,
     findPRForTicket: findPRForTicket,

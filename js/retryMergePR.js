@@ -13,6 +13,7 @@
 const { STATUSES, LABELS } = require('./config.js');
 var scmModule = require('./common/scm.js');
 var configLoader = require('./configLoader.js');
+var autoStart = require('./common/autoStart.js');
 
 function getGitHubRepoInfo() {
     try {
@@ -59,10 +60,56 @@ function removeApprovedLabels(scm, prNumber, ticketKey) {
     }
 }
 
-function releaseLock(ticketKey, params) {
-    const removeLabel = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.removeLabel;
+function releaseLock(ticketKey, customParams) {
+    const removeLabel = customParams && customParams.removeLabel;
     if (removeLabel && ticketKey) {
         try { jira_remove_label({ key: ticketKey, label: removeLabel }); } catch (e) {}
+    }
+}
+
+function resolveMergeJobName(params, customParams) {
+    var metadata = (params.jobParams && params.jobParams.metadata) || params.metadata || {};
+    if (metadata.contextId === 'retry_merge_test' || (customParams && customParams.testCaseMerge)) {
+        return 'retry_merge_test';
+    }
+    return 'retry_merge';
+}
+
+function resolveCustomParams(params, config) {
+    var runtime = (params.jobParams && params.jobParams.customParams) ||
+        params.customParams ||
+        {};
+    var jobName = resolveMergeJobName(params, runtime);
+    var merged = {};
+    var patch = configLoader.resolveInstructions(jobName, null, config).jobParamPatch;
+    if (patch && patch.customParams) {
+        Object.assign(merged, patch.customParams);
+    }
+    Object.assign(merged, runtime);
+    return merged;
+}
+
+function triggerAutoStartRework(ticketKey, customParams, config, scm) {
+    if (!customParams || !customParams.autoStartRework || !customParams.autoStartReworkConfigFile) {
+        return false;
+    }
+    try {
+        return autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: ticketKey,
+            customParams: customParams,
+            config: config,
+            configFile: customParams.autoStartReworkConfigFile,
+            label: 'pr_rework',
+            scm: scm,
+            stripKeys: [
+                'removeLabel',
+                'autoStartRework',
+                'autoStartReworkConfigFile'
+            ]
+        });
+    } catch (e) {
+        console.warn('⚠️ autoStartRework trigger failed:', e.message || e);
+        return false;
     }
 }
 
@@ -75,11 +122,12 @@ function action(params) {
 
     var config = configLoader.loadProjectConfig(params.jobParams || params);
     var scm = scmModule.createScm(config);
+    var customParams = resolveCustomParams(params, config);
 
     const repoInfo = scm.getRemoteRepoInfo();
     if (!repoInfo) {
         console.error('Could not determine owner/repo');
-        releaseLock(ticketKey, params);
+        releaseLock(ticketKey, customParams);
         return false;
     }
     const { owner, repo } = repoInfo;
@@ -87,7 +135,7 @@ function action(params) {
     const pr = findPRForTicket(scm, ticketKey);
     if (!pr) {
         console.warn('No open PR found for ticket ' + ticketKey + ' — releasing lock');
-        releaseLock(ticketKey, params);
+        releaseLock(ticketKey, customParams);
         return false;
     }
 
@@ -129,13 +177,14 @@ function action(params) {
     if (mergeable === false && mergeableState === 'dirty') {
         console.log('PR has merge conflict — moving ticket to In Rework');
         removeApprovedLabels(scm, prNumber, ticketKey);
-        releaseLock(ticketKey, params);
+        releaseLock(ticketKey, customParams);
         jira_post_comment({
             key: ticketKey,
             comment: '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *MERGE CONFLICT* — PR #' + prNumber + ' has a merge conflict with main. Please resolve conflicts and re-push.\n\n[View PR|' + prUrl + ']{panel}'
         });
         jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REWORK });
         console.log('✅ Ticket moved to In Rework (merge conflict)');
+        triggerAutoStartRework(ticketKey, customParams, config, scm);
         return true;
     }
 
@@ -151,7 +200,7 @@ function action(params) {
         } catch (e) {
             console.warn('Could not remove pr_approved from GitHub PR:', e);
         }
-        releaseLock(ticketKey, params);
+        releaseLock(ticketKey, customParams);
 
         // Move ticket to final status BEFORE removing pr_approved from Jira.
         // Jira's search index can lag: if the status update hasn't propagated yet when
@@ -192,17 +241,18 @@ function action(params) {
 
         const reason = isConflict ? 'merge conflict' : 'CI checks failing or PR not mergeable';
         removeApprovedLabels(scm, prNumber, ticketKey);
-        releaseLock(ticketKey, params);
+        releaseLock(ticketKey, customParams);
         jira_post_comment({
             key: ticketKey,
             comment: '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *MERGE FAILED* — Could not merge PR #' + prNumber + ': ' + reason + '. Please check and re-push.\n\n[View PR|' + prUrl + ']{panel}'
         });
         jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REWORK });
         console.log('✅ Ticket moved to In Rework (' + reason + ')');
+        triggerAutoStartRework(ticketKey, customParams, config, scm);
         return true;
     }
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = { action, resolveCustomParams, triggerAutoStartRework };
 }

@@ -11,6 +11,8 @@
 
 const { LABELS, STATUSES, resolveStatuses } = require('./config.js');
 var scmModule = require('./common/scm.js');
+var autoStart = require('./common/autoStart.js');
+var configLoader = require('./configLoader.js');
 
 /**
  * Derive project key from customParams.configPath or customParams.projectKey.
@@ -48,6 +50,25 @@ function buildAutoStartEncodedConfig(ticketKey, customParams) {
 function hasPrApprovedLabel(ticket) {
     var labels = (ticket && ticket.fields && ticket.fields.labels) ? ticket.fields.labels : [];
     return labels.indexOf(LABELS.PR_APPROVED) !== -1;
+}
+
+function resolveCustomParams(params, config) {
+    var merged = {};
+    var patch = configLoader.resolveInstructions(
+        'pr_review',
+        null,
+        config
+    ).jobParamPatch;
+    if (patch && patch.customParams) {
+        Object.assign(merged, patch.customParams);
+    }
+    Object.assign(
+        merged,
+        (params.jobParams && params.jobParams.customParams) ||
+            params.customParams ||
+            {}
+    );
+    return merged;
 }
 
 /**
@@ -283,7 +304,6 @@ function action(params) {
     try {
         const ticketKey = params.ticket.key;
         const jiraReview = params.response || '';
-        var configLoader = require('./configLoader.js');
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var scm = scmModule.createScm(config);
         var labels = (params.ticket && params.ticket.fields && params.ticket.fields.labels) ? params.ticket.fields.labels : [];
@@ -304,7 +324,7 @@ function action(params) {
         console.log('Issue counts:', JSON.stringify(reviewData.issueCounts));
 
         // Resolve statuses and customParams
-        const customParams = params.jobParams && params.jobParams.customParams;
+        const customParams = resolveCustomParams(params, config);
         const statuses = resolveStatuses(customParams);
 
         // Step 2: Extract PR info from input folder or find PR using MCP
@@ -507,6 +527,7 @@ function action(params) {
         }
 
         // Step 12: Auto-start pr_rework when changes were requested (opt-in via customParams)
+        var reworkStarted = false;
         if (!isApproved) {
             const autoStartRework = customParams && customParams.autoStartRework;
             const reworkConfigFile = customParams && customParams.autoStartReworkConfigFile;
@@ -516,32 +537,26 @@ function action(params) {
                     console.log('ℹ️ autoStartRework: skipped — ticket has pr_approved label');
                 } else {
                     try {
-                        // Use customParams.aiRepository if set (avoids targetRepository override in configLoader)
-                        const aiRepoCfg = customParams && customParams.aiRepository;
-                        const aiOwner = (aiRepoCfg && aiRepoCfg.owner) || (config.repository && config.repository.owner);
-                        const aiRepo  = (aiRepoCfg && aiRepoCfg.repo)  || (config.repository && config.repository.repo);
-                        const projectKey = deriveProjectKey(customParams);
-                        const encodedCfg = buildAutoStartEncodedConfig(ticketKey, customParams);
-                        if (aiOwner && aiRepo) {
-                            scm.triggerWorkflow(
-                                aiOwner, aiRepo, 'ai-teammate.yml',
-                                JSON.stringify({
-                                    concurrency_key: ticketKey,
-                                    config_file:     reworkConfigFile,
-                                    encoded_config:  encodedCfg,
-                                    project_key:     projectKey || ''
-                                }),
-                                'main'
-                            );
-                            console.log('✅ Auto-started pr_rework for', ticketKey,
-                                '[config=' + reworkConfigFile + (projectKey ? ', project=' + projectKey : '') + ']');
-                        } else {
-                            console.warn('⚠️ autoStartRework: config.repository.owner/repo not set — skipping');
-                        }
+                        reworkStarted = autoStart.triggerConfiguredWorkflowForTicket({
+                            ticketKey: ticketKey,
+                            customParams: customParams,
+                            config: config,
+                            configFile: reworkConfigFile,
+                            label: 'pr_rework',
+                            scm: scm,
+                            stripKeys: [
+                                'removeLabel',
+                                'autoStartRework',
+                                'autoStartReworkConfigFile'
+                            ]
+                        });
                     } catch (e) {
                         console.warn('⚠️ autoStartRework trigger failed:', e.message || e);
                     }
                 }
+            }
+            if (!reworkStarted) {
+                autoStart.triggerSmIfIdle({ config: config, customParams: customParams, scm: scm });
             }
         }
 
@@ -617,6 +632,11 @@ function action(params) {
             }
         }
 
+        // SM fallback for approved PRs — SM needs to merge via pr_approved flow
+        if (isApproved) {
+            autoStart.triggerSmIfIdle({ config: config, customParams: customParams, scm: scm });
+        }
+
         console.log('✅ PR review workflow completed:', isApproved ? 'APPROVED' : 'CHANGES REQUESTED');
 
         return {
@@ -653,5 +673,5 @@ function action(params) {
 
 // Export for dmtools standalone execution
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = { action, resolveCustomParams };
 }

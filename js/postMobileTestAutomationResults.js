@@ -6,15 +6,16 @@
  * labels and updates the feature PR, and posts results to Jira.
  *
  * Steps:
- * 1. Read outputs/test_automation_result.json
- * 2. Commit + push test files in the automation repo (src/tests/)
- * 3. Create or find PR in the test automation repository
- * 4. Find the feature PR in the main app repository (by trigger ticket key)
- * 5. Add configurable pass/fail labels to the feature PR (via dmtools github_add_pr_label)
- * 6. Append test summary to the feature PR description (via gh pr edit)
- * 7. Post Jira comment on the trigger ticket
- * 8. Move trigger ticket status (Passed / Failed / Blocked)
- * 9. Remove WIP and SM trigger labels
+ * 1. If mandatory output files are missing, attempt one resume run via run-agent.sh --continue --resume
+ * 2. Read outputs/test_automation_result.json
+ * 3. Commit + push test files in the automation repo (src/tests/)
+ * 4. Create or find PR in the test automation repository
+ * 5. Find the feature PR in the main app repository (by trigger ticket key)
+ * 6. Add configurable pass/fail labels to the feature PR (via dmtools github_add_pr_label)
+ * 7. Append test summary to the feature PR description (via gh pr edit)
+ * 8. Post Jira comment on the trigger ticket
+ * 9. Move trigger ticket status (Passed / Failed / Blocked)
+ * 10. Remove WIP and SM trigger labels
  *
  * Configuration (via customParams):
  *   targetRepository.workingDir   — path to test automation repo (required)
@@ -30,6 +31,87 @@
 var configLoader = require('./configLoader.js');
 const { STATUSES, LABELS } = require('./config.js');
 var prHelper = require('./common/pullRequest.js');
+
+/** Marker file path to prevent infinite resume loops. */
+var RESUME_MARKER = 'outputs/.missing-output-resume-attempted';
+
+/**
+ * If mandatory output files are missing and a resume has not already been attempted,
+ * run `run-agent.sh --continue --resume` with a targeted recovery prompt so the agent
+ * writes outputs/test_automation_result.json, outputs/response.md, outputs/pr_body.md,
+ * and outputs/pr_feature_update.md without rewriting the already-committed flows.
+ *
+ * Returns true if a resume was executed (caller should re-check outputs afterwards).
+ * Returns false if outputs already exist, or a resume was already attempted.
+ */
+function attemptResumeIfOutputsMissing(ticketKey, workingDir) {
+    var resultJson = readOutputFile('outputs/test_automation_result.json', workingDir);
+    if (resultJson) {
+        return false; // outputs present — no resume needed
+    }
+
+    // Guard against infinite loops
+    var alreadyAttempted = readOutputFile(RESUME_MARKER, workingDir);
+    if (alreadyAttempted) {
+        console.warn('⚠️  Resume already attempted once — skipping second resume to avoid infinite loop');
+        return false;
+    }
+
+    console.log('⚠️  Mandatory output files missing. Attempting resume run to write outputs…');
+
+    // Write marker first so the resumed run cannot trigger another resume
+    try {
+        file_write(RESUME_MARKER, new Date().toISOString() + '\n');
+    } catch (e) {
+        console.warn('Could not write resume marker:', e);
+    }
+
+    var recoveryPrompt =
+        'RESUME TASK: The previous automation run ended before writing the mandatory output files.\n\n' +
+        'DO NOT rewrite or delete existing flows. Inspect git changes, app_info.md, and any Maestro run logs first.\n' +
+        'If the generated suite has NOT been executed and app_info.md provides APP_PATH/MAESTRO_DEVICE,\n' +
+        'run the generated suite once on the available simulator before writing results. Use the suite file\n' +
+        'under src/flows/suites/ when present. Only mark flows as "written" when there is a real blocker\n' +
+        'that prevents simulator execution, and explain that blocker in the summary.\n\n' +
+        'Then write the four output files:\n\n' +
+        '1. /Users/vagrant/git/outputs/test_automation_result.json\n' +
+        '   Schema: { "status":"passed"|"failed", "passed":N, "failed":N, "skipped":N, "summary":"…",\n' +
+        '     "results":[{ "ticket":"MAPC-XXXX", "status":"passed"|"failed"|"written"|"skipped",\n' +
+        '       "title":"…", "file":"src/flows/…" }] }\n' +
+        '   Mark any flow that was WRITTEN but not run as "status":"written" only when simulator execution was impossible.\n\n' +
+        '2. /Users/vagrant/git/outputs/response.md\n' +
+        '   Jira-flavoured markdown (h3 header, Jira table with || pipes) summarising per-TC results.\n\n' +
+        '3. /Users/vagrant/git/outputs/pr_body.md\n' +
+        '   GitHub-flavoured markdown version of response.md (| tables, **bold**).\n\n' +
+        '4. /Users/vagrant/git/outputs/pr_feature_update.md\n' +
+        '   Compact summary for the feature PR (same format as pr_body.md but shorter).\n\n' +
+        'After writing all four files, verify they exist:\n' +
+        '```bash\n' +
+        'ls -la /Users/vagrant/git/outputs/\n' +
+        'cat /Users/vagrant/git/outputs/test_automation_result.json\n' +
+        '```\n\n' +
+        'Do NOT log out or install the app unless app_info.md explicitly requires it.\n' +
+        'Ticket: ' + ticketKey + '\n';
+
+    var promptFile = 'outputs/.resume-prompt.md';
+    try {
+        file_write(promptFile, recoveryPrompt);
+    } catch (e) {
+        console.error('Failed to write resume prompt file:', e);
+        return false;
+    }
+
+    try {
+        var resumeResult = cli_execute_command({
+            command: 'bash agents/scripts/run-agent.sh --continue --resume ' + promptFile
+        });
+        console.log('Resume run output:', (resumeResult || '').substring(0, 500));
+        return true;
+    } catch (e) {
+        console.error('Resume run failed:', e);
+        return false;
+    }
+}
 
 function parseMcpResult(result) {
     if (!result) return null;
@@ -75,12 +157,70 @@ function readResultJson(workingDir) {
     }
     try {
         var parsed = JSON.parse(raw);
+        parsed = normalizeResult(parsed);
         console.log('✅ Read test result — status:', parsed.status);
         return parsed;
     } catch (e) {
         console.error('Failed to parse test_automation_result.json:', e);
         return null;
     }
+}
+
+function asNumber(value) {
+    if (value === undefined || value === null || value === '') return null;
+    var n = parseInt(value, 10);
+    return isNaN(n) ? null : n;
+}
+
+function firstNumber(obj, keys) {
+    for (var i = 0; i < keys.length; i++) {
+        var value = asNumber(obj && obj[keys[i]]);
+        if (value !== null) return value;
+    }
+    return null;
+}
+
+function getResultCounts(result) {
+    var passed = firstNumber(result, ['passed', 'passedCount', 'passed_count', 'passedTests', 'passed_tests']);
+    var failed = firstNumber(result, ['failed', 'failedCount', 'failed_count', 'failedTests', 'failed_tests']);
+    var skipped = firstNumber(result, ['skipped', 'skippedCount', 'skipped_count', 'skippedTests', 'skipped_tests']);
+
+    if (result && result.results && Array.isArray(result.results)) {
+        var resultPassed = 0;
+        var resultFailed = 0;
+        var resultSkipped = 0;
+        for (var i = 0; i < result.results.length; i++) {
+            var status = String(result.results[i].status || '').toLowerCase();
+            if (status === 'passed') resultPassed += 1;
+            else if (status === 'skipped') resultSkipped += 1;
+            else if (status === 'failed' || status === 'error') resultFailed += 1;
+        }
+        if (passed === null) passed = resultPassed;
+        if (failed === null) failed = resultFailed;
+        if (skipped === null) skipped = resultSkipped;
+    }
+
+    return {
+        passed: passed === null ? 0 : passed,
+        failed: failed === null ? 0 : failed,
+        skipped: skipped === null ? 0 : skipped
+    };
+}
+
+function normalizeResult(result) {
+    result = result || {};
+    if (!result.status) {
+        var counts = getResultCounts(result);
+        var passRate = String(result.passRate || result.pass_rate || '').trim();
+        if (counts.failed > 0) {
+            result.status = 'failed';
+        } else if (counts.passed > 0 || passRate === '100%' || passRate === '100') {
+            result.status = 'passed';
+        } else if (result.results && Array.isArray(result.results) && result.results.length > 0) {
+            result.status = 'failed';
+        }
+    }
+    return result;
 }
 
 /** Run a command inside the automation repo directory. */
@@ -207,7 +347,22 @@ function updateFeaturePRLabel(owner, repo, prNumber, passed, labelPassed, labelF
 }
 
 /** Post test result summary as a comment on the feature PR. */
-function updateFeaturePRBody(owner, repo, prNumber, workingDir) {
+function buildFeatureVerdictSummary(result) {
+    var counts = getResultCounts(result || {});
+    var status = String((result && result.status) || '').toLowerCase();
+    var verdict = status === 'passed'
+        ? '✅ FIX VERIFIED — Maestro suite passed'
+        : status === 'blocked_by_human'
+        ? '🚫 BLOCKED — test automation needs human setup'
+        : '❌ FIX FAILED — Maestro suite failed';
+    return '## 🤖 Maestro Test Results\n\n' +
+        '**Verdict**: ' + verdict + '\n\n' +
+        '| Passed | Failed | Skipped |\n' +
+        '|--------|--------|---------|\n' +
+        '| ' + counts.passed + ' | ' + counts.failed + ' | ' + counts.skipped + ' |\n\n';
+}
+
+function updateFeaturePRBody(owner, repo, prNumber, workingDir, result) {
     var summaryFile = readOutputFile('outputs/pr_feature_update.md', workingDir);
     if (!summaryFile) {
         // Fallback: use pr_body.md (automation PR description) which has the same test results
@@ -219,6 +374,17 @@ function updateFeaturePRBody(owner, repo, prNumber, workingDir) {
     if (!summaryFile) {
         console.log('No outputs/pr_feature_update.md or pr_body.md — skipping feature PR comment');
         return;
+    }
+
+    if (result) {
+        var lower = summaryFile.toLowerCase();
+        var hasVerdict = lower.indexOf('verdict') !== -1 ||
+            lower.indexOf('test results') !== -1 ||
+            lower.indexOf('passed') !== -1 ||
+            lower.indexOf('failed') !== -1;
+        if (!hasVerdict) {
+            summaryFile = buildFeatureVerdictSummary(result) + summaryFile;
+        }
     }
 
     try {
@@ -320,6 +486,14 @@ function action(params) {
             console.log('Automation repo branch:', JSON.stringify(branchName));
         }
 
+        // Step 2b: If mandatory outputs are missing, attempt one resume run before committing.
+        // This handles the case where the agent ran out of context or was interrupted
+        // before writing outputs/test_automation_result.json and friends.
+        var resumed = attemptResumeIfOutputsMissing(ticketKey, workingDir);
+        if (resumed) {
+            console.log('Resume run completed — re-checking outputs before proceeding.');
+        }
+
         // Step 3: Commit + push + create automation PR (ALWAYS — don't lose agent's work)
         var automationPrUrl = null;
         if (branchName && workingDir) {
@@ -340,7 +514,8 @@ function action(params) {
         if (!result) {
             console.warn('No test_automation_result.json found — posting error to Jira but keeping git work');
             try {
-                var errMsg = 'h3. ⚠️ Test Automation Error\n\nFlows may have been written but output JSON is missing. Check workflow logs.';
+                var errMsg = 'h3. ⚠️ Test Automation Error\n\nFlows may have been written but output JSON is missing. Check workflow logs.' +
+                    (resumed ? '\n\n_Resume was attempted but also did not produce output files._' : '');
                 if (automationPrUrl) errMsg += '\n\n*Automation PR*: ' + automationPrUrl;
                 jira_post_comment({ key: ticketKey, comment: errMsg });
             } catch (e) { console.warn('Failed to post error Jira comment:', e); }
@@ -387,7 +562,7 @@ function action(params) {
                         }
                     } catch (_) {}
                 }
-                updateFeaturePRBody(featureOwner, featureRepo, featurePR.number, workingDir);
+                updateFeaturePRBody(featureOwner, featureRepo, featurePR.number, workingDir, result);
             }
         }
 

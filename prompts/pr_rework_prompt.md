@@ -39,6 +39,26 @@ The reviewer's job is to APPROVE based on code analysis (review is cheaper than 
 
 If `pr_discussions.md` contains NO actionable items (no human review threads AND no automated test failures/warnings), then there is **nothing to fix** — write a short `outputs/response.md` stating "No open review comments to address" and an empty `outputs/review_replies.json` (`{ "replies": [] }`), then exit. **Do NOT post multiple acknowledgment comments.**
 
+Use this decision flow whenever a PR appears "blocked" but has prior rework/approval comments:
+
+```mermaid
+flowchart TD
+    A[Inspect PR context] --> B{Open unresolved review threads?}
+    B -->|Yes| C[Fix every actionable thread]
+    B -->|No| D{Failed CI logs in ci_failures.md?}
+    D -->|Yes| E[Fix CI failure root cause]
+    D -->|No| F{PR already has APPROVE or pr_approved?}
+    F -->|Yes| G[Do not rework: wait for required checks or merge automation]
+    F -->|No| H{Reviewer only asks for fresh automation?}
+    H -->|Yes| I[No code change; write no-action response]
+    H -->|No| J[No open review comments to address]
+    C --> K[Write replies and response]
+    E --> K
+    G --> L[Empty replies; concise waiting response]
+    I --> L
+    J --> L
+```
+
 ### Fixing human review threads
 For each thread:
 1. Understand the issue described by the reviewer

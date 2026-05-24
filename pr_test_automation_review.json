@@ -8,8 +8,7 @@
       "aiRole": "Senior QA Engineer & Code Reviewer",
       "instructions": [
         "./agents/instructions/test_automation/pr_test_review_instructions.md",
-        "./agents/instructions/review/pr_review_json_output.md",
-        "./agents/instructions/common/bash_tools.md"
+        "./agents/instructions/review/pr_review_json_output.md"
       ],
       "knownInfo": "",
       "formattingRules": "./agents/instructions/review/pr_review_formatting.md",
@@ -31,6 +30,9 @@
     "customParams": {
       "removeLabel": "sm_test_review_triggered"
     },
-    "inputJql": "key = JD-111"
+    "inputJql": "key = JD-111",
+    "cliPrompts": [
+      "./agents/prompts/bash_tools.md"
+    ]
   }
 }

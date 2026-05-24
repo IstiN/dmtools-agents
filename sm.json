@@ -3,6 +3,7 @@
   "params": {
     "jsPath": "agents/js/smAgent.js",
     "jobParams": {
+      "maxTriggeredWorkflows": 3,
       "rules": [
         {
           "description": "PO Review Stories with all subtasks Done → BA Analysis",
@@ -36,15 +37,18 @@
           "addLabel": "sm_po_refinement_triggered"
         },
         {
-          "description": "Backlog Stories → ask clarification questions",
-          "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('Backlog')",
+          "description": "Backlog / To Do Stories → ask clarification questions",
+          "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('Backlog', 'To Do')",
           "configFile": "agents/story_questions.json",
-          "skipIfLabel": "sm_story_questions_triggered",
+          "skipIfLabels": [
+            "sm_story_questions_triggered",
+            "ai_questions_asked"
+          ],
           "addLabel": "sm_story_questions_triggered"
         },
         {
-          "description": "Backlog Tasks (children of parent ticket) → run intake agent",
-          "jql": "project = {jiraProject} AND issuetype in ('Task') AND status in ('Backlog') AND parent = {parentTicket}",
+          "description": "Backlog / To Do Tasks (children of parent ticket) → run intake agent",
+          "jql": "project = {jiraProject} AND issuetype in ('Task') AND status in ('Backlog', 'To Do') AND parent = {parentTicket}",
           "targetStatus": "In Development",
           "configFile": "agents/intake.json",
           "skipIfLabel": "sm_task_intake_triggered",
@@ -58,8 +62,8 @@
           "addLabel": "sm_story_development_triggered"
         },
         {
-          "description": "Backlog / Ready For Development Bugs → trigger bug_development",
-          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('Backlog', 'Ready For Development')",
+          "description": "Backlog / To Do / Ready For Development / In Development Bugs → trigger bug_development",
+          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('Backlog', 'To Do', 'Ready For Development', 'In Development', 'In Progress')",
           "configFile": "agents/bug_development.json",
           "skipIfLabel": "sm_bug_development_triggered",
           "addLabel": "sm_bug_development_triggered",
@@ -141,8 +145,8 @@
           "localExecution": true
         },
         {
-          "description": "Backlog Test Cases → In Development + automate",
-          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('Backlog')",
+          "description": "Backlog / To Do / Ready For Development Test Cases → In Development + automate",
+          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('Backlog', 'To Do', 'Ready For Development')",
           "targetStatus": "In Development",
           "configFile": "agents/test_case_automation.json",
           "skipIfLabel": "sm_test_automation_triggered",
@@ -168,7 +172,7 @@
           "configFile": "agents/bug_creation.json",
           "skipIfLabel": "sm_bug_creation_triggered",
           "addLabel": "sm_bug_creation_triggered",
-          "limit": 1,
+          "limit": 5,
           "enabled": true
         },
         {

@@ -43,6 +43,11 @@ function loadPreCli(workingDir) {
         makeRequire({
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
+            './common/pullRequest.js': {
+                buildOriginFetchCommand: function(refSpec) {
+                    return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+                }
+            },
             './fetchParentContextToInput.js': { action: function() {} },
             './fetchQuestionsToInput.js': { action: function() {} },
             './fetchLinkedTestsToInput.js': { action: function() {} }
@@ -133,6 +138,11 @@ function loadPreCliTestAutomation(workingDir) {
         makeRequire({
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
+            './common/pullRequest.js': {
+                buildOriginFetchCommand: function(refSpec) {
+                    return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+                }
+            },
             './fetchLinkedBugsToInput.js': { action: function() {} }
         }),
         {
@@ -246,7 +256,10 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
         makeRequire({
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
-            './common/pullRequest.js': prHelper
+            './common/pullRequest.js': prHelper,
+            './common/autoStart.js': {
+                triggerConfiguredWorkflowForTicket: function() { return false; }
+            }
         }),
         allMocks
     );

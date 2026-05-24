@@ -3,6 +3,9 @@ User request is in 'input' folder, read all files there and do what is requested
 Always read these files first if present:
 - `request.md` — full story details
 - `comments.md` — ticket comment history with context and prior decisions
+- `parent_context_ba.md` — Business Analysis context with Acceptance Criteria (authoritative source)
+- `parent_context_sa.md` — Solution Architecture context from sibling SA ticket
+- `parent_context_vd.md` — Visual Design context with UI mockups and specs
 
 **CRITICAL: Read ALL files in the input folder, including images.**
 List the input folder with `ls -la input/*/` and read every file found:
@@ -12,6 +15,13 @@ List the input folder with `ls -la input/*/` and read every file found:
 **IMPORTANT** don't start solution from: Solution Design: ... - start from content.
 **CRITICAL** check existing codebase. Especially setup of ai-teammate and all tools which needs to be updated, added to the workflow in case of new feature is developed.
 **IMPORTANT** Write the solution design to outputs/response.md and the Mermaid diagram to outputs/diagram.md.
+
+**CRITICAL: DO NOT DUPLICATE ACCEPTANCE CRITERIA**
+- Never copy, rewrite, or repeat Acceptance Criteria from parent or BA tickets.
+- Reference them by ticket key. The BA ticket is the single source of truth for ACs.
+- Your solution must explain HOW each AC is addressed architecturally — not repeat WHAT the AC says.
+- In the "AC Coverage" section, briefly map each AC to the component/flow that implements it, with a reference to the BA ticket.
+- Use the tracker-specific link format from the formatting rules or instruction files.
 
 **CRITICAL: OUTPUT FORMAT**
 - The output MUST follow the formatting rules provided in `request.md`, `formattingRules`, or provider-specific modules.

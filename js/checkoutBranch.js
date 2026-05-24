@@ -8,6 +8,7 @@
 
 const { GIT_CONFIG } = require('./config.js');
 var configLoader = require('./configLoader.js');
+var prHelper = require('./common/pullRequest.js');
 
 /**
  * Clean command output from script wrapper artifacts
@@ -46,7 +47,7 @@ function action(params) {
 
         // Fetch latest remote state
         try {
-            cli_execute_command({ command: 'git fetch origin --prune' });
+            cli_execute_command({ command: prHelper.buildOriginFetchCommand('--prune') });
             console.log('Fetched remote');
         } catch (e) {
             console.warn('Could not fetch remote branches:', e);

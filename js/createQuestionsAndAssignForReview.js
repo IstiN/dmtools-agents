@@ -17,6 +17,8 @@
 const { extractTicketKey } = require('./common/jiraHelpers.js');
 const { buildSummary } = require('./common/aiResponseParser.js');
 const configLoader = require('./configLoader.js');
+const scmModule = require('./common/scm.js');
+const autoStart = require('./common/autoStart.js');
 
 /**
  * Ensure summary starts with [Q] prefix
@@ -131,6 +133,7 @@ function action(params) {
         var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
         var jiraConfig = projectConfig.jira;
         var labels = projectConfig.labels;
+        var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
 
         console.log('Processing question creation for:', ticketKey);
 
@@ -206,6 +209,31 @@ function action(params) {
                 console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
             } catch (wipError) {
                 console.warn('Failed to remove WIP label:', wipError);
+            }
+        }
+
+        // 8. Optionally auto-start question answering for each created question
+        var autoStartQuestionAnswer = customParams.autoStartQuestionAnswer === true ||
+            customParams.autoStartQuestionAnswer === 'true';
+        var questionAnswerConfigFile = customParams.autoStartQuestionAnswerConfigFile;
+        if (autoStartQuestionAnswer && questionAnswerConfigFile) {
+            try {
+                var scm = scmModule.createScm(projectConfig);
+                createdTickets
+                    .filter(function(ticket) { return ticket.success && ticket.key; })
+                    .forEach(function(ticket) {
+                        autoStart.triggerConfiguredWorkflowForTicket({
+                            scm: scm,
+                            config: projectConfig,
+                            ticketKey: ticket.key,
+                            customParams: customParams,
+                            configFile: questionAnswerConfigFile,
+                            label: 'question answer',
+                            stripKeys: ['autoStartQuestionAnswer', 'autoStartQuestionAnswerConfigFile']
+                        });
+                    });
+            } catch (e) {
+                console.warn('⚠️ autoStartQuestionAnswer trigger failed:', e.message || e);
             }
         }
 

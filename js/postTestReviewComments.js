@@ -13,6 +13,8 @@
 
 const { STATUSES, LABELS } = require('./config.js');
 const gh = require('./common/githubHelpers.js');
+const autoStart = require('./common/autoStart.js');
+const configLoader = require('./configLoader.js');
 
 function readFile(path) {
     try {
@@ -24,9 +26,24 @@ function readFile(path) {
     }
 }
 
-function readReviewJson() {
+function readOutputFile(relativePath, workingDir) {
+    var content = readFile(relativePath);
+    if (content) return content;
+
+    if (workingDir) {
+        content = readFile(workingDir + '/' + relativePath);
+        if (content) {
+            console.log('Read from fallback path:', workingDir + '/' + relativePath);
+            return content;
+        }
+    }
+
+    return null;
+}
+
+function readReviewJson(workingDir) {
     try {
-        const raw = readFile('outputs/pr_review.json');
+        const raw = readOutputFile('outputs/pr_review.json', workingDir);
         if (!raw) return null;
         return JSON.parse(raw);
     } catch (e) {
@@ -103,42 +120,127 @@ function resolveApprovedThreads(repoInfo, prNumber, resolvedThreadIds) {
 }
 
 function postInlineComment(repoInfo, prNumber, inlineComment) {
+    const filePath = inlineComment.path || inlineComment.file;
+    const commentText = inlineComment.body || readFile(inlineComment.comment);
+
     try {
-        const comment = readFile(inlineComment.comment);
-        if (!comment) return;
+        if (!commentText) {
+            console.warn('No comment content found for inline comment on', filePath);
+            return false;
+        }
+        if (!filePath) {
+            console.warn('No file path found for inline comment');
+            return false;
+        }
 
         const params = {
             workspace: repoInfo.owner,
             repository: repoInfo.repo,
             pullRequestId: String(prNumber),
-            path: inlineComment.file,
+            path: filePath,
             line: String(inlineComment.line),
-            text: comment
+            text: commentText
         };
         if (inlineComment.startLine) params.startLine = String(inlineComment.startLine);
         if (inlineComment.side) params.side = inlineComment.side;
 
         github_add_inline_comment(params);
-        console.log('✅ Inline comment on ' + inlineComment.file + ':' + inlineComment.line);
+        console.log('✅ Inline comment on ' + filePath + ':' + inlineComment.line);
+        return true;
     } catch (e) {
-        console.warn('Failed to post inline comment:', e);
+        console.warn('Inline comment failed (line not in diff?), falling back to PR comment on ' + filePath + ':' + inlineComment.line);
+        try {
+            var lineRef = filePath + (inlineComment.line ? ':' + inlineComment.line : '');
+            github_add_pr_comment({
+                workspace: repoInfo.owner,
+                repository: repoInfo.repo,
+                pullRequestId: String(prNumber),
+                text: '📍 **`' + lineRef + '`**\n\n' + commentText
+            });
+            console.log('✅ Posted fallback PR comment for ' + lineRef);
+            return true;
+        } catch (fallbackError) {
+            console.warn('Failed to post fallback PR comment:', fallbackError);
+            return false;
+        }
     }
+}
+
+function triggerReworkIfConfigured(ticketKey, config, customParams) {
+    if (!customParams || !customParams.autoStartRework || !customParams.autoStartReworkConfigFile) {
+        return false;
+    }
+
+    try {
+        return autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: ticketKey,
+            customParams: customParams,
+            config: config,
+            configFile: customParams.autoStartReworkConfigFile,
+            label: 'pr_test_automation_rework',
+            stripKeys: [
+                'removeLabel',
+                'autoStartRework',
+                'autoStartReworkConfigFile'
+            ]
+        });
+    } catch (e) {
+        console.warn('⚠️ autoStartRework trigger failed:', e.message || e);
+        return false;
+    }
+}
+
+function resolveCustomParams(params, config) {
+    var merged = {};
+    var patch = configLoader.resolveInstructions(
+        'pr_test_automation_review',
+        null,
+        config
+    ).jobParamPatch;
+    if (patch && patch.customParams) {
+        Object.assign(merged, patch.customParams);
+    }
+    Object.assign(
+        merged,
+        (params.jobParams && params.jobParams.customParams) ||
+            params.customParams ||
+            {}
+    );
+    return merged;
 }
 
 function action(params) {
     try {
         const ticketKey = params.ticket.key;
         const jiraComment = params.response || '';
+        const config = configLoader.loadProjectConfig(params.jobParams || params);
+        const customParams = resolveCustomParams(params, config);
+        const workingDir = config.workingDir || null;
 
         console.log('=== Processing test automation review for', ticketKey, '===');
 
         // Step 1: Read review data
-        const reviewData = readReviewJson();
+        const reviewData = readReviewJson(workingDir);
         if (!reviewData) {
             jira_post_comment({
                 key: ticketKey,
-                comment: 'h3. ⚠️ Review Error\n\nCould not read pr_review.json. Check workflow logs.'
+                comment: 'h3. ⚠️ Review Error\n\nCould not read pr_review.json. Removed SM trigger label so SM can retry.'
             });
+            try {
+                const smTriggerLabel = customParams.removeLabel || 'sm_test_review_triggered';
+                jira_remove_label({ key: ticketKey, label: smTriggerLabel });
+                console.log('✅ Removed SM trigger label after missing review:', smTriggerLabel);
+            } catch (e) {
+                console.warn('Failed to remove SM trigger label after missing review:', e);
+            }
+            try {
+                const wipLabelMissingReview = params.metadata && params.metadata.contextId
+                    ? params.metadata.contextId + '_wip'
+                    : 'pr_test_automation_review_wip';
+                jira_remove_label({ key: ticketKey, label: wipLabelMissingReview });
+            } catch (e) {
+                console.warn('Failed to remove WIP label after missing review:', e);
+            }
             return { success: false, error: 'No review data found' };
         }
 
@@ -225,10 +327,14 @@ function action(params) {
         if (isApproved) {
             // Ticket stays in In Review - Passed/Failed until SM merges the PR via pr_approved flow
             console.log('✅ Ticket stays in', currentStatus, '— SM will merge and move to final status');
+            autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
         } else {
             try {
                 jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REWORK });
                 console.log('✅ Changes requested — moved', ticketKey, 'to In Rework');
+                if (!triggerReworkIfConfigured(ticketKey, config, customParams)) {
+                    autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
+                }
             } catch (e) {
                 console.warn('Failed to move to In Rework:', e);
             }

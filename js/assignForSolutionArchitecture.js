@@ -6,6 +6,9 @@
 
 const { extractTicketKey } = require('./common/jiraHelpers.js');
 const { LABELS, STATUSES } = require('./config.js');
+const configLoader = require('./configLoader.js');
+const scmModule = require('./common/scm.js');
+const autoStart = require('./common/autoStart.js');
 
 const ACCEPTANCE_CRITERIA_TRIGGER_LABELS = [
     'sm_story_acceptance_criteria_triggered',
@@ -19,6 +22,8 @@ function action(params) {
         var wipLabel = params.metadata && params.metadata.contextId
             ? params.metadata.contextId + '_wip'
             : null;
+        var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+        var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
 
         // Assign to initiator (skip if accountId is not available)
         if (initiatorId) {
@@ -64,6 +69,25 @@ function action(params) {
                 console.warn('Failed to remove trigger label "' + label + '":', e);
             }
         });
+
+        var autoStartSolution = customParams.autoStartSolution === true ||
+            customParams.autoStartSolution === 'true';
+        var solutionConfigFile = customParams.autoStartSolutionConfigFile;
+        if (autoStartSolution && solutionConfigFile) {
+            try {
+                autoStart.triggerConfiguredWorkflowForTicket({
+                    scm: scmModule.createScm(projectConfig),
+                    config: projectConfig,
+                    ticketKey: ticketKey,
+                    customParams: customParams,
+                    configFile: solutionConfigFile,
+                    label: 'solution',
+                    stripKeys: ['autoStartSolution', 'autoStartSolutionConfigFile']
+                });
+            } catch (e) {
+                console.warn('⚠️ autoStartSolution trigger failed:', e.message || e);
+            }
+        }
 
         return {
             success: true,

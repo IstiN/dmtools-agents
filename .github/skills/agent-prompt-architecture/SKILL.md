@@ -125,15 +125,16 @@ Minimal pattern:
     "agentParams": {
       "aiRole": "Senior Software Engineer",
       "instructions": [
-        "./agents/instructions/development/implementation_instructions.md",
-        "./agents/instructions/common/bash_tools.md"
+        "./agents/instructions/development/implementation_instructions.md"
       ],
       "knownInfo": "",
       "formattingRules": "",
       "fewShots": ""
     },
     "cliPrompt": "./agents/prompts/story_development_prompt.md",
-    "cliPrompts": [],
+    "cliPrompts": [
+      "./agents/prompts/bash_tools.md"
+    ],
     "cliCommands": [
       "./agents/scripts/run-agent.sh"
     ],

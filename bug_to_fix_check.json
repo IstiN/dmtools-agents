@@ -6,9 +6,6 @@
     },
     "agentParams": {
       "aiRole": "Bug to fix checker",
-      "instructions": [
-        "./agents/instructions/common/bash_tools.md"
-      ],
       "knownInfo": "",
       "formattingRules": "",
       "fewShots": ""
@@ -21,6 +18,9 @@
     "customParams": {
       "removeLabel": "sm_bug_to_fix_check_triggered"
     },
-    "inputJql": "key = PROJ-1"
+    "inputJql": "key = PROJ-1",
+    "cliPrompts": [
+      "./agents/prompts/bash_tools.md"
+    ]
   }
 }

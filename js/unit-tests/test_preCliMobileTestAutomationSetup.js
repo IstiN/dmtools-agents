@@ -35,7 +35,12 @@ function loadPreCli(mocks) {
         'agents/js/preCliMobileTestAutomationSetup.js',
         makeRequire({
             './configLoader.js': freshConfigLoader,
-            './config.js': configModule
+            './config.js': configModule,
+            './common/pullRequest.js': {
+                buildOriginFetchCommand: function(refSpec) {
+                    return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+                }
+            }
         }),
         allMocks
     );

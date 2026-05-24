@@ -10,8 +10,7 @@
         "Read all Bug *.md files in the input folder to check for duplicates before creating a new bug.",
         "If a matching open bug is found — link it. Do NOT create a duplicate.",
         "Write outputs/bug_decision.json as described in the prompt.",
-        "If action is 'create', also write outputs/bug_description.md in Jira Markdown format.",
-        "./agents/instructions/common/bash_tools.md"
+        "If action is 'create', also write outputs/bug_description.md in Jira Markdown format."
       ],
       "knownInfo": "",
       "formattingRules": "outputs/bug_decision.json must be valid JSON. 'action' must be one of: 'link', 'create', 'none', 'tests_pass'."
@@ -33,6 +32,9 @@
       "openBugsJql": "project = {jiraProject} AND issuetype in (Bug) AND status not in (Done)",
       "removeLabel": "sm_bug_creation_triggered"
     },
-    "inputJql": "key = JD-111"
+    "inputJql": "key = JD-111",
+    "cliPrompts": [
+      "./agents/prompts/bash_tools.md"
+    ]
   }
 }

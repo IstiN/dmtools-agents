@@ -11,6 +11,9 @@
  */
 
 var configLoader = require('./configLoader.js');
+var autoStart = require('./common/autoStart.js');
+var feedbackLoop = require('./common/feedbackLoop.js');
+var prHelper = require('./common/pullRequest.js');
 const { GIT_CONFIG, STATUSES, LABELS } = require('./config.js');
 
 function cleanCommandOutput(output) {
@@ -73,6 +76,29 @@ function findTestPRForTicket(workspace, repository, ticketKey) {
     }
 }
 
+function updatePullRequestBody(workspace, repository, prNumber, ticketKey, testStatus, bodyContent) {
+    if (!bodyContent) return false;
+
+    try {
+        const body = '## ' + ticketKey + ' Result: ' + testStatus.toUpperCase() + '\n\n' +
+            '**Latest rework result:** `' + testStatus.toUpperCase() + '`\n\n' +
+            '---\n\n' + bodyContent;
+        const payloadPath = 'pr_rework_body_' + ticketKey.replace(/[^A-Za-z0-9_-]/g, '_') + '.json';
+        file_write({
+            path: payloadPath,
+            content: JSON.stringify({ body: body })
+        });
+        cli_execute_command({
+            command: 'gh api --method PATCH repos/' + workspace + '/' + repository + '/pulls/' + prNumber + ' --input ' + payloadPath
+        });
+        console.log('✅ Updated PR body with latest test rework result');
+        return true;
+    } catch (e) {
+        console.warn('Failed to update PR body with latest rework result:', e.message || e);
+        return false;
+    }
+}
+
 function commitAndPush(ticketKey, passed, config) {
     const branchName = cleanCommandOutput(
         cli_execute_command({ command: 'git branch --show-current' }) || ''
@@ -89,9 +115,9 @@ function commitAndPush(ticketKey, passed, config) {
     // Stage only testing/ folder
     cli_execute_command({ command: 'git add testing/' });
 
-    const statusOutput = cleanCommandOutput(
-        cli_execute_command({ command: 'git status --porcelain' }) || ''
-    );
+    const statusOutput = prHelper.readStagedDiffStat(function(command) {
+        return cli_execute_command({ command: command });
+    });
 
     var localSha = '';
     if (statusOutput.trim()) {
@@ -175,6 +201,26 @@ function createPRIfMissing(owner, repo, branchName, ticketKey, config) {
     }
 }
 
+function resolveCustomParams(params, actualParams, config) {
+    var merged = {};
+    var patch = configLoader.resolveInstructions(
+        'pr_test_automation_rework',
+        null,
+        config
+    ).jobParamPatch;
+    if (patch && patch.customParams) {
+        Object.assign(merged, patch.customParams);
+    }
+    Object.assign(
+        merged,
+        (actualParams && actualParams.customParams) ||
+            (params.jobParams && params.jobParams.customParams) ||
+            params.customParams ||
+            {}
+    );
+    return merged;
+}
+
 function postThreadReplies(workspace, repository, pullRequestId) {
     const repliesJson = readFile('outputs/review_replies.json');
     if (!repliesJson) {
@@ -229,9 +275,8 @@ function postThreadReplies(workspace, repository, pullRequestId) {
 function action(params) {
     const actualParams = params.ticket ? params : (params.jobParams || params);
     const ticketKey = actualParams.ticket.key;
-    const customParams = (actualParams.customParams) ||
-        (params.jobParams && params.jobParams.customParams) ||
-        (params.customParams);
+    var config = configLoader.loadProjectConfig(params.jobParams || params);
+    const customParams = resolveCustomParams(params, actualParams, config);
     const removeLabel = customParams && customParams.removeLabel;
     const wipLabel = actualParams.metadata && actualParams.metadata.contextId
         ? actualParams.metadata.contextId + '_wip'
@@ -249,8 +294,6 @@ function action(params) {
 
     try {
         const fixSummary = actualParams.response || '_(No fix summary)_';
-        var config = configLoader.loadProjectConfig(params.jobParams || params);
-
         console.log('=== Processing test rework results for', ticketKey, '===');
 
         // Step 1: Read new test result
@@ -280,11 +323,38 @@ function action(params) {
             cli_execute_command({ command: 'git config user.email "' + config.git.authorEmail + '"' });
         } catch (e) {}
 
+        var gateResult = feedbackLoop.runQualityGates({
+            ticketKey: ticketKey,
+            customParams: customParams,
+            section: 'qualityGates'
+        });
+        if (!gateResult.success) {
+            throw new Error('Quality gate failed before test rework publish: ' + gateResult.failedGate + '\n' + gateResult.error);
+        }
+        var policyResult = feedbackLoop.runPolicyGates({
+            ticketKey: ticketKey,
+            customParams: customParams,
+            section: 'policyGates'
+        });
+        if (!policyResult.success) {
+            throw new Error('Policy gate failed before test rework publish: ' + policyResult.failedGate + '\n' + policyResult.error);
+        }
+
         let branchName;
         try {
             branchName = commitAndPush(ticketKey, passed, config);
         } catch (e) {
             console.error('Git operations failed:', e);
+            var resume = feedbackLoop.resumeAgent({
+                ticketKey: ticketKey,
+                customParams: customParams,
+                section: 'postAction',
+                stage: 'test_rework_git_operations',
+                error: e.toString()
+            });
+            if (resume.attempted) {
+                return action(params);
+            }
             jira_post_comment({
                 key: ticketKey,
                 comment: 'h3. ❌ Rework Push Failed\n\n{code}' + e.toString() + '{code}'
@@ -307,6 +377,7 @@ function action(params) {
             try {
                 const statusEmoji = passed ? '✅' : '❌';
                 const prBodyContent = readFile('outputs/pr_body.md') || fixSummary;
+                updatePullRequestBody(repoInfo.owner, repoInfo.repo, pr.number, ticketKey, testStatus, prBodyContent);
                 const prComment = '## 🔧 Test Rework Complete — ' + ticketKey + '\n\n' +
                     '**Re-run result**: ' + statusEmoji + ' ' + testStatus.toUpperCase() + '\n\n' +
                     '---\n\n' + prBodyContent;
@@ -350,6 +421,29 @@ function action(params) {
         // Step 7 & 8: Remove WIP label + SM idempotency label
         releaseLock();
 
+        var autoStarted = false;
+        if (customParams && customParams.autoStartReview && customParams.autoStartReviewConfigFile) {
+            try {
+                autoStarted = autoStart.triggerConfiguredWorkflowForTicket({
+                    ticketKey: ticketKey,
+                    customParams: customParams,
+                    config: config,
+                    configFile: customParams.autoStartReviewConfigFile,
+                    label: 'pr_test_automation_review',
+                    stripKeys: [
+                        'removeLabel',
+                        'autoStartReview',
+                        'autoStartReviewConfigFile'
+                    ]
+                });
+            } catch (e) {
+                console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
+            }
+        }
+        if (!autoStarted) {
+            autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
+        }
+
         console.log('✅ Test rework complete — re-run:', testStatus, '→', targetStatus);
 
         return {
@@ -364,6 +458,16 @@ function action(params) {
         try {
             const key = (params.ticket || (params.jobParams && params.jobParams.ticket) || {}).key;
             if (key) {
+                var resume = feedbackLoop.resumeAgent({
+                    ticketKey: key,
+                    customParams: customParams,
+                    section: 'postAction',
+                    stage: 'test_rework_post_action',
+                    error: error.toString()
+                });
+                if (resume.attempted) {
+                    return action(params);
+                }
                 jira_post_comment({
                     key: key,
                     comment: 'h3. ❌ Test Rework Error\n\n{code}' + error.toString() + '{code}'
@@ -376,5 +480,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = { action, resolveCustomParams };
 }
