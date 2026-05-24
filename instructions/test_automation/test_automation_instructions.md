@@ -55,6 +55,12 @@ Before writing a test, read project-specific CI, credential, and environment ins
 
 Do not assume a CI provider, cloud provider, project ID, secret name, or test account. If required credentials or test data are missing, report the exact missing item in `outputs/test_automation_result.json`.
 
+### GitHub workflow access
+
+- `SOURCE_GITHUB_TOKEN` is available as an environment variable in CI jobs.
+- You may use this token to call GitHub APIs or trigger required workflows yourself when the test flow depends on deployment/sync/retry automation.
+- Prefer repository workflows that already exist (for example, dispatching the project automation workflow with the proper inputs) instead of asking a human to click-run them manually.
+
 ---
 
 ## Test Data — Self-Sufficient Strategy
