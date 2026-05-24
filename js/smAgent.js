@@ -490,6 +490,25 @@ function action(params) {
         rules = projectConfig.smRules;
     }
 
+    // Apply smRuleOverrides from project config — patches individual rules by configFile
+    // Example in .dmtools/config.js:
+    //   smRuleOverrides: {
+    //     'agents/bug_creation.json':      { enabled: false },
+    //     'agents/bulk_bugs_creation.json': { enabled: true }
+    //   }
+    if (projectConfig.smRuleOverrides && typeof projectConfig.smRuleOverrides === 'object') {
+        var overrides = projectConfig.smRuleOverrides;
+        rules = rules.map(function(rule) {
+            var patch = overrides[rule.configFile];
+            if (!patch) return rule;
+            var patched = {};
+            Object.keys(rule).forEach(function(k) { patched[k] = rule[k]; });
+            Object.keys(patch).forEach(function(k) { patched[k] = patch[k]; });
+            console.log('SM Agent: Patched rule "' + (rule.description || rule.configFile) + '" with override:', JSON.stringify(patch));
+            return patched;
+        });
+    }
+
     if (!rules || rules.length === 0) {
         console.error('❌ No rules defined in jobParams.rules or project config');
         return { success: false, error: 'No rules defined' };
