@@ -11,6 +11,12 @@ User request is in 'input' folder, read all files there and do what is requested
    - Before writing `already_fixed.json`, verify the linked test actually passes with the current code.
 5. `existing_questions.json` — if present, clarification answers from the PO — treat as binding requirements
 
+## GitHub token and workflow self-service
+
+- `SOURCE_GITHUB_TOKEN` is available as an environment variable.
+- Use it to call GitHub API / `gh` and trigger the workflows you need yourself (deploy/sync/retest/retry automation), instead of waiting for manual human triggering.
+- Prefer existing project workflows and correct `workflow_dispatch` inputs.
+
 ## ⚠️ CRITICAL: Understand the bug BEFORE looking at code
 
 **Always start by deeply understanding what the user actually experiences**, not what the code looks like.

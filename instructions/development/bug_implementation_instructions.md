@@ -93,6 +93,12 @@ Then write `outputs/blocked.json`:
 Write a summary to `outputs/response.md` explaining the blocker clearly.
 **STOP — do not make incomplete changes.**
 
+### GitHub workflow self-service before blocking on deployment
+
+Before declaring a deployment/workflow blocker, use `SOURCE_GITHUB_TOKEN` (available as an environment variable) to trigger the required existing GitHub workflow(s) yourself (for example deploy/sync/retest workflows), then re-verify.
+
+Only use `blocked.json` for deployment/workflow reasons if self-triggered workflow attempts fail or are not permitted by repository configuration.
+
 ## Step 4 — Reproduce the Bug with a Unit Test First
 
 **Only after confirming the bug is NOT already fixed and NOT blocked:**
