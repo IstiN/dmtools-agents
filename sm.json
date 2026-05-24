@@ -167,13 +167,13 @@
           "addLabel": "sm_test_rework_triggered"
         },
         {
-          "description": "Failed Test Cases → create or link bug (single)",
+          "description": "Failed Test Cases → create or link bug (single, disabled by default — use bulk_bugs_creation instead)",
           "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('Failed')",
           "configFile": "agents/bug_creation.json",
           "skipIfLabel": "sm_bug_creation_triggered",
           "addLabel": "sm_bug_creation_triggered",
           "limit": 5,
-          "enabled": true
+          "enabled": false
         },
         {
           "description": "Failed Test Cases → create or link bugs in batch",
@@ -182,7 +182,7 @@
           "skipIfLabel": "sm_bulk_bugs_creation_triggered",
           "addLabel": "sm_bulk_bugs_creation_triggered",
           "limit": 1,
-          "enabled": false
+          "enabled": true
         },
         {
           "description": "Bug To Fix Test Cases → all linked Bugs Done → move to Backlog",
