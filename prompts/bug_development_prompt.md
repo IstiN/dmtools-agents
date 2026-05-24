@@ -16,6 +16,7 @@ User request is in 'input' folder, read all files there and do what is requested
 - `SOURCE_GITHUB_TOKEN` is available as an environment variable.
 - Use it to call GitHub API / `gh` and trigger the workflows you need yourself (deploy/sync/retest/retry automation), instead of waiting for manual human triggering.
 - Prefer existing project workflows and correct `workflow_dispatch` inputs.
+- If the codebase already contains the fix but the deployed app is stale, trigger the deploy/sync workflow yourself, rerun the linked test against the refreshed deployment, and then write `outputs/already_fixed.json` so the ticket can move to `Merged`.
 
 ## ⚠️ CRITICAL: Understand the bug BEFORE looking at code
 

@@ -35,6 +35,7 @@ Before claiming "already fixed" on any bug (returned or not):
    - If the test **PASSES** against current code → the bug may genuinely be fixed. Before writing `already_fixed.json`:
      - Re-read the latest comments — has QA confirmed the fix, or are they still reporting it broken?
      - Check the platform / build / environment the reporter mentioned — maybe it's only broken on one platform.
+     - If the failure is only in the deployed artifact, trigger the appropriate deploy/sync workflow yourself with `SOURCE_GITHUB_TOKEN`, rerun the linked test on the refreshed deployment, and only then decide whether `already_fixed.json` is correct.
      - Only after all of the above, if you are still confident, write `already_fixed.json`.
 
 ## Step 1 — Root Cause Analysis (RCA)
