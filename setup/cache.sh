@@ -9,7 +9,7 @@
 #
 # Examples:
 #   cache.sh keys dmtools maestro copilot node
-#   cache.sh keys dmtools:v1.7.167 java:17
+#   cache.sh keys dmtools:v1.7.195 java:17
 #
 # After running, CI cache steps can reference exported env vars:
 #   Bitrise:  key: $DMTOOLS_CACHE_KEY   paths: $DMTOOLS_CACHE_PATH
@@ -24,7 +24,7 @@ OS_TAG="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
 # ── Per-tool cache definitions ────────────────────────────────────────────────
 
 _cache_dmtools() {
-  local version="${1:-${DMTOOLS_VERSION:-v1.7.174}}"
+  local version="${1:-${DMTOOLS_VERSION:-v1.7.195}}"
   export_var "DMTOOLS_CACHE_PATH" "${HOME}/.dmtools"
   export_var "DMTOOLS_CACHE_KEY"  "dmtools-${version}-${OS_TAG}"
 }
@@ -85,7 +85,7 @@ _print_info() {
   echo "┌─────────────┬──────────────────────────────────┬────────────────────────────────────────────────┐"
   printf "│ %-11s │ %-32s │ %-46s │\n" "Tool" "Cache Path" "Cache Key (example)"
   echo "├─────────────┼──────────────────────────────────┼────────────────────────────────────────────────┤"
-  printf "│ %-11s │ %-32s │ %-46s │\n" "dmtools"  "~/.dmtools"     "dmtools-v1.7.167-darwin-arm64"
+  printf "│ %-11s │ %-32s │ %-46s │\n" "dmtools"  "~/.dmtools"     "dmtools-v1.7.195-darwin-arm64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "java"     "~/.sdkman/... " "java-17-darwin-arm64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "node"     "~/.nvm"         "nvm-node20-darwin-arm64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "maestro"  "~/.maestro"     "maestro-latest-darwin-arm64"
