@@ -39,7 +39,7 @@ function parseWorkflowRuns(raw) {
 
 function hasActiveTargetRun(scm, configFile, ticketKey, workflowFile) {
     var expectedName = configFile + ' : ' + ticketKey;
-    var statuses = ['queued', 'in_progress'];
+    var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
 
     for (var i = 0; i < statuses.length; i++) {
         var runsRaw = null;
@@ -150,7 +150,7 @@ function triggerSmIfIdle(options) {
     var scm = options.scm || scmModule.createScm(config);
 
     var activeCount = 0;
-    var statuses = ['queued', 'in_progress'];
+    var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
     for (var i = 0; i < statuses.length; i++) {
         try {
             var runsRaw = scm.listWorkflowRuns(statuses[i], agentWorkflowFile, 50);

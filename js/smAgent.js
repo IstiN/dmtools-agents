@@ -197,7 +197,7 @@ function hasActiveTargetWorkflowRun(scm, workflowFile, configFile, ticketKey) {
     if (!scm || typeof scm.listWorkflowRuns !== 'function') return false;
 
     var expectedRunName = configFile + ' : ' + ticketKey;
-    var statuses = ['queued', 'in_progress'];
+    var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
 
     for (var i = 0; i < statuses.length; i++) {
         var runs = [];
