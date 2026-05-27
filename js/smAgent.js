@@ -27,9 +27,9 @@
  *   workflowFile   (optional) — GitHub Actions workflow file  (default: ai-teammate.yml)
  *   workflowRef    (optional) — git ref for dispatch           (default: main)
  *   projectKey     (optional) — value passed as the `project_key` workflow input so the runner
- *                               activates the correct project-specific dependency setup (e.g. "mapc",
+ *                               activates the correct project-specific dependency setup (e.g. "myproject",
  *                               "bice"). Auto-derived from configPath basename when not set
- *                               (e.g. ".dmtools/configs/mapc.js" → "mapc").
+ *                               (e.g. ".dmtools/configs/myproject.js" → "myproject").
  *   skipIfLabel    (optional) — skip ticket if it already has this label (idempotency)
  *   skipIfLabels   (optional) — skip ticket if it already has any of these labels
  *   addLabel       (optional) — add this label after triggering (idempotency marker)
@@ -64,7 +64,7 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
     var p = { inputJql: 'key = ' + ticketKey };
     var resolvedCf = resolveConfigFile(rule, effectiveConfig);
 
-    // Derive project key to resolve project-specific agent JSON (e.g. "agents/pr_review.json" → "ai_teammate/mapc/pr_review.json")
+    // Derive project key to resolve project-specific agent JSON (e.g. "agents/pr_review.json" → "ai_teammate/myproject/pr_review.json")
     var projectKey = rule.projectKey || '';
     if (!projectKey && effectiveConfig && effectiveConfig._configPath) {
         var cp = effectiveConfig._configPath;
@@ -227,7 +227,7 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig) {
     var resolvedCf   = resolveConfigFile(rule, effectiveConfig);
 
     // Resolve project_key: explicit rule field takes priority, then auto-derive from configPath
-    // e.g. ".dmtools/configs/mapc.js" → "mapc", ".dmtools/configs/bice.js" → "bice"
+    // e.g. ".dmtools/configs/myproject.js" → "myproject", ".dmtools/configs/bice.js" → "bice"
     var projectKey = rule.projectKey || '';
     if (!projectKey && effectiveConfig && effectiveConfig._configPath) {
         var cp = effectiveConfig._configPath;

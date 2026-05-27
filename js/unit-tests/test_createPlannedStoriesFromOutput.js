@@ -52,7 +52,7 @@ function makeParams(customStoryPlanConfig, overrides) {
                     summaryCommentTitle: 'Planned Stories',
                     blockedByRelationship: 'is blocked by',
                     blockedStatusName: 'Blocked',
-                    projectKey: 'MAPC',
+                    projectKey: 'PROJ',
                     issueTypeName: 'Story',
                     additionalLinks: [
                         { target: 'sourceTicket', relationship: 'Relates', includeExisting: true }
@@ -138,7 +138,7 @@ suite('createPlannedStoriesFromOutput — creation flow', function() {
 
         assert.equal(result.success, true, 'action succeeds');
         assert.equal(createCalls.length, 2, 'two stories created');
-        assert.equal(createCalls[0].project, 'MAPC', 'creation project can differ from parent project');
+        assert.equal(createCalls[0].project, 'PROJ', 'creation project can differ from parent project');
         assert.equal(createCalls[0].fieldsJson.issuetype.name, 'Story', 'issue type can be configured');
         assert.equal(createCalls[0].fieldsJson.parent.key, 'PARENT-100', 'mobile parent resolved from source parent');
         assert.equal(createCalls[1].fieldsJson.parent.key, 'PARENT-100', 'sf parent resolved from source parent');

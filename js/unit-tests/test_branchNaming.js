@@ -69,50 +69,50 @@ suite('configLoader.resolveBranchName', function() {
         assert.equal(receivedRole, 'feature');
     });
 
-    test('branchNamingFn for PROJ-style issue-type naming: bug/PROJ-123', function() {
-        var mapcNamingFn = function(ticket, branchRole) {
+    test('branchNamingFn for project-style issue-type naming: bug/PROJ-123', function() {
+        var projectNamingFn = function(ticket, branchRole) {
             var issueType = (ticket.fields && ticket.fields.issuetype && ticket.fields.issuetype.name || 'feature').toLowerCase();
             return issueType + '/' + ticket.key;
         };
         var config = configLoaderModule.mergeProjectConfig(configLoaderModule.DEFAULTS, {
-            git: { branchNamingFn: mapcNamingFn }
+            git: { branchNamingFn: projectNamingFn }
         });
         var ticket = { key: 'PROJ-123', fields: { issuetype: { name: 'Bug' } } };
         assert.equal(configLoaderModule.resolveBranchName(config, ticket, 'development'), 'bug/PROJ-123');
     });
 
-    test('branchNamingFn for PROJ-style issue-type naming: story/STORY-456', function() {
-        var mapcNamingFn = function(ticket, branchRole) {
+    test('branchNamingFn for project-style issue-type naming: story/STORY-456', function() {
+        var projectNamingFn = function(ticket, branchRole) {
             var issueType = (ticket.fields && ticket.fields.issuetype && ticket.fields.issuetype.name || 'feature').toLowerCase();
             return issueType + '/' + ticket.key;
         };
         var config = configLoaderModule.mergeProjectConfig(configLoaderModule.DEFAULTS, {
-            git: { branchNamingFn: mapcNamingFn }
+            git: { branchNamingFn: projectNamingFn }
         });
         var ticket = { key: 'STORY-456', fields: { issuetype: { name: 'Story' } } };
         assert.equal(configLoaderModule.resolveBranchName(config, ticket, 'development'), 'story/STORY-456');
     });
 
-    test('branchNamingFn for PROJ-style issue-type naming: subtask → task/PROJ-1', function() {
-        var mapcNamingFn = function(ticket, branchRole) {
+    test('branchNamingFn for project-style issue-type naming: subtask → task/PROJ-1', function() {
+        var projectNamingFn = function(ticket, branchRole) {
             var rawType = (ticket.fields && ticket.fields.issuetype && ticket.fields.issuetype.name || 'feature').toLowerCase();
             var issueType = rawType === 'subtask' ? 'task' : rawType;
             return issueType + '/' + ticket.key;
         };
         var config = configLoaderModule.mergeProjectConfig(configLoaderModule.DEFAULTS, {
-            git: { branchNamingFn: mapcNamingFn }
+            git: { branchNamingFn: projectNamingFn }
         });
         var ticket = { key: 'PROJ-1', fields: { issuetype: { name: 'Subtask' } } };
         assert.equal(configLoaderModule.resolveBranchName(config, ticket, 'development'), 'task/PROJ-1');
     });
 
     test('branchNamingFn fallback when ticket has no issuetype', function() {
-        var mapcNamingFn = function(ticket, branchRole) {
+        var projectNamingFn = function(ticket, branchRole) {
             var issueType = (ticket.fields && ticket.fields.issuetype && ticket.fields.issuetype.name || 'feature').toLowerCase();
             return issueType + '/' + ticket.key;
         };
         var config = configLoaderModule.mergeProjectConfig(configLoaderModule.DEFAULTS, {
-            git: { branchNamingFn: mapcNamingFn }
+            git: { branchNamingFn: projectNamingFn }
         });
         var ticket = { key: 'PROJ-7', fields: {} };
         assert.equal(configLoaderModule.resolveBranchName(config, ticket, 'development'), 'feature/PROJ-7');
@@ -174,8 +174,8 @@ suite('configLoader.resolvePRTargetBranch', function() {
         assert.equal(configLoaderModule.resolvePRTargetBranch(config, ticket), 'feature-PROJ-5');
     });
 
-    test('two-branch mode with PROJ-style naming', function() {
-        var mapcNamingFn = function(ticket, branchRole) {
+    test('two-branch mode with project-style naming', function() {
+        var projectNamingFn = function(ticket, branchRole) {
             var issueType = (ticket.fields && ticket.fields.issuetype && ticket.fields.issuetype.name || 'feature').toLowerCase();
             if (branchRole === 'feature') return issueType + '/' + ticket.key;
             return 'ai/' + ticket.key;
@@ -183,7 +183,7 @@ suite('configLoader.resolvePRTargetBranch', function() {
         var config = configLoaderModule.mergeProjectConfig(configLoaderModule.DEFAULTS, {
             git: {
                 featureBranch: { enabled: true },
-                branchNamingFn: mapcNamingFn
+                branchNamingFn: projectNamingFn
             }
         });
         var ticket = { key: 'PROJ-55', fields: { issuetype: { name: 'Story' } } };

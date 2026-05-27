@@ -16,7 +16,7 @@ var configLoader = require('./configLoader.js');
 
 /**
  * Derive project key from customParams.configPath or customParams.projectKey.
- * e.g. ".dmtools/configs/mapc.js" → "mapc"
+ * e.g. ".dmtools/configs/myproject.js" → "myproject"
  */
 function deriveProjectKey(customParams) {
     if (!customParams) return '';

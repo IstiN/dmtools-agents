@@ -27,7 +27,7 @@ suite('releaseArtefacts.buildTag', function() {
 
     test('resolves custom tagTemplate', function() {
         var m = loadReleaseArtefacts({});
-        assert.equal(m.buildTag('PROJ-123', 'artefacts-{ticketKey}'), 'artefacts-mapc-123');
+        assert.equal(m.buildTag('PROJ-123', 'artefacts-{ticketKey}'), 'artefacts-proj-123');
     });
 
     test('lowercases the result', function() {

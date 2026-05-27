@@ -16,7 +16,7 @@ function makeOnApprovedConfig(withTestCasesGenerator) {
     return {
         bitriseBuild: null,
         testCasesGenerator: withTestCasesGenerator ? {
-            configFile: 'ai_teammate/mapc/TestCasesGenerator.json',
+            configFile: 'ai_teammate/myproject/TestCasesGenerator.json',
             workflow: 'ai-teammate.yml'
         } : null
     };
@@ -26,7 +26,7 @@ function makeCustomParams(onApproved) {
     return {
         onApproved: onApproved,
         aiRepository: { owner: 'ExampleOrg', repo: 'example-ai-agents' },
-        configPath: '.dmtools/configs/mapc.js'
+        configPath: '.dmtools/configs/myproject.js'
     };
 }
 

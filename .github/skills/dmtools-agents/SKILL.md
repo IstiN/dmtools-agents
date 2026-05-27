@@ -417,9 +417,9 @@ automatically use this directory for `git` and `gh` operations — no JS changes
 3. `configLoader.loadProjectConfig()` reads `workingDir` and stores it as `config.workingDir`
 4. All `cli_execute_command` calls in dev scripts pass `workingDirectory: config.workingDir`
 
-### Example — MAPC mobile app development
+### Example — mobile app development
 
-Agent JSON (`ai_teammate/mapc/story_development.json`):
+Agent JSON (`ai_teammate/myproject/story_development.json`):
 ```json
 {
   "params": {
@@ -438,7 +438,7 @@ Agent JSON (`ai_teammate/mapc/story_development.json`):
 `repositories.json` (checkout-project-dependencies):
 ```json
 {
-  "mapc": [
+  "myproject": [
     {"repo": "my-org/mobile-app", "branch": "develop"},
     {"repo": "my-org/backend", "branch": "master"}
   ]
