@@ -236,7 +236,7 @@ function findFeatureBranch(ticketKey, featurePR) {
  * input/{KEY}/app_info.md with the path for the agent prompt to use.
  *
  * @param {string} ticketKey
- * @param {string} folder       - input folder path, e.g. "input/MAPC-6618"
+ * @param {string} folder       - input folder path, e.g. "input/PROJ-6618"
  * @param {object} bitriseBuild - { appSlug, workflowId }
  * @param {string} branch       - feature branch name (may be null → any branch)
  * @param {string} workingDir   - working directory for cli commands
@@ -271,7 +271,7 @@ function downloadBitriseApp(ticketKey, folder, bitriseBuild, branch, workingDir)
         var successBuilds = builds.filter(function(b) { return b.status === 1 || b.status_text === 'success'; });
 
         // If we have a feature branch, find the build whose commit message
-        // mentions it (e.g. "MAPC-6818 — iOS build for bug/MAPC-6818")
+        // mentions it (e.g. "PROJ-6818 — iOS build for bug/PROJ-6818")
         if (branch && successBuilds.length > 0) {
             var branchMatched = successBuilds.filter(function(b) {
                 var msg = b.commit_message || b.original_build_params_commit_message || '';
@@ -418,7 +418,7 @@ function downloadBitriseApp(ticketKey, folder, bitriseBuild, branch, workingDir)
  *
  * @param {string} appPath - absolute path to the .app bundle
  * @param {string} folder  - input folder for writing updated app_info.md
- * @param {string} [appId] - bundle identifier (e.g. com.postnl.internal.business.customer)
+ * @param {string} [appId] - bundle identifier (e.g. com.example.internal.business.app)
  */
 function installAppOnSimulator(appPath, folder, appId) {
     if (!appPath) {
@@ -462,7 +462,7 @@ function installAppOnSimulator(appPath, folder, appId) {
     }
 
     // Append simulator info to app_info.md
-    var resolvedAppId = appId || 'com.postnl.internal.business.customer';
+    var resolvedAppId = appId || 'com.example.internal.business.app';
     try {
         var simInfo = [
             '\n## Simulator & Maestro\n',

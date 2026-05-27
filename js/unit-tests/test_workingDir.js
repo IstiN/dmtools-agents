@@ -91,10 +91,10 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
     });
 
     test('passes workingDirectory when config.workingDir is set', function() {
-        var loaded = loadPreCli('dependencies/PostNL-commercial-mobileApp');
+        var loaded = loadPreCli('dependencies/example-mobile-app');
         try {
             loaded.mod.action({
-                ticket: { key: 'MAPC-1', fields: { summary: 'Test', status: { name: 'In Development' }, labels: [] } },
+                ticket: { key: 'PROJ-1', fields: { summary: 'Test', status: { name: 'In Development' }, labels: [] } },
                 jobParams: {}
             });
         } catch (e) { /* expected */ }
@@ -104,7 +104,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             gitCalls.forEach(function(c) {
                 assert.equal(
                     c.workingDirectory,
-                    'dependencies/PostNL-commercial-mobileApp',
+                    'dependencies/example-mobile-app',
                     'workingDirectory should match config.workingDir'
                 );
             });
@@ -156,7 +156,7 @@ function loadPreCliTestAutomation(workingDir) {
     if (workingDir) {
         jobParams.customParams = {
             targetRepository: {
-                owner: 'Postnl-Production',
+                owner: 'ExampleOrg-Production',
                 repo: 'api-client-sdk',
                 baseBranch: 'main',
                 workingDir: workingDir
@@ -212,9 +212,9 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
         if (args.command.indexOf('git branch --show-current') === 0) return 'test/AITS-1';
         if (args.command.indexOf('git diff --cached --stat') === 0) return ' tests/FooTest.php | 1 +';
         if (args.command.indexOf('git ls-remote --heads origin') === 0) return 'abc123\trefs/heads/test/AITS-1';
-        if (args.command.indexOf('gh pr create') === 0) return 'https://github.com/Postnl-Production/api-client-sdk/pull/1';
+        if (args.command.indexOf('gh pr create') === 0) return 'https://github.com/ExampleOrg-Production/api-client-sdk/pull/1';
         if (args.command.indexOf('gh pr list --head') === 0) return '';
-        if (args.command.indexOf('git config --get remote.origin.url') === 0) return 'git@github.com:Postnl-Production/api-client-sdk.git';
+        if (args.command.indexOf('git config --get remote.origin.url') === 0) return 'git@github.com:ExampleOrg-Production/api-client-sdk.git';
         return '';
     };
 
@@ -283,7 +283,7 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
                     removeLabel: 'sm_aits_test_triggered',
                     testFilesGlob: testFilesGlob,
                     targetRepository: {
-                        owner: 'Postnl-Production',
+                        owner: 'ExampleOrg-Production',
                         repo: 'api-client-sdk',
                         baseBranch: 'main',
                         workingDir: workingDir

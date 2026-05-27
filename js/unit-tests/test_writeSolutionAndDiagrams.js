@@ -31,7 +31,7 @@ suite('writeSolutionAndDiagrams — required outputs', function() {
         );
 
         var result = module.action({
-            ticket: { key: 'MAPC-1' },
+            ticket: { key: 'PROJ-1' },
             customParams: {
                 solutionField: 'High-Level Solution',
                 diagramField: '',

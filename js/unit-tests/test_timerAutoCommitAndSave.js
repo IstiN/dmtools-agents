@@ -46,7 +46,7 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
             cli_execute_command: function(args) { cliCalls.push(args.command); return ''; }
         });
         m.action({
-            ticket: { key: 'MAPC-123' },
+            ticket: { key: 'PROJ-123' },
             jobParams: { customParams: {}, metadata: { contextId: 'sf_story_development' } },
             currentCliOutput: ''
         });
@@ -63,7 +63,7 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
             }
         });
         m.action({
-            ticket: { key: 'MAPC-123' },
+            ticket: { key: 'PROJ-123' },
             jobParams: {
                 customParams: {
                     targetRepository: { workingDir: '/some/dir' }
@@ -86,7 +86,7 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
             }
         });
         m.action({
-            ticket: { key: 'MAPC-123' },
+            ticket: { key: 'PROJ-123' },
             jobParams: {
                 customParams: {
                     targetRepository: { workingDir: '/some/dir' }
@@ -98,7 +98,7 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
         assert.ok(cliCalls.length >= 4, 'should call status, add, commit, push');
         assert.contains(cliCalls[1], 'git add -A');
         assert.contains(cliCalls[2], 'git commit');
-        assert.contains(cliCalls[2], 'MAPC-123');
+        assert.contains(cliCalls[2], 'PROJ-123');
         assert.contains(cliCalls[3], 'git push');
     });
 });
@@ -115,7 +115,7 @@ suite('timerAutoCommitAndSave — saveSessionArtefact', function() {
             file_delete: function() {}
         });
         m.action({
-            ticket: { key: 'MAPC-123' },
+            ticket: { key: 'PROJ-123' },
             jobParams: { customParams: {}, metadata: { contextId: 'test' } },
             currentCliOutput: 'some output'
         });
@@ -130,7 +130,7 @@ suite('timerAutoCommitAndSave — saveSessionArtefact', function() {
             file_delete: function() {}
         });
         m.action({
-            ticket: { key: 'MAPC-123' },
+            ticket: { key: 'PROJ-123' },
             jobParams: {
                 customParams: {
                     artefactRepository: { owner: 'TestOrg', repo: 'test-repo' }
@@ -168,10 +168,10 @@ suite('timerAutoCommitAndSave — saveSessionArtefact', function() {
         });
 
         m.action({
-            ticket: { key: 'MAPC-123' },
+            ticket: { key: 'PROJ-123' },
             jobParams: {
                 customParams: {
-                    artefactRepository: { owner: 'PostNL-BitDigital', repo: 'PostNL-commercial' },
+                    artefactRepository: { owner: 'ExampleOrg', repo: 'example-app' },
                     targetRepository: { workingDir: '/some/dir' }
                 },
                 metadata: { contextId: 'sf_story_development' }
@@ -186,14 +186,14 @@ suite('timerAutoCommitAndSave — saveSessionArtefact', function() {
 
         // Should call github_get_or_create_draft_release
         assert.equal(releaseCalls.length, 1);
-        assert.equal(releaseCalls[0].workspace, 'PostNL-BitDigital');
-        assert.equal(releaseCalls[0].repository, 'PostNL-commercial');
-        assert.equal(releaseCalls[0].tagName, 'ai-mapc-123');
+        assert.equal(releaseCalls[0].workspace, 'ExampleOrg');
+        assert.equal(releaseCalls[0].repository, 'example-app');
+        assert.equal(releaseCalls[0].tagName, 'ai-proj-123');
 
         // Should call github_upload_release_asset with overwrite
         assert.equal(uploadCalls.length, 1);
-        assert.equal(uploadCalls[0].workspace, 'PostNL-BitDigital');
-        assert.equal(uploadCalls[0].repository, 'PostNL-commercial');
+        assert.equal(uploadCalls[0].workspace, 'ExampleOrg');
+        assert.equal(uploadCalls[0].repository, 'example-app');
         assert.equal(uploadCalls[0].releaseId, '99999');
         assert.equal(uploadCalls[0].filePath, '.dmtools-session-output.log');
         assert.equal(uploadCalls[0].assetName, 'sf_story_development-session.log');
@@ -222,7 +222,7 @@ suite('timerAutoCommitAndSave — saveSessionArtefact', function() {
 
         // Should not throw — errors are caught
         m.action({
-            ticket: { key: 'MAPC-123' },
+            ticket: { key: 'PROJ-123' },
             jobParams: {
                 customParams: {
                     artefactRepository: { owner: 'Org', repo: 'repo' }

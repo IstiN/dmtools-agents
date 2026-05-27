@@ -59,7 +59,7 @@ function makeParams(ticketKey, customParams) {
         ticket: { key: ticketKey, fields: { summary: 'Test ticket summary', labels: [] } },
         jobParams: {
             customParams: Object.assign({
-                featurePR: { owner: 'PostNL-BitDigital', repo: 'PostNL-commercial-mobileApp' },
+                featurePR: { owner: 'ExampleOrg', repo: 'example-mobile-app' },
                 labels: { testsPassed: 'tests_passed', testsFailed: 'tests_failed' },
                 testFilesGlob: 'src/flows/'
             }, customParams || {})
@@ -71,8 +71,8 @@ var PASSED_RESULT = JSON.stringify({
     status: 'passed',
     summary: '3 flows written, all passed',
     results: [
-        { ticket: 'MAPC-TC-1', title: 'VoiceOver modal', status: 'passed' },
-        { ticket: 'MAPC-TC-2', title: 'Close button label', status: 'passed' }
+        { ticket: 'PROJ-TC-1', title: 'VoiceOver modal', status: 'passed' },
+        { ticket: 'PROJ-TC-2', title: 'Close button label', status: 'passed' }
     ]
 });
 
@@ -80,8 +80,8 @@ var FAILED_RESULT = JSON.stringify({
     status: 'failed',
     summary: '2 flows, 1 failed',
     results: [
-        { ticket: 'MAPC-TC-1', title: 'VoiceOver modal', status: 'passed' },
-        { ticket: 'MAPC-TC-2', title: 'Close button', status: 'failed', error: 'Element not found' }
+        { ticket: 'PROJ-TC-1', title: 'VoiceOver modal', status: 'passed' },
+        { ticket: 'PROJ-TC-2', title: 'Close button', status: 'failed', error: 'Element not found' }
     ]
 });
 
@@ -91,8 +91,8 @@ var COUNT_ONLY_PASSED_RESULT = JSON.stringify({
     failed: 0,
     skipped: 0,
     results: [
-        { ticket: 'MAPC-TC-1', title: 'VoiceOver modal', status: 'passed' },
-        { ticket: 'MAPC-TC-2', title: 'Close button label', status: 'passed' }
+        { ticket: 'PROJ-TC-1', title: 'VoiceOver modal', status: 'passed' },
+        { ticket: 'PROJ-TC-2', title: 'Close button label', status: 'passed' }
     ]
 });
 
@@ -110,14 +110,14 @@ suite('postMobileTestAutomationResults — findFeaturePR', function() {
             },
             github_list_prs: function() {
                 return JSON.stringify({ data: [
-                    { number: 963, title: 'MAPC-6618 some feature', head: { ref: 'story/MAPC-6618' } }
+                    { number: 963, title: 'PROJ-6618 some feature', head: { ref: 'story/PROJ-6618' } }
                 ]});
             },
             github_add_pr_label: function(opts) { labelsCalled.push(opts); },
-            cli_execute_command: function() { return 'test/MAPC-6618'; }
+            cli_execute_command: function() { return 'test/PROJ-6618'; }
         });
 
-        m.action(makeParams('MAPC-6618'));
+        m.action(makeParams('PROJ-6618'));
 
         assert.ok(labelsCalled.length > 0, 'should add label to found PR');
         assert.equal(labelsCalled[0].pullRequestId, '963', 'should use correct PR number (as string)');
@@ -132,13 +132,13 @@ suite('postMobileTestAutomationResults — findFeaturePR', function() {
                 return null;
             },
             github_list_prs: function() {
-                return [{ number: 42, title: 'Story MAPC-6618', head: { ref: 'story/MAPC-6618' } }];
+                return [{ number: 42, title: 'Story PROJ-6618', head: { ref: 'story/PROJ-6618' } }];
             },
             github_add_pr_label: function(opts) { labelsCalled.push(opts); },
-            cli_execute_command: function() { return 'test/MAPC-6618'; }
+            cli_execute_command: function() { return 'test/PROJ-6618'; }
         });
 
-        m.action(makeParams('MAPC-6618'));
+        m.action(makeParams('PROJ-6618'));
 
         assert.ok(labelsCalled.length > 0, 'should add label even when PRs returned as array');
         assert.equal(labelsCalled[0].pullRequestId, '42');
@@ -152,11 +152,11 @@ suite('postMobileTestAutomationResults — findFeaturePR', function() {
                 return null;
             },
             github_list_prs: function() { return JSON.stringify({ data: [] }); },
-            cli_execute_command: function() { return 'test/MAPC-6618'; }
+            cli_execute_command: function() { return 'test/PROJ-6618'; }
         });
 
         // Should complete without throwing
-        var result = m.action(makeParams('MAPC-6618'));
+        var result = m.action(makeParams('PROJ-6618'));
         assert.equal(result.success, true, 'action should succeed even without a feature PR');
     });
 
@@ -175,14 +175,14 @@ suite('postMobileTestAutomationResults — feature PR label', function() {
                 return null;
             },
             github_list_prs: function() {
-                return JSON.stringify({ data: [{ number: 963, title: 'MAPC-6618', head: { ref: 'story/MAPC-6618' } }]});
+                return JSON.stringify({ data: [{ number: 963, title: 'PROJ-6618', head: { ref: 'story/PROJ-6618' } }]});
             },
             github_add_pr_label: function(opts) { added.push(opts.label); },
             github_remove_pr_label: function(opts) { removed.push(opts.label); },
-            cli_execute_command: function() { return 'test/MAPC-6618'; }
+            cli_execute_command: function() { return 'test/PROJ-6618'; }
         });
 
-        m.action(makeParams('MAPC-6618'));
+        m.action(makeParams('PROJ-6618'));
 
         assert.ok(added.indexOf('tests_passed') !== -1, 'should add tests_passed label');
         assert.ok(removed.indexOf('tests_failed') !== -1, 'should remove tests_failed label');
@@ -197,14 +197,14 @@ suite('postMobileTestAutomationResults — feature PR label', function() {
                 return null;
             },
             github_list_prs: function() {
-                return JSON.stringify({ data: [{ number: 963, title: 'MAPC-6618', head: { ref: 'story/MAPC-6618' } }]});
+                return JSON.stringify({ data: [{ number: 963, title: 'PROJ-6618', head: { ref: 'story/PROJ-6618' } }]});
             },
             github_add_pr_label: function(opts) { added.push(opts.label); },
             github_remove_pr_label: function(opts) { removed.push(opts.label); },
-            cli_execute_command: function() { return 'test/MAPC-6618'; }
+            cli_execute_command: function() { return 'test/PROJ-6618'; }
         });
 
-        m.action(makeParams('MAPC-6618'));
+        m.action(makeParams('PROJ-6618'));
 
         assert.ok(added.indexOf('tests_failed') !== -1, 'should add tests_failed label');
         assert.ok(removed.indexOf('tests_passed') !== -1, 'should remove tests_passed label');
@@ -219,15 +219,15 @@ suite('postMobileTestAutomationResults — feature PR label', function() {
                 return null;
             },
             github_list_prs: function() {
-                return JSON.stringify({ data: [{ number: 963, title: 'MAPC-6618', head: { ref: 'story/MAPC-6618' } }]});
+                return JSON.stringify({ data: [{ number: 963, title: 'PROJ-6618', head: { ref: 'story/PROJ-6618' } }]});
             },
             github_add_pr_label: function(opts) { added.push(opts.label); },
             github_remove_pr_label: function(opts) { removed.push(opts.label); },
             jira_move_to_status: function(opts) { statusMoves.push(opts); },
-            cli_execute_command: function() { return 'test/MAPC-6618'; }
+            cli_execute_command: function() { return 'test/PROJ-6618'; }
         });
 
-        m.action(makeParams('MAPC-6618'));
+        m.action(makeParams('PROJ-6618'));
 
         assert.ok(added.indexOf('tests_passed') !== -1, 'should add tests_passed label');
         assert.ok(removed.indexOf('tests_failed') !== -1, 'should remove tests_failed label');
@@ -243,14 +243,14 @@ suite('postMobileTestAutomationResults — feature PR label', function() {
                 return null;
             },
             github_list_prs: function() {
-                return JSON.stringify({ data: [{ number: 10, title: 'MAPC-6618', head: { ref: 'story/MAPC-6618' } }]});
+                return JSON.stringify({ data: [{ number: 10, title: 'PROJ-6618', head: { ref: 'story/PROJ-6618' } }]});
             },
             github_add_pr_label: function(opts) { added.push(opts.label); },
             github_remove_pr_label: function() {},
-            cli_execute_command: function() { return 'test/MAPC-6618'; }
+            cli_execute_command: function() { return 'test/PROJ-6618'; }
         });
 
-        m.action(makeParams('MAPC-6618', { labels: { testsPassed: 'qa_approved', testsFailed: 'qa_rejected' } }));
+        m.action(makeParams('PROJ-6618', { labels: { testsPassed: 'qa_approved', testsFailed: 'qa_rejected' } }));
 
         assert.ok(added.indexOf('qa_approved') !== -1, 'should use custom passed label');
     });
@@ -273,18 +273,18 @@ suite('postMobileTestAutomationResults — feature PR comment', function() {
                 return null;
             },
             github_list_prs: function() {
-                return JSON.stringify({ data: [{ number: 963, title: 'MAPC-6618', head: { ref: 'story/MAPC-6618' } }]});
+                return JSON.stringify({ data: [{ number: 963, title: 'PROJ-6618', head: { ref: 'story/PROJ-6618' } }]});
             },
             github_add_pr_label: function() {},
             github_remove_pr_label: function() {},
             github_add_pr_comment: function(opts) { prComments.push(opts); },
             cli_execute_command: function(opts) {
                 cliCommands.push(opts.command || '');
-                return 'test/MAPC-6618';
+                return 'test/PROJ-6618';
             }
         });
 
-        m.action(makeParams('MAPC-6618'));
+        m.action(makeParams('PROJ-6618'));
 
         assert.ok(prComments.length > 0, 'should call github_add_pr_comment');
         assert.equal(prComments[0].pullRequestId, '963', 'should target correct PR');
@@ -306,15 +306,15 @@ suite('postMobileTestAutomationResults — feature PR comment', function() {
                 return null;
             },
             github_list_prs: function() {
-                return JSON.stringify({ data: [{ number: 963, title: 'MAPC-6618', head: { ref: 'story/MAPC-6618' } }]});
+                return JSON.stringify({ data: [{ number: 963, title: 'PROJ-6618', head: { ref: 'story/PROJ-6618' } }]});
             },
             github_add_pr_label: function() {},
             github_remove_pr_label: function() {},
             github_add_pr_comment: function(opts) { prComments.push(opts); },
-            cli_execute_command: function() { return 'test/MAPC-6618'; }
+            cli_execute_command: function() { return 'test/PROJ-6618'; }
         });
 
-        m.action(makeParams('MAPC-6618'));
+        m.action(makeParams('PROJ-6618'));
 
         assert.equal(prComments.length, 1, 'should post PR comment using pr_body.md fallback');
         assert.ok(prComments[0].text.indexOf('pr_body') !== -1, 'should contain pr_body content');
@@ -331,15 +331,15 @@ suite('postMobileTestAutomationResults — feature PR comment', function() {
                 return null;
             },
             github_list_prs: function() {
-                return JSON.stringify({ data: [{ number: 963, title: 'MAPC-6618', head: { ref: 'story/MAPC-6618' } }]});
+                return JSON.stringify({ data: [{ number: 963, title: 'PROJ-6618', head: { ref: 'story/PROJ-6618' } }]});
             },
             github_add_pr_label: function() {},
             github_remove_pr_label: function() {},
             github_add_pr_comment: function(opts) { prComments.push(opts); },
-            cli_execute_command: function() { return 'test/MAPC-6618'; }
+            cli_execute_command: function() { return 'test/PROJ-6618'; }
         });
 
-        m.action(makeParams('MAPC-6618'));
+        m.action(makeParams('PROJ-6618'));
 
         assert.equal(prComments.length, 1, 'should post PR comment');
         assert.ok(prComments[0].text.indexOf('FIX VERIFIED') !== -1, 'should include inferred verdict');
@@ -363,12 +363,12 @@ suite('postMobileTestAutomationResults — Jira updates', function() {
             },
             jira_post_comment: function(opts) { jiraComments.push(opts); },
             jira_move_to_status: function(opts) { statusMoves.push(opts); },
-            cli_execute_command: function() { return 'test/MAPC-6618'; }
+            cli_execute_command: function() { return 'test/PROJ-6618'; }
         });
 
-        m.action(makeParams('MAPC-6618'));
+        m.action(makeParams('PROJ-6618'));
 
-        assert.ok(jiraComments.some(function(c) { return c.key === 'MAPC-6618'; }), 'should post Jira comment');
+        assert.ok(jiraComments.some(function(c) { return c.key === 'PROJ-6618'; }), 'should post Jira comment');
         assert.ok(statusMoves.some(function(s) { return s.statusName === 'Passed'; }), 'should move to Passed');
     });
 
@@ -383,10 +383,10 @@ suite('postMobileTestAutomationResults — Jira updates', function() {
             },
             jira_post_comment: function() {},
             jira_move_to_status: function(opts) { statusMoves.push(opts); },
-            cli_execute_command: function() { return 'test/MAPC-6618'; }
+            cli_execute_command: function() { return 'test/PROJ-6618'; }
         });
 
-        m.action(makeParams('MAPC-6618'));
+        m.action(makeParams('PROJ-6618'));
 
         assert.ok(statusMoves.some(function(s) { return s.statusName === 'Failed'; }), 'should move to Failed');
     });
@@ -400,7 +400,7 @@ suite('postMobileTestAutomationResults — git commit resilience', function() {
     test('commits and pushes even when test_automation_result.json is missing', function() {
         var gitCommands = [];
         var jiraComments = [];
-        var WORKING_DIR = 'dependencies/PostNL-commercial-mobileApp-automation';
+        var WORKING_DIR = 'dependencies/example-mobile-app-automation';
 
         var m = loadPostCli({
             file_read: function(opts) {
@@ -409,13 +409,13 @@ suite('postMobileTestAutomationResults — git commit resilience', function() {
             },
             cli_execute_command: function(opts) {
                 gitCommands.push(opts.command || '');
-                if ((opts.command || '').indexOf('branch --show-current') !== -1) return 'test/MAPC-6618';
+                if ((opts.command || '').indexOf('branch --show-current') !== -1) return 'test/PROJ-6618';
                 return '';
             },
             jira_post_comment: function(opts) { jiraComments.push(opts); }
         });
 
-        m.action(makeParams('MAPC-6618', { targetRepository: { workingDir: WORKING_DIR } }));
+        m.action(makeParams('PROJ-6618', { targetRepository: { workingDir: WORKING_DIR } }));
 
         var hasAddOrCommit = gitCommands.some(function(c) {
             return c.indexOf('git add') !== -1 || c.indexOf('git commit') !== -1;
@@ -427,7 +427,7 @@ suite('postMobileTestAutomationResults — git commit resilience', function() {
 
     test('missing-output resume prompt runs suite when simulator is available', function() {
         var writes = {};
-        var WORKING_DIR = 'dependencies/PostNL-commercial-mobileApp-automation';
+        var WORKING_DIR = 'dependencies/example-mobile-app-automation';
 
         var m = loadPostCli({
             file_read: function(opts) {
@@ -438,13 +438,13 @@ suite('postMobileTestAutomationResults — git commit resilience', function() {
                 writes[path] = content;
             },
             cli_execute_command: function(opts) {
-                if ((opts.command || '').indexOf('branch --show-current') !== -1) return 'test/MAPC-6618';
+                if ((opts.command || '').indexOf('branch --show-current') !== -1) return 'test/PROJ-6618';
                 return '';
             },
             jira_post_comment: function() {}
         });
 
-        m.action(makeParams('MAPC-6618', { targetRepository: { workingDir: WORKING_DIR } }));
+        m.action(makeParams('PROJ-6618', { targetRepository: { workingDir: WORKING_DIR } }));
 
         var prompt = writes['outputs/.resume-prompt.md'] || '';
         assert.ok(prompt.indexOf('run the generated suite once on the available simulator') !== -1,
@@ -455,7 +455,7 @@ suite('postMobileTestAutomationResults — git commit resilience', function() {
 
     test('reads result JSON from automation repo outputs dir as fallback', function() {
         var statusMoves = [];
-        var WORKING_DIR = 'dependencies/PostNL-commercial-mobileApp-automation';
+        var WORKING_DIR = 'dependencies/example-mobile-app-automation';
 
         var m = loadPostCli({
             file_read: function(opts) {
@@ -465,14 +465,14 @@ suite('postMobileTestAutomationResults — git commit resilience', function() {
                 return null;
             },
             cli_execute_command: function(opts) {
-                if ((opts.command || '').indexOf('branch --show-current') !== -1) return 'test/MAPC-6618';
+                if ((opts.command || '').indexOf('branch --show-current') !== -1) return 'test/PROJ-6618';
                 return '';
             },
             jira_move_to_status: function(opts) { statusMoves.push(opts); },
             jira_post_comment: function() {}
         });
 
-        m.action(makeParams('MAPC-6618', { targetRepository: { workingDir: WORKING_DIR } }));
+        m.action(makeParams('PROJ-6618', { targetRepository: { workingDir: WORKING_DIR } }));
 
         assert.ok(statusMoves.some(function(s) { return s.statusName === 'Passed'; }),
             'should read result from automation repo fallback path and move to Passed');

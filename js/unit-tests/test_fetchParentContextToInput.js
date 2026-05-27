@@ -19,9 +19,9 @@ function loadFetchParentContext(mocks) {
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
-var PARENT_KEY = 'MAPC-100';
-var TICKET_KEY = 'MAPC-101';
-var INPUT_FOLDER = 'input/MAPC-101';
+var PARENT_KEY = 'PROJ-100';
+var TICKET_KEY = 'PROJ-101';
+var INPUT_FOLDER = 'input/PROJ-101';
 
 function makeParams(customParams, overrides) {
     return Object.assign({
@@ -152,7 +152,7 @@ suite('fetchParentContextToInput — context matching', function() {
         var writtenFiles = [];
         var m = loadFetchParentContext({
             jira_search_by_jql: function() {
-                return [makeSearchResult('MAPC-200', '[BA]')];
+                return [makeSearchResult('PROJ-200', '[BA]')];
             },
             file_write: function(p, c) { writtenFiles.push(p); }
         });
@@ -165,7 +165,7 @@ suite('fetchParentContextToInput — context matching', function() {
         var writtenFiles = [];
         var m = loadFetchParentContext({
             jira_search_by_jql: function() {
-                return [makeSearchResult('MAPC-201', '[SA]')];
+                return [makeSearchResult('PROJ-201', '[SA]')];
             },
             file_write: function(p, c) { writtenFiles.push(p); }
         });
@@ -179,8 +179,8 @@ suite('fetchParentContextToInput — context matching', function() {
         var m = loadFetchParentContext({
             jira_search_by_jql: function() {
                 return [
-                    makeSearchResult('MAPC-200', '[BA]'),
-                    makeSearchResult('MAPC-201', '[SA]')
+                    makeSearchResult('PROJ-200', '[BA]'),
+                    makeSearchResult('PROJ-201', '[SA]')
                 ];
             },
             file_write: function(p, c) { writtenFiles.push(p); }
@@ -193,7 +193,7 @@ suite('fetchParentContextToInput — context matching', function() {
         var writtenFiles = [];
         var m = loadFetchParentContext({
             jira_search_by_jql: function() {
-                return [makeSearchResult('MAPC-200', '[ba]')]; // lowercase
+                return [makeSearchResult('PROJ-200', '[ba]')]; // lowercase
             },
             file_write: function(p, c) { writtenFiles.push(p); }
         });
@@ -205,7 +205,7 @@ suite('fetchParentContextToInput — context matching', function() {
         var writtenFiles = [];
         var m = loadFetchParentContext({
             jira_search_by_jql: function() {
-                return [makeSearchResult('MAPC-202', '[QA]')]; // no QA context configured
+                return [makeSearchResult('PROJ-202', '[QA]')]; // no QA context configured
             },
             file_write: function(p, c) { writtenFiles.push(p); }
         });
@@ -217,7 +217,7 @@ suite('fetchParentContextToInput — context matching', function() {
         var writtenPaths = [];
         var m = loadFetchParentContext({
             jira_search_by_jql: function() {
-                return [makeSearchResult('MAPC-200', '[BA]')];
+                return [makeSearchResult('PROJ-200', '[BA]')];
             },
             file_write: function(p, c) { writtenPaths.push(p); }
         });
@@ -235,13 +235,13 @@ suite('fetchParentContextToInput — file content', function() {
         var writtenContent = null;
         var m = loadFetchParentContext({
             jira_search_by_jql: function() {
-                return [makeSearchResult('MAPC-200', '[BA]', { description: 'AC1: user can login' })];
+                return [makeSearchResult('PROJ-200', '[BA]', { description: 'AC1: user can login' })];
             },
             file_write: function(p, c) { writtenContent = c; }
         });
         m.action(makeParams(MINIMAL_PARENT_CONTEXT_FETCH));
         assert.ok(writtenContent !== null, 'content was written');
-        assert.ok(writtenContent.indexOf('MAPC-200') !== -1, 'ticket key in content');
+        assert.ok(writtenContent.indexOf('PROJ-200') !== -1, 'ticket key in content');
         assert.ok(writtenContent.indexOf('Business Analysis') !== -1, 'label in content');
     });
 
@@ -249,7 +249,7 @@ suite('fetchParentContextToInput — file content', function() {
         var writtenContent = null;
         var m = loadFetchParentContext({
             jira_search_by_jql: function() {
-                return [makeSearchResult('MAPC-200', '[BA]', { description: 'AC1: user can login' })];
+                return [makeSearchResult('PROJ-200', '[BA]', { description: 'AC1: user can login' })];
             },
             file_write: function(p, c) { writtenContent = c; }
         });
@@ -261,7 +261,7 @@ suite('fetchParentContextToInput — file content', function() {
         var writtenPaths = [];
         var m = loadFetchParentContext({
             jira_search_by_jql: function() {
-                return [makeSearchResult('MAPC-200', '[BA]')];
+                return [makeSearchResult('PROJ-200', '[BA]')];
             },
             file_write: function(p, c) { writtenPaths.push(p); }
         });
@@ -282,12 +282,12 @@ suite('fetchParentContextToInput — re-fetch fallback', function() {
         var m = loadFetchParentContext({
             jira_search_by_jql: function() {
                 // Returns result WITHOUT 'High-Level Solution' field
-                return [{ key: 'MAPC-200', fields: { summary: '[BA] Title', status: { name: 'Done' } } }];
+                return [{ key: 'PROJ-200', fields: { summary: '[BA] Title', status: { name: 'Done' } } }];
             },
             jira_get_ticket: function(opts) {
                 refetchedKeys.push(opts.key);
                 return {
-                    key: 'MAPC-200',
+                    key: 'PROJ-200',
                     fields: {
                         summary: '[BA] Title',
                         description: 'Full description',
@@ -302,18 +302,18 @@ suite('fetchParentContextToInput — re-fetch fallback', function() {
             fields: ['key', 'summary', 'description', 'status', 'High-Level Solution']
         });
         m.action(makeParams(cfg));
-        assert.ok(refetchedKeys.indexOf('MAPC-200') !== -1, 're-fetch was triggered for MAPC-200');
+        assert.ok(refetchedKeys.indexOf('PROJ-200') !== -1, 're-fetch was triggered for PROJ-200');
     });
 
     test('re-fetched field content appears in output file', function() {
         var writtenContent = null;
         var m = loadFetchParentContext({
             jira_search_by_jql: function() {
-                return [{ key: 'MAPC-200', fields: { summary: '[BA] Title', status: { name: 'Done' } } }];
+                return [{ key: 'PROJ-200', fields: { summary: '[BA] Title', status: { name: 'Done' } } }];
             },
             jira_get_ticket: function() {
                 return {
-                    key: 'MAPC-200',
+                    key: 'PROJ-200',
                     fields: {
                         summary: '[BA] Title',
                         description: 'Full description from re-fetch',
@@ -356,7 +356,7 @@ suite('fetchParentContextToInput — error resilience', function() {
     test('is non-fatal when file_write throws', function() {
         var m = loadFetchParentContext({
             jira_search_by_jql: function() {
-                return [makeSearchResult('MAPC-200', '[BA]')];
+                return [makeSearchResult('PROJ-200', '[BA]')];
             },
             file_write: function() { throw new Error('disk full'); }
         });
@@ -392,8 +392,8 @@ suite('fetchParentContextToInput — error resilience', function() {
         var m = loadFetchParentContext({
             jira_search_by_jql: function() {
                 return [
-                    makeSearchResult('MAPC-200', '[BA]'),
-                    makeSearchResult('MAPC-201', '[SA]')
+                    makeSearchResult('PROJ-200', '[BA]'),
+                    makeSearchResult('PROJ-201', '[SA]')
                 ];
             },
             file_write: function(p, c) {

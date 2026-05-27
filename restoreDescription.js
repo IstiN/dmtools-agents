@@ -3,13 +3,13 @@
  * Merges the last large "before accident" version with any unique content
  * found in the current (accidentally overridden) version.
  *
- * params.ticketKey  - Jira issue key, e.g. "MAPC-6815"
+ * params.ticketKey  - Jira issue key, e.g. "PROJ-1234"
  */
 function action(params) {
-    var ticketKey = params.ticketKey || "MAPC-6815";
+    var ticketKey = params.ticketKey || "PROJ-1234";
 
     // ── 1. Fetch the full changelog ──────────────────────────────────────────
-    var changelogUrl = "https://postnl.atlassian.net/rest/api/3/issue/" + ticketKey + "/changelog?maxResults=100";
+    var changelogUrl = "https://example.atlassian.net/rest/api/3/issue/" + ticketKey + "/changelog?maxResults=100";
     var changelog = jira_execute_request(changelogUrl);
 
     if (!changelog || !changelog.values) {

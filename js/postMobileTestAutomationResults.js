@@ -76,7 +76,7 @@ function attemptResumeIfOutputsMissing(ticketKey, workingDir) {
         'Then write the four output files:\n\n' +
         '1. /Users/vagrant/git/outputs/test_automation_result.json\n' +
         '   Schema: { "status":"passed"|"failed", "passed":N, "failed":N, "skipped":N, "summary":"…",\n' +
-        '     "results":[{ "ticket":"MAPC-XXXX", "status":"passed"|"failed"|"written"|"skipped",\n' +
+        '     "results":[{ "ticket":"PROJ-XXXX", "status":"passed"|"failed"|"written"|"skipped",\n' +
         '       "title":"…", "file":"src/flows/…" }] }\n' +
         '   Mark any flow that was WRITTEN but not run as "status":"written" only when simulator execution was impossible.\n\n' +
         '2. /Users/vagrant/git/outputs/response.md\n' +

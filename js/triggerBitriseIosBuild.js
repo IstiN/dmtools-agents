@@ -5,7 +5,7 @@
  * build_ios_simulator on the PR's head branch.
  *
  * Required jobParams:
- *   inputJql           — JQL to find the ticket (e.g. "key = MAPC-6815")
+ *   inputJql           — JQL to find the ticket (e.g. "key = PROJ-6815")
  *   bitriseBuild.appSlug       — Bitrise app slug
  *   bitriseBuild.workflowId   — Bitrise workflow ID (default: build_ios_simulator)
  *   bitriseBuild.triggerBranch — branch for Bitrise trigger (use "main" when YAML
@@ -36,7 +36,7 @@ function action(params) {
         var ticketKey = '';
         var ticketSummary = '';
         if (inputJql) {
-            // Extract ticket key directly from JQL (e.g. "key = MAPC-6815")
+            // Extract ticket key directly from JQL (e.g. "key = PROJ-6815")
             var keyMatch = inputJql.match(/key\s*=\s*([A-Z]+-\d+)/i);
             if (keyMatch) {
                 ticketKey = keyMatch[1].toUpperCase();

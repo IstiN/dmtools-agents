@@ -9,7 +9,7 @@
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function makeTicket(labels) {
-    return { key: 'MAPC-9999', fields: { labels: labels || [], summary: 'Test ticket' } };
+    return { key: 'PROJ-9999', fields: { labels: labels || [], summary: 'Test ticket' } };
 }
 
 function makeOnApprovedConfig(withTestCasesGenerator) {
@@ -25,7 +25,7 @@ function makeOnApprovedConfig(withTestCasesGenerator) {
 function makeCustomParams(onApproved) {
     return {
         onApproved: onApproved,
-        aiRepository: { owner: 'PostNL-BitDigital', repo: 'PostNL-commercial-ai' },
+        aiRepository: { owner: 'ExampleOrg', repo: 'example-ai-agents' },
         configPath: '.dmtools/configs/mapc.js'
     };
 }

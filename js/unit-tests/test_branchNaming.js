@@ -69,7 +69,7 @@ suite('configLoader.resolveBranchName', function() {
         assert.equal(receivedRole, 'feature');
     });
 
-    test('branchNamingFn for MAPC-style issue-type naming: bug/MAPC-123', function() {
+    test('branchNamingFn for PROJ-style issue-type naming: bug/PROJ-123', function() {
         var mapcNamingFn = function(ticket, branchRole) {
             var issueType = (ticket.fields && ticket.fields.issuetype && ticket.fields.issuetype.name || 'feature').toLowerCase();
             return issueType + '/' + ticket.key;
@@ -77,11 +77,11 @@ suite('configLoader.resolveBranchName', function() {
         var config = configLoaderModule.mergeProjectConfig(configLoaderModule.DEFAULTS, {
             git: { branchNamingFn: mapcNamingFn }
         });
-        var ticket = { key: 'MAPC-123', fields: { issuetype: { name: 'Bug' } } };
-        assert.equal(configLoaderModule.resolveBranchName(config, ticket, 'development'), 'bug/MAPC-123');
+        var ticket = { key: 'PROJ-123', fields: { issuetype: { name: 'Bug' } } };
+        assert.equal(configLoaderModule.resolveBranchName(config, ticket, 'development'), 'bug/PROJ-123');
     });
 
-    test('branchNamingFn for MAPC-style issue-type naming: story/STORY-456', function() {
+    test('branchNamingFn for PROJ-style issue-type naming: story/STORY-456', function() {
         var mapcNamingFn = function(ticket, branchRole) {
             var issueType = (ticket.fields && ticket.fields.issuetype && ticket.fields.issuetype.name || 'feature').toLowerCase();
             return issueType + '/' + ticket.key;
@@ -93,7 +93,7 @@ suite('configLoader.resolveBranchName', function() {
         assert.equal(configLoaderModule.resolveBranchName(config, ticket, 'development'), 'story/STORY-456');
     });
 
-    test('branchNamingFn for MAPC-style issue-type naming: subtask → task/PROJ-1', function() {
+    test('branchNamingFn for PROJ-style issue-type naming: subtask → task/PROJ-1', function() {
         var mapcNamingFn = function(ticket, branchRole) {
             var rawType = (ticket.fields && ticket.fields.issuetype && ticket.fields.issuetype.name || 'feature').toLowerCase();
             var issueType = rawType === 'subtask' ? 'task' : rawType;
@@ -174,7 +174,7 @@ suite('configLoader.resolvePRTargetBranch', function() {
         assert.equal(configLoaderModule.resolvePRTargetBranch(config, ticket), 'feature-PROJ-5');
     });
 
-    test('two-branch mode with MAPC-style naming', function() {
+    test('two-branch mode with PROJ-style naming', function() {
         var mapcNamingFn = function(ticket, branchRole) {
             var issueType = (ticket.fields && ticket.fields.issuetype && ticket.fields.issuetype.name || 'feature').toLowerCase();
             if (branchRole === 'feature') return issueType + '/' + ticket.key;
@@ -186,8 +186,8 @@ suite('configLoader.resolvePRTargetBranch', function() {
                 branchNamingFn: mapcNamingFn
             }
         });
-        var ticket = { key: 'MAPC-55', fields: { issuetype: { name: 'Story' } } };
-        assert.equal(configLoaderModule.resolvePRTargetBranch(config, ticket), 'story/MAPC-55');
+        var ticket = { key: 'PROJ-55', fields: { issuetype: { name: 'Story' } } };
+        assert.equal(configLoaderModule.resolvePRTargetBranch(config, ticket), 'story/PROJ-55');
     });
 
 });

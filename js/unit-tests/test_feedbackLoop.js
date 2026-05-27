@@ -173,7 +173,7 @@ suite('feedbackLoop helper', function() {
             cli_execute_command: function(args) {
                 loaded.commands.push(args);
                 if (args.command === 'yarn lint:a11y') {
-                    assert.equal(args.workingDirectory, 'dependencies/PostNL-commercial-mobileApp');
+                    assert.equal(args.workingDirectory, 'dependencies/example-mobile-app');
                     throw new Error('a11y failed');
                 }
                 return '';
@@ -182,7 +182,7 @@ suite('feedbackLoop helper', function() {
 
         var result = loaded.mod.runPostPublishGates({
             ticketKey: 'TS-5',
-            workingDir: 'dependencies/PostNL-commercial-mobileApp',
+            workingDir: 'dependencies/example-mobile-app',
             customParams: {
                 feedbackLoop: {
                     postPublishGates: {
@@ -205,7 +205,7 @@ suite('feedbackLoop helper', function() {
         );
         assert.contains(
             loaded.files['outputs/feedback/TS-5_post_publish_gate_accessibility-lint.md'],
-            'Working directory: dependencies/PostNL-commercial-mobileApp'
+            'Working directory: dependencies/example-mobile-app'
         );
     });
 

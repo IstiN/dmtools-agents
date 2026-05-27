@@ -25,7 +25,7 @@
  * (falls back to aiRepository or targetRepository)
  *
  * Result in GitHub:
- *   Release:  [AI] [MAPC-123] Artefacts   (tag: ai-mapc-123)
+ *   Release:  [AI] [PROJ-123] Artefacts   (tag: ai-proj-123)
  *   Assets:   copilot-session.zip, agent-outputs.zip
  *
  * Usage in agent config:

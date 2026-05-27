@@ -57,8 +57,8 @@ function makeParams(ticketKey, workingDir, overrides) {
         jobParams: {
             customParams: {
                 targetRepository: workingDir ? {
-                    owner: 'PostNL-BitDigital',
-                    repo: 'PostNL-commercial-mobileApp-automation',
+                    owner: 'ExampleOrg',
+                    repo: 'example-mobile-app-automation',
                     baseBranch: 'main',
                     workingDir: workingDir
                 } : undefined
@@ -79,9 +79,9 @@ suite('preCliMobileTestAutomationSetup — ticket status move', function() {
             file_write: function() {},
             cli_execute_command: function() { return ''; }
         });
-        m.action(makeParams('MAPC-9999', '/tmp/automation-repo'));
+        m.action(makeParams('PROJ-9999', '/tmp/automation-repo'));
         assert.equal(moves.length, 1, 'should move ticket once');
-        assert.equal(moves[0].key, 'MAPC-9999', 'should use correct key');
+        assert.equal(moves[0].key, 'PROJ-9999', 'should use correct key');
     });
 
     test('continues even if status move throws', function() {
@@ -93,7 +93,7 @@ suite('preCliMobileTestAutomationSetup — ticket status move', function() {
             cli_execute_command: function() { return ''; }
         });
         // Should not throw; file_write should still be called (linked_test_cases.md)
-        m.action(makeParams('MAPC-9999', '/tmp/automation-repo'));
+        m.action(makeParams('PROJ-9999', '/tmp/automation-repo'));
         assert.ok(written.length > 0, 'should still write linked_test_cases.md despite status error');
     });
 
@@ -112,8 +112,8 @@ suite('preCliMobileTestAutomationSetup — linked TC fetching', function() {
                 searchCalls.push(opts.jql);
                 if (opts.jql.indexOf('is tested by') !== -1) {
                     return [
-                        { key: 'MAPC-TC-1', fields: { summary: 'VoiceOver on modal', status: { name: 'Ready' }, priority: { name: 'High' }, description: 'Step 1: Open modal' } },
-                        { key: 'MAPC-TC-2', fields: { summary: 'Close button label', status: { name: 'Draft' }, priority: { name: 'Medium' }, description: 'Verify close button' } }
+                        { key: 'PROJ-TC-1', fields: { summary: 'VoiceOver on modal', status: { name: 'Ready' }, priority: { name: 'High' }, description: 'Step 1: Open modal' } },
+                        { key: 'PROJ-TC-2', fields: { summary: 'Close button label', status: { name: 'Draft' }, priority: { name: 'Medium' }, description: 'Verify close button' } }
                     ];
                 }
                 return [];
@@ -125,12 +125,12 @@ suite('preCliMobileTestAutomationSetup — linked TC fetching', function() {
             cli_execute_command: function() { return ''; }
         });
 
-        m.action(makeParams('MAPC-6618', '/tmp/automation-repo'));
+        m.action(makeParams('PROJ-5678', '/tmp/automation-repo'));
 
-        var mdPath = 'input/MAPC-6618/linked_test_cases.md';
+        var mdPath = 'input/PROJ-5678/linked_test_cases.md';
         assert.ok(writtenFiles.hasOwnProperty(mdPath), 'linked_test_cases.md should be written');
-        assert.ok(writtenFiles[mdPath].indexOf('MAPC-TC-1') !== -1, 'should contain first TC key');
-        assert.ok(writtenFiles[mdPath].indexOf('MAPC-TC-2') !== -1, 'should contain second TC key');
+        assert.ok(writtenFiles[mdPath].indexOf('PROJ-TC-1') !== -1, 'should contain first TC key');
+        assert.ok(writtenFiles[mdPath].indexOf('PROJ-TC-2') !== -1, 'should contain second TC key');
         assert.ok(writtenFiles[mdPath].indexOf('VoiceOver on modal') !== -1, 'should contain TC summary');
     });
 
@@ -144,7 +144,7 @@ suite('preCliMobileTestAutomationSetup — linked TC fetching', function() {
                 // Primary JQL returns empty; fallback returns one TC
                 if (opts.jql.indexOf('is tested by') !== -1) return [];
                 return [
-                    { key: 'MAPC-TC-3', fields: { summary: 'Fallback TC', status: { name: 'Ready' }, priority: { name: 'Low' }, description: null } }
+                    { key: 'PROJ-TC-3', fields: { summary: 'Fallback TC', status: { name: 'Ready' }, priority: { name: 'Low' }, description: null } }
                 ];
             },
             jira_get_ticket: function(opts) {
@@ -154,12 +154,12 @@ suite('preCliMobileTestAutomationSetup — linked TC fetching', function() {
             cli_execute_command: function() { return ''; }
         });
 
-        m.action(makeParams('MAPC-6618', '/tmp/automation-repo'));
+        m.action(makeParams('PROJ-5678', '/tmp/automation-repo'));
 
         assert.equal(searchCalls.length, 2, 'should try both JQL queries');
         assert.ok(searchCalls[0].indexOf('is tested by') !== -1, 'first call uses primary JQL');
-        var mdContent = writtenFiles['input/MAPC-6618/linked_test_cases.md'];
-        assert.ok(mdContent.indexOf('MAPC-TC-3') !== -1, 'should contain fallback TC');
+        var mdContent = writtenFiles['input/PROJ-5678/linked_test_cases.md'];
+        assert.ok(mdContent.indexOf('PROJ-TC-3') !== -1, 'should contain fallback TC');
     });
 
     test('writes no-TCs message when both JQL queries return empty', function() {
@@ -171,9 +171,9 @@ suite('preCliMobileTestAutomationSetup — linked TC fetching', function() {
             cli_execute_command: function() { return ''; }
         });
 
-        m.action(makeParams('MAPC-6618', '/tmp/automation-repo'));
+        m.action(makeParams('PROJ-5678', '/tmp/automation-repo'));
 
-        var mdContent = writtenFiles['input/MAPC-6618/linked_test_cases.md'];
+        var mdContent = writtenFiles['input/PROJ-5678/linked_test_cases.md'];
         assert.ok(mdContent.indexOf('No linked Test Case') !== -1, 'should mention no TCs');
     });
 
@@ -183,7 +183,7 @@ suite('preCliMobileTestAutomationSetup — linked TC fetching', function() {
         var m = loadPreCli({
             jira_search_by_jql: function(opts) {
                 if (opts.jql.indexOf('is tested by') !== -1) {
-                    return [{ key: 'MAPC-TC-10', fields: { summary: 'Modal TC', status: { name: 'Ready' }, priority: { name: 'High' }, description: 'Steps here' } }];
+                    return [{ key: 'PROJ-TC-10', fields: { summary: 'Modal TC', status: { name: 'Ready' }, priority: { name: 'High' }, description: 'Steps here' } }];
                 }
                 return [];
             },
@@ -204,9 +204,9 @@ suite('preCliMobileTestAutomationSetup — linked TC fetching', function() {
             cli_execute_command: function() { return ''; }
         });
 
-        m.action(makeParams('MAPC-6618', '/tmp/automation-repo'));
+        m.action(makeParams('PROJ-5678', '/tmp/automation-repo'));
 
-        var md = writtenFiles['input/MAPC-6618/linked_test_cases.md'];
+        var md = writtenFiles['input/PROJ-5678/linked_test_cases.md'];
         assert.ok(md.indexOf('QA Bot') !== -1, 'should include comment author');
         assert.ok(md.indexOf('Run failed on 2026-04-10') !== -1, 'should include recent comment');
     });
@@ -224,26 +224,26 @@ suite('preCliMobileTestAutomationSetup — Bitrise artifact download', function(
             jira_search_by_jql: function() { return []; },
             file_write: opts.onFileWrite || function() {},
             cli_execute_command: opts.onCliCommand || function(o) {
-                if (o.command && o.command.indexOf('find') !== -1) return 'input/MAPC-6618/app/PostNL Zakelijk.app\n';
+                if (o.command && o.command.indexOf('find') !== -1) return 'input/PROJ-5678/app/Example Business.app\n';
                 return '';
             },
             github_list_prs: opts.onListPrs || function() {
                 return JSON.stringify({ data: [
-                    { number: 963, head: { ref: 'story/MAPC-6618' } }
+                    { number: 963, head: { ref: 'story/PROJ-5678' } }
                 ]});
             },
             bitrise_list_builds: opts.onListBuilds || function() {
                 return JSON.stringify({ data: [
-                    { slug: 'build-abc', build_number: 10317, status: 1, status_text: 'success', branch: 'story/MAPC-6618' }
+                    { slug: 'build-abc', build_number: 10317, status: 1, status_text: 'success', branch: 'story/PROJ-5678' }
                 ]});
             },
             bitrise_list_build_artifacts: opts.onListArtifacts || function() {
                 return JSON.stringify({ data: [
-                    { slug: 'artifact-xyz', title: 'PostNL Zakelijk-simulator.zip', file_size_bytes: 32000000 }
+                    { slug: 'artifact-xyz', title: 'Example Business-simulator.zip', file_size_bytes: 32000000 }
                 ]});
             },
             bitrise_get_build_artifact: opts.onGetArtifact || function() {
-                return JSON.stringify({ data: { expiring_download_url: 'https://example.com/app.zip', slug: 'artifact-xyz', title: 'PostNL Zakelijk-simulator.zip' } });
+                return JSON.stringify({ data: { expiring_download_url: 'https://example.com/app.zip', slug: 'artifact-xyz', title: 'Example Business-simulator.zip' } });
             }
         };
     }
@@ -254,12 +254,12 @@ suite('preCliMobileTestAutomationSetup — Bitrise artifact download', function(
             jobParams: {
                 customParams: {
                     targetRepository: {
-                        owner: 'PostNL-BitDigital',
-                        repo: 'PostNL-commercial-mobileApp-automation',
+                        owner: 'ExampleOrg',
+                        repo: 'example-mobile-app-automation',
                         baseBranch: 'main',
                         workingDir: '/tmp/automation-repo'
                     },
-                    featurePR: { owner: 'PostNL-BitDigital', repo: 'PostNL-commercial-mobileApp' },
+                    featurePR: { owner: 'ExampleOrg', repo: 'example-mobile-app' },
                     bitriseBuild: {
                         appSlug: 'e739ec8c-app-slug',
                         workflowId: 'build_ios_simulator'
@@ -278,18 +278,18 @@ suite('preCliMobileTestAutomationSetup — Bitrise artifact download', function(
             onCliCommand: function(opts) {
                 cliCommands.push(opts.command);
                 if (opts.command && opts.command.indexOf('find') !== -1) {
-                    return 'input/MAPC-6618/app/PostNL Zakelijk.app\n';
+                    return 'input/PROJ-5678/app/Example Business.app\n';
                 }
                 return '';
             }
         }));
 
-        m.action(makeParamsWithBitrise('MAPC-6618'));
+        m.action(makeParamsWithBitrise('PROJ-5678'));
 
-        var md = writtenFiles['input/MAPC-6618/app_info.md'];
+        var md = writtenFiles['input/PROJ-5678/app_info.md'];
         assert.ok(md, 'app_info.md should be written');
         assert.ok(md.indexOf('App Path') !== -1, 'should contain App Path');
-        assert.ok(md.indexOf('PostNL Zakelijk.app') !== -1, 'should contain .app name');
+        assert.ok(md.indexOf('Example Business.app') !== -1, 'should contain .app name');
         assert.ok(md.indexOf('build_ios_simulator') !== -1, 'should contain workflow name');
     });
 
@@ -300,12 +300,12 @@ suite('preCliMobileTestAutomationSetup — Bitrise artifact download', function(
             onFileWrite: function() {},
             onCliCommand: function(opts) {
                 cliCommands.push(opts.command);
-                if (opts.command && opts.command.indexOf('find') !== -1) return 'input/MAPC-6618/app/PostNL Zakelijk.app';
+                if (opts.command && opts.command.indexOf('find') !== -1) return 'input/PROJ-5678/app/Example Business.app';
                 return '';
             }
         }));
 
-        m.action(makeParamsWithBitrise('MAPC-6618'));
+        m.action(makeParamsWithBitrise('PROJ-5678'));
 
         var curlCmd = cliCommands.find(function(c) { return c && c.indexOf('curl') !== -1; });
         var unzipCmd = cliCommands.find(function(c) { return c && c.indexOf('unzip') !== -1; });
@@ -322,9 +322,9 @@ suite('preCliMobileTestAutomationSetup — Bitrise artifact download', function(
             onFileWrite: function() {},
             onListPrs: function(opts) {
                 listPrsCalled = true;
-                assert.equal(opts.workspace, 'PostNL-BitDigital', 'should use workspace param');
-                assert.equal(opts.repository, 'PostNL-commercial-mobileApp', 'should use repository param');
-                return JSON.stringify({ data: [{ number: 963, head: { ref: 'story/MAPC-6618' } }] });
+                assert.equal(opts.workspace, 'ExampleOrg', 'should use workspace param');
+                assert.equal(opts.repository, 'example-mobile-app', 'should use repository param');
+                return JSON.stringify({ data: [{ number: 963, head: { ref: 'story/PROJ-5678' } }] });
             },
             onListBuilds: function(opts) {
                 listBuildsArgs.push(opts);
@@ -334,11 +334,11 @@ suite('preCliMobileTestAutomationSetup — Bitrise artifact download', function(
             onGetArtifact: function() { return JSON.stringify({ data: { expiring_download_url: 'https://x.com/a.zip' } }); }
         }));
 
-        m.action(makeParamsWithBitrise('MAPC-6618'));
+        m.action(makeParamsWithBitrise('PROJ-5678'));
 
         assert.ok(listPrsCalled, 'should call github_list_prs');
         assert.ok(listBuildsArgs.length > 0, 'should call bitrise_list_builds');
-        assert.equal(listBuildsArgs[0].branch, 'story/MAPC-6618', 'should filter builds by feature branch');
+        assert.equal(listBuildsArgs[0].branch, 'story/PROJ-5678', 'should filter builds by feature branch');
     });
 
     test('skips artifact download when bitriseBuild not configured', function() {
@@ -351,10 +351,10 @@ suite('preCliMobileTestAutomationSetup — Bitrise artifact download', function(
         }), { bitrise_list_builds: function() { listBuildsCalled = true; return JSON.stringify({ data: [] }); } }));
 
         // No bitriseBuild in customParams
-        m.action(makeParams('MAPC-6618', '/tmp/automation-repo'));
+        m.action(makeParams('PROJ-5678', '/tmp/automation-repo'));
 
         assert.ok(!listBuildsCalled, 'should NOT call bitrise_list_builds when not configured');
-        assert.ok(!writtenFiles['input/MAPC-6618/app_info.md'], 'should NOT write app_info.md');
+        assert.ok(!writtenFiles['input/PROJ-5678/app_info.md'], 'should NOT write app_info.md');
     });
 
     test('throws when no successful builds found', function() {
@@ -365,7 +365,7 @@ suite('preCliMobileTestAutomationSetup — Bitrise artifact download', function(
 
         var threw = false;
         try {
-            m.action(makeParamsWithBitrise('MAPC-6618'));
+            m.action(makeParamsWithBitrise('PROJ-5678'));
         } catch (e) {
             threw = true;
             assert.ok(e.message.indexOf('No successful') !== -1, 'error should mention no successful builds: ' + e.message);
@@ -390,7 +390,7 @@ suite('preCliMobileTestAutomationSetup — branch checkout', function() {
             }
         });
 
-        m.action(makeParams('MAPC-6618', '/tmp/automation-repo'));
+        m.action(makeParams('PROJ-5678', '/tmp/automation-repo'));
 
         var gitCommands = commands.filter(function(c) { return c.cmd.indexOf('git') !== -1; });
         assert.ok(gitCommands.length > 0, 'should run git commands');
@@ -414,10 +414,10 @@ suite('preCliMobileTestAutomationSetup — branch checkout', function() {
             }
         });
 
-        m.action(makeParams('MAPC-6618', '/tmp/automation-repo'));
+        m.action(makeParams('PROJ-5678', '/tmp/automation-repo'));
 
-        var checkoutB = commands.find(function(c) { return c.indexOf('checkout -b test/MAPC-6618') !== -1; });
-        assert.ok(checkoutB, 'should create branch test/MAPC-6618');
+        var checkoutB = commands.find(function(c) { return c.indexOf('checkout -b test/PROJ-5678') !== -1; });
+        assert.ok(checkoutB, 'should create branch test/PROJ-5678');
     });
 
     test('checks out existing local branch without creating', function() {
@@ -429,19 +429,19 @@ suite('preCliMobileTestAutomationSetup — branch checkout', function() {
             cli_execute_command: function(opts) {
                 commands.push(opts.command);
                 // Simulate: branch exists locally
-                if (opts.command.indexOf('git branch --list') !== -1) return '  test/MAPC-6618';
+                if (opts.command.indexOf('git branch --list') !== -1) return '  test/PROJ-5678';
                 return '';
             }
         });
 
-        m.action(makeParams('MAPC-6618', '/tmp/automation-repo'));
+        m.action(makeParams('PROJ-5678', '/tmp/automation-repo'));
 
         var checkoutExisting = commands.find(function(c) {
-            return c.indexOf('git checkout test/MAPC-6618') !== -1 && c.indexOf('-b') === -1;
+            return c.indexOf('git checkout test/PROJ-5678') !== -1 && c.indexOf('-b') === -1;
         });
         assert.ok(checkoutExisting, 'should checkout existing branch without -b');
 
-        var createB = commands.find(function(c) { return c.indexOf('checkout -b test/MAPC-6618') !== -1; });
+        var createB = commands.find(function(c) { return c.indexOf('checkout -b test/PROJ-5678') !== -1; });
         assert.ok(!createB, 'should NOT use -b for existing branch');
     });
 
@@ -458,7 +458,7 @@ suite('preCliMobileTestAutomationSetup — branch checkout', function() {
         });
 
         // No workingDir → no targetRepository
-        m.action(makeParams('MAPC-6618', null));
+        m.action(makeParams('PROJ-5678', null));
 
         var gitCommands = commands.filter(function(c) { return c && c.indexOf('git') !== -1; });
         assert.equal(gitCommands.length, 0, 'should run no git commands when workingDir absent');
@@ -474,8 +474,8 @@ suite('preCliMobileTestAutomationSetup — branch checkout', function() {
         });
 
         // Should not throw; linked_test_cases.md still written
-        m.action(makeParams('MAPC-6618', '/tmp/automation-repo'));
-        assert.ok(writtenFiles.hasOwnProperty('input/MAPC-6618/linked_test_cases.md'),
+        m.action(makeParams('PROJ-5678', '/tmp/automation-repo'));
+        assert.ok(writtenFiles.hasOwnProperty('input/PROJ-5678/linked_test_cases.md'),
             'should write linked_test_cases.md even if git commands fail');
     });
 

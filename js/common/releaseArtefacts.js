@@ -4,8 +4,8 @@
  * Core utilities for caching and restoring folders as GitHub Release assets.
  *
  * One release per ticket, multiple named assets inside:
- *   release tag:   ai-{ticketKey}              e.g. ai-mapc-123
- *   release name:  [AI] [MAPC-123] Artefacts
+ *   release tag:   ai-{ticketKey}              e.g. ai-proj-123
+ *   release name:  [AI] [PROJ-123] Artefacts
  *   asset names:   copilot-session.zip, agent-outputs.zip, ...
  *
  * Both the tag and release name are fully customizable via templates in customParams:
@@ -55,7 +55,7 @@ function buildReleaseName(ticketKey, nameTemplate) {
 /**
  * Resolve {ticketKey} template token in a folder path.
  * @param {string} template   e.g. ".copilot/session-state/{ticketKey}"
- * @param {string} ticketKey  e.g. "MAPC-123"
+ * @param {string} ticketKey  e.g. "PROJ-123"
  * @returns {string}
  */
 function resolveTemplate(template, ticketKey) {
