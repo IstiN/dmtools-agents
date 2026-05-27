@@ -28,7 +28,7 @@ function action(params) {
             .replace('{jiraProject}', projectKey);
 
         var failedTCsJql = (customParams.failedTCsJql ||
-            'project = {jiraProject} AND issuetype = "Test Case" AND status = Failed AND labels NOT IN (sm_bug_creation_triggered) ORDER BY created ASC')
+            'project = {jiraProject} AND issuetype = "Test Case" AND status = Failed AND (labels is EMPTY OR labels NOT IN (sm_bug_creation_triggered)) ORDER BY created ASC')
             .replace('{jiraProject}', projectKey);
 
         console.log('=== Preparing bulk bugs creation context ===');

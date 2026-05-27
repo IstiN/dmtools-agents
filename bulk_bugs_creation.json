@@ -33,8 +33,15 @@
     "customParams": {
       "batchSize": 50,
       "openBugsJql": "project = {jiraProject} AND issuetype in (Bug) AND status not in (Done)",
-      "failedTCsJql": "project = {jiraProject} AND issuetype = \"Test Case\" AND status = Failed AND labels NOT IN (sm_bug_creation_triggered) ORDER BY created ASC",
-      "removeLabel": "sm_bug_creation_triggered"
+      "failedTCsJql": "project = {jiraProject} AND issuetype = \"Test Case\" AND status = Failed AND (labels is EMPTY OR labels NOT IN (sm_bug_creation_triggered)) ORDER BY created ASC",
+      "removeLabel": "sm_bug_creation_triggered",
+      "smTriggerLabel": "sm_bulk_bugs_creation_triggered",
+      "feedbackLoop": {
+        "postAction": {
+          "enabled": true,
+          "maxAttempts": 1
+        }
+      }
     },
     "inputJql": "key = JD-111",
     "cliPrompts": [

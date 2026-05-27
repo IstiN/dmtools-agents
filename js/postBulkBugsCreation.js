@@ -25,6 +25,7 @@
  */
 
 const { STATUSES, LABELS } = require('./config.js');
+var feedbackLoop = require('./common/feedbackLoop.js');
 
 function readFile(path) {
     try {
@@ -94,6 +95,16 @@ function postComment(tcKey, comment) {
     }
 }
 
+function removeTriggerLabel(ticketKey, label) {
+    if (!ticketKey || !label) return;
+    try {
+        jira_remove_label({ key: ticketKey, label: label });
+        console.log('  🏷️ Removed SM trigger label "' + label + '" from ' + ticketKey);
+    } catch (e) {
+        console.warn('  ⚠️ Could not remove label', label, 'from', ticketKey, e);
+    }
+}
+
 function action(params) {
     try {
         var actualParams = params.jobParams || params;
@@ -104,8 +115,33 @@ function action(params) {
 
         var decisions = readDecisions();
         if (!decisions) {
-            console.error('❌ Could not read bulk_bug_decisions.json — no changes made');
-            return { success: false, error: 'Missing bulk_bug_decisions.json' };
+            console.error('❌ Could not read bulk_bug_decisions.json — attempting recovery');
+
+            // Remove SM trigger label so SM can re-dispatch on next run
+            var triggerTicketKey = (actualParams.ticket && actualParams.ticket.key) || null;
+            var smTriggerLabel = customParams.smTriggerLabel || 'sm_bulk_bugs_creation_triggered';
+            removeTriggerLabel(triggerTicketKey, smTriggerLabel);
+
+            // Try feedback loop resume — tell agent to produce the output file
+            var resume = feedbackLoop.resumeAgent({
+                ticketKey: triggerTicketKey || 'unknown',
+                customParams: customParams,
+                section: 'postAction',
+                stage: 'bulk_bugs_output',
+                error: 'The AI agent did not produce the required outputs/bulk_bug_decisions.json file. ' +
+                    'The file must be valid JSON with keys: processed (array of TC keys), ' +
+                    'newBugs (array of bug definitions with summary, priority, descriptionFile, linkedTCs), ' +
+                    'links (array of {tcKey, bugKey} for existing bugs), ' +
+                    'skipped (array of {tcKey, reason}). ' +
+                    'Read input/failed_tcs.json and input/open_bugs.json, then write the decisions file.'
+            });
+
+            if (resume.attempted) {
+                console.log('🔄 Feedback loop resumed agent — re-running post-action');
+                return action(params);
+            }
+
+            return { success: false, error: 'Missing bulk_bug_decisions.json, resume not attempted: ' + (resume.reason || 'unknown') };
         }
 
         var processed = decisions.processed || [];
