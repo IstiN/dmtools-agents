@@ -71,7 +71,7 @@
         },
         {
           "description": "In Review Stories & Bugs → trigger pr_review",
-          "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('In Review') AND labels NOT IN ('pr_approved')",
+          "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('In Review') AND (labels is EMPTY OR labels NOT IN ('pr_approved'))",
           "configFile": "agents/pr_review.json",
           "skipIfLabel": "sm_story_review_triggered",
           "addLabel": "sm_story_review_triggered"
@@ -158,7 +158,7 @@
         },
         {
           "description": "In Review Test Cases → trigger pr_test_automation_review",
-          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('In Review - Passed', 'In Review - Failed') AND labels NOT IN ('pr_approved')",
+          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('In Review - Passed', 'In Review - Failed') AND (labels is EMPTY OR labels NOT IN ('pr_approved'))",
           "configFile": "agents/pr_test_automation_review.json",
           "skipIfLabel": "sm_test_review_triggered",
           "addLabel": "sm_test_review_triggered"
@@ -182,7 +182,7 @@
         },
         {
           "description": "Failed Test Cases → create or link bugs in batch",
-          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('Failed') AND labels NOT IN ('sm_bug_creation_triggered') ORDER BY created ASC",
+          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('Failed') AND (labels is EMPTY OR labels NOT IN ('sm_bug_creation_triggered')) ORDER BY created ASC",
           "configFile": "agents/bulk_bugs_creation.json",
           "skipIfLabel": "sm_bulk_bugs_creation_triggered",
           "addLabel": "sm_bulk_bugs_creation_triggered",
