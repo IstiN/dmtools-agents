@@ -8,8 +8,7 @@
       "aiRole": "Senior Code Reviewer & Security Expert",
       "instructions": [
         "./agents/instructions/review/pr_review_instructions.md",
-        "./agents/instructions/review/pr_review_json_output.md",
-        "./agents/instructions/common/codegraph_tools.md"
+        "./agents/instructions/review/pr_review_json_output.md"
       ],
       "knownInfo": "",
       "formattingRules": "./agents/instructions/review/pr_review_formatting.md",

@@ -13,8 +13,7 @@
         "Group TCs with the same root cause — create ONE new bug for the group.",
         "Write outputs/bulk_bug_decisions.json as described in the prompt.",
         "For each new bug write its description to a separate file: outputs/bug_NNN_description.md (NNN = zero-padded index). Reference that file in bulk_bug_decisions.json via 'descriptionFile'.",
-        "Do NOT embed multi-line description text directly inside bulk_bug_decisions.json.",
-        "./agents/instructions/common/codegraph_tools.md"
+        "Do NOT embed multi-line description text directly inside bulk_bug_decisions.json."
       ],
       "knownInfo": "",
       "formattingRules": "outputs/bulk_bug_decisions.json must be valid JSON. 'processed' must list every TC key the AI made a decision for. newBugs[].descriptionFile must be a relative path to an existing outputs/*.md file."

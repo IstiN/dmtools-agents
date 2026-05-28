@@ -10,8 +10,7 @@
         "./agents/instructions/intake/intake_instructions.md",
         "./agents/instructions/common/no_development.md",
         "./agents/instructions/common/error_handling.md",
-        "outputs/stories.json must be a valid JSON array. After writing it, run: dmtools file_validate_json \"$(cat outputs/stories.json)\" — fix and rewrite if valid is false. Do not finish until validation passes.",
-        "./agents/instructions/common/codegraph_tools.md"
+        "outputs/stories.json must be a valid JSON array. After writing it, run: dmtools file_validate_json \"$(cat outputs/stories.json)\" — fix and rewrite if valid is false. Do not finish until validation passes."
       ],
       "knownInfo": "",
       "formattingRules": "./agents/instructions/intake/formatting_rules.md",

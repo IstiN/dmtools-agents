@@ -10,8 +10,7 @@
         "./agents/instructions/test_automation/test_automation_architecture.md",
         "./agents/instructions/test_automation/test_automation_instructions.md",
         "./agents/instructions/test_automation/test_automation_json_output.md",
-        "./agents/instructions/rework/rework_instructions.md",
-        "./agents/instructions/common/codegraph_tools.md"
+        "./agents/instructions/rework/rework_instructions.md"
       ],
       "knownInfo": "",
       "formattingRules": "./agents/instructions/development/formatting_rules.md"
