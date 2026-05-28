@@ -1,0 +1,20 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "recover_stuck_test_case"
+    },
+    "agentParams": {
+      "aiRole": "QA Recovery Agent",
+      "knownInfo": "",
+      "formattingRules": ""
+    },
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "postJSAction": "agents/js/recoverStuckTestCase.js",
+    "customParams": {},
+    "inputJql": "key = PROJ-111"
+  }
+}

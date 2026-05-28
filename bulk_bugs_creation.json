@@ -1,0 +1,51 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "bulk_bugs_creation"
+    },
+    "agentParams": {
+      "aiRole": "QA Engineer",
+      "instructions": [
+        "Read input/failed_tcs.json for the list of failed Test Cases.",
+        "Read input/open_bugs.json for all existing open bugs.",
+        "For each failed TC decide: link to existing bug, create new bug, or skip.",
+        "Group TCs with the same root cause — create ONE new bug for the group.",
+        "Write outputs/bulk_bug_decisions.json as described in the prompt.",
+        "For each new bug write its description to a separate file: outputs/bug_NNN_description.md (NNN = zero-padded index). Reference that file in bulk_bug_decisions.json via 'descriptionFile'.",
+        "Do NOT embed multi-line description text directly inside bulk_bug_decisions.json."
+      ],
+      "knownInfo": "",
+      "formattingRules": "outputs/bulk_bug_decisions.json must be valid JSON. 'processed' must list every TC key the AI made a decision for. newBugs[].descriptionFile must be a relative path to an existing outputs/*.md file."
+    },
+    "cliPrompt": "./agents/prompts/bulk_bugs_creation_prompt.md",
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
+    "outputType": "none",
+    "ticketContextDepth": 0,
+    "attachResponseAsFile": false,
+    "cleanupInputFolder": false,
+    "skipAIProcessing": true,
+    "alwaysPostComments": false,
+    "preCliJSAction": "agents/js/prepareBulkBugsCreationContext.js",
+    "postJSAction": "agents/js/postBulkBugsCreation.js",
+    "customParams": {
+      "batchSize": 50,
+      "openBugsJql": "project = {jiraProject} AND issuetype in (Bug) AND status not in (Done)",
+      "failedTCsJql": "project = {jiraProject} AND issuetype = \"Test Case\" AND status = Failed AND (labels is EMPTY OR labels NOT IN (sm_bug_creation_triggered)) ORDER BY created ASC",
+      "removeLabel": "sm_bug_creation_triggered",
+      "smTriggerLabel": "sm_bulk_bugs_creation_triggered",
+      "feedbackLoop": {
+        "postAction": {
+          "enabled": true,
+          "maxAttempts": 1
+        }
+      }
+    },
+    "inputJql": "key = JD-111",
+    "cliPrompts": [
+      "./agents/prompts/bash_tools.md"
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "js/unit-tests/testRunner.js",
+    "jobParams": {
+      "testFiles": [
+        "js/unit-tests/test_configLoader.js",
+        "js/unit-tests/test_fetchQuestionsToInput.js",
+        "js/unit-tests/test_smAgent.js",
+        "js/unit-tests/test_checkSubtasksDoneForBA.js",
+        "js/unit-tests/test_workingDir.js",
+        "js/unit-tests/test_branchNaming.js",
+        "js/unit-tests/test_githubHelpers.js",
+        "js/unit-tests/test_submodules.js",
+        "js/unit-tests/test_pullRequestHelper.js",
+        "js/unit-tests/test_developTicketAndCreatePR.js",
+        "js/unit-tests/test_autoStart.js",
+        "js/unit-tests/test_dfManager.js",
+        "js/unit-tests/test_retryMergePR.js",
+        "js/unit-tests/test_feedbackLoop.js",
+        "js/unit-tests/test_fetchParentContextToInput.js",
+        "js/unit-tests/test_testsGeneratedGuard.js",
+        "js/unit-tests/test_postBugCreation.js",
+        "js/unit-tests/test_postTestAutomationResults.js",
+        "js/unit-tests/test_postTestReviewComments.js",
+        "js/unit-tests/test_postPRReviewComments.js",
+        "js/unit-tests/test_reworkCustomParams.js",
+        "js/unit-tests/test_preCliMobileTestAutomationSetup.js",
+        "js/unit-tests/test_postMobileTestAutomationResults.js",
+        "js/unit-tests/test_writeSolutionAndDiagrams.js",
+        "js/unit-tests/test_createPlannedStoriesFromOutput.js",
+        "js/unit-tests/test_releaseArtefacts.js",
+        "js/unit-tests/test_timerAutoCommitAndSave.js"
+      ]
+    }
+  }
+}

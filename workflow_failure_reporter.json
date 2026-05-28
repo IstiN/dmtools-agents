@@ -1,0 +1,13 @@
+{
+  "name" : "JSRunner",
+  "params" : {
+    "jsPath"    : "agents/js/workflowFailureReporter.js",
+    "jobParams" : {
+      "customParams" : {
+        "workspace"   : "{owner}",
+        "repository"  : "{repo}",
+        "jiraProject" : "{jiraProject}"
+      }
+    }
+  }
+}

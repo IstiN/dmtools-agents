@@ -1,0 +1,1046 @@
+/**
+ * Develop Ticket and Create PR Action
+ * Handles git operations, branch creation, commit, push, and PR creation after cursor agent development
+ */
+
+// Import common helper functions
+const { extractTicketKey } = require('./common/jiraHelpers.js');
+const prHelper = require('./common/pullRequest.js');
+const submoduleHelper = require('./common/submodules.js');
+const feedbackLoop = require('./common/feedbackLoop.js');
+var configLoader = require('./configLoader.js');
+var autoStart = require('./common/autoStart.js');
+const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js');
+var cacheToReleases = require('./cacheToReleases.js');
+
+function deriveProjectKey(customParams) {
+    if (!customParams) return '';
+    if (customParams.projectKey) return customParams.projectKey;
+    var cp = customParams.configPath || '';
+    if (!cp) return '';
+    var base = cp.substring(cp.lastIndexOf('/') + 1).replace(/\.js$/, '');
+    return (base && base !== 'config') ? base : '';
+}
+
+function buildAutoStartEncodedConfig(ticketKey, customParams) {
+    var p = { inputJql: 'key = ' + ticketKey };
+    if (customParams) {
+        // Pass the full customParams to the next agent so it has all config
+        // (autoStartReworkConfigFile, customStatuses, targetRepository, etc.)
+        // Strip fields that are only relevant to the current agent's execution.
+        var nextCustomParams = Object.assign({}, customParams);
+        delete nextCustomParams.removeLabel;   // SM idempotency label — per-agent, not inherited
+        delete nextCustomParams.autoStartReview;             // dev → review trigger, not needed downstream
+        delete nextCustomParams.autoStartReviewConfigFile;   // same
+        p.customParams = nextCustomParams;
+    }
+    return encodeURIComponent(JSON.stringify({ params: p }));
+}
+
+function hasPrApprovedLabel(ticket) {
+    var labels = (ticket && ticket.fields && ticket.fields.labels) ? ticket.fields.labels : [];
+    return labels.indexOf(LABELS.PR_APPROVED) !== -1;
+}
+
+// Universal working-directory-aware wrapper for cli_execute_command.
+// When config.workingDir is set (via customParams.targetRepository.workingDir),
+// all git/shell commands are executed inside that directory.
+var _workingDir = null;
+function runCmd(args) {
+    if (_workingDir) args.workingDirectory = _workingDir;
+    return cli_execute_command(args);
+}
+
+/**
+ * Clean command output from script wrapper artifacts
+ * Removes "Script started/done" lines that DMTools CLI adds
+ *
+ * @param {string} output - Raw command output
+ * @returns {string} Cleaned output
+ */
+function cleanCommandOutput(output) {
+    return prHelper.cleanCommandOutput(output);
+}
+
+/**
+ * Generate unique branch name with collision detection
+ * Appends _1, _2, _3 etc. if branch already exists locally or remotely
+ */
+function generateUniqueBranchName(branchPrefix, ticketKey) {
+    const baseBranchName = branchPrefix + '/' + ticketKey;
+
+    // Check if base branch exists locally or remotely
+    try {
+        // Fetch latest remote branches without pulling
+        try {
+            runCmd({
+                command: prHelper.buildOriginFetchCommand('--prune')
+            });
+        } catch (fetchError) {
+            console.warn('Could not fetch remote branches:', fetchError);
+        }
+
+        // Check local branches
+        const localBranches = runCmd({
+            command: 'git branch --list "*' + baseBranchName + '*"'
+        }) || '';
+
+        // Check remote branches
+        const remoteBranches = runCmd({
+            command: 'git branch --remotes --list "origin/' + baseBranchName + '*"'
+        }) || '';
+
+        const allBranches = localBranches + '\n' + remoteBranches;
+
+        // If no branches exist with this base name, use it
+        if (!allBranches.trim() || allBranches.trim() === '\n') {
+            return baseBranchName;
+        }
+
+        // Try with suffixes _1, _2, _3, etc.
+        for (let i = 1; i <= 10; i++) {
+            const candidateName = baseBranchName + '_' + i;
+            if (allBranches.indexOf(candidateName) === -1) {
+                return candidateName;
+            }
+        }
+
+        // Fallback: use timestamp suffix if too many collisions
+        const timestamp = Date.now();
+        return baseBranchName + '_' + timestamp;
+
+    } catch (error) {
+        console.warn('Error checking existing branches, using base name:', error);
+        return baseBranchName;
+    }
+}
+
+/**
+ * Configure git author for AI Teammate commits
+ *
+ * @returns {boolean} True if successful
+ */
+function configureGitAuthor(config) {
+    try {
+        runCmd({
+            command: 'git config user.name "' + config.git.authorName + '"'
+        });
+
+        runCmd({
+            command: 'git config user.email "' + config.git.authorEmail + '"'
+        });
+
+        console.log('✅ Configured git author as AI Teammate');
+        return true;
+
+    } catch (error) {
+        console.error('Failed to configure git author:', error);
+        return false;
+    }
+}
+
+/**
+ * Push already-committed changes to remote (used when CLI agent committed its own work).
+ */
+function performPushOnly(branchName, baseBranch) {
+    console.log('Pushing pre-committed changes to remote...');
+    var syncResult = prHelper.syncBranchWithBase({
+        branchName: branchName,
+        baseBranch: baseBranch || 'main',
+        workingDir: _workingDir,
+        runCommand: function(command, workingDir) {
+            var args = { command: command };
+            if (workingDir) args.workingDirectory = workingDir;
+            return cli_execute_command(args);
+        }
+    });
+    if (!syncResult.success) {
+        return { success: false, isMergeSyncFailure: true, error: syncResult.error };
+    }
+
+    var pushOutput = '';
+    var pushThrewException = false;
+    try {
+        pushOutput = runCmd({ command: 'git push -u origin ' + branchName }) || '';
+    } catch (pushErr) {
+        pushOutput = String(pushErr);
+        pushThrewException = true;
+    }
+
+    var pushFailed = pushThrewException ||
+                     pushOutput.indexOf('remote rejected') !== -1 ||
+                     pushOutput.indexOf('GH013') !== -1 ||
+                     pushOutput.indexOf('error: failed to push') !== -1 ||
+                     pushOutput.indexOf('push declined') !== -1 ||
+                     pushOutput.indexOf('non-fast-forward') !== -1 ||
+                     pushOutput.indexOf('rejected') !== -1;
+
+    if (pushFailed) {
+        // Try force push (branch may have diverged from a previous interrupted run)
+        console.log('Push rejected — retrying with --force...');
+        var forceOutput = '';
+        try {
+            forceOutput = runCmd({ command: 'git push -u origin ' + branchName + ' --force' }) || '';
+        } catch (forceErr) {
+            forceOutput = String(forceErr);
+        }
+        var forceFailed = forceOutput.indexOf('remote rejected') !== -1 ||
+                          forceOutput.indexOf('GH013') !== -1 ||
+                          forceOutput.indexOf('error: failed to push') !== -1 ||
+                          forceOutput.indexOf('push declined') !== -1;
+        if (forceFailed) {
+            return { success: false, isPushFailure: true, error: 'Push still rejected after force: ' + forceOutput.substring(0, 300) };
+        }
+    }
+
+    var lsRemote = runCmd({ command: 'git ls-remote --heads origin ' + branchName }) || '';
+    if (lsRemote.indexOf('refs/heads/' + branchName) === -1) {
+        return { success: false, isPushFailure: true, error: 'Branch not found on remote after push' };
+    }
+
+    console.log('✅ Push-only git operations completed successfully');
+    return { success: true, branchName: branchName };
+}
+
+/**
+ * Stage changes, commit, and push on current branch
+ *
+ * @param {string} branchName - Current branch name (already checked out by preCliJSAction)
+ * @param {string} commitMessage - Commit message
+ * @param {string} baseBranch - Base branch used to detect existing local/remote commits
+ * @param {Object} config - Resolved project config, including optional managed submodules
+ * @param {Object} customParams - Runtime custom params, including optional managed submodules
+ * @param {string} ticketKey - Ticket key used for managed submodule commit messages
+ * @returns {Object} Result with success status and branch name
+ */
+function performGitOperations(branchName, commitMessage, baseBranch, config, customParams, ticketKey) {
+    try {
+        submoduleHelper.pushManagedSubmodules({
+            run: function(command) {
+                return runCmd({ command: command });
+            },
+            cleanOutput: cleanCommandOutput,
+            config: config,
+            customParams: customParams,
+            ticketKey: ticketKey
+        });
+
+        // Stage all changes
+        console.log('Staging changes...');
+        runCmd({
+            command: 'git add .'
+        });
+
+        // Check if there are changes to commit
+        const statusOutput = prHelper.readStagedDiffStat(function(command) {
+            return runCmd({ command: command });
+        }, _workingDir);
+
+        if (!statusOutput || !statusOutput.trim()) {
+            // No uncommitted changes — but check if the agent already committed its work
+221.             // (the CLI agent sometimes commits itself before postJSAction runs)
+            var originRef = baseBranch ? 'origin/' + baseBranch : 'origin/main';
+            var aheadOutput = '';
+            try {
+                aheadOutput = cleanCommandOutput(runCmd({ command: 'git rev-list --count ' + originRef + '..HEAD' }) || '');
+            } catch (e) {
+                console.warn('Could not check commits ahead of ' + originRef + ':', e);
+            }
+            var commitsAhead = parseInt(aheadOutput, 10) || 0;
+            if (commitsAhead > 0) {
+                console.log('No uncommitted changes, but branch is ' + commitsAhead + ' commit(s) ahead of ' + originRef + ' — agent already committed. Skipping commit step.');
+                // Jump straight to push after syncing with the latest base branch.
+                return performPushOnly(branchName, baseBranch);
+            }
+
+            // Check if the remote branch already has commits not yet in origin/main
+            // (e.g. agent pushed in a previous run but was interrupted before PR creation)
+            var remoteAheadOutput = '';
+            try {
+                // Fetch remote refs so origin/<branchName> is up to date
+                try { runCmd({ command: prHelper.buildOriginFetchCommand(branchName) }); } catch (e) {}
+                remoteAheadOutput = cleanCommandOutput(runCmd({ command: 'git rev-list --count ' + originRef + '..origin/' + branchName }) || '');
+            } catch (e) {
+                console.warn('Could not check remote branch commits:', e);
+            }
+            var remoteCommitsAhead = parseInt(remoteAheadOutput, 10) || 0;
+            if (remoteCommitsAhead > 0) {
+                console.log('Remote branch origin/' + branchName + ' is ' + remoteCommitsAhead + ' commit(s) ahead of ' + originRef + ' — branch already pushed. Skipping push, proceeding to PR creation.');
+                // No push needed — return success so the caller proceeds to PR creation
+                return { success: true, branchName: branchName };
+            }
+
+            console.warn('No changes to commit');
+            return {
+                success: false,
+                error: 'No changes were made by the development process'
+            };
+        }
+
+        // Commit changes — sanitize message to avoid shell metacharacter rejection
+        var safeMessage = commitMessage
+            .replace(/"/g, '\\"')
+            .replace(/[><|;`$\r\n]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        console.log('Committing changes...');
+        runCmd({
+            command: 'git commit -m "' + safeMessage + '"'
+        });
+
+        var syncResult = prHelper.syncBranchWithBase({
+            branchName: branchName,
+            baseBranch: baseBranch || 'main',
+            workingDir: _workingDir,
+            runCommand: function(command, workingDir) {
+                var args = { command: command };
+                if (workingDir) args.workingDirectory = workingDir;
+                return cli_execute_command(args);
+            }
+        });
+        if (!syncResult.success) {
+            return {
+                success: false,
+                isMergeSyncFailure: true,
+                error: syncResult.error
+            };
+        }
+
+        // Push to remote
+        console.log('Pushing to remote...');
+        var pushOutput = '';
+        var pushThrewException = false;
+        try {
+            pushOutput = runCmd({
+                command: 'git push -u origin ' + branchName
+            }) || '';
+        } catch (pushErr) {
+            // git push exits with non-zero (e.g. non-fast-forward) — cli_execute_command throws
+            pushOutput = String(pushErr);
+            pushThrewException = true;
+        }
+
+        // Check output text for soft-rejected pushes (exit 0 but error text) AND
+        // exception messages (exit non-zero) — covers both code paths.
+        const pushFailed = pushThrewException ||
+                           pushOutput.indexOf('remote rejected') !== -1 ||
+                           pushOutput.indexOf('GH013') !== -1 ||
+                           pushOutput.indexOf('error: failed to push') !== -1 ||
+                           pushOutput.indexOf('push declined') !== -1 ||
+                           pushOutput.indexOf('non-fast-forward') !== -1 ||
+                           pushOutput.indexOf('rejected') !== -1;
+
+        if (pushFailed) {
+            return {
+                success: false,
+                isPushFailure: true,
+                error: 'Push was rejected by remote: ' + pushOutput.substring(0, 500)
+            };
+        }
+
+        // Verify branch is actually present on remote
+        console.log('Verifying branch is pushed to remote...');
+        const lsRemoteOutput = runCmd({
+            command: 'git ls-remote --heads origin ' + branchName
+        }) || '';
+
+        // ls-remote stdout contains refs/heads/<branch> when the branch exists
+        if (lsRemoteOutput.indexOf('refs/heads/' + branchName) === -1) {
+            return {
+                success: false,
+                isPushFailure: true,
+                error: 'Branch was not found on remote after push'
+            };
+        }
+
+        console.log('✅ Git operations completed successfully');
+        return {
+            success: true,
+            branchName: branchName
+        };
+
+    } catch (error) {
+        console.error('Git operations failed:', error);
+        return {
+            success: false,
+            error: error.toString()
+        };
+    }
+}
+
+/**
+ * Create Pull Request using GitHub CLI
+ * Expects outputs/response.md to already exist with PR body content
+ *
+ * @param {string} title - PR title
+ * @param {string} branchName - Branch name to use as head
+ * @returns {Object} Result with success status and PR URL
+ */
+function createPullRequest(title, branchName, baseBranch) {
+    console.log('Creating Pull Request...');
+
+    function remoteBranchExists(branch) {
+        var output = runCmd({ command: 'git ls-remote --heads origin ' + branch }) || '';
+        return output.indexOf('refs/heads/' + branch) !== -1;
+    }
+
+    try {
+        if (!remoteBranchExists(baseBranch)) {
+            return {
+                success: false,
+                error: 'PR base branch does not exist on remote: ' + baseBranch +
+                    '. In two-branch mode the release/target branch must be pushed before PR creation.'
+            };
+        }
+        if (!remoteBranchExists(branchName)) {
+            return {
+                success: false,
+                error: 'PR head branch does not exist on remote: ' + branchName +
+                    '. The development branch push did not complete successfully.'
+            };
+        }
+    } catch (verifyErr) {
+        return {
+            success: false,
+            error: 'Could not verify remote PR branches before PR creation: ' + verifyErr.toString()
+        };
+    }
+
+    return prHelper.createPullRequest({
+        title: title,
+        branchName: branchName,
+        baseBranch: baseBranch,
+        workingDir: _workingDir,
+        bodyFileCandidates: ['outputs/response.md'],
+        defaultBody: 'Development changes.',
+        runCommand: function(command, workingDir) {
+            var args = { command: command };
+            if (workingDir) args.workingDirectory = workingDir;
+            return cli_execute_command(args);
+        }
+    });
+}
+
+/**
+ * Post comment to Jira ticket with PR details
+ *
+ * @param {string} ticketKey - Ticket key
+ * @param {string} prUrl - Pull Request URL
+ * @param {string} branchName - Git branch name
+ */
+function postPRCommentToJira(ticketKey, prUrl, branchName) {
+    try {
+        let comment = 'h3. *Development Completed*\n\n';
+        comment += '*Branch:* {code}' + branchName + '{code}\n';
+
+        if (prUrl) {
+            comment += '*Pull Request:* ' + prUrl + '\n';
+        } else {
+            comment += '*Pull Request:* Created (check GitHub for URL)\n';
+        }
+
+        comment += '\nAI Teammate has completed the implementation and created a pull request for review.';
+
+        jira_post_comment({
+            key: ticketKey,
+            comment: comment
+        });
+
+        console.log('✅ Posted PR comment to', ticketKey);
+
+    } catch (error) {
+        console.error('Failed to post comment to Jira:', error);
+    }
+}
+
+/**
+ * Post error comment to Jira ticket
+ *
+ * @param {string} ticketKey - Ticket key
+ * @param {string} stage - Stage where error occurred
+ * @param {string} errorMessage - Error message
+ */
+function postErrorCommentToJira(ticketKey, stage, errorMessage) {
+    try {
+        let comment = 'h3. *Development Workflow Error*\n\n';
+        comment += '*Stage:* ' + stage + '\n';
+        comment += '*Error:* {code}' + errorMessage + '{code}\n\n';
+        comment += 'Please check the logs for more details and retry the workflow if needed.';
+
+        jira_post_comment({
+            key: ticketKey,
+            comment: comment
+        });
+
+        console.log('Posted error comment to', ticketKey);
+
+    } catch (error) {
+        console.error('Failed to post error comment to Jira:', error);
+    }
+}
+
+function labelsToRemove(customParams, metadata) {
+    var labels = [];
+    if (customParams && customParams.removeLabel) labels.push(customParams.removeLabel);
+    if (customParams && Array.isArray(customParams.removeLabels)) {
+        customParams.removeLabels.forEach(function(label) { labels.push(label); });
+    }
+    if (metadata && metadata.contextId) labels.push(metadata.contextId + '_wip');
+
+    var seen = {};
+    return labels.filter(function(label) {
+        if (!label || seen[label]) return false;
+        seen[label] = true;
+        return true;
+    });
+}
+
+function resetDevelopmentForRetry(ticketKey, statuses, customParams, metadata, stage, errorMessage) {
+    postErrorCommentToJira(ticketKey, stage, errorMessage);
+
+    try {
+        jira_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
+        console.log('✅ Moved', ticketKey, 'to', statuses.READY_FOR_DEVELOPMENT, 'after development workflow error');
+    } catch (e) {
+        console.warn('Failed to move ' + ticketKey + ' to ' + statuses.READY_FOR_DEVELOPMENT + ':', e);
+    }
+
+    labelsToRemove(customParams, metadata).forEach(function(label) {
+        try {
+            jira_remove_label({ key: ticketKey, label: label });
+            console.log('✅ Removed retry-blocking label:', label);
+        } catch (e) {
+            console.warn('Failed to remove retry-blocking label ' + label + ':', e);
+        }
+    });
+}
+
+function resumeDevelopmentAgent(params, ticketKey, customParams, stage, errorMessage) {
+    return feedbackLoop.resumeAgent({
+        ticketKey: ticketKey,
+        customParams: customParams,
+        section: 'postAction',
+        stage: stage,
+        error: errorMessage
+    }).attempted;
+}
+
+/**
+ * Retry push after asking the agent to fix the commit
+ * Used when push is rejected (e.g. GitHub push protection blocked a secret)
+ *
+ * @param {string} ticketKey - Jira ticket key
+ * @param {string} branchName - Branch name to push
+ * @param {string} pushError - Error message from the failed push
+ * @returns {Object} Result with success status
+ */
+function retryAfterPushFailure(ticketKey, branchName, pushError) {
+    console.log('Push failed — asking agent to fix commit and retrying...');
+
+    // Write error details for the agent
+    const errorFilePath = 'input/' + ticketKey + '/push_error.md';
+    try {
+        file_write({
+            path: errorFilePath,
+            content: '# Push Error — Please Fix\n\n' +
+                'The git push was rejected. Error:\n\n```\n' + pushError + '\n```\n\n' +
+                '**What to do:**\n' +
+                '1. Identify what caused the push to be rejected (e.g. a secret/credentials file in the commit)\n' +
+                '2. Remove it from the commit:\n' +
+                '   ```\n' +
+                '   git rm --cached <filename>\n' +
+                '   git commit --amend --no-edit\n' +
+                '   ```\n' +
+                '3. Do NOT push — just fix the commit history\n'
+        });
+        console.log('Wrote push error to', errorFilePath);
+    } catch (e) {
+        console.warn('Could not write push_error.md:', e);
+    }
+
+    // For non-fast-forward: force push (branch diverged from remote, our local is newer)
+    console.log('Retrying with force push...');
+    var retryOutput = '';
+    try {
+        retryOutput = runCmd({ command: 'git push -u origin ' + branchName + ' --force' }) || '';
+    } catch (forceErr) {
+        retryOutput = String(forceErr);
+    }
+    var retryFailed = retryOutput.indexOf('remote rejected') !== -1 ||
+                      retryOutput.indexOf('GH013') !== -1 ||
+                      retryOutput.indexOf('error: failed to push') !== -1 ||
+                      retryOutput.indexOf('push declined') !== -1;
+
+    if (retryFailed) {
+        return { success: false, error: 'Push still rejected after agent fix: ' + retryOutput.substring(0, 300) };
+    }
+
+    // Verify branch is on remote
+    var lsOutput = runCmd({ command: 'git ls-remote --heads origin ' + branchName }) || '';
+    if (lsOutput.indexOf('refs/heads/' + branchName) === -1) {
+        return { success: false, error: 'Branch not found on remote after retry push' };
+    }
+
+    console.log('✅ Push succeeded after agent fix');
+    return { success: true };
+}
+
+/**
+ * Main action function - orchestrates the entire workflow
+ *
+ * @param {Object} params - Parameters from Teammate job
+ * @param {Object} params.ticket - Jira ticket object
+ * @param {string} params.response - Response content from cursor agent (development summary)
+ * @param {string} params.initiator - Initiator account ID
+ * @returns {Object} Result object with success status
+ */
+function action(params) {
+    try {
+        // Handle both Teammate workflow and standalone dmtools execution
+        // - Teammate workflow: params.ticket exists directly
+        // - Standalone dmtools (JSRunner): params.jobParams.ticket
+        const actualParams = params.ticket ? params : (params.jobParams || params);
+        var config = configLoader.loadProjectConfig(params.jobParams || params);
+        _workingDir = config.workingDir || null;
+
+        const ticketKey = actualParams.ticket.key;
+        const ticketSummary = actualParams.ticket.fields.summary;
+        const ticketDescription = actualParams.ticket.fields.description || '';
+        const developmentSummary = actualParams.response || '';
+
+        // Resolve statuses — allows per-project overrides via customParams.customStatuses
+        const _customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
+        const statuses = resolveStatuses(_customParams);
+
+        console.log('Processing development workflow for ticket:', ticketKey);
+        console.log('Ticket summary:', ticketSummary);
+
+        // ── Early exit: PR already open for this branch ──────────────────────
+        // If a PR already exists, a previous run created it but failed to move
+        // the ticket to In Review. Move now and skip re-development.
+        const expectedBranch = configLoader.resolveBranchName(config, params.ticket || actualParams.ticket, 'development');
+        try {
+            const existingPrJson = runCmd({
+                command: 'gh pr list --head ' + expectedBranch + ' --state open --json url,number --jq ".[0]"'
+            }) || '';
+            const cleanedPrJson = existingPrJson.split('\n').filter(function(l) {
+                return l.trim() && l.indexOf('Script started') === -1 && l.indexOf('Script done') === -1;
+            }).join('').trim();
+            if (cleanedPrJson && cleanedPrJson !== 'null') {
+                let existingPr = null;
+                try { existingPr = JSON.parse(cleanedPrJson); } catch (e) {}
+                if (existingPr && existingPr.url) {
+                    console.log('⚠️  PR already open for', ticketKey, ':', existingPr.url, '— skipping re-development');
+                    try {
+                        jira_post_comment({
+                            key: ticketKey,
+                            comment: 'h3. ℹ️ PR Already Open\n\n' +
+                                'A pull request already exists for this ticket: ' + existingPr.url + '\n\n' +
+                                'Moved ticket to *In Review* for review.'
+                        });
+                    } catch (e) {}
+                    try {
+                        jira_move_to_status({ key: ticketKey, statusName: statuses.IN_REVIEW });
+                        console.log('✅ Moved', ticketKey, 'to In Review');
+                    } catch (e) { console.warn('Failed to move to In Review:', e); }
+                    return { success: true, path: 'pr_already_open', ticketKey };
+                }
+            }
+        } catch (prCheckErr) {
+            console.warn('Could not check existing PRs (non-fatal):', prCheckErr);
+        }
+
+        // ── Clean up stale pr_approved labels from previous review cycle ────
+        // When story/bug development is re-triggered (e.g. after rework or manual restart),
+        // the pr_approved label from a prior review must be removed so the new review
+        // cycle starts clean and onApproved triggers don't fire prematurely.
+        var prApprovedCleaned = false;
+        if (hasPrApprovedLabel(actualParams.ticket)) {
+            console.log('🧹 Removing stale pr_approved label from', ticketKey);
+            try {
+                jira_remove_label({ key: ticketKey, label: LABELS.PR_APPROVED });
+                console.log('✅ Removed pr_approved from Jira ticket');
+                prApprovedCleaned = true;
+            } catch (e) { console.warn('Could not remove pr_approved from Jira:', e); }
+            // Also try to remove from GitHub PR if branch already has one open
+            try {
+                var targetRepo = _customParams && _customParams.targetRepository;
+                if (targetRepo && targetRepo.owner && targetRepo.repo) {
+                    var prListJson = runCmd({
+                        command: 'gh pr list --head ' + expectedBranch + ' --state open --json number --jq ".[0].number"'
+                    }) || '';
+                    var prNum = parseInt(cleanCommandOutput(prListJson), 10);
+                    if (prNum) {
+                        github_remove_pr_label({
+                            workspace: targetRepo.owner,
+                            repository: targetRepo.repo,
+                            pullRequestId: String(prNum),
+                            label: LABELS.PR_APPROVED
+                        });
+                        console.log('✅ Removed pr_approved from GitHub PR #' + prNum);
+                    }
+                }
+            } catch (e) { console.warn('Could not remove pr_approved from GitHub PR (non-fatal):', e); }
+        }
+
+        // Configure git author
+        if (!configureGitAuthor(config)) {
+            const error = 'Failed to configure git author';
+            resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Git Configuration', error);
+            return {
+                success: true,
+                path: 'development-reset-for-retry',
+                error: error
+            };
+        }
+
+        // Always use the expected branch (ai/<ticketKey>), computed from ticket key.
+        // Do NOT trust git branch --show-current — the CLI agent may have switched branches.
+        // Force checkout to the expected branch before committing to prevent pushing to develop/main.
+        // Note: expectedBranch is already declared above for the early-exit PR check — reuse it here.
+
+        const rawBranchOutput = runCmd({ command: 'git branch --show-current' }) || '';
+        const currentBranch = cleanCommandOutput(rawBranchOutput);
+        console.log('Current branch in workingDir:', currentBranch);
+
+        var branchName = expectedBranch;
+        if (currentBranch !== expectedBranch) {
+            console.warn('⚠️  Branch mismatch: expected "' + expectedBranch + '" but found "' + currentBranch + '". Forcing checkout to expected branch.');
+            try {
+                // Try to checkout expected branch (should already exist from preCliJSAction)
+                runCmd({ command: 'git checkout ' + expectedBranch });
+                console.log('✅ Switched to expected branch:', expectedBranch);
+            } catch (checkoutErr) {
+                console.warn('Expected branch not found, creating it:', checkoutErr);
+                try {
+                    runCmd({ command: 'git checkout -b ' + expectedBranch });
+                    console.log('✅ Created and switched to branch:', expectedBranch);
+                } catch (createErr) {
+                    const error = 'Could not checkout expected branch "' + expectedBranch + '": ' + createErr;
+                    resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Git Branch Checkout', error);
+                    return { success: true, path: 'development-reset-for-retry', error: error };
+                }
+            }
+        }
+        console.log('Using branch:', branchName);
+
+        // Prepare commit message
+        const commitMessage = configLoader.formatTemplate(config.formats.commitMessage.development, {ticketKey: ticketKey, ticketSummary: ticketSummary});
+
+        var gateResult = feedbackLoop.runQualityGates({
+            ticketKey: ticketKey,
+            customParams: _customParams,
+            section: 'qualityGates'
+        });
+        if (!gateResult.success) {
+            const error = 'Quality gate failed before development publish: ' + gateResult.failedGate + '\n' + gateResult.error;
+            resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Quality Gate', error);
+            return { success: true, path: 'development-reset-for-retry', error: error };
+        }
+        var policyResult = feedbackLoop.runPolicyGates({
+            ticketKey: ticketKey,
+            customParams: _customParams,
+            section: 'policyGates'
+        });
+        if (!policyResult.success) {
+            const error = 'Policy gate failed before development publish: ' + policyResult.failedGate + '\n' + policyResult.error;
+            resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Policy Gate', error);
+            return { success: true, path: 'development-reset-for-retry', error: error };
+        }
+
+        // Perform git operations
+        const prTarget = configLoader.resolvePRTargetBranch(config, params.ticket || actualParams.ticket);
+        const gitResult = performGitOperations(branchName, commitMessage, prTarget, config, _customParams, ticketKey);
+        if (!gitResult.success) {
+            if (gitResult.isPushFailure) {
+                // Push was rejected — ask the agent to fix the commit, then retry
+                const retryResult = retryAfterPushFailure(ticketKey, branchName, gitResult.error);
+                if (!retryResult.success) {
+                    if (resumeDevelopmentAgent(params, ticketKey, _customParams, 'development_git_push', retryResult.error)) {
+                        return action(params);
+                    }
+                    resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Git Push (after retry)', retryResult.error);
+                    return { success: true, path: 'development-reset-for-retry', error: 'Git push failed even after retry: ' + retryResult.error };
+                }
+                // Push succeeded after agent fix — continue to PR creation
+            } else if (gitResult.error && gitResult.error.indexOf('No changes were made') !== -1) {
+                // No git changes detected. Distinguish two cases:
+                //   (A) Agent completed successfully and determined no code changes are needed
+                //       (e.g. fix already merged via prior PR). outputs/response.md exists with content.
+                //       → Post the agent's analysis as a comment and move to IN_REVIEW. No retry.
+                //   (B) Agent was interrupted mid-analysis (e.g. rate limit, crash).
+                //       outputs/response.md is missing or empty.
+                //       → Reset to Ready For Development for automatic retry.
+                var agentResponse = null;
+                try {
+                    agentResponse = file_read({ path: 'outputs/response.md' });
+                } catch (e) {
+                    agentResponse = null;
+                }
+                var wipLabelIfNoChanges = actualParams.metadata && actualParams.metadata.contextId
+                    ? actualParams.metadata.contextId + '_wip' : null;
+
+                if (agentResponse && agentResponse.trim()) {
+                    // Case A: agent finished successfully, no code changes needed.
+                    console.log('No git changes detected — agent completed successfully (response.md present). Treating as "no change needed".');
+                    try {
+                        jira_post_comment({
+                            key: ticketKey,
+                            comment: 'h3. ℹ️ No Code Changes Needed\n\nThe AI agent completed its analysis and determined no code changes are required (e.g. the fix is already present in the target branch, or the ticket was resolved by a previous change).\n\n*Agent analysis:*\n\n' + agentResponse
+                        });
+                    } catch (e) {
+                        console.warn('Failed to post agent analysis comment:', e);
+                    }
+                    try {
+                        jira_move_to_status({ key: ticketKey, statusName: statuses.IN_REVIEW });
+                        console.log('✅ Moved', ticketKey, 'to', statuses.IN_REVIEW, '(no code changes needed)');
+                    } catch (e) {
+                        console.warn('Failed to move ticket to ' + statuses.IN_REVIEW + ':', e);
+                    }
+                    if (wipLabelIfNoChanges) {
+                        try { jira_remove_label({ key: ticketKey, label: wipLabelIfNoChanges }); } catch (e) {}
+                    }
+                    return { success: true, path: 'no-changes-needed', ticketKey: ticketKey };
+                }
+
+                // Case B: agent was genuinely interrupted — retry.
+                console.log('No git changes detected AND no response.md — CLI agent was interrupted. Resetting ticket for retry.');
+                try {
+                    jira_post_comment({
+                        key: ticketKey,
+                        comment: 'h3. ⏸️ Development Interrupted\n\nThe AI agent was interrupted (likely hit a rate limit) before completing the implementation. The ticket has been reset to *Ready For Development* and will be automatically retried.'
+                    });
+                } catch (e) {}
+                try {
+                    jira_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
+                    console.log('✅ Moved', ticketKey, 'to Ready For Development for retry');
+                } catch (e) {
+                    console.warn('Failed to move ticket to Ready For Development:', e);
+                }
+                if (wipLabelIfNoChanges) {
+                    try { jira_remove_label({ key: ticketKey, label: wipLabelIfNoChanges }); } catch (e) {}
+                }
+                return { success: true, path: 'interrupted', ticketKey: ticketKey };
+            } else {
+                if (resumeDevelopmentAgent(params, ticketKey, _customParams, 'development_git_operations', gitResult.error)) {
+                    return action(params);
+                }
+                resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Git Operations', gitResult.error);
+                return { success: true, path: 'development-reset-for-retry', error: 'Git operations failed: ' + gitResult.error };
+            }
+        }
+
+        var postPublishGateResult = feedbackLoop.runPostPublishGates({
+            ticketKey: ticketKey,
+            customParams: _customParams,
+            section: 'postPublishGates',
+            workingDir: _workingDir
+        });
+        if (!postPublishGateResult.success) {
+            const error = 'Post-publish quality gate failed: ' +
+                postPublishGateResult.failedGate + '\n' + postPublishGateResult.error;
+            if (postPublishGateResult.resumeAttempted) {
+                return action(params);
+            }
+            resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Post-Publish Quality Gate', error);
+            return { success: true, path: 'development-reset-for-retry', error: error };
+        }
+
+        // Verify outputs/response.md exists (must be created by cursor-agent or workflow)
+        let responseContent;
+        try {
+            responseContent = file_read({ path: 'outputs/response.md' });
+        } catch (e) {
+            responseContent = null;
+        }
+        if (!responseContent || !responseContent.trim()) {
+            // Agent was interrupted after committing partial work (e.g. outputs/rca.md) but
+            // before writing response.md. Reset ticket for retry rather than posting an error.
+            console.log('outputs/response.md missing after commit — CLI agent was interrupted mid-way. Resetting for retry.');
+            try {
+                jira_post_comment({
+                    key: ticketKey,
+                    comment: 'h3. ⏸️ Development Interrupted\n\nThe AI agent was interrupted before completing the implementation (partial work was pushed to branch *' + branchName + '*). The ticket has been reset to *Ready For Development* and will be automatically retried.\n\nThe agent can resume from the existing branch.'
+                });
+            } catch (e) {}
+            try {
+                jira_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
+                console.log('✅ Moved', ticketKey, 'to Ready For Development for retry');
+            } catch (e) {
+                console.warn('Failed to move ticket to Ready For Development:', e);
+            }
+            const wipLabel2 = actualParams.metadata && actualParams.metadata.contextId
+                ? actualParams.metadata.contextId + '_wip' : null;
+            if (wipLabel2) {
+                try { jira_remove_label({ key: ticketKey, label: wipLabel2 }); } catch (e) {}
+            }
+            return { success: true, path: 'interrupted', ticketKey: ticketKey };
+        }
+        console.log('Using outputs/response.md as PR body (' + responseContent.length + ' characters)');
+
+        // Create Pull Request
+        const prTitle = configLoader.formatTemplate(config.formats.prTitle.development, {ticketKey: ticketKey, ticketSummary: ticketSummary});
+        const prResult = createPullRequest(prTitle, branchName, prTarget);
+
+        if (!prResult.success) {
+            if (resumeDevelopmentAgent(params, ticketKey, _customParams, 'development_pr_creation', prResult.error)) {
+                return action(params);
+            }
+            resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Pull Request Creation', prResult.error);
+            return {
+                success: true,
+                path: 'development-reset-for-retry',
+                error: 'PR creation failed: ' + prResult.error
+            };
+        }
+
+        // Assign ticket to initiator
+        try {
+            const initiatorId = actualParams.initiator;
+            if (initiatorId) {
+                jira_assign_ticket_to({
+                    key: ticketKey,
+                    accountId: initiatorId
+                });
+                console.log('✅ Assigned ticket to initiator');
+            }
+        } catch (error) {
+            console.warn('Failed to assign ticket to initiator:', error);
+        }
+
+        // Move ticket to In Review status
+        try {
+            jira_move_to_status({
+                key: ticketKey,
+                statusName: statuses.IN_REVIEW
+            });
+            console.log('✅ Moved ' + ticketKey + ' to In Review');
+        } catch (error) {
+            console.warn('Failed to move ticket to In Review:', error);
+        }
+
+        // Post comment with PR details
+        postPRCommentToJira(ticketKey, prResult.prUrl, branchName);
+
+        // Add label to indicate AI development
+        try {
+            jira_add_label({
+                key: ticketKey,
+                label: LABELS.AI_DEVELOPED
+            });
+        } catch (error) {
+            console.warn('Failed to add ai_developed label:', error);
+        }
+
+        // Remove WIP label if configured (dynamically generated from contextId)
+        const wipLabel = actualParams.metadata && actualParams.metadata.contextId
+            ? actualParams.metadata.contextId + '_wip'
+            : null;
+        if (wipLabel) {
+            try {
+                jira_remove_label({
+                    key: ticketKey,
+                    label: wipLabel
+                });
+                console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
+            } catch (labelError) {
+                console.warn('Failed to remove WIP label "' + wipLabel + '":', labelError);
+            }
+        }
+
+        console.log('✅ Development workflow completed successfully');
+
+        // Auto-start pr_review after PR is created and ticket moved to In Review (opt-in)
+        const customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
+        const autoStartReview = customParams && customParams.autoStartReview;
+        const reviewConfigFile = customParams && customParams.autoStartReviewConfigFile;
+        var reviewStarted = false;
+        if (autoStartReview && reviewConfigFile) {
+            if (hasPrApprovedLabel(actualParams.ticket) && !prApprovedCleaned) {
+                console.log('ℹ️ autoStartReview: skipped — ticket has pr_approved label');
+            } else {
+                try {
+                    // Use customParams.aiRepository if set (avoids targetRepository override in configLoader)
+                    const aiRepoCfg = customParams && customParams.aiRepository;
+                    const aiOwner = (aiRepoCfg && aiRepoCfg.owner) || (config.repository && config.repository.owner);
+                    const aiRepo  = (aiRepoCfg && aiRepoCfg.repo)  || (config.repository && config.repository.repo);
+                    const projectKey = deriveProjectKey(customParams);
+                    const encodedCfg = buildAutoStartEncodedConfig(ticketKey, customParams);
+                    if (aiOwner && aiRepo) {
+                        github_trigger_workflow(
+                            aiOwner, aiRepo, 'ai-teammate.yml',
+                            JSON.stringify({
+                                concurrency_key: ticketKey,
+                                config_file:     reviewConfigFile,
+                                encoded_config:  encodedCfg,
+                                project_key:     projectKey || ''
+                            }),
+                            'main'
+                        );
+                        reviewStarted = true;
+                        console.log('✅ Auto-started pr_review for', ticketKey,
+                            '[config=' + reviewConfigFile + (projectKey ? ', project=' + projectKey : '') + ']');
+                    } else {
+                        console.warn('⚠️ autoStartReview: config.repository.owner/repo not set — skipping');
+                    }
+                } catch (e) {
+                    console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
+                }
+            }
+        }
+        if (!reviewStarted) {
+            autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
+        }
+
+        // Cache configured artefacts (e.g. cosmo test reports) to GitHub Release — non-fatal
+        try { cacheToReleases.action(params); } catch (e) { console.warn('⚠️ cacheToReleases failed (non-fatal):', e); }
+
+        return {
+            success: true,
+            message: 'Ticket ' + ticketKey + ' developed, committed, and PR created',
+            branchName: branchName,
+            prUrl: prResult.prUrl
+        };
+
+    } catch (error) {
+        console.error('❌ Error in development workflow:', error);
+
+        // Try to reset ticket for retry instead of leaving it stuck In Development.
+        try {
+            const actualParams = params.ticket ? params : (params.jobParams || params);
+            if (actualParams && actualParams.ticket && actualParams.ticket.key) {
+                const customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
+                const statuses = resolveStatuses(customParams);
+                if (resumeDevelopmentAgent(
+                    params,
+                    actualParams.ticket.key,
+                    customParams,
+                    'development_post_action',
+                    error.toString()
+                )) {
+                    return action(params);
+                }
+                resetDevelopmentForRetry(
+                    actualParams.ticket.key,
+                    statuses,
+                    customParams,
+                    actualParams.metadata,
+                    'Workflow Execution',
+                    error.toString()
+                );
+            }
+        } catch (commentError) {
+            console.error('Failed to reset development ticket after error:', commentError);
+        }
+
+        return {
+            success: true,
+            path: 'development-reset-for-retry',
+            error: error.toString()
+        };
+    }
+}
+// Export for dmtools standalone execution
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { action };
+}

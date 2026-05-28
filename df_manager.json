@@ -1,0 +1,18 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "agents/js/dfManager.js",
+    "jobParams": {
+      "customParams": {
+        "autoRecover": false,
+        "staleMinutes": 45,
+        "jiraLimit": 100,
+        "workflowRunLimit": 100,
+        "failedRunLimit": 20,
+        "smWorkflowFile": "sm.yml",
+        "workflowRef": "main",
+        "outputPath": "outputs/df_manager_report.json"
+      }
+    }
+  }
+}
