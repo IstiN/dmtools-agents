@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"
 
 # Canonical order for "all" (node before copilot, java before dmtools)
-ALL_TOOLS="java node dmtools maestro copilot codemie cursor"
+ALL_TOOLS="java node dmtools maestro copilot codemie cursor codegraph"
 
 if [ $# -eq 0 ]; then
   echo "Usage: install.sh tool1[:version] tool2[:version] ..."
@@ -27,11 +27,12 @@ if [ $# -eq 0 ]; then
   echo "Supported tools (in install order):"
   echo "  java      — Java (Temurin/OpenJDK). Default version: 17"
   echo "  node      — Node.js via nvm.         Default version: 20"
-  echo "  dmtools   — DMtools CLI.             Default version: v1.7.195"
+  echo "  dmtools   — DMtools CLI.             Default version: v1.7.196"
   echo "  maestro   — Maestro mobile testing.  Default version: latest"
   echo "  copilot   — @github/copilot npm CLI. Default version: latest  (needs node)"
   echo "  codemie   — codemie-claude CLI.      Default version: latest"
   echo "  cursor    — cursor-agent (check only; cannot be auto-installed)"
+  echo "  codegraph — CodeGraph CLI (npm).     Default version: latest"
   echo ""
   echo "Examples:"
   echo "  install.sh dmtools maestro copilot"
@@ -162,6 +163,7 @@ for tool in ${TOOL_LIST}; do
     copilot) BIN="copilot" ;;
     codemie) BIN="codemie-claude" ;;
     cursor)  BIN="cursor-agent" ;;
+    codegraph) BIN="codegraph" ;;
     *)       continue ;;
   esac
 

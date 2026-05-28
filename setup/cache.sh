@@ -24,7 +24,7 @@ OS_TAG="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
 # ── Per-tool cache definitions ────────────────────────────────────────────────
 
 _cache_dmtools() {
-  local version="${1:-${DMTOOLS_VERSION:-v1.7.195}}"
+  local version="${1:-${DMTOOLS_VERSION:-v1.7.196}}"
   export_var "DMTOOLS_CACHE_PATH" "${HOME}/.dmtools"
   export_var "DMTOOLS_CACHE_KEY"  "dmtools-${version}-${OS_TAG}"
 }
@@ -58,6 +58,12 @@ _cache_copilot() {
   export_var "COPILOT_CACHE_KEY"  "npm-global-copilot-${version}-${OS_TAG}"
 }
 
+_cache_codegraph() {
+  local version="${1:-${CODEGRAPH_VERSION:-latest}}"
+  export_var "CODEGRAPH_CACHE_PATH" "${HOME}/.npm-global"
+  export_var "CODEGRAPH_CACHE_KEY"  "npm-global-codegraph-${version}-${OS_TAG}"
+}
+
 _cache_codemie() {
   local version="${1:-${CODEMIE_VERSION:-latest}}"
   export_var "CODEMIE_CACHE_PATH" "${HOME}/.local/bin"
@@ -74,6 +80,7 @@ _dispatch_tool() {
     node)     _cache_node     "${version}" ;;
     maestro)  _cache_maestro  "${version}" ;;
     copilot)  _cache_copilot  "${version}" ;;
+    codegraph) _cache_codegraph "${version}" ;;
     codemie)  _cache_codemie  "${version}" ;;
     cursor)   echo "ℹ️  cursor-agent is not cacheable (part of Cursor IDE)" ;;
     *)        echo "⚠️  Unknown tool '${tool}' — skipping cache config" ;;
@@ -85,13 +92,14 @@ _print_info() {
   echo "┌─────────────┬──────────────────────────────────┬────────────────────────────────────────────────┐"
   printf "│ %-11s │ %-32s │ %-46s │\n" "Tool" "Cache Path" "Cache Key (example)"
   echo "├─────────────┼──────────────────────────────────┼────────────────────────────────────────────────┤"
-  printf "│ %-11s │ %-32s │ %-46s │\n" "dmtools"  "~/.dmtools"     "dmtools-v1.7.195-darwin-arm64"
+  printf "│ %-11s │ %-32s │ %-46s │\n" "dmtools"  "~/.dmtools"     "dmtools-v1.7.196-darwin-arm64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "java"     "~/.sdkman/... " "java-17-darwin-arm64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "node"     "~/.nvm"         "nvm-node20-darwin-arm64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "maestro"  "~/.maestro"     "maestro-latest-darwin-arm64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "copilot"  "~/.npm-global"  "npm-global-copilot-latest-darwin-arm64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "codemie"  "~/.local/bin"   "codemie-latest-linux-x86_64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "cursor"   "(not cacheable)" "-"
+  printf "│ %-11s │ %-32s │ %-46s │\n" "codegraph" "~/.npm-global"  "npm-global-codegraph-latest-linux-x86_64"
   echo "└─────────────┴──────────────────────────────────┴────────────────────────────────────────────────┘"
   echo ""
   echo "Exported env vars per tool:"
@@ -107,7 +115,7 @@ _print_info() {
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-ALL_TOOLS="java node dmtools maestro copilot codemie"  # cursor has no cache
+ALL_TOOLS="java node dmtools maestro copilot codemie codegraph"  # cursor has no cache
 
 MODE="${1:-info}"
 shift || true
