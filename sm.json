@@ -70,6 +70,12 @@
           "enabled": true
         },
         {
+          "description": "Review/Rework/Blocked Stories & Bugs with already merged PR → recover Merged status",
+          "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('In Review', 'In Rework', 'Blocked') ORDER BY updated ASC",
+          "configFile": "agents/recover_merged_pr.json",
+          "localExecution": true
+        },
+        {
           "description": "In Review Stories & Bugs → trigger pr_review",
           "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('In Review') AND (labels is EMPTY OR labels NOT IN ('pr_approved'))",
           "configFile": "agents/pr_review.json",

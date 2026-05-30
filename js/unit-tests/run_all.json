@@ -17,6 +17,7 @@
         "js/unit-tests/test_autoStart.js",
         "js/unit-tests/test_dfManager.js",
         "js/unit-tests/test_retryMergePR.js",
+        "js/unit-tests/test_recoverMergedPRTicket.js",
         "js/unit-tests/test_feedbackLoop.js",
         "js/unit-tests/test_fetchParentContextToInput.js",
         "js/unit-tests/test_testsGeneratedGuard.js",

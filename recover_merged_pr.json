@@ -1,0 +1,6 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "postJSAction": "agents/js/recoverMergedPRTicket.js"
+  }
+}
