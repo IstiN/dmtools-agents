@@ -105,11 +105,18 @@ function removeTriggerLabel(ticketKey, label) {
     }
 }
 
+function removeProcessingLabels(tcKey, labels) {
+    labels.forEach(function(label) {
+        removeTriggerLabel(tcKey, label);
+    });
+}
+
 function action(params) {
     try {
         var actualParams = params.jobParams || params;
         var customParams = actualParams.customParams || {};
         var triggerLabel = customParams.removeLabel || 'sm_bug_creation_triggered';
+        var smTriggerLabel = customParams.smTriggerLabel || 'sm_bulk_bugs_creation_triggered';
 
         console.log('=== Processing bulk bug creation decisions ===');
 
@@ -119,7 +126,6 @@ function action(params) {
 
             // Remove SM trigger label so SM can re-dispatch on next run
             var triggerTicketKey = (actualParams.ticket && actualParams.ticket.key) || null;
-            var smTriggerLabel = customParams.smTriggerLabel || 'sm_bulk_bugs_creation_triggered';
             removeTriggerLabel(triggerTicketKey, smTriggerLabel);
 
             // Try feedback loop resume — tell agent to produce the output file
@@ -212,6 +218,7 @@ function action(params) {
                     linkBugToTC(tcKey, bugKey);
                     moveToBugToFix(tcKey);
                     addTriggerLabel(tcKey, triggerLabel);
+                    removeTriggerLabel(tcKey, smTriggerLabel);
                     postComment(tcKey,
                         'h3. 🐛 New Bug Created (Batch)\n\n' +
                         'Created: *' + bugKey + '*\n' +
@@ -244,6 +251,7 @@ function action(params) {
                 linkBugToTC(tcKey, bugKey);
                 moveToBugToFix(tcKey);
                 addTriggerLabel(tcKey, triggerLabel);
+                removeTriggerLabel(tcKey, smTriggerLabel);
                 postComment(tcKey,
                     'h3. 🔗 Existing Bug Linked (Batch)\n\n' +
                     'Linked to existing bug: *' + bugKey + '*'
@@ -284,9 +292,7 @@ function action(params) {
                     jira_remove_label({ key: tcKey, label: 'sm_test_automation_triggered' });
                 } catch (e) {}
                 // Remove bug creation trigger label
-                try {
-                    jira_remove_label({ key: tcKey, label: triggerLabel });
-                } catch (e) {}
+                removeProcessingLabels(tcKey, [triggerLabel, smTriggerLabel]);
                 postComment(tcKey,
                     'h3. 🔄 Bug Already Fixed — Ready for Re-automation\n\n' +
                     (bugKey ? 'Matching bug *' + bugKey + '* is already in *Done* status.\n\n' : '') +
@@ -313,8 +319,8 @@ function action(params) {
             // REMOVE trigger label so SM can retry on next cycle
             // (prevents permanent deadlock in Failed status)
             try {
-                jira_remove_label({ key: tcKey, label: triggerLabel });
-                console.log('  🏷️ Removed trigger label from', tcKey, '— eligible for next cycle');
+                removeProcessingLabels(tcKey, [triggerLabel, smTriggerLabel]);
+                console.log('  🏷️ Removed trigger labels from', tcKey, '— eligible for next cycle');
             } catch (e) {}
             postComment(tcKey,
                 'h3. ℹ️ No Bug Created (Batch) — Test Code Issue\n\n' +

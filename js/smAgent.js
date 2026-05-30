@@ -34,6 +34,8 @@
  *   skipIfLabels   (optional) — skip ticket if it already has any of these labels
  *   addLabel       (optional) — add this label after triggering (idempotency marker)
  *   addLabels      (optional) — add these labels after triggering
+ *   recoverStaleTriggerLabel (optional) — if true, remove skip labels when no matching
+ *                               active workflow exists and continue processing
  *   enabled        (optional) — set to false to disable the rule entirely (default: true)
  *   limit          (optional) — max number of tickets to process per run (default: 50)
  *   localExecution (optional) — if true, run postJSAction directly (no runner, no AI/CLI)
@@ -300,6 +302,16 @@ function addRuleLabels(ticketKey, rule) {
     });
 }
 
+function removeRuleLabel(ticketKey, label) {
+    if (!ticketKey || !label) return;
+    try {
+        jira_remove_label({ key: ticketKey, label: label });
+        console.log('  🏷️  Removed stale trigger label "' + label + '" from ' + ticketKey);
+    } catch (e) {
+        console.warn('  ⚠️  Could not remove stale trigger label "' + label + '" from ' + ticketKey + ': ' + (e.message || e));
+    }
+}
+
 function normalizePositiveInt(value) {
     if (typeof value !== 'number' || !isFinite(value)) return null;
     var normalized = Math.floor(value);
@@ -511,8 +523,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     }
 
     if (effectiveLimit !== null && tickets.length > effectiveLimit) {
-        console.log('  Limiting from ' + tickets.length + ' to ' + effectiveLimit + ' ticket(s)');
-        tickets = tickets.slice(0, effectiveLimit);
+        console.log('  Will trigger up to ' + effectiveLimit + ' ticket(s) after skipping active/stale labels');
     }
 
     if (tickets.length === 0) {
@@ -529,14 +540,29 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         if (workflowBudget && workflowBudget.remaining <= 0) {
             break;
         }
+        if (effectiveLimit !== null && processedKeys.length >= effectiveLimit) {
+            break;
+        }
         var ticket = tickets[idx];
         var key = ticket.key;
 
         var skipLabel = firstMatchingLabel(ticket, normalizeLabels(rule.skipIfLabel, rule.skipIfLabels));
         if (skipLabel) {
-            console.log('  ⏭️  ' + key + ' skipped (label: ' + skipLabel + ')');
-            skippedKeys.push(key);
-            continue;
+            if (rule.recoverStaleTriggerLabel) {
+                var workflowFile = rule.workflowFile || 'ai-teammate.yml';
+                var resolvedCf = resolveConfigFile(rule, effectiveConfig);
+                var scm = scmModule.createScm(effectiveConfig);
+                if (hasActiveTargetWorkflowRun(scm, workflowFile, resolvedCf, key)) {
+                    skippedKeys.push(key);
+                    continue;
+                }
+                console.log('  ♻️  ' + key + ' has ' + skipLabel + ' but no active workflow — recovering stale trigger label');
+                removeRuleLabel(key, skipLabel);
+            } else {
+                console.log('  ⏭️  ' + key + ' skipped (label: ' + skipLabel + ')');
+                skippedKeys.push(key);
+                continue;
+            }
         }
 
         if (rule.targetStatus) {

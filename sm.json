@@ -186,6 +186,7 @@
           "configFile": "agents/bulk_bugs_creation.json",
           "skipIfLabel": "sm_bulk_bugs_creation_triggered",
           "addLabel": "sm_bulk_bugs_creation_triggered",
+          "recoverStaleTriggerLabel": true,
           "limit": 1,
           "enabled": true
         },

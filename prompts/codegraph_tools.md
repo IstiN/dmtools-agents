@@ -14,6 +14,16 @@ CodeGraph builds a semantic knowledge graph of the codebase and makes it availab
 | Read a single symbol's source | `codegraph node "<ClassName>"` |
 | Browse project file structure | `codegraph files` |
 
+## Mandatory usage rule
+
+For any task that requires understanding, modifying, or reviewing source code, your first code-navigation command MUST be a CodeGraph command before using `grep`, `find`, `cat`, `sed`, or opening files directly.
+
+Use `codegraph context "<task description>"` by default. Use `codegraph query "<symbol>"` only when you already know the symbol name.
+
+After editing code, run `codegraph sync` before any further CodeGraph query.
+
+Only skip CodeGraph when the task does not involve source-code navigation (for example, a pure Jira/status update or a known single-file text edit). If you skip it, state the reason in the final response.
+
 **Prefer CodeGraph over `grep` or `cat` for code understanding** — it uses the pre-built semantic index and returns only relevant, structured results.
 
 ## Key commands

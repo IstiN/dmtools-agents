@@ -583,6 +583,31 @@ suite('smAgent: skipIfLabel', function() {
         assert.equal(sm.capturedLabels.length, 0, 'no label added for skipped ticket');
     });
 
+    test('recovers stale trigger label when configured and no active workflow exists', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [
+                { key: 'T-1', fields: { labels: ['sm_triggered'] } }
+            ],
+            workflowRuns: {
+                queued: [],
+                in_progress: []
+            }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", {
+                skipIfLabel: 'sm_triggered',
+                addLabel: 'sm_triggered',
+                recoverStaleTriggerLabel: true
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'stale label should not deadlock ticket');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.contains(inputs.encoded_config, 'T-1', 'T-1 was retriggered');
+    });
+
     test('skips ticket that has any skipIfLabels entry', function() {
         var sm = makeSmAgent({
             fileMap: {},
@@ -673,6 +698,24 @@ suite('smAgent: rule enabled flag', function() {
         ]));
 
         assert.equal(sm.capturedTriggers.length, 2, 'only 2 tickets processed (limit: 2)');
+    });
+
+    test('limit applies after skipped tickets so stale labels do not starve later tickets', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [
+                { key: 'T-skipped', fields: { labels: ['sm_triggered'] } },
+                { key: 'T-open', fields: { labels: [] } }
+            ]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { skipIfLabel: 'sm_triggered', limit: 1 })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'one non-skipped ticket should be triggered');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.contains(inputs.encoded_config, 'T-open', 'limit should not be consumed by skipped ticket');
     });
 
 });
