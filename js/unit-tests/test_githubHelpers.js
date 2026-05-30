@@ -122,6 +122,34 @@ suite('github repo remote parsing', function() {
     });
 });
 
+suite('githubHelpers.checkoutPRBranch', function() {
+    test('falls back to existing local branch when fetch creates it before failing', function() {
+        var commands = [];
+        var branchExists = false;
+        var gh = loadGithubHelpers({
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git branch --list "ai/TS-1268"') {
+                    return branchExists ? '  ai/TS-1268\nCOMMAND_EXIT_CODE=0' : '\nCOMMAND_EXIT_CODE=0';
+                }
+                if (args.command === 'git ls-remote --heads origin ai/TS-1268') {
+                    return 'abc123\trefs/heads/ai/TS-1268\nCOMMAND_EXIT_CODE=0';
+                }
+                if (args.command === 'git -c fetch.recurseSubmodules=no fetch origin ai/TS-1268:ai/TS-1268') {
+                    branchExists = true;
+                    throw new Error('fatal: refusing to fetch into branch checked out');
+                }
+                return 'COMMAND_EXIT_CODE=0';
+            }
+        });
+
+        gh.checkoutPRBranch('ai/TS-1268');
+
+        assert.ok(commands.indexOf('git checkout ai/TS-1268') !== -1, 'existing local branch should be checked out');
+        assert.equal(commands.indexOf('git checkout -b ai/TS-1268 origin/ai/TS-1268'), -1, 'must not recreate an existing branch');
+    });
+});
+
 suite('githubHelpers.fetchDiscussionsAndRawData — resolved thread detection', function() {
 
     test('thread resolved=true via GraphQL isResolved is excluded from markdown', function() {

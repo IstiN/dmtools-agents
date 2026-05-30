@@ -104,15 +104,16 @@ function checkoutPRBranch(branchName, workingDir) {
     var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
 
     var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
+    var localBranchExists = function() {
+        return cleanCommandOutput(cmd('git branch --list "' + branchName + '"') || '').trim() !== '';
+    };
 
     cmd('git config user.name "' + GIT_CONFIG.AUTHOR_NAME + '"');
     cmd('git config user.email "' + GIT_CONFIG.AUTHOR_EMAIL + '"');
     // Update remote refs; blobless repos already have the commit graph
     cmd(prHelper.buildOriginFetchCommand('--prune'));
 
-    const localBranch = cleanCommandOutput(cmd('git branch --list "' + branchName + '"') || '');
-
-    if (localBranch.trim()) {
+    if (localBranchExists()) {
         cmd('git checkout ' + branchName);
         cmd('git pull origin ' + branchName);
     } else {
@@ -120,10 +121,21 @@ function checkoutPRBranch(branchName, workingDir) {
         if (remoteBranch.trim()) {
             try {
                 cmd(prHelper.buildOriginFetchCommand(branchName + ':' + branchName));
-                cmd('git checkout ' + branchName);
             } catch (e) {
                 cmd(prHelper.buildOriginFetchCommand(branchName));
-                cmd('git checkout -b ' + branchName + ' origin/' + branchName);
+            }
+
+            if (localBranchExists()) {
+                cmd('git checkout ' + branchName);
+            } else {
+                try {
+                    cmd('git checkout -b ' + branchName + ' origin/' + branchName);
+                } catch (e) {
+                    if (!localBranchExists()) {
+                        throw e;
+                    }
+                    cmd('git checkout ' + branchName);
+                }
             }
         } else {
             throw new Error('Branch not found locally or remotely: ' + branchName);
