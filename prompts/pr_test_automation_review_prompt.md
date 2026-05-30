@@ -1,5 +1,16 @@
 User request is in the 'input' folder. Read all files there.
 
+Before reviewing any source/test code, run CodeGraph once to orient yourself in
+the repository. Use a command such as:
+
+```bash
+codegraph context "test automation review architecture and relevant testing patterns"
+```
+
+Reading files from `input/` is allowed first because they are generated task
+context, but your first repository code-navigation command must be CodeGraph.
+Do not finish the review without a recorded CodeGraph invocation.
+
 **IMPORTANT**: Read in order:
 1. `request.md` *(if present)* — full ticket details
 2. `comments.md` *(if present)* — ticket comment history; recent comments contain previous test run results

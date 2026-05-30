@@ -33,7 +33,8 @@
     },
     "inputJql": "project = JD AND issuetype = 'Test Case' AND status = 'In Rework'",
     "cliPrompts": [
-      "./agents/prompts/bash_tools.md"
+      "./agents/prompts/bash_tools.md",
+      "./agents/prompts/codegraph_tools.md"
     ]
   }
 }
