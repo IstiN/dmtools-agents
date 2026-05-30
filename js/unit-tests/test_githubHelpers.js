@@ -13,7 +13,15 @@
 function loadGithubHelpers(mocks) {
     return loadModule(
         'js/common/githubHelpers.js',
-        makeRequire({ '../config.js': configModule, 'config': configModule, './pullRequest.js': {} }),
+        makeRequire({
+            '../config.js': configModule,
+            'config': configModule,
+            './pullRequest.js': {
+                buildOriginFetchCommand: function(refSpec) {
+                    return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+                }
+            }
+        }),
         mocks || {}
     );
 }

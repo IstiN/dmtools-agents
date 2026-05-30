@@ -21,7 +21,7 @@
  *
  * For newBugs:  create bug, link all linkedTCs, move linkedTCs to "Bug To Fix"
  * For links:    link TC to existing bug, move TC to "Bug To Fix"
- * For skipped:  add sm_bug_creation_triggered label, keep TC in Failed
+ * For skipped:  move TC to In Rework so test automation can be fixed
  */
 
 const { STATUSES, LABELS } = require('./config.js');
@@ -109,6 +109,18 @@ function removeProcessingLabels(tcKey, labels) {
     labels.forEach(function(label) {
         removeTriggerLabel(tcKey, label);
     });
+}
+
+function moveFailedTcToRework(tcKey) {
+    try {
+        jira_move_to_status({ key: tcKey, statusName: STATUSES.IN_REWORK || 'In Rework' });
+        console.log('  🔧 Moved to ' + (STATUSES.IN_REWORK || 'In Rework') + ':', tcKey);
+    } catch (e) {
+        console.warn('  ⚠️ Could not move to In Rework:', tcKey, e);
+    }
+    try {
+        jira_remove_label({ key: tcKey, label: 'sm_test_automation_triggered' });
+    } catch (e) {}
 }
 
 function action(params) {
@@ -306,7 +318,7 @@ function action(params) {
             }
         });
 
-        // ── 4. Mark skipped TCs (keep in Failed, REMOVE trigger label for retry) ─
+        // ── 4. Test-code issues → In Rework so they leave Failed and rework runs ─
         skipped.forEach(function(skipDef) {
             var tcKey = skipDef.tcKey;
             if (!tcKey) return;
@@ -314,18 +326,16 @@ function action(params) {
                 console.warn('  ⚠️ TC', tcKey, 'not in processed list — skipping (safety guard)');
                 return;
             }
-
             console.log('  Skipping', tcKey, '—', skipDef.reason || 'no reason given');
-            // REMOVE trigger label so SM can retry on next cycle
-            // (prevents permanent deadlock in Failed status)
+            moveFailedTcToRework(tcKey);
             try {
                 removeProcessingLabels(tcKey, [triggerLabel, smTriggerLabel]);
-                console.log('  🏷️ Removed trigger labels from', tcKey, '— eligible for next cycle');
+                console.log('  🏷️ Removed trigger labels from', tcKey, '— eligible for rework');
             } catch (e) {}
             postComment(tcKey,
                 'h3. ℹ️ No Bug Created (Batch) — Test Code Issue\n\n' +
                 '*Reason*: ' + (skipDef.reason || 'AI determined this is a test code issue, not an application bug.') +
-                '\n\n_TC remains in Failed status. Trigger label removed — will be re-evaluated on next cycle._'
+                '\n\n_TC moved to *In Rework* so the test automation can be fixed instead of staying in *Failed*._'
             );
             results.skipped.push({ tcKey: tcKey, reason: skipDef.reason });
         });
@@ -343,4 +353,8 @@ function action(params) {
         console.error('postBulkBugsCreation failed:', e);
         throw e;
     }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { action };
 }

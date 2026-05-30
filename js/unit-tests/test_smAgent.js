@@ -567,7 +567,7 @@ suite('smAgent: skipIfLabel', function() {
         assert.equal(sm.capturedLabels[0].label, 'sm_dev_triggered');
     });
 
-    test('does not add label when ticket already had skipIfLabel', function() {
+    test('does not recover trigger label when explicitly disabled', function() {
         var sm = makeSmAgent({
             fileMap: {},
             tickets: [
@@ -576,14 +576,18 @@ suite('smAgent: skipIfLabel', function() {
         });
 
         sm.action(baseParams('o', 'r', [
-            makeRule("project = X", { skipIfLabel: 'sm_triggered', addLabel: 'sm_triggered' })
+            makeRule("project = X", {
+                skipIfLabel: 'sm_triggered',
+                addLabel: 'sm_triggered',
+                recoverStaleTriggerLabel: false
+            })
         ]));
 
         assert.equal(sm.capturedTriggers.length, 0, 'no trigger for skipped ticket');
         assert.equal(sm.capturedLabels.length, 0, 'no label added for skipped ticket');
     });
 
-    test('recovers stale trigger label when configured and no active workflow exists', function() {
+    test('recovers stale trigger label by default when no active workflow exists', function() {
         var sm = makeSmAgent({
             fileMap: {},
             tickets: [
@@ -598,8 +602,7 @@ suite('smAgent: skipIfLabel', function() {
         sm.action(baseParams('o', 'r', [
             makeRule("project = X", {
                 skipIfLabel: 'sm_triggered',
-                addLabel: 'sm_triggered',
-                recoverStaleTriggerLabel: true
+                addLabel: 'sm_triggered'
             })
         ]));
 

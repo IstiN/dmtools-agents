@@ -7,7 +7,7 @@
  *   { "action": "none", "reason": "..." }
  *
  * For link/create: links/creates bug, moves TC to "Bug To Fix", removes trigger labels.
- * For none:        posts comment, keeps TC in Failed, keeps trigger label (prevents re-fire).
+ * For none:        posts comment, moves TC to In Rework, removes trigger labels.
  *
  * Link direction: Bug "blocks" TC (TC is blocked by the Bug until it's fixed).
  */
@@ -58,6 +58,19 @@ function linkBugToTC(ticketKey, bugKey) {
         relationship: 'Blocks'
     });
     console.log('✅ Linked:', bugKey, 'blocks', ticketKey);
+}
+
+function moveFailedTcToRework(ticketKey) {
+    try {
+        jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REWORK || 'In Rework' });
+        console.log('🔧 Moved', ticketKey, 'to', STATUSES.IN_REWORK || 'In Rework');
+    } catch (e) {
+        console.warn('Failed to move to In Rework:', e);
+    }
+    try {
+        jira_remove_label({ key: ticketKey, label: 'sm_test_automation_triggered' });
+        console.log('✅ Removed sm_test_automation_triggered');
+    } catch (e) {}
 }
 
 function action(params) {
@@ -163,13 +176,15 @@ function action(params) {
             // action: none — test code issue, not an app bug
             comment = 'h3. ℹ️ No Bug Created\n\n' +
                 (decision.reason || 'AI determined no bug creation or linking is required.') +
-                '\n\n_TC remains in Failed status for manual review._';
+                '\n\n_TC moved to *In Rework* so the test automation can be fixed instead of staying in *Failed*._';
 
             try { jira_post_comment({ key: ticketKey, comment: comment }); } catch (e) {}
+            moveFailedTcToRework(ticketKey);
             try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
-            // KEEP sm_bug_creation_triggered label — TC stays in Failed, removing
-            // the label would cause SM to re-trigger bug_creation in an infinite loop.
-            console.log('ℹ️ No action taken for', ticketKey, '— TC stays in Failed (trigger label kept to prevent re-fire)');
+            if (smTriggerLabel) {
+                try { jira_remove_label({ key: ticketKey, label: smTriggerLabel }); } catch (e) {}
+            }
+            console.log('ℹ️ No product bug for', ticketKey, '— moved to In Rework for test automation fixes');
             return { success: true, ticketKey: ticketKey, bugKey: null, action: 'none' };
         }
 

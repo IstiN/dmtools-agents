@@ -60,4 +60,48 @@ suite('postBugCreation', function() {
         ]);
     });
 
+    test('moves test-code issue decision to In Rework and clears trigger labels', function() {
+        var statusMoves = [];
+        var removedLabels = [];
+        var comments = [];
+
+        var module = loadPostBugCreation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/bug_decision.json') {
+                    return JSON.stringify({
+                        action: 'none',
+                        reason: 'Failure is caused by stale test automation.'
+                    });
+                }
+                return null;
+            },
+            jira_post_comment: function(args) { comments.push(args); },
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            jira_remove_label: function(args) { removedLabels.push(args); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-222' },
+            metadata: { contextId: 'bug_creation' },
+            jobParams: {
+                customParams: {
+                    removeLabel: 'sm_bug_creation_triggered'
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'none');
+        assert.deepEqual(statusMoves, [
+            { key: 'TS-222', statusName: 'In Rework' }
+        ]);
+        assert.deepEqual(removedLabels, [
+            { key: 'TS-222', label: 'sm_test_automation_triggered' },
+            { key: 'TS-222', label: 'bug_creation_wip' },
+            { key: 'TS-222', label: 'sm_bug_creation_triggered' }
+        ]);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'In Rework');
+    });
+
 });

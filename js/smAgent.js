@@ -35,7 +35,9 @@
  *   addLabel       (optional) — add this label after triggering (idempotency marker)
  *   addLabels      (optional) — add these labels after triggering
  *   recoverStaleTriggerLabel (optional) — if true, remove skip labels when no matching
- *                               active workflow exists and continue processing
+ *                               active workflow exists and continue processing. Trigger
+ *                               labels that are also added by the same rule recover by
+ *                               default; set false to opt out.
  *   enabled        (optional) — set to false to disable the rule entirely (default: true)
  *   limit          (optional) — max number of tickets to process per run (default: 50)
  *   localExecution (optional) — if true, run postJSAction directly (no runner, no AI/CLI)
@@ -193,6 +195,25 @@ function parseWorkflowRuns(raw) {
     if (parsed && Array.isArray(parsed.workflow_runs)) return parsed.workflow_runs;
     if (parsed && Array.isArray(parsed.runs)) return parsed.runs;
     return [];
+}
+
+function labelList(value) {
+    if (!value) return [];
+    return Array.isArray(value) ? value : [value];
+}
+
+function isRuleTriggerLabel(rule, label) {
+    var labels = labelList(rule.addLabel).concat(labelList(rule.addLabels));
+    for (var i = 0; i < labels.length; i++) {
+        if (labels[i] === label) return true;
+    }
+    return false;
+}
+
+function shouldRecoverStaleTriggerLabel(rule, label) {
+    if (rule.recoverStaleTriggerLabel === true) return true;
+    if (rule.recoverStaleTriggerLabel === false) return false;
+    return isRuleTriggerLabel(rule, label);
 }
 
 function hasActiveTargetWorkflowRun(scm, workflowFile, configFile, ticketKey) {
@@ -548,7 +569,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
 
         var skipLabel = firstMatchingLabel(ticket, normalizeLabels(rule.skipIfLabel, rule.skipIfLabels));
         if (skipLabel) {
-            if (rule.recoverStaleTriggerLabel) {
+            if (shouldRecoverStaleTriggerLabel(rule, skipLabel)) {
                 var workflowFile = rule.workflowFile || 'ai-teammate.yml';
                 var resolvedCf = resolveConfigFile(rule, effectiveConfig);
                 var scm = scmModule.createScm(effectiveConfig);
