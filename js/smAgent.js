@@ -271,6 +271,7 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig) {
             workflowFile,
             JSON.stringify({
                 concurrency_key: concurrencyKey,
+                input_jql:       'key = ' + ticketKey,
                 config_file:     resolvedCf,
                 encoded_config:  buildEncodedConfig(ticketKey, rule, effectiveConfig),
                 project_key:     projectKey
