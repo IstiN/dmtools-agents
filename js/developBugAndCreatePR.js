@@ -53,28 +53,32 @@ function hasCodeGraphUsage() {
 
 function isGeneratedToolingStatusLine(line) {
     var trimmed = (line || '').trim();
-    return trimmed === 'A  .agent-bin/codegraph' ||
-        trimmed === '?? .agent-bin/codegraph' ||
-        trimmed === 'D  .codegraph/.gitignore' ||
-        trimmed.indexOf(' .agent-bin/codegraph') !== -1 ||
-        trimmed.indexOf(' .codegraph/.gitignore') !== -1;
+    var path = trimmed.length > 3 ? trimmed.substring(3).trim() : '';
+    return path.indexOf('.agent-bin/') === 0 ||
+        path.indexOf('.codegraph/') === 0 ||
+        path === 'agents';
 }
 
 function cleanupGeneratedToolingArtifacts(baseBranch) {
     var originRef = 'origin/' + (baseBranch || 'main');
     try {
         cli_execute_command({
-            command: 'git reset -q -- .agent-bin/codegraph .codegraph/.gitignore 2>/dev/null || true'
+            command: 'git reset -q -- .agent-bin .codegraph agents'
         });
     } catch (e) {}
     try {
         cli_execute_command({
-            command: 'git checkout ' + originRef + ' -- .codegraph/.gitignore 2>/dev/null || git checkout -- .codegraph/.gitignore 2>/dev/null || true'
+            command: 'git checkout ' + originRef + ' -- .codegraph/.gitignore'
         });
     } catch (e) {}
     try {
         cli_execute_command({
-            command: 'rm -f .agent-bin/codegraph'
+            command: 'git checkout -- .codegraph/.gitignore'
+        });
+    } catch (e) {}
+    try {
+        cli_execute_command({
+            command: 'git clean -fd -- .agent-bin .codegraph'
         });
     } catch (e) {}
 }

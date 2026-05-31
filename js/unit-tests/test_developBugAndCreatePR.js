@@ -89,7 +89,11 @@ suite('developBugAndCreatePR', function() {
                 loaded.commands.push(args.command);
                 if (args.command.indexOf('gh pr list --head ') === 0) return '';
                 if (args.command === 'git status --porcelain') {
-                    return 'A  .agent-bin/codegraph\nD  .codegraph/.gitignore\n';
+                    return 'A  .agent-bin/codegraph\n' +
+                        '?? .agent-bin/codegraph-wrapper\n' +
+                        'D  .codegraph/.gitignore\n' +
+                        '?? .codegraph/index.sqlite\n' +
+                        'M  agents\n';
                 }
                 if (args.command === 'git branch --show-current') return 'main\n';
                 return '';
@@ -120,6 +124,22 @@ suite('developBugAndCreatePR', function() {
         assert.notOk(
             loaded.commands.some(function(c) { return c.indexOf('git push -u origin ai/TS-1298') === 0; }),
             'generated CodeGraph setup artifacts must not be pushed'
+        );
+        assert.ok(
+            loaded.commands.indexOf('git reset -q -- .agent-bin .codegraph agents') !== -1,
+            'generated tooling and submodule pointer artifacts must be unstaged before status check'
+        );
+        assert.ok(
+            loaded.commands.indexOf('git clean -fd -- .agent-bin .codegraph') !== -1,
+            'untracked generated tooling artifacts must be cleaned with whitelisted git command'
+        );
+        assert.notOk(
+            loaded.commands.some(function(c) {
+                return c.indexOf('||') !== -1 ||
+                    c.indexOf('2>') !== -1 ||
+                    c.indexOf('rm ') === 0;
+            }),
+            'cleanup commands must be accepted by the restricted CLI executor'
         );
         assert.contains(loaded.comments[0].comment, 'No partial work was produced');
     });
