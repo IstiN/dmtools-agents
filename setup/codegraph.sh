@@ -19,6 +19,19 @@ NPM_GLOBAL_BIN="${HOME}/.npm-global/bin"
 
 echo "🛠  CodeGraph (${CODEGRAPH_PACKAGE})"
 
+cleanup_workspace_artifacts() {
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git clean -fd -- .agent-bin >/dev/null 2>&1 || true
+  fi
+}
+
+clean_codegraph_state() {
+  cleanup_workspace_artifacts
+  if command -v codegraph >/dev/null 2>&1; then
+    codegraph clean >/dev/null 2>&1 || true
+  fi
+}
+
 # Ensure npm uses our global prefix so the binary lands in ~/.npm-global/bin
 npm config set prefix "${HOME}/.npm-global" 2>/dev/null || true
 
@@ -27,6 +40,7 @@ if command -v codegraph &>/dev/null; then
   VER="$(codegraph --version 2>/dev/null || echo "${CODEGRAPH_VERSION}")"
   echo "✅ CodeGraph already installed (cache hit): ${VER}"
   register_path "${NPM_GLOBAL_BIN}"
+  clean_codegraph_state
   _codegraph_init_or_sync
   exit 0
 fi
@@ -44,4 +58,5 @@ register_path "${NPM_GLOBAL_BIN}"
 echo "✅ CodeGraph $(codegraph --version 2>/dev/null || echo "${CODEGRAPH_VERSION}")"
 
 # ── Auto-init or sync index if inside a git repository ────────────────────────
+clean_codegraph_state
 _codegraph_init_or_sync
