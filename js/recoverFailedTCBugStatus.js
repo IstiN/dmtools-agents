@@ -1,9 +1,10 @@
 /**
  * Recover Failed Test Cases after bug triage.
  *
- * If a Failed TC already has linked Bugs, it must not stay in Failed waiting
- * for bug_creation again. Move it to Bug To Fix while any linked bug is open,
- * or Backlog if all linked bugs are already Done.
+ * If a Failed TC already has linked non-Done Bugs, it must not stay in Failed
+ * waiting for bug_creation again. Move it to Bug To Fix while any linked bug is
+ * still active. Done Bugs are historical context only; they must not suppress
+ * new bug creation.
  */
 
 const { STATUSES } = require('./config.js');
@@ -25,12 +26,12 @@ function action(params) {
     console.log('=== Failed TC bug status recovery for', ticketKey, '===');
 
     var linkedBugs = jira_search_by_jql({
-        jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug',
+        jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug AND status not in (Done)',
         maxResults: 50
     }) || [];
 
     if (linkedBugs.length === 0) {
-        console.log('No linked Bugs found for', ticketKey);
+        console.log('No linked non-Done Bugs found for', ticketKey);
         // The old single bug_creation rule is disabled, but its trigger label
         // can remain on Failed TCs and exclude them from bulk_bugs_creation JQL.
         // Clear only that stale single-run label so the active bulk path can
@@ -39,14 +40,8 @@ function action(params) {
         return { success: true, action: 'released_for_bulk_bug_creation', ticketKey: ticketKey };
     }
 
-    var openBugs = jira_search_by_jql({
-        jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug AND status != "Done"',
-        maxResults: 1
-    }) || [];
-
-    var targetStatus = openBugs.length > 0 ? STATUSES.BUG_TO_FIX : STATUSES.BACKLOG;
-    jira_move_to_status({ key: ticketKey, statusName: targetStatus });
-    console.log('Moved', ticketKey, 'to', targetStatus);
+    jira_move_to_status({ key: ticketKey, statusName: STATUSES.BUG_TO_FIX });
+    console.log('Moved', ticketKey, 'to', STATUSES.BUG_TO_FIX);
 
     removeLabel(ticketKey, 'sm_bug_creation_triggered');
     removeLabel(ticketKey, 'sm_bulk_bugs_creation_triggered');
@@ -54,18 +49,14 @@ function action(params) {
 
     jira_post_comment({
         key: ticketKey,
-        comment: openBugs.length > 0
-            ? 'h3. 🐛 Linked Bug Found — Moved to Bug To Fix\n\n' +
-                'This failed test case already has linked Bug issue(s), so it was moved to *' +
-                STATUSES.BUG_TO_FIX + '* instead of staying in *Failed* and re-running bug creation.'
-            : 'h3. 🔄 Linked Bug Already Done — Ready for Re-automation\n\n' +
-                'All linked Bug issue(s) are already *Done*, so this test case was moved to *' +
-                STATUSES.BACKLOG + '* for re-automation.'
+        comment: 'h3. 🐛 Linked Non-Done Bug Found — Moved to Bug To Fix\n\n' +
+            'This failed test case already has linked non-Done Bug issue(s), so it was moved to *' +
+            STATUSES.BUG_TO_FIX + '* instead of staying in *Failed* and re-running bug creation.'
     });
 
     return {
         success: true,
-        action: openBugs.length > 0 ? 'moved_to_bug_to_fix' : 'moved_to_backlog',
+        action: 'moved_to_bug_to_fix',
         ticketKey: ticketKey,
         linkedBugs: linkedBugs.length
     };

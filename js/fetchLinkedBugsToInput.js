@@ -23,7 +23,7 @@ function action(params) {
         var linkedBugs = [];
         try {
             linkedBugs = jira_search_by_jql({
-                jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug',
+                jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug AND status not in (Done)',
                 fields: ['key', 'summary', 'status', 'description', 'Solution', 'labels'],
                 maxResults: 10
             });

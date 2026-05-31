@@ -35,10 +35,10 @@ suite('recoverFailedTCBugStatus', function() {
         var loaded = loadRecoverFailedTCBugStatus({
             jira_search_by_jql: function(args) {
                 loaded.calls.searches.push(args);
-                if (args.jql.indexOf('status != "Done"') !== -1) {
+                if (args.jql.indexOf('status not in (Done)') !== -1) {
                     return [{ key: 'TS-1289' }];
                 }
-                return [{ key: 'TS-1289' }];
+                return [];
             }
         });
 
@@ -56,22 +56,23 @@ suite('recoverFailedTCBugStatus', function() {
         assert.contains(loaded.calls.comments[0].comment, 'Moved to Bug To Fix');
     });
 
-    test('moves Failed TC with only Done linked Bugs to Backlog', function() {
+    test('releases Failed TC with only Done linked Bugs for bulk bug creation', function() {
         var loaded = loadRecoverFailedTCBugStatus({
             jira_search_by_jql: function(args) {
                 loaded.calls.searches.push(args);
-                if (args.jql.indexOf('status != "Done"') !== -1) {
+                if (args.jql.indexOf('status not in (Done)') !== -1) {
                     return [];
                 }
-                return [{ key: 'TS-1289' }];
+                return [];
             }
         });
 
         var result = loaded.mod.action({ ticket: { key: 'TS-333' } });
 
-        assert.equal(result.action, 'moved_to_backlog');
-        assert.deepEqual(loaded.calls.statusMoves, [
-            { key: 'TS-333', statusName: 'Backlog' }
+        assert.equal(result.action, 'released_for_bulk_bug_creation');
+        assert.deepEqual(loaded.calls.statusMoves, []);
+        assert.deepEqual(loaded.calls.removedLabels, [
+            { key: 'TS-333', label: 'sm_bug_creation_triggered' }
         ]);
     });
 

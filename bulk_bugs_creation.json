@@ -8,9 +8,9 @@
       "aiRole": "QA Engineer",
       "instructions": [
         "Read input/failed_tcs.json for the list of failed Test Cases.",
-        "Read input/open_bugs.json for all existing open bugs.",
-        "Read input/done_bugs.json for recently fixed (Done) bugs.",
-        "For each failed TC decide: link to existing open bug, create new bug, mark as fixed by Done bug, or skip (test code issue only).",
+        "Read input/open_bugs.json for all existing non-Done bugs.",
+        "Done bugs are intentionally excluded from bug matching.",
+        "For each failed TC decide: link to existing non-Done bug, create new bug, or skip (test code issue only).",
         "Group TCs with the same root cause — create ONE new bug for the group.",
         "Write outputs/bulk_bug_decisions.json as described in the prompt.",
         "For each new bug write its description to a separate file: outputs/bug_NNN_description.md (NNN = zero-padded index). Reference that file in bulk_bug_decisions.json via 'descriptionFile'.",
@@ -18,7 +18,7 @@
         "Prefer creating a bug over skipping. Only skip when you are confident the failure is purely a test code problem — and provide a detailed reason."
       ],
       "knownInfo": "",
-      "formattingRules": "outputs/bulk_bug_decisions.json must be valid JSON. 'processed' must list every TC key the AI made a decision for. newBugs[].descriptionFile must be a relative path to an existing outputs/*.md file. fixedByBug[] entries must reference a bugKey from input/done_bugs.json. skipped[].reason must be a detailed explanation of the test code issue."
+      "formattingRules": "outputs/bulk_bug_decisions.json must be valid JSON. 'processed' must list every TC key the AI made a decision for. newBugs[].descriptionFile must be a relative path to an existing outputs/*.md file. Do not output fixedByBug; Done bugs are excluded from matching. skipped[].reason must be a detailed explanation of the test code issue."
     },
     "cliPrompt": "./agents/prompts/bulk_bugs_creation_prompt.md",
     "cliCommands": [

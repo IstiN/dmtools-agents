@@ -2,11 +2,11 @@
  * Prepare Bulk Bugs Creation Context (preCliJSAction for bulk_bugs_creation agent)
  *
  * Fetches all failed Test Cases (without sm_bug_creation_triggered label) and
- * all open bugs, then writes them to input files for the AI to process in batch.
+ * all non-Done bugs, then writes them to input files for the AI to process in batch.
  *
  * Writes:
  *   input/failed_tcs.json  — array of failed TC objects
- *   input/open_bugs.json   — array of open bug objects
+ *   input/open_bugs.json   — array of non-Done bug objects
  *   input/context.md       — summary for the AI
  *
  * The SM passes one ticket as the "trigger" but this action ignores it and
@@ -75,8 +75,8 @@ function action(params) {
         file_write(inputFolder + '/failed_tcs.json', JSON.stringify(tcList, null, 2));
         console.log('Wrote input/failed_tcs.json with ' + tcList.length + ' TCs');
 
-        // Fetch open bugs
-        console.log('Fetching open bugs with JQL:', openBugsJql);
+        // Fetch non-Done bugs
+        console.log('Fetching non-Done bugs with JQL:', openBugsJql);
         var bugs = [];
         try {
             var bugResults = jira_search_by_jql({
@@ -89,7 +89,7 @@ function action(params) {
             console.error('Failed to fetch open bugs:', e);
         }
 
-        console.log('Found ' + bugs.length + ' open bug(s)');
+        console.log('Found ' + bugs.length + ' non-Done bug(s)');
 
         var bugList = bugs.map(function(bug) {
             var fields = bug.fields || {};
@@ -104,51 +104,17 @@ function action(params) {
 
         if (bugList.length === 0) {
             file_write(inputFolder + '/open_bugs.json', '[]');
-            console.log('No open bugs found — wrote empty open_bugs.json');
+            console.log('No non-Done bugs found — wrote empty open_bugs.json');
         } else {
             file_write(inputFolder + '/open_bugs.json', JSON.stringify(bugList, null, 2));
             console.log('Wrote input/open_bugs.json with ' + bugList.length + ' bugs');
         }
 
-        // Fetch recently Done bugs (for "already fixed" detection)
-        var doneBugsJql = (customParams.doneBugsJql ||
-            'project = {jiraProject} AND issuetype in (Bug) AND status in (Done) ORDER BY updated DESC')
-            .replace('{jiraProject}', projectKey);
-
-        console.log('Fetching done bugs with JQL:', doneBugsJql);
-        var doneBugs = [];
-        try {
-            var doneResults = jira_search_by_jql({
-                jql: doneBugsJql,
-                fields: ['key', 'summary', 'description', 'status', 'priority'],
-                maxResults: 100
-            });
-            doneBugs = doneResults || [];
-        } catch (e) {
-            console.error('Failed to fetch done bugs:', e);
-        }
-
-        console.log('Found ' + doneBugs.length + ' done bug(s)');
-
-        var doneBugList = doneBugs.map(function(bug) {
-            var fields = bug.fields || {};
-            return {
-                key: bug.key,
-                summary: fields.summary || '',
-                description: (fields.description || '').substring(0, 500),
-                status: fields.status ? fields.status.name : '',
-                priority: fields.priority ? fields.priority.name : ''
-            };
-        });
-
-        file_write(inputFolder + '/done_bugs.json', JSON.stringify(doneBugList, null, 2));
-        console.log('Wrote input/done_bugs.json with ' + doneBugList.length + ' bugs');
-
         // Write context summary for the AI
         var contextMd = '# Bulk Bug Creation Context\n\n' +
             '- **Project**: ' + projectKey + '\n' +
             '- **Failed TCs to process**: ' + tcList.length + '\n' +
-            '- **Open bugs for dedup check**: ' + bugList.length + '\n\n' +
+            '- **Non-Done bugs for dedup check**: ' + bugList.length + '\n\n' +
             'Read `input/failed_tcs.json` and `input/open_bugs.json`, then follow the prompt instructions.\n';
         file_write(inputFolder + '/context.md', contextMd);
         console.log('=== Context preparation complete ===');
