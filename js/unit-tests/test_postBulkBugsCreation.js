@@ -126,6 +126,7 @@ suite('postBulkBugsCreation', function() {
         var created = [];
         var linked = [];
         var statusMoves = [];
+        var removedLabels = [];
 
         var module = loadPostBulkBugsCreation({
             file_read: function(opts) {
@@ -159,7 +160,8 @@ suite('postBulkBugsCreation', function() {
                 return '{"key":"TS-9999"}';
             },
             jira_link_issues: function(args) { linked.push(args); },
-            jira_move_to_status: function(args) { statusMoves.push(args); }
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            jira_remove_label: function(args) { removedLabels.push(args); }
         });
 
         var result = module.action({
@@ -180,6 +182,107 @@ suite('postBulkBugsCreation', function() {
         assert.deepEqual(statusMoves, [
             { key: 'TS-657', statusName: 'Bug To Fix' }
         ]);
+        assert.deepEqual(removedLabels, [
+            { key: 'TS-657', label: 'sm_bug_creation_triggered' },
+            { key: 'TS-657', label: 'sm_bulk_bugs_creation_triggered' }
+        ]);
+    });
+
+    test('recovers processed TC without outcome when a linked non-Done bug exists', function() {
+        var statusMoves = [];
+        var removedLabels = [];
+        var comments = [];
+
+        var module = loadPostBulkBugsCreation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/bulk_bug_decisions.json') {
+                    return JSON.stringify({
+                        processed: ['TS-42'],
+                        newBugs: [],
+                        links: [],
+                        skipped: []
+                    });
+                }
+                return null;
+            },
+            jira_search_by_jql: function(args) {
+                assert.contains(args.jql, 'linkedIssues("TS-42")');
+                assert.contains(args.jql, 'status not in (Done)');
+                return [{ key: 'TS-1300' }];
+            },
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            jira_remove_label: function(args) { removedLabels.push(args); },
+            jira_post_comment: function(args) { comments.push(args); }
+        });
+
+        var result = module.action({
+            jobParams: {
+                customParams: {
+                    removeLabel: 'sm_bug_creation_triggered',
+                    smTriggerLabel: 'sm_bulk_bugs_creation_triggered'
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.results.linked.length, 1);
+        assert.equal(result.results.linked[0].source, 'post_batch_recovery');
+        assert.deepEqual(statusMoves, [
+            { key: 'TS-42', statusName: 'Bug To Fix' }
+        ]);
+        assert.deepEqual(removedLabels, [
+            { key: 'TS-42', label: 'sm_bug_creation_triggered' },
+            { key: 'TS-42', label: 'sm_bulk_bugs_creation_triggered' }
+        ]);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'linked non-Done bug already exists');
+    });
+
+    test('releases processed TC without outcome when no linked non-Done bug exists', function() {
+        var statusMoves = [];
+        var removedLabels = [];
+        var comments = [];
+
+        var module = loadPostBulkBugsCreation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/bulk_bug_decisions.json') {
+                    return JSON.stringify({
+                        processed: ['TS-208'],
+                        newBugs: [],
+                        links: [],
+                        skipped: []
+                    });
+                }
+                return null;
+            },
+            jira_search_by_jql: function(args) {
+                assert.contains(args.jql, 'linkedIssues("TS-208")');
+                assert.contains(args.jql, 'status not in (Done)');
+                return [];
+            },
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            jira_remove_label: function(args) { removedLabels.push(args); },
+            jira_post_comment: function(args) { comments.push(args); }
+        });
+
+        var result = module.action({
+            jobParams: {
+                customParams: {
+                    removeLabel: 'sm_bug_creation_triggered',
+                    smTriggerLabel: 'sm_bulk_bugs_creation_triggered'
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.deepEqual(statusMoves, []);
+        assert.equal(result.results.released.length, 1);
+        assert.deepEqual(removedLabels, [
+            { key: 'TS-208', label: 'sm_bug_creation_triggered' },
+            { key: 'TS-208', label: 'sm_bulk_bugs_creation_triggered' }
+        ]);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'No linked non-Done bug was found');
     });
 
 });

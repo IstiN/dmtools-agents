@@ -48,7 +48,7 @@ For each failed TC, decide one of:
 
 **A — Link to existing non-Done bug**: A clearly matching **non-Done** bug already exists. The TC will be moved to "Bug To Fix" to wait for the fix.
 
-**B — Create new bug**: No matching bug exists. If multiple TCs share the same root cause, group them under ONE new bug. The TC will be moved to "Bug To Fix".
+**B — Create new bug**: No matching bug exists. If multiple TCs share the same root cause, group them under ONE new bug and include all affected TC keys in that bug's `linkedTCs`. The TCs will be moved to "Bug To Fix".
 
 **D — Skip (test code issue)**: The TC failed due to a test code issue (flaky selector, test environment problem, outdated test assertion), NOT an application bug. **You MUST provide a detailed reason** explaining exactly what test code issue caused the failure and why it is not an application bug. The TC will remain in "Failed" for the next review cycle.
 
@@ -61,6 +61,8 @@ For each failed TC, decide one of:
 ### Grouping rules:
 - TCs that test the same UI component and fail with the same symptom → group under one bug
 - TCs that fail at the same step with the same error → group under one bug
+- If one existing non-Done bug explains multiple failed TCs, add one `links` entry per TC to that same bug.
+- If one new bug explains multiple failed TCs, create one `newBugs` entry and put every affected TC in `linkedTCs`.
 - When in doubt, create separate bugs (better safe than under-reported)
 
 ## Step 4 — Write outputs
@@ -97,6 +99,7 @@ Write a JSON object with this structure:
 **Rules for `bulk_bug_decisions.json`:**
 - `processed` MUST include the key of every TC you made a decision for
 - Every TC from `input/failed_tcs.json` MUST appear in exactly one of: `newBugs[].linkedTCs`, `links`, or `skipped`
+- Never leave a `processed` TC without one of those final outcomes. A missing outcome leaves the TC in Failed and forces cleanup/retry.
 - Do not output `fixedByBug`. Done bugs are excluded from bug matching; a current failed run with no matching non-Done bug requires a new bug unless it is clearly a test-code issue.
 - `skipped[].reason` MUST be a detailed explanation (not just "test issue") — explain the specific test code problem
 - `priority` must be one of: `Highest`, `High`, `Medium`, `Low`, `Lowest`
