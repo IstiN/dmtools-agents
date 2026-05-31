@@ -190,6 +190,21 @@ suite('sm.json rule ordering', function() {
             'failed TC bug creation must be prioritized before bug development uses maxTriggeredWorkflows'
         );
     });
+
+    test('bug development has a cooldown to avoid Copilot rate-limit retry storms', function() {
+        var config = JSON.parse(file_read({ path: 'sm.json' }));
+        var rules = config.params.jobParams.rules;
+        var bugDevelopment = null;
+
+        rules.forEach(function(rule) {
+            if (rule.description === 'Backlog / To Do / Ready For Development / In Development Bugs → trigger bug_development') {
+                bugDevelopment = rule;
+            }
+        });
+
+        assert.ok(bugDevelopment, 'bug development rule exists');
+        assert.contains(bugDevelopment.jql, 'updated <= -15m');
+    });
 });
 
 // ── JQL interpolation ─────────────────────────────────────────────────────────
