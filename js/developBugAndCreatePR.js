@@ -60,7 +60,8 @@ function isGeneratedToolingStatusLine(line) {
         trimmed.indexOf(' .codegraph/.gitignore') !== -1;
 }
 
-function cleanupGeneratedToolingArtifacts() {
+function cleanupGeneratedToolingArtifacts(baseBranch) {
+    var originRef = 'origin/' + (baseBranch || 'main');
     try {
         cli_execute_command({
             command: 'git reset -q -- .agent-bin/codegraph .codegraph/.gitignore 2>/dev/null || true'
@@ -68,7 +69,7 @@ function cleanupGeneratedToolingArtifacts() {
     } catch (e) {}
     try {
         cli_execute_command({
-            command: 'git checkout -- .codegraph/.gitignore 2>/dev/null || true'
+            command: 'git checkout ' + originRef + ' -- .codegraph/.gitignore 2>/dev/null || git checkout -- .codegraph/.gitignore 2>/dev/null || true'
         });
     } catch (e) {}
     try {
@@ -257,7 +258,7 @@ function action(params) {
         let hasGitChanges = false;
         try {
             cli_execute_command({ command: 'git add .' });
-            cleanupGeneratedToolingArtifacts();
+            cleanupGeneratedToolingArtifacts((config.git && config.git.baseBranch) || 'main');
             const rawStatus = cli_execute_command({ command: 'git status --porcelain' }) || '';
             const statusLines = rawStatus.split('\n').filter(function(l) {
                 return l.trim() &&
