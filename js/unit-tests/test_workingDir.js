@@ -193,15 +193,11 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
         );
     });
 
-    test('does not rebase stale existing development branch', function() {
+    test('resets development branch that is already merged to main', function() {
         var calls = [];
         var mockCli = function(args) {
             calls.push(args.command);
             if (args.command === 'git branch --list "ai/TS-1306"') return '  ai/TS-1306\n';
-            if (args.command === 'git merge-base --is-ancestor origin/main HEAD') {
-                throw new Error('not ancestor');
-            }
-            if (args.command === 'git rev-list --count origin/main..HEAD') return '1427\n';
             return '';
         };
 
@@ -250,23 +246,29 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
         assert.equal(
             calls.some(function(c) { return c.indexOf('git rebase origin/') === 0; }),
             false,
-            'stale AI branches must not be rebased through bootstrap history'
+            'already merged AI branches must not be rebased through bootstrap history'
         );
         assert.ok(
             calls.indexOf('git reset --hard origin/main') !== -1,
-            'stale AI branch should be reset to the base branch'
+            'already merged AI branch should be reset to the base branch'
         );
     });
 
-    test('keeps normal divergent development branch work for publish-time sync', function() {
+    test('keeps normal divergent development branch work and writes conflict guidance', function() {
         var calls = [];
+        var writes = [];
         var mockCli = function(args) {
             calls.push(args.command);
             if (args.command === 'git branch --list "ai/TS-1307"') return '  ai/TS-1307\n';
+            if (args.command === 'git merge-base --is-ancestor HEAD origin/main') {
+                throw new Error('not merged');
+            }
+            if (args.command === 'git cherry origin/main HEAD') return '+ abc123 ticket work\n';
             if (args.command === 'git merge-base --is-ancestor origin/main HEAD') {
                 throw new Error('not ancestor');
             }
-            if (args.command === 'git rev-list --count origin/main..HEAD') return '3\n';
+            if (args.command === 'git merge-base HEAD origin/main') return 'base123\n';
+            if (args.command === 'git merge-tree base123 HEAD origin/main') return 'CONFLICT (content): Merge conflict in .dmtools/config.js\n';
             return '';
         };
 
@@ -300,7 +302,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 file_read: function(opts) {
                     try { return file_read(opts); } catch (e) { return null; }
                 },
-                file_write: function() {},
+                file_write: function(args) { writes.push(args); },
                 jira_move_to_status: function() {},
                 jira_search_by_jql: function() { return []; }
             }
@@ -317,6 +319,9 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             -1,
             'normal branch work must not be discarded during pre-CLI setup'
         );
+        assert.equal(writes.length, 1, 'conflict guidance should be written');
+        assert.equal(writes[0].path, 'input/TS-1307/merge_conflicts.md');
+        assert.contains(writes[0].content, 'prefer `origin/main`');
     });
 
 });
