@@ -576,7 +576,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 var workflowFile = rule.workflowFile || 'ai-teammate.yml';
                 var resolvedCf = resolveConfigFile(rule, effectiveConfig);
                 var scm = scmModule.createScm(effectiveConfig);
-                if (hasActiveTargetWorkflowRun(scm, workflowFile, resolvedCf, key)) {
+                var activeKey = rule.concurrencyKey || key;
+                if (hasActiveTargetWorkflowRun(scm, workflowFile, resolvedCf, activeKey)) {
                     skippedKeys.push(key);
                     continue;
                 }
