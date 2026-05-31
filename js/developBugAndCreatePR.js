@@ -23,6 +23,16 @@ var configLoader = require('./configLoader.js');
 const { STATUSES, LABELS, resolveStatuses } = require('./config.js');
 const developTicket = require('./developTicketAndCreatePR.js');
 
+function cleanCliOutput(output) {
+    return (output || '').split('\n').filter(function(l) {
+        return l.trim() &&
+               l.indexOf('Script started') === -1 &&
+               l.indexOf('Script done') === -1 &&
+               l.indexOf('COMMAND=') === -1 &&
+               l.indexOf('COMMAND_EXIT_CODE=') === -1;
+    }).join('').trim();
+}
+
 function readJson(path) {
     try {
         const raw = file_read({ path: path });
@@ -195,16 +205,28 @@ function action(params) {
                 console.log('Partial git changes found — pushing to preserve analysis work...');
                 try {
                     const rawBranch = cli_execute_command({ command: 'git branch --show-current' }) || '';
-                    const partialBranch = rawBranch.split('\n').filter(function(l) {
-                        return l.trim() &&
-                               l.indexOf('Script started') === -1 &&
-                               l.indexOf('Script done') === -1;
-                    }).join('').trim();
+                    const currentBranch = cleanCliOutput(rawBranch);
+                    const expectedBranch = configLoader.resolveBranchName(
+                        config,
+                        actualParamsForCheck.ticket,
+                        'development'
+                    );
+                    const baseBranch = (config.git && config.git.baseBranch) || 'main';
+                    const partialBranch = expectedBranch || currentBranch;
                     if (partialBranch) {
+                        if (currentBranch !== partialBranch) {
+                            console.log('Switching partial work from ' + (currentBranch || '(unknown)') +
+                                ' to development branch: ' + partialBranch);
+                            cli_execute_command({ command: 'git checkout -B ' + partialBranch });
+                        }
                         cli_execute_command({ command: 'git config user.name "' + config.git.authorName + '"' });
                         cli_execute_command({ command: 'git config user.email "' + config.git.authorEmail + '"' });
                         cli_execute_command({ command: 'git commit -m "' + configLoader.formatTemplate(config.formats.commitMessage.wip, {ticketKey: ticketKeyForCheck}) + '"' });
-                        cli_execute_command({ command: 'git push -u origin ' + partialBranch });
+                        var pushCommand = 'git push -u origin ' + partialBranch;
+                        if (currentBranch === baseBranch || currentBranch === 'main' || currentBranch === 'master') {
+                            pushCommand += ' --force-with-lease';
+                        }
+                        cli_execute_command({ command: pushCommand });
                         console.log('✅ Pushed partial analysis to branch:', partialBranch);
                     }
                 } catch (pushErr) {

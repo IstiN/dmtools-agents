@@ -14,6 +14,7 @@
         "js/unit-tests/test_submodules.js",
         "js/unit-tests/test_pullRequestHelper.js",
         "js/unit-tests/test_developTicketAndCreatePR.js",
+        "js/unit-tests/test_developBugAndCreatePR.js",
         "js/unit-tests/test_autoStart.js",
         "js/unit-tests/test_dfManager.js",
         "js/unit-tests/test_retryMergePR.js",
