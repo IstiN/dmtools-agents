@@ -80,7 +80,7 @@
         },
         {
           "description": "Backlog / To Do / Ready For Development / In Development Bugs → trigger bug_development",
-          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('Backlog', 'To Do', 'Ready For Development', 'In Development', 'In Progress')",
+          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('Backlog', 'To Do', 'Ready For Development', 'In Development', 'In Progress') AND updated <= -5m ORDER BY updated ASC",
           "configFile": "agents/bug_development.json",
           "skipIfLabel": "sm_bug_development_triggered",
           "addLabel": "sm_bug_development_triggered",
