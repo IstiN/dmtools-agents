@@ -51,6 +51,33 @@ function hasCodeGraphUsage() {
     }
 }
 
+function isGeneratedToolingStatusLine(line) {
+    var trimmed = (line || '').trim();
+    return trimmed === 'A  .agent-bin/codegraph' ||
+        trimmed === '?? .agent-bin/codegraph' ||
+        trimmed === 'D  .codegraph/.gitignore' ||
+        trimmed.indexOf(' .agent-bin/codegraph') !== -1 ||
+        trimmed.indexOf(' .codegraph/.gitignore') !== -1;
+}
+
+function cleanupGeneratedToolingArtifacts() {
+    try {
+        cli_execute_command({
+            command: 'git reset -q -- .agent-bin/codegraph .codegraph/.gitignore 2>/dev/null || true'
+        });
+    } catch (e) {}
+    try {
+        cli_execute_command({
+            command: 'git checkout -- .codegraph/.gitignore 2>/dev/null || true'
+        });
+    } catch (e) {}
+    try {
+        cli_execute_command({
+            command: 'rm -f .agent-bin/codegraph'
+        });
+    } catch (e) {}
+}
+
 function removeLabels(ticketKey, params) {
     const wipLabel = params.metadata && params.metadata.contextId
         ? params.metadata.contextId + '_wip' : null;
@@ -230,11 +257,13 @@ function action(params) {
         let hasGitChanges = false;
         try {
             cli_execute_command({ command: 'git add .' });
+            cleanupGeneratedToolingArtifacts();
             const rawStatus = cli_execute_command({ command: 'git status --porcelain' }) || '';
             const statusLines = rawStatus.split('\n').filter(function(l) {
                 return l.trim() &&
                        l.indexOf('Script started') === -1 &&
-                       l.indexOf('Script done') === -1;
+                       l.indexOf('Script done') === -1 &&
+                       !isGeneratedToolingStatusLine(l);
             });
             hasGitChanges = statusLines.length > 0;
         } catch (e) {

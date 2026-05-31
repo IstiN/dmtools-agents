@@ -83,6 +83,47 @@ suite('developBugAndCreatePR', function() {
         assert.contains(loaded.comments[0].comment, 'Development Interrupted');
     });
 
+    test('does not push CodeGraph setup artifacts as interrupted partial work', function() {
+        var loaded = loadDevelopBugAndCreatePR({
+            cli_execute_command: function(args) {
+                loaded.commands.push(args.command);
+                if (args.command.indexOf('gh pr list --head ') === 0) return '';
+                if (args.command === 'git status --porcelain') {
+                    return 'A  .agent-bin/codegraph\nD  .codegraph/.gitignore\n';
+                }
+                if (args.command === 'git branch --show-current') return 'main\n';
+                return '';
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: {
+                key: 'TS-1298',
+                fields: { summary: 'Interrupted by rate limit', description: '', labels: [] }
+            },
+            metadata: { contextId: 'bug_development' },
+            jobParams: {
+                customParams: { removeLabel: 'sm_bug_development_triggered' }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'interrupted');
+        assert.notOk(
+            loaded.commands.indexOf('git checkout -B ai/TS-1298') !== -1,
+            'generated CodeGraph setup artifacts must not trigger a WIP branch push'
+        );
+        assert.notOk(
+            loaded.commands.some(function(c) { return c.indexOf('git commit -m "TS-1298 WIP') === 0; }),
+            'generated CodeGraph setup artifacts must not be committed'
+        );
+        assert.notOk(
+            loaded.commands.some(function(c) { return c.indexOf('git push -u origin ai/TS-1298') === 0; }),
+            'generated CodeGraph setup artifacts must not be pushed'
+        );
+        assert.contains(loaded.comments[0].comment, 'No partial work was produced');
+    });
+
     test('rejects already_fixed output when CodeGraph was not used', function() {
         var loaded = loadDevelopBugAndCreatePR({
             file_read: function(args) {
