@@ -123,6 +123,42 @@ suite('developBugAndCreatePR', function() {
         ]);
     });
 
+    test('rejects blocked output when CodeGraph was not used', function() {
+        var loaded = loadDevelopBugAndCreatePR({
+            file_read: function(args) {
+                if (args.path === 'outputs/blocked.json') {
+                    return JSON.stringify({
+                        reason: 'Session tooling did not return repository file contents',
+                        tried: ['Read input files'],
+                        needs: 'A working session'
+                    });
+                }
+                if (args.path === '.dmtools/codegraph-usage.log') {
+                    throw new Error('missing codegraph usage log');
+                }
+                throw new Error('missing ' + args.path);
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: {
+                key: 'TS-1304',
+                fields: { summary: 'Blocked claim', description: '', labels: [] }
+            },
+            metadata: { contextId: 'bug_development' },
+            jobParams: {
+                customParams: { removeLabel: 'sm_bug_development_triggered' }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'blocked_without_codegraph');
+        assert.deepEqual(loaded.moves, [
+            { key: 'TS-1304', statusName: 'Ready For Development' }
+        ]);
+        assert.contains(loaded.comments[0].comment, 'Blocked Claim Needs CodeGraph Verification');
+    });
+
     test('accepts already_fixed output when CodeGraph usage was recorded', function() {
         var loaded = loadDevelopBugAndCreatePR({
             file_read: function(args) {

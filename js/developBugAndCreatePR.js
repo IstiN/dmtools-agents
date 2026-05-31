@@ -120,6 +120,27 @@ function action(params) {
         if (blocked) {
             console.log('outputs/blocked.json found — bug cannot be fixed automatically');
 
+            if (!hasCodeGraphUsage()) {
+                console.warn('outputs/blocked.json rejected — no CodeGraph usage was recorded');
+                try {
+                    jira_post_comment({
+                        key: ticketKey,
+                        comment: 'h3. ⚠️ Blocked Claim Needs CodeGraph Verification\n\n' +
+                            'The agent wrote `outputs/blocked.json`, but no CodeGraph usage was recorded. ' +
+                            'Source-code bugs must use CodeGraph before declaring the work blocked.\n\n' +
+                            'Resetting to *Ready For Development* for an automatic retry.'
+                    });
+                } catch (e) {}
+                try {
+                    jira_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
+                    console.log('✅ Moved', ticketKey, 'to Ready For Development for CodeGraph retry');
+                } catch (e) {
+                    console.warn('Failed to move ticket to Ready For Development:', e);
+                }
+                removeLabels(ticketKey, params);
+                return { success: true, path: 'blocked_without_codegraph', ticketKey };
+            }
+
             let comment = 'h3. 🚫 Bug Cannot Be Fixed Automatically\n\n';
             comment += '*Reason*: ' + (blocked.reason || '(see details below)') + '\n\n';
             if (blocked.tried && blocked.tried.length > 0) {
