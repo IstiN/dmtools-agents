@@ -249,6 +249,8 @@ suite('dfManager', function() {
         assert.deepEqual(df.removedLabels[0], { key: 'TS-86', label: 'sm_story_rework_triggered' });
         assert.equal(df.triggered.length, 1);
         assert.equal(df.triggered[0].workflowFile, 'sm.yml');
+        assert.equal(df.triggered[0].payload, '{}');
+        assert.equal(report.actions[1].reason, 'released stale SM label for TS-86');
     });
 
     test('classifies labels from previous statuses as obsolete cleanup', function() {

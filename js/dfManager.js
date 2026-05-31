@@ -456,7 +456,7 @@ function triggerSmWorkflow(context, reason) {
         context.repoInfo.owner,
         context.repoInfo.repo,
         context.params.smWorkflowFile || 'sm.yml',
-        JSON.stringify({ reason: reason || 'df-manager' }),
+        '{}',
         context.params.workflowRef || 'main'
     );
     context.recoveryState.smTriggered = true;
