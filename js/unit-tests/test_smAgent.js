@@ -410,6 +410,34 @@ suite('smAgent: ticket dispatch', function() {
         assert.equal(inputs.concurrency_key, 'P-1', 'first ticket dispatched, others deferred');
     });
 
+    test('global maxTriggeredWorkflows counts already active workflows before dispatch', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [
+                { key: 'P-1', fields: { labels: [] } }
+            ],
+            workflowRuns: {
+                in_progress: [
+                    { id: 1001, name: 'agents/bug_development.json : bug_development', status: 'in_progress' }
+                ]
+            }
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'", {
+                addLabel: 'sm_bulk_bugs_creation_triggered',
+                targetStatus: 'Bug Creation'
+            })
+        ]);
+        params.jobParams.maxTriggeredWorkflows = 1;
+
+        sm.action(params);
+
+        assert.equal(sm.capturedTriggers.length, 0, 'active workflow consumes the only global slot');
+        assert.equal(sm.capturedLabels.length, 0, 'trigger label must not be added when cap is full');
+        assert.equal(sm.capturedStatusMoves.length, 0, 'ticket should not move when no workflow slot is available');
+    });
+
     test('maxWorkflowsPerRun alias also limits dispatches', function() {
         var sm = makeSmAgent({
             fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },

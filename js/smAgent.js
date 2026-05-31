@@ -13,8 +13,8 @@
  *   If config.smRules is provided, uses those instead of params.rules (full override).
  *   Repository owner/repo from config override params when present.
  *   JQL placeholders {jiraProject} and {parentTicket} are resolved from config.
- *   jobParams.maxTriggeredWorkflows (or maxWorkflowsPerRun) limits total workflow dispatches
- *   per SM run across all non-local rules.
+ *   jobParams.maxTriggeredWorkflows (or maxWorkflowsPerRun) limits total active plus newly
+ *   dispatched workflows across all non-local rules.
  *   Override priority: config.smMaxWorkflows (from .dmtools/config.js) > sm.json value.
  *
  * Rule fields:
@@ -245,7 +245,60 @@ function hasActiveTargetWorkflowRun(scm, workflowFile, configFile, ticketKey) {
     return false;
 }
 
-function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig) {
+function countActiveWorkflowRuns(scm, workflowFile) {
+    if (!scm || typeof scm.listWorkflowRuns !== 'function') return 0;
+
+    var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
+    var seen = {};
+    var count = 0;
+
+    for (var i = 0; i < statuses.length; i++) {
+        var runs = [];
+        try {
+            runs = parseWorkflowRuns(scm.listWorkflowRuns(statuses[i], workflowFile, 50));
+        } catch (e) {
+            console.warn('  ⚠️  Could not count active workflow runs (' + statuses[i] + '): ' + (e.message || e));
+            continue;
+        }
+
+        for (var j = 0; j < runs.length; j++) {
+            var run = runs[j] || {};
+            var id = run.id || run.databaseId || run.run_number || ((run.name || run.display_title || '') + ':' + j + ':' + statuses[i]);
+            if (!seen[id]) {
+                seen[id] = true;
+                count += 1;
+            }
+        }
+    }
+
+    return count;
+}
+
+function ensureWorkflowBudgetActiveCount(workflowBudget, scm, workflowFile) {
+    if (!workflowBudget) return;
+    if (!workflowBudget.activeCountsByWorkflow) workflowBudget.activeCountsByWorkflow = {};
+    if (workflowBudget.activeCountsByWorkflow[workflowFile]) return;
+
+    var activeCount = countActiveWorkflowRuns(scm, workflowFile);
+    workflowBudget.activeCount = (workflowBudget.activeCount || 0) + activeCount;
+    workflowBudget.remaining = Math.max(0, workflowBudget.remaining - activeCount);
+    workflowBudget.activeCountsByWorkflow[workflowFile] = true;
+
+    if (activeCount > 0) {
+        console.log('  Active workflow cap accounting: ' + activeCount + ' active, ' + workflowBudget.remaining + ' dispatch slot(s) left');
+    }
+}
+
+function isWorkflowBudgetExhausted(rule, effectiveConfig, workflowBudget) {
+    if (!workflowBudget) return false;
+
+    var workflowFile = rule.workflowFile || 'ai-teammate.yml';
+    var scm = scmModule.createScm(effectiveConfig);
+    ensureWorkflowBudgetActiveCount(workflowBudget, scm, workflowFile);
+    return workflowBudget.remaining <= 0;
+}
+
+function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBudget) {
     var workflowFile = rule.workflowFile || 'ai-teammate.yml';
     var workflowRef  = rule.workflowRef  || 'main';
     var resolvedCf   = resolveConfigFile(rule, effectiveConfig);
@@ -262,6 +315,11 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig) {
 
     try {
         var scm = scmModule.createScm(effectiveConfig);
+        ensureWorkflowBudgetActiveCount(workflowBudget, scm, workflowFile);
+        if (workflowBudget && workflowBudget.remaining <= 0) {
+            console.log('  ⏭️  ' + ticketKey + ' skipped (global workflow cap reached: ' + workflowBudget.initial + ')');
+            return false;
+        }
         if (hasActiveTargetWorkflowRun(scm, workflowFile, resolvedCf, concurrencyKey)) {
             return false;
         }
@@ -591,10 +649,14 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         }
 
         if (rule.targetStatus) {
+            if (isWorkflowBudgetExhausted(rule, effectiveConfig, workflowBudget)) {
+                console.log('  ⏭️  ' + key + ' skipped before transition (global workflow cap reached: ' + workflowBudget.initial + ')');
+                break;
+            }
             moveStatus(key, rule.targetStatus);
         }
 
-        var triggered = triggerWorkflow(effectiveRepoInfo, key, rule, effectiveConfig);
+        var triggered = triggerWorkflow(effectiveRepoInfo, key, rule, effectiveConfig, workflowBudget);
 
         if (triggered) addRuleLabels(key, rule);
 
