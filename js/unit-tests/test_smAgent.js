@@ -170,6 +170,28 @@ var MINIMAL_AGENT_CONFIG = JSON.stringify({
     }
 });
 
+suite('sm.json rule ordering', function() {
+    test('failed test case bug creation runs before bug development consumes workflow cap', function() {
+        var config = JSON.parse(file_read({ path: 'sm.json' }));
+        var rules = config.params.jobParams.rules;
+        var indexByDescription = {};
+
+        rules.forEach(function(rule, index) {
+            indexByDescription[rule.description] = index;
+        });
+
+        var failedTcBulk = indexByDescription['Failed Test Cases → create or link bugs in batch'];
+        var bugDevelopment = indexByDescription['Backlog / To Do / Ready For Development / In Development Bugs → trigger bug_development'];
+
+        assert.ok(failedTcBulk >= 0, 'failed TC bulk creation rule exists');
+        assert.ok(bugDevelopment >= 0, 'bug development rule exists');
+        assert.ok(
+            failedTcBulk < bugDevelopment,
+            'failed TC bug creation must be prioritized before bug development uses maxTriggeredWorkflows'
+        );
+    });
+});
+
 // ── JQL interpolation ─────────────────────────────────────────────────────────
 
 suite('smAgent: JQL interpolation', function() {
