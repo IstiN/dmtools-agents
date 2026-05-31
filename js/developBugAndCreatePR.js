@@ -51,38 +51,6 @@ function hasCodeGraphUsage() {
     }
 }
 
-function isGeneratedToolingStatusLine(line) {
-    var trimmed = (line || '').trim();
-    var path = trimmed.length > 3 ? trimmed.substring(3).trim() : '';
-    return path.indexOf('.agent-bin/') === 0 ||
-        path.indexOf('.codegraph/') === 0 ||
-        path === 'agents';
-}
-
-function cleanupGeneratedToolingArtifacts(baseBranch) {
-    var originRef = 'origin/' + (baseBranch || 'main');
-    try {
-        cli_execute_command({
-            command: 'git reset -q -- .agent-bin .codegraph agents'
-        });
-    } catch (e) {}
-    try {
-        cli_execute_command({
-            command: 'git checkout ' + originRef + ' -- .codegraph/.gitignore'
-        });
-    } catch (e) {}
-    try {
-        cli_execute_command({
-            command: 'git checkout -- .codegraph/.gitignore'
-        });
-    } catch (e) {}
-    try {
-        cli_execute_command({
-            command: 'git clean -fd -- .agent-bin .codegraph'
-        });
-    } catch (e) {}
-}
-
 function removeLabels(ticketKey, params) {
     const wipLabel = params.metadata && params.metadata.contextId
         ? params.metadata.contextId + '_wip' : null;
@@ -262,13 +230,11 @@ function action(params) {
         let hasGitChanges = false;
         try {
             cli_execute_command({ command: 'git add .' });
-            cleanupGeneratedToolingArtifacts((config.git && config.git.baseBranch) || 'main');
             const rawStatus = cli_execute_command({ command: 'git status --porcelain' }) || '';
             const statusLines = rawStatus.split('\n').filter(function(l) {
                 return l.trim() &&
                        l.indexOf('Script started') === -1 &&
-                       l.indexOf('Script done') === -1 &&
-                       !isGeneratedToolingStatusLine(l);
+                       l.indexOf('Script done') === -1;
             });
             hasGitChanges = statusLines.length > 0;
         } catch (e) {

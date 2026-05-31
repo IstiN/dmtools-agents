@@ -20,8 +20,10 @@ NPM_GLOBAL_BIN="${HOME}/.npm-global/bin"
 echo "🛠  CodeGraph (${CODEGRAPH_PACKAGE})"
 
 cleanup_workspace_artifacts() {
-  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    git clean -fd -- .agent-bin >/dev/null 2>&1 || true
+  local workspace="${GITHUB_WORKSPACE:-${PWD}}"
+
+  if git -C "${workspace}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "${workspace}" clean -fd -- .agent-bin >/dev/null 2>&1 || true
   fi
 }
 

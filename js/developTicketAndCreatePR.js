@@ -27,25 +27,6 @@ function runCmd(args) {
     return cli_execute_command(args);
 }
 
-function cleanupGeneratedToolingArtifacts(baseBranch) {
-    var originRef = 'origin/' + (baseBranch || 'main');
-    try {
-        runCmd({
-            command: 'git reset -q -- .agent-bin/codegraph .codegraph/.gitignore 2>/dev/null || true'
-        });
-    } catch (e) {}
-    try {
-        runCmd({
-            command: 'git checkout ' + originRef + ' -- .codegraph/.gitignore 2>/dev/null || git checkout -- .codegraph/.gitignore 2>/dev/null || true'
-        });
-    } catch (e) {}
-    try {
-        runCmd({
-            command: 'rm -f .agent-bin/codegraph'
-        });
-    } catch (e) {}
-}
-
 /**
  * Clean command output from script wrapper artifacts
  * Removes "Script started/done" lines that DMTools CLI adds
@@ -225,7 +206,6 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
         runCmd({
             command: 'git add .'
         });
-        cleanupGeneratedToolingArtifacts(baseBranch || 'main');
 
         // Check if there are changes to commit
         const statusOutput = prHelper.readStagedDiffStat(function(command) {

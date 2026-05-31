@@ -94,6 +94,16 @@ parse_tool_arg() {
 # If .codegraph/ already exists (restored from cache) → sync.
 # If not → init non-interactively.
 # Skips silently if not inside a git repository or if codegraph is not installed.
+_codegraph_restore_gitignore() {
+  local workspace="$1"
+
+  if git -C "${workspace}" ls-files --error-unmatch .codegraph/.gitignore >/dev/null 2>&1; then
+    git -C "${workspace}" checkout -- .codegraph/.gitignore >/dev/null 2>&1 || true
+  else
+    rm -f "${workspace}/.codegraph/.gitignore"
+  fi
+}
+
 _codegraph_init_or_sync() {
   local workspace="${GITHUB_WORKSPACE:-${PWD}}"
 
@@ -109,12 +119,12 @@ _codegraph_init_or_sync() {
   if [ -d "${workspace}/.codegraph" ]; then
     echo "🔄 CodeGraph index found — syncing..."
     codegraph sync "${workspace}" 2>/dev/null || true
-    rm -f "${workspace}/.codegraph/.gitignore"
+    _codegraph_restore_gitignore "${workspace}"
     echo "✅ CodeGraph index synced"
   else
     echo "🔨 Initializing CodeGraph index..."
     codegraph init -i "${workspace}" 2>/dev/null || true
-    rm -f "${workspace}/.codegraph/.gitignore"
+    _codegraph_restore_gitignore "${workspace}"
     echo "✅ CodeGraph index initialized"
   fi
 }

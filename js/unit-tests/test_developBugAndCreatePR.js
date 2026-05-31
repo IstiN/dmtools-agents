@@ -83,22 +83,8 @@ suite('developBugAndCreatePR', function() {
         assert.contains(loaded.comments[0].comment, 'Development Interrupted');
     });
 
-    test('does not push CodeGraph setup artifacts as interrupted partial work', function() {
-        var loaded = loadDevelopBugAndCreatePR({
-            cli_execute_command: function(args) {
-                loaded.commands.push(args.command);
-                if (args.command.indexOf('gh pr list --head ') === 0) return '';
-                if (args.command === 'git status --porcelain') {
-                    return 'A  .agent-bin/codegraph\n' +
-                        '?? .agent-bin/codegraph-wrapper\n' +
-                        'D  .codegraph/.gitignore\n' +
-                        '?? .codegraph/index.sqlite\n' +
-                        'M  agents\n';
-                }
-                if (args.command === 'git branch --show-current') return 'main\n';
-                return '';
-            }
-        });
+    test('does not clean CodeGraph runtime artifacts from JS post-action', function() {
+        var loaded = loadDevelopBugAndCreatePR();
 
         var result = loaded.mod.action({
             ticket: {
@@ -114,34 +100,11 @@ suite('developBugAndCreatePR', function() {
         assert.equal(result.success, true);
         assert.equal(result.path, 'interrupted');
         assert.notOk(
-            loaded.commands.indexOf('git checkout -B ai/TS-1298') !== -1,
-            'generated CodeGraph setup artifacts must not trigger a WIP branch push'
-        );
-        assert.notOk(
-            loaded.commands.some(function(c) { return c.indexOf('git commit -m "TS-1298 WIP') === 0; }),
-            'generated CodeGraph setup artifacts must not be committed'
-        );
-        assert.notOk(
-            loaded.commands.some(function(c) { return c.indexOf('git push -u origin ai/TS-1298') === 0; }),
-            'generated CodeGraph setup artifacts must not be pushed'
-        );
-        assert.ok(
-            loaded.commands.indexOf('git reset -q -- .agent-bin .codegraph agents') !== -1,
-            'generated tooling and submodule pointer artifacts must be unstaged before status check'
-        );
-        assert.ok(
-            loaded.commands.indexOf('git clean -fd -- .agent-bin .codegraph') !== -1,
-            'untracked generated tooling artifacts must be cleaned with whitelisted git command'
-        );
-        assert.notOk(
             loaded.commands.some(function(c) {
-                return c.indexOf('||') !== -1 ||
-                    c.indexOf('2>') !== -1 ||
-                    c.indexOf('rm ') === 0;
+                return c.indexOf('.agent-bin') !== -1 || c.indexOf('.codegraph') !== -1;
             }),
-            'cleanup commands must be accepted by the restricted CLI executor'
+            'CodeGraph setup/cleanup belongs to setup scripts, not JS post-actions'
         );
-        assert.contains(loaded.comments[0].comment, 'No partial work was produced');
     });
 
     test('rejects already_fixed output when CodeGraph was not used', function() {
