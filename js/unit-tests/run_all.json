@@ -16,6 +16,7 @@
         "js/unit-tests/test_developTicketAndCreatePR.js",
         "js/unit-tests/test_developBugAndCreatePR.js",
         "js/unit-tests/test_autoStart.js",
+        "js/unit-tests/test_aiTeammateTokenUsageReporter.js",
         "js/unit-tests/test_dfManager.js",
         "js/unit-tests/test_retryMergePR.js",
         "js/unit-tests/test_recoverMergedPRTicket.js",
