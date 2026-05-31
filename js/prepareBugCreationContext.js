@@ -12,6 +12,52 @@ function sanitizeFilename(str) {
     return str.replace(/[\/\\:*?"<>|]/g, '-').replace(/\s+/g, ' ').substring(0, 100).trim();
 }
 
+function fetchHistoricalDoneBugs(ticketKey) {
+    try {
+        return jira_search_by_jql({
+            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug AND status in (Done) ORDER BY updated DESC',
+            fields: ['key', 'summary', 'description', 'status', 'updated'],
+            maxResults: 10
+        }) || [];
+    } catch (e) {
+        console.warn('Could not fetch historical Done bugs:', e);
+        return [];
+    }
+}
+
+function writeHistoricalDoneBugs(inputFolder, ticketKey) {
+    var doneBugs = fetchHistoricalDoneBugs(ticketKey);
+    if (!doneBugs || doneBugs.length === 0) {
+        return 0;
+    }
+
+    var lines = [];
+    lines.push('# Historical Done Bugs');
+    lines.push('');
+    lines.push('These linked Done bugs are recurrence context only. Do not treat them as open duplicate matches.');
+    lines.push('If the Test Case is currently Failed and no non-Done bug matches, create a new bug and mention these prior attempts.');
+    lines.push('');
+
+    doneBugs.forEach(function(bug) {
+        var fields = bug.fields || {};
+        var status = fields.status ? fields.status.name : '';
+        lines.push('---');
+        lines.push('## ' + bug.key + ': ' + (fields.summary || ''));
+        if (status) lines.push('**Status**: ' + status);
+        if (fields.updated) lines.push('**Updated**: ' + fields.updated);
+        if (fields.description) {
+            lines.push('');
+            lines.push('**Description**:');
+            lines.push(String(fields.description).substring(0, 1200));
+        }
+        lines.push('');
+    });
+
+    file_write(inputFolder + '/historical_done_bugs.md', lines.join('\n'));
+    console.log('Wrote historical_done_bugs.md with ' + doneBugs.length + ' Done bug(s)');
+    return doneBugs.length;
+}
+
 function action(params) {
     try {
         var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
@@ -45,6 +91,8 @@ function action(params) {
             file_write(inputFolder + '/ticket.md', tcContent);
             console.log('Wrote ticket.md for', ticketKey);
         }
+
+        var historicalDoneCount = writeHistoricalDoneBugs(inputFolder, ticketKey);
 
         // Fetch all open bugs
         console.log('Fetching open bugs with JQL:', openBugsJql);
@@ -94,6 +142,9 @@ function action(params) {
                 key: ticketKey,
                 comment: 'h3. 🔍 Bug Detection Started\n\n' +
                     'Checking ' + bugs.length + ' open bug(s) for duplicates...\n\n' +
+                    (historicalDoneCount > 0
+                        ? 'Also loaded ' + historicalDoneCount + ' linked Done bug(s) as recurrence history only.\n\n'
+                        : '') +
                     '_Result will be posted shortly._'
             });
         } catch (e) {
@@ -103,7 +154,8 @@ function action(params) {
         return {
             success: true,
             ticketKey: ticketKey,
-            bugsLoaded: bugs.length
+            bugsLoaded: bugs.length,
+            historicalDoneBugsLoaded: historicalDoneCount
         };
 
     } catch (error) {
@@ -113,5 +165,9 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = {
+        action: action,
+        fetchHistoricalDoneBugs: fetchHistoricalDoneBugs,
+        writeHistoricalDoneBugs: writeHistoricalDoneBugs
+    };
 }

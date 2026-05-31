@@ -9,6 +9,7 @@ Read `input/failed_tcs.json`. It contains an array of failed Test Case objects, 
 - `summary` — what the TC tests
 - `description` — test case details
 - `lastComment` — the most recent comment with the actual failure evidence and root cause
+- `historicalDoneBugs` — linked Done bugs for the same TC, if any. This is recurrence context only.
 
 The `lastComment` is the **primary source** for bug description — it contains the latest run result.
 If the latest comment is a PR/test review instead of the raw test run, interpret it carefully:
@@ -31,9 +32,10 @@ current failed run, create a new bug.
 
 Never decide "already fixed" from Done bugs or historical comments. A current
 `Failed` TC means the prior fix did not prove the scenario anymore. If the TC
-mentions prior Done bugs, include them in the new bug description as history
-under "Prior Attempts / Related Done Bugs", but still create or link only a
-non-Done bug.
+has `historicalDoneBugs`, include them in the new bug description as history
+under "Prior Attempts / Related Done Bugs", explain that the current failure is
+a recurrence after those Done tickets, but still create or link only a non-Done
+bug.
 
 ### Duplicate / match rules (treat as match if ANY of the following):
 - Same component AND same failure symptom

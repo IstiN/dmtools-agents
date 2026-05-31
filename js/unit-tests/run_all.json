@@ -24,6 +24,7 @@
         "js/unit-tests/test_feedbackLoop.js",
         "js/unit-tests/test_fetchParentContextToInput.js",
         "js/unit-tests/test_testsGeneratedGuard.js",
+        "js/unit-tests/test_prepareBugCreationContext.js",
         "js/unit-tests/test_postBugCreation.js",
         "js/unit-tests/test_postBulkBugsCreation.js",
         "js/unit-tests/test_postTestAutomationResults.js",

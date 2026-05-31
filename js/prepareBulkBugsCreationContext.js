@@ -13,6 +13,31 @@
  * fetches ALL eligible failed TCs up to batchSize.
  */
 
+function summarizeDoneBug(bug) {
+    var fields = bug.fields || {};
+    return {
+        key: bug.key,
+        summary: fields.summary || '',
+        status: fields.status ? fields.status.name : '',
+        updated: fields.updated || '',
+        description: (fields.description || '').substring(0, 500)
+    };
+}
+
+function fetchHistoricalDoneBugs(tcKey) {
+    try {
+        var bugs = jira_search_by_jql({
+            jql: 'issue in linkedIssues("' + tcKey + '") AND issuetype = Bug AND status in (Done) ORDER BY updated DESC',
+            fields: ['key', 'summary', 'description', 'status', 'updated'],
+            maxResults: 10
+        }) || [];
+        return bugs.map(summarizeDoneBug);
+    } catch (e) {
+        console.warn('Failed to fetch historical Done bugs for ' + tcKey + ':', e);
+        return [];
+    }
+}
+
 function action(params) {
     try {
         var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
@@ -57,18 +82,22 @@ function action(params) {
         }
 
         // Build TC list for AI
+        var totalHistoricalDoneBugs = 0;
         var tcList = failedTCs.map(function(tc) {
             var fields = tc.fields || {};
             var comments = fields.comment && fields.comment.comments;
             var lastComment = comments && comments.length > 0
                 ? comments[comments.length - 1].body
                 : '';
+            var historicalDoneBugs = fetchHistoricalDoneBugs(tc.key);
+            totalHistoricalDoneBugs += historicalDoneBugs.length;
             return {
                 key: tc.key,
                 summary: fields.summary || '',
                 description: fields.description || '',
                 lastComment: lastComment,
-                parent: fields.parent ? fields.parent.key + ' — ' + (fields.parent.fields && fields.parent.fields.summary || '') : ''
+                parent: fields.parent ? fields.parent.key + ' — ' + (fields.parent.fields && fields.parent.fields.summary || '') : '',
+                historicalDoneBugs: historicalDoneBugs
             };
         });
 
@@ -115,6 +144,7 @@ function action(params) {
             '- **Project**: ' + projectKey + '\n' +
             '- **Failed TCs to process**: ' + tcList.length + '\n' +
             '- **Non-Done bugs for dedup check**: ' + bugList.length + '\n\n' +
+            '- **Historical Done linked bugs**: ' + totalHistoricalDoneBugs + ' (recurrence context only; not open matches)\n\n' +
             'Read `input/failed_tcs.json` and `input/open_bugs.json`, then follow the prompt instructions.\n';
         file_write(inputFolder + '/context.md', contextMd);
         console.log('=== Context preparation complete ===');
@@ -123,4 +153,11 @@ function action(params) {
         console.error('prepareBulkBugsCreationContext failed:', e);
         throw e;
     }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        action: action,
+        fetchHistoricalDoneBugs: fetchHistoricalDoneBugs
+    };
 }
