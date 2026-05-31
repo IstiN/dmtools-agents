@@ -37,9 +37,8 @@ function findPRForTicket(scm, ticketKey) {
 }
 
 function action(params) {
-    var config = configLoader.loadConfig(params);
-    var ticketKey = config.ticketKey;
-    var customParams = config.customParams || {};
+    var ticketKey = params.ticket && params.ticket.key;
+    var config = configLoader.loadProjectConfig(params.jobParams || params || {});
 
     if (!ticketKey) {
         console.error('No ticket key found');
@@ -48,7 +47,7 @@ function action(params) {
 
     console.log('Recovering stuck Test Case:', ticketKey);
 
-    var scm = scmModule.createSCM();
+    var scm = scmModule.createScm(config);
     var pr = findPRForTicket(scm, ticketKey);
 
     if (!pr) {
@@ -61,7 +60,7 @@ function action(params) {
         }
         // Remove automation label so SM can re-trigger
         try { jira_remove_label({ key: ticketKey, label: 'sm_test_automation_triggered' }); } catch (e) {}
-        jira_add_comment({
+        jira_post_comment({
             key: ticketKey,
             comment: '🔄 *Recovery*: Test Case was stuck in "In Development" with no open PR. Moved back to Backlog for re-automation.'
         });
@@ -94,7 +93,7 @@ function action(params) {
         // Remove stale labels so rework agent can pick it up
         try { jira_remove_label({ key: ticketKey, label: 'sm_test_rework_triggered' }); } catch (e) {}
         try { jira_remove_label({ key: ticketKey, label: 'sm_test_automation_triggered' }); } catch (e) {}
-        jira_add_comment({
+        jira_post_comment({
             key: ticketKey,
             comment: '🔄 *Recovery*: Test Case was stuck in "In Development" with a conflicting PR #' + pr.number + '. Moved to In Rework for conflict resolution.'
         });
@@ -110,7 +109,7 @@ function action(params) {
         console.error('Failed to move to In Review - Passed:', e);
     }
     try { jira_remove_label({ key: ticketKey, label: 'sm_test_automation_triggered' }); } catch (e) {}
-    jira_add_comment({
+    jira_post_comment({
         key: ticketKey,
         comment: '🔄 *Recovery*: Test Case was stuck in "In Development" with clean PR #' + pr.number + '. Moved to In Review - Passed for code review.'
     });

@@ -18,6 +18,7 @@
         "js/unit-tests/test_dfManager.js",
         "js/unit-tests/test_retryMergePR.js",
         "js/unit-tests/test_recoverMergedPRTicket.js",
+        "js/unit-tests/test_recoverStuckTestCase.js",
         "js/unit-tests/test_recoverFailedTCBugStatus.js",
         "js/unit-tests/test_feedbackLoop.js",
         "js/unit-tests/test_fetchParentContextToInput.js",
