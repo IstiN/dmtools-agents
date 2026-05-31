@@ -148,6 +148,7 @@ elif [ "$PROVIDER" = "copilot" ]; then
 
   echo "Copilot Configuration:"
   echo "  Model: ${COPILOT_MODEL:-gpt-5-mini}"
+  echo "  Command timeout: ${COPILOT_COMMAND_TIMEOUT_SECONDS:-1200}s"
   echo "Working directory: $(pwd)"
   echo ""
 
@@ -162,18 +163,38 @@ elif [ "$PROVIDER" = "copilot" ]; then
   fi
   run_copilot_once() {
     local log_file="$1"
+    local timeout_seconds="${COPILOT_COMMAND_TIMEOUT_SECONDS:-1200}"
+    local timeout_cmd=()
+
+    if command -v timeout >/dev/null 2>&1 && [ "${timeout_seconds}" -gt 0 ] 2>/dev/null; then
+      timeout_cmd=(timeout "${timeout_seconds}s")
+    fi
+
     set +e
     if [ -f "${PROMPT_ARG}" ]; then
       echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} ${PASS_ARGS[*]:-} (prompt: ${PROMPT_BYTES} bytes via stdin)"
+      if [ "${#timeout_cmd[@]}" -gt 0 ]; then
+        echo "Timeout guard: ${timeout_seconds}s"
+      fi
       echo ""
-      "${COPILOT_CMD[@]}" --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${PROMPT_ARG}" 2>&1 | tee "$log_file"
+      if [ "${#timeout_cmd[@]}" -gt 0 ]; then
+        "${timeout_cmd[@]}" "${COPILOT_CMD[@]}" --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${PROMPT_ARG}" 2>&1 | tee "$log_file"
+      else
+        "${COPILOT_CMD[@]}" --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${PROMPT_ARG}" 2>&1 | tee "$log_file"
+      fi
     else
       echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} ${PASS_ARGS[*]:-} -p <inline prompt>"
+      if [ "${#timeout_cmd[@]}" -gt 0 ]; then
+        echo "Timeout guard: ${timeout_seconds}s"
+      fi
       echo ""
-      "${COPILOT_CMD[@]}" --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$log_file"
+      if [ "${#timeout_cmd[@]}" -gt 0 ]; then
+        "${timeout_cmd[@]}" "${COPILOT_CMD[@]}" --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$log_file"
+      else
+        "${COPILOT_CMD[@]}" --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$log_file"
+      fi
     fi
     local status=${PIPESTATUS[0]}
-    set -e
     return "$status"
   }
 
@@ -184,10 +205,19 @@ elif [ "$PROVIDER" = "copilot" ]; then
 
   while [ "$attempt" -le "$max_attempts" ]; do
     copilot_log="$(mktemp)"
+    set +e
     run_copilot_once "$copilot_log"
     exit_code=$?
+    set -e
 
     if [ "$exit_code" -eq 0 ]; then
+      rm -f "$copilot_log"
+      break
+    fi
+
+    if [ "$exit_code" -eq 124 ]; then
+      echo ""
+      echo "Copilot command timed out after ${COPILOT_COMMAND_TIMEOUT_SECONDS:-1200}s; exiting so DMTools post-action can recover/reset the ticket."
       rm -f "$copilot_log"
       break
     fi
