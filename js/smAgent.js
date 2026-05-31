@@ -26,6 +26,7 @@
  *   targetStatus   (optional) — Jira status to transition tickets to before triggering
  *   workflowFile   (optional) — GitHub Actions workflow file  (default: ai-teammate.yml)
  *   workflowRef    (optional) — git ref for dispatch           (default: main)
+ *   concurrencyKey (optional) — workflow concurrency key override (default: ticket key)
  *   projectKey     (optional) — value passed as the `project_key` workflow input so the runner
  *                               activates the correct project-specific dependency setup (e.g. "myproject",
  *                               "bice"). Auto-derived from configPath basename when not set
@@ -248,6 +249,7 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig) {
     var workflowFile = rule.workflowFile || 'ai-teammate.yml';
     var workflowRef  = rule.workflowRef  || 'main';
     var resolvedCf   = resolveConfigFile(rule, effectiveConfig);
+    var concurrencyKey = rule.concurrencyKey || ticketKey;
 
     // Resolve project_key: explicit rule field takes priority, then auto-derive from configPath
     // e.g. ".dmtools/configs/myproject.js" → "myproject", ".dmtools/configs/bice.js" → "bice"
@@ -260,7 +262,7 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig) {
 
     try {
         var scm = scmModule.createScm(effectiveConfig);
-        if (hasActiveTargetWorkflowRun(scm, workflowFile, resolvedCf, ticketKey)) {
+        if (hasActiveTargetWorkflowRun(scm, workflowFile, resolvedCf, concurrencyKey)) {
             return false;
         }
         scm.triggerWorkflow(
@@ -268,7 +270,7 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig) {
             repoInfo.repo,
             workflowFile,
             JSON.stringify({
-                concurrency_key: ticketKey,
+                concurrency_key: concurrencyKey,
                 config_file:     resolvedCf,
                 encoded_config:  buildEncodedConfig(ticketKey, rule, effectiveConfig),
                 project_key:     projectKey

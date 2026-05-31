@@ -188,6 +188,7 @@
           "description": "Failed Test Cases → create or link bugs in batch",
           "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('Failed') AND (labels is EMPTY OR labels NOT IN ('sm_bug_creation_triggered')) ORDER BY created ASC",
           "configFile": "agents/bulk_bugs_creation.json",
+          "concurrencyKey": "bulk_bugs_creation",
           "skipIfLabel": "sm_bulk_bugs_creation_triggered",
           "addLabel": "sm_bulk_bugs_creation_triggered",
           "recoverStaleTriggerLabel": true,

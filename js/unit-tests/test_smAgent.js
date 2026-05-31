@@ -410,6 +410,27 @@ suite('smAgent: ticket dispatch', function() {
         assert.contains(decoded.params.inputJql, 'P-42', 'ticket key in inputJql');
     });
 
+    test('uses rule concurrencyKey override while preserving ticket inputJql', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-42', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/bulk_bugs_creation.json',
+                concurrencyKey: 'bulk_bugs_creation'
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.concurrency_key, 'bulk_bugs_creation', 'rule concurrency key used');
+
+        var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
+        assert.contains(decoded.params.inputJql, 'P-42', 'ticket key still used for agent input');
+    });
+
     test('interpolates project placeholders from target agent params into encoded config', function() {
         var sm = makeSmAgent({
             fileMap: {
