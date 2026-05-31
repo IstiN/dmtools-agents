@@ -85,16 +85,38 @@ function isStaleNonRunningWorkflowRun(run, status) {
     return (Date.now() - timestamp) > STALE_NON_RUNNING_WORKFLOW_MS;
 }
 
+function workflowRunAge(run) {
+    var timestamp = workflowRunTimestamp(run);
+    if (!timestamp) return '';
+
+    var ageMinutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
+    if (ageMinutes < 60) return ageMinutes + 'm';
+    var ageHours = Math.floor(ageMinutes / 60);
+    var remainingMinutes = ageMinutes % 60;
+    return ageHours + 'h' + (remainingMinutes ? ' ' + remainingMinutes + 'm' : '');
+}
+
+function formatWorkflowRunSummary(run, fallbackStatus) {
+    run = run || {};
+    var title = run.display_title || run.displayTitle || run.name || 'workflow run';
+    var status = run.status || fallbackStatus || 'active';
+    var age = workflowRunAge(run);
+    var id = run.id || run.databaseId || run.run_number || run.runNumber || '?';
+    var url = run.html_url || run.htmlUrl || run.url || '';
+    return title + ' [' + status + ', age ' + (age || '?') + ', id ' + id + ']' + (url ? ' ' + url : '');
+}
+
 function normalizePositiveInt(value) {
     if (typeof value !== 'number' || !isFinite(value)) return null;
     var normalized = Math.floor(value);
     return normalized > 0 ? normalized : null;
 }
 
-function countActiveWorkflowRuns(scm, workflowFile) {
+function collectActiveWorkflowRuns(scm, workflowFile) {
     var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
     var seen = {};
     var count = 0;
+    var summaries = [];
 
     for (var i = 0; i < statuses.length; i++) {
         var runsRaw = null;
@@ -113,11 +135,27 @@ function countActiveWorkflowRuns(scm, workflowFile) {
             if (!seen[id]) {
                 seen[id] = true;
                 count += 1;
+                summaries.push(formatWorkflowRunSummary(run, statuses[i]));
             }
         }
     }
 
-    return count;
+    return { count: count, summaries: summaries };
+}
+
+function countActiveWorkflowRuns(scm, workflowFile) {
+    return collectActiveWorkflowRuns(scm, workflowFile).count;
+}
+
+function logBlockingWorkflowRuns(summaries) {
+    if (!summaries || !summaries.length) return;
+    console.log('autoStart: blocking active workflow run(s):');
+    summaries.slice(0, 5).forEach(function(summary) {
+        console.log('autoStart:  - ' + summary);
+    });
+    if (summaries.length > 5) {
+        console.log('autoStart:  - ... +' + (summaries.length - 5) + ' more');
+    }
 }
 
 function resolveActiveWorkflowCap(options) {
@@ -130,10 +168,12 @@ function isGlobalWorkflowCapReached(scm, workflowFile, options) {
     var cap = resolveActiveWorkflowCap(options || {});
     if (!cap) return false;
 
-    var activeCount = countActiveWorkflowRuns(scm, workflowFile);
+    var active = collectActiveWorkflowRuns(scm, workflowFile);
+    var activeCount = active.count;
     if (activeCount >= cap) {
         console.log('autoStart: skipped workflow trigger because ' + activeCount +
             ' active workflow run(s) reached global cap ' + cap);
+        logBlockingWorkflowRuns(active.summaries);
         return true;
     }
 
@@ -266,6 +306,7 @@ module.exports = {
     triggerConfiguredWorkflowForTicket: triggerConfiguredWorkflowForTicket,
     hasActiveTargetRun: hasActiveTargetRun,
     countActiveWorkflowRuns: countActiveWorkflowRuns,
+    collectActiveWorkflowRuns: collectActiveWorkflowRuns,
     isGlobalWorkflowCapReached: isGlobalWorkflowCapReached,
     isStaleNonRunningWorkflowRun: isStaleNonRunningWorkflowRun,
     triggerSmIfIdle: triggerSmIfIdle

@@ -265,12 +265,34 @@ function isStaleNonRunningWorkflowRun(run, status) {
     return (Date.now() - timestamp) > STALE_NON_RUNNING_WORKFLOW_MS;
 }
 
-function countActiveWorkflowRuns(scm, workflowFile) {
-    if (!scm || typeof scm.listWorkflowRuns !== 'function') return 0;
+function workflowRunAge(run) {
+    var timestamp = workflowRunTimestamp(run);
+    if (!timestamp) return '';
+
+    var ageMinutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
+    if (ageMinutes < 60) return ageMinutes + 'm';
+    var ageHours = Math.floor(ageMinutes / 60);
+    var remainingMinutes = ageMinutes % 60;
+    return ageHours + 'h' + (remainingMinutes ? ' ' + remainingMinutes + 'm' : '');
+}
+
+function formatWorkflowRunSummary(run, fallbackStatus) {
+    run = run || {};
+    var title = run.display_title || run.displayTitle || run.name || 'workflow run';
+    var status = run.status || fallbackStatus || 'active';
+    var age = workflowRunAge(run);
+    var id = run.id || run.databaseId || run.run_number || run.runNumber || '?';
+    var url = run.html_url || run.htmlUrl || run.url || '';
+    return title + ' [' + status + ', age ' + (age || '?') + ', id ' + id + ']' + (url ? ' ' + url : '');
+}
+
+function collectActiveWorkflowRuns(scm, workflowFile) {
+    if (!scm || typeof scm.listWorkflowRuns !== 'function') return { count: 0, summaries: [] };
 
     var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
     var seen = {};
     var count = 0;
+    var summaries = [];
 
     for (var i = 0; i < statuses.length; i++) {
         var runs = [];
@@ -288,25 +310,48 @@ function countActiveWorkflowRuns(scm, workflowFile) {
             if (!seen[id]) {
                 seen[id] = true;
                 count += 1;
+                summaries.push(formatWorkflowRunSummary(run, statuses[i]));
             }
         }
     }
 
-    return count;
+    return { count: count, summaries: summaries };
+}
+
+function countActiveWorkflowRuns(scm, workflowFile) {
+    return collectActiveWorkflowRuns(scm, workflowFile).count;
+}
+
+function logBlockingWorkflowRuns(workflowBudget, workflowFile) {
+    if (!workflowBudget || !workflowBudget.activeRunSummariesByWorkflow) return;
+    var summaries = workflowBudget.activeRunSummariesByWorkflow[workflowFile] || [];
+    if (!summaries.length) return;
+
+    console.log('  Blocking active workflow run(s):');
+    summaries.slice(0, 5).forEach(function(summary) {
+        console.log('   - ' + summary);
+    });
+    if (summaries.length > 5) {
+        console.log('   - ... +' + (summaries.length - 5) + ' more');
+    }
 }
 
 function ensureWorkflowBudgetActiveCount(workflowBudget, scm, workflowFile) {
     if (!workflowBudget) return;
     if (!workflowBudget.activeCountsByWorkflow) workflowBudget.activeCountsByWorkflow = {};
     if (workflowBudget.activeCountsByWorkflow[workflowFile]) return;
+    if (!workflowBudget.activeRunSummariesByWorkflow) workflowBudget.activeRunSummariesByWorkflow = {};
 
-    var activeCount = countActiveWorkflowRuns(scm, workflowFile);
+    var active = collectActiveWorkflowRuns(scm, workflowFile);
+    var activeCount = active.count;
     workflowBudget.activeCount = (workflowBudget.activeCount || 0) + activeCount;
     workflowBudget.remaining = Math.max(0, workflowBudget.remaining - activeCount);
     workflowBudget.activeCountsByWorkflow[workflowFile] = true;
+    workflowBudget.activeRunSummariesByWorkflow[workflowFile] = active.summaries;
 
     if (activeCount > 0) {
         console.log('  Active workflow cap accounting: ' + activeCount + ' active, ' + workflowBudget.remaining + ' dispatch slot(s) left');
+        logBlockingWorkflowRuns(workflowBudget, workflowFile);
     }
 }
 
@@ -339,6 +384,7 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
         ensureWorkflowBudgetActiveCount(workflowBudget, scm, workflowFile);
         if (workflowBudget && workflowBudget.remaining <= 0) {
             console.log('  ⏭️  ' + ticketKey + ' skipped (global workflow cap reached: ' + workflowBudget.initial + ')');
+            logBlockingWorkflowRuns(workflowBudget, workflowFile);
             return false;
         }
         if (hasActiveTargetWorkflowRun(scm, workflowFile, resolvedCf, concurrencyKey)) {
@@ -579,8 +625,10 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
 
     if (workflowBudget && workflowBudget.remaining <= 0) {
         var skippedLabel = rule.description || ('Rule #' + (ruleIndex + 1));
+        var workflowFile = rule.workflowFile || 'ai-teammate.yml';
         console.log('\n══ ' + skippedLabel + ' ══');
         console.log('  ⏭️  Global workflow cap reached (' + workflowBudget.initial + ') — skipping rule');
+        logBlockingWorkflowRuns(workflowBudget, workflowFile);
         return { processedKeys: [], skippedKeys: [] };
     }
 
