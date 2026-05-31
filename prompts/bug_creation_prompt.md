@@ -6,6 +6,11 @@ Always read these files first if present:
 - `request.md` — full Test Case ticket details
 - `comments.md` — ticket comment history; the most recent comment contains the actual test run result with failure evidence and root cause — **this is the primary source for bug description**
 
+If the most recent comment is a PR/test review, interpret it as follows:
+- "APPROVE", "automation implements the ticket correctly", or "valid product evidence" means the test failure is accepted as a product bug signal.
+- Those phrases are **not** a reason to return `none` or `tests_pass`.
+- Only use `tests_pass` when the most recent actual test run says all relevant checks passed.
+
 ## Step 1 — Read the failed Test Case
 
 Read `input/ticket.md` to understand:
@@ -34,6 +39,14 @@ If `input/no_open_bugs.md` exists — there are no open bugs, skip to Step 3 dir
 **Case C — Tests are currently passing**: Check `comments.md` carefully. If the **most recent test run** shows all tests **PASSED** (regardless of the ticket's current Failed status), use this case. The ticket status is stale — it failed in a previous run but the underlying issue has since been fixed. Do NOT create a bug.
 
 **Case D — No action needed**: If the Test Case failed due to a test code issue (not an application bug), and tests are **not** currently passing, state so.
+
+### Historical Done bugs / loop prevention
+
+Do not decide that the TC is already fixed because an older linked bug is Done.
+Done bugs are history, not open matches. If the TC is currently Failed and no
+open bug matches, create a new bug and mention the older Done bug(s) as prior
+attempts in `outputs/bug_description.md`. This prevents loops where the same TC
+returns to Failed but bug creation keeps suppressing new work.
 
 ## Output
 

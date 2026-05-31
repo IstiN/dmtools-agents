@@ -13,6 +13,7 @@ The Teammate job has already prepared the full ticket context in the `input/<TIC
    - Human notes clarifying the bug, edge cases, or reproduction steps
 3. **`existing_questions.json`** — questions previously asked and their answers.
 4. **`linked_tests.md`** — linked test cases, if any.
+   - If a linked Test Case is currently `Failed` after older linked bugs reached `Done`, this ticket is a repeated-fix loop until proven otherwise. Read the latest failed run evidence, list the older Done bug(s) in `outputs/rca.md`, and verify the exact linked test before considering `already_fixed.json`.
 
 ## ⚠️ STEP 0.1 — Bug Returned to Development = Previous Fix Did NOT Work
 
@@ -23,6 +24,17 @@ If `comments.md` shows that **this ticket has been through development before** 
 3. **DO NOT repeat the same approach** — if the previous fix modified file X to add a null check, and the bug is still happening, the null check is not the root cause. Dig deeper.
 4. **DO NOT assume "it was fixed in #NNN"** — the whole reason the ticket is back is that #NNN did not actually fix the problem (or fixed it incompletely). Never write `outputs/already_fixed.json` for a returned bug.
 5. Document in `outputs/rca.md` what the previous attempt missed and why your new approach is different.
+
+### STEP 0.1b — Linked Test Failed After Done Bug
+
+When `linked_tests.md` shows a Test Case that is still `Failed` while comments
+or linked issues mention older Done bugs for the same scenario, handle it like a
+returned bug even if the current Bug ticket is new:
+
+1. Identify the older Done bug(s) and any PRs they reference.
+2. Run the linked test or the closest available command before editing.
+3. Explain in `outputs/rca.md` why the Done bug did not cover the current failure.
+4. Do not write `already_fixed.json` unless the exact linked test passes now in the target environment.
 
 ## ⚠️ STEP 0.2 — Verify the Bug Actually Reproduces NOW
 

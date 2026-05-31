@@ -9,6 +9,7 @@ User request is in 'input' folder, read all files there and do what is requested
    - Read the **test run comments** to understand prior fix attempts and why they didn't work.
    - If a previous comment says "Bug Already Fixed" but the test is still failing, the fix was **incomplete or the test has timing/async requirements** that the code doesn't yet satisfy.
    - Before writing `already_fixed.json`, verify the linked test actually passes with the current code.
+   - If the linked TC has failed again after one or more Done bugs, treat this as a repeated-fix loop. Summarize the prior Done bug(s) in `outputs/rca.md`, run the linked test or its closest available command first, and do not claim already fixed unless that exact TC passes now.
 5. `existing_questions.json` — if present, clarification answers from the PO — treat as binding requirements
 
 ## GitHub token and workflow self-service

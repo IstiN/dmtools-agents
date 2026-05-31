@@ -11,6 +11,10 @@ Read `input/failed_tcs.json`. It contains an array of failed Test Case objects, 
 - `lastComment` — the most recent comment with the actual failure evidence and root cause
 
 The `lastComment` is the **primary source** for bug description — it contains the latest run result.
+If the latest comment is a PR/test review instead of the raw test run, interpret it carefully:
+- "automation implements the ticket correctly", "APPROVE", or "valid product evidence" means the failed TC is ready for bug creation.
+- These review phrases are **not** a reason to skip bug creation.
+- A TC in `Failed` with no matching non-Done bug must get a new bug unless the comment explicitly says the failure is test code, flaky infrastructure, or an invalid assertion.
 
 ## Step 2 — Read existing non-Done bugs
 
@@ -22,6 +26,14 @@ Read `input/open_bugs.json`. It contains an array of **non-Done** bug objects, e
 Done bugs are intentionally not provided and must not be used for matching.
 They are historical context only. If no matching non-Done bug exists for a
 current failed run, create a new bug.
+
+### Loop / historical Done bug rule
+
+Never decide "already fixed" from Done bugs or historical comments. A current
+`Failed` TC means the prior fix did not prove the scenario anymore. If the TC
+mentions prior Done bugs, include them in the new bug description as history
+under "Prior Attempts / Related Done Bugs", but still create or link only a
+non-Done bug.
 
 ### Duplicate / match rules (treat as match if ANY of the following):
 - Same component AND same failure symptom
@@ -41,6 +53,8 @@ For each failed TC, decide one of:
 ### IMPORTANT: Prefer creating a bug over skipping
 - If you are unsure whether the failure is a test issue or an app bug, **create a bug** (option B). It is better to over-report than to leave a TC stuck in Failed with no action.
 - Only use Skip (option D) when you are confident the failure is purely a test infrastructure or test code problem.
+- Do not skip because a review says the test is correct. That is the signal to create a product bug from the failed evidence.
+- Do not skip because a previous Done bug has a similar title. Done bugs are not matches in this workflow.
 
 ### Grouping rules:
 - TCs that test the same UI component and fail with the same symptom → group under one bug
@@ -115,6 +129,10 @@ h2. Actual Result
 h2. Environment
 
 <browser, OS, URL from the TC context>
+
+h2. Prior Attempts / Related Done Bugs
+
+<mention any prior Done bugs or repeated failed attempts from the TC context; write "None observed" if unavailable>
 
 h2. Linked Test Cases
 
