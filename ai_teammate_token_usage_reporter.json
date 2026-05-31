@@ -1,0 +1,19 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "agents/js/aiTeammateTokenUsageReporter.js",
+    "jobParams": {
+      "customParams": {
+        "workspace": "{owner}",
+        "repository": "{repo}",
+        "workflowId": "ai-teammate.yml",
+        "statuses": [
+          "completed"
+        ],
+        "perStatusLimit": 50,
+        "maxRuns": 50,
+        "outputDir": "outputs/token_usage"
+      }
+    }
+  }
+}
