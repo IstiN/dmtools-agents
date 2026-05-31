@@ -4,7 +4,7 @@
     "jsPath": "agents/js/dfManager.js",
     "jobParams": {
       "customParams": {
-        "autoRecover": false,
+        "autoRecover": true,
         "staleMinutes": 45,
         "jiraLimit": 100,
         "workflowRunLimit": 100,
