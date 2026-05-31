@@ -70,6 +70,47 @@ function linkBugToTC(tcKey, bugKey) {
     console.log('  ✅ Linked:', bugKey, 'blocks', tcKey);
 }
 
+function extractTickets(result) {
+    if (!result) return [];
+    if (Array.isArray(result)) return result;
+    if (typeof result === 'string') {
+        try {
+            var parsed = JSON.parse(result);
+            return extractTickets(parsed);
+        } catch (e) {
+            return [];
+        }
+    }
+    if (Array.isArray(result.issues)) return result.issues;
+    if (Array.isArray(result.data)) return result.data;
+    if (Array.isArray(result.results)) return result.results;
+    return [];
+}
+
+function findLinkedNonDoneBug(tcKey) {
+    if (!tcKey || typeof jira_search_by_jql !== 'function') return null;
+    try {
+        var result = jira_search_by_jql({
+            jql: 'issue in linkedIssues("' + tcKey + '") AND issuetype = Bug AND status not in (Done)',
+            fields: ['key', 'summary', 'status'],
+            maxResults: 1
+        });
+        var tickets = extractTickets(result);
+        return tickets.length > 0 ? (tickets[0].key || null) : null;
+    } catch (e) {
+        console.warn('  ⚠️ Could not live-check linked non-Done bugs for', tcKey, e);
+        return null;
+    }
+}
+
+function findAnyLinkedNonDoneBug(tcKeys) {
+    for (var i = 0; i < tcKeys.length; i++) {
+        var bugKey = findLinkedNonDoneBug(tcKeys[i]);
+        if (bugKey) return bugKey;
+    }
+    return null;
+}
+
 function moveToBugToFix(tcKey) {
     try {
         jira_move_to_status({ key: tcKey, statusName: STATUSES.BUG_TO_FIX || 'Bug To Fix' });
@@ -208,6 +249,32 @@ function action(params) {
 
             var linkedTCs = bugDef.linkedTCs || [];
             console.log('  Creating bug:', summary, '| links to:', linkedTCs.join(', '));
+
+            var existingBugKey = findAnyLinkedNonDoneBug(linkedTCs);
+            if (existingBugKey) {
+                console.log('  🔁 Existing linked non-Done bug found during live re-check:', existingBugKey);
+                linkedTCs.forEach(function(tcKey) {
+                    if (!processedSet[tcKey]) {
+                        console.warn('  ⚠️ TC', tcKey, 'not in processed list — skipping (safety guard)');
+                        return;
+                    }
+                    try {
+                        linkBugToTC(tcKey, existingBugKey);
+                        moveToBugToFix(tcKey);
+                        addTriggerLabel(tcKey, triggerLabel);
+                        removeTriggerLabel(tcKey, smTriggerLabel);
+                        postComment(tcKey,
+                            'h3. 🔗 Existing Bug Linked (Batch Live Re-check)\n\n' +
+                            'Linked to existing non-Done bug: *' + existingBugKey + '*'
+                        );
+                        results.linked.push({ tcKey: tcKey, bugKey: existingBugKey, source: 'live_recheck' });
+                    } catch (e) {
+                        console.error('  ❌ Failed to link', tcKey, '→', existingBugKey, ':', e);
+                        results.errors.push({ tcKey: tcKey, bugKey: existingBugKey, error: e.toString() });
+                    }
+                });
+                return;
+            }
 
             var bugKey = null;
             try {
