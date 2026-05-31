@@ -8,8 +8,8 @@
 #   install.sh all -tool1 -tool2            # install all except listed
 #
 # Examples:
-#   install.sh dmtools maestro copilot
-#   install.sh java:17 dmtools:v1.7.195 node:20 maestro copilot
+#   install.sh dmtools maestro copilot playwright
+#   install.sh java:17 dmtools:v1.7.195 node:20 maestro copilot playwright
 #   install.sh all
 #   install.sh all -cursor -codemie
 set -eu
@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"
 
 # Canonical order for "all" (node before copilot, java before dmtools)
-ALL_TOOLS="java node dmtools maestro copilot codemie cursor codegraph"
+ALL_TOOLS="java node dmtools maestro copilot codemie cursor codegraph playwright"
 
 if [ $# -eq 0 ]; then
   echo "Usage: install.sh tool1[:version] tool2[:version] ..."
@@ -33,10 +33,11 @@ if [ $# -eq 0 ]; then
   echo "  codemie   — codemie-claude CLI.      Default version: latest"
   echo "  cursor    — cursor-agent (check only; cannot be auto-installed)"
   echo "  codegraph — CodeGraph CLI (npm).     Default version: latest"
+  echo "  playwright — Playwright + Chromium.  Default version: latest"
   echo ""
   echo "Examples:"
-  echo "  install.sh dmtools maestro copilot"
-  echo "  install.sh java:17 dmtools:v1.7.195 node:20 maestro copilot"
+  echo "  install.sh dmtools maestro copilot playwright"
+  echo "  install.sh java:17 dmtools:v1.7.195 node:20 maestro copilot playwright"
   echo "  install.sh all"
   echo "  install.sh all -cursor -codemie"
   exit 0
@@ -164,6 +165,7 @@ for tool in ${TOOL_LIST}; do
     codemie) BIN="codemie-claude" ;;
     cursor)  BIN="cursor-agent" ;;
     codegraph) BIN="codegraph" ;;
+    playwright) BIN="playwright" ;;
     *)       continue ;;
   esac
 

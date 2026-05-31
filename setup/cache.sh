@@ -8,7 +8,7 @@
 #   cache.sh info                      # print cache table for all known tools
 #
 # Examples:
-#   cache.sh keys dmtools maestro copilot node
+#   cache.sh keys dmtools maestro copilot node playwright
 #   cache.sh keys dmtools:v1.7.195 java:17
 #
 # After running, CI cache steps can reference exported env vars:
@@ -69,6 +69,12 @@ _cache_codegraph() {
   export_var "CODEGRAPH_INDEX_CACHE_KEY"  "codegraph-index-${OS_TAG}"
 }
 
+_cache_playwright() {
+  local version="${1:-${PLAYWRIGHT_VERSION:-latest}}"
+  export_var "PLAYWRIGHT_CACHE_PATH" "${HOME}/.cache/ms-playwright"
+  export_var "PLAYWRIGHT_CACHE_KEY"  "playwright-browsers-${version}-${OS_TAG}"
+}
+
 _cache_codemie() {
   local version="${1:-${CODEMIE_VERSION:-latest}}"
   export_var "CODEMIE_CACHE_PATH" "${HOME}/.local/bin"
@@ -86,6 +92,7 @@ _dispatch_tool() {
     maestro)  _cache_maestro  "${version}" ;;
     copilot)  _cache_copilot  "${version}" ;;
     codegraph) _cache_codegraph "${version}" ;;
+    playwright) _cache_playwright "${version}" ;;
     codemie)  _cache_codemie  "${version}" ;;
     cursor)   echo "ℹ️  cursor-agent is not cacheable (part of Cursor IDE)" ;;
     *)        echo "⚠️  Unknown tool '${tool}' — skipping cache config" ;;
@@ -105,6 +112,7 @@ _print_info() {
   printf "│ %-11s │ %-32s │ %-46s │\n" "codemie"  "~/.local/bin"   "codemie-latest-linux-x86_64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "cursor"   "(not cacheable)" "-"
   printf "│ %-11s │ %-32s │ %-46s │\n" "codegraph" "~/.npm-global + .codegraph/" "npm-global-codegraph-latest-linux-x86_64"
+  printf "│ %-11s │ %-32s │ %-46s │\n" "playwright" "~/.cache/ms-playwright" "playwright-browsers-latest-linux-x86_64"
   echo "└─────────────┴──────────────────────────────────┴────────────────────────────────────────────────┘"
   echo ""
   echo "Exported env vars per tool:"
@@ -122,7 +130,7 @@ _print_info() {
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-ALL_TOOLS="java node dmtools maestro copilot codemie codegraph"  # cursor has no cache
+ALL_TOOLS="java node dmtools maestro copilot codemie codegraph playwright"  # cursor has no cache
 
 MODE="${1:-info}"
 shift || true
@@ -188,4 +196,3 @@ for arg in ${TOOL_LIST}; do
   KEY_VAR="${VAR_PREFIX}_CACHE_KEY"
   echo "📦 ${TOOL_NAME}: key=${!KEY_VAR:-?}  path=${!PATH_VAR:-?}"
 done
-
