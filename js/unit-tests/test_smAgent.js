@@ -634,6 +634,36 @@ suite('smAgent: skipIfLabel', function() {
         assert.contains(inputs.encoded_config, 'T-1', 'T-1 was retriggered');
     });
 
+    test('uses shared concurrencyKey when checking active workflow for stale label recovery', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [
+                { key: 'T-1', fields: { labels: ['sm_bulk_bugs_creation_triggered'] } }
+            ],
+            workflowRuns: {
+                queued: [
+                    {
+                        display_title: 'agents/bulk_bugs_creation.json : bulk_bugs_creation',
+                        status: 'queued'
+                    }
+                ],
+                in_progress: []
+            }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", {
+                configFile: 'agents/bulk_bugs_creation.json',
+                concurrencyKey: 'bulk_bugs_creation',
+                skipIfLabel: 'sm_bulk_bugs_creation_triggered',
+                addLabel: 'sm_bulk_bugs_creation_triggered',
+                recoverStaleTriggerLabel: true
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 0, 'active shared-concurrency run should prevent relaunch');
+    });
+
     test('skips ticket that has any skipIfLabels entry', function() {
         var sm = makeSmAgent({
             fileMap: {},
