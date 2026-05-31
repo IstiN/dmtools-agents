@@ -43,19 +43,6 @@ function cleanCommandOutput(output) {
     return lines.join('\n').trim();
 }
 
-function cleanupRuntimeGitArtifacts() {
-    try {
-        runCmd({ command: 'git reset -q -- .agent-bin .codegraph' });
-    } catch (e) {
-        console.warn('Runtime artifact reset skipped:', e);
-    }
-    try {
-        runCmd({ command: 'git clean -fd -- .agent-bin .codegraph' });
-    } catch (e) {
-        console.warn('Runtime artifact cleanup skipped:', e);
-    }
-}
-
 function checkoutBranch(ticketKey, config, ticket) {
     ticket = ticket || { key: ticketKey, fields: {} };
     _workingDir = config.workingDir || null;
@@ -75,11 +62,6 @@ function checkoutBranch(ticketKey, config, ticket) {
     } catch (e) {
         console.warn('Could not fetch remote branches:', e);
     }
-
-    // CodeGraph wrappers are installed by the workflow before branch setup.
-    // They are runtime-only files and can block git checkout when target branches
-    // contain or remove the same paths.
-    cleanupRuntimeGitArtifacts();
 
     var localBranches = '';
     try {
