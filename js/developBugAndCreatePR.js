@@ -42,6 +42,15 @@ function readJson(path) {
     }
 }
 
+function hasCodeGraphUsage() {
+    try {
+        const raw = file_read({ path: '.dmtools/codegraph-usage.log' });
+        return !!(raw && raw.trim());
+    } catch (e) {
+        return false;
+    }
+}
+
 function removeLabels(ticketKey, params) {
     const wipLabel = params.metadata && params.metadata.contextId
         ? params.metadata.contextId + '_wip' : null;
@@ -139,6 +148,27 @@ function action(params) {
         const alreadyFixed = readJson('outputs/already_fixed.json');
         if (alreadyFixed) {
             console.log('outputs/already_fixed.json found — bug already resolved in codebase');
+
+            if (!hasCodeGraphUsage()) {
+                console.warn('outputs/already_fixed.json rejected — no CodeGraph usage was recorded');
+                try {
+                    jira_post_comment({
+                        key: ticketKey,
+                        comment: 'h3. ⚠️ Already Fixed Claim Needs CodeGraph Verification\n\n' +
+                            'The agent wrote `outputs/already_fixed.json`, but no CodeGraph usage was recorded. ' +
+                            'Already-fixed conclusions for source-code bugs must use CodeGraph to locate the relevant implementation and impact path.\n\n' +
+                            'Resetting to *Ready For Development* for an automatic retry.'
+                    });
+                } catch (e) {}
+                try {
+                    jira_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
+                    console.log('✅ Moved', ticketKey, 'to Ready For Development for CodeGraph retry');
+                } catch (e) {
+                    console.warn('Failed to move ticket to Ready For Development:', e);
+                }
+                removeLabels(ticketKey, params);
+                return { success: true, path: 'already_fixed_without_codegraph', ticketKey };
+            }
 
             let comment = 'h3. ✅ Bug Already Fixed\n\n';
             if (alreadyFixed.rca) {

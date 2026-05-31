@@ -83,4 +83,81 @@ suite('developBugAndCreatePR', function() {
         assert.contains(loaded.comments[0].comment, 'Development Interrupted');
     });
 
+    test('rejects already_fixed output when CodeGraph was not used', function() {
+        var loaded = loadDevelopBugAndCreatePR({
+            file_read: function(args) {
+                if (args.path === 'outputs/already_fixed.json') {
+                    return JSON.stringify({
+                        rca: 'Current code already covers this behavior',
+                        commit: 'abc123',
+                        description: 'Verified without CodeGraph'
+                    });
+                }
+                if (args.path === '.dmtools/codegraph-usage.log') {
+                    throw new Error('missing codegraph usage log');
+                }
+                throw new Error('missing ' + args.path);
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: {
+                key: 'TS-1303',
+                fields: { summary: 'Already fixed claim', description: '', labels: [] }
+            },
+            metadata: { contextId: 'bug_development' },
+            jobParams: {
+                customParams: { removeLabel: 'sm_bug_development_triggered' }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'already_fixed_without_codegraph');
+        assert.deepEqual(loaded.moves, [
+            { key: 'TS-1303', statusName: 'Ready For Development' }
+        ]);
+        assert.contains(loaded.comments[0].comment, 'Needs CodeGraph Verification');
+        assert.deepEqual(loaded.removed, [
+            { key: 'TS-1303', label: 'bug_development_wip' },
+            { key: 'TS-1303', label: 'sm_bug_development_triggered' }
+        ]);
+    });
+
+    test('accepts already_fixed output when CodeGraph usage was recorded', function() {
+        var loaded = loadDevelopBugAndCreatePR({
+            file_read: function(args) {
+                if (args.path === 'outputs/already_fixed.json') {
+                    return JSON.stringify({
+                        rca: 'Current code already covers this behavior',
+                        commit: 'abc123',
+                        description: 'Verified with CodeGraph'
+                    });
+                }
+                if (args.path === '.dmtools/codegraph-usage.log') {
+                    return '2026-05-31T00:00:00Z\tcodegraph search symbol\n';
+                }
+                throw new Error('missing ' + args.path);
+            },
+            jira_add_label: function() {}
+        });
+
+        var result = loaded.mod.action({
+            ticket: {
+                key: 'TS-1303',
+                fields: { summary: 'Already fixed claim', description: '', labels: [] }
+            },
+            metadata: { contextId: 'bug_development' },
+            jobParams: {
+                customParams: { removeLabel: 'sm_bug_development_triggered' }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'already_fixed');
+        assert.deepEqual(loaded.moves, [
+            { key: 'TS-1303', statusName: 'Merged' }
+        ]);
+        assert.contains(loaded.comments[0].comment, 'Bug Already Fixed');
+    });
+
 });
