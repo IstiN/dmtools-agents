@@ -43,14 +43,38 @@ function cleanCommandOutput(output) {
     return lines.join('\n').trim();
 }
 
-function resetDivergentBranchToBase(branchName, baseBranch) {
+var STALE_BRANCH_RESET_AHEAD_THRESHOLD = 100;
+
+function alignBranchWithBase(branchName, baseBranch) {
     try {
         runCmd({ command: 'git merge-base --is-ancestor origin/' + baseBranch + ' HEAD' });
         console.log('Branch already contains origin/' + baseBranch + ':', branchName);
         return;
     } catch (ancestorError) {
-        console.warn('Branch does not contain origin/' + baseBranch + ', resetting local branch:', branchName);
+        console.warn('Branch does not contain origin/' + baseBranch + ':', branchName);
     }
+
+    var aheadCount = 0;
+    try {
+        aheadCount = parseInt(cleanCommandOutput(
+            runCmd({ command: 'git rev-list --count origin/' + baseBranch + '..HEAD' }) || ''
+        ), 10) || 0;
+    } catch (countError) {
+        console.warn('Could not count branch commits ahead of origin/' + baseBranch + ':', countError);
+    }
+
+    if (aheadCount <= STALE_BRANCH_RESET_AHEAD_THRESHOLD) {
+        console.warn(
+            'Keeping existing branch ' + branchName + ' because it has ' + aheadCount +
+            ' commit(s) ahead of origin/' + baseBranch + '. Publish-time sync will handle base conflicts.'
+        );
+        return;
+    }
+
+    console.warn(
+        'Branch ' + branchName + ' has ' + aheadCount + ' commits ahead of origin/' + baseBranch +
+        ', treating it as stale/bootstrap history and resetting local branch.'
+    );
 
     try { runCmd({ command: 'git rebase --abort' }); } catch (_) {}
     try { runCmd({ command: 'git merge --abort' }); } catch (_) {}
@@ -88,7 +112,7 @@ function checkoutBranch(ticketKey, config, ticket) {
     if (localBranches.trim()) {
         console.log('Branch exists locally, aligning with base:', branchName);
         runCmd({ command: 'git checkout ' + branchName });
-        resetDivergentBranchToBase(branchName, rebaseBase);
+        alignBranchWithBase(branchName, rebaseBase);
     } else {
         var remoteBranches = '';
         try {
@@ -110,7 +134,7 @@ function checkoutBranch(ticketKey, config, ticket) {
                 runCmd({ command: prHelper.buildOriginFetchCommand(branchName) });
                 runCmd({ command: 'git checkout -B ' + branchName + ' origin/' + branchName });
             }
-            resetDivergentBranchToBase(branchName, rebaseBase);
+            alignBranchWithBase(branchName, rebaseBase);
         } else {
             // New branch: in two-branch mode, ensure feature branch exists first
             var branchBase = config.git.baseBranch;

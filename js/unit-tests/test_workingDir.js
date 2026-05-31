@@ -201,6 +201,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             if (args.command === 'git merge-base --is-ancestor origin/main HEAD') {
                 throw new Error('not ancestor');
             }
+            if (args.command === 'git rev-list --count origin/main..HEAD') return '1427\n';
             return '';
         };
 
@@ -254,6 +255,67 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
         assert.ok(
             calls.indexOf('git reset --hard origin/main') !== -1,
             'stale AI branch should be reset to the base branch'
+        );
+    });
+
+    test('keeps normal divergent development branch work for publish-time sync', function() {
+        var calls = [];
+        var mockCli = function(args) {
+            calls.push(args.command);
+            if (args.command === 'git branch --list "ai/TS-1307"') return '  ai/TS-1307\n';
+            if (args.command === 'git merge-base --is-ancestor origin/main HEAD') {
+                throw new Error('not ancestor');
+            }
+            if (args.command === 'git rev-list --count origin/main..HEAD') return '3\n';
+            return '';
+        };
+
+        var freshConfigLoader = loadModule(
+            'js/configLoader.js',
+            makeRequire({ './config.js': configModule }),
+            { file_read: function(opts) {
+                var p = opts && (opts.path || opts);
+                if (p && p.indexOf('.dmtools/config') !== -1) return null;
+                try { return file_read(opts); } catch (e) { return null; }
+            } }
+        );
+
+        var mod = loadModule(
+            'js/preCliDevelopmentSetup.js',
+            makeRequire({
+                './configLoader.js': freshConfigLoader,
+                './config.js': configModule,
+                './common/pullRequest.js': {
+                    buildOriginFetchCommand: function(refSpec) {
+                        return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+                    }
+                },
+                './fetchParentContextToInput.js': { action: function() {} },
+                './fetchQuestionsToInput.js': { action: function() {} },
+                './fetchLinkedTestsToInput.js': { action: function() {} },
+                './restoreFromReleases.js': { action: function() {} }
+            }),
+            {
+                cli_execute_command: mockCli,
+                file_read: function(opts) {
+                    try { return file_read(opts); } catch (e) { return null; }
+                },
+                file_write: function() {},
+                jira_move_to_status: function() {},
+                jira_search_by_jql: function() { return []; }
+            }
+        );
+
+        mod.action({
+            ticket: { key: 'TS-1307', fields: { summary: 'Normal branch work', labels: [] } },
+            inputFolderPath: 'input/TS-1307',
+            jobParams: {}
+        });
+
+        assert.equal(
+            calls.indexOf('git reset --hard origin/main'),
+            -1,
+            'normal branch work must not be discarded during pre-CLI setup'
         );
     });
 
