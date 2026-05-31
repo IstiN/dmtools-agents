@@ -77,4 +77,48 @@ suite('postBulkBugsCreation', function() {
         assert.contains(comments[0].comment, 'In Rework');
     });
 
+    test('rejects fixedByBug decisions and does not move TC to Backlog', function() {
+        var statusMoves = [];
+        var removedLabels = [];
+        var links = [];
+
+        var module = loadPostBulkBugsCreation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/bulk_bug_decisions.json') {
+                    return JSON.stringify({
+                        processed: ['TS-706'],
+                        newBugs: [],
+                        links: [],
+                        fixedByBug: [
+                            { tcKey: 'TS-706', bugKey: 'TS-1', reason: 'Done bug matched' }
+                        ],
+                        skipped: []
+                    });
+                }
+                return null;
+            },
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            jira_remove_label: function(args) { removedLabels.push(args); },
+            jira_link_issues: function(args) { links.push(args); }
+        });
+
+        var result = module.action({
+            jobParams: {
+                customParams: {
+                    removeLabel: 'sm_bug_creation_triggered',
+                    smTriggerLabel: 'sm_bulk_bugs_creation_triggered'
+                }
+            }
+        });
+
+        assert.equal(result.success, false);
+        assert.contains(result.error, 'fixedByBug is not supported');
+        assert.deepEqual(statusMoves, []);
+        assert.deepEqual(links, []);
+        assert.deepEqual(removedLabels, [
+            { key: 'TS-706', label: 'sm_bug_creation_triggered' },
+            { key: 'TS-706', label: 'sm_bulk_bugs_creation_triggered' }
+        ]);
+    });
+
 });

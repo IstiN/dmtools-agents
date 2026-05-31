@@ -160,17 +160,51 @@ elif [ "$PROVIDER" = "copilot" ]; then
   if ! command -v copilot >/dev/null 2>&1; then
     COPILOT_CMD=(npx @github/copilot@1.0.44)
   fi
-  if [ -f "${PROMPT_ARG}" ]; then
-    echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} ${PASS_ARGS[*]:-} (prompt: ${PROMPT_BYTES} bytes via stdin)"
-    echo ""
-    "${COPILOT_CMD[@]}" --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${PROMPT_ARG}"
-  else
-    echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} ${PASS_ARGS[*]:-} -p <inline prompt>"
-    echo ""
-    "${COPILOT_CMD[@]}" --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}"
-  fi
+  run_copilot_once() {
+    local log_file="$1"
+    set +e
+    if [ -f "${PROMPT_ARG}" ]; then
+      echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} ${PASS_ARGS[*]:-} (prompt: ${PROMPT_BYTES} bytes via stdin)"
+      echo ""
+      "${COPILOT_CMD[@]}" --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${PROMPT_ARG}" 2>&1 | tee "$log_file"
+    else
+      echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} ${PASS_ARGS[*]:-} -p <inline prompt>"
+      echo ""
+      "${COPILOT_CMD[@]}" --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$log_file"
+    fi
+    local status=${PIPESTATUS[0]}
+    set -e
+    return "$status"
+  }
 
-  exit_code=$?
+  max_attempts="${COPILOT_RATE_LIMIT_RETRIES:-2}"
+  retry_delay="${COPILOT_RATE_LIMIT_RETRY_DELAY_SECONDS:-90}"
+  attempt=1
+  exit_code=1
+
+  while [ "$attempt" -le "$max_attempts" ]; do
+    copilot_log="$(mktemp)"
+    run_copilot_once "$copilot_log"
+    exit_code=$?
+
+    if [ "$exit_code" -eq 0 ]; then
+      rm -f "$copilot_log"
+      break
+    fi
+
+    if grep -Eiq "rate limit|limit reset|You've hit your rate limit" "$copilot_log" && [ "$attempt" -lt "$max_attempts" ]; then
+      echo ""
+      echo "Copilot rate limit detected; retrying in ${retry_delay}s (attempt $((attempt + 1))/${max_attempts})"
+      rm -f "$copilot_log"
+      sleep "$retry_delay"
+      attempt=$((attempt + 1))
+      continue
+    fi
+
+    rm -f "$copilot_log"
+    break
+  done
+
   echo ""
   echo "=== Agent completed with exit code: $exit_code ==="
   exit $exit_code

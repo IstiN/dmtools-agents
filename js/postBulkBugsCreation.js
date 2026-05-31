@@ -161,11 +161,24 @@ function action(params) {
         var processed = decisions.processed || [];
         var newBugs = decisions.newBugs || [];
         var links = decisions.links || [];
-        var fixedByBug = decisions.fixedByBug || [];
         var skipped = decisions.skipped || [];
+        var fixedByBug = decisions.fixedByBug || [];
+
+        if (fixedByBug.length > 0) {
+            console.error('❌ fixedByBug is not supported for bulk bug creation; Done bugs are excluded from matching');
+            fixedByBug.forEach(function(fixDef) {
+                if (fixDef && fixDef.tcKey) {
+                    removeProcessingLabels(fixDef.tcKey, [triggerLabel, smTriggerLabel]);
+                }
+            });
+            return {
+                success: false,
+                error: 'fixedByBug is not supported; create or link a non-Done bug, or skip only confirmed test-code issues'
+            };
+        }
 
         console.log('Decisions: ' + newBugs.length + ' new bugs, ' + links.length + ' links, ' +
-            fixedByBug.length + ' fixed by done bug, ' + skipped.length + ' skipped');
+            skipped.length + ' skipped');
         console.log('Processed TCs: ' + processed.join(', '));
 
         var results = { created: [], linked: [], skipped: [], errors: [] };
@@ -271,50 +284,7 @@ function action(params) {
             }
         });
 
-        // ── 3. Handle TCs fixed by Done bugs → Backlog ────────────────────
-        var fixedByBug = decisions.fixedByBug || [];
-        fixedByBug.forEach(function(fixDef) {
-            var tcKey = fixDef.tcKey;
-            var bugKey = fixDef.bugKey;
-
-            if (!tcKey) return;
-            if (!processedSet[tcKey]) {
-                console.warn('  ⚠️ TC', tcKey, 'not in processed list — skipping (safety guard)');
-                return;
-            }
-
-            console.log('  Fixed by Done bug:', tcKey, '→', bugKey || 'unknown');
-            try {
-                if (bugKey) {
-                    linkBugToTC(tcKey, bugKey);
-                }
-                // Move to Backlog for re-automation against fixed code
-                try {
-                    jira_move_to_status({ key: tcKey, statusName: 'Backlog' });
-                    console.log('  📋 Moved to Backlog:', tcKey);
-                } catch (e) {
-                    console.warn('  ⚠️ Could not move to Backlog:', tcKey, e);
-                }
-                // Remove test automation label so SM can re-trigger automation
-                try {
-                    jira_remove_label({ key: tcKey, label: 'sm_test_automation_triggered' });
-                } catch (e) {}
-                // Remove bug creation trigger label
-                removeProcessingLabels(tcKey, [triggerLabel, smTriggerLabel]);
-                postComment(tcKey,
-                    'h3. 🔄 Bug Already Fixed — Ready for Re-automation\n\n' +
-                    (bugKey ? 'Matching bug *' + bugKey + '* is already in *Done* status.\n\n' : '') +
-                    (fixDef.reason || 'The underlying bug has been fixed.') +
-                    '\n\n_TC moved to *Backlog* for re-automation against the fixed code._'
-                );
-                results.created.push({ tcKey: tcKey, bugKey: bugKey || 'done', action: 'fixed_by_bug' });
-            } catch (e) {
-                console.error('  ❌ Failed to process fixed TC', tcKey, ':', e);
-                results.errors.push({ tcKey: tcKey, bugKey: bugKey, error: e.toString() });
-            }
-        });
-
-        // ── 4. Test-code issues → In Rework so they leave Failed and rework runs ─
+        // ── 3. Test-code issues → In Rework so they leave Failed and rework runs ─
         skipped.forEach(function(skipDef) {
             var tcKey = skipDef.tcKey;
             if (!tcKey) return;
