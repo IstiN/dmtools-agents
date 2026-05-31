@@ -103,9 +103,9 @@ function checkoutBranch(ticketKey, config, ticket) {
                 runCmd({ command: prHelper.buildOriginFetchCommand(branchName + ':' + branchName) });
                 runCmd({ command: 'git checkout ' + branchName });
             } catch (fetchCheckoutErr) {
-                console.warn('fetch+checkout failed, falling back to -b from origin:', fetchCheckoutErr);
+                console.warn('fetch+checkout failed, resetting local branch from origin:', fetchCheckoutErr);
                 runCmd({ command: prHelper.buildOriginFetchCommand(branchName) });
-                runCmd({ command: 'git checkout -b ' + branchName + ' origin/' + branchName });
+                runCmd({ command: 'git checkout -B ' + branchName + ' origin/' + branchName });
             }
             try {
                 var rebaseOutput2 = cleanCommandOutput(
@@ -227,4 +227,8 @@ function action(params) {
         console.error('Error in preCliDevelopmentSetup:', error);
         throw error;
     }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { action };
 }

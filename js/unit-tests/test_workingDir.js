@@ -115,6 +115,84 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
         assert.ok(true, 'workingDirectory propagated correctly');
     });
 
+    test('remote branch fallback is idempotent when local branch already exists', function() {
+        var loaded = loadPreCli(null);
+        var commands = loaded.calls.map(function(c) { return c.command; });
+        var fetchCheckoutFailed = false;
+
+        loaded.calls.length = 0;
+        var originalAction = loaded.mod.action;
+        var mod = loaded.mod;
+
+        // Reload with a CLI mock that exercises the remote-branch fallback:
+        // local branch check is empty, remote branch exists, explicit fetch+checkout
+        // fails, then checkout -B must be used instead of checkout -b.
+        var calls = [];
+        var mockCli = function(args) {
+            calls.push(args.command);
+            if (args.command === 'git branch --list "ai/TS-1302"') return '';
+            if (args.command === 'git ls-remote --heads origin ai/TS-1302') return 'abc\trefs/heads/ai/TS-1302\n';
+            if (args.command === 'git -c fetch.recurseSubmodules=no fetch origin ai/TS-1302:ai/TS-1302') {
+                fetchCheckoutFailed = true;
+                throw new Error('fatal: refusing to fetch into checked out branch');
+            }
+            return '';
+        };
+
+        var freshConfigLoader = loadModule(
+            'js/configLoader.js',
+            makeRequire({ './config.js': configModule }),
+            { file_read: function(opts) {
+                var p = opts && (opts.path || opts);
+                if (p && p.indexOf('.dmtools/config') !== -1) return null;
+                try { return file_read(opts); } catch (e) { return null; }
+            } }
+        );
+
+        mod = loadModule(
+            'js/preCliDevelopmentSetup.js',
+            makeRequire({
+                './configLoader.js': freshConfigLoader,
+                './config.js': configModule,
+                './common/pullRequest.js': {
+                    buildOriginFetchCommand: function(refSpec) {
+                        return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+                    }
+                },
+                './fetchParentContextToInput.js': { action: function() {} },
+                './fetchQuestionsToInput.js': { action: function() {} },
+                './fetchLinkedTestsToInput.js': { action: function() {} },
+                './restoreFromReleases.js': { action: function() {} }
+            }),
+            {
+                cli_execute_command: mockCli,
+                file_read: function(opts) {
+                    try { return file_read(opts); } catch (e) { return null; }
+                },
+                file_write: function() {},
+                jira_move_to_status: function() {},
+                jira_search_by_jql: function() { return []; }
+            }
+        );
+
+        mod.action({
+            ticket: { key: 'TS-1302', fields: { summary: 'Remote branch recovery', labels: [] } },
+            inputFolderPath: 'input/TS-1302',
+            jobParams: {}
+        });
+
+        assert.ok(fetchCheckoutFailed, 'test should exercise fallback path');
+        assert.ok(
+            calls.indexOf('git checkout -B ai/TS-1302 origin/ai/TS-1302') !== -1,
+            'fallback must reset/create local branch idempotently'
+        );
+        assert.equal(
+            calls.indexOf('git checkout -b ai/TS-1302 origin/ai/TS-1302'),
+            -1,
+            'fallback must not fail when local branch already exists'
+        );
+    });
+
 });
 
 // ── preCliTestAutomationSetup: workingDir support ─────────────────────────────
