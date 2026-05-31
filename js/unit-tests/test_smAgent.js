@@ -204,6 +204,7 @@ suite('sm.json rule ordering', function() {
 
         assert.ok(bugDevelopment, 'bug development rule exists');
         assert.contains(bugDevelopment.jql, 'updated <= -15m');
+        assert.equal(bugDevelopment.limit, 1, 'bug development should retry one ticket per SM cycle to avoid Copilot rate-limit bursts');
     });
 });
 
