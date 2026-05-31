@@ -43,6 +43,20 @@ function cleanCommandOutput(output) {
     return lines.join('\n').trim();
 }
 
+function resetDivergentBranchToBase(branchName, baseBranch) {
+    try {
+        runCmd({ command: 'git merge-base --is-ancestor origin/' + baseBranch + ' HEAD' });
+        console.log('Branch already contains origin/' + baseBranch + ':', branchName);
+        return;
+    } catch (ancestorError) {
+        console.warn('Branch does not contain origin/' + baseBranch + ', resetting local branch:', branchName);
+    }
+
+    try { runCmd({ command: 'git rebase --abort' }); } catch (_) {}
+    try { runCmd({ command: 'git merge --abort' }); } catch (_) {}
+    runCmd({ command: 'git reset --hard origin/' + baseBranch });
+}
+
 function checkoutBranch(ticketKey, config, ticket) {
     ticket = ticket || { key: ticketKey, fields: {} };
     _workingDir = config.workingDir || null;
@@ -72,20 +86,9 @@ function checkoutBranch(ticketKey, config, ticket) {
     }
 
     if (localBranches.trim()) {
-        console.log('Branch exists locally, rebasing from main:', branchName);
+        console.log('Branch exists locally, aligning with base:', branchName);
         runCmd({ command: 'git checkout ' + branchName });
-        try {
-            var rebaseOutput = cleanCommandOutput(
-                runCmd({ command: 'git rebase origin/' + rebaseBase }) || ''
-            );
-            if (rebaseOutput.indexOf('CONFLICT') !== -1) {
-                throw new Error('Rebase conflict detected: ' + rebaseOutput.substring(0, 200));
-            }
-        } catch (rebaseErr) {
-            console.warn('Rebase failed, resetting to main:', rebaseErr);
-            try { runCmd({ command: 'git rebase --abort' }); } catch (_) {}
-            runCmd({ command: 'git reset --hard origin/' + rebaseBase });
-        }
+        resetDivergentBranchToBase(branchName, rebaseBase);
     } else {
         var remoteBranches = '';
         try {
@@ -96,7 +99,7 @@ function checkoutBranch(ticketKey, config, ticket) {
         }
 
         if (remoteBranches.trim()) {
-            console.log('Branch exists on remote, fetching and checking out:', branchName);
+            console.log('Branch exists on remote, fetching and aligning with base:', branchName);
             // Explicitly fetch the branch so origin/<branch> tracking ref is available locally.
             // git fetch origin --prune may not populate it if the repo is sparse/shallow.
             try {
@@ -107,18 +110,7 @@ function checkoutBranch(ticketKey, config, ticket) {
                 runCmd({ command: prHelper.buildOriginFetchCommand(branchName) });
                 runCmd({ command: 'git checkout -B ' + branchName + ' origin/' + branchName });
             }
-            try {
-                var rebaseOutput2 = cleanCommandOutput(
-                    runCmd({ command: 'git rebase origin/' + rebaseBase }) || ''
-                );
-                if (rebaseOutput2.indexOf('CONFLICT') !== -1) {
-                    throw new Error('Rebase conflict detected: ' + rebaseOutput2.substring(0, 200));
-                }
-            } catch (rebaseErr) {
-                console.warn('Rebase failed, resetting to main:', rebaseErr);
-                try { runCmd({ command: 'git rebase --abort' }); } catch (_) {}
-                runCmd({ command: 'git reset --hard origin/' + rebaseBase });
-            }
+            resetDivergentBranchToBase(branchName, rebaseBase);
         } else {
             // New branch: in two-branch mode, ensure feature branch exists first
             var branchBase = config.git.baseBranch;

@@ -193,6 +193,70 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
         );
     });
 
+    test('does not rebase stale existing development branch', function() {
+        var calls = [];
+        var mockCli = function(args) {
+            calls.push(args.command);
+            if (args.command === 'git branch --list "ai/TS-1306"') return '  ai/TS-1306\n';
+            if (args.command === 'git merge-base --is-ancestor origin/main HEAD') {
+                throw new Error('not ancestor');
+            }
+            return '';
+        };
+
+        var freshConfigLoader = loadModule(
+            'js/configLoader.js',
+            makeRequire({ './config.js': configModule }),
+            { file_read: function(opts) {
+                var p = opts && (opts.path || opts);
+                if (p && p.indexOf('.dmtools/config') !== -1) return null;
+                try { return file_read(opts); } catch (e) { return null; }
+            } }
+        );
+
+        var mod = loadModule(
+            'js/preCliDevelopmentSetup.js',
+            makeRequire({
+                './configLoader.js': freshConfigLoader,
+                './config.js': configModule,
+                './common/pullRequest.js': {
+                    buildOriginFetchCommand: function(refSpec) {
+                        return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+                    }
+                },
+                './fetchParentContextToInput.js': { action: function() {} },
+                './fetchQuestionsToInput.js': { action: function() {} },
+                './fetchLinkedTestsToInput.js': { action: function() {} },
+                './restoreFromReleases.js': { action: function() {} }
+            }),
+            {
+                cli_execute_command: mockCli,
+                file_read: function(opts) {
+                    try { return file_read(opts); } catch (e) { return null; }
+                },
+                file_write: function() {},
+                jira_move_to_status: function() {},
+                jira_search_by_jql: function() { return []; }
+            }
+        );
+
+        mod.action({
+            ticket: { key: 'TS-1306', fields: { summary: 'Stale branch', labels: [] } },
+            inputFolderPath: 'input/TS-1306',
+            jobParams: {}
+        });
+
+        assert.equal(
+            calls.some(function(c) { return c.indexOf('git rebase origin/') === 0; }),
+            false,
+            'stale AI branches must not be rebased through bootstrap history'
+        );
+        assert.ok(
+            calls.indexOf('git reset --hard origin/main') !== -1,
+            'stale AI branch should be reset to the base branch'
+        );
+    });
+
 });
 
 // ── preCliTestAutomationSetup: workingDir support ─────────────────────────────
