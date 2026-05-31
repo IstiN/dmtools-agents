@@ -49,6 +49,7 @@ var scmModule = require('./common/scm.js');
 
 // Project config loaded once in action() — used as global default for rules without configPath
 var projectConfig = null;
+var STALE_NON_RUNNING_WORKFLOW_MS = 6 * 60 * 60 * 1000;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -234,6 +235,7 @@ function hasActiveTargetWorkflowRun(scm, workflowFile, configFile, ticketKey) {
 
         for (var j = 0; j < runs.length; j++) {
             var run = runs[j] || {};
+            if (isStaleNonRunningWorkflowRun(run, statuses[i])) continue;
             var runName = run.name || run.display_title || '';
             if (runName === expectedRunName) {
                 console.log('  ⏭️  ' + ticketKey + ' skipped (active workflow already exists: ' + expectedRunName + ')');
@@ -243,6 +245,20 @@ function hasActiveTargetWorkflowRun(scm, workflowFile, configFile, ticketKey) {
     }
 
     return false;
+}
+
+function workflowRunTimestamp(run) {
+    var value = run && (run.updated_at || run.updatedAt || run.created_at || run.createdAt);
+    if (!value) return null;
+    var timestamp = Date.parse(value);
+    return isNaN(timestamp) ? null : timestamp;
+}
+
+function isStaleNonRunningWorkflowRun(run, status) {
+    if (status === 'in_progress') return false;
+    var timestamp = workflowRunTimestamp(run);
+    if (!timestamp) return false;
+    return (Date.now() - timestamp) > STALE_NON_RUNNING_WORKFLOW_MS;
 }
 
 function countActiveWorkflowRuns(scm, workflowFile) {
@@ -263,6 +279,7 @@ function countActiveWorkflowRuns(scm, workflowFile) {
 
         for (var j = 0; j < runs.length; j++) {
             var run = runs[j] || {};
+            if (isStaleNonRunningWorkflowRun(run, statuses[i])) continue;
             var id = run.id || run.databaseId || run.run_number || ((run.name || run.display_title || '') + ':' + j + ':' + statuses[i]);
             if (!seen[id]) {
                 seen[id] = true;

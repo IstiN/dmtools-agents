@@ -117,6 +117,39 @@ suite('autoStart helper', function() {
         assert.equal(triggered, false, 'global cap should prevent follow-up auto-starts');
     });
 
+    test('ignores stale queued runs when applying global active workflow cap', function() {
+        var triggered = false;
+        var autoStart = loadAutoStartHelper({
+            github_list_workflow_runs: function(workspace, repository, status) {
+                if (status === 'queued') {
+                    return JSON.stringify({
+                        workflow_runs: [{
+                            id: 9002,
+                            name: 'AI Teammate',
+                            status: 'queued',
+                            created_at: '2020-01-01T00:00:00Z',
+                            updated_at: '2020-01-01T00:00:00Z'
+                        }]
+                    });
+                }
+                return JSON.stringify({ workflow_runs: [] });
+            },
+            github_trigger_workflow: function() {
+                triggered = true;
+            }
+        });
+
+        var result = autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: 'TS-90',
+            config: { repository: { owner: 'IstiN', repo: 'trackstate' }, smMaxWorkflows: 1 },
+            customParams: {},
+            configFile: 'agents/pr_review.json'
+        });
+
+        assert.equal(result, true);
+        assert.equal(triggered, true, 'stale queued workflow should not consume the global slot');
+    });
+
 });
 
 suite('triggerSmIfIdle', function() {

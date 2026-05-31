@@ -1,4 +1,5 @@
 var scmModule = require('./scm.js');
+var STALE_NON_RUNNING_WORKFLOW_MS = 6 * 60 * 60 * 1000;
 
 function deriveProjectKey(customParams) {
     if (!customParams) return '';
@@ -53,6 +54,7 @@ function hasActiveTargetRun(scm, configFile, ticketKey, workflowFile) {
         var runs = parseWorkflowRuns(runsRaw);
         for (var j = 0; j < runs.length; j++) {
             var run = runs[j] || {};
+            if (isStaleNonRunningWorkflowRun(run, statuses[i])) continue;
             var name = run.display_title || run.displayTitle || run.name || '';
             if (name === expectedName) {
                 console.log('autoStart: skipped duplicate ' + expectedName + ' because run #' +
@@ -63,6 +65,20 @@ function hasActiveTargetRun(scm, configFile, ticketKey, workflowFile) {
     }
 
     return false;
+}
+
+function workflowRunTimestamp(run) {
+    var value = run && (run.updated_at || run.updatedAt || run.created_at || run.createdAt);
+    if (!value) return null;
+    var timestamp = Date.parse(value);
+    return isNaN(timestamp) ? null : timestamp;
+}
+
+function isStaleNonRunningWorkflowRun(run, status) {
+    if (status === 'in_progress') return false;
+    var timestamp = workflowRunTimestamp(run);
+    if (!timestamp) return false;
+    return (Date.now() - timestamp) > STALE_NON_RUNNING_WORKFLOW_MS;
 }
 
 function normalizePositiveInt(value) {
@@ -88,6 +104,7 @@ function countActiveWorkflowRuns(scm, workflowFile) {
         var runs = parseWorkflowRuns(runsRaw);
         for (var j = 0; j < runs.length; j++) {
             var run = runs[j] || {};
+            if (isStaleNonRunningWorkflowRun(run, statuses[i])) continue;
             var id = run.id || run.databaseId || run.run_number || ((run.display_title || run.displayTitle || run.name || '') + ':' + j + ':' + statuses[i]);
             if (!seen[id]) {
                 seen[id] = true;
@@ -245,5 +262,6 @@ module.exports = {
     hasActiveTargetRun: hasActiveTargetRun,
     countActiveWorkflowRuns: countActiveWorkflowRuns,
     isGlobalWorkflowCapReached: isGlobalWorkflowCapReached,
+    isStaleNonRunningWorkflowRun: isStaleNonRunningWorkflowRun,
     triggerSmIfIdle: triggerSmIfIdle
 };

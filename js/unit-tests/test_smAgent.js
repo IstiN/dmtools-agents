@@ -438,6 +438,35 @@ suite('smAgent: ticket dispatch', function() {
         assert.equal(sm.capturedStatusMoves.length, 0, 'ticket should not move when no workflow slot is available');
     });
 
+    test('global maxTriggeredWorkflows ignores stale queued workflows before dispatch', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [
+                { key: 'P-1', fields: { labels: [] } }
+            ],
+            workflowRuns: {
+                queued: [
+                    {
+                        id: 1002,
+                        name: 'AI Teammate',
+                        status: 'queued',
+                        created_at: '2020-01-01T00:00:00Z',
+                        updated_at: '2020-01-01T00:00:00Z'
+                    }
+                ]
+            }
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'")
+        ]);
+        params.jobParams.maxTriggeredWorkflows = 1;
+
+        sm.action(params);
+
+        assert.equal(sm.capturedTriggers.length, 1, 'stale queued workflow should not consume the global slot');
+    });
+
     test('maxWorkflowsPerRun alias also limits dispatches', function() {
         var sm = makeSmAgent({
             fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
