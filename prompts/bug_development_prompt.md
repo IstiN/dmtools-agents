@@ -1,4 +1,7 @@
-User request is in 'input' folder, read all files there and do what is requested.
+User request is in the `input` folder. First list `input/`, then read every file
+that actually exists there. Do not repeatedly retry hard-coded paths that are
+missing; after one "file not found", use the directory listing as the source of
+truth and continue with the available files.
 
 **IMPORTANT** Before anything else, read inputs in this order:
 1. `instruction.md` (repo root) — **read this first**: project stack, deployment constraints, approved frameworks, and infrastructure access. All implementation decisions must respect the constraints defined here.
