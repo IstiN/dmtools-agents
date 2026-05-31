@@ -10,8 +10,8 @@
         "statuses": [
           "completed"
         ],
-        "perStatusLimit": 50,
-        "maxRuns": 50,
+        "perStatusLimit": 100,
+        "maxPages": 100,
         "outputDir": "outputs/token_usage"
       }
     }

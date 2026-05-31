@@ -124,6 +124,32 @@ function isoDay(value) {
     return String(value).substring(0, 10);
 }
 
+function todayIsoDay() {
+    return new Date().toISOString().substring(0, 10);
+}
+
+function toWindowStart(value) {
+    var text = String(value || todayIsoDay());
+    return text.length === 10 ? text + 'T00:00:00Z' : text;
+}
+
+function toWindowEnd(value) {
+    var text = String(value || todayIsoDay());
+    return text.length === 10 ? text + 'T23:59:59Z' : text;
+}
+
+function formatWindowTime(ms) {
+    return new Date(ms).toISOString().replace('.000Z', 'Z');
+}
+
+function addMilliseconds(iso, count) {
+    return formatWindowTime(Date.parse(iso) + count);
+}
+
+function midpointTime(startIso, endIso) {
+    return formatWindowTime(Math.floor((Date.parse(startIso) + Date.parse(endIso)) / 2));
+}
+
 function toCsvValue(value) {
     if (value == null) return '';
     var text = String(value);
@@ -244,25 +270,73 @@ function buildHtml(rows, summary) {
         '</script>\n</body>\n</html>\n';
 }
 
-function listCompletedRuns(custom) {
-    var workspace = custom.workspace;
-    var repository = custom.repository;
-    var workflowId = custom.workflowId || 'ai-teammate.yml';
-    var statuses = custom.statuses || ['completed'];
-    if (typeof statuses === 'string') statuses = statuses.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-    var perStatusLimit = custom.perStatusLimit || custom.limit || 50;
-    var seen = {};
-    var runs = [];
+function fetchWorkflowRunsPage(custom, status, created, page) {
+    var raw = github_list_workflow_runs(
+        custom.workspace,
+        custom.repository,
+        status,
+        custom.workflowId || 'ai-teammate.yml',
+        custom.perStatusLimit || custom.limit || 100,
+        page,
+        created
+    );
+    var parsed = parseJson(raw, raw);
+    return {
+        total: parsed && typeof parsed.total_count === 'number' ? parsed.total_count : null,
+        runs: asArray(parsed)
+    };
+}
 
-    statuses.forEach(function(status) {
-        var raw = github_list_workflow_runs(workspace, repository, status, workflowId, perStatusLimit);
-        asArray(parseJson(raw, raw)).forEach(function(run) {
+function collectRunsForWindow(custom, status, startDay, endDay, seen, runs, depth) {
+    var created = startDay + '..' + endDay;
+    var firstPage = fetchWorkflowRunsPage(custom, status, created, 1);
+    var total = firstPage.total;
+    var windowMs = Date.parse(endDay) - Date.parse(startDay);
+
+    if (total != null && total >= 1000 && windowMs > 60000) {
+        var mid = midpointTime(startDay, endDay);
+        collectRunsForWindow(custom, status, startDay, mid, seen, runs, depth + 1);
+        collectRunsForWindow(custom, status, addMilliseconds(mid, 1000), endDay, seen, runs, depth + 1);
+        return;
+    }
+
+    var pageRuns = firstPage.runs;
+    var page = 1;
+    while (pageRuns.length) {
+        pageRuns.forEach(function(run) {
             var id = String(run.id || run.databaseId || '');
             if (!id || seen[id]) return;
             seen[id] = true;
             if (run.status && run.status !== 'completed') return;
             runs.push(run);
         });
+        if (custom.maxRuns && runs.length >= custom.maxRuns) return;
+        if (pageRuns.length < (custom.perStatusLimit || custom.limit || 100)) return;
+        page++;
+        if (page > (custom.maxPages || 100)) return;
+        pageRuns = fetchWorkflowRunsPage(custom, status, created, page).runs;
+    }
+}
+
+function listCompletedRuns(custom) {
+    var workspace = custom.workspace;
+    var repository = custom.repository;
+    var workflowId = custom.workflowId || 'ai-teammate.yml';
+    var statuses = custom.statuses || ['completed'];
+    if (typeof statuses === 'string') statuses = statuses.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+    var perStatusLimit = custom.perStatusLimit || custom.limit || 100;
+    var maxPages = custom.maxPages || 100;
+    var seen = {};
+    var runs = [];
+
+    statuses.forEach(function(status) {
+        custom.perStatusLimit = perStatusLimit;
+        custom.maxPages = maxPages;
+        if (custom.created === false || custom.created === 'false') {
+            collectRunsForWindow(custom, status, '1970-01-01T00:00:00Z', toWindowEnd(todayIsoDay()), seen, runs, 0);
+        } else {
+            collectRunsForWindow(custom, status, toWindowStart(custom.createdStart || custom.since || '2020-01-01'), toWindowEnd(custom.createdEnd || todayIsoDay()), seen, runs, 0);
+        }
     });
 
     runs.sort(function(a, b) {
@@ -356,17 +430,21 @@ function action(params) {
     console.log('Found ' + runs.length + ' completed workflow run(s)');
 
     var rows = [];
+    var logEvery = custom.logEvery || 50;
+    var verbose = custom.verbose === true || custom.verbose === 'true';
     for (var i = 0; i < runs.length; i++) {
         var run = runs[i];
         var meta = extractAgentAndKey(run);
         var runId = String(run.id || run.databaseId);
-        console.log('  [' + (i + 1) + '/' + runs.length + '] ' + runId + ' ' + meta.title);
+        if (verbose || i === 0 || (i + 1) % logEvery === 0 || i === runs.length - 1) {
+            console.log('  [' + (i + 1) + '/' + runs.length + '] ' + runId + ' ' + meta.title);
+        }
 
         try {
             var logs = downloadRunLogs(custom, run);
             var usage = extractTokenUsage(logs);
             if (!usage) {
-                console.log('    no token summary found');
+                if (verbose) console.log('    no token summary found');
                 continue;
             }
 
@@ -392,7 +470,9 @@ function action(params) {
                 samples: usage.samples || 1,
                 url: run.html_url || run.htmlUrl || ''
             });
-            console.log('    tokens read=' + usage.readTokens + ' write=' + usage.writeTokens + ' cached=' + usage.cachedTokens + ' reasoning=' + usage.reasoningTokens);
+            if (verbose) {
+                console.log('    tokens read=' + usage.readTokens + ' write=' + usage.writeTokens + ' cached=' + usage.cachedTokens + ' reasoning=' + usage.reasoningTokens);
+            }
         } catch (e) {
             console.warn('    failed to process run ' + runId + ': ' + (e.message || e));
         }
@@ -417,6 +497,7 @@ if (typeof module !== 'undefined' && module.exports) {
         parseTokensLine: parseTokensLine,
         extractTokenUsage: extractTokenUsage,
         extractAgentAndKey: extractAgentAndKey,
+        listCompletedRuns: listCompletedRuns,
         buildCsv: buildCsv,
         buildSummary: buildSummary
     };

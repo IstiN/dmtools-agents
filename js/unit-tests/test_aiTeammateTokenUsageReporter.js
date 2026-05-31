@@ -2,16 +2,17 @@
  * Unit tests for aiTeammateTokenUsageReporter.js
  */
 
-function loadReporter() {
+function loadReporter(overrides) {
     var configLoaderMock = {
         loadProjectConfig: function() {
             return { repository: { owner: 'IstiN', repo: 'trackstate' } };
         }
     };
-    return loadModule('js/aiTeammateTokenUsageReporter.js', makeRequire({ './configLoader.js': configLoaderMock }), {
+    var globals = Object.assign({
         file_write: function() {},
         github_list_workflow_runs: function() { return JSON.stringify({ workflow_runs: [] }); }
-    });
+    }, overrides || {});
+    return loadModule('js/aiTeammateTokenUsageReporter.js', makeRequire({ './configLoader.js': configLoaderMock }), globals);
 }
 
 suite('aiTeammateTokenUsageReporter parsing', function() {
@@ -61,5 +62,40 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
         assert.equal(parsed.configFile, 'agents/bug_development.json');
         assert.equal(parsed.agent, 'bug_development');
         assert.equal(parsed.ticketKey, 'TS-1307');
+    });
+
+    test('lists completed workflow runs across MCP pages', function() {
+        var calls = [];
+        var reporter = loadReporter({
+            github_list_workflow_runs: function(workspace, repository, status, workflowId, perPage, page) {
+                calls.push({ workspace: workspace, repository: repository, status: status, workflowId: workflowId, perPage: perPage, page: page });
+                if (page === 1) {
+                    return JSON.stringify({ workflow_runs: [
+                        { id: 1, status: 'completed', created_at: '2026-06-01T00:00:00Z' },
+                        { id: 2, status: 'completed', created_at: '2026-05-31T00:00:00Z' }
+                    ] });
+                }
+                if (page === 2) {
+                    return JSON.stringify({ workflow_runs: [
+                        { id: 3, status: 'completed', created_at: '2026-05-30T00:00:00Z' }
+                    ] });
+                }
+                return JSON.stringify({ workflow_runs: [] });
+            }
+        });
+
+        var runs = reporter.listCompletedRuns({
+            workspace: 'IstiN',
+            repository: 'trackstate',
+            workflowId: 'ai-teammate.yml',
+            statuses: ['completed'],
+            perStatusLimit: 2,
+            maxPages: 10
+        });
+
+        assert.equal(runs.length, 3);
+        assert.equal(calls.length, 2);
+        assert.equal(calls[0].page, 1);
+        assert.equal(calls[1].page, 2);
     });
 });
