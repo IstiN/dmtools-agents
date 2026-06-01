@@ -98,10 +98,10 @@ suite('submodule helper', function() {
                 if (command === 'git -C trackstate-setup rev-parse origin/main') {
                     return 'base-sha';
                 }
-                if (command === 'git -C trackstate-setup merge-base HEAD origin/main 2>/dev/null || true') {
+                if (command === 'git -C trackstate-setup merge-base HEAD origin/main') {
                     return 'old-sha';
                 }
-                if (command === 'git -C trackstate-setup merge-base origin/main HEAD 2>/dev/null || true') {
+                if (command === 'git -C trackstate-setup merge-base origin/main HEAD') {
                     return 'base-sha';
                 }
                 if (command === 'git -C trackstate-setup rev-parse --short=12 HEAD') {
@@ -142,10 +142,10 @@ suite('submodule helper', function() {
                 if (command === 'git -C trackstate-setup rev-parse origin/main') {
                     return 'base-sha';
                 }
-                if (command === 'git -C trackstate-setup merge-base HEAD origin/main 2>/dev/null || true') {
+                if (command === 'git -C trackstate-setup merge-base HEAD origin/main') {
                     return 'old-sha';
                 }
-                if (command === 'git -C trackstate-setup merge-base origin/main HEAD 2>/dev/null || true') {
+                if (command === 'git -C trackstate-setup merge-base origin/main HEAD') {
                     return 'base-sha';
                 }
                 return '';
@@ -220,7 +220,7 @@ suite('submodule helper', function() {
                 if (command === 'git -C trackstate-setup rev-parse origin/main') {
                     return 'base-sha';
                 }
-                if (command === 'git -C trackstate-setup merge-base HEAD origin/main 2>/dev/null || true') return '';
+                if (command === 'git -C trackstate-setup merge-base HEAD origin/main') return '';
                 return '';
             }
         });

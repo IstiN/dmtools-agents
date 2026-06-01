@@ -76,12 +76,20 @@ function branchHasUniquePatches(baseBranch) {
 }
 
 function isAncestorRef(ancestor, descendant) {
-    var marker = cleanCommandOutput(runCmd({ command: 'git merge-base --is-ancestor ' + ancestor + ' ' + descendant + ' >/dev/null 2>&1 && echo yes || true' }) || '');
-    return marker.trim() === 'yes';
+    try {
+        runCmd({ command: 'git merge-base --is-ancestor ' + ancestor + ' ' + descendant });
+        return true;
+    } catch (e) {
+        return false;
+    }
 }
 
 function findMergeBase(left, right) {
-    return cleanCommandOutput(runCmd({ command: 'git merge-base ' + left + ' ' + right + ' 2>/dev/null || true' }) || '');
+    try {
+        return cleanCommandOutput(runCmd({ command: 'git merge-base ' + left + ' ' + right }) || '');
+    } catch (e) {
+        return '';
+    }
 }
 
 function alignBranchWithBase(ticketKey, branchName, baseBranch) {

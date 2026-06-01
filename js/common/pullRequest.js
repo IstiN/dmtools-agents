@@ -99,7 +99,7 @@ function branchContainsBase(runCommand, workingDir, baseBranch) {
     }
 
     try {
-        var mergeBase = lastNonEmptyLine(runCommand('git merge-base ' + baseRef + ' HEAD 2>/dev/null || true', workingDir));
+        var mergeBase = lastNonEmptyLine(runCommand('git merge-base ' + baseRef + ' HEAD', workingDir));
         return mergeBase === baseSha;
     } catch (e) {
         return false;
@@ -111,10 +111,14 @@ function branchHasMergeBase(runCommand, workingDir, baseBranch) {
         throw new Error('Unsafe base branch name: ' + baseBranch);
     }
 
-    var mergeBase = lastNonEmptyLine(
-        runCommand('git merge-base origin/' + baseBranch + ' HEAD 2>/dev/null || true', workingDir)
-    );
-    return !!mergeBase;
+    try {
+        var mergeBase = lastNonEmptyLine(
+            runCommand('git merge-base origin/' + baseBranch + ' HEAD', workingDir)
+        );
+        return !!mergeBase;
+    } catch (e) {
+        return false;
+    }
 }
 
 function buildOriginFetchCommand(refSpec) {
