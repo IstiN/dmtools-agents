@@ -46,7 +46,11 @@ function loadPushReworkChangesForAction(mocks) {
                 runQualityGates: function() { return { success: true }; },
                 runPolicyGates: function() { return { success: true }; },
                 runPostPublishGates: function() { return { success: true }; },
-                resumeAgent: function() { return { attempted: false }; }
+                resumeAgent: function(options) {
+                    mocks.resumeCalls = (mocks.resumeCalls || []).concat([options.stage]);
+                    if (typeof mocks.onResume === 'function') mocks.onResume(options);
+                    return mocks.resumeResult || { attempted: false };
+                }
             },
             './common/autoStart.js': {
                 triggerConfiguredWorkflowForTicket: function() { mocks.autoStartReview = true; return true; },
@@ -155,6 +159,34 @@ suite('rework custom params', function() {
         assert.equal(mocks.threadReplies || 0, 0, 'must not reply to conversations without review_replies.json');
         assert.equal(mocks.resolvedThreads || 0, 0, 'must not resolve conversations without review_replies.json');
         assert.equal(!!mocks.autoStartReview, false, 'must not start review after interrupted rework');
+    });
+
+    test('interrupted pr_rework attempts resume before falling back to SM retry', function() {
+        var params;
+        var mocks = {
+            resumeResult: { attempted: true },
+            onResume: function() {
+                params.jobParams.response = 'Implemented fix and wrote outputs/response.md after resume.';
+            }
+        };
+        var mod = loadPushReworkChangesForAction(mocks);
+
+        params = {
+            jobParams: {
+                ticket: { key: 'TS-1293', fields: { labels: [] } },
+                response: 'CLI command executed but did not produce output file:\nCommand failed (exit code 124): ./agents/scripts/run-agent.sh',
+                customParams: {
+                    feedbackLoop: { postAction: { enabled: true, maxAttempts: 2 } },
+                    removeLabels: ['sm_story_rework_triggered']
+                }
+            }
+        };
+        var result = mod.action(params);
+
+        assert.deepEqual(mocks.resumeCalls, ['rework_missing_outputs']);
+        assert.equal(result.success, true);
+        assert.equal(result.message, 'TS-1293 rework pushed, PR commented, moved to In Review');
+        assert.deepEqual(mocks.moves, ['In Review']);
     });
 
     test('merges pr_test_automation_rework jobParamPatches into runtime customParams', function() {

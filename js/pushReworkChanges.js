@@ -440,6 +440,16 @@ function action(params) {
         }
 
         if (isInterruptedReworkResponse(fixSummary)) {
+            var interruptedResume = feedbackLoop.resumeAgent({
+                ticketKey: ticketKey,
+                customParams: _customParams,
+                section: 'postAction',
+                stage: 'rework_missing_outputs',
+                error: fixSummary
+            });
+            if (interruptedResume.attempted) {
+                return action(params);
+            }
             return handleInterruptedRework(ticketKey, branchName, _customParams, statuses);
         }
 
