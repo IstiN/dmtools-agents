@@ -75,14 +75,20 @@ function branchHasUniquePatches(baseBranch) {
     }
 }
 
+function isAncestorRef(ancestor, descendant) {
+    var marker = cleanCommandOutput(runCmd({ command: 'git merge-base --is-ancestor ' + ancestor + ' ' + descendant + ' >/dev/null 2>&1 && echo yes || true' }) || '');
+    return marker.trim() === 'yes';
+}
+
+function findMergeBase(left, right) {
+    return cleanCommandOutput(runCmd({ command: 'git merge-base ' + left + ' ' + right + ' 2>/dev/null || true' }) || '');
+}
+
 function alignBranchWithBase(ticketKey, branchName, baseBranch) {
-    try {
-        runCmd({ command: 'git merge-base --is-ancestor HEAD origin/' + baseBranch });
+    if (isAncestorRef('HEAD', 'origin/' + baseBranch)) {
         console.log('Branch changes are already included in origin/' + baseBranch + ', resetting local branch:', branchName);
         runCmd({ command: 'git reset --hard origin/' + baseBranch });
         return;
-    } catch (mergedError) {
-        // Branch has work that is not trivially reachable from origin/base.
     }
 
     if (!branchHasUniquePatches(baseBranch)) {
@@ -91,19 +97,19 @@ function alignBranchWithBase(ticketKey, branchName, baseBranch) {
         return;
     }
 
-    try {
-        runCmd({ command: 'git merge-base --is-ancestor origin/' + baseBranch + ' HEAD' });
+    if (isAncestorRef('origin/' + baseBranch, 'HEAD')) {
         console.log('Branch already contains origin/' + baseBranch + ':', branchName);
         return;
-    } catch (ancestorError) {
-        console.warn('Branch does not contain origin/' + baseBranch + ':', branchName);
     }
+    console.warn('Branch does not contain origin/' + baseBranch + ':', branchName);
 
     var details = '';
     try {
-        var mergeBase = cleanCommandOutput(runCmd({ command: 'git merge-base HEAD origin/' + baseBranch }) || '');
+        var mergeBase = findMergeBase('HEAD', 'origin/' + baseBranch);
         if (mergeBase) {
             details = cleanCommandOutput(runCmd({ command: 'git merge-tree ' + mergeBase + ' HEAD origin/' + baseBranch }) || '');
+        } else {
+            details = 'No merge base found between HEAD and origin/' + baseBranch + '. The local checkout is likely shallow or the branch history is unrelated to the current base.';
         }
     } catch (mergeTreeError) {
         details = mergeTreeError && mergeTreeError.toString ? mergeTreeError.toString() : String(mergeTreeError);

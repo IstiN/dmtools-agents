@@ -46,6 +46,21 @@ suite('feedbackLoop helper', function() {
         assert.deepEqual(loaded.commands, []);
     });
 
+    test('does not resume unrelated-history git infrastructure failures', function() {
+        var loaded = loadFeedbackLoop();
+        var result = loaded.mod.resumeAgent({
+            ticketKey: 'TS-1',
+            customParams: { feedbackLoop: { postAction: { enabled: true, maxAttempts: 1 } } },
+            section: 'postAction',
+            stage: 'git_operations',
+            error: 'fatal: refusing to merge unrelated histories'
+        });
+
+        assert.equal(result.attempted, false);
+        assert.equal(result.reason, 'non-recoverable');
+        assert.deepEqual(loaded.commands, []);
+    });
+
     test('writes feedback prompt and resumes agent once when enabled', function() {
         var loaded = loadFeedbackLoop();
         var result = loaded.mod.resumeAgent({

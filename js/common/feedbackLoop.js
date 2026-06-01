@@ -59,7 +59,9 @@ function isNonRecoverable(errorText, config) {
         'Bad credentials',
         'Resource not accessible by integration',
         'could not read Username',
-        'Authentication failed'
+        'Authentication failed',
+        'refusing to merge unrelated histories',
+        'No merge base found between HEAD and origin/'
     ];
     return patterns.some(function(pattern) {
         return text.indexOf(pattern) !== -1;

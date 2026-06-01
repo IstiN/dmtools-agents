@@ -116,7 +116,7 @@ suite('pullRequest helper', function() {
             runCommand: function(command, workingDir) {
                 commands.push({ command: command, workingDirectory: workingDir || null });
                 if (command === 'git rev-parse origin/main') return 'base-sha';
-                if (command === 'git merge-base origin/main HEAD') return 'old-sha';
+                if (command === 'git merge-base origin/main HEAD 2>/dev/null || true') return 'old-sha';
                 if (command === 'git status --porcelain --ignore-submodules=dirty') return '';
                 return '';
             }
@@ -127,7 +127,8 @@ suite('pullRequest helper', function() {
         assert.deepEqual(commands, [
             { command: 'git -c fetch.recurseSubmodules=no fetch origin main', workingDirectory: 'repo' },
             { command: 'git rev-parse origin/main', workingDirectory: 'repo' },
-            { command: 'git merge-base origin/main HEAD', workingDirectory: 'repo' },
+            { command: 'git merge-base origin/main HEAD 2>/dev/null || true', workingDirectory: 'repo' },
+            { command: 'git merge-base origin/main HEAD 2>/dev/null || true', workingDirectory: 'repo' },
             { command: 'git status --porcelain --ignore-submodules=dirty', workingDirectory: 'repo' },
             { command: 'git merge --no-edit origin/main', workingDirectory: 'repo' }
         ]);
@@ -143,7 +144,7 @@ suite('pullRequest helper', function() {
             runCommand: function(command) {
                 commands.push(command);
                 if (command === 'git rev-parse origin/release') return 'base-sha';
-                if (command === 'git merge-base origin/release HEAD') return 'base-sha';
+                if (command === 'git merge-base origin/release HEAD 2>/dev/null || true') return 'base-sha';
                 return '';
             }
         });
@@ -153,7 +154,7 @@ suite('pullRequest helper', function() {
         assert.deepEqual(commands, [
             'git -c fetch.recurseSubmodules=no fetch origin release',
             'git rev-parse origin/release',
-            'git merge-base origin/release HEAD'
+            'git merge-base origin/release HEAD 2>/dev/null || true'
         ]);
     });
 
@@ -168,7 +169,7 @@ suite('pullRequest helper', function() {
             runCommand: function(command, workingDir) {
                 commands.push({ command: command, workingDirectory: workingDir || null });
                 if (command === 'git rev-parse origin/main') return 'base-sha';
-                if (command === 'git merge-base origin/main HEAD') return 'old-sha';
+                if (command === 'git merge-base origin/main HEAD 2>/dev/null || true') return 'old-sha';
                 if (command === 'git status --porcelain --ignore-submodules=dirty') return '';
                 return '';
             }
@@ -179,10 +180,32 @@ suite('pullRequest helper', function() {
         assert.deepEqual(commands, [
             { command: 'git -c fetch.recurseSubmodules=no fetch origin main', workingDirectory: 'repo' },
             { command: 'git rev-parse origin/main', workingDirectory: 'repo' },
-            { command: 'git merge-base origin/main HEAD', workingDirectory: 'repo' },
+            { command: 'git merge-base origin/main HEAD 2>/dev/null || true', workingDirectory: 'repo' },
+            { command: 'git merge-base origin/main HEAD 2>/dev/null || true', workingDirectory: 'repo' },
             { command: 'git status --porcelain --ignore-submodules=dirty', workingDirectory: 'repo' },
             { command: 'git merge --no-edit origin/main', workingDirectory: 'repo' }
         ]);
+    });
+
+    test('refuses to merge unrelated histories during branch sync', function() {
+        var commands = [];
+        var pr = loadPullRequestHelper();
+
+        var result = pr.syncBranchWithBase({
+            branchName: 'feature/DMC-7',
+            baseBranch: 'main',
+            runCommand: function(command) {
+                commands.push(command);
+                if (command === 'git rev-parse origin/main') return 'base-sha';
+                if (command === 'git merge-base origin/main HEAD 2>/dev/null || true') return '';
+                return '';
+            }
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.unrecoverableByAgent, true);
+        assert.contains(result.error, 'No merge base found');
+        assert.equal(commands.indexOf('git merge --no-edit origin/main'), -1);
     });
 
 });

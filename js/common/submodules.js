@@ -117,12 +117,8 @@ function isAncestor(run, cleanOutput, path, ancestor, descendant) {
         throw new Error('Could not resolve managed submodule ancestor ref for ' + path + ': ' + ancestor);
     }
 
-    try {
-        var mergeBase = cleanOutput(run('git -C ' + path + ' merge-base ' + ancestor + ' ' + descendant) || '').trim().split(/\r?\n/).pop();
-        return mergeBase === ancestorSha;
-    } catch (e) {
-        return false;
-    }
+    var mergeBase = cleanOutput(run('git -C ' + path + ' merge-base ' + ancestor + ' ' + descendant + ' 2>/dev/null || true') || '').trim().split(/\r?\n/).pop();
+    return mergeBase === ancestorSha;
 }
 
 function prepareDirtySubmoduleBranch(run, cleanOutput, path, branch) {

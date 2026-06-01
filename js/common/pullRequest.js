@@ -99,11 +99,22 @@ function branchContainsBase(runCommand, workingDir, baseBranch) {
     }
 
     try {
-        var mergeBase = lastNonEmptyLine(runCommand('git merge-base ' + baseRef + ' HEAD', workingDir));
+        var mergeBase = lastNonEmptyLine(runCommand('git merge-base ' + baseRef + ' HEAD 2>/dev/null || true', workingDir));
         return mergeBase === baseSha;
     } catch (e) {
         return false;
     }
+}
+
+function branchHasMergeBase(runCommand, workingDir, baseBranch) {
+    if (!isSafeRefName(baseBranch)) {
+        throw new Error('Unsafe base branch name: ' + baseBranch);
+    }
+
+    var mergeBase = lastNonEmptyLine(
+        runCommand('git merge-base origin/' + baseBranch + ' HEAD 2>/dev/null || true', workingDir)
+    );
+    return !!mergeBase;
 }
 
 function buildOriginFetchCommand(refSpec) {
@@ -141,6 +152,14 @@ function syncBranchWithBase(options) {
         if (upToDate) {
             console.log('✅ Branch already contains origin/' + baseBranch);
             return { success: true, updated: false };
+        }
+
+        if (!branchHasMergeBase(runCommand, workingDir, baseBranch)) {
+            return {
+                success: false,
+                unrecoverableByAgent: true,
+                error: 'No merge base found between HEAD and origin/' + baseBranch + '; refusing to merge unrelated histories. Fetch full branch history or recreate the branch from origin/' + baseBranch + ' before publishing.'
+            };
         }
 
         var status = readTrackedStatus(runCommand, workingDir);
