@@ -40,6 +40,8 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
             '[INFO] CommandLineUtils - Requests  1 Premium (27m 2s)',
             '[INFO] CommandLineUtils - Tokens    ↑ 2.9m • ↓ 9.4k • 2.8m (cached) • 1.7k (reasoning)',
             'Feedback loop: resuming agent for rework_missing_outputs attempt 1/2',
+            'Copilot rate limit detected; retrying in 90s (attempt 2/2)',
+            'Command failed (exit code 124): ./agents/scripts/run-agent.sh',
             '[INFO] CommandLineUtils - Requests  2 Premium (30m 0s)',
             '[INFO] CommandLineUtils - Tokens    ↑ 3.1m • ↓ 10k • 3m (cached) • 2k (reasoning)'
         ].join('\n'));
@@ -57,6 +59,10 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
         assert.equal(usage.attempts[0].attemptIndex, 1);
         assert.equal(usage.attempts[1].attemptIndex, 2);
         assert.equal(usage.resumeStages[0], 'rework_missing_outputs 1/2');
+        assert.equal(usage.feedbackLoopCount, 1);
+        assert.equal(usage.rateLimitRetryCount, 1);
+        assert.equal(usage.rateLimitDetected, true);
+        assert.equal(usage.timeoutCount, 1);
     });
 
     test('extracts agent and ticket key from ai-teammate run title', function() {
@@ -125,6 +131,10 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
             samples: 2,
             resumeDetected: true,
             resumeStages: 'rework_missing_outputs 1/2',
+            feedbackLoopCount: 1,
+            rateLimitRetryCount: 1,
+            rateLimitDetected: true,
+            timeoutCount: 1,
             url: 'https://example.test/run/1'
         }]);
         var attemptsCsv = reporter.buildAttemptsCsv([{
@@ -137,6 +147,10 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
             ticketKey: 'TS-1',
             attemptIndex: 2,
             resumeDetected: true,
+            feedbackLoopCount: 1,
+            rateLimitRetryCount: 1,
+            rateLimitDetected: true,
+            timeoutCount: 1,
             requests: 2,
             readTokens: 3100000,
             writeTokens: 10000,
@@ -147,8 +161,53 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
         }]);
 
         assert.contains(aggregateCsv.split('\n')[0], 'resumeDetected');
+        assert.contains(aggregateCsv.split('\n')[0], 'feedbackLoopCount');
+        assert.contains(aggregateCsv.split('\n')[0], 'rateLimitRetryCount');
+        assert.contains(aggregateCsv.split('\n')[0], 'timeoutCount');
         assert.contains(aggregateCsv, 'rework_missing_outputs 1/2');
         assert.contains(attemptsCsv.split('\n')[0], 'attemptIndex');
+        assert.contains(attemptsCsv.split('\n')[0], 'rateLimitDetected');
         assert.contains(attemptsCsv, 'pr_rework,TS-1,2,true');
+    });
+
+    test('builds HTML with loop KPIs and chart tooltips', function() {
+        var reporter = loadReporter();
+        var summary = reporter.buildSummary([{
+            day: '2026-06-01',
+            agent: 'pr_rework',
+            readTokens: 100,
+            writeTokens: 10,
+            cachedTokens: 50,
+            reasoningTokens: 5,
+            samples: 2,
+            resumeDetected: true,
+            feedbackLoopCount: 1,
+            rateLimitRetryCount: 1,
+            rateLimitDetected: true,
+            timeoutCount: 1
+        }], 1);
+        var html = reporter.buildHtml([{
+            createdAt: '2026-06-01T00:00:00Z',
+            agent: 'pr_rework',
+            ticketKey: 'TS-1',
+            conclusion: 'success',
+            samples: 2,
+            resumeDetected: true,
+            feedbackLoopCount: 1,
+            rateLimitRetryCount: 1,
+            timeoutCount: 1,
+            readTokens: 100,
+            writeTokens: 10,
+            cachedTokens: 50,
+            reasoningTokens: 5,
+            runNumber: 10,
+            url: 'https://example.test/run/1'
+        }], summary);
+
+        assert.contains(html, '<span>Loops</span><b>1</b>');
+        assert.contains(html, '<span>Limit Retries</span><b>1</b>');
+        assert.contains(html, '<span>Timeouts</span><b>1</b>');
+        assert.contains(html, 'id="chartTooltip"');
+        assert.contains(html, 'function showTip');
     });
 });
