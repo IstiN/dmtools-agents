@@ -77,6 +77,10 @@ function quoteCommitMessage(message) {
         .trim() + '"';
 }
 
+function quoteShellArgument(value) {
+    return "'" + String(value || '').replace(/'/g, "'\"'\"'") + "'";
+}
+
 function resolveStashPopConflicts(run, cleanOutput, path) {
     var unmerged = cleanOutput(run('git -C ' + path + ' diff --name-only --diff-filter=U') || '')
         .split('\n')
@@ -104,13 +108,12 @@ function resolveStashPopConflicts(run, cleanOutput, path) {
     return cleanOutput(run('git -C ' + path + ' status --porcelain') || '');
 }
 
-function isAncestor(run, path, ancestor, descendant) {
-    try {
-        run('git -C ' + path + ' merge-base --is-ancestor ' + ancestor + ' ' + descendant);
-        return true;
-    } catch (e) {
-        return false;
-    }
+function isAncestor(run, cleanOutput, path, ancestor, descendant) {
+    var command = 'git -C ' + path + ' merge-base --is-ancestor ' + ancestor + ' ' + descendant +
+        '; code=$?; if [ "$code" -eq 0 ]; then echo ancestor; elif [ "$code" -eq 1 ]; then echo not-ancestor; else exit "$code"; fi';
+    var output = cleanOutput(run('bash -lc ' + quoteShellArgument(command)) || '').trim();
+    var lines = output.split(/\r?\n/).map(function(line) { return line.trim(); }).filter(function(line) { return line; });
+    return lines[lines.length - 1] === 'ancestor';
 }
 
 function prepareDirtySubmoduleBranch(run, cleanOutput, path, branch) {
@@ -182,8 +185,8 @@ function pushManagedSubmodules(options) {
 
         var hasDirtyChanges = !!status.trim();
         var remoteRef = 'origin/' + branch;
-        var localIncludedInRemote = isAncestor(run, path, 'HEAD', remoteRef);
-        var remoteIncludedInLocal = isAncestor(run, path, remoteRef, 'HEAD');
+        var localIncludedInRemote = isAncestor(run, cleanOutput, path, 'HEAD', remoteRef);
+        var remoteIncludedInLocal = isAncestor(run, cleanOutput, path, remoteRef, 'HEAD');
 
         if (!hasDirtyChanges && aheadCount === 0) {
             console.log('No managed submodule changes detected in', path);

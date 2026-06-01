@@ -71,6 +71,18 @@ function defaultWriteFile(path, content) {
     return file_write(path, content);
 }
 
+function quoteShellArgument(value) {
+    return "'" + String(value || '').replace(/'/g, "'\"'\"'") + "'";
+}
+
+function branchContainsBase(runCommand, workingDir, baseBranch) {
+    var command = 'git merge-base --is-ancestor origin/' + baseBranch + ' HEAD' +
+        '; code=$?; if [ "$code" -eq 0 ]; then echo ancestor; elif [ "$code" -eq 1 ]; then echo not-ancestor; else exit "$code"; fi';
+    var output = cleanCommandOutput(runCommand('bash -lc ' + quoteShellArgument(command), workingDir) || '').trim();
+    var lines = output.split(/\r?\n/).map(function(line) { return line.trim(); }).filter(function(line) { return line; });
+    return lines[lines.length - 1] === 'ancestor';
+}
+
 function buildOriginFetchCommand(refSpec) {
     return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
 }
@@ -100,13 +112,7 @@ function syncBranchWithBase(options) {
         console.log('Synchronizing ' + branchName + ' with origin/' + baseBranch + ' before publishing...');
         runCommand(buildOriginFetchCommand(baseBranch), workingDir);
 
-        var upToDate = false;
-        try {
-            runCommand('git merge-base --is-ancestor origin/' + baseBranch + ' HEAD', workingDir);
-            upToDate = true;
-        } catch (ancestorError) {
-            upToDate = false;
-        }
+        var upToDate = branchContainsBase(runCommand, workingDir, baseBranch);
         if (upToDate) {
             console.log('✅ Branch already contains origin/' + baseBranch);
             return { success: true, updated: false };

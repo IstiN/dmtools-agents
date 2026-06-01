@@ -92,8 +92,11 @@ suite('submodule helper', function() {
                 if (command === 'git -C trackstate-setup rev-list --count origin/main..HEAD') {
                     return '2';
                 }
-                if (command === 'git -C trackstate-setup merge-base --is-ancestor HEAD origin/main') {
-                    throw new Error('local ahead of remote');
+                if (command.indexOf('merge-base --is-ancestor HEAD origin/main') !== -1) {
+                    return 'not-ancestor';
+                }
+                if (command.indexOf('merge-base --is-ancestor origin/main HEAD') !== -1) {
+                    return 'ancestor';
                 }
                 if (command === 'git -C trackstate-setup rev-parse --short=12 HEAD') {
                     return '2b4b84712bfa';
@@ -127,8 +130,11 @@ suite('submodule helper', function() {
                 if (command === 'git -C trackstate-setup rev-list --count origin/main..HEAD') {
                     return '2';
                 }
-                if (command === 'git -C trackstate-setup merge-base --is-ancestor HEAD origin/main') {
-                    throw new Error('local ahead of remote');
+                if (command.indexOf('merge-base --is-ancestor HEAD origin/main') !== -1) {
+                    return 'not-ancestor';
+                }
+                if (command.indexOf('merge-base --is-ancestor origin/main HEAD') !== -1) {
+                    return 'ancestor';
                 }
                 return '';
             }
