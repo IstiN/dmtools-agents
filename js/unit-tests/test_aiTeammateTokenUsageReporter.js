@@ -302,4 +302,109 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
         assert.equal(result.summary.cache.hits, 1);
         assert.equal(result.summary.cache.logDownloads, 1);
     });
+
+    test('maxLogDownloads zero skips uncached log downloads', function() {
+        var logDownloads = [];
+        var reporter = loadReporter({
+            file_read: function() {
+                return JSON.stringify({ version: 1, entries: {} });
+            },
+            github_list_workflow_runs: function() {
+                return JSON.stringify({ workflow_runs: [
+                    { id: 1, status: 'completed', conclusion: 'success', run_number: 10, created_at: '2026-06-01T00:00:00Z', run_started_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:01:00Z', display_title: 'agents/pr_review.json : TS-1 : TS-1', html_url: 'https://example.test/run/1' }
+                ] });
+            },
+            github_get_workflow_run_logs: function(args) {
+                logDownloads.push(args.runId);
+                return '[INFO] CommandLineUtils - Tokens    ↑ 2k • ↓ 20 • 1k (cached) • 3 (reasoning)';
+            }
+        });
+
+        var result = reporter.action({
+            jobParams: {
+                customParams: {
+                    workspace: 'IstiN',
+                    repository: 'trackstate',
+                    outputDir: 'outputs/token_usage',
+                    maxPages: 1,
+                    maxLogDownloads: 0
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(logDownloads.length, 0);
+        assert.equal(result.summary.cache.logDownloads, 0);
+        assert.equal(result.summary.cache.stoppedByDownloadLimit, true);
+    });
+
+    test('cacheOnly writes report from cache without listing or downloading logs', function() {
+        var writes = {};
+        var listCalls = 0;
+        var logDownloads = [];
+        var cachedRow = {
+            runId: '1',
+            runNumber: 10,
+            createdAt: '2026-06-01T00:00:00Z',
+            startedAt: '2026-06-01T00:00:00Z',
+            updatedAt: '2026-06-01T00:01:00Z',
+            day: '2026-06-01',
+            conclusion: 'success',
+            agent: 'pr_review',
+            ticketKey: 'TS-1',
+            configFile: 'agents/pr_review.json',
+            title: 'agents/pr_review.json : TS-1 : TS-1',
+            durationSeconds: 60,
+            duration: '1m 0s',
+            requests: 0,
+            readTokens: 100,
+            writeTokens: 10,
+            cachedTokens: 90,
+            reasoningTokens: 5,
+            samples: 1,
+            resumeDetected: false,
+            resumeStages: '',
+            feedbackLoopCount: 0,
+            rateLimitRetryCount: 0,
+            rateLimitDetected: false,
+            timeoutCount: 0,
+            url: 'https://example.test/run/1'
+        };
+        var reporter = loadReporter({
+            file_read: function(args) {
+                if (args.path === 'outputs/token_usage/ai_teammate_token_usage_cache.json') {
+                    return JSON.stringify({ version: 1, entries: { '1': { row: cachedRow, attemptRows: [] }, '2': { noUsage: true } } });
+                }
+                return '';
+            },
+            file_write: function(args) { writes[args.path] = args.content; },
+            github_list_workflow_runs: function() {
+                listCalls += 1;
+                return JSON.stringify({ workflow_runs: [] });
+            },
+            github_get_workflow_run_logs: function(args) {
+                logDownloads.push(args.runId);
+                return '';
+            }
+        });
+
+        var result = reporter.action({
+            jobParams: {
+                customParams: {
+                    workspace: 'IstiN',
+                    repository: 'trackstate',
+                    outputDir: 'outputs/token_usage',
+                    cacheOnly: true
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.cacheOnly, true);
+        assert.equal(listCalls, 0);
+        assert.equal(logDownloads.length, 0);
+        assert.equal(result.summary.totalRuns, 2);
+        assert.equal(result.summary.runsWithTokens, 1);
+        assert.contains(writes['outputs/token_usage/ai_teammate_token_usage.html'], 'Daily Token Trend');
+    });
 });

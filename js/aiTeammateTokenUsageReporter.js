@@ -583,6 +583,26 @@ function writeUsageCache(path, cache) {
     writeOutput(path, JSON.stringify(cache, null, 2));
 }
 
+function buildRowsFromCache(cache) {
+    var rows = [];
+    var attemptRows = [];
+    Object.keys(cache.entries || {}).forEach(function(runId) {
+        var entry = cache.entries[runId];
+        if (!entry || !entry.row) return;
+        rows.push(entry.row);
+        (entry.attemptRows || []).forEach(function(attemptRow) { attemptRows.push(attemptRow); });
+    });
+    rows.sort(function(a, b) {
+        return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+    });
+    attemptRows.sort(function(a, b) {
+        var byDate = String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+        if (byDate !== 0) return byDate;
+        return (a.attemptIndex || 0) - (b.attemptIndex || 0);
+    });
+    return { rows: rows, attemptRows: attemptRows };
+}
+
 function action(params) {
     var custom = (params && params.jobParams && params.jobParams.customParams) || {};
     var projectConfig = configLoader.loadProjectConfig(params || {});
@@ -609,9 +629,10 @@ function action(params) {
     var useCache = custom.useCache !== false && custom.useCache !== 'false';
     var cacheWriteEvery = Math.max(1, parseInt(custom.cacheWriteEvery || 25, 10) || 25);
     var logDownloadSleepMs = parseInt(custom.logDownloadSleepMs || 0, 10) || 0;
+    var parsedMaxLogDownloads = parseInt(custom.maxLogDownloads, 10);
     var maxLogDownloads = custom.maxLogDownloads == null || custom.maxLogDownloads === ''
         ? null
-        : Math.max(0, parseInt(custom.maxLogDownloads, 10) || 0);
+        : Math.max(0, isNaN(parsedMaxLogDownloads) ? 0 : parsedMaxLogDownloads);
 
     if (custom.renderOnly === true || custom.renderOnly === 'true') {
         var inputJsonPath = custom.inputJsonPath || jsonPath;
@@ -622,6 +643,34 @@ function action(params) {
         writeOutput(htmlPath, buildHtml(existing.rows, existing.summary));
         console.log('Wrote HTML: ' + htmlPath);
         return { success: true, renderOnly: true, jsonPath: inputJsonPath, htmlPath: htmlPath, summary: existing.summary };
+    }
+
+    if (custom.cacheOnly === true || custom.cacheOnly === 'true') {
+        var cacheOnly = loadUsageCache(cachePath);
+        var cached = buildRowsFromCache(cacheOnly);
+        var cachedTotalRuns = Object.keys(cacheOnly.entries || {}).length;
+        var summaryFromCache = buildSummary(cached.rows, cachedTotalRuns);
+        summaryFromCache.cache = {
+            enabled: true,
+            path: cachePath,
+            cacheOnly: true,
+            hits: cached.rows.length,
+            logDownloads: 0,
+            maxLogDownloads: 0,
+            stoppedByDownloadLimit: false,
+            logDownloadSleepMs: 0
+        };
+        var cachedPayload = { summary: summaryFromCache, rows: cached.rows, attempts: cached.attemptRows };
+        writeOutput(csvPath, buildCsv(cached.rows));
+        writeOutput(attemptsCsvPath, buildAttemptsCsv(cached.attemptRows));
+        writeOutput(jsonPath, JSON.stringify(cachedPayload, null, 2));
+        writeOutput(htmlPath, buildHtml(cached.rows, summaryFromCache));
+        console.log('Wrote CSV: ' + csvPath);
+        console.log('Wrote attempts CSV: ' + attemptsCsvPath);
+        console.log('Wrote JSON: ' + jsonPath);
+        console.log('Wrote HTML: ' + htmlPath);
+        console.log('Cache-only report rows=' + cached.rows.length + ', log downloads=0');
+        return { success: true, cacheOnly: true, csvPath: csvPath, attemptsCsvPath: attemptsCsvPath, jsonPath: jsonPath, htmlPath: htmlPath, summary: summaryFromCache };
     }
 
     console.log('AI Teammate Token Usage Reporter — ' + custom.workspace + '/' + custom.repository + ' [' + custom.workflowId + ']');
