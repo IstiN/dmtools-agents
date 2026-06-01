@@ -229,6 +229,7 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
         assert.contains(html, '<span>Loops</span><b>1</b>');
         assert.contains(html, '<span>Limit Retries</span><b>1</b>');
         assert.contains(html, '<span>Timeouts</span><b>1</b>');
+        assert.contains(html, 'fails with limits');
         assert.contains(html, '<span>Avg Duration</span><b>27m 2s</b>');
         assert.contains(html, '<span>Runner Time</span><b>27m 2s</b>');
         assert.contains(html, '<span>Max Runners</span><b>1</b>');
