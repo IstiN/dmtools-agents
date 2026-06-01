@@ -78,6 +78,24 @@ _session_group_for_config() {
   esac
 }
 
+exclude_copilot_session_from_git() {
+  local workspace="$1"
+  local git_dir
+
+  git_dir="$(git -C "${workspace}" rev-parse --git-dir 2>/dev/null || true)"
+  if [ -z "${git_dir}" ]; then
+    return 0
+  fi
+
+  mkdir -p "${git_dir}/info"
+  touch "${git_dir}/info/exclude"
+
+  grep -qxF ".dmtools/copilot-sessions/" "${git_dir}/info/exclude" 2>/dev/null \
+    || echo ".dmtools/copilot-sessions/" >> "${git_dir}/info/exclude"
+  grep -qxF ".dmtools/copilot-sessions/**" "${git_dir}/info/exclude" 2>/dev/null \
+    || echo ".dmtools/copilot-sessions/**" >> "${git_dir}/info/exclude"
+}
+
 configure_copilot_session() {
   local workspace="${GITHUB_WORKSPACE:-${PWD}}"
   local repo="${GITHUB_REPOSITORY:-$(basename "${workspace}")}"
@@ -104,6 +122,7 @@ configure_copilot_session() {
   local cache_run_id="${GITHUB_RUN_ID:-local}"
 
   mkdir -p "${session_root}"
+  exclude_copilot_session_from_git "${workspace}"
 
   export_var "COPILOT_HOME" "${session_root}"
   export_var "COPILOT_SESSION_ID" "${session_id}"

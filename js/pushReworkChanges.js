@@ -176,7 +176,7 @@ function commitAndPush(ticketKey, config, customParams) {
         ticketKey: ticketKey
     });
 
-    cmd('git add .');
+    cmd('git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**"');
 
     const status = prHelper.readStagedDiffStat(cmd, workingDir);
 

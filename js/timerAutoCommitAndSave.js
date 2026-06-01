@@ -68,7 +68,7 @@ function autoCommitAndPush(customParams, ticketKey) {
 
     try {
         cli_execute_command({
-            command: 'git add -A',
+            command: 'git add -A -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**"',
             workingDirectory: workingDir
         });
     } catch (e) {

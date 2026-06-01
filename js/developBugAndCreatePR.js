@@ -229,7 +229,7 @@ function action(params) {
 
         let hasGitChanges = false;
         try {
-            cli_execute_command({ command: 'git add .' });
+            cli_execute_command({ command: 'git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**"' });
             const rawStatus = cli_execute_command({ command: 'git status --porcelain' }) || '';
             const statusLines = rawStatus.split('\n').filter(function(l) {
                 return l.trim() &&
