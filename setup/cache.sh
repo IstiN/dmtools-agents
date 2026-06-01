@@ -58,6 +58,11 @@ _cache_copilot() {
   export_var "COPILOT_CACHE_KEY"  "npm-global-copilot-${version}-${OS_TAG}"
 }
 
+_cache_copilot_session() {
+  # shellcheck source=/dev/null
+  source "${SCRIPT_DIR}/copilot-session.sh" env
+}
+
 _cache_codegraph() {
   local version="${1:-${CODEGRAPH_VERSION:-latest}}"
   # Binary cache (~/.npm-global)
@@ -91,6 +96,7 @@ _dispatch_tool() {
     node)     _cache_node     "${version}" ;;
     maestro)  _cache_maestro  "${version}" ;;
     copilot)  _cache_copilot  "${version}" ;;
+    copilot-session) _cache_copilot_session ;;
     codegraph) _cache_codegraph "${version}" ;;
     playwright) _cache_playwright "${version}" ;;
     codemie)  _cache_codemie  "${version}" ;;
@@ -130,7 +136,7 @@ _print_info() {
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-ALL_TOOLS="java node dmtools maestro copilot codemie codegraph playwright"  # cursor has no cache
+ALL_TOOLS="java node dmtools maestro copilot copilot-session codemie codegraph playwright"  # cursor has no cache
 
 MODE="${1:-info}"
 shift || true
@@ -191,7 +197,7 @@ for arg in ${TOOL_LIST}; do
 
   _dispatch_tool "${TOOL_NAME}" "${TOOL_VERSION}"
 
-  VAR_PREFIX="$(echo "${TOOL_NAME}" | tr '[:lower:]' '[:upper:]')"
+  VAR_PREFIX="$(echo "${TOOL_NAME}" | tr '[:lower:]-' '[:upper:]_')"
   PATH_VAR="${VAR_PREFIX}_CACHE_PATH"
   KEY_VAR="${VAR_PREFIX}_CACHE_KEY"
   echo "📦 ${TOOL_NAME}: key=${!KEY_VAR:-?}  path=${!PATH_VAR:-?}"

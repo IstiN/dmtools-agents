@@ -167,9 +167,34 @@ elif [ "$PROVIDER" = "copilot" ]; then
 
   COPILOT_DEFAULT_MODEL="${COPILOT_DEFAULT_MODEL:-gpt-5-mini}"
   COPILOT_MODEL_VALUE="${COPILOT_MODEL:-$COPILOT_DEFAULT_MODEL}"
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [ "${COPILOT_SESSION_ENABLED:-true}" != "false" ] && [ -f "${SCRIPT_DIR}/../setup/copilot-session.sh" ]; then
+    # shellcheck source=/dev/null
+    source "${SCRIPT_DIR}/../setup/copilot-session.sh" env
+  fi
+
+  COPILOT_SESSION_ARGS=()
+  COPILOT_HAS_RESUME_ARG=false
+  for pass_arg in "${PASS_ARGS[@]:-}"; do
+    case "${pass_arg}" in
+      --continue|--resume|--resume=*|--session-id|--session-id=*)
+        COPILOT_HAS_RESUME_ARG=true
+        ;;
+    esac
+  done
+  if [ "${COPILOT_SESSION_ENABLED:-true}" != "false" ] && [ "${COPILOT_HAS_RESUME_ARG}" = "false" ] && [ -n "${COPILOT_SESSION_ID:-}" ]; then
+    COPILOT_SESSION_ARGS=(--session-id "${COPILOT_SESSION_ID}")
+    if [ -n "${COPILOT_SESSION_NAME:-}" ]; then
+      COPILOT_SESSION_ARGS+=(--name "${COPILOT_SESSION_NAME}")
+    fi
+  fi
 
   echo "Copilot Configuration:"
   echo "  Model: ${COPILOT_MODEL_VALUE}"
+  if [ -n "${COPILOT_SESSION_ID:-}" ]; then
+    echo "  Session: ${COPILOT_SESSION_NAME:-${COPILOT_SESSION_ID}} (${COPILOT_SESSION_GROUP:-default})"
+    echo "  COPILOT_HOME: ${COPILOT_HOME:-}"
+  fi
   echo "Working directory: $(pwd)"
   echo ""
 
@@ -188,13 +213,13 @@ elif [ "$PROVIDER" = "copilot" ]; then
 
     set +e
     if [ -f "${PROMPT_ARG}" ]; then
-      echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${model} ${PASS_ARGS[*]:-} (prompt: ${PROMPT_BYTES} bytes via stdin)"
+      echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${model} ${COPILOT_SESSION_ARGS[*]:-} ${PASS_ARGS[*]:-} (prompt: ${PROMPT_BYTES} bytes via stdin)"
       echo ""
-      "${COPILOT_CMD[@]}" --allow-all --model "${model}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${PROMPT_ARG}" 2>&1 | tee "$log_file"
+      "${COPILOT_CMD[@]}" --allow-all --model "${model}" ${COPILOT_SESSION_ARGS[@]+"${COPILOT_SESSION_ARGS[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${PROMPT_ARG}" 2>&1 | tee "$log_file"
     else
-      echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${model} ${PASS_ARGS[*]:-} -p <inline prompt>"
+      echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${model} ${COPILOT_SESSION_ARGS[*]:-} ${PASS_ARGS[*]:-} -p <inline prompt>"
       echo ""
-      "${COPILOT_CMD[@]}" --allow-all --model "${model}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$log_file"
+      "${COPILOT_CMD[@]}" --allow-all --model "${model}" ${COPILOT_SESSION_ARGS[@]+"${COPILOT_SESSION_ARGS[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$log_file"
     fi
     local status=${PIPESTATUS[0]}
     return "$status"
