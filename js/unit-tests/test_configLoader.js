@@ -214,10 +214,12 @@ suite('configLoader.loadProjectConfig', function() {
         assert.equal(config.repository.owner, '');
     });
 
-    test('loads config from ../.dmtools/config.js', function() {
+    test('loads config from .dmtools/config.js before relative fallback', function() {
         var cl = makeLoader({
+            '.dmtools/config.js':
+                'module.exports = { jira: { project: "PROJ", parentTicket: "PROJ-1" }, repository: { owner: "my-org", repo: "my-repo" } };',
             '../.dmtools/config.js':
-                'module.exports = { jira: { project: "PROJ", parentTicket: "PROJ-1" }, repository: { owner: "my-org", repo: "my-repo" } };'
+                'module.exports = { jira: { project: "REL" } };'
         });
         var config = cl.loadProjectConfig({});
         assert.equal(config.jira.project, 'PROJ');
@@ -225,16 +227,54 @@ suite('configLoader.loadProjectConfig', function() {
         assert.equal(config.repository.owner, 'my-org');
         assert.equal(config.repository.repo, 'my-repo');
         assert.equal(config.git.baseBranch, 'main', 'defaults preserved');
+        assert.equal(config._configPath, '.dmtools/config.js');
     });
 
-    test('falls back to .dmtools/config.js if relative path not found', function() {
+    test('falls back to ../.dmtools/config.js when root config not found', function() {
         var cl = makeLoader({
-            '../.dmtools/config.js': null,
-            '.dmtools/config.js':
-                'module.exports = { jira: { project: "FALLBACK" } };'
+            '.dmtools/config.js': null,
+            '../.dmtools/config.js':
+                'module.exports = { jira: { project: "REL", parentTicket: "REL-1" }, repository: { owner: "rel-org", repo: "rel-repo" } };'
         });
         var config = cl.loadProjectConfig({});
-        assert.equal(config.jira.project, 'FALLBACK');
+        assert.equal(config.jira.project, 'REL');
+        assert.equal(config.jira.parentTicket, 'REL-1');
+        assert.equal(config.repository.owner, 'rel-org');
+        assert.equal(config.repository.repo, 'rel-repo');
+        assert.equal(config.git.baseBranch, 'main', 'defaults preserved');
+        assert.equal(config._configPath, '../.dmtools/config.js');
+    });
+
+    test('does not probe relative config when root config is present', function() {
+        var paths = [];
+        var loader = loadModule(
+            'js/configLoader.js',
+            makeRequire({ './config.js': configModule }),
+            {
+                file_read: function(opts) {
+                    paths.push(opts.path);
+                    if (opts.path === '.dmtools/config.js') {
+                        return 'module.exports = { jira: { project: "ROOT" } };';
+                    }
+                    if (opts.path === '../.dmtools/config.js') {
+                        throw new Error('relative path should not be read');
+                    }
+                    return null;
+                }
+            }
+        );
+        var config = loader.loadProjectConfig({});
+        assert.equal(config.jira.project, 'ROOT');
+        assert.equal(paths.indexOf('../.dmtools/config.js'), -1, 'relative fallback skipped');
+    });
+
+    test('falls back to defaults if both discovered configs are missing', function() {
+        var cl = makeLoader({
+            '.dmtools/config.js': null,
+            '../.dmtools/config.js': null
+        });
+        var config = cl.loadProjectConfig({});
+        assert.equal(config.jira.project, '');
     });
 
     test('uses customParams.configPath when provided', function() {
@@ -491,7 +531,7 @@ suite('configLoader.loadProjectConfig top-level configPath', function() {
 
     test('_configPath is stored for discovered paths (not just explicit)', function() {
         var mockRead = function(opts) {
-            if (opts.path === '../.dmtools/config.js') {
+            if (opts.path === '.dmtools/config.js') {
                 return 'module.exports = { jira: { project: "DISC" } };';
             }
             return null;
@@ -503,7 +543,7 @@ suite('configLoader.loadProjectConfig top-level configPath', function() {
 
         var config = loader.loadProjectConfig({});
         assert.equal(config.jira.project, 'DISC', 'discovered config loaded');
-        assert.equal(config._configPath, '../.dmtools/config.js', '_configPath set for discovered path');
+        assert.equal(config._configPath, '.dmtools/config.js', '_configPath set for discovered path');
     });
 
     test('_configPath is undefined when using defaults (no config file found)', function() {

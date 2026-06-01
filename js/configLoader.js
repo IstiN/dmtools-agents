@@ -6,8 +6,9 @@
  *
  * Discovery order:
  *   1. customParams.configPath (explicit path)
- *   2. ../.dmtools/config.js   (relative to agents dir — submodule layout)
- *   3. Built-in defaults       (backward compatible)
+ *   2. .dmtools/config.js      (target repo root layout)
+ *   3. ../.dmtools/config.js   (when running directly from agents submodule)
+ *   4. Built-in defaults       (backward compatible)
  *
  * Merge strategy:
  *   - jira.statuses, jira.issueTypes, jira.questions, labels: FULL REPLACEMENT when provided
@@ -254,8 +255,8 @@ function loadConfigFile(path) {
  *   1. params.configPath          — top-level param (e.g. jobParams.configPath in sm.json)
  *   2. params.customParams.configPath — explicit path from agent customParams
  *   3. params.agentConfigsDir + "/.dmtools/config.js" — when agentConfigsDir is passed
- *   4. ../.dmtools/config.js       — submodule layout (agents/ is a submodule)
- *   5. .dmtools/config.js          — co-located layout (agents/ in same repo)
+ *   4. .dmtools/config.js          — target repo root layout
+ *   5. ../.dmtools/config.js       — running directly from agents submodule
  *   6. Defaults                    — built-in defaults from config.js
  *
  * @param {Object} params - Agent params (jobParams or top-level params)
@@ -295,23 +296,23 @@ function loadProjectConfig(params) {
         }
     }
 
-    // 4. Relative discovery: ../.dmtools/config.js (submodule layout)
-    if (!loaded) {
-        var relativePath = '../.dmtools/config.js';
-        loaded = loadConfigFile(relativePath);
-        if (loaded) {
-            resolvedPath = relativePath;
-            console.log('configLoader: Loaded config from ' + relativePath);
-        }
-    }
-
-    // 5. Co-located: .dmtools/config.js (same repo layout)
+    // 4. Co-located/target-root discovery: .dmtools/config.js
     if (!loaded) {
         var absolutePath = '.dmtools/config.js';
         loaded = loadConfigFile(absolutePath);
         if (loaded) {
             resolvedPath = absolutePath;
             console.log('configLoader: Loaded config from ' + absolutePath);
+        }
+    }
+
+    // 5. Relative discovery: ../.dmtools/config.js (when running from agents/)
+    if (!loaded) {
+        var relativePath = '../.dmtools/config.js';
+        loaded = loadConfigFile(relativePath);
+        if (loaded) {
+            resolvedPath = relativePath;
+            console.log('configLoader: Loaded config from ' + relativePath);
         }
     }
 
