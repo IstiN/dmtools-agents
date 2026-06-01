@@ -173,6 +173,15 @@ elif [ "$PROVIDER" = "copilot" ]; then
     source "${SCRIPT_DIR}/../setup/copilot-session.sh" env
   fi
 
+  COPILOT_CMD=(copilot)
+  if ! command -v copilot >/dev/null 2>&1; then
+    COPILOT_CMD=(npx @github/copilot@1.0.44)
+  fi
+
+  copilot_supports_flag() {
+    "${COPILOT_CMD[@]}" --help 2>/dev/null | grep -q -- "$1"
+  }
+
   COPILOT_SESSION_ARGS=()
   COPILOT_HAS_RESUME_ARG=false
   for pass_arg in "${PASS_ARGS[@]:-}"; do
@@ -183,7 +192,11 @@ elif [ "$PROVIDER" = "copilot" ]; then
     esac
   done
   if [ "${COPILOT_SESSION_ENABLED:-true}" != "false" ] && [ "${COPILOT_HAS_RESUME_ARG}" = "false" ] && [ -n "${COPILOT_SESSION_ID:-}" ]; then
-    COPILOT_SESSION_ARGS=(--session-id "${COPILOT_SESSION_ID}")
+    if copilot_supports_flag "--session-id"; then
+      COPILOT_SESSION_ARGS=(--session-id "${COPILOT_SESSION_ID}")
+    else
+      echo "Copilot CLI does not support --session-id; using COPILOT_HOME session cache and --name only"
+    fi
     if [ -n "${COPILOT_SESSION_NAME:-}" ]; then
       COPILOT_SESSION_ARGS+=(--name "${COPILOT_SESSION_NAME}")
     fi
@@ -203,10 +216,6 @@ elif [ "$PROVIDER" = "copilot" ]; then
   # stdin when it is not a TTY (e.g. inside CI pipes). The prompt file path is already
   # available as $PROMPT_ARG when DMTools calls this script with cliPrompt.
   # PASS_ARGS support: flags like --continue --resume are forwarded to the copilot CLI.
-  COPILOT_CMD=(copilot)
-  if ! command -v copilot >/dev/null 2>&1; then
-    COPILOT_CMD=(npx @github/copilot@1.0.44)
-  fi
   run_copilot_once() {
     local log_file="$1"
     local model="$2"
