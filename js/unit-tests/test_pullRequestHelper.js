@@ -115,7 +115,8 @@ suite('pullRequest helper', function() {
             workingDir: 'repo',
             runCommand: function(command, workingDir) {
                 commands.push({ command: command, workingDirectory: workingDir || null });
-                if (command.indexOf('git merge-base --is-ancestor') !== -1) return 'not-ancestor';
+                if (command === 'git rev-parse origin/main') return 'base-sha';
+                if (command === 'git merge-base origin/main HEAD') return 'old-sha';
                 if (command === 'git status --porcelain --ignore-submodules=dirty') return '';
                 return '';
             }
@@ -125,7 +126,8 @@ suite('pullRequest helper', function() {
         assert.equal(result.updated, true);
         assert.deepEqual(commands, [
             { command: 'git -c fetch.recurseSubmodules=no fetch origin main', workingDirectory: 'repo' },
-            { command: 'bash -lc \'git merge-base --is-ancestor origin/main HEAD; code=$?; if [ "$code" -eq 0 ]; then echo ancestor; elif [ "$code" -eq 1 ]; then echo not-ancestor; else exit "$code"; fi\'', workingDirectory: 'repo' },
+            { command: 'git rev-parse origin/main', workingDirectory: 'repo' },
+            { command: 'git merge-base origin/main HEAD', workingDirectory: 'repo' },
             { command: 'git status --porcelain --ignore-submodules=dirty', workingDirectory: 'repo' },
             { command: 'git merge --no-edit origin/main', workingDirectory: 'repo' }
         ]);
@@ -140,7 +142,8 @@ suite('pullRequest helper', function() {
             baseBranch: 'release',
             runCommand: function(command) {
                 commands.push(command);
-                if (command.indexOf('git merge-base --is-ancestor') !== -1) return 'ancestor';
+                if (command === 'git rev-parse origin/release') return 'base-sha';
+                if (command === 'git merge-base origin/release HEAD') return 'base-sha';
                 return '';
             }
         });
@@ -149,7 +152,8 @@ suite('pullRequest helper', function() {
         assert.equal(result.updated, false);
         assert.deepEqual(commands, [
             'git -c fetch.recurseSubmodules=no fetch origin release',
-            'bash -lc \'git merge-base --is-ancestor origin/release HEAD; code=$?; if [ "$code" -eq 0 ]; then echo ancestor; elif [ "$code" -eq 1 ]; then echo not-ancestor; else exit "$code"; fi\''
+            'git rev-parse origin/release',
+            'git merge-base origin/release HEAD'
         ]);
     });
 
@@ -163,7 +167,8 @@ suite('pullRequest helper', function() {
             workingDir: 'repo',
             runCommand: function(command, workingDir) {
                 commands.push({ command: command, workingDirectory: workingDir || null });
-                if (command.indexOf('git merge-base --is-ancestor') !== -1) return 'not-ancestor';
+                if (command === 'git rev-parse origin/main') return 'base-sha';
+                if (command === 'git merge-base origin/main HEAD') return 'old-sha';
                 if (command === 'git status --porcelain --ignore-submodules=dirty') return '';
                 return '';
             }
@@ -173,7 +178,8 @@ suite('pullRequest helper', function() {
         assert.equal(result.updated, true);
         assert.deepEqual(commands, [
             { command: 'git -c fetch.recurseSubmodules=no fetch origin main', workingDirectory: 'repo' },
-            { command: 'bash -lc \'git merge-base --is-ancestor origin/main HEAD; code=$?; if [ "$code" -eq 0 ]; then echo ancestor; elif [ "$code" -eq 1 ]; then echo not-ancestor; else exit "$code"; fi\'', workingDirectory: 'repo' },
+            { command: 'git rev-parse origin/main', workingDirectory: 'repo' },
+            { command: 'git merge-base origin/main HEAD', workingDirectory: 'repo' },
             { command: 'git status --porcelain --ignore-submodules=dirty', workingDirectory: 'repo' },
             { command: 'git merge --no-edit origin/main', workingDirectory: 'repo' }
         ]);
