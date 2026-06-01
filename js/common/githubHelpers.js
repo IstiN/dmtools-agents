@@ -4,13 +4,15 @@
  *
  * Writes the following files to input/{ticketKey}/:
  *   pr_info.md            — PR metadata
- *   pr_diff.txt           — full git diff
+ *   pr_diff.txt           — git diff context, truncated when large
  *   pr_discussions.md     — human-readable review threads + comments
  *   pr_discussions_raw.json — structured threads with IDs for reply/resolve
  */
 
 const { GIT_CONFIG } = require('../config.js');
 const prHelper = require('./pullRequest.js');
+
+var MAX_PR_DIFF_CONTEXT_CHARS = 80000;
 
 function cleanCommandOutput(output) {
     if (!output) return '';
@@ -474,6 +476,38 @@ function detectMergeConflicts(baseBranch, inputFolder, workingDir) {
     }
 }
 
+function trimLargeTextForInput(content, label, maxChars) {
+    var text = content || '';
+    var limit = maxChars || MAX_PR_DIFF_CONTEXT_CHARS;
+    if (text.length <= limit) return text;
+
+    var headChars = Math.floor(limit * 0.65);
+    var tailChars = limit - headChars;
+    return [
+        '# ' + label + ' Truncated',
+        '',
+        'Original size: ' + text.length + ' characters.',
+        'Kept: first ' + headChars + ' and last ' + tailChars + ' characters.',
+        '',
+        'The full diff is available in the checked-out PR branch. Use `git diff` or CodeGraph for focused source navigation instead of relying only on this file.',
+        '',
+        '```diff',
+        text.substring(0, headChars),
+        '',
+        '... [' + (text.length - limit) + ' characters omitted] ...',
+        '',
+        text.substring(text.length - tailChars),
+        '```'
+    ].join('\n');
+}
+
+function writeInputFile(path, content, label) {
+    var text = content || '';
+    console.log('Writing ' + label + ' to ' + path + ' (' + text.length + ' chars)');
+    file_write({ path: path, content: text });
+    console.log('Wrote ' + label + ' to ' + path);
+}
+
 /**
  * Write PR context files to input folder.
  * Writes: pr_info.md, pr_diff.txt, pr_discussions.md, pr_discussions_raw.json
@@ -502,24 +536,24 @@ function writePRContext(inputFolder, prDetails, diff, markdown, rawThreads) {
     if (prDetails.body) {
         prInfo += '\n## PR Description\n\n' + prDetails.body + '\n';
     }
-    file_write({ path: inputFolder + '/pr_info.md', content: prInfo });
+    writeInputFile(inputFolder + '/pr_info.md', prInfo, 'pr_info.md');
 
     // pr_diff.txt
-    file_write({ path: inputFolder + '/pr_diff.txt', content: diff || 'No diff available' });
+    var diffContext = trimLargeTextForInput(diff || 'No diff available', 'PR Diff', MAX_PR_DIFF_CONTEXT_CHARS);
+    writeInputFile(inputFolder + '/pr_diff.txt', diffContext, 'pr_diff.txt');
 
     // pr_discussions.md
     if (markdown) {
-        file_write({ path: inputFolder + '/pr_discussions.md', content: markdown });
-        console.log('✅ Written pr_discussions.md');
+        writeInputFile(inputFolder + '/pr_discussions.md', markdown, 'pr_discussions.md');
     }
 
     // pr_discussions_raw.json
     if (rawThreads) {
-        file_write({
-            path: inputFolder + '/pr_discussions_raw.json',
-            content: JSON.stringify(rawThreads, null, 2)
-        });
-        console.log('✅ Written pr_discussions_raw.json (' + rawThreads.threads.length + ' threads)');
+        writeInputFile(
+            inputFolder + '/pr_discussions_raw.json',
+            JSON.stringify(rawThreads, null, 2),
+            'pr_discussions_raw.json (' + rawThreads.threads.length + ' threads)'
+        );
     }
 
     console.log('✅ PR context written to', inputFolder);
@@ -662,6 +696,7 @@ module.exports = {
     checkoutPRBranch: checkoutPRBranch,
     getPRDiff: getPRDiff,
     fetchDiscussionsAndRawData: fetchDiscussionsAndRawData,
+    trimLargeTextForInput: trimLargeTextForInput,
     writePRContext: writePRContext,
     detectMergeConflicts: detectMergeConflicts,
     detectFailedChecks: detectFailedChecks
