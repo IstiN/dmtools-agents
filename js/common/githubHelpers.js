@@ -12,7 +12,7 @@
 const { GIT_CONFIG } = require('../config.js');
 const prHelper = require('./pullRequest.js');
 
-var MAX_PR_DIFF_CONTEXT_CHARS = 80000;
+var MAX_PR_DIFF_CONTEXT_CHARS = 12000;
 
 function cleanCommandOutput(output) {
     if (!output) return '';
