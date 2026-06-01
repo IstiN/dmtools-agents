@@ -198,7 +198,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
         var mockCli = function(args) {
             calls.push(args.command);
             if (args.command === 'git branch --list "ai/TS-1306"') return '  ai/TS-1306\n';
-            if (args.command === 'git merge-base --is-ancestor HEAD origin/main >/dev/null 2>&1 && echo yes || true') return 'yes\n';
+            if (args.command === 'git merge-base --is-ancestor HEAD origin/main') return '';
             return '';
         };
 
@@ -261,10 +261,10 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
         var mockCli = function(args) {
             calls.push(args.command);
             if (args.command === 'git branch --list "ai/TS-1307"') return '  ai/TS-1307\n';
-            if (args.command === 'git merge-base --is-ancestor HEAD origin/main >/dev/null 2>&1 && echo yes || true') return '';
+            if (args.command === 'git merge-base --is-ancestor HEAD origin/main') throw new Error('not ancestor');
             if (args.command === 'git cherry origin/main HEAD') return '+ abc123 ticket work\n';
-            if (args.command === 'git merge-base --is-ancestor origin/main HEAD >/dev/null 2>&1 && echo yes || true') return '';
-            if (args.command === 'git merge-base HEAD origin/main 2>/dev/null || true') return 'base123\n';
+            if (args.command === 'git merge-base --is-ancestor origin/main HEAD') throw new Error('not ancestor');
+            if (args.command === 'git merge-base HEAD origin/main') return 'base123\n';
             if (args.command === 'git merge-tree base123 HEAD origin/main') return 'CONFLICT (content): Merge conflict in .dmtools/config.js\n';
             return '';
         };
