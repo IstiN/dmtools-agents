@@ -34,23 +34,29 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
         assert.equal(parsed.reasoningTokens, 1700);
     });
 
-    test('extracts the final token usage sample with request metadata', function() {
+    test('extracts and sums token usage attempts with request metadata', function() {
         var reporter = loadReporter();
         var usage = reporter.extractTokenUsage([
             '[INFO] CommandLineUtils - Requests  1 Premium (27m 2s)',
             '[INFO] CommandLineUtils - Tokens    ↑ 2.9m • ↓ 9.4k • 2.8m (cached) • 1.7k (reasoning)',
+            'Feedback loop: resuming agent for rework_missing_outputs attempt 1/2',
             '[INFO] CommandLineUtils - Requests  2 Premium (30m 0s)',
             '[INFO] CommandLineUtils - Tokens    ↑ 3.1m • ↓ 10k • 3m (cached) • 2k (reasoning)'
         ].join('\n'));
 
-        assert.equal(usage.requests, 2);
+        assert.equal(usage.requests, 3);
         assert.equal(usage.requestTier, 'Premium');
         assert.equal(usage.requestDuration, '30m 0s');
-        assert.equal(usage.readTokens, 3100000);
-        assert.equal(usage.writeTokens, 10000);
-        assert.equal(usage.cachedTokens, 3000000);
-        assert.equal(usage.reasoningTokens, 2000);
+        assert.equal(usage.readTokens, 6000000);
+        assert.equal(usage.writeTokens, 19400);
+        assert.equal(usage.cachedTokens, 5800000);
+        assert.equal(usage.reasoningTokens, 3700);
         assert.equal(usage.samples, 2);
+        assert.equal(usage.resumeDetected, true);
+        assert.equal(usage.attempts.length, 2);
+        assert.equal(usage.attempts[0].attemptIndex, 1);
+        assert.equal(usage.attempts[1].attemptIndex, 2);
+        assert.equal(usage.resumeStages[0], 'rework_missing_outputs 1/2');
     });
 
     test('extracts agent and ticket key from ai-teammate run title', function() {
@@ -97,5 +103,52 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
         assert.equal(calls.length, 2);
         assert.equal(calls[0].page, 1);
         assert.equal(calls[1].page, 2);
+    });
+
+    test('builds aggregate and attempt CSV with resume columns', function() {
+        var reporter = loadReporter();
+        var aggregateCsv = reporter.buildCsv([{
+            runId: '1',
+            runNumber: 10,
+            createdAt: '2026-06-01T00:00:00Z',
+            day: '2026-06-01',
+            conclusion: 'success',
+            agent: 'pr_rework',
+            ticketKey: 'TS-1',
+            configFile: 'agents/pr_rework.json',
+            title: 'agents/pr_rework.json : TS-1 : TS-1',
+            requests: 3,
+            readTokens: 6000000,
+            writeTokens: 19400,
+            cachedTokens: 5800000,
+            reasoningTokens: 3700,
+            samples: 2,
+            resumeDetected: true,
+            resumeStages: 'rework_missing_outputs 1/2',
+            url: 'https://example.test/run/1'
+        }]);
+        var attemptsCsv = reporter.buildAttemptsCsv([{
+            runId: '1',
+            runNumber: 10,
+            createdAt: '2026-06-01T00:00:00Z',
+            day: '2026-06-01',
+            conclusion: 'success',
+            agent: 'pr_rework',
+            ticketKey: 'TS-1',
+            attemptIndex: 2,
+            resumeDetected: true,
+            requests: 2,
+            readTokens: 3100000,
+            writeTokens: 10000,
+            cachedTokens: 3000000,
+            reasoningTokens: 2000,
+            rawTokensLine: 'Tokens ↑ 3.1m',
+            url: 'https://example.test/run/1'
+        }]);
+
+        assert.contains(aggregateCsv.split('\n')[0], 'resumeDetected');
+        assert.contains(aggregateCsv, 'rework_missing_outputs 1/2');
+        assert.contains(attemptsCsv.split('\n')[0], 'attemptIndex');
+        assert.contains(attemptsCsv, 'pr_rework,TS-1,2,true');
     });
 });

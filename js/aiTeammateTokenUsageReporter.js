@@ -68,8 +68,19 @@ function extractTokenUsage(logs) {
     var lines = String(logs || '').split(/\r?\n/);
     var lastRequests = null;
     var samples = [];
+    var resumeDetected = false;
+    var resumeStages = [];
 
     for (var i = 0; i < lines.length; i++) {
+        var line = String(lines[i] || '');
+        var resumeMatch = line.match(/Feedback loop: resuming agent for\s+(.+?)\s+attempt\s+([0-9]+)\/([0-9]+)/);
+        if (resumeMatch) {
+            resumeDetected = true;
+            resumeStages.push((resumeMatch[1] || 'resume') + ' ' + resumeMatch[2] + '/' + resumeMatch[3]);
+        } else if (line.indexOf('--resume') !== -1 || line.indexOf('--continue --resume') !== -1) {
+            resumeDetected = true;
+        }
+
         var request = parseRequestsLine(lines[i]);
         if (request) {
             lastRequests = request;
@@ -78,14 +89,33 @@ function extractTokenUsage(logs) {
 
         var tokens = parseTokensLine(lines[i]);
         if (tokens) {
-            samples.push(Object.assign({}, lastRequests || {}, tokens));
+            samples.push(Object.assign({ attemptIndex: samples.length + 1 }, lastRequests || {}, tokens));
         }
     }
 
     if (!samples.length) return null;
     var finalSample = samples[samples.length - 1];
-    finalSample.samples = samples.length;
-    return finalSample;
+    var aggregate = {
+        requests: 0,
+        requestTier: finalSample.requestTier || '',
+        requestDuration: finalSample.requestDuration || '',
+        readTokens: 0,
+        writeTokens: 0,
+        cachedTokens: 0,
+        reasoningTokens: 0,
+        samples: samples.length,
+        resumeDetected: resumeDetected || samples.length > 1,
+        resumeStages: resumeStages,
+        attempts: samples
+    };
+    samples.forEach(function(sample) {
+        aggregate.requests += sample.requests || 0;
+        aggregate.readTokens += sample.readTokens || 0;
+        aggregate.writeTokens += sample.writeTokens || 0;
+        aggregate.cachedTokens += sample.cachedTokens || 0;
+        aggregate.reasoningTokens += sample.reasoningTokens || 0;
+    });
+    return aggregate;
 }
 
 function normalizeLogPayload(raw) {
@@ -163,10 +193,25 @@ function buildCsv(rows) {
         'conclusion', 'agent', 'ticketKey', 'configFile', 'title',
         'requests', 'requestTier', 'requestDuration',
         'readTokens', 'writeTokens', 'cachedTokens', 'reasoningTokens',
-        'samples', 'url'
+        'samples', 'resumeDetected', 'resumeStages', 'url'
     ];
     var out = [headers.join(',')];
     rows.forEach(function(row) {
+        out.push(headers.map(function(key) { return toCsvValue(row[key]); }).join(','));
+    });
+    return out.join('\n') + '\n';
+}
+
+function buildAttemptsCsv(attemptRows) {
+    var headers = [
+        'runId', 'runNumber', 'createdAt', 'day', 'conclusion',
+        'agent', 'ticketKey', 'attemptIndex', 'resumeDetected',
+        'requests', 'requestTier', 'requestDuration',
+        'readTokens', 'writeTokens', 'cachedTokens', 'reasoningTokens',
+        'rawTokensLine', 'url'
+    ];
+    var out = [headers.join(',')];
+    attemptRows.forEach(function(row) {
         out.push(headers.map(function(key) { return toCsvValue(row[key]); }).join(','));
     });
     return out.join('\n') + '\n';
@@ -184,7 +229,9 @@ function groupBy(rows, keyFn) {
                 readTokens: 0,
                 writeTokens: 0,
                 cachedTokens: 0,
-                reasoningTokens: 0
+                reasoningTokens: 0,
+                samples: 0,
+                resumedRuns: 0
             };
         }
         var bucket = map[key];
@@ -194,6 +241,8 @@ function groupBy(rows, keyFn) {
         bucket.writeTokens += row.writeTokens || 0;
         bucket.cachedTokens += row.cachedTokens || 0;
         bucket.reasoningTokens += row.reasoningTokens || 0;
+        bucket.samples += row.samples || 0;
+        if (row.resumeDetected) bucket.resumedRuns += 1;
     });
     return Object.keys(map).sort().map(function(key) {
         var item = map[key];
@@ -241,7 +290,7 @@ function buildHtml(rows, summary) {
         ':root{color-scheme:light;--bg:#f6f7f9;--panel:#fff;--ink:#18202a;--muted:#5f6b7a;--grid:#e1e5ea;--blue:#2563eb;--green:#059669;--amber:#b7791f;--red:#dc2626;--violet:#7c3aed}' +
         '*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}' +
         'header{padding:24px 28px 12px}h1{margin:0 0 6px;font-size:26px;letter-spacing:0}p{margin:0;color:var(--muted)}' +
-        '.wrap{padding:12px 28px 32px;display:grid;gap:16px}.kpis{display:grid;grid-template-columns:repeat(5,minmax(140px,1fr));gap:12px}' +
+        '.wrap{padding:12px 28px 32px;display:grid;gap:16px}.kpis{display:grid;grid-template-columns:repeat(7,minmax(120px,1fr));gap:12px}' +
         '.kpi,.panel{background:var(--panel);border:1px solid var(--grid);border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.04)}.kpi{padding:14px}.kpi b{display:block;font-size:22px;margin-top:4px}.kpi span{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}' +
         '.grid{display:grid;grid-template-columns:1.4fr 1fr;gap:16px}.panel{padding:16px}.panel h2{font-size:16px;margin:0 0 12px}.chart{width:100%;height:340px;display:block}.pie{height:300px}' +
         'table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;border-bottom:1px solid var(--grid);text-align:left;white-space:nowrap}th{font-size:12px;color:var(--muted);font-weight:600}th.sortable{cursor:pointer;user-select:none}th.sortable:after{content:"";display:inline-block;margin-left:5px;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid #9aa4b2;vertical-align:middle}th.sortable.desc:after{border-top:0;border-bottom:5px solid #9aa4b2}td.num{text-align:right;font-variant-numeric:tabular-nums}.scroll{overflow:auto;max-height:520px}' +
@@ -250,6 +299,8 @@ function buildHtml(rows, summary) {
         '</style>\n</head>\n<body>\n<header><h1>AI Teammate Token Usage</h1><p>Generated ' + htmlEscape(summary.generatedAt) + ' from completed workflow logs.</p></header>\n' +
         '<main class="wrap">\n<section class="kpis">' +
         '<div class="kpi"><span>Runs Parsed</span><b>' + summary.runsWithTokens + '</b></div>' +
+        '<div class="kpi"><span>Attempts</span><b>' + summary.totals.samples + '</b></div>' +
+        '<div class="kpi"><span>Resume Runs</span><b>' + summary.totals.resumedRuns + '</b></div>' +
         '<div class="kpi"><span>Read Tokens</span><b>' + formatShort(summary.totals.readTokens) + '</b></div>' +
         '<div class="kpi"><span>Write Tokens</span><b>' + formatShort(summary.totals.writeTokens) + '</b></div>' +
         '<div class="kpi"><span>Cached Tokens</span><b>' + formatShort(summary.totals.cachedTokens) + '</b></div>' +
@@ -258,14 +309,14 @@ function buildHtml(rows, summary) {
         '<div class="panel"><h2>Tokens By Agent</h2><canvas id="agents" class="chart"></canvas></div></section>\n' +
         '<section class="grid"><div class="panel"><h2>Agent Token Share</h2><canvas id="agentPie" class="chart pie"></canvas><div id="agentPieLegend" class="legend"></div></div>' +
         '<div class="panel"><h2>Token Type Share</h2><canvas id="tokenPie" class="chart pie"></canvas><div id="tokenPieLegend" class="legend"></div></div></section>\n' +
-        '<section class="panel"><h2>Agent Totals And Averages</h2><div class="scroll"><table id="agentTable"><thead><tr><th class="sortable" data-type="text">Agent</th><th class="sortable" data-type="number">Runs</th><th class="sortable" data-type="number">Read</th><th class="sortable" data-type="number">Avg Read</th><th class="sortable" data-type="number">Write</th><th class="sortable" data-type="number">Avg Write</th><th class="sortable" data-type="number">Cached</th><th class="sortable" data-type="number">Reasoning</th></tr></thead><tbody>' +
+        '<section class="panel"><h2>Agent Totals And Averages</h2><div class="scroll"><table id="agentTable"><thead><tr><th class="sortable" data-type="text">Agent</th><th class="sortable" data-type="number">Runs</th><th class="sortable" data-type="number">Attempts</th><th class="sortable" data-type="number">Resume Runs</th><th class="sortable" data-type="number">Read</th><th class="sortable" data-type="number">Avg Read</th><th class="sortable" data-type="number">Write</th><th class="sortable" data-type="number">Avg Write</th><th class="sortable" data-type="number">Cached</th><th class="sortable" data-type="number">Reasoning</th></tr></thead><tbody>' +
         topAgents.map(function(a) {
-            return '<tr><td' + sortAttr(a.key) + '>' + htmlEscape(a.key) + '</td><td class="num"' + sortAttr(a.runs) + '>' + a.runs + '</td><td class="num"' + sortAttr(a.readTokens) + '>' + formatShort(a.readTokens) + '</td><td class="num"' + sortAttr(a.avgReadTokens) + '>' + formatShort(a.avgReadTokens) + '</td><td class="num"' + sortAttr(a.writeTokens) + '>' + formatShort(a.writeTokens) + '</td><td class="num"' + sortAttr(a.avgWriteTokens) + '>' + formatShort(a.avgWriteTokens) + '</td><td class="num"' + sortAttr(a.cachedTokens) + '>' + formatShort(a.cachedTokens) + '</td><td class="num"' + sortAttr(a.reasoningTokens) + '>' + formatShort(a.reasoningTokens) + '</td></tr>';
+            return '<tr><td' + sortAttr(a.key) + '>' + htmlEscape(a.key) + '</td><td class="num"' + sortAttr(a.runs) + '>' + a.runs + '</td><td class="num"' + sortAttr(a.samples) + '>' + a.samples + '</td><td class="num"' + sortAttr(a.resumedRuns) + '>' + a.resumedRuns + '</td><td class="num"' + sortAttr(a.readTokens) + '>' + formatShort(a.readTokens) + '</td><td class="num"' + sortAttr(a.avgReadTokens) + '>' + formatShort(a.avgReadTokens) + '</td><td class="num"' + sortAttr(a.writeTokens) + '>' + formatShort(a.writeTokens) + '</td><td class="num"' + sortAttr(a.avgWriteTokens) + '>' + formatShort(a.avgWriteTokens) + '</td><td class="num"' + sortAttr(a.cachedTokens) + '>' + formatShort(a.cachedTokens) + '</td><td class="num"' + sortAttr(a.reasoningTokens) + '>' + formatShort(a.reasoningTokens) + '</td></tr>';
         }).join('') +
         '</tbody></table></div></section>\n' +
-        '<section class="panel"><h2>Recent Runs</h2><div class="scroll"><table id="runsTable"><thead><tr><th class="sortable" data-type="text">Created</th><th class="sortable" data-type="text">Agent</th><th class="sortable" data-type="text">Key</th><th class="sortable" data-type="text">Conclusion</th><th class="sortable" data-type="number">Read</th><th class="sortable" data-type="number">Write</th><th class="sortable" data-type="number">Cached</th><th class="sortable" data-type="number">Reasoning</th><th class="sortable" data-type="number">Run</th></tr></thead><tbody>' +
+        '<section class="panel"><h2>Recent Runs</h2><div class="scroll"><table id="runsTable"><thead><tr><th class="sortable" data-type="text">Created</th><th class="sortable" data-type="text">Agent</th><th class="sortable" data-type="text">Key</th><th class="sortable" data-type="text">Conclusion</th><th class="sortable" data-type="number">Attempts</th><th class="sortable" data-type="text">Resume</th><th class="sortable" data-type="number">Read</th><th class="sortable" data-type="number">Write</th><th class="sortable" data-type="number">Cached</th><th class="sortable" data-type="number">Reasoning</th><th class="sortable" data-type="number">Run</th></tr></thead><tbody>' +
         recentRows.map(function(r) {
-            return '<tr><td' + sortAttr(r.createdAt) + '>' + htmlEscape(r.createdAt) + '</td><td' + sortAttr(r.agent) + '>' + htmlEscape(r.agent) + '</td><td' + sortAttr(r.ticketKey) + '>' + htmlEscape(r.ticketKey) + '</td><td' + sortAttr(r.conclusion) + '>' + htmlEscape(r.conclusion) + '</td><td class="num"' + sortAttr(r.readTokens) + '>' + formatShort(r.readTokens) + '</td><td class="num"' + sortAttr(r.writeTokens) + '>' + formatShort(r.writeTokens) + '</td><td class="num"' + sortAttr(r.cachedTokens) + '>' + formatShort(r.cachedTokens) + '</td><td class="num"' + sortAttr(r.reasoningTokens) + '>' + formatShort(r.reasoningTokens) + '</td><td' + sortAttr(r.runNumber) + '><a href="' + htmlEscape(r.url) + '">#' + htmlEscape(r.runNumber) + '</a></td></tr>';
+            return '<tr><td' + sortAttr(r.createdAt) + '>' + htmlEscape(r.createdAt) + '</td><td' + sortAttr(r.agent) + '>' + htmlEscape(r.agent) + '</td><td' + sortAttr(r.ticketKey) + '>' + htmlEscape(r.ticketKey) + '</td><td' + sortAttr(r.conclusion) + '>' + htmlEscape(r.conclusion) + '</td><td class="num"' + sortAttr(r.samples) + '>' + htmlEscape(r.samples || 1) + '</td><td' + sortAttr(r.resumeDetected ? 'yes' : 'no') + '>' + (r.resumeDetected ? 'yes' : 'no') + '</td><td class="num"' + sortAttr(r.readTokens) + '>' + formatShort(r.readTokens) + '</td><td class="num"' + sortAttr(r.writeTokens) + '>' + formatShort(r.writeTokens) + '</td><td class="num"' + sortAttr(r.cachedTokens) + '>' + formatShort(r.cachedTokens) + '</td><td class="num"' + sortAttr(r.reasoningTokens) + '>' + formatShort(r.reasoningTokens) + '</td><td' + sortAttr(r.runNumber) + '><a href="' + htmlEscape(r.url) + '">#' + htmlEscape(r.runNumber) + '</a></td></tr>';
         }).join('') +
         '</tbody></table></div></section>\n</main>\n<script>const DATA=' + payload.replace(/</g, '\\u003c') + ';\n' +
         'function short(v){v=v||0;if(v>=1e9)return(v/1e9).toFixed(1).replace(/\\.0$/,"")+"b";if(v>=1e6)return(v/1e6).toFixed(1).replace(/\\.0$/,"")+"m";if(v>=1e3)return(v/1e3).toFixed(1).replace(/\\.0$/,"")+"k";return String(v)}' +
@@ -391,12 +442,15 @@ function buildSummary(rows, totalRuns) {
         readTokens: 0,
         writeTokens: 0,
         cachedTokens: 0,
-        reasoningTokens: 0
+        reasoningTokens: 0,
+        samples: 0,
+        resumedRuns: 0
     };
     rows.forEach(function(row) {
         Object.keys(totals).forEach(function(key) {
             totals[key] += row[key] || 0;
         });
+        if (row.resumeDetected) totals.resumedRuns += 1;
     });
     return {
         generatedAt: new Date().toISOString(),
@@ -436,6 +490,7 @@ function action(params) {
 
     var outputDir = custom.outputDir || 'outputs/token_usage';
     var csvPath = custom.csvPath || (outputDir + '/ai_teammate_token_usage.csv');
+    var attemptsCsvPath = custom.attemptsCsvPath || (outputDir + '/ai_teammate_token_usage_attempts.csv');
     var jsonPath = custom.jsonPath || (outputDir + '/ai_teammate_token_usage.json');
     var htmlPath = custom.htmlPath || (outputDir + '/ai_teammate_token_usage.html');
 
@@ -455,6 +510,7 @@ function action(params) {
     console.log('Found ' + runs.length + ' completed workflow run(s)');
 
     var rows = [];
+    var attemptRows = [];
     var logEvery = custom.logEvery || 50;
     var verbose = custom.verbose === true || custom.verbose === 'true';
     for (var i = 0; i < runs.length; i++) {
@@ -493,10 +549,34 @@ function action(params) {
                 cachedTokens: usage.cachedTokens || 0,
                 reasoningTokens: usage.reasoningTokens || 0,
                 samples: usage.samples || 1,
+                resumeDetected: usage.resumeDetected === true,
+                resumeStages: (usage.resumeStages || []).join('; '),
                 url: run.html_url || run.htmlUrl || ''
             });
+            (usage.attempts || []).forEach(function(attempt) {
+                attemptRows.push({
+                    runId: runId,
+                    runNumber: run.run_number || run.runNumber || '',
+                    createdAt: run.created_at || run.createdAt || '',
+                    day: isoDay(run.created_at || run.createdAt || run.run_started_at || run.runStartedAt),
+                    conclusion: run.conclusion || '',
+                    agent: meta.agent,
+                    ticketKey: meta.ticketKey,
+                    attemptIndex: attempt.attemptIndex || 1,
+                    resumeDetected: usage.resumeDetected === true,
+                    requests: attempt.requests || 0,
+                    requestTier: attempt.requestTier || '',
+                    requestDuration: attempt.requestDuration || '',
+                    readTokens: attempt.readTokens || 0,
+                    writeTokens: attempt.writeTokens || 0,
+                    cachedTokens: attempt.cachedTokens || 0,
+                    reasoningTokens: attempt.reasoningTokens || 0,
+                    rawTokensLine: attempt.rawTokensLine || '',
+                    url: run.html_url || run.htmlUrl || ''
+                });
+            });
             if (verbose) {
-                console.log('    tokens read=' + usage.readTokens + ' write=' + usage.writeTokens + ' cached=' + usage.cachedTokens + ' reasoning=' + usage.reasoningTokens);
+                console.log('    tokens read=' + usage.readTokens + ' write=' + usage.writeTokens + ' cached=' + usage.cachedTokens + ' reasoning=' + usage.reasoningTokens + ' attempts=' + usage.samples);
             }
         } catch (e) {
             console.warn('    failed to process run ' + runId + ': ' + (e.message || e));
@@ -504,15 +584,17 @@ function action(params) {
     }
 
     var summary = buildSummary(rows, runs.length);
-    var payload = { summary: summary, rows: rows };
+    var payload = { summary: summary, rows: rows, attempts: attemptRows };
     writeOutput(csvPath, buildCsv(rows));
+    writeOutput(attemptsCsvPath, buildAttemptsCsv(attemptRows));
     writeOutput(jsonPath, JSON.stringify(payload, null, 2));
     writeOutput(htmlPath, buildHtml(rows, summary));
 
     console.log('Wrote CSV: ' + csvPath);
+    console.log('Wrote attempts CSV: ' + attemptsCsvPath);
     console.log('Wrote JSON: ' + jsonPath);
     console.log('Wrote HTML: ' + htmlPath);
-    return { success: true, csvPath: csvPath, jsonPath: jsonPath, htmlPath: htmlPath, summary: summary };
+    return { success: true, csvPath: csvPath, attemptsCsvPath: attemptsCsvPath, jsonPath: jsonPath, htmlPath: htmlPath, summary: summary };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
@@ -524,6 +606,7 @@ if (typeof module !== 'undefined' && module.exports) {
         extractAgentAndKey: extractAgentAndKey,
         listCompletedRuns: listCompletedRuns,
         buildCsv: buildCsv,
+        buildAttemptsCsv: buildAttemptsCsv,
         buildSummary: buildSummary,
         buildHtml: buildHtml,
         sortAttr: sortAttr
