@@ -221,6 +221,10 @@ function htmlEscape(value) {
         .replace(/"/g, '&quot;');
 }
 
+function sortAttr(value) {
+    return ' data-sort="' + htmlEscape(value == null ? '' : value) + '"';
+}
+
 function buildHtml(rows, summary) {
     var payload = JSON.stringify({ rows: rows, summary: summary });
     var topAgents = summary.byAgent.slice().sort(function(a, b) {
@@ -239,8 +243,8 @@ function buildHtml(rows, summary) {
         'header{padding:24px 28px 12px}h1{margin:0 0 6px;font-size:26px;letter-spacing:0}p{margin:0;color:var(--muted)}' +
         '.wrap{padding:12px 28px 32px;display:grid;gap:16px}.kpis{display:grid;grid-template-columns:repeat(5,minmax(140px,1fr));gap:12px}' +
         '.kpi,.panel{background:var(--panel);border:1px solid var(--grid);border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.04)}.kpi{padding:14px}.kpi b{display:block;font-size:22px;margin-top:4px}.kpi span{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}' +
-        '.grid{display:grid;grid-template-columns:1.4fr 1fr;gap:16px}.panel{padding:16px}.panel h2{font-size:16px;margin:0 0 12px}.chart{width:100%;height:280px;display:block}' +
-        'table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;border-bottom:1px solid var(--grid);text-align:left;white-space:nowrap}th{font-size:12px;color:var(--muted);font-weight:600}td.num{text-align:right;font-variant-numeric:tabular-nums}.scroll{overflow:auto;max-height:520px}' +
+        '.grid{display:grid;grid-template-columns:1.4fr 1fr;gap:16px}.panel{padding:16px}.panel h2{font-size:16px;margin:0 0 12px}.chart{width:100%;height:340px;display:block}.pie{height:300px}' +
+        'table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;border-bottom:1px solid var(--grid);text-align:left;white-space:nowrap}th{font-size:12px;color:var(--muted);font-weight:600}th.sortable{cursor:pointer;user-select:none}th.sortable:after{content:"";display:inline-block;margin-left:5px;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid #9aa4b2;vertical-align:middle}th.sortable.desc:after{border-top:0;border-bottom:5px solid #9aa4b2}td.num{text-align:right;font-variant-numeric:tabular-nums}.scroll{overflow:auto;max-height:520px}' +
         '.legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;color:var(--muted);font-size:12px}.dot{width:10px;height:10px;border-radius:2px;display:inline-block;margin-right:5px}' +
         '@media(max-width:900px){.kpis,.grid{grid-template-columns:1fr}.wrap,header{padding-left:16px;padding-right:16px}}\n' +
         '</style>\n</head>\n<body>\n<header><h1>AI Teammate Token Usage</h1><p>Generated ' + htmlEscape(summary.generatedAt) + ' from completed workflow logs.</p></header>\n' +
@@ -252,21 +256,27 @@ function buildHtml(rows, summary) {
         '<div class="kpi"><span>Reasoning Tokens</span><b>' + formatShort(summary.totals.reasoningTokens) + '</b></div>' +
         '</section>\n<section class="grid"><div class="panel"><h2>Daily Token Trend</h2><canvas id="daily" class="chart"></canvas><div class="legend"><span><i class="dot" style="background:#2563eb"></i>read</span><span><i class="dot" style="background:#059669"></i>write</span><span><i class="dot" style="background:#b7791f"></i>cached</span><span><i class="dot" style="background:#dc2626"></i>reasoning</span></div></div>' +
         '<div class="panel"><h2>Tokens By Agent</h2><canvas id="agents" class="chart"></canvas></div></section>\n' +
-        '<section class="panel"><h2>Agent Totals And Averages</h2><div class="scroll"><table><thead><tr><th>Agent</th><th>Runs</th><th>Read</th><th>Avg Read</th><th>Write</th><th>Avg Write</th><th>Cached</th><th>Reasoning</th></tr></thead><tbody>' +
+        '<section class="grid"><div class="panel"><h2>Agent Token Share</h2><canvas id="agentPie" class="chart pie"></canvas><div id="agentPieLegend" class="legend"></div></div>' +
+        '<div class="panel"><h2>Token Type Share</h2><canvas id="tokenPie" class="chart pie"></canvas><div id="tokenPieLegend" class="legend"></div></div></section>\n' +
+        '<section class="panel"><h2>Agent Totals And Averages</h2><div class="scroll"><table id="agentTable"><thead><tr><th class="sortable" data-type="text">Agent</th><th class="sortable" data-type="number">Runs</th><th class="sortable" data-type="number">Read</th><th class="sortable" data-type="number">Avg Read</th><th class="sortable" data-type="number">Write</th><th class="sortable" data-type="number">Avg Write</th><th class="sortable" data-type="number">Cached</th><th class="sortable" data-type="number">Reasoning</th></tr></thead><tbody>' +
         topAgents.map(function(a) {
-            return '<tr><td>' + htmlEscape(a.key) + '</td><td class="num">' + a.runs + '</td><td class="num">' + formatShort(a.readTokens) + '</td><td class="num">' + formatShort(a.avgReadTokens) + '</td><td class="num">' + formatShort(a.writeTokens) + '</td><td class="num">' + formatShort(a.avgWriteTokens) + '</td><td class="num">' + formatShort(a.cachedTokens) + '</td><td class="num">' + formatShort(a.reasoningTokens) + '</td></tr>';
+            return '<tr><td' + sortAttr(a.key) + '>' + htmlEscape(a.key) + '</td><td class="num"' + sortAttr(a.runs) + '>' + a.runs + '</td><td class="num"' + sortAttr(a.readTokens) + '>' + formatShort(a.readTokens) + '</td><td class="num"' + sortAttr(a.avgReadTokens) + '>' + formatShort(a.avgReadTokens) + '</td><td class="num"' + sortAttr(a.writeTokens) + '>' + formatShort(a.writeTokens) + '</td><td class="num"' + sortAttr(a.avgWriteTokens) + '>' + formatShort(a.avgWriteTokens) + '</td><td class="num"' + sortAttr(a.cachedTokens) + '>' + formatShort(a.cachedTokens) + '</td><td class="num"' + sortAttr(a.reasoningTokens) + '>' + formatShort(a.reasoningTokens) + '</td></tr>';
         }).join('') +
         '</tbody></table></div></section>\n' +
-        '<section class="panel"><h2>Recent Runs</h2><div class="scroll"><table><thead><tr><th>Created</th><th>Agent</th><th>Key</th><th>Conclusion</th><th>Read</th><th>Write</th><th>Cached</th><th>Reasoning</th><th>Run</th></tr></thead><tbody>' +
+        '<section class="panel"><h2>Recent Runs</h2><div class="scroll"><table id="runsTable"><thead><tr><th class="sortable" data-type="text">Created</th><th class="sortable" data-type="text">Agent</th><th class="sortable" data-type="text">Key</th><th class="sortable" data-type="text">Conclusion</th><th class="sortable" data-type="number">Read</th><th class="sortable" data-type="number">Write</th><th class="sortable" data-type="number">Cached</th><th class="sortable" data-type="number">Reasoning</th><th class="sortable" data-type="number">Run</th></tr></thead><tbody>' +
         recentRows.map(function(r) {
-            return '<tr><td>' + htmlEscape(r.createdAt) + '</td><td>' + htmlEscape(r.agent) + '</td><td>' + htmlEscape(r.ticketKey) + '</td><td>' + htmlEscape(r.conclusion) + '</td><td class="num">' + formatShort(r.readTokens) + '</td><td class="num">' + formatShort(r.writeTokens) + '</td><td class="num">' + formatShort(r.cachedTokens) + '</td><td class="num">' + formatShort(r.reasoningTokens) + '</td><td><a href="' + htmlEscape(r.url) + '">#' + htmlEscape(r.runNumber) + '</a></td></tr>';
+            return '<tr><td' + sortAttr(r.createdAt) + '>' + htmlEscape(r.createdAt) + '</td><td' + sortAttr(r.agent) + '>' + htmlEscape(r.agent) + '</td><td' + sortAttr(r.ticketKey) + '>' + htmlEscape(r.ticketKey) + '</td><td' + sortAttr(r.conclusion) + '>' + htmlEscape(r.conclusion) + '</td><td class="num"' + sortAttr(r.readTokens) + '>' + formatShort(r.readTokens) + '</td><td class="num"' + sortAttr(r.writeTokens) + '>' + formatShort(r.writeTokens) + '</td><td class="num"' + sortAttr(r.cachedTokens) + '>' + formatShort(r.cachedTokens) + '</td><td class="num"' + sortAttr(r.reasoningTokens) + '>' + formatShort(r.reasoningTokens) + '</td><td' + sortAttr(r.runNumber) + '><a href="' + htmlEscape(r.url) + '">#' + htmlEscape(r.runNumber) + '</a></td></tr>';
         }).join('') +
         '</tbody></table></div></section>\n</main>\n<script>const DATA=' + payload.replace(/</g, '\\u003c') + ';\n' +
         'function short(v){v=v||0;if(v>=1e9)return(v/1e9).toFixed(1).replace(/\\.0$/,"")+"b";if(v>=1e6)return(v/1e6).toFixed(1).replace(/\\.0$/,"")+"m";if(v>=1e3)return(v/1e3).toFixed(1).replace(/\\.0$/,"")+"k";return String(v)}' +
-        'function drawBars(id, labels, series){const c=document.getElementById(id),ctx=c.getContext("2d"),dpr=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;c.width=w*dpr;c.height=h*dpr;ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);const pad={l:54,r:14,t:12,b:54};const max=Math.max(1,...series.flatMap(s=>s.values));ctx.strokeStyle="#e1e5ea";ctx.fillStyle="#5f6b7a";ctx.font="12px -apple-system,Segoe UI,sans-serif";for(let i=0;i<=4;i++){let y=pad.t+(h-pad.t-pad.b)*i/4;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(w-pad.r,y);ctx.stroke();ctx.fillText(short(max*(1-i/4)),6,y+4)}const groupW=(w-pad.l-pad.r)/Math.max(1,labels.length),barW=Math.max(3,groupW/(series.length+1));labels.forEach((lab,i)=>{series.forEach((s,j)=>{let val=s.values[i]||0,bh=(h-pad.t-pad.b)*val/max,x=pad.l+i*groupW+j*barW+barW*.35,y=h-pad.b-bh;ctx.fillStyle=s.color;ctx.fillRect(x,y,barW*.8,bh)});ctx.save();ctx.translate(pad.l+i*groupW+groupW*.35,h-pad.b+10);ctx.rotate(-Math.PI/5);ctx.fillStyle="#5f6b7a";ctx.fillText(lab,0,0);ctx.restore()})}' +
-        'const daily=DATA.summary.byDay;drawBars("daily",daily.map(x=>x.key),[{color:"#2563eb",values:daily.map(x=>x.readTokens)},{color:"#059669",values:daily.map(x=>x.writeTokens)},{color:"#b7791f",values:daily.map(x=>x.cachedTokens)},{color:"#dc2626",values:daily.map(x=>x.reasoningTokens)}]);' +
-        'const agents=DATA.summary.byAgent.slice().sort((a,b)=>(b.readTokens+b.writeTokens+b.cachedTokens+b.reasoningTokens)-(a.readTokens+a.writeTokens+a.cachedTokens+a.reasoningTokens)).slice(0,12);drawBars("agents",agents.map(x=>x.key),[{color:"#7c3aed",values:agents.map(x=>x.readTokens+x.writeTokens+x.cachedTokens+x.reasoningTokens)}]);' +
-        'addEventListener("resize",()=>{drawBars("daily",daily.map(x=>x.key),[{color:"#2563eb",values:daily.map(x=>x.readTokens)},{color:"#059669",values:daily.map(x=>x.writeTokens)},{color:"#b7791f",values:daily.map(x=>x.cachedTokens)},{color:"#dc2626",values:daily.map(x=>x.reasoningTokens)}]);drawBars("agents",agents.map(x=>x.key),[{color:"#7c3aed",values:agents.map(x=>x.readTokens+x.writeTokens+x.cachedTokens+x.reasoningTokens)}])});' +
+        'function labelLines(label,mode){let text=String(label||"");if(mode==="date")text=text.slice(5);if(mode==="agent"){const chunks=text.split("_");const lines=[];let line="";chunks.forEach(part=>{const next=line?line+"_"+part:part;if(next.length>14&&line){lines.push(line);line=part}else line=next});if(line)lines.push(line);return lines.slice(0,4)}return [text]}' +
+        'function drawBars(id, labels, series, options){options=options||{};const c=document.getElementById(id),ctx=c.getContext("2d"),dpr=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;c.width=w*dpr;c.height=h*dpr;ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);const pad={l:54,r:18,t:12,b:options.bottom||82};const max=Math.max(1,...series.flatMap(s=>s.values));ctx.strokeStyle="#e1e5ea";ctx.fillStyle="#5f6b7a";ctx.font="12px -apple-system,Segoe UI,sans-serif";for(let i=0;i<=4;i++){let y=pad.t+(h-pad.t-pad.b)*i/4;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(w-pad.r,y);ctx.stroke();ctx.fillText(short(max*(1-i/4)),6,y+4)}const groupW=(w-pad.l-pad.r)/Math.max(1,labels.length),barW=Math.max(3,Math.min(18,groupW/(series.length+1)));labels.forEach((lab,i)=>{series.forEach((s,j)=>{let val=s.values[i]||0,bh=(h-pad.t-pad.b)*val/max,x=pad.l+i*groupW+(groupW-series.length*barW)/2+j*barW,y=h-pad.b-bh;ctx.fillStyle=s.color;ctx.fillRect(x,y,barW*.75,bh)});const lines=labelLines(lab,options.labelMode);ctx.fillStyle="#5f6b7a";ctx.textAlign="center";ctx.textBaseline="top";lines.forEach((line,k)=>ctx.fillText(line,pad.l+i*groupW+groupW/2,h-pad.b+10+k*13,Math.max(28,groupW-4)));ctx.textAlign="left";ctx.textBaseline="alphabetic"})}' +
+        'function drawPie(id,legendId,items){const c=document.getElementById(id),ctx=c.getContext("2d"),dpr=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;c.width=w*dpr;c.height=h*dpr;ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);const total=items.reduce((s,x)=>s+x.value,0)||1,cx=w/2,cy=h/2,r=Math.min(w,h)*.34;let a=-Math.PI/2;items.forEach(x=>{const span=x.value/total*Math.PI*2;ctx.beginPath();ctx.moveTo(cx,cy);ctx.arc(cx,cy,r,a,a+span);ctx.closePath();ctx.fillStyle=x.color;ctx.fill();a+=span});const el=document.getElementById(legendId);el.innerHTML=items.map(x=>"<span><i class=\\"dot\\" style=\\"background:"+x.color+"\\"></i>"+x.label+" "+short(x.value)+"</span>").join("")}' +
+        'function makeSortable(id){const table=document.getElementById(id);if(!table)return;table.querySelectorAll("th.sortable").forEach((th,idx)=>th.addEventListener("click",()=>{const desc=!th.classList.contains("desc");table.querySelectorAll("th").forEach(h=>h.classList.remove("desc","asc"));th.classList.add(desc?"desc":"asc");const type=th.dataset.type||"text",body=table.tBodies[0],rows=Array.from(body.rows);rows.sort((a,b)=>{let av=a.cells[idx].dataset.sort||a.cells[idx].textContent,bv=b.cells[idx].dataset.sort||b.cells[idx].textContent;if(type==="number"){av=parseFloat(av)||0;bv=parseFloat(bv)||0;return desc?bv-av:av-bv}return desc?String(bv).localeCompare(String(av)):String(av).localeCompare(String(bv))});rows.forEach(r=>body.appendChild(r))}))}' +
+        'const daily=DATA.summary.byDay;drawBars("daily",daily.map(x=>x.key),[{color:"#2563eb",values:daily.map(x=>x.readTokens)},{color:"#059669",values:daily.map(x=>x.writeTokens)},{color:"#b7791f",values:daily.map(x=>x.cachedTokens)},{color:"#dc2626",values:daily.map(x=>x.reasoningTokens)}],{labelMode:"date",bottom:70});' +
+        'const agents=DATA.summary.byAgent.slice().sort((a,b)=>(b.readTokens+b.writeTokens+b.cachedTokens+b.reasoningTokens)-(a.readTokens+a.writeTokens+a.cachedTokens+a.reasoningTokens)).slice(0,12);drawBars("agents",agents.map(x=>x.key),[{color:"#7c3aed",values:agents.map(x=>x.readTokens+x.writeTokens+x.cachedTokens+x.reasoningTokens)}],{labelMode:"agent",bottom:112});' +
+        'const colors=["#2563eb","#059669","#b7791f","#dc2626","#7c3aed","#0891b2","#ea580c","#4f46e5","#64748b"];const agentPie=agents.slice(0,8).map((x,i)=>({label:x.key,value:x.readTokens+x.writeTokens+x.cachedTokens+x.reasoningTokens,color:colors[i%colors.length]}));const agentOther=DATA.summary.byAgent.reduce((s,x)=>s+x.readTokens+x.writeTokens+x.cachedTokens+x.reasoningTokens,0)-agentPie.reduce((s,x)=>s+x.value,0);if(agentOther>0)agentPie.push({label:"other",value:agentOther,color:"#94a3b8"});const tokenPie=[{label:"read",value:DATA.summary.totals.readTokens,color:"#2563eb"},{label:"write",value:DATA.summary.totals.writeTokens,color:"#059669"},{label:"cached",value:DATA.summary.totals.cachedTokens,color:"#b7791f"},{label:"reasoning",value:DATA.summary.totals.reasoningTokens,color:"#dc2626"}];drawPie("agentPie","agentPieLegend",agentPie);drawPie("tokenPie","tokenPieLegend",tokenPie);makeSortable("agentTable");makeSortable("runsTable");' +
+        'addEventListener("resize",()=>{drawBars("daily",daily.map(x=>x.key),[{color:"#2563eb",values:daily.map(x=>x.readTokens)},{color:"#059669",values:daily.map(x=>x.writeTokens)},{color:"#b7791f",values:daily.map(x=>x.cachedTokens)},{color:"#dc2626",values:daily.map(x=>x.reasoningTokens)}],{labelMode:"date",bottom:70});drawBars("agents",agents.map(x=>x.key),[{color:"#7c3aed",values:agents.map(x=>x.readTokens+x.writeTokens+x.cachedTokens+x.reasoningTokens)}],{labelMode:"agent",bottom:112});drawPie("agentPie","agentPieLegend",agentPie);drawPie("tokenPie","tokenPieLegend",tokenPie)});' +
         '</script>\n</body>\n</html>\n';
 }
 
@@ -403,6 +413,10 @@ function writeOutput(path, content) {
     file_write({ path: path, content: content });
 }
 
+function readInput(path) {
+    return file_read({ path: path });
+}
+
 function action(params) {
     var custom = (params && params.jobParams && params.jobParams.customParams) || {};
     var projectConfig = configLoader.loadProjectConfig(params || {});
@@ -424,6 +438,17 @@ function action(params) {
     var csvPath = custom.csvPath || (outputDir + '/ai_teammate_token_usage.csv');
     var jsonPath = custom.jsonPath || (outputDir + '/ai_teammate_token_usage.json');
     var htmlPath = custom.htmlPath || (outputDir + '/ai_teammate_token_usage.html');
+
+    if (custom.renderOnly === true || custom.renderOnly === 'true') {
+        var inputJsonPath = custom.inputJsonPath || jsonPath;
+        var existing = parseJson(readInput(inputJsonPath), null);
+        if (!existing || !existing.summary || !existing.rows) {
+            return { success: false, error: 'Cannot render HTML: invalid token usage JSON at ' + inputJsonPath };
+        }
+        writeOutput(htmlPath, buildHtml(existing.rows, existing.summary));
+        console.log('Wrote HTML: ' + htmlPath);
+        return { success: true, renderOnly: true, jsonPath: inputJsonPath, htmlPath: htmlPath, summary: existing.summary };
+    }
 
     console.log('AI Teammate Token Usage Reporter — ' + custom.workspace + '/' + custom.repository + ' [' + custom.workflowId + ']');
     var runs = listCompletedRuns(custom);
@@ -499,6 +524,8 @@ if (typeof module !== 'undefined' && module.exports) {
         extractAgentAndKey: extractAgentAndKey,
         listCompletedRuns: listCompletedRuns,
         buildCsv: buildCsv,
-        buildSummary: buildSummary
+        buildSummary: buildSummary,
+        buildHtml: buildHtml,
+        sortAttr: sortAttr
     };
 }
