@@ -213,6 +213,7 @@ function buildCsv(rows) {
     var headers = [
         'runId', 'runNumber', 'createdAt', 'startedAt', 'updatedAt', 'day',
         'conclusion', 'agent', 'ticketKey', 'configFile', 'title',
+        'durationSeconds', 'duration',
         'requests', 'requestTier', 'requestDuration',
         'readTokens', 'writeTokens', 'cachedTokens', 'reasoningTokens',
         'samples', 'resumeDetected', 'resumeStages',
@@ -228,7 +229,7 @@ function buildCsv(rows) {
 
 function buildAttemptsCsv(attemptRows) {
     var headers = [
-        'runId', 'runNumber', 'createdAt', 'day', 'conclusion',
+        'runId', 'runNumber', 'createdAt', 'day', 'conclusion', 'durationSeconds', 'duration',
         'agent', 'ticketKey', 'attemptIndex', 'resumeDetected',
         'feedbackLoopCount', 'rateLimitRetryCount', 'rateLimitDetected', 'timeoutCount',
         'requests', 'requestTier', 'requestDuration',
@@ -261,7 +262,9 @@ function groupBy(rows, keyFn) {
                 rateLimitRetryCount: 0,
                 rateLimitRuns: 0,
                 timeoutCount: 0,
-                timeoutRuns: 0
+                timeoutRuns: 0,
+                durationSeconds: 0,
+                durationRuns: 0
             };
         }
         var bucket = map[key];
@@ -278,6 +281,8 @@ function groupBy(rows, keyFn) {
         if (row.rateLimitDetected) bucket.rateLimitRuns += 1;
         bucket.timeoutCount += row.timeoutCount || 0;
         if (row.timeoutCount) bucket.timeoutRuns += 1;
+        bucket.durationSeconds += row.durationSeconds || 0;
+        if (row.durationSeconds) bucket.durationRuns += 1;
     });
     return Object.keys(map).sort().map(function(key) {
         var item = map[key];
@@ -285,6 +290,8 @@ function groupBy(rows, keyFn) {
         item.avgWriteTokens = item.runs ? Math.round(item.writeTokens / item.runs) : 0;
         item.avgCachedTokens = item.runs ? Math.round(item.cachedTokens / item.runs) : 0;
         item.avgReasoningTokens = item.runs ? Math.round(item.reasoningTokens / item.runs) : 0;
+        item.avgDurationSeconds = item.durationRuns ? Math.round(item.durationSeconds / item.durationRuns) : 0;
+        item.avgDuration = formatDuration(item.avgDurationSeconds);
         return item;
     });
 }
@@ -295,6 +302,26 @@ function formatShort(value) {
     if (value >= 1000000) return (value / 1000000).toFixed(1).replace(/\.0$/, '') + 'm';
     if (value >= 1000) return (value / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
     return String(value);
+}
+
+function formatDuration(seconds) {
+    seconds = Math.max(0, Math.round(seconds || 0));
+    var hours = Math.floor(seconds / 3600);
+    var minutes = Math.floor((seconds % 3600) / 60);
+    var secs = seconds % 60;
+    if (hours) return hours + 'h ' + minutes + 'm';
+    if (minutes) return minutes + 'm ' + secs + 's';
+    return secs + 's';
+}
+
+function calculateDurationSeconds(run) {
+    run = run || {};
+    var start = run.run_started_at || run.runStartedAt || run.started_at || run.startedAt || run.created_at || run.createdAt;
+    var end = run.updated_at || run.updatedAt || run.completed_at || run.completedAt;
+    var startMs = Date.parse(start || '');
+    var endMs = Date.parse(end || '');
+    if (isNaN(startMs) || isNaN(endMs) || endMs < startMs) return 0;
+    return Math.round((endMs - startMs) / 1000);
 }
 
 function htmlEscape(value) {
@@ -325,7 +352,7 @@ function buildHtml(rows, summary) {
         ':root{color-scheme:light;--bg:#f6f7f9;--panel:#fff;--ink:#18202a;--muted:#5f6b7a;--grid:#e1e5ea;--blue:#2563eb;--green:#059669;--amber:#b7791f;--red:#dc2626;--violet:#7c3aed}' +
         '*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}' +
         'header{padding:24px 28px 12px}h1{margin:0 0 6px;font-size:26px;letter-spacing:0}p{margin:0;color:var(--muted)}' +
-        '.wrap{padding:12px 28px 32px;display:grid;gap:16px}.kpis{display:grid;grid-template-columns:repeat(10,minmax(110px,1fr));gap:12px}' +
+        '.wrap{padding:12px 28px 32px;display:grid;gap:16px}.kpis{display:grid;grid-template-columns:repeat(11,minmax(105px,1fr));gap:12px}' +
         '.kpi,.panel{background:var(--panel);border:1px solid var(--grid);border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.04)}.kpi{padding:14px}.kpi b{display:block;font-size:22px;margin-top:4px}.kpi span{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}' +
         '.grid{display:grid;grid-template-columns:1.4fr 1fr;gap:16px}.panel{padding:16px}.panel h2{font-size:16px;margin:0 0 12px}.chart{width:100%;height:340px;display:block}.pie{height:300px}' +
         'table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;border-bottom:1px solid var(--grid);text-align:left;white-space:nowrap}th{font-size:12px;color:var(--muted);font-weight:600}th.sortable{cursor:pointer;user-select:none}th.sortable:after{content:"";display:inline-block;margin-left:5px;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid #9aa4b2;vertical-align:middle}th.sortable.desc:after{border-top:0;border-bottom:5px solid #9aa4b2}td.num{text-align:right;font-variant-numeric:tabular-nums}.scroll{overflow:auto;max-height:520px}' +
@@ -339,6 +366,7 @@ function buildHtml(rows, summary) {
         '<div class="kpi"><span>Loops</span><b>' + summary.totals.feedbackLoopCount + '</b></div>' +
         '<div class="kpi"><span>Limit Retries</span><b>' + summary.totals.rateLimitRetryCount + '</b></div>' +
         '<div class="kpi"><span>Timeouts</span><b>' + summary.totals.timeoutCount + '</b></div>' +
+        '<div class="kpi"><span>Avg Duration</span><b>' + htmlEscape(summary.totals.avgDuration || '0s') + '</b></div>' +
         '<div class="kpi"><span>Read Tokens</span><b>' + formatShort(summary.totals.readTokens) + '</b></div>' +
         '<div class="kpi"><span>Write Tokens</span><b>' + formatShort(summary.totals.writeTokens) + '</b></div>' +
         '<div class="kpi"><span>Cached Tokens</span><b>' + formatShort(summary.totals.cachedTokens) + '</b></div>' +
@@ -347,14 +375,14 @@ function buildHtml(rows, summary) {
         '<div class="panel"><h2>Tokens By Agent</h2><canvas id="agents" class="chart"></canvas></div></section>\n' +
         '<section class="grid"><div class="panel"><h2>Agent Token Share</h2><canvas id="agentPie" class="chart pie"></canvas><div id="agentPieLegend" class="legend"></div></div>' +
         '<div class="panel"><h2>Token Type Share</h2><canvas id="tokenPie" class="chart pie"></canvas><div id="tokenPieLegend" class="legend"></div></div></section>\n' +
-        '<section class="panel"><h2>Agent Totals And Averages</h2><div class="scroll"><table id="agentTable"><thead><tr><th class="sortable" data-type="text">Agent</th><th class="sortable" data-type="number">Runs</th><th class="sortable" data-type="number">Attempts</th><th class="sortable" data-type="number">Resume Runs</th><th class="sortable" data-type="number">Loops</th><th class="sortable" data-type="number">Limit Retries</th><th class="sortable" data-type="number">Timeouts</th><th class="sortable" data-type="number">Read</th><th class="sortable" data-type="number">Avg Read</th><th class="sortable" data-type="number">Write</th><th class="sortable" data-type="number">Avg Write</th><th class="sortable" data-type="number">Cached</th><th class="sortable" data-type="number">Reasoning</th></tr></thead><tbody>' +
+        '<section class="panel"><h2>Agent Totals And Averages</h2><div class="scroll"><table id="agentTable"><thead><tr><th class="sortable" data-type="text">Agent</th><th class="sortable" data-type="number">Runs</th><th class="sortable" data-type="number">Attempts</th><th class="sortable" data-type="number">Resume Runs</th><th class="sortable" data-type="number">Loops</th><th class="sortable" data-type="number">Limit Retries</th><th class="sortable" data-type="number">Timeouts</th><th class="sortable" data-type="number">Avg Duration</th><th class="sortable" data-type="number">Read</th><th class="sortable" data-type="number">Avg Read</th><th class="sortable" data-type="number">Write</th><th class="sortable" data-type="number">Avg Write</th><th class="sortable" data-type="number">Cached</th><th class="sortable" data-type="number">Reasoning</th></tr></thead><tbody>' +
         topAgents.map(function(a) {
-            return '<tr><td' + sortAttr(a.key) + '>' + htmlEscape(a.key) + '</td><td class="num"' + sortAttr(a.runs) + '>' + a.runs + '</td><td class="num"' + sortAttr(a.samples) + '>' + a.samples + '</td><td class="num"' + sortAttr(a.resumedRuns) + '>' + a.resumedRuns + '</td><td class="num"' + sortAttr(a.feedbackLoopCount) + '>' + a.feedbackLoopCount + '</td><td class="num"' + sortAttr(a.rateLimitRetryCount) + '>' + a.rateLimitRetryCount + '</td><td class="num"' + sortAttr(a.timeoutCount) + '>' + a.timeoutCount + '</td><td class="num"' + sortAttr(a.readTokens) + '>' + formatShort(a.readTokens) + '</td><td class="num"' + sortAttr(a.avgReadTokens) + '>' + formatShort(a.avgReadTokens) + '</td><td class="num"' + sortAttr(a.writeTokens) + '>' + formatShort(a.writeTokens) + '</td><td class="num"' + sortAttr(a.avgWriteTokens) + '>' + formatShort(a.avgWriteTokens) + '</td><td class="num"' + sortAttr(a.cachedTokens) + '>' + formatShort(a.cachedTokens) + '</td><td class="num"' + sortAttr(a.reasoningTokens) + '>' + formatShort(a.reasoningTokens) + '</td></tr>';
+            return '<tr><td' + sortAttr(a.key) + '>' + htmlEscape(a.key) + '</td><td class="num"' + sortAttr(a.runs) + '>' + a.runs + '</td><td class="num"' + sortAttr(a.samples) + '>' + a.samples + '</td><td class="num"' + sortAttr(a.resumedRuns) + '>' + a.resumedRuns + '</td><td class="num"' + sortAttr(a.feedbackLoopCount) + '>' + a.feedbackLoopCount + '</td><td class="num"' + sortAttr(a.rateLimitRetryCount) + '>' + a.rateLimitRetryCount + '</td><td class="num"' + sortAttr(a.timeoutCount) + '>' + a.timeoutCount + '</td><td class="num"' + sortAttr(a.avgDurationSeconds) + '>' + htmlEscape(a.avgDuration || '0s') + '</td><td class="num"' + sortAttr(a.readTokens) + '>' + formatShort(a.readTokens) + '</td><td class="num"' + sortAttr(a.avgReadTokens) + '>' + formatShort(a.avgReadTokens) + '</td><td class="num"' + sortAttr(a.writeTokens) + '>' + formatShort(a.writeTokens) + '</td><td class="num"' + sortAttr(a.avgWriteTokens) + '>' + formatShort(a.avgWriteTokens) + '</td><td class="num"' + sortAttr(a.cachedTokens) + '>' + formatShort(a.cachedTokens) + '</td><td class="num"' + sortAttr(a.reasoningTokens) + '>' + formatShort(a.reasoningTokens) + '</td></tr>';
         }).join('') +
         '</tbody></table></div></section>\n' +
-        '<section class="panel"><h2>Recent Runs</h2><div class="scroll"><table id="runsTable"><thead><tr><th class="sortable" data-type="text">Created</th><th class="sortable" data-type="text">Agent</th><th class="sortable" data-type="text">Key</th><th class="sortable" data-type="text">Conclusion</th><th class="sortable" data-type="number">Attempts</th><th class="sortable" data-type="text">Resume</th><th class="sortable" data-type="number">Loops</th><th class="sortable" data-type="number">Limit Retries</th><th class="sortable" data-type="number">Timeouts</th><th class="sortable" data-type="number">Read</th><th class="sortable" data-type="number">Write</th><th class="sortable" data-type="number">Cached</th><th class="sortable" data-type="number">Reasoning</th><th class="sortable" data-type="number">Run</th></tr></thead><tbody>' +
+        '<section class="panel"><h2>Recent Runs</h2><div class="scroll"><table id="runsTable"><thead><tr><th class="sortable" data-type="text">Created</th><th class="sortable" data-type="text">Agent</th><th class="sortable" data-type="text">Key</th><th class="sortable" data-type="text">Conclusion</th><th class="sortable" data-type="number">Duration</th><th class="sortable" data-type="number">Attempts</th><th class="sortable" data-type="text">Resume</th><th class="sortable" data-type="number">Loops</th><th class="sortable" data-type="number">Limit Retries</th><th class="sortable" data-type="number">Timeouts</th><th class="sortable" data-type="number">Read</th><th class="sortable" data-type="number">Write</th><th class="sortable" data-type="number">Cached</th><th class="sortable" data-type="number">Reasoning</th><th class="sortable" data-type="number">Run</th></tr></thead><tbody>' +
         recentRows.map(function(r) {
-            return '<tr><td' + sortAttr(r.createdAt) + '>' + htmlEscape(r.createdAt) + '</td><td' + sortAttr(r.agent) + '>' + htmlEscape(r.agent) + '</td><td' + sortAttr(r.ticketKey) + '>' + htmlEscape(r.ticketKey) + '</td><td' + sortAttr(r.conclusion) + '>' + htmlEscape(r.conclusion) + '</td><td class="num"' + sortAttr(r.samples) + '>' + htmlEscape(r.samples || 1) + '</td><td' + sortAttr(r.resumeDetected ? 'yes' : 'no') + '>' + (r.resumeDetected ? 'yes' : 'no') + '</td><td class="num"' + sortAttr(r.feedbackLoopCount) + '>' + (r.feedbackLoopCount || 0) + '</td><td class="num"' + sortAttr(r.rateLimitRetryCount) + '>' + (r.rateLimitRetryCount || 0) + '</td><td class="num"' + sortAttr(r.timeoutCount) + '>' + (r.timeoutCount || 0) + '</td><td class="num"' + sortAttr(r.readTokens) + '>' + formatShort(r.readTokens) + '</td><td class="num"' + sortAttr(r.writeTokens) + '>' + formatShort(r.writeTokens) + '</td><td class="num"' + sortAttr(r.cachedTokens) + '>' + formatShort(r.cachedTokens) + '</td><td class="num"' + sortAttr(r.reasoningTokens) + '>' + formatShort(r.reasoningTokens) + '</td><td' + sortAttr(r.runNumber) + '><a href="' + htmlEscape(r.url) + '">#' + htmlEscape(r.runNumber) + '</a></td></tr>';
+            return '<tr><td' + sortAttr(r.createdAt) + '>' + htmlEscape(r.createdAt) + '</td><td' + sortAttr(r.agent) + '>' + htmlEscape(r.agent) + '</td><td' + sortAttr(r.ticketKey) + '>' + htmlEscape(r.ticketKey) + '</td><td' + sortAttr(r.conclusion) + '>' + htmlEscape(r.conclusion) + '</td><td class="num"' + sortAttr(r.durationSeconds) + '>' + htmlEscape(r.duration || '0s') + '</td><td class="num"' + sortAttr(r.samples) + '>' + htmlEscape(r.samples || 1) + '</td><td' + sortAttr(r.resumeDetected ? 'yes' : 'no') + '>' + (r.resumeDetected ? 'yes' : 'no') + '</td><td class="num"' + sortAttr(r.feedbackLoopCount) + '>' + (r.feedbackLoopCount || 0) + '</td><td class="num"' + sortAttr(r.rateLimitRetryCount) + '>' + (r.rateLimitRetryCount || 0) + '</td><td class="num"' + sortAttr(r.timeoutCount) + '>' + (r.timeoutCount || 0) + '</td><td class="num"' + sortAttr(r.readTokens) + '>' + formatShort(r.readTokens) + '</td><td class="num"' + sortAttr(r.writeTokens) + '>' + formatShort(r.writeTokens) + '</td><td class="num"' + sortAttr(r.cachedTokens) + '>' + formatShort(r.cachedTokens) + '</td><td class="num"' + sortAttr(r.reasoningTokens) + '>' + formatShort(r.reasoningTokens) + '</td><td' + sortAttr(r.runNumber) + '><a href="' + htmlEscape(r.url) + '">#' + htmlEscape(r.runNumber) + '</a></td></tr>';
         }).join('') +
         '</tbody></table></div></section>\n</main><div id="chartTooltip" class="tooltip"></div>\n<script>const DATA=' + payload.replace(/</g, '\\u003c') + ';\n' +
         'function short(v){v=v||0;if(v>=1e9)return(v/1e9).toFixed(1).replace(/\\.0$/,"")+"b";if(v>=1e6)return(v/1e6).toFixed(1).replace(/\\.0$/,"")+"m";if(v>=1e3)return(v/1e3).toFixed(1).replace(/\\.0$/,"")+"k";return String(v)}' +
@@ -489,7 +517,9 @@ function buildSummary(rows, totalRuns) {
         rateLimitRetryCount: 0,
         rateLimitRuns: 0,
         timeoutCount: 0,
-        timeoutRuns: 0
+        timeoutRuns: 0,
+        durationSeconds: 0,
+        durationRuns: 0
     };
     rows.forEach(function(row) {
         Object.keys(totals).forEach(function(key) {
@@ -498,7 +528,10 @@ function buildSummary(rows, totalRuns) {
         if (row.resumeDetected) totals.resumedRuns += 1;
         if (row.rateLimitDetected) totals.rateLimitRuns += 1;
         if (row.timeoutCount) totals.timeoutRuns += 1;
+        if (row.durationSeconds) totals.durationRuns += 1;
     });
+    totals.avgDurationSeconds = totals.durationRuns ? Math.round(totals.durationSeconds / totals.durationRuns) : 0;
+    totals.avgDuration = formatDuration(totals.avgDurationSeconds);
     return {
         generatedAt: new Date().toISOString(),
         totalRuns: totalRuns,
@@ -564,6 +597,8 @@ function action(params) {
         var run = runs[i];
         var meta = extractAgentAndKey(run);
         var runId = String(run.id || run.databaseId);
+        var durationSeconds = calculateDurationSeconds(run);
+        var duration = formatDuration(durationSeconds);
         if (verbose || i === 0 || (i + 1) % logEvery === 0 || i === runs.length - 1) {
             console.log('  [' + (i + 1) + '/' + runs.length + '] ' + runId + ' ' + meta.title);
         }
@@ -588,6 +623,8 @@ function action(params) {
                 ticketKey: meta.ticketKey,
                 configFile: meta.configFile,
                 title: meta.title,
+                durationSeconds: durationSeconds,
+                duration: duration,
                 requests: usage.requests || 0,
                 requestTier: usage.requestTier || '',
                 requestDuration: usage.requestDuration || '',
@@ -611,6 +648,8 @@ function action(params) {
                     createdAt: run.created_at || run.createdAt || '',
                     day: isoDay(run.created_at || run.createdAt || run.run_started_at || run.runStartedAt),
                     conclusion: run.conclusion || '',
+                    durationSeconds: durationSeconds,
+                    duration: duration,
                     agent: meta.agent,
                     ticketKey: meta.ticketKey,
                     attemptIndex: attempt.attemptIndex || 1,
@@ -659,6 +698,8 @@ if (typeof module !== 'undefined' && module.exports) {
         parseTokensLine: parseTokensLine,
         extractTokenUsage: extractTokenUsage,
         extractAgentAndKey: extractAgentAndKey,
+        calculateDurationSeconds: calculateDurationSeconds,
+        formatDuration: formatDuration,
         listCompletedRuns: listCompletedRuns,
         buildCsv: buildCsv,
         buildAttemptsCsv: buildAttemptsCsv,

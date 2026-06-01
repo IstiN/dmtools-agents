@@ -76,6 +76,17 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
         assert.equal(parsed.ticketKey, 'TS-1307');
     });
 
+    test('calculates workflow run duration from GitHub timestamps', function() {
+        var reporter = loadReporter();
+        var seconds = reporter.calculateDurationSeconds({
+            run_started_at: '2026-06-01T05:00:00Z',
+            updated_at: '2026-06-01T05:27:02Z'
+        });
+
+        assert.equal(seconds, 1622);
+        assert.equal(reporter.formatDuration(seconds), '27m 2s');
+    });
+
     test('lists completed workflow runs across MCP pages', function() {
         var calls = [];
         var reporter = loadReporter({
@@ -123,6 +134,8 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
             ticketKey: 'TS-1',
             configFile: 'agents/pr_rework.json',
             title: 'agents/pr_rework.json : TS-1 : TS-1',
+            durationSeconds: 1622,
+            duration: '27m 2s',
             requests: 3,
             readTokens: 6000000,
             writeTokens: 19400,
@@ -143,6 +156,8 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
             createdAt: '2026-06-01T00:00:00Z',
             day: '2026-06-01',
             conclusion: 'success',
+            durationSeconds: 1622,
+            duration: '27m 2s',
             agent: 'pr_rework',
             ticketKey: 'TS-1',
             attemptIndex: 2,
@@ -161,6 +176,7 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
         }]);
 
         assert.contains(aggregateCsv.split('\n')[0], 'resumeDetected');
+        assert.contains(aggregateCsv.split('\n')[0], 'durationSeconds');
         assert.contains(aggregateCsv.split('\n')[0], 'feedbackLoopCount');
         assert.contains(aggregateCsv.split('\n')[0], 'rateLimitRetryCount');
         assert.contains(aggregateCsv.split('\n')[0], 'timeoutCount');
@@ -184,7 +200,8 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
             feedbackLoopCount: 1,
             rateLimitRetryCount: 1,
             rateLimitDetected: true,
-            timeoutCount: 1
+            timeoutCount: 1,
+            durationSeconds: 1622
         }], 1);
         var html = reporter.buildHtml([{
             createdAt: '2026-06-01T00:00:00Z',
@@ -196,6 +213,8 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
             feedbackLoopCount: 1,
             rateLimitRetryCount: 1,
             timeoutCount: 1,
+            durationSeconds: 1622,
+            duration: '27m 2s',
             readTokens: 100,
             writeTokens: 10,
             cachedTokens: 50,
@@ -207,6 +226,8 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
         assert.contains(html, '<span>Loops</span><b>1</b>');
         assert.contains(html, '<span>Limit Retries</span><b>1</b>');
         assert.contains(html, '<span>Timeouts</span><b>1</b>');
+        assert.contains(html, '<span>Avg Duration</span><b>27m 2s</b>');
+        assert.contains(html, '>27m 2s</td>');
         assert.contains(html, 'id="chartTooltip"');
         assert.contains(html, 'function showTip');
     });
