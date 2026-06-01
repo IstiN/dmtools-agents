@@ -165,8 +165,11 @@ elif [ "$PROVIDER" = "copilot" ]; then
     exit 1
   fi
 
+  COPILOT_DEFAULT_MODEL="${COPILOT_DEFAULT_MODEL:-gpt-5-mini}"
+  COPILOT_MODEL_VALUE="${COPILOT_MODEL:-$COPILOT_DEFAULT_MODEL}"
+
   echo "Copilot Configuration:"
-  echo "  Model: ${COPILOT_MODEL:-gpt-5-mini}"
+  echo "  Model: ${COPILOT_MODEL_VALUE}"
   echo "Working directory: $(pwd)"
   echo ""
 
@@ -181,16 +184,17 @@ elif [ "$PROVIDER" = "copilot" ]; then
   fi
   run_copilot_once() {
     local log_file="$1"
+    local model="$2"
 
     set +e
     if [ -f "${PROMPT_ARG}" ]; then
-      echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} ${PASS_ARGS[*]:-} (prompt: ${PROMPT_BYTES} bytes via stdin)"
+      echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${model} ${PASS_ARGS[*]:-} (prompt: ${PROMPT_BYTES} bytes via stdin)"
       echo ""
-      "${COPILOT_CMD[@]}" --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${PROMPT_ARG}" 2>&1 | tee "$log_file"
+      "${COPILOT_CMD[@]}" --allow-all --model "${model}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${PROMPT_ARG}" 2>&1 | tee "$log_file"
     else
-      echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${COPILOT_MODEL:-gpt-5-mini} ${PASS_ARGS[*]:-} -p <inline prompt>"
+      echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${model} ${PASS_ARGS[*]:-} -p <inline prompt>"
       echo ""
-      "${COPILOT_CMD[@]}" --allow-all --model "${COPILOT_MODEL:-gpt-5-mini}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$log_file"
+      "${COPILOT_CMD[@]}" --allow-all --model "${model}" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$log_file"
     fi
     local status=${PIPESTATUS[0]}
     return "$status"
@@ -204,7 +208,7 @@ elif [ "$PROVIDER" = "copilot" ]; then
   while [ "$attempt" -le "$max_attempts" ]; do
     copilot_log="$(mktemp)"
     set +e
-    run_copilot_once "$copilot_log"
+    run_copilot_once "$copilot_log" "$COPILOT_MODEL_VALUE"
     exit_code=$?
     set -e
 
@@ -212,6 +216,24 @@ elif [ "$PROVIDER" = "copilot" ]; then
       record_codegraph_usage "$copilot_log"
       rm -f "$copilot_log"
       break
+    fi
+
+    if grep -Eiq 'Model ".+" from --model flag is not available' "$copilot_log" && [ "$COPILOT_MODEL_VALUE" != "$COPILOT_DEFAULT_MODEL" ]; then
+      echo ""
+      echo "Copilot model ${COPILOT_MODEL_VALUE} is unavailable; retrying with ${COPILOT_DEFAULT_MODEL}"
+      record_codegraph_usage "$copilot_log"
+      rm -f "$copilot_log"
+      copilot_log="$(mktemp)"
+      set +e
+      run_copilot_once "$copilot_log" "$COPILOT_DEFAULT_MODEL"
+      exit_code=$?
+      set -e
+      COPILOT_MODEL_VALUE="$COPILOT_DEFAULT_MODEL"
+      if [ "$exit_code" -eq 0 ]; then
+        record_codegraph_usage "$copilot_log"
+        rm -f "$copilot_log"
+        break
+      fi
     fi
 
     if grep -Eiq "rate limit|limit reset|You've hit your rate limit" "$copilot_log" && [ "$attempt" -lt "$max_attempts" ]; then
