@@ -12,6 +12,9 @@
         ],
         "perStatusLimit": 100,
         "maxPages": 100,
+        "maxLogDownloads": 4000,
+        "logDownloadSleepMs": 250,
+        "cacheWriteEvery": 25,
         "outputDir": "outputs/token_usage"
       }
     }

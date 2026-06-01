@@ -231,4 +231,75 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
         assert.contains(html, 'id="chartTooltip"');
         assert.contains(html, 'function showTip');
     });
+
+    test('action reuses cached run usage and writes cache progress', function() {
+        var writes = {};
+        var logDownloads = [];
+        var cachedRow = {
+            runId: '1',
+            runNumber: 10,
+            createdAt: '2026-06-01T00:00:00Z',
+            startedAt: '2026-06-01T00:00:00Z',
+            updatedAt: '2026-06-01T00:01:00Z',
+            day: '2026-06-01',
+            conclusion: 'success',
+            agent: 'pr_review',
+            ticketKey: 'TS-1',
+            configFile: 'agents/pr_review.json',
+            title: 'agents/pr_review.json : TS-1 : TS-1',
+            durationSeconds: 60,
+            duration: '1m 0s',
+            requests: 0,
+            readTokens: 100,
+            writeTokens: 10,
+            cachedTokens: 90,
+            reasoningTokens: 5,
+            samples: 1,
+            resumeDetected: false,
+            resumeStages: '',
+            feedbackLoopCount: 0,
+            rateLimitRetryCount: 0,
+            rateLimitDetected: false,
+            timeoutCount: 0,
+            url: 'https://example.test/run/1'
+        };
+        var reporter = loadReporter({
+            file_read: function(args) {
+                if (args.path === 'outputs/token_usage/ai_teammate_token_usage_cache.json') {
+                    return JSON.stringify({ version: 1, entries: { '1': { row: cachedRow, attemptRows: [] } } });
+                }
+                return '';
+            },
+            file_write: function(args) { writes[args.path] = args.content; },
+            github_list_workflow_runs: function() {
+                return JSON.stringify({ workflow_runs: [
+                    { id: 1, status: 'completed', conclusion: 'success', run_number: 10, created_at: '2026-06-01T00:00:00Z', run_started_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:01:00Z', display_title: 'agents/pr_review.json : TS-1 : TS-1', html_url: 'https://example.test/run/1' },
+                    { id: 2, status: 'completed', conclusion: 'success', run_number: 11, created_at: '2026-06-01T00:02:00Z', run_started_at: '2026-06-01T00:02:00Z', updated_at: '2026-06-01T00:03:00Z', display_title: 'agents/pr_rework.json : TS-2 : TS-2', html_url: 'https://example.test/run/2' }
+                ] });
+            },
+            github_get_workflow_run_logs: function(args) {
+                logDownloads.push(args.runId);
+                return '[INFO] CommandLineUtils - Tokens    ↑ 2k • ↓ 20 • 1k (cached) • 3 (reasoning)';
+            }
+        });
+
+        var result = reporter.action({
+            jobParams: {
+                customParams: {
+                    workspace: 'IstiN',
+                    repository: 'trackstate',
+                    outputDir: 'outputs/token_usage',
+                    maxPages: 1
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(logDownloads.length, 1);
+        assert.equal(logDownloads[0], '2');
+        assert.contains(writes['outputs/token_usage/ai_teammate_token_usage_cache.json'], '"1"');
+        assert.contains(writes['outputs/token_usage/ai_teammate_token_usage_cache.json'], '"2"');
+        assert.equal(result.summary.cache.hits, 1);
+        assert.equal(result.summary.cache.logDownloads, 1);
+    });
 });

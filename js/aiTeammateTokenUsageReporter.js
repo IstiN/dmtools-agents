@@ -551,6 +551,38 @@ function readInput(path) {
     return file_read({ path: path });
 }
 
+function readJsonFile(path, fallback) {
+    try {
+        return parseJson(readInput(path), fallback);
+    } catch (e) {
+        return fallback;
+    }
+}
+
+function sleepMilliseconds(ms) {
+    ms = parseInt(ms, 10) || 0;
+    if (ms <= 0) return;
+    if (typeof Java !== 'undefined' && Java.type) {
+        Java.type('java.lang.Thread').sleep(ms);
+        return;
+    }
+    var end = Date.now() + ms;
+    while (Date.now() < end) {}
+}
+
+function loadUsageCache(path) {
+    var cache = readJsonFile(path, null);
+    if (!cache || typeof cache !== 'object') return { version: 1, entries: {} };
+    if (!cache.entries || typeof cache.entries !== 'object') cache.entries = {};
+    cache.version = cache.version || 1;
+    return cache;
+}
+
+function writeUsageCache(path, cache) {
+    cache.updatedAt = new Date().toISOString();
+    writeOutput(path, JSON.stringify(cache, null, 2));
+}
+
 function action(params) {
     var custom = (params && params.jobParams && params.jobParams.customParams) || {};
     var projectConfig = configLoader.loadProjectConfig(params || {});
@@ -573,6 +605,13 @@ function action(params) {
     var attemptsCsvPath = custom.attemptsCsvPath || (outputDir + '/ai_teammate_token_usage_attempts.csv');
     var jsonPath = custom.jsonPath || (outputDir + '/ai_teammate_token_usage.json');
     var htmlPath = custom.htmlPath || (outputDir + '/ai_teammate_token_usage.html');
+    var cachePath = custom.cachePath || (outputDir + '/ai_teammate_token_usage_cache.json');
+    var useCache = custom.useCache !== false && custom.useCache !== 'false';
+    var cacheWriteEvery = Math.max(1, parseInt(custom.cacheWriteEvery || 25, 10) || 25);
+    var logDownloadSleepMs = parseInt(custom.logDownloadSleepMs || 0, 10) || 0;
+    var maxLogDownloads = custom.maxLogDownloads == null || custom.maxLogDownloads === ''
+        ? null
+        : Math.max(0, parseInt(custom.maxLogDownloads, 10) || 0);
 
     if (custom.renderOnly === true || custom.renderOnly === 'true') {
         var inputJsonPath = custom.inputJsonPath || jsonPath;
@@ -593,6 +632,11 @@ function action(params) {
     var attemptRows = [];
     var logEvery = custom.logEvery || 50;
     var verbose = custom.verbose === true || custom.verbose === 'true';
+    var cache = useCache ? loadUsageCache(cachePath) : { version: 1, entries: {} };
+    var downloadedLogs = 0;
+    var cacheHits = 0;
+    var stoppedByDownloadLimit = false;
+
     for (var i = 0; i < runs.length; i++) {
         var run = runs[i];
         var meta = extractAgentAndKey(run);
@@ -604,14 +648,37 @@ function action(params) {
         }
 
         try {
+            var cached = useCache && cache.entries[runId];
+            if (cached && cached.row) {
+                rows.push(cached.row);
+                (cached.attemptRows || []).forEach(function(attemptRow) { attemptRows.push(attemptRow); });
+                cacheHits += 1;
+                if (verbose) console.log('    cache hit');
+                continue;
+            }
+            if (cached && cached.noUsage) {
+                cacheHits += 1;
+                if (verbose) console.log('    cache hit: no token summary');
+                continue;
+            }
+
+            if (maxLogDownloads != null && downloadedLogs >= maxLogDownloads) {
+                stoppedByDownloadLimit = true;
+                if (verbose) console.log('    skipped: maxLogDownloads reached');
+                continue;
+            }
+
+            if (downloadedLogs > 0 && logDownloadSleepMs > 0) sleepMilliseconds(logDownloadSleepMs);
             var logs = downloadRunLogs(custom, run);
+            downloadedLogs += 1;
             var usage = extractTokenUsage(logs);
             if (!usage) {
+                if (useCache) cache.entries[runId] = { runId: runId, noUsage: true, cachedAt: new Date().toISOString() };
                 if (verbose) console.log('    no token summary found');
                 continue;
             }
 
-            rows.push({
+            var row = {
                 runId: runId,
                 runNumber: run.run_number || run.runNumber || '',
                 createdAt: run.created_at || run.createdAt || '',
@@ -640,9 +707,11 @@ function action(params) {
                 rateLimitDetected: usage.rateLimitDetected === true,
                 timeoutCount: usage.timeoutCount || 0,
                 url: run.html_url || run.htmlUrl || ''
-            });
+            };
+            var runAttemptRows = [];
+            rows.push(row);
             (usage.attempts || []).forEach(function(attempt) {
-                attemptRows.push({
+                var attemptRow = {
                     runId: runId,
                     runNumber: run.run_number || run.runNumber || '',
                     createdAt: run.created_at || run.createdAt || '',
@@ -667,17 +736,39 @@ function action(params) {
                     reasoningTokens: attempt.reasoningTokens || 0,
                     rawTokensLine: attempt.rawTokensLine || '',
                     url: run.html_url || run.htmlUrl || ''
-                });
+                };
+                attemptRows.push(attemptRow);
+                runAttemptRows.push(attemptRow);
             });
+            if (useCache) {
+                cache.entries[runId] = {
+                    runId: runId,
+                    cachedAt: new Date().toISOString(),
+                    row: row,
+                    attemptRows: runAttemptRows
+                };
+                if (downloadedLogs % cacheWriteEvery === 0) writeUsageCache(cachePath, cache);
+            }
             if (verbose) {
                 console.log('    tokens read=' + usage.readTokens + ' write=' + usage.writeTokens + ' cached=' + usage.cachedTokens + ' reasoning=' + usage.reasoningTokens + ' attempts=' + usage.samples);
             }
         } catch (e) {
+            if (useCache) cache.entries[runId] = { runId: runId, error: String(e.message || e), cachedAt: new Date().toISOString() };
             console.warn('    failed to process run ' + runId + ': ' + (e.message || e));
         }
     }
 
+    if (useCache) writeUsageCache(cachePath, cache);
     var summary = buildSummary(rows, runs.length);
+    summary.cache = {
+        enabled: useCache,
+        path: useCache ? cachePath : '',
+        hits: cacheHits,
+        logDownloads: downloadedLogs,
+        maxLogDownloads: maxLogDownloads,
+        stoppedByDownloadLimit: stoppedByDownloadLimit,
+        logDownloadSleepMs: logDownloadSleepMs
+    };
     var payload = { summary: summary, rows: rows, attempts: attemptRows };
     writeOutput(csvPath, buildCsv(rows));
     writeOutput(attemptsCsvPath, buildAttemptsCsv(attemptRows));
@@ -688,6 +779,7 @@ function action(params) {
     console.log('Wrote attempts CSV: ' + attemptsCsvPath);
     console.log('Wrote JSON: ' + jsonPath);
     console.log('Wrote HTML: ' + htmlPath);
+    console.log('Cache hits=' + cacheHits + ', log downloads=' + downloadedLogs + (stoppedByDownloadLimit ? ', stopped by maxLogDownloads' : ''));
     return { success: true, csvPath: csvPath, attemptsCsvPath: attemptsCsvPath, jsonPath: jsonPath, htmlPath: htmlPath, summary: summary };
 }
 
@@ -705,6 +797,7 @@ if (typeof module !== 'undefined' && module.exports) {
         buildAttemptsCsv: buildAttemptsCsv,
         buildSummary: buildSummary,
         buildHtml: buildHtml,
+        loadUsageCache: loadUsageCache,
         sortAttr: sortAttr
     };
 }
