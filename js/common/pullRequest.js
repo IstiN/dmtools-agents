@@ -71,16 +71,39 @@ function defaultWriteFile(path, content) {
     return file_write(path, content);
 }
 
-function quoteShellArgument(value) {
-    return "'" + String(value || '').replace(/'/g, "'\"'\"'") + "'";
+function isSafeRefName(ref) {
+    return ref &&
+        typeof ref === 'string' &&
+        ref[0] !== '-' &&
+        ref.indexOf('..') === -1 &&
+        /^[A-Za-z0-9._/-]+$/.test(ref);
+}
+
+function lastNonEmptyLine(output) {
+    var lines = cleanCommandOutput(output || '')
+        .split(/\r?\n/)
+        .map(function(line) { return line.trim(); })
+        .filter(function(line) { return line; });
+    return lines[lines.length - 1] || '';
 }
 
 function branchContainsBase(runCommand, workingDir, baseBranch) {
-    var command = 'git merge-base --is-ancestor origin/' + baseBranch + ' HEAD' +
-        '; code=$?; if [ "$code" -eq 0 ]; then echo ancestor; elif [ "$code" -eq 1 ]; then echo not-ancestor; else exit "$code"; fi';
-    var output = cleanCommandOutput(runCommand('bash -lc ' + quoteShellArgument(command), workingDir) || '').trim();
-    var lines = output.split(/\r?\n/).map(function(line) { return line.trim(); }).filter(function(line) { return line; });
-    return lines[lines.length - 1] === 'ancestor';
+    if (!isSafeRefName(baseBranch)) {
+        throw new Error('Unsafe base branch name: ' + baseBranch);
+    }
+
+    var baseRef = 'origin/' + baseBranch;
+    var baseSha = lastNonEmptyLine(runCommand('git rev-parse ' + baseRef, workingDir));
+    if (!baseSha) {
+        throw new Error('Could not resolve ' + baseRef);
+    }
+
+    try {
+        var mergeBase = lastNonEmptyLine(runCommand('git merge-base ' + baseRef + ' HEAD', workingDir));
+        return mergeBase === baseSha;
+    } catch (e) {
+        return false;
+    }
 }
 
 function buildOriginFetchCommand(refSpec) {
@@ -107,6 +130,8 @@ function syncBranchWithBase(options) {
     var runCommand = options.runCommand || defaultRunCommand;
 
     if (!branchName) return { success: false, error: 'branchName is required' };
+    if (!isSafeRefName(branchName)) return { success: false, error: 'Unsafe branch name: ' + branchName };
+    if (!isSafeRefName(baseBranch)) return { success: false, error: 'Unsafe base branch name: ' + baseBranch };
 
     try {
         console.log('Synchronizing ' + branchName + ' with origin/' + baseBranch + ' before publishing...');

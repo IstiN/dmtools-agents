@@ -92,11 +92,17 @@ suite('submodule helper', function() {
                 if (command === 'git -C trackstate-setup rev-list --count origin/main..HEAD') {
                     return '2';
                 }
-                if (command.indexOf('merge-base --is-ancestor HEAD origin/main') !== -1) {
-                    return 'not-ancestor';
+                if (command === 'git -C trackstate-setup rev-parse HEAD') {
+                    return 'head-sha';
                 }
-                if (command.indexOf('merge-base --is-ancestor origin/main HEAD') !== -1) {
-                    return 'ancestor';
+                if (command === 'git -C trackstate-setup rev-parse origin/main') {
+                    return 'base-sha';
+                }
+                if (command === 'git -C trackstate-setup merge-base HEAD origin/main') {
+                    return 'old-sha';
+                }
+                if (command === 'git -C trackstate-setup merge-base origin/main HEAD') {
+                    return 'base-sha';
                 }
                 if (command === 'git -C trackstate-setup rev-parse --short=12 HEAD') {
                     return '2b4b84712bfa';
@@ -130,11 +136,17 @@ suite('submodule helper', function() {
                 if (command === 'git -C trackstate-setup rev-list --count origin/main..HEAD') {
                     return '2';
                 }
-                if (command.indexOf('merge-base --is-ancestor HEAD origin/main') !== -1) {
-                    return 'not-ancestor';
+                if (command === 'git -C trackstate-setup rev-parse HEAD') {
+                    return 'head-sha';
                 }
-                if (command.indexOf('merge-base --is-ancestor origin/main HEAD') !== -1) {
-                    return 'ancestor';
+                if (command === 'git -C trackstate-setup rev-parse origin/main') {
+                    return 'base-sha';
+                }
+                if (command === 'git -C trackstate-setup merge-base HEAD origin/main') {
+                    return 'old-sha';
+                }
+                if (command === 'git -C trackstate-setup merge-base origin/main HEAD') {
+                    return 'base-sha';
                 }
                 return '';
             }
@@ -202,7 +214,13 @@ suite('submodule helper', function() {
                 if (command === 'git -C trackstate-setup rev-list --count origin/main..HEAD') {
                     return '1';
                 }
-                if (command.indexOf('git -C trackstate-setup merge-base --is-ancestor') === 0) {
+                if (command === 'git -C trackstate-setup rev-parse HEAD') {
+                    return 'head-sha';
+                }
+                if (command === 'git -C trackstate-setup rev-parse origin/main') {
+                    return 'base-sha';
+                }
+                if (command === 'git -C trackstate-setup merge-base HEAD origin/main') {
                     throw new Error('diverged');
                 }
                 return '';

@@ -77,10 +77,6 @@ function quoteCommitMessage(message) {
         .trim() + '"';
 }
 
-function quoteShellArgument(value) {
-    return "'" + String(value || '').replace(/'/g, "'\"'\"'") + "'";
-}
-
 function resolveStashPopConflicts(run, cleanOutput, path) {
     var unmerged = cleanOutput(run('git -C ' + path + ' diff --name-only --diff-filter=U') || '')
         .split('\n')
@@ -109,11 +105,24 @@ function resolveStashPopConflicts(run, cleanOutput, path) {
 }
 
 function isAncestor(run, cleanOutput, path, ancestor, descendant) {
-    var command = 'git -C ' + path + ' merge-base --is-ancestor ' + ancestor + ' ' + descendant +
-        '; code=$?; if [ "$code" -eq 0 ]; then echo ancestor; elif [ "$code" -eq 1 ]; then echo not-ancestor; else exit "$code"; fi';
-    var output = cleanOutput(run('bash -lc ' + quoteShellArgument(command)) || '').trim();
-    var lines = output.split(/\r?\n/).map(function(line) { return line.trim(); }).filter(function(line) { return line; });
-    return lines[lines.length - 1] === 'ancestor';
+    if (!isSafeRefName(ancestor)) {
+        throw new Error('Unsafe managed submodule ancestor ref for ' + path + ': ' + ancestor);
+    }
+    if (!isSafeRefName(descendant)) {
+        throw new Error('Unsafe managed submodule descendant ref for ' + path + ': ' + descendant);
+    }
+
+    var ancestorSha = cleanOutput(run('git -C ' + path + ' rev-parse ' + ancestor) || '').trim().split(/\r?\n/).pop();
+    if (!ancestorSha) {
+        throw new Error('Could not resolve managed submodule ancestor ref for ' + path + ': ' + ancestor);
+    }
+
+    try {
+        var mergeBase = cleanOutput(run('git -C ' + path + ' merge-base ' + ancestor + ' ' + descendant) || '').trim().split(/\r?\n/).pop();
+        return mergeBase === ancestorSha;
+    } catch (e) {
+        return false;
+    }
 }
 
 function prepareDirtySubmoduleBranch(run, cleanOutput, path, branch) {
@@ -184,23 +193,26 @@ function pushManagedSubmodules(options) {
         }
 
         var hasDirtyChanges = !!status.trim();
-        var remoteRef = 'origin/' + branch;
-        var localIncludedInRemote = isAncestor(run, cleanOutput, path, 'HEAD', remoteRef);
-        var remoteIncludedInLocal = isAncestor(run, cleanOutput, path, remoteRef, 'HEAD');
 
         if (!hasDirtyChanges && aheadCount === 0) {
             console.log('No managed submodule changes detected in', path);
             return;
         }
 
-        if (!hasDirtyChanges && localIncludedInRemote) {
-            console.log('Managed submodule HEAD is already included in origin/' + branch + ', skipping publish:', path);
-            return;
-        }
+        if (!hasDirtyChanges) {
+            var remoteRef = 'origin/' + branch;
+            var localIncludedInRemote = isAncestor(run, cleanOutput, path, 'HEAD', remoteRef);
+            var remoteIncludedInLocal = isAncestor(run, cleanOutput, path, remoteRef, 'HEAD');
 
-        if (!hasDirtyChanges && aheadCount > 0 && !remoteIncludedInLocal) {
-            console.log('Managed submodule has clean divergent gitlink state; skipping publish to avoid rebasing stale generated commits:', path);
-            return;
+            if (localIncludedInRemote) {
+                console.log('Managed submodule HEAD is already included in origin/' + branch + ', skipping publish:', path);
+                return;
+            }
+
+            if (aheadCount > 0 && !remoteIncludedInLocal) {
+                console.log('Managed submodule has clean divergent gitlink state; skipping publish to avoid rebasing stale generated commits:', path);
+                return;
+            }
         }
 
         console.log('Publishing managed submodule changes:', path, '-> origin/' + branch);
