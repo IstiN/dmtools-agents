@@ -2,6 +2,16 @@
 
 CodeGraph builds a semantic knowledge graph of the codebase and makes it available as CLI commands. The index is pre-built during CI setup, so all commands work immediately without any initialization step.
 
+## Required first action
+
+If this task includes development, rework, code review, test automation, or any source-code investigation, run CodeGraph before any other code-navigation command:
+
+```bash
+codegraph context "<ticket key> <agent role> <short task summary>"
+```
+
+Do this even when the prompt already includes a PR diff, file path, failing test, or review comment. PR diffs are not enough context; CodeGraph provides surrounding symbols and call paths that plain file reads miss.
+
 ## When to use CodeGraph vs other tools
 
 | Situation | Use |

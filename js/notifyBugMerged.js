@@ -9,7 +9,7 @@
  * Status transition to "Ready For Testing" is handled by the SM targetStatus rule.
  */
 
-const { LABELS } = require('./config.js');
+const { loadProjectConfig } = require('./configLoader.js');
 
 /**
  * Find the bug fix development comment from Jira comments.
@@ -32,9 +32,20 @@ function findDevSummaryComment(comments) {
  * Writes the result to the Jira "Solution" field so the TestCasesGenerator
  * has RCA context when generating regression and prevention test cases.
  */
-function updateSolutionField(ticketKey, ticketDescription, comments) {
+function resolveBugSolutionField(params) {
+    const config = loadProjectConfig(params && params.jobParams ? params.jobParams : params);
+    const fields = config && config.jira && config.jira.fields ? config.jira.fields : {};
+    return fields.bugSolution || fields.solution || 'Solution';
+}
+
+function updateSolutionField(ticketKey, ticketDescription, comments, params) {
     try {
         const devSummary = findDevSummaryComment(comments);
+        const solutionField = resolveBugSolutionField(params);
+        if (!solutionField) {
+            console.warn('Bug Solution field is not configured — skipping Solution field update');
+            return;
+        }
 
         const prompt =
             'You are writing the *Solution* field for a Jira Bug ticket.\n' +
@@ -59,10 +70,10 @@ function updateSolutionField(ticketKey, ticketDescription, comments) {
 
         jira_update_field({
             key: ticketKey,
-            field: 'Solution',
+            field: solutionField,
             value: solution.trim()
         });
-        console.log('✅ Updated Solution field with RCA + prevention summary');
+        console.log('✅ Updated ' + solutionField + ' field with RCA + prevention summary');
     } catch (e) {
         console.warn('Failed to update Solution field:', e.message || e);
     }
@@ -85,7 +96,7 @@ function action(params) {
         }
 
         // Step 2: Update Solution field with AI-generated RCA + prevention
-        updateSolutionField(ticketKey, ticketDescription, comments);
+        updateSolutionField(ticketKey, ticketDescription, comments, params);
 
         // Step 3: Post merge notification
         try {
