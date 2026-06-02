@@ -2,7 +2,7 @@
  * Unit tests for js/postTestReviewComments.js.
  */
 
-function loadPostTestReviewComments(mocks) {
+function loadPostTestReviewComments(mocks, moduleMocks) {
     var defaults = {
         file_read: function(opts) {
             if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
@@ -34,17 +34,19 @@ function loadPostTestReviewComments(mocks) {
         allMocks
     );
 
+    var autoStartMock = (moduleMocks && moduleMocks.autoStart) || {
+        triggerConfiguredWorkflowForTicket: function() {
+            return { success: true };
+        },
+        triggerSmIfIdle: function() {}
+    };
+
     return loadModule(
         'js/postTestReviewComments.js',
         makeRequire({
             './config.js': configModule,
             './common/githubHelpers.js': gh,
-            './common/autoStart.js': {
-                triggerConfiguredWorkflowForTicket: function() {
-                    return { success: true };
-                },
-                triggerSmIfIdle: function() {}
-            },
+            './common/autoStart.js': autoStartMock,
             './configLoader.js': configLoaderModule
         }),
         allMocks
@@ -102,6 +104,54 @@ suite('postTestReviewComments: failure cleanup', function() {
 
         assert.equal(result.success, true);
         assert.ok(reads.indexOf('/tmp/repo/outputs/pr_review.json') !== -1, 'checked workingDir fallback path');
+    });
+
+    test('marks ticket for SM test rework when direct auto-start is capped', function() {
+        var labels = [];
+        var smFallbackCalled = false;
+        var module = loadPostTestReviewComments({
+            file_read: function(opts) {
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                if (opts.path === 'outputs/pr_review.json') {
+                    return JSON.stringify({
+                        recommendation: 'REQUEST_CHANGES',
+                        generalComment: 'outputs/pr_review_general.md'
+                    });
+                }
+                if (opts.path === 'outputs/pr_review_general.md') return 'Needs rework';
+                return null;
+            },
+            github_list_prs: function() {
+                return [{ number: 1323, html_url: 'https://github.com/org/repo/pull/1323', head: { ref: 'test/TS-1323' } }];
+            },
+            jira_add_label: function(args) {
+                labels.push(args.label);
+            },
+            cli_execute_command: function() {
+                return 'https://github.com/IstiN/trackstate';
+            }
+        }, {
+            autoStart: {
+                triggerConfiguredWorkflowForTicket: function() { return false; },
+                triggerSmIfIdle: function() { smFallbackCalled = true; }
+            }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-1323', fields: { summary: 'Review capped auto-start' } },
+            jobParams: {
+                customParams: {
+                    autoStartRework: true,
+                    autoStartReworkConfigFile: 'agents/pr_test_automation_rework.json',
+                    smFallback: true
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.finalStatus, 'In Rework');
+        assert.ok(labels.indexOf('sm_test_rework_triggered') !== -1, 'SM test rework trigger label added');
+        assert.equal(smFallbackCalled, true, 'SM fallback attempted after direct auto-start was capped');
     });
 });
 

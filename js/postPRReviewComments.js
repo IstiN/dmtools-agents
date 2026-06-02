@@ -54,6 +54,17 @@ function hasPrApprovedLabel(ticket) {
     return labels.indexOf(LABELS.PR_APPROVED) !== -1;
 }
 
+function markForSmStoryRework(ticketKey) {
+    try {
+        jira_add_label({ key: ticketKey, label: 'sm_story_rework_triggered' });
+        console.log('✅ Added SM rework label: sm_story_rework_triggered');
+        return true;
+    } catch (e) {
+        console.warn('⚠️ Failed to add SM rework label:', e.message || e);
+        return false;
+    }
+}
+
 function resolveCustomParams(params, config) {
     var merged = {};
     var patch = configLoader.resolveInstructions(
@@ -651,6 +662,7 @@ function action(params) {
                 }
             }
             if (!reworkStarted) {
+                markForSmStoryRework(ticketKey);
                 autoStart.triggerSmIfIdle({ config: config, customParams: customParams, scm: scm });
             }
         }
