@@ -72,7 +72,7 @@ function isAncestorRef(ancestor, descendant, workingDir) {
 
 function findMergeBase(left, right, workingDir) {
     try {
-        return cleanCommandOutput(runGit('git merge-base ' + left + ' ' + right + ' || true', workingDir) || '');
+        return cleanCommandOutput(runGit('git merge-base ' + left + ' ' + right, workingDir) || '');
     } catch (e) {
         return '';
     }

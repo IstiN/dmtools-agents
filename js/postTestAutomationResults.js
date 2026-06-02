@@ -197,6 +197,42 @@ function createPullRequest(title, branchName, baseBranch, workingDir) {
     });
 }
 
+function hasBranchConflictGuidance(ticketKey, workingDir) {
+    var relativePath = 'input/' + ticketKey + '/merge_conflicts.md';
+    if (readFile(relativePath)) return true;
+    if (workingDir && readFile(workingDir + '/' + relativePath)) return true;
+    return false;
+}
+
+function getPrMergeability(prUrl, workingDir) {
+    try {
+        var raw = cleanCommandOutput(runInRepo('gh pr view ' + prUrl + ' --json mergeable', workingDir) || '');
+        if (!raw) return '';
+        var parsed = JSON.parse(raw);
+        return parsed && parsed.mergeable ? String(parsed.mergeable) : '';
+    } catch (e) {
+        console.warn('Could not read PR mergeability:', e);
+        return '';
+    }
+}
+
+function removeAutomationLabels(ticketKey, params) {
+    try {
+        const wipLabel = params.metadata && params.metadata.contextId
+            ? params.metadata.contextId + '_wip'
+            : 'test_case_automation_wip';
+        jira_remove_label({ key: ticketKey, label: wipLabel });
+    } catch (e) {}
+
+    try {
+        const smTriggerLabel = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.removeLabel;
+        if (smTriggerLabel) {
+            jira_remove_label({ key: ticketKey, label: smTriggerLabel });
+            console.log('✅ Removed SM trigger label:', smTriggerLabel);
+        }
+    } catch (e) {}
+}
+
 function autoStartTestReview(ticketKey, config, customParams, noCodeChanges) {
     if (noCodeChanges) {
         console.log('ℹ️ autoStartReview: skipped — no test code changes to review');
@@ -343,6 +379,34 @@ function action(params) {
                         }
                     } catch (e) { console.warn('Could not remove SM trigger label:', e); }
                     return { success: false, error: 'PR creation failed: ' + (prResult.error || 'no URL returned') };
+                }
+
+                if (hasBranchConflictGuidance(ticketKey, workingDir)) {
+                    var mergeable = getPrMergeability(prUrl, workingDir);
+                    console.log('PR mergeability after branch conflict guidance:', mergeable || '(unknown)');
+                    if (mergeable === 'CONFLICTING') {
+                        var conflictComment = 'h3. 🚫 Test Automation Blocked — PR Conflicts With Main\n\n' +
+                            'The test automation branch {code}' + branchName + '{code} still conflicts with {code}' + config.git.baseBranch + '{code} after the agent run.\n\n' +
+                            '*Pull Request:* ' + prUrl + '\n\n' +
+                            'A {code}merge_conflicts.md{code} guidance file was present for this run, which means the existing test branch could not be safely auto-aligned with {code}origin/' + config.git.baseBranch + '{code}. ' +
+                            'Do not send this PR into automated review until the branch is deliberately synced with main and only ticket-specific test automation changes remain.\n\n' +
+                            'Ticket moved to *Blocked* for human conflict resolution.';
+                        try { jira_post_comment({ key: ticketKey, comment: conflictComment }); } catch (e) {}
+                        try {
+                            jira_move_to_status({ key: ticketKey, statusName: STATUSES.BLOCKED });
+                            console.log('✅ Conflicting PR — moved', ticketKey, 'to', STATUSES.BLOCKED);
+                        } catch (e) {
+                            console.warn('Failed to move conflicting PR ticket to Blocked:', e);
+                        }
+                        removeAutomationLabels(ticketKey, params);
+                        return {
+                            success: true,
+                            status: 'blocked_by_human',
+                            ticketKey: ticketKey,
+                            prUrl: prUrl,
+                            blockedReason: 'pr_conflicts_with_main'
+                        };
+                    }
                 }
             } else if (gitResult.noNewCommit) {
                 noCodeChanges = true;

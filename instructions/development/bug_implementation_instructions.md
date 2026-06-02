@@ -45,6 +45,7 @@ Before claiming "already fixed" on any bug (returned or not):
 3. Write a unit test that exercises the exact failure scenario from the ticket. Run it.
    - If the test **FAILS** → the bug is real, proceed to fix.
    - If the test **PASSES** against current code → the bug may genuinely be fixed. Before writing `already_fixed.json`:
+     - Run a targeted CodeGraph command for the RCA code path, for example `codegraph context "<ticket key> already fixed validation <failing flow or symbol>"`. Do not write `already_fixed.json` until the conversation contains an actual executed `codegraph ...` command.
      - Re-read the latest comments — has QA confirmed the fix, or are they still reporting it broken?
      - Check the platform / build / environment the reporter mentioned — maybe it's only broken on one platform.
      - If the failure is only in the deployed artifact, trigger the appropriate deploy/sync workflow yourself with `SOURCE_GITHUB_TOKEN`, rerun the linked test on the refreshed deployment, and only then decide whether `already_fixed.json` is correct.
@@ -74,6 +75,7 @@ Otherwise, after RCA, check recent commits and the current codebase:
 - Run `git log --oneline -20` to see recent commits
 - Check if the code path identified in RCA already has the correct logic
 - Run the reproduction test from Step 0.2 — it must FAIL before you can claim the bug exists
+- Run a targeted CodeGraph command for the current code path and include the validated symbol/flow in `outputs/rca.md`; `already_fixed.json` is invalid without an actual executed `codegraph ...` command in the session.
 - If the reproduction test PASSES on current code AND no QA comment disputes this:
   - Write `outputs/already_fixed.json`:
     ```json
