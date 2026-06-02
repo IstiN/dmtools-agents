@@ -18,6 +18,7 @@ function loadPostTestReviewComments(mocks) {
         github_list_prs: function() { return []; },
         github_add_pr_comment: function() {},
         github_add_inline_comment: function() {},
+        github_get_pr_diff: function() { return null; },
         github_add_pr_label: function() {},
         github_resolve_pr_thread: function() {},
         cli_execute_command: function() { return ''; }
@@ -196,5 +197,63 @@ suite('postTestReviewComments: inline comments', function() {
         assert.equal(prComments.length, 2, 'general comment plus fallback inline comment');
         assert.contains(prComments[1].text, 'testing/tests/TS-250/test_ts_250.py:99');
         assert.contains(prComments[1].text, 'Fallback inline finding');
+    });
+
+    test('falls back without calling inline API when line is not in PR diff', function() {
+        var inlineCalls = [];
+        var prComments = [];
+        var module = loadPostTestReviewComments({
+            file_read: function(opts) {
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                if (opts.path === 'outputs/pr_review.json') {
+                    return JSON.stringify({
+                        recommendation: 'REQUEST_CHANGES',
+                        generalComment: 'outputs/pr_review_general.md',
+                        inlineComments: [
+                            {
+                                path: 'testing/tests/TS-250/config.yaml',
+                                line: 59,
+                                body: 'Line is outside the diff.'
+                            }
+                        ]
+                    });
+                }
+                if (opts.path === 'outputs/pr_review_general.md') return 'General comment';
+                return null;
+            },
+            github_list_prs: function() {
+                return [{ number: 255, html_url: 'https://github.com/org/repo/pull/255', head: { ref: 'test/DMC-1104' } }];
+            },
+            cli_execute_command: function() {
+                return 'https://github.com/IstiN/trackstate';
+            },
+            github_get_pr_diff: function() {
+                return [
+                    'diff --git a/testing/tests/TS-250/config.yaml b/testing/tests/TS-250/config.yaml',
+                    '--- a/testing/tests/TS-250/config.yaml',
+                    '+++ b/testing/tests/TS-250/config.yaml',
+                    '@@ -1,3 +1,3 @@',
+                    ' name: TS-250',
+                    '+enabled: true',
+                    ' owner: qa'
+                ].join('\n');
+            },
+            github_add_inline_comment: function(args) {
+                inlineCalls.push(args);
+            },
+            github_add_pr_comment: function(args) {
+                prComments.push(args);
+            }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-1104', fields: { summary: 'Inline diff prevalidation' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(inlineCalls.length, 0, 'inline API should not be called for a line outside the PR diff');
+        assert.equal(prComments.length, 2, 'general comment plus fallback inline comment');
+        assert.contains(prComments[1].text, 'testing/tests/TS-250/config.yaml:59');
+        assert.contains(prComments[1].text, 'Line is outside the diff');
     });
 });

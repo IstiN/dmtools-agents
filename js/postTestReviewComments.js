@@ -119,6 +119,79 @@ function resolveApprovedThreads(repoInfo, prNumber, resolvedThreadIds) {
     });
 }
 
+function getPrDiff(repoInfo, prNumber) {
+    try {
+        return github_get_pr_diff({
+            workspace: repoInfo.owner,
+            repository: repoInfo.repo,
+            pullRequestId: String(prNumber)
+        }) || '';
+    } catch (e) {
+        console.warn('Could not fetch PR diff for inline comment validation:', e.message || e);
+        return null;
+    }
+}
+
+function isLinePresentInDiff(diffText, filePath, targetLine) {
+    if (!diffText || !filePath || !targetLine) return true;
+
+    var lineNumber = parseInt(targetLine, 10);
+    if (!lineNumber) return true;
+
+    var currentFile = null;
+    var newLine = null;
+    var lines = String(diffText).split(/\r?\n/);
+
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+
+        if (line.indexOf('diff --git ') === 0) {
+            currentFile = null;
+            newLine = null;
+            continue;
+        }
+
+        if (line.indexOf('+++ b/') === 0) {
+            currentFile = line.substring('+++ b/'.length);
+            continue;
+        }
+
+        if (currentFile !== filePath) continue;
+
+        var hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+        if (hunk) {
+            newLine = parseInt(hunk[1], 10);
+            continue;
+        }
+
+        if (newLine === null) continue;
+
+        if (line.indexOf('+') === 0 || line.indexOf(' ') === 0) {
+            if (newLine === lineNumber) return true;
+            newLine++;
+        } else if (line.indexOf('-') === 0) {
+            continue;
+        } else if (line === '\\ No newline at end of file') {
+            continue;
+        } else {
+            newLine++;
+        }
+    }
+
+    return false;
+}
+
+function postFallbackInlineComment(repoInfo, prNumber, filePath, line, commentText) {
+    var lineRef = filePath + (line ? ':' + line : '');
+    github_add_pr_comment({
+        workspace: repoInfo.owner,
+        repository: repoInfo.repo,
+        pullRequestId: String(prNumber),
+        text: '📍 **`' + lineRef + '`**\n\n' + commentText
+    });
+    console.log('✅ Posted fallback PR comment for ' + lineRef);
+}
+
 function postInlineComment(repoInfo, prNumber, inlineComment) {
     const filePath = inlineComment.path || inlineComment.file;
     const commentText = inlineComment.body || readFile(inlineComment.comment);
@@ -144,20 +217,20 @@ function postInlineComment(repoInfo, prNumber, inlineComment) {
         if (inlineComment.startLine) params.startLine = String(inlineComment.startLine);
         if (inlineComment.side) params.side = inlineComment.side;
 
+        var diffText = getPrDiff(repoInfo, prNumber);
+        if (diffText !== null && !isLinePresentInDiff(diffText, filePath, inlineComment.line)) {
+            console.warn('Inline comment line is not present in PR diff; falling back to PR comment on ' + filePath + ':' + inlineComment.line);
+            postFallbackInlineComment(repoInfo, prNumber, filePath, inlineComment.line, commentText);
+            return true;
+        }
+
         github_add_inline_comment(params);
         console.log('✅ Inline comment on ' + filePath + ':' + inlineComment.line);
         return true;
     } catch (e) {
         console.warn('Inline comment failed (line not in diff?), falling back to PR comment on ' + filePath + ':' + inlineComment.line);
         try {
-            var lineRef = filePath + (inlineComment.line ? ':' + inlineComment.line : '');
-            github_add_pr_comment({
-                workspace: repoInfo.owner,
-                repository: repoInfo.repo,
-                pullRequestId: String(prNumber),
-                text: '📍 **`' + lineRef + '`**\n\n' + commentText
-            });
-            console.log('✅ Posted fallback PR comment for ' + lineRef);
+            postFallbackInlineComment(repoInfo, prNumber, filePath, inlineComment.line, commentText);
             return true;
         } catch (fallbackError) {
             console.warn('Failed to post fallback PR comment:', fallbackError);
