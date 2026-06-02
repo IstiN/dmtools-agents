@@ -264,7 +264,7 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             if (args.command === 'git merge-base --is-ancestor HEAD origin/main') throw new Error('not ancestor');
             if (args.command === 'git cherry origin/main HEAD') return '+ abc123 ticket work\n';
             if (args.command === 'git merge-base --is-ancestor origin/main HEAD') throw new Error('not ancestor');
-            if (args.command === 'git merge-base HEAD origin/main') return 'base123\n';
+            if (args.command === 'bash agents/scripts/git-merge-base-or-empty.sh HEAD origin/main') return 'base123\n';
             if (args.command === 'git merge-tree base123 HEAD origin/main') return 'CONFLICT (content): Merge conflict in .dmtools/config.js\n';
             return '';
         };
@@ -472,7 +472,7 @@ suite('preCliTestAutomationSetup > workingDir', function() {
             if (args.command === 'git rev-list -1 HEAD --not origin/main') return 'head-sha\n';
             if (args.command === 'git cherry origin/main HEAD') return '+ abc123 ticket test work\n';
             if (args.command === 'git rev-list -1 origin/main --not HEAD') return 'base-sha\n';
-            if (args.command === 'git merge-base HEAD origin/main') return 'base123\n';
+            if (args.command === 'bash agents/scripts/git-merge-base-or-empty.sh HEAD origin/main') return 'base123\n';
             if (args.command === 'git merge-tree base123 HEAD origin/main') return 'CONFLICT (add/add): Merge conflict in .github/workflows/unit-tests.yml\n';
             return '';
         };
