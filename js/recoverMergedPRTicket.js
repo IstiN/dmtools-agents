@@ -11,8 +11,7 @@ function prMatchesTicket(pr, ticketKey) {
     if (!pr || !ticketKey) return false;
     var titleMatch = pr.title && pr.title.indexOf(ticketKey) !== -1;
     var branchMatch = pr.head && pr.head.ref && pr.head.ref.indexOf(ticketKey) !== -1;
-    var bodyMatch = pr.body && pr.body.indexOf(ticketKey) !== -1;
-    return !!(titleMatch || branchMatch || bodyMatch);
+    return !!(titleMatch || branchMatch);
 }
 
 function isMergedPR(pr) {
@@ -23,6 +22,19 @@ function isMergedPR(pr) {
 }
 
 function findMergedPRForTicket(scm, ticketKey) {
+    try {
+        var open = scm.listPrs('open') || [];
+        for (var openIndex = 0; openIndex < open.length; openIndex++) {
+            if (prMatchesTicket(open[openIndex], ticketKey)) {
+                console.log('Open PR still exists for ' + ticketKey + ', skipping merged-PR recovery: #' + open[openIndex].number);
+                return null;
+            }
+        }
+    } catch (openError) {
+        console.warn('Could not list open PRs for merged recovery guard:', openError.message || openError);
+        return null;
+    }
+
     var closed = [];
     try {
         closed = scm.listPrs('closed') || [];
