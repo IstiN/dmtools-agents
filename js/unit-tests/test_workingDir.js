@@ -472,7 +472,7 @@ suite('preCliTestAutomationSetup > workingDir', function() {
             if (args.command === 'git rev-list -1 HEAD --not origin/main') return 'head-sha\n';
             if (args.command === 'git cherry origin/main HEAD') return '+ abc123 ticket test work\n';
             if (args.command === 'git rev-list -1 origin/main --not HEAD') return 'base-sha\n';
-            if (args.command === 'git merge-base HEAD origin/main || true') return 'base123\n';
+            if (args.command === 'git merge-base HEAD origin/main') return 'base123\n';
             if (args.command === 'git merge-tree base123 HEAD origin/main') return 'CONFLICT (add/add): Merge conflict in .github/workflows/unit-tests.yml\n';
             return '';
         };

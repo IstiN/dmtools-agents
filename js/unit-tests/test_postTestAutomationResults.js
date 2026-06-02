@@ -90,6 +90,66 @@ suite('postTestAutomationResults: PR creation', function() {
         assert.notOk(commands.some(function(command) { return command === 'pwd'; }), 'pwd command not used');
     });
 
+    test('blocks conflicting PR when merge conflict guidance was present', function() {
+        var commands = [];
+        var statuses = [];
+        var removedLabels = [];
+        var comments = [];
+        var module = loadPostTestAutomation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/test_automation_result.json') {
+                    return JSON.stringify({ status: 'blocked_by_human', summary: 'Needs browser auth' });
+                }
+                if (opts.path === 'outputs/pr_body.md') return 'PR body';
+                if (opts.path === 'input/DMC-909/merge_conflicts.md') return '# Branch Conflict Guidance';
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            jira_move_to_status: function(args) {
+                statuses.push(args.statusName);
+            },
+            jira_remove_label: function(args) {
+                removedLabels.push(args.label);
+            },
+            jira_post_comment: function(args) {
+                comments.push(args.comment);
+            },
+            cli_execute_command: function(opts) {
+                var command = opts.command;
+                commands.push(command);
+                if (command === 'git branch --show-current') return 'test/DMC-909';
+                if (command === 'git status --short -- testing') return ' M testing/tests/DMC-909/test_dmc_909.py';
+                if (command === 'git diff --cached --stat') return ' testing/tests/DMC-909/test_dmc_909.py | 1 +';
+                if (command.indexOf('git ls-remote --heads origin test/DMC-909') === 0) return 'abc\trefs/heads/test/DMC-909';
+                if (command.indexOf('gh pr list --head test/DMC-909') === 0) return '';
+                if (command.indexOf('gh pr create') === 0) return 'https://github.com/epam/dm.ai/pull/909';
+                if (command.indexOf('gh pr view https://github.com/epam/dm.ai/pull/909 --json mergeable') === 0) {
+                    return '{"mergeable":"CONFLICTING"}';
+                }
+                return '';
+            }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-909', fields: { summary: 'Conflicting test automation branch' } },
+            metadata: { contextId: 'test_case_automation' },
+            jobParams: { customParams: { removeLabel: 'sm_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.status, 'blocked_by_human');
+        assert.equal(result.blockedReason, 'pr_conflicts_with_main');
+        assert.equal(result.prUrl, 'https://github.com/epam/dm.ai/pull/909');
+        assert.ok(statuses.indexOf('Blocked') !== -1, 'moved ticket to Blocked');
+        assert.ok(removedLabels.indexOf('sm_test_automation_triggered') !== -1, 'removed SM trigger label');
+        assert.ok(removedLabels.indexOf('test_case_automation_wip') !== -1, 'removed WIP label');
+        assert.ok(commands.some(function(command) {
+            return command.indexOf('gh pr view https://github.com/epam/dm.ai/pull/909 --json mergeable') === 0;
+        }), 'checked PR mergeability');
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0], 'PR Conflicts With Main');
+    });
+
     test('pushes synced existing branch before moving directly to Passed when there are no new test changes', function() {
         var commands = [];
         var statuses = [];
