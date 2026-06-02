@@ -25,6 +25,93 @@ function runGit(command, workingDir) {
     return cli_execute_command(args);
 }
 
+function writeBranchConflictGuidance(ticketKey, branchName, baseBranch, details) {
+    try {
+        file_write({
+            path: 'input/' + ticketKey + '/merge_conflicts.md',
+            content: '# Branch Conflict Guidance\n\n' +
+                'Branch `' + branchName + '` has test automation work that is not already merged into `origin/' + baseBranch + '`, ' +
+                'and `origin/' + baseBranch + '` is not an ancestor of this branch.\n\n' +
+                'Before editing tests, sync the branch deliberately with `origin/' + baseBranch + '`. ' +
+                'In most cases, prefer `origin/' + baseBranch + '` for repository setup, generated workflow/config files, ' +
+                'and shared infrastructure, then re-apply only the ticket-specific test automation that is still relevant.\n\n' +
+                'Do not discard test files that are still needed for this ticket. Do not keep stale bootstrap/setup files just because they exist on the old branch.\n\n' +
+                'Details:\n\n```\n' + (details || '(not available)') + '\n```\n'
+        });
+    } catch (e) {
+        console.warn('Could not write branch conflict guidance:', e);
+    }
+}
+
+function branchHasUniquePatches(baseBranch, workingDir) {
+    try {
+        var cherry = cleanCommandOutput(runGit('git cherry origin/' + baseBranch + ' HEAD', workingDir) || '');
+        if (!cherry.trim()) return false;
+        var lines = cherry.split('\n');
+        for (var i = 0; i < lines.length; i++) {
+            if (lines[i].trim().indexOf('+') === 0) return true;
+        }
+        return false;
+    } catch (e) {
+        console.warn('Could not inspect unique test branch patches:', e);
+        return true;
+    }
+}
+
+function isAncestorRef(ancestor, descendant, workingDir) {
+    try {
+        var output = cleanCommandOutput(
+            runGit('git rev-list -1 ' + ancestor + ' --not ' + descendant, workingDir) || ''
+        );
+        return output.trim() === '';
+    } catch (e) {
+        console.warn('Could not inspect branch ancestry for ' + ancestor + ' -> ' + descendant + ':', e);
+        return false;
+    }
+}
+
+function findMergeBase(left, right, workingDir) {
+    try {
+        return cleanCommandOutput(runGit('git merge-base ' + left + ' ' + right + ' || true', workingDir) || '');
+    } catch (e) {
+        return '';
+    }
+}
+
+function alignBranchWithBase(ticketKey, branchName, baseBranch, workingDir) {
+    if (isAncestorRef('HEAD', 'origin/' + baseBranch, workingDir)) {
+        console.log('Test branch changes are already included in origin/' + baseBranch + ', resetting local branch:', branchName);
+        runGit('git reset --hard origin/' + baseBranch, workingDir);
+        return;
+    }
+
+    if (!branchHasUniquePatches(baseBranch, workingDir)) {
+        console.log('Test branch has no unique patches versus origin/' + baseBranch + ', resetting local branch:', branchName);
+        runGit('git reset --hard origin/' + baseBranch, workingDir);
+        return;
+    }
+
+    if (isAncestorRef('origin/' + baseBranch, 'HEAD', workingDir)) {
+        console.log('Test branch already contains origin/' + baseBranch + ':', branchName);
+        return;
+    }
+
+    console.warn('Test branch does not contain origin/' + baseBranch + ':', branchName);
+    var details = '';
+    try {
+        var mergeBase = findMergeBase('HEAD', 'origin/' + baseBranch, workingDir);
+        if (mergeBase) {
+            details = cleanCommandOutput(runGit('git merge-tree ' + mergeBase + ' HEAD origin/' + baseBranch, workingDir) || '');
+        } else {
+            details = 'No merge base found between HEAD and origin/' + baseBranch + '. The branch history may be unrelated to the current base or too shallow.';
+        }
+    } catch (mergeTreeError) {
+        details = mergeTreeError && mergeTreeError.toString ? mergeTreeError.toString() : String(mergeTreeError);
+    }
+    writeBranchConflictGuidance(ticketKey, branchName, baseBranch, details.substring(0, 6000));
+    console.warn('Keeping divergent test branch ' + branchName + '; conflict guidance written for the agent.');
+}
+
 function checkoutBranch(ticketKey, config) {
     var branchName = configLoader.formatBranchName(config.git.branchPrefix.test, ticketKey);
     var workingDir = config.workingDir || null;
@@ -47,56 +134,19 @@ function checkoutBranch(ticketKey, config) {
         runGit('git branch --list "' + branchName + '"', workingDir) || ''
     );
 
-    /**
-     * Bring the current branch up-to-date with main.
-     * Strategy:
-     *   1. Try rebase — if it fails only due to the 'agents' submodule pointer,
-     *      auto-resolve it (main's version always wins for test branches) and continue.
-     *   2. If rebase still fails for any other reason, abort and fall back to
-     *      'git merge origin/main --no-edit' so we keep all existing test code.
-     * NOTE: never do 'git reset --hard origin/main' on an existing branch — that
-     *       diverges the local branch from its remote counterpart and breaks commits.
-     */
-    function syncWithMain() {
-        var base = 'origin/' + config.git.baseBranch;
-        try {
-            runGit('git rebase ' + base, workingDir);
-            console.log('✅ Rebase succeeded');
-        } catch (rebaseErr) {
-            console.warn('Rebase failed, attempting auto-resolve for agents submodule conflict:', rebaseErr);
-            try {
-                // Auto-resolve: take main's agents pointer (test branches never touch agents)
-                runGit('git checkout --ours agents', workingDir);
-                runGit('git add agents', workingDir);
-                runGit('git rebase --continue', workingDir);
-                console.log('✅ Rebase resumed after resolving agents submodule conflict');
-            } catch (continueErr) {
-                console.warn('Rebase --continue also failed, falling back to merge:', continueErr);
-                try { runGit('git rebase --abort', workingDir); } catch (_) {}
-                try {
-                    runGit('git merge ' + base + ' --no-edit', workingDir);
-                    console.log('✅ Merged main into branch instead of rebasing');
-                } catch (mergeErr) {
-                    console.warn('Merge also failed — branch may need manual attention:', mergeErr);
-                    try { runGit('git merge --abort', workingDir); } catch (_) {}
-                }
-            }
-        }
-    }
-
     if (localBranches.trim()) {
-        console.log('Branch exists locally, syncing from main:', branchName);
+        console.log('Branch exists locally, aligning with base:', branchName);
         runGit('git checkout ' + branchName, workingDir);
-        syncWithMain();
+        alignBranchWithBase(ticketKey, branchName, config.git.baseBranch, workingDir);
     } else {
         var remoteBranches = cleanCommandOutput(
             runGit('git ls-remote --heads origin ' + branchName, workingDir) || ''
         );
 
         if (remoteBranches.trim()) {
-            console.log('Branch exists on remote, checking out and syncing from main:', branchName);
+            console.log('Branch exists on remote, checking out and aligning with base:', branchName);
             runGit('git checkout -b ' + branchName + ' origin/' + branchName, workingDir);
-            syncWithMain();
+            alignBranchWithBase(ticketKey, branchName, config.git.baseBranch, workingDir);
         } else {
             console.log('Creating new branch from', config.git.baseBranch + ':', branchName);
             runGit('git checkout ' + config.git.baseBranch, workingDir);

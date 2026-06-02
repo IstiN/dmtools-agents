@@ -408,6 +408,125 @@ suite('preCliTestAutomationSetup > workingDir', function() {
         });
     });
 
+    test('resets test branch that is already included in main without rebasing bootstrap history', function() {
+        var calls = [];
+        var mockCli = function(args) {
+            calls.push(args.command);
+            if (args.command === 'git branch --list "test/TS-1324"') return '  test/TS-1324\n';
+            if (args.command === 'git rev-list -1 HEAD --not origin/main') return '';
+            return '';
+        };
+
+        var freshConfigLoader = loadModule(
+            'js/configLoader.js',
+            makeRequire({ './config.js': configModule }),
+            { file_read: function(opts) {
+                try { return file_read(opts); } catch (e) { return null; }
+            } }
+        );
+
+        var mod = loadModule(
+            'js/preCliTestAutomationSetup.js',
+            makeRequire({
+                './configLoader.js': freshConfigLoader,
+                './config.js': configModule,
+                './common/pullRequest.js': {
+                    buildOriginFetchCommand: function(refSpec) {
+                        return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+                    }
+                },
+                './fetchLinkedBugsToInput.js': { action: function() {} }
+            }),
+            {
+                cli_execute_command: mockCli,
+                file_read: function(opts) {
+                    try { return file_read(opts); } catch (e) { return null; }
+                },
+                file_write: function() {},
+                jira_move_to_status: function() {}
+            }
+        );
+
+        mod.action({
+            inputFolderPath: 'input/TS-1324',
+            jobParams: {}
+        });
+
+        assert.equal(
+            calls.some(function(c) { return c.indexOf('git rebase origin/') === 0; }),
+            false,
+            'already included test branches must not be rebased through stale bootstrap history'
+        );
+        assert.ok(
+            calls.indexOf('git reset --hard origin/main') !== -1,
+            'already included test branch should be reset to base'
+        );
+    });
+
+    test('keeps divergent test branch and writes conflict guidance without rebase or merge attempts', function() {
+        var calls = [];
+        var writes = [];
+        var mockCli = function(args) {
+            calls.push(args.command);
+            if (args.command === 'git branch --list "test/TS-1325"') return '  test/TS-1325\n';
+            if (args.command === 'git rev-list -1 HEAD --not origin/main') return 'head-sha\n';
+            if (args.command === 'git cherry origin/main HEAD') return '+ abc123 ticket test work\n';
+            if (args.command === 'git rev-list -1 origin/main --not HEAD') return 'base-sha\n';
+            if (args.command === 'git merge-base HEAD origin/main || true') return 'base123\n';
+            if (args.command === 'git merge-tree base123 HEAD origin/main') return 'CONFLICT (add/add): Merge conflict in .github/workflows/unit-tests.yml\n';
+            return '';
+        };
+
+        var freshConfigLoader = loadModule(
+            'js/configLoader.js',
+            makeRequire({ './config.js': configModule }),
+            { file_read: function(opts) {
+                try { return file_read(opts); } catch (e) { return null; }
+            } }
+        );
+
+        var mod = loadModule(
+            'js/preCliTestAutomationSetup.js',
+            makeRequire({
+                './configLoader.js': freshConfigLoader,
+                './config.js': configModule,
+                './common/pullRequest.js': {
+                    buildOriginFetchCommand: function(refSpec) {
+                        return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+                    }
+                },
+                './fetchLinkedBugsToInput.js': { action: function() {} }
+            }),
+            {
+                cli_execute_command: mockCli,
+                file_read: function(opts) {
+                    try { return file_read(opts); } catch (e) { return null; }
+                },
+                file_write: function(args) { writes.push(args); },
+                jira_move_to_status: function() {}
+            }
+        );
+
+        mod.action({
+            inputFolderPath: 'input/TS-1325',
+            jobParams: {}
+        });
+
+        assert.equal(
+            calls.some(function(c) { return c.indexOf('git rebase origin/') === 0; }),
+            false,
+            'divergent test branches should not trigger noisy automatic rebase'
+        );
+        assert.equal(
+            calls.some(function(c) { return c.indexOf('git merge origin/') === 0; }),
+            false,
+            'divergent test branches should not trigger noisy automatic merge'
+        );
+        assert.equal(writes.length, 1, 'conflict guidance should be written');
+        assert.equal(writes[0].path, 'input/TS-1325/merge_conflicts.md');
+        assert.contains(writes[0].content, 'prefer `origin/main`');
+    });
+
 });
 
 // ── postTestAutomationResults: workingDir + testFilesGlob ────────────────────

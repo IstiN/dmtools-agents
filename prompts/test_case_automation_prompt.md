@@ -12,6 +12,8 @@ User request is in the 'input' folder. Read all files there.
 
 The feature code is **already implemented** in the `main` branch and **deployed**. Your job is to automate this test case — not to implement features.
 
+If `merge_conflicts.md` is present in the input folder, the test branch could not be safely auto-aligned with `origin/main` before you started. Resolve this first: inspect the guidance, sync the branch deliberately with `origin/main`, prefer `origin/main` for setup/config/workflow/shared infrastructure conflicts, and keep only ticket-specific test automation that is still relevant. Do not open or leave a PR that is still dirty/conflicting with the base branch.
+
 ## Your task
 
 0. Before inspecting `testing/` or any source file, run a targeted CodeGraph command such as `codegraph context "<ticket key> test automation existing tests and reusable helpers"`. Use CodeGraph for code investigation before `grep`, `find`, `cat`, `sed`, or opening files directly.
