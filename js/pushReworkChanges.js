@@ -213,8 +213,8 @@ function commitAndPush(ticketKey, config, customParams) {
     try {
         cmd('git push -u origin ' + branchName);
     } catch (pushError) {
-        console.log('Normal push failed, force pushing...');
-        cmd('git push -u origin ' + branchName + ' --force');
+        console.log('Normal push failed, retrying with --force-with-lease...');
+        cmd('git push -u origin ' + branchName + ' --force-with-lease');
     }
 
     const remoteCheck = cleanCommandOutput(cmd('git ls-remote --heads origin ' + branchName) || '');
