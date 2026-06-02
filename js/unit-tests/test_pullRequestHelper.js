@@ -206,6 +206,41 @@ suite('pullRequest helper', function() {
         assert.equal(result.unrecoverableByAgent, true);
         assert.contains(result.error, 'No merge base found');
         assert.equal(commands.indexOf('git merge --no-edit origin/main'), -1);
+        assert.ok(commands.indexOf('git -c fetch.recurseSubmodules=no fetch --deepen=100 origin +refs/heads/main:refs/remotes/origin/main') !== -1,
+            'should deepen base history before declaring histories unrelated');
+        assert.ok(commands.indexOf('git -c fetch.recurseSubmodules=no fetch --deepen=100 origin +refs/heads/feature/DMC-7:refs/remotes/origin/feature/DMC-7') !== -1,
+            'should deepen head branch history before declaring histories unrelated');
+    });
+
+    test('deepens shallow history before merge-base refusal', function() {
+        var commands = [];
+        var mergeBaseAttempts = 0;
+        var pr = loadPullRequestHelper();
+
+        var result = pr.syncBranchWithBase({
+            branchName: 'feature/DMC-8',
+            baseBranch: 'main',
+            workingDir: 'repo',
+            runCommand: function(command, workingDir) {
+                commands.push({ command: command, workingDirectory: workingDir || null });
+                if (command === 'git rev-parse origin/main') return 'base-sha';
+                if (command === 'git merge-base origin/main HEAD') {
+                    mergeBaseAttempts += 1;
+                    return mergeBaseAttempts < 3 ? '' : 'old-sha';
+                }
+                if (command === 'git status --porcelain --ignore-submodules=dirty') return '';
+                return '';
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.updated, true);
+        assert.ok(commands.some(function(call) {
+            return call.command === 'git -c fetch.recurseSubmodules=no fetch --deepen=100 origin +refs/heads/main:refs/remotes/origin/main';
+        }), 'expected base history deepen fetch');
+        assert.ok(commands.some(function(call) {
+            return call.command === 'git merge --no-edit origin/main';
+        }), 'expected merge after merge-base is found');
     });
 
 });
