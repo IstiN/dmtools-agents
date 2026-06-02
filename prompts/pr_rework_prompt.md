@@ -64,7 +64,7 @@ For each thread:
 1. Understand the issue described by the reviewer
 2. Locate the relevant code in the codebase
 3. Apply the required fix
-4. **Search the entire codebase for the same pattern** and fix ALL similar occurrences — not just the exact line the reviewer flagged. For example, if the reviewer flags a missing `accessibilityLabel`, search all similar components for the same omission and fix them too. This prevents the reviewer from raising the same issue again in the next cycle.
+4. **Use CodeGraph to inspect the same pattern across the codebase** and fix ALL similar occurrences — not just the exact line the reviewer flagged. Start source-code navigation with `codegraph context "<review issue and affected area>"`, then use `codegraph query`, `codegraph callers`, or `codegraph impact` for related symbols. Use grep only after CodeGraph when you need a literal string match. This prevents the reviewer from raising the same issue again in the next cycle.
 5. Write a reply entry in `outputs/review_replies.json` — mention all files you fixed (both the flagged one and the similar ones found by search)
 
 **Every human review thread in `pr_discussions.md` must have exactly one matching entry in `review_replies.json`. Do not skip any thread.**
