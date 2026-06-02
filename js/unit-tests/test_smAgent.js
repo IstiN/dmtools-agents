@@ -207,6 +207,22 @@ suite('sm.json rule ordering', function() {
         assert.equal(bugDevelopment.limit, 1, 'bug development should retry one ticket per SM cycle to avoid Copilot rate-limit bursts');
         assert.equal(bugDevelopment.concurrencyKey, 'bug_development', 'bug development should use shared active-run detection across SM cycles');
     });
+
+    test('stuck test case recovery has a cooldown to avoid racing active automation', function() {
+        var config = JSON.parse(file_read({ path: 'sm.json' }));
+        var rules = config.params.jobParams.rules;
+        var stuckRecovery = null;
+
+        rules.forEach(function(rule) {
+            if (rule.description === 'Stuck In Development Test Cases → recover (check PR, route to Rework/Review/Backlog)') {
+                stuckRecovery = rule;
+            }
+        });
+
+        assert.ok(stuckRecovery, 'stuck test case recovery rule exists');
+        assert.contains(stuckRecovery.jql, 'updated <= -15m');
+        assert.equal(stuckRecovery.localExecution, true, 'recovery should stay local execution');
+    });
 });
 
 // ── JQL interpolation ─────────────────────────────────────────────────────────

@@ -170,7 +170,7 @@
         },
         {
           "description": "Stuck In Development Test Cases → recover (check PR, route to Rework/Review/Backlog)",
-          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('In Development')",
+          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('In Development') AND updated <= -15m",
           "configFile": "agents/recover_stuck_test_case.json",
           "localExecution": true
         },

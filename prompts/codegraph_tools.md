@@ -12,6 +12,16 @@ codegraph context "<ticket key> <agent role> <short task summary>"
 
 Do this even when the prompt already includes a PR diff, file path, failing test, or review comment. PR diffs are not enough context; CodeGraph provides surrounding symbols and call paths that plain file reads miss.
 
+## Completion check
+
+Before you finish a source-code agent run, verify that the conversation contains an actual executed `codegraph ...` command, not only this instruction text or example commands. If no CodeGraph command has been executed yet, run a targeted command before writing the final result:
+
+```bash
+codegraph context "<ticket key> <changed file or tested flow> <decision you are validating>"
+```
+
+Do not approve, request changes, report a passed test, report a failed test, or publish implementation results until this check is satisfied.
+
 ## When to use CodeGraph vs other tools
 
 | Situation | Use |
