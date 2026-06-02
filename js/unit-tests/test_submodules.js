@@ -98,10 +98,10 @@ suite('submodule helper', function() {
                 if (command === 'git -C trackstate-setup rev-parse origin/main') {
                     return 'base-sha';
                 }
-                if (command === 'git -C trackstate-setup merge-base HEAD origin/main') {
+                if (command === 'bash -lc "git -C trackstate-setup merge-base HEAD origin/main 2>/dev/null || true"') {
                     return 'old-sha';
                 }
-                if (command === 'git -C trackstate-setup merge-base origin/main HEAD') {
+                if (command === 'bash -lc "git -C trackstate-setup merge-base origin/main HEAD 2>/dev/null || true"') {
                     return 'base-sha';
                 }
                 if (command === 'git -C trackstate-setup rev-parse --short=12 HEAD') {
@@ -142,10 +142,10 @@ suite('submodule helper', function() {
                 if (command === 'git -C trackstate-setup rev-parse origin/main') {
                     return 'base-sha';
                 }
-                if (command === 'git -C trackstate-setup merge-base HEAD origin/main') {
+                if (command === 'bash -lc "git -C trackstate-setup merge-base HEAD origin/main 2>/dev/null || true"') {
                     return 'old-sha';
                 }
-                if (command === 'git -C trackstate-setup merge-base origin/main HEAD') {
+                if (command === 'bash -lc "git -C trackstate-setup merge-base origin/main HEAD 2>/dev/null || true"') {
                     return 'base-sha';
                 }
                 return '';
@@ -220,7 +220,7 @@ suite('submodule helper', function() {
                 if (command === 'git -C trackstate-setup rev-parse origin/main') {
                     return 'base-sha';
                 }
-                if (command === 'git -C trackstate-setup merge-base HEAD origin/main') return '';
+                if (command === 'bash -lc "git -C trackstate-setup merge-base HEAD origin/main 2>/dev/null || true"') return '';
                 return '';
             }
         });
@@ -228,6 +228,7 @@ suite('submodule helper', function() {
         assert.ok(commands.indexOf('git -C trackstate-setup rebase origin/main') === -1, 'divergent stale gitlink should not be rebased');
         assert.ok(commands.indexOf('git -C trackstate-setup push origin HEAD:main') === -1, 'divergent clean gitlink should not be pushed');
         assert.ok(commands.indexOf('git -C trackstate-setup checkout -B main HEAD') === -1, 'divergent clean gitlink should not rewrite branch');
+        assert.ok(commands.indexOf('git -C trackstate-setup merge-base HEAD origin/main') === -1, 'expected non-ancestor checks must not call raw merge-base through error-logging command executor');
     });
 
     test('restores stashed dirty changes when branch alignment fails', function() {
