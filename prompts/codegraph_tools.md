@@ -22,7 +22,7 @@ Use `codegraph context "<task description>"` by default. Use `codegraph query "<
 
 After editing code, run `codegraph sync` before any further CodeGraph query.
 
-Only skip CodeGraph when the task does not involve source-code navigation (for example, a pure Jira/status update or a known single-file text edit). If you skip it, state the reason in the final response.
+Only skip CodeGraph when the task does not involve source-code navigation at all (for example, a pure Jira/status update). Source-code agents such as development, rework, review, and test automation must still run at least one CodeGraph command even when the requested fix names an exact file, line, failing test, or review comment. In that case use a short targeted command such as `codegraph context "<ticket key> <file or failing test> <issue summary>"`.
 
 **Prefer CodeGraph over `grep` or `cat` for code understanding** — it uses the pre-built semantic index and returns only relevant, structured results.
 
