@@ -121,6 +121,33 @@ function branchHasMergeBase(runCommand, workingDir, baseBranch) {
     }
 }
 
+function fetchAdditionalHistoryForMergeBase(runCommand, workingDir, baseBranch, branchName) {
+    var refSpecs = [
+        '+refs/heads/' + baseBranch + ':refs/remotes/origin/' + baseBranch
+    ];
+    if (branchName && isSafeRefName(branchName)) {
+        refSpecs.push('+refs/heads/' + branchName + ':refs/remotes/origin/' + branchName);
+    }
+
+    var deepenCommands = [];
+    for (var i = 0; i < refSpecs.length; i++) {
+        deepenCommands.push('git -c fetch.recurseSubmodules=no fetch --deepen=100 origin ' + refSpecs[i]);
+    }
+    deepenCommands.push('git -c fetch.recurseSubmodules=no fetch --unshallow origin');
+
+    for (var j = 0; j < deepenCommands.length; j++) {
+        try {
+            runCommand(deepenCommands[j], workingDir);
+        } catch (e) {
+            console.warn('Could not deepen git history for merge-base lookup:', e.message || e);
+        }
+        if (branchHasMergeBase(runCommand, workingDir, baseBranch)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function buildOriginFetchCommand(refSpec) {
     return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
 }
@@ -158,7 +185,8 @@ function syncBranchWithBase(options) {
             return { success: true, updated: false };
         }
 
-        if (!branchHasMergeBase(runCommand, workingDir, baseBranch)) {
+        if (!branchHasMergeBase(runCommand, workingDir, baseBranch) &&
+                !fetchAdditionalHistoryForMergeBase(runCommand, workingDir, baseBranch, branchName)) {
             return {
                 success: false,
                 unrecoverableByAgent: true,
