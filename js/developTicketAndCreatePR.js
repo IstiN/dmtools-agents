@@ -201,6 +201,14 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
             ticketKey: ticketKey
         });
 
+        try {
+            runCmd({
+                command: 'git rm -r --ignore-unmatch .dmtools/copilot-sessions'
+            });
+        } catch (cleanupErr) {
+            console.warn('Could not remove tracked Copilot session cache before staging:', cleanupErr);
+        }
+
         // Stage all changes
         console.log('Staging changes...');
         runCmd({

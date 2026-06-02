@@ -116,9 +116,10 @@ configure_copilot_session() {
   local session_seed="${repo_slug}:${key_slug}:${group_slug}"
   local session_id="$(_uuid_from_seed "${session_seed}")"
   local session_name="${repo_slug}-${key_slug}-${group_slug}"
-  local session_root="${workspace}/.dmtools/copilot-sessions/${repo_slug}/${key_slug}/${group_slug}"
+  local session_base="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/dmtools-copilot-sessions"
+  local session_root="${session_base}/${repo_slug}/${key_slug}/${group_slug}"
   local cache_prefix="copilot-session-${repo_slug}-${key_slug}-${group_slug}-"
-  local cache_version="${COPILOT_SESSION_CACHE_VERSION:-v1}"
+  local cache_version="${COPILOT_SESSION_CACHE_VERSION:-v2}"
   local cache_run_id="${GITHUB_RUN_ID:-local}"
 
   mkdir -p "${session_root}"

@@ -229,6 +229,11 @@ function action(params) {
 
         let hasGitChanges = false;
         try {
+            try {
+                cli_execute_command({ command: 'git rm -r --ignore-unmatch .dmtools/copilot-sessions' });
+            } catch (cleanupErr) {
+                console.warn('Could not remove tracked Copilot session cache before checking status:', cleanupErr);
+            }
             cli_execute_command({ command: 'git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**"' });
             const rawStatus = cli_execute_command({ command: 'git status --porcelain' }) || '';
             const statusLines = rawStatus.split('\n').filter(function(l) {

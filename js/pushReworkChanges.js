@@ -176,6 +176,12 @@ function commitAndPush(ticketKey, config, customParams) {
         ticketKey: ticketKey
     });
 
+    try {
+        cmd('git rm -r --ignore-unmatch .dmtools/copilot-sessions');
+    } catch (cleanupErr) {
+        console.warn('Could not remove tracked Copilot session cache before staging:', cleanupErr);
+    }
+
     cmd('git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**"');
 
     const status = prHelper.readStagedDiffStat(cmd, workingDir);

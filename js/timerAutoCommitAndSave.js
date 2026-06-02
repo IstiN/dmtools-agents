@@ -68,6 +68,15 @@ function autoCommitAndPush(customParams, ticketKey) {
 
     try {
         cli_execute_command({
+            command: 'git rm -r --ignore-unmatch .dmtools/copilot-sessions',
+            workingDirectory: workingDir
+        });
+    } catch (cleanupErr) {
+        console.log('⏱️ timer: session cache cleanup skipped:', cleanupErr.toString().substring(0, 100));
+    }
+
+    try {
+        cli_execute_command({
             command: 'git add -A -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**"',
             workingDirectory: workingDir
         });
