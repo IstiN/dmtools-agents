@@ -290,6 +290,62 @@ function postGeneralComment(scm, pullRequestId, commentPath) {
     }
 }
 
+function isLinePresentInDiff(diffText, filePath, targetLine) {
+    if (!diffText || !filePath || !targetLine) return true;
+
+    var lineNumber = parseInt(targetLine, 10);
+    if (!lineNumber) return true;
+
+    var currentFile = null;
+    var newLine = null;
+    var lines = String(diffText).split(/\r?\n/);
+
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+
+        if (line.indexOf('diff --git ') === 0) {
+            currentFile = null;
+            newLine = null;
+            continue;
+        }
+
+        if (line.indexOf('+++ b/') === 0) {
+            currentFile = line.substring('+++ b/'.length);
+            if (currentFile === '/dev/null') currentFile = null;
+            continue;
+        }
+
+        if (currentFile !== filePath) continue;
+
+        var hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+        if (hunk) {
+            newLine = parseInt(hunk[1], 10);
+            continue;
+        }
+
+        if (newLine === null) continue;
+
+        if (line.indexOf('+') === 0 || line.indexOf(' ') === 0) {
+            if (newLine === lineNumber) return true;
+            newLine++;
+        } else if (line.indexOf('-') === 0) {
+            continue;
+        } else if (line === '\\ No newline at end of file') {
+            continue;
+        } else {
+            newLine++;
+        }
+    }
+
+    return false;
+}
+
+function postFallbackInlineComment(scm, pullRequestId, filePath, line, commentText) {
+    var lineRef = filePath + (line ? ':' + line : '');
+    scm.addComment(pullRequestId, '📍 **`' + lineRef + '`**\n\n' + commentText);
+    console.log('✅ Posted fallback PR comment for ' + lineRef);
+}
+
 function postInlineComment(scm, pullRequestId, inlineComment) {
     // Accept both spec formats:
     //   old spec: { file, comment: "path/to/file.md" }
@@ -309,6 +365,17 @@ function postInlineComment(scm, pullRequestId, inlineComment) {
 
         console.log('Posting inline comment on ' + filePath + ':' + inlineComment.line);
 
+        try {
+            var diffText = scm.getPrDiff(pullRequestId);
+            if (diffText !== null && !isLinePresentInDiff(diffText, filePath, inlineComment.line)) {
+                console.warn('Inline comment line is not present in PR diff; falling back to PR comment on ' + filePath + ':' + inlineComment.line);
+                postFallbackInlineComment(scm, pullRequestId, filePath, inlineComment.line, commentText);
+                return true;
+            }
+        } catch (diffError) {
+            console.warn('Could not fetch PR diff for inline comment validation:', diffError.message || diffError);
+        }
+
         scm.addInlineComment(
             pullRequestId, filePath, inlineComment.line, commentText,
             inlineComment.startLine || null, inlineComment.side || null
@@ -321,9 +388,7 @@ function postInlineComment(scm, pullRequestId, inlineComment) {
         // 422 = line not in diff hunk — fall back to a regular PR comment so nothing is lost
         console.warn('Inline comment failed (line not in diff?), falling back to PR comment on ' + filePath + ':' + inlineComment.line);
         try {
-            var lineRef = filePath + (inlineComment.line ? ':' + inlineComment.line : '');
-            scm.addComment(pullRequestId, '📍 **`' + lineRef + '`**\n\n' + commentText);
-            console.log('✅ Posted fallback PR comment for ' + lineRef);
+            postFallbackInlineComment(scm, pullRequestId, filePath, inlineComment.line, commentText);
             return true;
         } catch (fallbackError) {
             console.error('Failed to post fallback PR comment for ' + filePath + ':', fallbackError);
@@ -780,5 +845,5 @@ function action(params) {
 
 // Export for dmtools standalone execution
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, resolveCustomParams };
+    module.exports = { action, resolveCustomParams, isLinePresentInDiff };
 }

@@ -23,6 +23,16 @@ Do NOT run `git commit` or `git merge --abort` — the commit is handled automat
 3. **Address BLOCKING issues first** (security, critical bugs), then IMPORTANT, then SUGGESTIONS
 4. **If a SUGGESTION is minor and time-consuming**, you may skip it but explicitly note it in `outputs/response.md`
 
+## Scope-Creep Review Loop Guard
+
+If a reviewer blocks the PR because `pr_diff.txt` contains an unrelated deleted file, generated/cache artifact, tooling file, or other out-of-scope path, this is an actionable blocking issue even if it appears as a general PR comment instead of an inline thread.
+
+Before writing a no-action response:
+- Re-read `pr_diff.txt` and confirm the blocked path is no longer present.
+- For deleted unrelated files, restore the file from the base branch or otherwise remove that deletion from the PR diff.
+- Do not write "No open review comments" or "No new actionable items" while the blocked path remains in `pr_diff.txt`.
+- If the same path appears in repeated review cycles, fix that path first to stop the loop.
+
 ## Rework Decision Flow
 
 Use this flow before changing code so approved PRs that are only waiting for CI or merge checks do not enter a stale rework loop:
