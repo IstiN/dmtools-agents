@@ -183,6 +183,7 @@ elif [ "$PROVIDER" = "copilot" ]; then
   }
 
   COPILOT_SESSION_ARGS=()
+  COPILOT_SESSION_MODE="none"
   COPILOT_HAS_RESUME_ARG=false
   for pass_arg in "${PASS_ARGS[@]:-}"; do
     case "${pass_arg}" in
@@ -192,13 +193,13 @@ elif [ "$PROVIDER" = "copilot" ]; then
     esac
   done
   if [ "${COPILOT_SESSION_ENABLED:-true}" != "false" ] && [ "${COPILOT_HAS_RESUME_ARG}" = "false" ] && [ -n "${COPILOT_SESSION_ID:-}" ]; then
-    if copilot_supports_flag "--session-id"; then
-      COPILOT_SESSION_ARGS=(--session-id "${COPILOT_SESSION_ID}")
-    else
-      echo "Copilot CLI does not support --session-id; using COPILOT_HOME session cache and --name only"
-    fi
     if [ -n "${COPILOT_SESSION_NAME:-}" ]; then
-      COPILOT_SESSION_ARGS+=(--name "${COPILOT_SESSION_NAME}")
+      COPILOT_SESSION_ARGS=(--resume "${COPILOT_SESSION_NAME}")
+      COPILOT_SESSION_MODE="resume-name"
+      echo "Copilot session restore enabled; trying --resume ${COPILOT_SESSION_NAME} first"
+    elif copilot_supports_flag "--session-id"; then
+      COPILOT_SESSION_ARGS=(--session-id "${COPILOT_SESSION_ID}")
+      COPILOT_SESSION_MODE="session-id"
     fi
   fi
 
@@ -234,6 +235,42 @@ elif [ "$PROVIDER" = "copilot" ]; then
     return "$status"
   }
 
+  retry_copilot_session_selection() {
+    local log_file="$1"
+    local model="$2"
+    local resume_id=""
+
+    if [ "${COPILOT_SESSION_MODE}" != "resume-name" ]; then
+      return 1
+    fi
+
+    if grep -Eiq "No session, task, or name matched" "$log_file"; then
+      echo ""
+      echo "Copilot session ${COPILOT_SESSION_NAME} was not found; starting a new named session"
+      COPILOT_SESSION_ARGS=(--name "${COPILOT_SESSION_NAME}")
+      COPILOT_SESSION_MODE="name"
+    elif grep -Eiq "Multiple sessions match the name" "$log_file"; then
+      resume_id="$(grep -Eo '^[[:space:]]+[0-9a-fA-F-]{36}[[:space:]]*$' "$log_file" | head -n 1 | tr -d '[:space:]')"
+      if [ -z "${resume_id}" ]; then
+        echo "Copilot reported multiple matching sessions, but no session id could be parsed"
+        return 1
+      fi
+      echo ""
+      echo "Copilot found multiple sessions named ${COPILOT_SESSION_NAME}; resuming first match ${resume_id}"
+      COPILOT_SESSION_ARGS=(--resume "${resume_id}")
+      COPILOT_SESSION_MODE="resume-id"
+    else
+      return 1
+    fi
+
+    record_codegraph_usage "$log_file"
+    set +e
+    run_copilot_once "$log_file" "$model"
+    exit_code=$?
+    set -e
+    return 0
+  }
+
   max_attempts="${COPILOT_RATE_LIMIT_RETRIES:-2}"
   retry_delay="${COPILOT_RATE_LIMIT_RETRY_DELAY_SECONDS:-90}"
   attempt=1
@@ -245,6 +282,10 @@ elif [ "$PROVIDER" = "copilot" ]; then
     run_copilot_once "$copilot_log" "$COPILOT_MODEL_VALUE"
     exit_code=$?
     set -e
+
+    if [ "$exit_code" -ne 0 ] && retry_copilot_session_selection "$copilot_log" "$COPILOT_MODEL_VALUE"; then
+      :
+    fi
 
     if [ "$exit_code" -eq 0 ]; then
       record_codegraph_usage "$copilot_log"
