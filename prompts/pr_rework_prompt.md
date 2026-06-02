@@ -27,6 +27,16 @@ Your mission is to address every issue raised in `pr_discussions.md`. This inclu
 
 **Ignore only**: bot ticket-link comments (e.g. "TICKET-123 ...link..."), previous rework summary comments, and automated code review APPROVE comments — these are informational and require no action.
 
+### 🚫 SCOPE-CREEP REVIEW LOOP GUARD
+
+If a review blocks the PR for an unrelated, deleted, generated, cache, tooling, or scope-creep file:
+
+- Treat it as an actionable blocking issue even when the comment is posted as a general PR comment rather than an inline thread.
+- Re-read the current `pr_diff.txt` and verify the path is gone from the PR diff before writing `outputs/response.md`.
+- For deleted unrelated files, restore the file from the base branch or remove the deletion from the PR so the diff no longer contains that path.
+- Do NOT answer "No new actionable items" while `pr_diff.txt` still contains the blocked path.
+- If the same blocking path was mentioned in a previous review cycle, prioritize removing that diff before any other cleanup.
+
 ### 🛑 STALE AUTOMATION LOOP — DO NOT REPEAT YOURSELF
 
 If the only "blocker" is the reviewer asking for fresh post-fix automation, and you have ALREADY explained in a previous rework cycle that the code addresses the failure:
