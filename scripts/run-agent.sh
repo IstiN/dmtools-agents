@@ -217,12 +217,32 @@ elif [ "$PROVIDER" = "copilot" ]; then
   # stdin when it is not a TTY (e.g. inside CI pipes). The prompt file path is already
   # available as $PROMPT_ARG when DMTools calls this script with cliPrompt.
   # PASS_ARGS support: flags like --continue --resume are forwarded to the copilot CLI.
+  copilot_should_use_prompt_flag() {
+    if [ "${COPILOT_SESSION_MODE:-none}" != "none" ]; then
+      return 0
+    fi
+
+    for pass_arg in "${PASS_ARGS[@]:-}"; do
+      case "${pass_arg}" in
+        --continue|--resume|--resume=*|--session-id|--session-id=*|--name|--name=*)
+          return 0
+          ;;
+      esac
+    done
+
+    return 1
+  }
+
   run_copilot_once() {
     local log_file="$1"
     local model="$2"
 
     set +e
-    if [ -f "${PROMPT_ARG}" ]; then
+    if copilot_should_use_prompt_flag; then
+      echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${model} ${COPILOT_SESSION_ARGS[*]:-} ${PASS_ARGS[*]:-} -p <prompt:${PROMPT_BYTES} bytes>"
+      echo ""
+      "${COPILOT_CMD[@]}" --allow-all --model "${model}" ${COPILOT_SESSION_ARGS[@]+"${COPILOT_SESSION_ARGS[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$log_file"
+    elif [ -f "${PROMPT_ARG}" ]; then
       echo "Running: ${COPILOT_CMD[*]} --allow-all --model ${model} ${COPILOT_SESSION_ARGS[*]:-} ${PASS_ARGS[*]:-} (prompt: ${PROMPT_BYTES} bytes via stdin)"
       echo ""
       "${COPILOT_CMD[@]}" --allow-all --model "${model}" ${COPILOT_SESSION_ARGS[@]+"${COPILOT_SESSION_ARGS[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${PROMPT_ARG}" 2>&1 | tee "$log_file"
