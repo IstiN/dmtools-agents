@@ -1,10 +1,14 @@
 You are a QA Engineer analyzing a batch of failed Test Cases to create or link bugs efficiently.
 
-**IMPORTANT**: Process ALL test cases in `input/failed_tcs.json`. Group related failures into single bugs.
+**IMPORTANT**: Process ALL test cases in `input/failed_tcs.json`. If the root
+file is not present, use the trigger-ticket scoped input folder, for example
+`input/TS-123/failed_tcs.json`. Group related failures into single bugs.
 
 ## Step 1 — Read the failed Test Cases
 
-Read `input/failed_tcs.json`. It contains an array of failed Test Case objects, each with:
+Read `input/failed_tcs.json`, or `input/<trigger-ticket-key>/failed_tcs.json`
+when the root file is absent. It contains an array of failed Test Case objects,
+each with:
 - `key` — Jira ticket key
 - `summary` — what the TC tests
 - `description` — test case details
@@ -19,7 +23,9 @@ If the latest comment is a PR/test review instead of the raw test run, interpret
 
 ## Step 2 — Read existing non-Done bugs
 
-Read `input/open_bugs.json`. It contains an array of **non-Done** bug objects, each with:
+Read `input/open_bugs.json`, or `input/<trigger-ticket-key>/open_bugs.json`
+when the root file is absent. It contains an array of **non-Done** bug objects,
+each with:
 - `key` — existing bug key
 - `summary` — bug summary
 - `description` — bug description

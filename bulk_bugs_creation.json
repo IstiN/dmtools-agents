@@ -7,8 +7,8 @@
     "agentParams": {
       "aiRole": "QA Engineer",
       "instructions": [
-        "Read input/failed_tcs.json for the list of failed Test Cases.",
-        "Read input/open_bugs.json for all existing non-Done bugs.",
+        "Read input/failed_tcs.json for the list of failed Test Cases. If it is not present, read input/<trigger-ticket-key>/failed_tcs.json.",
+        "Read input/open_bugs.json for all existing non-Done bugs. If it is not present, read input/<trigger-ticket-key>/open_bugs.json.",
         "Done bugs are intentionally excluded from bug matching.",
         "For each failed TC decide: link to existing non-Done bug, create new bug, or skip (test code issue only).",
         "Group TCs with the same root cause — create ONE new bug for the group.",
