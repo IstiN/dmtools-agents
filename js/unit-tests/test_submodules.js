@@ -98,11 +98,11 @@ suite('submodule helper', function() {
                 if (command === 'git -C trackstate-setup rev-parse origin/main') {
                     return 'base-sha';
                 }
-                if (command === 'bash -lc "git -C trackstate-setup merge-base HEAD origin/main 2>/dev/null || true"') {
-                    return 'old-sha';
+                if (command === 'git -C trackstate-setup rev-list -1 head-sha --not base-sha') {
+                    return 'head-sha';
                 }
-                if (command === 'bash -lc "git -C trackstate-setup merge-base origin/main HEAD 2>/dev/null || true"') {
-                    return 'base-sha';
+                if (command === 'git -C trackstate-setup rev-list -1 base-sha --not head-sha') {
+                    return '';
                 }
                 if (command === 'git -C trackstate-setup rev-parse --short=12 HEAD') {
                     return '2b4b84712bfa';
@@ -142,11 +142,11 @@ suite('submodule helper', function() {
                 if (command === 'git -C trackstate-setup rev-parse origin/main') {
                     return 'base-sha';
                 }
-                if (command === 'bash -lc "git -C trackstate-setup merge-base HEAD origin/main 2>/dev/null || true"') {
-                    return 'old-sha';
+                if (command === 'git -C trackstate-setup rev-list -1 head-sha --not base-sha') {
+                    return 'head-sha';
                 }
-                if (command === 'bash -lc "git -C trackstate-setup merge-base origin/main HEAD 2>/dev/null || true"') {
-                    return 'base-sha';
+                if (command === 'git -C trackstate-setup rev-list -1 base-sha --not head-sha') {
+                    return '';
                 }
                 return '';
             }
@@ -220,7 +220,8 @@ suite('submodule helper', function() {
                 if (command === 'git -C trackstate-setup rev-parse origin/main') {
                     return 'base-sha';
                 }
-                if (command === 'bash -lc "git -C trackstate-setup merge-base HEAD origin/main 2>/dev/null || true"') return '';
+                if (command === 'git -C trackstate-setup rev-list -1 head-sha --not base-sha') return 'head-sha';
+                if (command === 'git -C trackstate-setup rev-list -1 base-sha --not head-sha') return 'base-sha';
                 return '';
             }
         });
@@ -229,6 +230,7 @@ suite('submodule helper', function() {
         assert.ok(commands.indexOf('git -C trackstate-setup push origin HEAD:main') === -1, 'divergent clean gitlink should not be pushed');
         assert.ok(commands.indexOf('git -C trackstate-setup checkout -B main HEAD') === -1, 'divergent clean gitlink should not rewrite branch');
         assert.ok(commands.indexOf('git -C trackstate-setup merge-base HEAD origin/main') === -1, 'expected non-ancestor checks must not call raw merge-base through error-logging command executor');
+        assert.ok(commands.indexOf('git -C trackstate-setup rev-list -1 head-sha --not base-sha') !== -1, 'expected non-ancestor checks should use exit-zero rev-list containment check');
     });
 
     test('restores stashed dirty changes when branch alignment fails', function() {

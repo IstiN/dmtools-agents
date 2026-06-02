@@ -69,7 +69,7 @@ suite('postTestAutomationResults: PR creation', function() {
                 commands.push(command);
                 if (command === 'pwd') throw new Error('pwd must not be called');
                 if (command === 'git branch --show-current') return 'test/DMC-898';
-                if (command.indexOf('find testing') === 0) return 'testing/tests/DMC-898/test_dmc_898.py';
+                if (command === 'git status --short -- testing') return '?? testing/tests/DMC-898/test_dmc_898.py';
                 if (command === 'git diff --cached --stat') return ' testing/tests/DMC-898/test_dmc_898.py | 1 +';
                 if (command.indexOf('git ls-remote --heads origin test/DMC-898') === 0) return 'abc\trefs/heads/test/DMC-898';
                 if (command.indexOf('gh pr list --head test/DMC-898') === 0) return '';
@@ -113,7 +113,7 @@ suite('postTestAutomationResults: PR creation', function() {
                 var command = opts.command;
                 commands.push(command);
                 if (command === 'git branch --show-current') return 'test/DMC-968';
-                if (command.indexOf('find testing') === 0) return 'testing/tests/DMC-968/test_dmc_968.py';
+                if (command === 'git status --short -- testing') return '?? testing/tests/DMC-968/test_dmc_968.py';
                 if (command === 'git diff --cached --stat') return '';
                 if (command.indexOf('git ls-remote --heads origin test/DMC-968') === 0) return 'abc\trefs/heads/test/DMC-968';
                 if (command.indexOf('gh pr create') === 0) throw new Error('gh pr create must not be called without branch diff');

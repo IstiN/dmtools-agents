@@ -104,8 +104,8 @@ function performGitOperations(branchName, commitMessage, workingDir, testFilesPa
     try {
         // Diagnostic: list test files before staging
         try {
-            var lsOutput = runInRepo('find ' + inspectPath + ' -type f 2>/dev/null | head -20', workingDir) || '';
-            console.log('Files in ' + inspectPath + ':', cleanCommandOutput(lsOutput) || '(empty)');
+            var lsOutput = runInRepo('git status --short -- ' + inspectPath, workingDir) || '';
+            console.log('Git status for ' + inspectPath + ':', cleanCommandOutput(lsOutput) || '(empty)');
         } catch (e) {
             console.warn('Could not list ' + inspectPath + ':', e);
         }
