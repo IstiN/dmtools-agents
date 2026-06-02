@@ -96,10 +96,11 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
             currentCliOutput: ''
         });
         assert.ok(cliCalls.length >= 4, 'should call status, add, commit, push');
-        assert.contains(cliCalls[1], 'git add -A');
-        assert.contains(cliCalls[2], 'git commit');
-        assert.contains(cliCalls[2], 'PROJ-123');
-        assert.contains(cliCalls[3], 'git push');
+        assert.contains(cliCalls[1], 'git rm -r --ignore-unmatch .dmtools/copilot-sessions');
+        assert.contains(cliCalls[2], 'git add -A');
+        assert.contains(cliCalls[3], 'git commit');
+        assert.contains(cliCalls[3], 'PROJ-123');
+        assert.contains(cliCalls[4], 'git push');
     });
 });
 
