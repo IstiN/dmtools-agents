@@ -44,6 +44,16 @@ Before reading any source code, do ALL of the following:
 
 **Only if you cannot reproduce the bug** (no browser, no live server, no runnable test) — then fall back to static code analysis. Document in `outputs/rca.md` that reproduction was not possible and why.
 
+### Step 0.5: Use CodeGraph before source-code navigation
+
+Before reading source code, test code, or repository files for static analysis, run a targeted CodeGraph command such as:
+
+```bash
+codegraph context "<ticket key> bug root cause relevant source and tests"
+```
+
+Use CodeGraph for code investigation before `grep`, `find`, `cat`, `sed`, or opening source files directly. If you already know the symbol name, use `codegraph query "<symbol>"` first.
+
 ## Your workflow (MUST follow in order)
 
 ### 1. Root Cause Analysis — write `outputs/rca.md` FIRST
