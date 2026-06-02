@@ -213,8 +213,18 @@ function commitAndPush(ticketKey, config, customParams) {
     try {
         cmd('git push -u origin ' + branchName);
     } catch (pushError) {
-        console.log('Normal push failed, retrying with --force-with-lease...');
-        cmd('git push -u origin ' + branchName + ' --force-with-lease');
+        console.warn('Normal push failed; synchronizing with origin/' + branchName + ' before retry:', pushError.message || pushError);
+        try {
+            cmd('git -c fetch.recurseSubmodules=no fetch origin ' + branchName + ':refs/remotes/origin/' + branchName);
+            cmd('git merge --no-edit origin/' + branchName);
+            cmd('git push -u origin ' + branchName);
+        } catch (syncPushError) {
+            throw new Error(
+                'Could not push rework branch after synchronizing with origin/' + branchName +
+                '. Refusing to force-push over remote updates. Error: ' +
+                (syncPushError.message || syncPushError)
+            );
+        }
     }
 
     const remoteCheck = cleanCommandOutput(cmd('git ls-remote --heads origin ' + branchName) || '');

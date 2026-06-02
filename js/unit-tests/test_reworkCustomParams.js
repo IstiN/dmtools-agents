@@ -69,6 +69,10 @@ function loadPushReworkChangesForAction(mocks) {
                 mocks.commands = mocks.commands || [];
                 mocks.commands.push(args.command);
                 if (args.command === 'git branch --show-current') return 'ai/TS-1293';
+                if (args.command === 'git push -u origin ai/TS-1293' && mocks.failFirstPush) {
+                    mocks.failFirstPush = false;
+                    throw new Error('rejected non-fast-forward');
+                }
                 if (args.command.indexOf('git ls-remote --heads origin ai/TS-1293') === 0) return 'abc123\trefs/heads/ai/TS-1293';
                 return '';
             },
@@ -187,6 +191,36 @@ suite('rework custom params', function() {
         assert.equal(result.success, true);
         assert.equal(result.message, 'TS-1293 rework pushed, PR commented, moved to In Review');
         assert.deepEqual(mocks.moves, ['In Review']);
+    });
+
+    test('pr_rework syncs remote branch before retrying a rejected push', function() {
+        var mocks = { failFirstPush: true };
+        var mod = loadPushReworkChangesForAction(mocks);
+
+        var result = mod.action({
+            jobParams: {
+                ticket: { key: 'TS-1293', fields: { labels: [] } },
+                response: 'Implemented fix and wrote outputs/response.md',
+                customParams: {
+                    removeLabels: ['sm_story_rework_triggered']
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.ok(
+            mocks.commands.indexOf('git -c fetch.recurseSubmodules=no fetch origin ai/TS-1293:refs/remotes/origin/ai/TS-1293') !== -1,
+            'expected fetch of remote PR branch after rejected push'
+        );
+        assert.ok(
+            mocks.commands.indexOf('git merge --no-edit origin/ai/TS-1293') !== -1,
+            'expected merge of remote PR branch before retry push'
+        );
+        assert.equal(
+            mocks.commands.indexOf('git push -u origin ai/TS-1293 --force-with-lease'),
+            -1,
+            'must not force-push over remote PR updates'
+        );
     });
 
     test('merges pr_test_automation_rework jobParamPatches into runtime customParams', function() {
