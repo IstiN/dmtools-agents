@@ -14,6 +14,8 @@ var scmModule = require('./common/scm.js');
 var autoStart = require('./common/autoStart.js');
 var configLoader = require('./configLoader.js');
 
+var RESUME_MARKER = 'outputs/.pr-review-missing-output-resume-attempted';
+
 /**
  * Derive project key from customParams.configPath or customParams.projectKey.
  * e.g. ".dmtools/configs/myproject.js" → "myproject"
@@ -109,6 +111,98 @@ function readMarkdownFile(filePath) {
         console.warn('Could not read file ' + filePath + ':', error);
     }
     return '';
+}
+
+function writeFile(path, content) {
+    try {
+        file_write({ path: path, content: content });
+    } catch (e) {
+        file_write(path, content);
+    }
+}
+
+function attemptResumeIfReviewOutputsMissing(ticketKey) {
+    if (readReviewJson()) {
+        return false;
+    }
+
+    try {
+        var marker = file_read({ path: RESUME_MARKER });
+        if (marker && marker.trim()) {
+            console.warn('Review output resume already attempted once — skipping');
+            return false;
+        }
+    } catch (e) {}
+
+    console.log('Mandatory PR review outputs are missing. Attempting one resume run to write them.');
+    writeFile(RESUME_MARKER, new Date().toISOString() + '\n');
+
+    var recoveryPrompt =
+        'RESUME TASK: The previous PR review run ended without writing mandatory review output files.\n\n' +
+        'Do not rework product code. Read input/' + ticketKey + '/pr_info.md, pr_diff.txt, pr_discussions.md, ' +
+        'pr_discussions_raw.json when present, ci_failures.md when present, and the current PR context.\n\n' +
+        'Write these files before stopping:\n' +
+        '1. outputs/pr_review.json with fields recommendation, generalComment, resolvedThreadIds, inlineComments, issueCounts.\n' +
+        '2. outputs/pr_review_general.md with a short GitHub Markdown review summary.\n' +
+        '3. outputs/response.md with a short Jira review summary.\n\n' +
+        'If you found a BLOCK or REQUEST_CHANGES result, still write the files. Do not return only plain text.\n' +
+        'If the finding is not on a changed diff line, put it in outputs/pr_review_general.md and leave inlineComments empty.\n' +
+        'Validate outputs/pr_review.json as parseable JSON before stopping.\n' +
+        'Ticket: ' + ticketKey + '\n';
+
+    var promptFile = 'outputs/.pr-review-resume-prompt.md';
+    writeFile(promptFile, recoveryPrompt);
+
+    try {
+        var resumeResult = cli_execute_command({
+            command: 'bash agents/scripts/run-agent.sh --continue --resume ' + promptFile
+        });
+        console.log('Review output resume run output:', (resumeResult || '').substring(0, 500));
+        return true;
+    } catch (e) {
+        console.error('Review output resume run failed:', e);
+        return false;
+    }
+}
+
+function handleMissingReviewData(params, config, customParams) {
+    var ticketKey = params.ticket.key;
+    console.error('Failed to read pr_review.json after resume attempt');
+
+    try {
+        jira_post_comment({
+            key: ticketKey,
+            comment: 'h3. ⚠️ PR Review Output Missing\n\n' +
+                'The PR review agent completed without writing {code}outputs/pr_review.json{code}. ' +
+                'A resume was attempted once, but mandatory outputs are still missing. ' +
+                'The SM trigger label was cleared so the review can retry.'
+        });
+    } catch (e) {
+        console.warn('Could not post missing review output comment:', e);
+    }
+
+    var removeLabel = customParams && customParams.removeLabel;
+    if (removeLabel) {
+        try {
+            jira_remove_label({ key: ticketKey, label: removeLabel });
+            console.log('Removed SM label after missing review output:', removeLabel);
+        } catch (e) {
+            console.warn('Could not remove SM label after missing review output:', e);
+        }
+    }
+
+    try {
+        var scm = scmModule.createScm(config);
+        autoStart.triggerSmIfIdle({ config: config, customParams: customParams, scm: scm });
+    } catch (e) {
+        console.warn('Could not trigger SM after missing review output:', e);
+    }
+
+    return {
+        success: true,
+        action: 'missing_review_outputs',
+        error: 'No review data found in pr_review.json'
+    };
 }
 
 /**
@@ -311,13 +405,14 @@ function action(params) {
         console.log('=== Processing PR review results for', ticketKey, '===');
 
         // Step 1: Read structured review data
-        const reviewData = readReviewJson();
+        let reviewData = readReviewJson();
         if (!reviewData) {
-            console.error('Failed to read pr_review.json');
-            return {
-                success: false,
-                error: 'No review data found in pr_review.json'
-            };
+            attemptResumeIfReviewOutputsMissing(ticketKey);
+            reviewData = readReviewJson();
+        }
+        if (!reviewData) {
+            const customParams = resolveCustomParams(params, config);
+            return handleMissingReviewData(params, config, customParams);
         }
 
         console.log('Review recommendation:', reviewData.recommendation);
