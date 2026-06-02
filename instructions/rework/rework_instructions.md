@@ -19,7 +19,7 @@ Do NOT run `git commit` or `git merge --abort` — the commit is handled automat
 ## Approach
 
 1. **Read `pr_discussions.md` first** — list all review comments and threads before touching any code
-2. **Be surgical but thorough** — fix the exact issue the reviewer flagged, then use CodeGraph to find the same structural pattern across the codebase and fix all similar occurrences. Start with `codegraph context "<review issue and affected area>"`; use `codegraph query`, `codegraph callers`, or `codegraph impact` when you know a symbol. Use `grep` only after CodeGraph when you need a literal string search. This prevents the same issue from being raised in the next review cycle. Do not refactor unrelated code or add unrequested features.
+2. **Be surgical but thorough** — before opening or editing any source file, run `codegraph context "<ticket key> <review issue and affected area>"`, even if the review already names an exact file, line, failing assertion, or test. Then fix the exact issue the reviewer flagged and use CodeGraph to find the same structural pattern across the codebase. Use `codegraph query`, `codegraph callers`, or `codegraph impact` when you know a symbol. Use `grep` only after CodeGraph when you need a literal string search. This prevents the same issue from being raised in the next review cycle. Do not refactor unrelated code or add unrequested features.
 3. **Address BLOCKING issues first** (security, critical bugs), then IMPORTANT, then SUGGESTIONS
 4. **If a SUGGESTION is minor and time-consuming**, you may skip it but explicitly note it in `outputs/response.md`
 
