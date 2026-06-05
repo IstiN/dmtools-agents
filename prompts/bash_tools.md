@@ -1,23 +1,29 @@
-# Bash tools reference
+```mermaid
+flowchart TD
+    subgraph USE["Use dmtools skill"]
+        U1[Jira, Figma, Confluence,<br/>Teams, etc.]
+        U2[Credentials preconfigured<br/>via environment variables]
+    end
 
-- When navigating external services such as tracker/Jira, Figma, Confluence, Teams, or similar systems, use the `dmtools` skill available in this AI repository.
-- Required service credentials and integration keys are preconfigured through environment variables.
+    subgraph SAFETY["CLI command safety"]
+        S1[One simple executable<br/>command at a time]
+        S2[DMTools rejects shell<br/>metacharacters]
+    end
 
-## DMTools CLI command safety
+    subgraph FORBIDDEN["❌ NEVER USE"]
+        F1[Pipes: |]
+        F2[Redirection: > < 2>/dev/null]
+        F3[Chaining: ; && ||]
+        F4[Substitution: backticks, $(), ${...}]
+    end
 
-When using DMTools `cli_execute_command`, pass only one simple executable
-command at a time. DMTools intentionally rejects shell metacharacters to prevent
-command injection.
+    subgraph EXAMPLES["✅ Instead"]
+        E1["find ... | head -20"] --> E1a[run: find ...]
+        E2["cmd1 && cmd2"] --> E2a[run: cmd1] --> E2b[then: cmd2]
+        E3[Complex logic] --> E3a[Write script file<br/>Run script as single command]
+    end
 
-Do not use:
-- pipes: `|`
-- redirection: `>`, `<`, `2>/dev/null`
-- command chaining: `;`, `&&`, `||`
-- command substitution: backticks, `$()`, `${...}`
-
-Examples:
-- Instead of `find testing -type f 2>/dev/null | head -20`, run
-  `find testing -type f` and inspect the returned output.
-- Instead of `cmd1 && cmd2`, run `cmd1`, then run `cmd2` only if needed.
-- If complex shell logic is unavoidable, write a small script file first and run
-  that script as the single command.
+    USE --> SAFETY
+    SAFETY --> FORBIDDEN
+    SAFETY --> EXAMPLES
+```

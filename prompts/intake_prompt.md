@@ -1,40 +1,49 @@
-Your task is intake analysis. Read all files in the 'input' folder:
-- `request.md` — this is a raw idea or informal input
-- `comments.md` *(if present)* — ticket comment history with additional context or decisions
-- `existing_epics.json` — understand what Epics already exist in the project
-- `existing_stories.json` — understand what Stories already exist — avoid creating duplicates
+```mermaid
+flowchart TD
+    subgraph INPUT["Read input/ folder"]
+        I1[request.md — raw idea]
+        I2[comments.md — history & decisions]
+        I3[existing_epics.json]
+        I4[existing_stories.json — avoid duplicates]
+    end
 
-**Check for attachments in input folder:**
-List ALL files in `input/` to find any non-standard files (images, PDFs, ZIPs, mockups, specs, etc.):
-- If a `.zip` file is present, unzip it: `unzip input/file.zip -d input/` — then study all extracted files
-- If any files are relevant to specific tickets (designs, screenshots, specs, mockups, PDFs), copy them to `outputs/attachments/`:
-  `cp input/design.png outputs/attachments/design.png`
-- Mark those files for attachment in `stories.json` using the `attachments` field on the relevant ticket(s)
+    subgraph ATTACH["Check attachments"]
+        A1[List ALL files in input/]
+        A2{.zip?} -->|yes| A3[unzip -d input/]
+        A2 -->|no| A4{Relevant? designs, screenshots, specs, mockups, PDFs}
+        A3 --> A4
+        A4 -->|yes| A5[cp → outputs/attachments/]
+        A5 --> A6[Mark in stories.json attachments: [path1, path2]]
+    end
 
-**Before decomposing, study the current project structure:**
-1. Read `existing_epics.json` and `existing_stories.json` fully.
-2. For any existing story where the summary is ambiguous or closely related to the new request, fetch full details: `dmtools jira_get_ticket <KEY>`
-3. Build a mental map of what pages/flows/features already exist and what entry points are already covered.
-4. Only then proceed to identify gaps and create new tickets.
+    subgraph STUDY["Study project structure"]
+        S1[Read existing_epics.json & existing_stories.json fully]
+        S2{Ambiguous or closely related?} -->|yes| S3[dmtools jira_get_ticket KEY]
+        S2 -->|no| S4[Build mental map of pages/flows/features & entry points]
+        S3 --> S4
+        S4 --> S5[Only then identify gaps & create new tickets]
+    end
 
-Analyse the request, break it into structured tracker work items (for example Epics or Stories), then:
-1. Write individual description files to outputs/stories/ (story-1.md, story-2.md, ...)
-2. Write outputs/stories.json with the ticket plan
-3. Write outputs/comment.md with your intake analysis summary
+    subgraph OUTPUT["Decompose & write"]
+        O1[outputs/stories/story-1.md, story-2.md, ...]
+        O2[outputs/stories.json — valid JSON array ticket plan]
+        O3[outputs/comment.md — intake analysis summary]
+    end
 
-**Attachments in stories.json** — if a ticket should have files attached, add an `attachments` array with paths to files copied into `outputs/attachments/`:
-```json
-{
-  "summary": "...",
-  "description": "outputs/stories/story-1.md",
-  "attachments": ["outputs/attachments/design.png", "outputs/attachments/spec.pdf"]
-}
+    subgraph VALIDATE["Validate"]
+        V1{dmtools file_validate_json $(cat outputs/stories.json)} -->|false| V2[Fix & rewrite] --> V1
+        V1 -->|true| DONE([Done])
+    end
+
+    F1["attachments JSON: {summary: ..., description: outputs/stories/story-1.md, attachments: [outputs/attachments/design.png, outputs/attachments/spec.pdf]}"]
+
+    CR1[CRITICAL: Tech prerequisites → separate epics/stories | Max 5SP per story | No duplicate content | No water in descriptions | MVP thinking always | Follow all input instructions exactly]
+
+    INPUT --> STUDY
+    INPUT --> ATTACH
+    STUDY --> OUTPUT
+    ATTACH --> OUTPUT
+    OUTPUT --> VALIDATE
+    F1 -.-> OUTPUT
+    CR1 -.-> OUTPUT
 ```
-
-**CRITICAL** 
-1. If technical prerequisets are required, like deployment workflows. Create for that separate epics, stories.
-2. Check yourself: user stories must not be big - max 5SPs.
-3. Stories must not duplicate content of each other.
-4. No water in descriptions.
-5. MVP thinking, all time.
-Follow all instructions from the input folder exactly.
