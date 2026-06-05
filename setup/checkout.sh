@@ -176,12 +176,12 @@ while IFS= read -r entry; do
 
     if [ -d "${DEST}/.git" ]; then
       git -C "${DEST}" remote set-url origin "${CLONE_URL}"
-      git -C "${DEST}" fetch --depth="${GIT_DEPTH}" origin "${BRANCH}"
-      git -C "${DEST}" checkout "${BRANCH}"
-      git -C "${DEST}" pull origin "${BRANCH}" --ff-only 2>/dev/null || true
+      git -C "${DEST}" fetch -q --depth="${GIT_DEPTH}" origin "${BRANCH}"
+      git -C "${DEST}" checkout -q "${BRANCH}"
+      git -C "${DEST}" pull -q origin "${BRANCH}" --ff-only 2>/dev/null || true
       echo "  ↻ updated"
     else
-      git clone --depth="${GIT_DEPTH}" --single-branch --branch "${BRANCH}" "${CLONE_URL}" "${DEST}"
+      git clone -q --depth="${GIT_DEPTH}" --single-branch --branch "${BRANCH}" "${CLONE_URL}" "${DEST}"
       echo "  ✅ cloned"
     fi
 
@@ -211,12 +211,12 @@ while IFS= read -r entry; do
 
     if [ -d "${DEST}/.git" ]; then
       git -C "${DEST}" remote set-url origin "${CLONE_URL}"
-      git -C "${DEST}" fetch --depth="${GIT_DEPTH}" --filter="${GIT_FILTER}" origin "${BRANCH}"
-      git -C "${DEST}" checkout "${BRANCH}"
-      git -C "${DEST}" pull origin "${BRANCH}" --ff-only 2>/dev/null || true
+      git -C "${DEST}" fetch -q --depth="${GIT_DEPTH}" --filter="${GIT_FILTER}" origin "${BRANCH}"
+      git -C "${DEST}" checkout -q "${BRANCH}"
+      git -C "${DEST}" pull -q origin "${BRANCH}" --ff-only 2>/dev/null || true
       echo "  ↻ updated"
     else
-      git clone \
+      git clone -q \
         --depth="${GIT_DEPTH}" \
         --single-branch \
         --filter="${GIT_FILTER}" \
@@ -240,11 +240,11 @@ while IFS= read -r entry; do
     if [ -d "${DEST}/.git" ]; then
       git -C "${DEST}" remote set-url origin \
         "https://x-access-token:${GH_TOKEN}@${GH_HOST}/${REPO}.git"
-      git -C "${DEST}" fetch --depth="${GIT_DEPTH}" --filter="${GIT_FILTER}" origin "${BRANCH}"
-      git -C "${DEST}" checkout "${BRANCH}"
+      git -C "${DEST}" fetch -q --depth="${GIT_DEPTH}" --filter="${GIT_FILTER}" origin "${BRANCH}"
+      git -C "${DEST}" checkout -q "${BRANCH}"
       echo "  ↻ updated"
     else
-      git clone \
+      git clone -q \
         --depth="${GIT_DEPTH}" \
         --single-branch \
         --filter="${GIT_FILTER}" \
