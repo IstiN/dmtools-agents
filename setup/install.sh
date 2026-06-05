@@ -132,6 +132,15 @@ for tool in ${TOOL_LIST}; do
   else
     bash "${SCRIPT}"
   fi
+  # Re-read registered paths after each tool so subsequent tools get updated PATH
+  if [ -f /tmp/_registered_paths ]; then
+    while IFS= read -r dir; do
+      case ":${PATH}:" in
+        *":${dir}:"*) ;;
+        *) export PATH="${dir}:${PATH}" ;;
+      esac
+    done < /tmp/_registered_paths
+  fi
   INSTALLED=$((INSTALLED + 1))
 done
 
