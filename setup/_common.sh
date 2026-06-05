@@ -135,12 +135,12 @@ _codegraph_init_or_sync() {
 
   if [ -d "${workspace}/.codegraph" ]; then
     echo "🔄 CodeGraph index found — syncing..."
-    codegraph sync "${workspace}" 2>/dev/null || true
+    codegraph sync "${workspace}" >/dev/null 2>&1 || true
     _codegraph_restore_gitignore "${workspace}"
     echo "✅ CodeGraph index synced"
   else
     echo "🔨 Initializing CodeGraph index..."
-    codegraph init -i "${workspace}" 2>/dev/null || true
+    codegraph init -i "${workspace}" >/dev/null 2>&1 || true
     _codegraph_restore_gitignore "${workspace}"
     echo "✅ CodeGraph index initialized"
   fi
