@@ -137,8 +137,13 @@ function saveSessionArtefact(customParams, ticketKey, contextId, currentCliOutpu
     // Write to working dir (FileTools blocks /tmp/ paths)
     var outputFile = '.dmtools-session-output.log';
 
+    var snapshotTimestamp = new Date().toISOString();
+    var snapshotHeader = '=== ⏱️ TIMER SESSION SNAPSHOT START (saved at ' + snapshotTimestamp + ') ===\n' +
+                         '=== This is a periodic snapshot of the running agent output, NOT a new agent run ===\n\n';
+    var snapshotFooter = '\n\n=== ⏱️ TIMER SESSION SNAPSHOT END ===\n';
+
     try {
-        file_write({ path: outputFile, content: currentCliOutput });
+        file_write({ path: outputFile, content: snapshotHeader + currentCliOutput + snapshotFooter });
     } catch (e) {
         console.error('⏱️ timer: failed to write CLI output file:', e.toString().substring(0, 100));
         return;
