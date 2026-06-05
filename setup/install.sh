@@ -80,6 +80,16 @@ if $USE_ALL; then
   TOOL_LIST="${ALL_TOOLS}"
 else
   TOOL_LIST="${EXPLICIT_TOOLS}"
+  # Auto-inject node before any npm-dependent tools (copilot, codemie, codegraph)
+  # if node is not already in the list
+  NEEDS_NODE=false
+  for _t in ${TOOL_LIST}; do
+    case "${_t}" in copilot|codemie|codegraph) NEEDS_NODE=true; break ;; esac
+  done
+  if $NEEDS_NODE && ! echo " ${TOOL_LIST} " | grep -qw "node"; then
+    TOOL_LIST="node ${TOOL_LIST}"
+    echo "ℹ️  Auto-injecting node (required by npm-based tool)"
+  fi
 fi
 
 # ── Run installs ──────────────────────────────────────────────────────────────
