@@ -969,11 +969,66 @@ suite('smAgent: additionalInstructions in encoded_config', function() {
         var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
         var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
         assert.equal(decoded.params.cliPrompt, './.dmtools/prompts/main.md');
-        assert.deepEqual(decoded.params.cliPrompts, ['./.dmtools/prompts/role.md', './.dmtools/prompts/focus.md']);
+        // cliPrompts = agent JSON cliPrompts (bash_tools) + config cliPrompts (role, focus)
+        assert.deepEqual(decoded.params.cliPrompts, ['./agents/prompts/bash_tools.md', './.dmtools/prompts/role.md', './.dmtools/prompts/focus.md']);
         assert.equal(decoded.params.agentParams.aiRole, 'Senior Engineer');
         assert.equal(decoded.params.agentParams.customFlag, true);
         assert.deepEqual(decoded.params.confluencePages, ['./.dmtools/instructions/project.md']);
         assert.equal(decoded.params.isGenerateNew, false);
+    });
+
+    test('inputJql in encoded_config is always the real ticket key, not the agent JSON placeholder', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'P-99', fields: { labels: [] } }]
+        });
+
+        // story_questions.json has inputJql: "key = JD-82" — must NOT appear in encoded_config
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { configFile: 'agents/story_questions.json' })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
+        assert.equal(decoded.params.inputJql, 'key = P-99', 'inputJql must be the real ticket, not agent JSON default');
+    });
+
+    test('agentParams is always present in encoded_config (never null)', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'T-42', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { configFile: 'agents/story_questions.json' })
+        ]));
+
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
+        assert.ok(decoded.params.agentParams !== null && decoded.params.agentParams !== undefined,
+            'agentParams must always be present to prevent NPE in Teammate.java');
+    });
+
+    test('primitive and array params from agent JSON are copied to encoded_config', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'T-5', fields: { labels: [] } }]
+        });
+
+        // story_questions.json has skipAIProcessing:true, alwaysPostComments:true, cliCommands, cliPrompts
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { configFile: 'agents/story_questions.json' })
+        ]));
+
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
+        assert.equal(decoded.params.skipAIProcessing, true, 'skipAIProcessing copied from agent JSON');
+        assert.equal(decoded.params.alwaysPostComments, true, 'alwaysPostComments copied from agent JSON');
+        assert.ok(Array.isArray(decoded.params.cliCommands) && decoded.params.cliCommands.length > 0,
+            'cliCommands array copied from agent JSON');
+        assert.ok(Array.isArray(decoded.params.cliPrompts) && decoded.params.cliPrompts.length > 0,
+            'cliPrompts array copied from agent JSON');
     });
 
 });
