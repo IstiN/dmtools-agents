@@ -189,7 +189,12 @@ function action(params) {
                 console.log('No initiator id — skipping assign');
             }
         } catch (assignError) {
-            console.warn('Failed to assign ticket:', assignError);
+            var assignMsg = String(assignError && (assignError.message || assignError));
+            if (assignMsg.indexOf('accountId') !== -1) {
+                console.warn('Skipping assign — accountId not supported in this Jira instance (Server/DC uses username)');
+            } else {
+                console.warn('Failed to assign ticket:', assignError);
+            }
         }
 
         // 6. Move parent story to PO Review

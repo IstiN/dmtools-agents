@@ -123,7 +123,9 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
             p.additionalInstructions = resolved.additionalInstructions;
         }
         if (resolved.cliPrompts && resolved.cliPrompts.length > 0) {
-            p.cliPrompts = resolved.cliPrompts;
+            // Merge: keep original cliPrompts from agent JSON, append resolved (globalCliPrompts etc.)
+            var existing = Array.isArray(p.cliPrompts) ? p.cliPrompts : [];
+            p.cliPrompts = existing.concat(resolved.cliPrompts);
         }
         if (resolved.cliPrompt) {
             p.cliPrompt = resolved.cliPrompt;
