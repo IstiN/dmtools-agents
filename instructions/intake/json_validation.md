@@ -1,0 +1,1 @@
+outputs/stories.json must be a valid JSON array. After writing it, run: dmtools file_validate_json "$(cat outputs/stories.json)" — fix and rewrite if valid is false. Do not finish until validation passes.
