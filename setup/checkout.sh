@@ -70,6 +70,7 @@ ADO_TOKEN_VAR="ADO_GIT_TOKEN"
 GITLAB_TOKEN_VAR="GITLAB_TOKEN"
 GH_HOST="github.com"
 GIT_FILTER="blob:none"
+GIT_DEPTH="1"
 GITLAB_HOST="${GITLAB_BASE_PATH:-gitlab.com}"
 GITLAB_HOST="${GITLAB_HOST#https://}"
 GITLAB_HOST="${GITLAB_HOST#http://}"
@@ -89,6 +90,7 @@ while [[ $# -gt 0 ]]; do
     --host)             GH_HOST="$2";           shift 2 ;;
     --gitlab-host)      GITLAB_HOST="$2";       shift 2 ;;
     --filter)           GIT_FILTER="$2";        shift 2 ;;
+    --depth)            GIT_DEPTH="$2";         shift 2 ;;
     -h|--help)
       sed -n '2,/^set -/p' "$0" | grep '^#' | sed 's/^# \{0,1\}//'
       exit 0 ;;
@@ -174,12 +176,12 @@ while IFS= read -r entry; do
 
     if [ -d "${DEST}/.git" ]; then
       git -C "${DEST}" remote set-url origin "${CLONE_URL}"
-      git -C "${DEST}" fetch origin "${BRANCH}"
+      git -C "${DEST}" fetch --depth="${GIT_DEPTH}" origin "${BRANCH}"
       git -C "${DEST}" checkout "${BRANCH}"
       git -C "${DEST}" pull origin "${BRANCH}" --ff-only 2>/dev/null || true
       echo "  ↻ updated"
     else
-      git clone --branch "${BRANCH}" "${CLONE_URL}" "${DEST}"
+      git clone --depth="${GIT_DEPTH}" --single-branch --branch "${BRANCH}" "${CLONE_URL}" "${DEST}"
       echo "  ✅ cloned"
     fi
 
@@ -209,12 +211,14 @@ while IFS= read -r entry; do
 
     if [ -d "${DEST}/.git" ]; then
       git -C "${DEST}" remote set-url origin "${CLONE_URL}"
-      git -C "${DEST}" fetch --filter="${GIT_FILTER}" origin "${BRANCH}"
+      git -C "${DEST}" fetch --depth="${GIT_DEPTH}" --filter="${GIT_FILTER}" origin "${BRANCH}"
       git -C "${DEST}" checkout "${BRANCH}"
       git -C "${DEST}" pull origin "${BRANCH}" --ff-only 2>/dev/null || true
       echo "  ↻ updated"
     else
       git clone \
+        --depth="${GIT_DEPTH}" \
+        --single-branch \
         --filter="${GIT_FILTER}" \
         --branch "${BRANCH}" \
         "${CLONE_URL}" \
@@ -236,11 +240,13 @@ while IFS= read -r entry; do
     if [ -d "${DEST}/.git" ]; then
       git -C "${DEST}" remote set-url origin \
         "https://x-access-token:${GH_TOKEN}@${GH_HOST}/${REPO}.git"
-      git -C "${DEST}" fetch --filter="${GIT_FILTER}" origin "${BRANCH}"
+      git -C "${DEST}" fetch --depth="${GIT_DEPTH}" --filter="${GIT_FILTER}" origin "${BRANCH}"
       git -C "${DEST}" checkout "${BRANCH}"
       echo "  ↻ updated"
     else
       git clone \
+        --depth="${GIT_DEPTH}" \
+        --single-branch \
         --filter="${GIT_FILTER}" \
         --branch "${BRANCH}" \
         "https://x-access-token:${GH_TOKEN}@${GH_HOST}/${REPO}.git" \
