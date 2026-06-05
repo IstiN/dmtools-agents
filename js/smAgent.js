@@ -158,6 +158,10 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
         p.customParams.configPath = effectiveConfig._configPath;
     }
 
+    // Ensure agentParams is always present — Teammate.java calls getAgentParams() unconditionally
+    // and will NPE if it returns null (even when skipAIProcessing=true).
+    if (!p.agentParams) p.agentParams = {};
+
     return encodeURIComponent(JSON.stringify({ params: p }));
 }
 
