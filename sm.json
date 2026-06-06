@@ -10,7 +10,8 @@
           "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('PO Review')",
           "configFile": "agents/story_ba_check.json",
           "skipIfLabel": "sm_story_ba_check_triggered",
-          "localExecution": true
+          "localExecution": true,
+          "enabled": false
         },
         {
           "description": "BA Analysis Stories → generate Acceptance Criteria",
@@ -20,21 +21,24 @@
             "sm_story_acceptance_criteria_triggered",
             "sm_story_acceptance_criterias_triggered"
           ],
-          "addLabel": "sm_story_acceptance_criteria_triggered"
+          "addLabel": "sm_story_acceptance_criteria_triggered",
+          "enabled": false
         },
         {
           "description": "Solution Architecture Stories → generate Solution Design",
           "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('Solution Architecture')",
           "configFile": "agents/story_solution.json",
           "skipIfLabel": "sm_story_solution_triggered",
-          "addLabel": "sm_story_solution_triggered"
+          "addLabel": "sm_story_solution_triggered",
+          "enabled": false
         },
         {
           "description": "Subtasks with 'q' label → trigger PO refinement",
           "jql": "project = {jiraProject} AND issuetype in ('Subtask') AND labels in ('q') and status not in (Done)",
           "configFile": "agents/po_refinement.json",
           "skipIfLabel": "sm_po_refinement_triggered",
-          "addLabel": "sm_po_refinement_triggered"
+          "addLabel": "sm_po_refinement_triggered",
+          "enabled": false
         },
         {
           "description": "Backlog / To Do Stories → ask clarification questions",
@@ -53,20 +57,23 @@
           "targetStatus": "In Development",
           "configFile": "agents/intake.json",
           "skipIfLabel": "sm_task_intake_triggered",
-          "addLabel": "sm_task_intake_triggered"
+          "addLabel": "sm_task_intake_triggered",
+          "enabled": false
         },
         {
           "description": "Ready For Development Stories → trigger story_development",
           "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('Ready For Development')",
           "configFile": "agents/story_development.json",
           "skipIfLabel": "sm_story_development_triggered",
-          "addLabel": "sm_story_development_triggered"
+          "addLabel": "sm_story_development_triggered",
+          "enabled": false
         },
         {
           "description": "Failed Test Cases with linked Bugs → recover Bug To Fix",
           "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('Failed') ORDER BY updated ASC",
           "configFile": "agents/recover_failed_tc_bug_status.json",
-          "localExecution": true
+          "localExecution": true,
+          "enabled": false
         },
         {
           "description": "Failed Test Cases → create or link bugs in batch",
@@ -77,7 +84,7 @@
           "addLabel": "sm_bulk_bugs_creation_triggered",
           "recoverStaleTriggerLabel": true,
           "limit": 1,
-          "enabled": true
+          "enabled": false
         },
         {
           "description": "Backlog / To Do / Ready For Development / In Development Bugs → trigger bug_development",
@@ -87,39 +94,44 @@
           "skipIfLabel": "sm_bug_development_triggered",
           "addLabel": "sm_bug_development_triggered",
           "limit": 1,
-          "enabled": true
+          "enabled": false
         },
         {
           "description": "Review/Rework/Blocked Stories & Bugs with already merged PR → recover Merged status",
           "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('In Review', 'In Rework', 'Blocked') ORDER BY updated ASC",
           "configFile": "agents/recover_merged_pr.json",
-          "localExecution": true
+          "localExecution": true,
+          "enabled": false
         },
         {
           "description": "In Review Stories & Bugs → trigger pr_review",
           "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('In Review') AND (labels is EMPTY OR labels NOT IN ('pr_approved'))",
           "configFile": "agents/pr_review.json",
           "skipIfLabel": "sm_story_review_triggered",
-          "addLabel": "sm_story_review_triggered"
+          "addLabel": "sm_story_review_triggered",
+          "enabled": false
         },
         {
           "description": "In Review Stories & Bugs (pr_approved) → retry merge",
           "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('In Review') AND labels = 'pr_approved' ORDER BY created ASC",
           "configFile": "agents/retry_merge.json",
-          "localExecution": true
+          "localExecution": true,
+          "enabled": false
         },
         {
           "description": "In Review Test Cases (pr_approved) → retry merge",
           "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('In Review - Passed', 'In Review - Failed') AND labels = 'pr_approved' ORDER BY created ASC",
           "configFile": "agents/retry_merge_test.json",
-          "localExecution": true
+          "localExecution": true,
+          "enabled": false
         },
         {
           "description": "In Rework Stories & Bugs → trigger pr_rework",
           "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('In Rework')",
           "configFile": "agents/pr_rework.json",
           "skipIfLabel": "sm_story_rework_triggered",
-          "addLabel": "sm_story_rework_triggered"
+          "addLabel": "sm_story_rework_triggered",
+          "enabled": false
         },
         {
           "description": "Merged Stories → Ready For Testing + generate test cases",
@@ -127,7 +139,8 @@
           "targetStatus": "Ready For Testing",
           "configFile": "agents/test_cases_generator.json",
           "skipIfLabel": "sm_test_cases_triggered",
-          "addLabel": "sm_test_cases_triggered"
+          "addLabel": "sm_test_cases_triggered",
+          "enabled": false
         },
         {
           "description": "Merged Bugs → Ready For Testing",
@@ -135,7 +148,7 @@
           "targetStatus": "Ready For Testing",
           "configFile": "agents/bug_merged.json",
           "skipIfLabel": "sm_bug_merged_triggered",
-          "enabled": true,
+          "enabled": false,
           "localExecution": true
         },
         {
@@ -144,14 +157,14 @@
           "configFile": "agents/bug_test_cases_generator.json",
           "skipIfLabel": "sm_bug_test_cases_triggered",
           "addLabel": "sm_bug_test_cases_triggered",
-          "enabled": true
+          "enabled": false
         },
         {
           "description": "In Testing Stories → check all TCs passed → Done",
           "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('In Testing')",
           "configFile": "agents/story_done_check.json",
           "skipIfLabel": "sm_story_done_check_triggered",
-          "enabled": true,
+          "enabled": false,
           "localExecution": true
         },
         {
@@ -167,27 +180,31 @@
           "jql": "project = {jiraProject} AND issuetype in ('Task') AND status in ('In Development', 'In Progress') AND (parent = {parentTicket} OR labels in ('ai_intake'))",
           "configFile": "agents/task_done_check.json",
           "skipIfLabel": "sm_task_done_check_triggered",
-          "localExecution": true
+          "localExecution": true,
+          "enabled": false
         },
         {
           "description": "Stuck In Development Test Cases → recover (check PR, route to Rework/Review/Backlog)",
           "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('In Development') AND updated <= -15m",
           "configFile": "agents/recover_stuck_test_case.json",
-          "localExecution": true
+          "localExecution": true,
+          "enabled": false
         },
         {
           "description": "In Rework Test Cases → trigger pr_test_automation_rework",
           "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('In Rework')",
           "configFile": "agents/pr_test_automation_rework.json",
           "skipIfLabel": "sm_test_rework_triggered",
-          "addLabel": "sm_test_rework_triggered"
+          "addLabel": "sm_test_rework_triggered",
+          "enabled": false
         },
         {
           "description": "In Review Test Cases → trigger pr_test_automation_review",
           "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('In Review - Passed', 'In Review - Failed') AND (labels is EMPTY OR labels NOT IN ('pr_approved'))",
           "configFile": "agents/pr_test_automation_review.json",
           "skipIfLabel": "sm_test_review_triggered",
-          "addLabel": "sm_test_review_triggered"
+          "addLabel": "sm_test_review_triggered",
+          "enabled": false
         },
         {
           "description": "Failed Test Cases → create or link bug (single, disabled by default — use bulk_bugs_creation instead)",
@@ -204,14 +221,16 @@
           "targetStatus": "In Development",
           "configFile": "agents/test_case_automation.json",
           "skipIfLabel": "sm_test_automation_triggered",
-          "addLabel": "sm_test_automation_triggered"
+          "addLabel": "sm_test_automation_triggered",
+          "enabled": false
         },
         {
           "description": "Bug To Fix Test Cases → all linked Bugs Done → move to Backlog",
           "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('Bug To Fix')",
           "configFile": "agents/bug_to_fix_check.json",
           "skipIfLabel": "sm_bug_to_fix_check_triggered",
-          "localExecution": true
+          "localExecution": true,
+          "enabled": false
         }
       ]
     }
