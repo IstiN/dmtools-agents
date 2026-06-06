@@ -13,6 +13,15 @@ flowchart TD
         CG5["Questions already answered by the code = stupid questions — FORBIDDEN"]
     end
 
+    subgraph VALIDATE["⚠️ MANDATORY: Post-validation — check each question before output"]
+        V1["For each draft question: search codebase for the answer"]
+        V2["codegraph query 'keyword from the question'"]
+        V3["If answer found in code → DELETE the question"]
+        V4["If answer found in Confluence/specs → DELETE the question"]
+        V5["Only keep questions with NO answer anywhere in code or docs"]
+        V6["Final check: would a dev need to ask a human? If no → DELETE"]
+    end
+
     subgraph BAD["❌ Stupid question examples — DO NOT ask these"]
         B1["'What API endpoint should be used?' — check the code first"]
         B2["'How should errors be handled?' — check existing error handling"]
@@ -25,6 +34,6 @@ flowchart TD
         GQ3["Edge case with multiple valid approaches not addressed anywhere"]
     end
 
-    CODEGRAPH --> BAD
-    CODEGRAPH --> GOOD
+    CODEGRAPH --> VALIDATE --> BAD
+    VALIDATE --> GOOD
 ```
