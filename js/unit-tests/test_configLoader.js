@@ -483,6 +483,55 @@ suite('configLoader.resolveInstructions', function() {
         assert.deepEqual(result.additionalInstructions, []);
     });
 
+    test('applies cliPromptsByTracker for matching tracker type', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            cliPrompts: {
+                story_questions: ['./base.md']
+            },
+            cliPromptsByTracker: {
+                jira: {
+                    story_questions: ['./jira-specific.md']
+                }
+            }
+        });
+        // Mock DEFAULT_TRACKER env var by temporarily overriding java.lang.System.getenv
+        var originalGetenv = java.lang.System.getenv;
+        java.lang.System.getenv = function(key) {
+            if (key === 'DEFAULT_TRACKER') return 'jira';
+            return originalGetenv(key);
+        };
+        try {
+            var result = configLoaderModule.resolveInstructions('story_questions', [], config);
+            assert.deepEqual(result.cliPrompts, ['./base.md', './jira-specific.md']);
+        } finally {
+            java.lang.System.getenv = originalGetenv;
+        }
+    });
+
+    test('ignores cliPromptsByTracker when tracker type does not match', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            cliPrompts: {
+                story_questions: ['./base.md']
+            },
+            cliPromptsByTracker: {
+                ado: {
+                    story_questions: ['./ado-specific.md']
+                }
+            }
+        });
+        var originalGetenv = java.lang.System.getenv;
+        java.lang.System.getenv = function(key) {
+            if (key === 'DEFAULT_TRACKER') return 'jira';
+            return originalGetenv(key);
+        };
+        try {
+            var result = configLoaderModule.resolveInstructions('story_questions', [], config);
+            assert.deepEqual(result.cliPrompts, ['./base.md']);
+        } finally {
+            java.lang.System.getenv = originalGetenv;
+        }
+    });
+
 });
 
 // ── configPath top-level param ────────────────────────────────────────────────

@@ -73,15 +73,15 @@ After running the test, write the structured result to `outputs/test_automation_
 Always write:
 
 - `outputs/test_automation_result.json` — machine-readable status from this document.
-- `outputs/jira_comment.md` — Jira wiki markup comment for the Test Case ticket.
+- `outputs/tracker_comment.md` — tracker-specific comment for the Test Case ticket. Use Jira wiki markup for Jira or GitHub-flavored Markdown for ADO.
 - `outputs/pr_body.md` — GitHub Markdown body for the automation Pull Request.
 - `outputs/response.md` — short backward-compatible GitHub Markdown summary.
 
 The structure and destination-specific formatting rules are defined in
 `agents/instructions/test_automation/test_automation_output_files.md`.
 
-Do not put GitHub Markdown into `outputs/jira_comment.md`.
-Do not put Jira wiki markup into `outputs/pr_body.md`.
+Do not mix GitHub Markdown into tracker comments when the tracker is Jira.
+Do not put tracker markup into `outputs/pr_body.md`.
 
 ### `outputs/bug_description.md` — Bug description (only when FAILED)
 

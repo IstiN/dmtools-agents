@@ -2,45 +2,43 @@
 
 Write separate files for separate consumers. Do not reuse one format for all destinations.
 
-## `outputs/jira_comment.md` — Jira ticket comment
+## `outputs/tracker_comment.md` — tracker ticket comment
 
 Purpose: posted to the Test Case ticket.
 
-Use Jira wiki markup only. Follow `agents/instructions/tracker/jira_comment_format.md`.
+Use the tracker-specific markup format configured for the project (loaded via `cliPromptsByTracker`).
+- For Jira trackers: use Jira wiki markup and follow `agents/instructions/tracker/jira_comment_format.md`.
+- For Azure DevOps trackers: use GitHub-flavored Markdown and follow `agents/instructions/tracker/ado_comment_format.md`.
 
-Required structure:
+Required structure (render with the appropriate tracker syntax):
 
 ```text
-h3. Test Automation Result
+### Test Automation Result
 
 *Status:* ✅ PASSED / ❌ FAILED / 🚫 BLOCKED
 *Test Case:* KEY-123 — summary
-*Test Branch PR:* [PR title|https://github.com/org/repo/pull/123] (omit if not available)
+*Test Branch PR:* link to PR (omit if not available)
 
-h4. What was tested
-* Short factual bullet
+#### What was tested
+- Short factual bullet
 
-h4. Result
-* What passed or failed
-* If failed, name the failed step and actual issue
+#### Result
+- What passed or failed
+- If failed, name the failed step and actual issue
 
-h4. Test file
-{code}
+#### Test file
+<code block>
 testing/tests/KEY-123/test_key_123.py
-{code}
+</code block>
 
-h4. Run command
-{code:bash}
+#### Run command
+<code block>
 pytest testing/tests/KEY-123/test_key_123.py
-{code}
+</code block>
 ```
 
-Jira-specific rules:
-- Use `h3.` / `h4.` headings, not `##`.
-- Use `* item` bullets, not `- item`.
-- Use `{code}` blocks for file paths, commands, logs, and snippets.
-- Use `{{inline code}}` only for short identifiers.
-- Do not use triple backticks, Markdown tables, or Markdown links.
+When the tracker is Jira, write this content to `outputs/jira_comment.md`.
+When the tracker is Azure DevOps, write this content to `outputs/response.md` (or `outputs/tracker_comment.md`) using Markdown syntax.
 
 ## `outputs/pr_body.md` — GitHub Pull Request body
 
@@ -70,7 +68,7 @@ pytest testing/tests/KEY-123/test_key_123.py
 
 ## `outputs/response.md` — backward-compatible summary
 
-If a platform still expects `outputs/response.md`, write a concise GitHub Markdown summary. Jira posting must use `outputs/jira_comment.md`.
+If a platform still expects `outputs/response.md`, write a concise GitHub Markdown summary. The tracker-specific ticket comment must use the tracker markup file described above.
 
 ## `outputs/test_automation_result.json` — machine-readable result
 

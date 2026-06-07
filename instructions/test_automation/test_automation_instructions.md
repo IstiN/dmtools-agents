@@ -187,11 +187,11 @@ Include the human-style verification in the output summaries: what was checked m
 Always write the required output files described in `agents/instructions/test_automation/test_automation_output_files.md`.
 
 At minimum, include the automation result and the real user-style verification result in:
-- `outputs/jira_comment.md` — Jira wiki markup
+- `outputs/tracker_comment.md` — tracker-specific markup (Jira wiki markup or ADO Markdown)
 - `outputs/pr_body.md` — GitHub Markdown
 - `outputs/test_automation_result.json` — machine-readable status
 
-`outputs/response.md` may be written as a backward-compatible Markdown summary, but Jira comments must use `outputs/jira_comment.md`.
+`outputs/response.md` may be written as a backward-compatible Markdown summary, but tracker comments must use `outputs/tracker_comment.md`.
 
 If the test **failed**, also write:
 

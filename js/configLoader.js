@@ -104,6 +104,7 @@ var DEFAULTS = {
     instructionOverrides: {},
     cliPrompts: {},
     cliPromptOverrides: {},
+    cliPromptsByTracker: {},
     agentParamPatches: {},
     jobParamPatches: {},
 
@@ -201,6 +202,9 @@ function mergeProjectConfig(defaults, overrides) {
     }
     if (overrides.cliPromptOverrides) {
         result.cliPromptOverrides = overrides.cliPromptOverrides;
+    }
+    if (overrides.cliPromptsByTracker) {
+        result.cliPromptsByTracker = overrides.cliPromptsByTracker;
     }
     if (overrides.agentParamPatches) {
         result.agentParamPatches = overrides.agentParamPatches;
@@ -523,6 +527,26 @@ function resolveInstructions(agentName, defaultInstructions, config) {
 
     if (config.cliPromptOverrides && config.cliPromptOverrides[agentName]) {
         cliPrompt = config.cliPromptOverrides[agentName];
+    }
+
+    // Merge tracker-specific CLI prompts based on DEFAULT_TRACKER env var
+    var trackerType = null;
+    try {
+        trackerType = java.lang.System.getenv('DEFAULT_TRACKER');
+    } catch (e) {
+        // Not running in GraalJS environment
+    }
+    if (!trackerType && config.defaultTracker) {
+        trackerType = config.defaultTracker;
+    }
+    if (!trackerType) {
+        trackerType = 'jira';
+    }
+    if (config.cliPromptsByTracker && config.cliPromptsByTracker[trackerType]) {
+        var trackerSpecificForAgent = config.cliPromptsByTracker[trackerType][agentName];
+        if (trackerSpecificForAgent && trackerSpecificForAgent.length > 0) {
+            cliPrompts = cliPrompts.concat(trackerSpecificForAgent);
+        }
     }
 
     if (config.agentParamPatches && config.agentParamPatches[agentName]) {

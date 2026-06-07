@@ -7,7 +7,7 @@ These instructions extend `implementation_instructions.md` for bug tickets speci
 The Teammate job has already prepared the full ticket context in the `input/<TICKET-KEY>/` folder. **Read every file** before you start thinking about a fix:
 
 1. **`request.md`** — ticket summary, description, acceptance criteria, and the **Root Cause Analysis (RCA)** section written by the `bug_rca` job. The RCA is the authoritative diagnosis — do not re-do it from scratch unless it is clearly wrong.
-2. **`comments.md`** — every Jira comment on the ticket, oldest first. Read carefully for:
+2. **`comments.md`** — every tracker comment on the ticket, oldest first. Read carefully for:
    - Prior AI-agent attempts (look for "Implementation Completed", "Development Interrupted", "No Code Changes Needed", PR links)
    - QA / reviewer feedback after failed previous fixes ("still reproducing on iOS", "not fixed in build X")
    - Human notes clarifying the bug, edge cases, or reproduction steps

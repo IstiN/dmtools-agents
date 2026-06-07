@@ -11,3 +11,5 @@ Use this only when the target tracker field/comment expects Jira wiki markup.
 - Mermaid diagrams: `{code:mermaid}...{code}` if supported by the target field.
 - Do not use Markdown headings, triple backticks, or Markdown tables in Jira wiki fields.
 
+**IMPORTANT** You must check child tickets and parent story for better context using: `dmtools jira_search_by_jql`.
+
