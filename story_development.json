@@ -4,16 +4,6 @@
     "metadata": {
       "contextId": "story_development"
     },
-    "agentParams": {
-      "aiRole": "Senior Developer Engineer",
-      "instructions": [
-        "./agents/instructions/development/implementation_instructions.md"
-      ],
-      "knownInfo": "",
-      "formattingRules": "./agents/instructions/development/formatting_rules.md",
-      "fewShots": "./agents/instructions/development/few_shots.md"
-    },
-    "cliPrompt": "./agents/prompts/story_development_prompt.md",
     "cliCommands": [
       "./agents/scripts/run-agent.sh"
     ],
@@ -27,6 +17,15 @@
     "postJSAction": "agents/js/developTicketAndCreatePR.js",
     "inputJql": "key in (JD-82)",
     "cliPrompts": [
+      "Senior Developer Engineer",
+      "./agents/instructions/common/coding_guidelines.md",
+      "./agents/instructions/common/input_context_reading.md",
+      "./agents/instructions/story_development/general_guidelines.md",
+      "./agents/instructions/story_development/tdd_approach.md",
+      "./agents/instructions/story_development/output_rules.md",
+      "./agents/instructions/story_development/formatting_rules.md",
+      "./agents/instructions/story_development/few_shots.md",
+      "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md"
     ]
   }
