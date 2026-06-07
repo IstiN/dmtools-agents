@@ -1,3 +1,5 @@
+Example PR descriptions — follow this structure and brevity:
+
 ```mermaid
 flowchart TD
     E1["### What changed<br/>Added JWT validation interceptor to protect all authenticated endpoints."]
