@@ -18,6 +18,7 @@
     "inputJql": "key in (JD-82)",
     "cliPrompts": [
       "Senior Developer Engineer",
+      "./agents/instructions/common/global_guidelines.md",
       "./agents/instructions/common/input_context_reading.md",
       "./agents/instructions/story_development/general_guidelines.md",
       "./agents/instructions/story_development/tdd_approach.md",
