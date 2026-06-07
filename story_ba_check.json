@@ -4,12 +4,6 @@
     "metadata": {
       "contextId": "story_ba_check"
     },
-    "agentParams": {
-      "aiRole": "Story BA readiness checker",
-      "knownInfo": "",
-      "formattingRules": "",
-      "fewShots": ""
-    },
     "outputType": "none",
     "ticketContextDepth": 1,
     "skipAIProcessing": true,
@@ -18,9 +12,6 @@
     "customParams": {
       "removeLabel": "sm_story_ba_check_triggered"
     },
-    "inputJql": "key = PROJ-1",
-    "cliPrompts": [
-      "./agents/prompts/bash_tools.md"
-    ]
+    "inputJql": "key = PROJ-1"
   }
 }
