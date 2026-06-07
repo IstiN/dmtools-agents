@@ -1,6 +1,6 @@
 ```mermaid
 flowchart TD
-    G1["Question descriptions must be in Jira Markdown format"]
+    G1["Question descriptions must follow the tracker-specific format"]
     G4["Read input/existing_questions.json to avoid duplicates"]
 
     subgraph CODEGRAPH["⚠️ MANDATORY: Investigate codebase BEFORE writing any question"]
