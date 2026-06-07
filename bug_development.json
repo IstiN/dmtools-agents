@@ -1,31 +1,35 @@
 {
-    "name": "Teammate",
-    "params": {
-        "metadata": {
-            "contextId": "bug_development"
-        },
-        "cliPrompt": "./agents/prompts/bug_development_prompt.md",
-        "cliCommands": [
-            "./agents/scripts/run-agent.sh"
-        ],
-        "outputType": "none",
-        "ticketContextDepth": 1,
-        "attachResponseAsFile": false,
-        "skipAIProcessing": true,
-        "alwaysPostComments": true,
-        "preJSAction": "agents/js/checkWipLabel.js",
-        "preCliJSAction": "agents/js/preCliDevelopmentSetup.js",
-        "postJSAction": "agents/js/developBugAndCreatePR.js",
-        "customParams": {
-            "removeLabel": "sm_bug_development_triggered"
-        },
-        "inputJql": "key = PROJ-74",
-        "cliPrompts": [
-            "Senior Developer Engineer specializing in root cause analysis and bug fixing",
-            "./agents/instructions/bug_development/workflow.md",
-            "./agents/instructions/bug_development/formatting_rules.md",
-            "./agents/instructions/bug_development/few_shots.md",
-            "./agents/prompts/bash_tools.md"
-        ]
-    }
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "bug_development"
+    },
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "attachResponseAsFile": false,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "preJSAction": "agents/js/checkWipLabel.js",
+    "preCliJSAction": "agents/js/preCliDevelopmentSetup.js",
+    "postJSAction": "agents/js/developBugAndCreatePR.js",
+    "customParams": {
+      "removeLabel": "sm_bug_development_triggered"
+    },
+    "inputJql": "key = PROJ-74",
+    "cliPrompts": [
+      "Senior Developer Engineer specializing in root cause analysis and bug fixing",
+      "./agents/instructions/common/coding_guidelines.md",
+      "./agents/instructions/common/input_context_reading.md",
+      "./agents/instructions/bug_development/general_guidelines.md",
+      "./agents/instructions/bug_development/tdd_approach.md",
+      "./agents/instructions/bug_development/output_rules.md",
+      "./agents/instructions/bug_development/formatting_rules.md",
+      "./agents/instructions/bug_development/few_shots.md",
+      "./agents/instructions/common/dmtools_cli.md",
+      "./agents/prompts/bash_tools.md"
+    ]
+  }
 }

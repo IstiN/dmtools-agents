@@ -1,11 +1,10 @@
-## Issues/Notes
-All acceptance criteria implemented successfully. No blocking issues encountered.
+Example bug fix PR descriptions — follow this structure and brevity:
 
-## Approach
-Implemented the feature by creating a new service class following the existing repository pattern. Added validation logic in the service layer.
-
-## Test Coverage
-Created comprehensive unit tests covering:
-- Happy path scenarios
-- Edge cases with null/empty inputs
-- Error handling and exception cases
+```mermaid
+flowchart TD
+    E1["### Root Cause<br/>Null pointer when processing orders without a shipping address. `OrderValidator` assumed `address` field was always present."]
+    E2["### Previous Attempt<br/>PR #142 added a null check in `OrderController`, but the root cause was in `OrderValidator` which runs before the controller."]
+    E3["### Fix<br/>- `OrderValidator.java`: added null-safe address validation with early return<br/>- `OrderValidatorTest.java`: added reproduction test for missing address"]
+    E4["### Test Coverage<br/>- `OrderValidatorTest.shouldRejectOrderWithMissingAddress` — PASSED<br/>- Full suite: 247 tests passed, 0 failures"]
+    E5["### Notes<br/>No breaking changes — existing orders with valid addresses are unaffected."]
+```
