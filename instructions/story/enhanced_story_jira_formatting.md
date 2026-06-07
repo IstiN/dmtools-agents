@@ -56,3 +56,7 @@ AC 3 - [Category Name]
 - Use plain bullets under each AC category.
 - Do not add an introduction, conclusion, ticket key heading, or "Acceptance Criteria for ..." prefix.
 - If critical information is missing, put the blocker at the top and keep any useful existing context below it.
+
+**IMPORTANT** Read 'input/existing_questions.json' to see existing question subtasks for this story (fields: key, summary, description, status, answer). Use answered questions as context. If you need full details run: `dmtools jira_get_ticket KEY`.
+
+**IMPORTANT** You must check child tickets and parent story for better context using: `dmtools jira_search_by_jql`.

@@ -76,6 +76,9 @@ function readJiraComment(params, workingDir, ticketKey) {
     jiraComment = readOutputFile('comment.md', workingDir, ticketKey);
     if (jiraComment) return jiraComment;
 
+    jiraComment = readOutputFile('tracker_comment.md', workingDir, ticketKey);
+    if (jiraComment) return jiraComment;
+
     return markdownToJiraWiki(params.response || readOutputFile('response.md', workingDir, ticketKey) || '');
 }
 

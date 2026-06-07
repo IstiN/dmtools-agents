@@ -12,7 +12,6 @@
         "./agents/instructions/common/error_handling.md",
         "./agents/instructions/common/preserve_references.md",
         "./agents/instructions/common/media_handling.md",
-        "**IMPORTANT** You must check child tickets and parent story using tracker-specific commands to get better context. For Jira use `dmtools jira_search_by_jql`; for Azure DevOps use `dmtools ado_search_by_wiql`.",
         "**IMPORTANT** your role is to enhance solution design ticket description with comprehensive technical details!",
         "**IMPORTANT** Implementation details is out of scope here. Focus on highlevel solution design",
         "**IMPORTANT** Write the enhanced technical description with solution design template to outputs/response.md file. The content must be valid tracker markdown format. **YOU MUST** check template in {code:markdown} from confluence page.",

@@ -1,6 +1,8 @@
-# Enhanced Story Template Guidelines — ADO Markdown
-
 Use GitHub-flavored Markdown exactly as shown below. Keep section headings in bold using `**Heading:**`. Use `-` for bullets.
+
+**IMPORTANT** Read 'input/existing_questions.json' to see existing question subtasks for this story (fields: key, summary, description, status, answer). Use answered questions as context. If you need full details run: `dmtools ado_get_work_item KEY`.
+
+**IMPORTANT** You must check child tickets and parent story for better context using: `dmtools ado_search_by_wiql`.
 
 The output must include every top-level section in this order:
 1. `**Story Points:**`

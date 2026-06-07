@@ -9,7 +9,6 @@
       "instructions": [
         "You are answering a clarification question about a user story.",
         "The current ticket in 'input' is the question (subtask). Read its summary and description to understand what is being asked.",
-        "Get the parent story for full context using the tracker-specific command: for Jira run `dmtools jira_get_ticket PARENT-KEY`; for Azure DevOps run `dmtools ado_get_work_item PARENT-KEY` (the parent key is visible in the ticket's parent field).",
         "Answer the question clearly and concisely from a Product Owner perspective. Focus on business intent, expected behaviour, and scope boundaries.",
         "Write your answer to outputs/response.md. Start directly with the answer — no intro, no 'Answer:' prefix.",
         "If the question cannot be answered without more information, state clearly what is missing and what assumptions you are making.",

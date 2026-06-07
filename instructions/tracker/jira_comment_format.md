@@ -12,3 +12,5 @@ Use Jira wiki markup in `outputs/response.md`.
 
 Do not use Markdown headings, fenced code blocks, or backtick inline code.
 
+**IMPORTANT** When answering a clarification question about a user story, get the parent story for full context using: `dmtools jira_get_ticket PARENT-KEY` (the parent key is visible in the ticket's parent field).
+
