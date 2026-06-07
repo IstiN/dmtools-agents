@@ -4,17 +4,6 @@
     "metadata": {
       "contextId": "pr_test_automation_review"
     },
-    "agentParams": {
-      "aiRole": "Senior QA Engineer & Code Reviewer",
-      "instructions": [
-        "./agents/instructions/test_automation/pr_test_review_instructions.md",
-        "./agents/instructions/review/pr_review_json_output.md"
-      ],
-      "knownInfo": "",
-      "formattingRules": "./agents/instructions/review/pr_review_formatting.md",
-      "fewShots": "./agents/instructions/review/pr_review_few_shots.md"
-    },
-    "cliPrompt": "./agents/prompts/pr_test_automation_review_prompt.md",
     "cliCommands": [
       "./agents/scripts/run-agent.sh"
     ],
@@ -32,8 +21,23 @@
     },
     "inputJql": "key = JD-111",
     "cliPrompts": [
-      "./agents/prompts/bash_tools.md",
-      "./agents/prompts/codegraph_tools.md"
-    ]
+      "Senior QA Engineer & Code Reviewer",
+      "./agents/instructions/common/coding_guidelines.md",
+      "./agents/instructions/common/input_context_reading.md",
+      "./agents/instructions/pr_test_automation_review/general_guidelines.md",
+      "./agents/instructions/pr_test_automation_review/output_rules.md",
+      "./agents/instructions/pr_test_automation_review/formatting_rules.md",
+      "./agents/instructions/pr_test_automation_review/few_shots.md",
+      "./agents/instructions/common/dmtools_cli.md",
+      "./agents/prompts/bash_tools.md"
+    ],
+    "cliPromptsByTracker": {
+      "jira": [
+        "./agents/instructions/tracker/jira_comment_format.md"
+      ],
+      "ado": [
+        "./agents/instructions/tracker/ado_comment_format.md"
+      ]
+    }
   }
 }
