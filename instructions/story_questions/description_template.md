@@ -1,4 +1,4 @@
-Each question `.md` file (referenced from `questions.json` as `description`) must follow this Jira Markdown template:
+Each question `.md` file (referenced from `questions.json` as `description`) must follow this template:
 
 ```
 *Background:* [Brief context — 1-2 sentences explaining why this matters]
@@ -15,6 +15,5 @@ Each question `.md` file (referenced from `questions.json` as `description`) mus
 
 Rules:
 - Do NOT repeat the summary in the description — start directly with `*Background:*`
-- Use Jira Markdown: `*bold*`, `-` for bullets, no `**` or `#` headers
 - `*Recommended Decision:*` is required — always provide your best guess even if uncertain
 - Keep options focused: 2–3 max; omit if only one valid path exists

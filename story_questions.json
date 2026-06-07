@@ -19,6 +19,7 @@
       "./agents/instructions/story_questions/output_rules.md",
       "./agents/instructions/story_questions/formatting_rules.md",
       "./agents/instructions/story_questions/description_template.md",
+      "./agents/instructions/tracker/jira_question_description_format.md",
       "./agents/instructions/story_questions/few_shots.md",
       "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md",
