@@ -369,6 +369,11 @@ If test **failed**, also write `outputs/bug_description.md` with reproduction st
 
 # Test Automation Output Files
 
+**⚠️ CRITICAL: All output files MUST be written to `outputs/` at the repository root** (e.g. `/home/runner/work/repo/repo/outputs/`).
+Do NOT write them inside `input/`, `input/TICKET-KEY/`, or any subfolder of `input/`. The post-processing script reads from `outputs/` at the repo root — writing elsewhere means all results will be silently lost.
+
+Run `mkdir -p outputs` first to ensure the directory exists.
+
 Write separate files for separate consumers. Do not reuse one format for all destinations.
 
 ## `outputs/tracker_comment.md` — tracker ticket comment
@@ -461,8 +466,8 @@ flowchart TD
     end
 
     subgraph FIELDS["Fields by Status"]
-        F1["passed: { status }"]
-        F2["failed: { status, bug: { summary, description, priority } }"]
+        F1["passed: { status, passed, failed, skipped, summary }"]
+        F2["failed: { status, passed, failed, skipped, summary, error }"]
         F3["blocked: { status, blocked_reason, missing[]: { type, name, description, how_to_add } }"]
     end
 
@@ -515,6 +520,22 @@ flowchart TD
 }
 ```
 
+## Detailed Examples (with counts)
+
+The `status` field is the only required field. Additional fields help reporting but are optional.
+
+### Passed (with counts)
+```json
+{ "status": "passed", "passed": 1, "failed": 0, "skipped": 0, "summary": "1 passed, 0 failed" }
+```
+
+### Failed (with error detail)
+```json
+{ "status": "failed", "passed": 0, "failed": 1, "skipped": 0, "summary": "0 passed, 1 failed", "error": "AssertionError: <exact error message>" }
+```
+
+The `"status"` field **must** be exactly `"passed"` or `"failed"` (lowercase). Missing or wrong field name causes the pipeline to break.
+
 ## Bug Description Template (when FAILED)
 
 Use tracker-specific format:
@@ -564,29 +585,6 @@ If `merge_conflicts.md` is present in the input folder, the test branch could no
 If the Test Case requires behavior that is missing or broken in the current production code on `main`, do not fake a passing result by pre-authoring the expected final state in fixtures or by weakening the assertions. Write the best test-only reproduction you can through the production-visible UI, CLI, service, repository API, or file format that the Test Case targets.
 
 When that reproduction fails because production behavior is missing or broken, set `outputs/test_automation_result.json` to `"status": "failed"` and write a detailed `outputs/bug_description.md`. Missing product behavior is a failed test/product bug, not `blocked_by_human`; the downstream workflow creates or links a Bug from the failed Test Case.
-
-## Output files
-
-**⚠️ CRITICAL: All output files MUST be written to `outputs/` at the repository root** (e.g. `/home/runner/work/repo/repo/outputs/`).
-Do NOT write them inside `input/`, `input/TICKET-KEY/`, or any subfolder of `input/`. The post-processing script reads from `outputs/` at the repo root — writing elsewhere means all results will be silently lost.
-
-Run `mkdir -p outputs` first to ensure the directory exists.
-
-- `outputs/tracker_comment.md` — tracker-formatted test result summary (format via cliPromptsByTracker)
-- `outputs/pr_body.md` — GitHub Markdown PR body
-- `outputs/response.md` — backward-compatible Markdown summary
-- `outputs/test_automation_result.json` — **MANDATORY — always write this file**, even if the test failed or errored. Use exactly this format:
-  ```json
-  { "status": "passed", "passed": 1, "failed": 0, "skipped": 0, "summary": "1 passed, 0 failed" }
-  ```
-  or for failure:
-  ```json
-  { "status": "failed", "passed": 0, "failed": 1, "skipped": 0, "summary": "0 passed, 1 failed", "error": "AssertionError: <exact error message>" }
-  ```
-  The `"status"` field **must** be exactly `"passed"` or `"failed"` (lowercase). Missing or wrong field name causes the pipeline to break.
-- `outputs/bug_description.md` — detailed tracker-formatted bug report (only if test FAILED)
-
-`tracker_comment.md` and `pr_body.md` contain the same facts but are formatted for different consumers: tracker markup vs GitHub Markdown. Do not put GitHub Markdown into `tracker_comment.md`.
 
 ## Real human-style verification
 

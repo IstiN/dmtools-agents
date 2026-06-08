@@ -11,8 +11,8 @@ flowchart TD
     end
 
     subgraph FIELDS["Fields by Status"]
-        F1["passed: { status }"]
-        F2["failed: { status, bug: { summary, description, priority } }"]
+        F1["passed: { status, passed, failed, skipped, summary }"]
+        F2["failed: { status, passed, failed, skipped, summary, error }"]
         F3["blocked: { status, blocked_reason, missing[]: { type, name, description, how_to_add } }"]
     end
 
@@ -64,6 +64,22 @@ flowchart TD
   ]
 }
 ```
+
+## Detailed Examples (with counts)
+
+The `status` field is the only required field. Additional fields help reporting but are optional.
+
+### Passed (with counts)
+```json
+{ "status": "passed", "passed": 1, "failed": 0, "skipped": 0, "summary": "1 passed, 0 failed" }
+```
+
+### Failed (with error detail)
+```json
+{ "status": "failed", "passed": 0, "failed": 1, "skipped": 0, "summary": "0 passed, 1 failed", "error": "AssertionError: <exact error message>" }
+```
+
+The `"status"` field **must** be exactly `"passed"` or `"failed"` (lowercase). Missing or wrong field name causes the pipeline to break.
 
 ## Bug Description Template (when FAILED)
 
