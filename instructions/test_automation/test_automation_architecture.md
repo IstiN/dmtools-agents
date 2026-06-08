@@ -2,170 +2,89 @@
 
 ## High-Level Structure
 
-```
-testing/
-│
-├── core/                           # Shared across ALL test types
-│   ├── models/                     # Domain models (User, Product, Order...)
-│   ├── config/                     # Environment configs, credentials
-│   ├── interfaces/                 # Abstract contracts (protocols)
-│   ├── utils/                      # Helpers, data generators, logging
-│
-├── frameworks/                     # Framework-specific implementations
-│   │
-│   ├── web/                        # Web UI Testing
-│   │   ├── playwright/
-│   │   ├── selenium/
-│   │   └── cypress/
-│   │
-│   ├── mobile/                     # Mobile Testing
-│   │   ├── appium/
-│   │   ├── xcuitest/               # iOS native
-│   │   └── espresso/               # Android native
-│   │
-│   └── api/                        # API Testing
-│       ├── rest/                   # REST clients (requests, httpx)
-│       ├── graphql/
-│       ├── grpc/
-│       └── karate/
-│
-├── components/                     # Reusable test components
-│   │
-│   ├── pages/                      # Page Objects (Web)
-│   │   ├── login_page
-│   │   ├── checkout_page
-│   │   └── ...
-│   │
-│   ├── screens/                    # Screen Objects (Mobile)
-│   │   ├── login_screen
-│   │   ├── home_screen
-│   │   └── ...
-│   │
-│   └── services/                   # API Service Objects
-│       ├── auth_service
-│       ├── order_service
-│       └── ...
-│
-├── tests/                          # Actual test cases by ticket/story
-│   ├── TEST-1/
-│   ├── TEST-2/
-│   └── TEST-3/
-│
-└── fixtures/                       # Shared test fixtures & data
-    ├── users/
-    ├── products/
-    └── ...
+```mermaid
+flowchart TD
+    subgraph CORE["core/ — Framework-Agnostic Foundation"]
+        C1[models/ User, Product, Order]
+        C2[config/ Env, Creds, Timeouts]
+        C3[interfaces/ IBrowser, IDriver, IClient]
+        C4[utils/ Logger, DataGen, Waiters]
+    end
+
+    subgraph FW["frameworks/ — Concrete Implementations"]
+        direction LR
+        WEB[web/<br/>Playwright<br/>Selenium<br/>Cypress]
+        MOB[mobile/<br/>Appium<br/>XCUITest<br/>Espresso]
+        API[api/<br/>REST<br/>GraphQL<br/>gRPC]
+    end
+
+    subgraph COMP["components/ — Reusable Test Objects"]
+        direction LR
+        PAGES[pages/<br/>LoginPage<br/>CartPage]
+        SCR[screens/<br/>LoginScreen<br/>HomeScreen]
+        SVC[services/<br/>AuthService<br/>OrderService]
+    end
+
+    subgraph TESTS["tests/ — Per Ticket/Story"]
+        T1[TEST-1/ config.yaml + test_*.py]
+        T2[TEST-2/ config.yaml + test_*.py]
+        T3[TEST-3/ config.yaml + test_*.py]
+    end
+
+    FX[fixtures/<br/>users/<br/>products/]
+
+    CORE --> FW
+    FW --> COMP
+    COMP --> TESTS
+    FX --> TESTS
 ```
 
 ## Architecture Diagram
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                                  TESTS                                       │
-│                                                                              │
-│    ┌──────────────┐      ┌──────────────┐      ┌──────────────┐            │
-│    │   STORY-123  │      │   STORY-456  │      │   STORY-789  │            │
-│    │   ─────────  │      │   ─────────  │      │   ─────────  │            │
-│    │  TEST-1 (web)│      │ TEST-4 (api) │      │TEST-7 (mobile)│           │
-│    │  TEST-2 (api)│      │ TEST-5 (web) │      │ TEST-8 (web) │            │
-│    │TEST-3(mobile)│      │TEST-6(mobile)│      │ TEST-9 (api) │            │
-│    └──────┬───────┘      └──────┬───────┘      └──────┬───────┘            │
-│           │                     │                     │                     │
-└───────────┼─────────────────────┼─────────────────────┼─────────────────────┘
-            │                     │                     │
-            ▼                     ▼                     ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              COMPONENTS                                      │
-│                        (Reusable Test Objects)                              │
-│                                                                              │
-│   ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐            │
-│   │     PAGES       │  │    SCREENS      │  │    SERVICES     │            │
-│   │   (Web UI)      │  │   (Mobile)      │  │     (API)       │            │
-│   │                 │  │                 │  │                 │            │
-│   │  • LoginPage    │  │ • LoginScreen   │  │ • AuthService   │            │
-│   │  • CartPage     │  │ • HomeScreen    │  │ • OrderService  │            │
-│   │  • CheckoutPage │  │ • CartScreen    │  │ • UserService   │            │
-│   └────────┬────────┘  └────────┬────────┘  └────────┬────────┘            │
-│            │                    │                    │                      │
-└────────────┼────────────────────┼────────────────────┼──────────────────────┘
-             │                    │                    │
-             ▼                    ▼                    ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                             FRAMEWORKS                                       │
-│                    (Technology Implementations)                              │
-│                                                                              │
-│  ┌───────────────────┐ ┌───────────────────┐ ┌───────────────────┐         │
-│  │        WEB        │ │      MOBILE       │ │        API        │         │
-│  │                   │ │                   │ │                   │         │
-│  │  ┌─────────────┐  │ │  ┌─────────────┐  │ │  ┌─────────────┐  │         │
-│  │  │ Playwright  │  │ │  │   Appium    │  │ │  │    REST     │  │         │
-│  │  └─────────────┘  │ │  └─────────────┘  │ │  └─────────────┘  │         │
-│  │  ┌─────────────┐  │ │  ┌─────────────┐  │ │  ┌─────────────┐  │         │
-│  │  │  Selenium   │  │ │  │  XCUITest   │  │ │  │   GraphQL   │  │         │
-│  │  └─────────────┘  │ │  └─────────────┘  │ │  └─────────────┘  │         │
-│  │  ┌─────────────┐  │ │  ┌─────────────┐  │ │  ┌─────────────┐  │         │
-│  │  │   Cypress   │  │ │  │  Espresso   │  │ │  │   Karate    │  │         │
-│  │  └─────────────┘  │ │  └─────────────┘  │ │  └─────────────┘  │         │
-│  └───────────────────┘ └───────────────────┘ └───────────────────┘         │
-│                                                                              │
-└──────────────────────────────────┬──────────────────────────────────────────┘
-                                   │
-                                   ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                               CORE                                           │
-│                    (Framework-Agnostic Foundation)                          │
-│                                                                              │
-│  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐            │
-│  │   MODELS   │  │  CONFIGS   │  │ INTERFACES │  │   UTILS    │            │
-│  │            │  │            │  │            │  │            │            │
-│  │ • User     │  │ • Env URLs │  │ • IBrowser │  │ • Logger   │            │
-│  │ • Product  │  │ • Creds    │  │ • IDriver  │  │ • DataGen  │            │
-│  │ • Order    │  │ • Timeouts │  │ • IClient  │  │ • Waiters  │            │
-│  └────────────┘  └────────────┘  └────────────┘  └────────────┘            │
-└────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart BT
+    subgraph TESTS_LAYER["TESTS"]
+        T1["STORY-123<br/>TEST-1 (web)<br/>TEST-2 (api)"]
+    end
+
+    subgraph COMP_LAYER["COMPONENTS — Reusable Objects"]
+        direction LR
+        P[pages/ Web UI] --> S[screens/ Mobile] --> SV[services/ API]
+    end
+
+    subgraph FW_LAYER["FRAMEWORKS — Implementations"]
+        direction LR
+        W[web/] --> M[mobile/] --> A[api/]
+    end
+
+    subgraph CORE_LAYER["CORE — Framework-Agnostic"]
+        direction LR
+        MOD[models/] --> CFG[config/] --> IF[interfaces/] --> UT[utils/]
+    end
+
+    TESTS_LAYER --> COMP_LAYER
+    COMP_LAYER --> FW_LAYER
+    FW_LAYER --> CORE_LAYER
 ```
 
 ## Layer Responsibilities
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  LAYER           │  RESPONSIBILITY                              │
-├─────────────────────────────────────────────────────────────────┤
-│                  │                                              │
-│  TESTS           │  • Test logic per ticket/story              │
-│                  │  • Uses components, not frameworks directly │
-│                  │  • Contains test config (which framework)   │
-│                  │                                              │
-├─────────────────────────────────────────────────────────────────┤
-│                  │                                              │
-│  COMPONENTS      │  • Reusable Page/Screen/Service objects     │
-│                  │  • Business-level abstractions              │
-│                  │  • Framework-agnostic interfaces            │
-│                  │                                              │
-├─────────────────────────────────────────────────────────────────┤
-│                  │                                              │
-│  FRAMEWORKS      │  • Concrete implementations                 │
-│                  │  • Playwright, Appium, REST clients         │
-│                  │  • Wraps vendor libraries                   │
-│                  │                                              │
-├─────────────────────────────────────────────────────────────────┤
-│                  │                                              │
-│  CORE            │  • Shared models & configs                  │
-│                  │  • Abstract interfaces/protocols            │
-│                  │  • Utilities & reporting                    │
-│                  │                                              │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    TESTS["TESTS"] -->|"uses"| COMPONENTS["COMPONENTS"]
+    COMPONENTS -->|"implements via"| FRAMEWORKS["FRAMEWORKS"]
+    FRAMEWORKS -->|"built on"| CORE["CORE"]
+
+    TESTS -. "• Test logic per ticket<br/>• Uses components only<br/>• Ticket-level config" .- TESTS
+    COMPONENTS -. "• Page/Screen/Service objects<br/>• Business abstractions<br/>• Framework-agnostic" .- COMPONENTS
+    FRAMEWORKS -. "• Playwright, Appium, REST<br/>• Wraps vendor libs" .- FRAMEWORKS
+    CORE -. "• Models, Config, Utils<br/>• Abstract protocols" .- CORE
 ```
 
 ## Test Configuration Per Ticket
 
-```
-tests/TEST-1/
-├── config.yaml          # Defines: framework, platform, dependencies
-└── test_*.py            # Actual test file
-
-Example config.yaml:
-─────────────────────
+```yaml
+# tests/TEST-1/config.yaml
 test_id: TEST-1
 type: web | mobile | api
 framework: playwright | appium | rest
@@ -175,25 +94,14 @@ dependencies: [TEST-0]
 
 ## Cross-Platform Component Sharing
 
-```
-                        ┌─────────────────┐
-                        │   Login Flow    │
-                        │   (Business)    │
-                        └────────┬────────┘
-                                 │
-           ┌─────────────────────┼─────────────────────┐
-           │                     │                     │
-           ▼                     ▼                     ▼
-   ┌───────────────┐    ┌───────────────┐    ┌───────────────┐
-   │   LoginPage   │    │  LoginScreen  │    │  AuthService  │
-   │     (Web)     │    │   (Mobile)    │    │     (API)     │
-   └───────┬───────┘    └───────┬───────┘    └───────┬───────┘
-           │                    │                    │
-           ▼                    ▼                    ▼
-   ┌───────────────┐    ┌───────────────┐    ┌───────────────┐
-   │  Playwright/  │    │    Appium/    │    │  REST/GraphQL │
-   │   Selenium    │    │   XCUITest    │    │               │
-   └───────────────┘    └───────────────┘    └───────────────┘
+```mermaid
+flowchart TD
+    B[Login Flow<br/>Business Logic] --> W[LoginPage<br/>Web]
+    B --> M[LoginScreen<br/>Mobile]
+    B --> A[AuthService<br/>API]
+    W --> PW[Playwright / Selenium]
+    M --> AP[Appium / XCUITest]
+    A --> REST[REST / GraphQL]
 ```
 
 ## Key Principles
