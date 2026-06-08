@@ -1,14 +1,5 @@
 ```mermaid
 flowchart TD
-    subgraph INPUT["Read input/ folder — MANDATORY first step"]
-        I1["List ALL files: find input/ -type f | sort (NO maxdepth limit!)"]
-        I2["Read request.md — full ticket details"]
-        I3["Read comments.md — history, prior decisions"]
-        I4["Read existing_questions.json — avoid duplicates"]
-        I5["Read ALL .md files in input/TICKET/confluence/ — already downloaded, no API needed!"]
-        I1 --> I2 --> I3 --> I4 --> I5
-    end
-
     subgraph RULES["Rules"]
         R1["Follow ALL instructions from request.md strictly"]
         R2["Description files follow tracker-specific formatting"]
@@ -39,7 +30,6 @@ flowchart TD
         F2["WRONG: { questions: [ ... ] } — never wrap in object"]
     end
 
-    INPUT --> RULES
     RULES --> EXAMPLES
     RULES --> CHECKS
     CHECKS --> OUTPUT
