@@ -4,23 +4,6 @@
     "metadata": {
       "contextId": "bulk_bugs_creation"
     },
-    "agentParams": {
-      "aiRole": "QA Engineer",
-      "instructions": [
-        "Read input/failed_tcs.json for the list of failed Test Cases. If it is not present, read input/<trigger-ticket-key>/failed_tcs.json.",
-        "Read input/open_bugs.json for all existing non-Done bugs. If it is not present, read input/<trigger-ticket-key>/open_bugs.json.",
-        "Done bugs are intentionally excluded from bug matching.",
-        "For each failed TC decide: link to existing non-Done bug, create new bug, or skip (test code issue only).",
-        "Group TCs with the same root cause — create ONE new bug for the group.",
-        "Write outputs/bulk_bug_decisions.json as described in the prompt.",
-        "For each new bug write its description to a separate file: outputs/bug_NNN_description.md (NNN = zero-padded index). Reference that file in bulk_bug_decisions.json via 'descriptionFile'.",
-        "Do NOT embed multi-line description text directly inside bulk_bug_decisions.json.",
-        "Prefer creating a bug over skipping. Only skip when you are confident the failure is purely a test code problem — and provide a detailed reason."
-      ],
-      "knownInfo": "",
-      "formattingRules": "outputs/bulk_bug_decisions.json must be valid JSON. 'processed' must list every TC key the AI made a decision for. newBugs[].descriptionFile must be a relative path to an existing outputs/*.md file. Do not output fixedByBug; Done bugs are excluded from matching. skipped[].reason must be a detailed explanation of the test code issue."
-    },
-    "cliPrompt": "./agents/prompts/bulk_bugs_creation_prompt.md",
     "cliCommands": [
       "./agents/scripts/run-agent.sh"
     ],
@@ -47,7 +30,23 @@
     },
     "inputJql": "key = JD-111",
     "cliPrompts": [
+      "QA Engineer",
+      "./agents/instructions/common/coding_guidelines.md",
+      "./agents/instructions/common/input_context_reading.md",
+      "./agents/instructions/bulk_bugs_creation/general_guidelines.md",
+      "./agents/instructions/bulk_bugs_creation/output_rules.md",
+      "./agents/instructions/bulk_bugs_creation/formatting_rules.md",
+      "./agents/instructions/bulk_bugs_creation/few_shots.md",
+      "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md"
-    ]
+    ],
+    "cliPromptsByTracker": {
+      "jira": [
+        "./agents/instructions/tracker/jira_comment_format.md"
+      ],
+      "ado": [
+        "./agents/instructions/tracker/ado_comment_format.md"
+      ]
+    }
   }
 }
