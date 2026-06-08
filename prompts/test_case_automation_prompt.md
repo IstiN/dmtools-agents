@@ -1,14 +1,8 @@
-User request is in the 'input' folder. Read all files there.
-
-**IMPORTANT**: Before writing any test, read and follow these inputs in order:
-1. `request.md` — the Test Case ticket: objective, preconditions, steps, expected result, and priority.
-2. `comments.md` *(if present)* — ticket comment history; recent comments may contain prior test run results, failure analysis, or reviewer feedback.
-3. `linked_bugs.md` *(if present)* — **CRITICAL**: linked bugs that block or are related to this test case.
-   - Read the **Solution** field and **AI Fix Comments** for each bug carefully.
-   - If the fix introduced **timing or async behavior** (e.g., a heartbeat probe with a delay, a polling interval, a retry timeout) — your test **MUST** wait long enough to observe the effect. Do NOT assert immediately after triggering the action.
-   - Example: if a bug was fixed by adding a heartbeat probe that runs every 5 seconds, your test must wait at least 5–10 seconds after blocking auth domains before asserting the error appears.
-   - If the bug status is `Done` or `In Testing`, the fix is deployed — **run the test against the live implementation** and expect it to pass.
-4. Any other files present in the input folder for additional context.
+**CRITICAL — linked bugs**: If `linked_bugs.md` is present in the input folder, read it carefully before writing any test.
+- Read the **Solution** field and **AI Fix Comments** for each bug.
+- If the fix introduced **timing or async behavior** (e.g., a heartbeat probe with a delay, a polling interval, a retry timeout) — your test **MUST** wait long enough to observe the effect. Do NOT assert immediately after triggering the action.
+- Example: if a bug was fixed by adding a heartbeat probe that runs every 5 seconds, your test must wait at least 5–10 seconds after blocking auth domains before asserting the error appears.
+- If the bug status is `Done` or `In Testing`, the fix is deployed — **run the test against the live implementation** and expect it to pass.
 
 The feature code is **already implemented** in the `main` branch and **deployed**. Your job is to automate this test case — not to implement features.
 
