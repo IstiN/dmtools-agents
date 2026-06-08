@@ -1,94 +1,76 @@
 # Test Automation JSON Output Format
 
-After running the test, write the structured result to `outputs/test_automation_result.json`.
+Write structured result to `outputs/test_automation_result.json`.
 
-## When the test PASSES
+```mermaid
+flowchart TD
+    subgraph STATUSES["Status"]
+        S1["passed — test ran and succeeded"]
+        S2["failed — test ran and found a bug"]
+        S3["blocked_by_human — cannot run (missing credentials/data)"]
+    end
 
-```json
-{
-  "status": "passed"
-}
+    subgraph FIELDS["Fields by Status"]
+        F1["passed: { status }"]
+        F2["failed: { status, bug: { summary, description, priority } }"]
+        F3["blocked: { status, blocked_reason, missing[]: { type, name, description, how_to_add } }"]
+    end
+
+    subgraph PRIORITY["Bug Priority"]
+        P1["High — completely broken, data loss, security, blocking workflow"]
+        P2["Medium — partially works, key scenario fails, workaround exists"]
+        P3["Low — edge case, minor visual, non-critical"]
+    end
+
+    subgraph OUTPUTS["Required Output Files"]
+        O1["test_automation_result.json — machine-readable status"]
+        O2["tracker_comment.md — tracker-specific comment"]
+        O3["pr_body.md — GitHub Markdown for PR"]
+        O4["response.md — short backward-compatible summary"]
+        O5["bug_description.md — ONLY when failed"]
+    end
+
+    STATUSES --> FIELDS
+    FIELDS --> PRIORITY
+    FIELDS --> OUTPUTS
 ```
 
-## When the test FAILS
+## Examples
 
+### Passed
+```json
+{ "status": "passed" }
+```
+
+### Failed
 ```json
 {
   "status": "failed",
   "bug": {
-    "summary": "Bug: [short description of what failed, max 120 chars]",
+    "summary": "Bug: [what failed, max 120 chars]",
     "description": "outputs/bug_description.md",
     "priority": "High"
   }
 }
 ```
 
-## When blocked by human (missing credentials or test data)
-
+### Blocked by Human
 ```json
 {
   "status": "blocked_by_human",
-  "blocked_reason": "One sentence explaining why the test cannot run automatically.",
+  "blocked_reason": "Missing TEST_USER_EMAIL secret — automated test user not configured.",
   "missing": [
-    {
-      "type": "secret",
-      "name": "TEST_USER_EMAIL",
-      "description": "Email of a dedicated automated-test user",
-      "how_to_add": "Add the value using the project's secret-management process"
-    },
-    {
-      "type": "secret",
-      "name": "TEST_USER_PASSWORD",
-      "description": "Password for the automated-test user",
-      "how_to_add": "Add the value using the project's secret-management process"
-    }
+    { "type": "secret", "name": "TEST_USER_EMAIL", "description": "Automated test user email", "how_to_add": "gh secret set TEST_USER_EMAIL --body value --repo OWNER/REPO" }
   ]
 }
 ```
 
-## Field rules
+## Bug Description Template (when FAILED)
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `status` | always | `"passed"`, `"failed"`, or `"blocked_by_human"` — must be exactly lowercase |
-| `bug.summary` | if failed | Short bug title. Format: `Bug: <what failed>` |
-| `bug.description` | if failed | Path to the bug description file you must create |
-| `bug.priority` | if failed | `High`, `Medium`, or `Low` (see priority rules below) |
-| `blocked_reason` | if blocked | One sentence: what is missing and why the test cannot run |
-| `missing[].type` | if blocked | `secret`, `variable`, `test_data`, or `external_file` |
-| `missing[].name` | if blocked | Name of the secret/variable or short label for the data/file needed |
-| `missing[].description` | if blocked | Human-readable explanation of what it is |
-| `missing[].how_to_add` | if blocked | Exact `gh` command or human action to resolve the block |
-
-## Bug priority rules
-
-- **High**: Feature is completely broken, data loss risk, security issue, or blocking core workflow
-- **Medium**: Feature partially works but key scenario fails, workaround exists
-- **Low**: Edge case failure, minor visual or non-critical behavior
-
----
-
-## Required output files
-
-Always write:
-
-- `outputs/test_automation_result.json` — machine-readable status from this document.
-- `outputs/tracker_comment.md` — tracker-specific comment for the Test Case ticket. Use Jira wiki markup for Jira or GitHub-flavored Markdown for ADO.
-- `outputs/pr_body.md` — GitHub Markdown body for the automation Pull Request.
-- `outputs/response.md` — short backward-compatible GitHub Markdown summary.
-
-The structure and destination-specific formatting rules are defined in
-`agents/instructions/test_automation/test_automation_output_files.md`.
-
-Do not mix GitHub Markdown into tracker comments when the tracker is Jira.
-Do not put tracker markup into `outputs/pr_body.md`.
-
-### `outputs/bug_description.md` — Bug description (only when FAILED)
-
-Use the tracker-specific format. Include:
+Use tracker-specific format:
 - `h4. Environment`
 - `h4. Steps to Reproduce` (numbered)
 - `h4. Expected Result`
 - `h4. Actual Result`
-- `h4. Logs / Error Output` (use `{code}` block)
+- `h4. Logs / Error Output` (`{code}` block)
 - `h4. Notes` (optional)
