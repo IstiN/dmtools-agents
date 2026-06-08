@@ -4,11 +4,6 @@
     "metadata": {
       "contextId": "recover_stuck_test_case"
     },
-    "agentParams": {
-      "aiRole": "QA Recovery Agent",
-      "knownInfo": "",
-      "formattingRules": ""
-    },
     "outputType": "none",
     "ticketContextDepth": 1,
     "skipAIProcessing": true,
