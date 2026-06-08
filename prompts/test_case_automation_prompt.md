@@ -33,29 +33,6 @@ If the Test Case requires behavior that is missing or broken in the current prod
 
 When that reproduction fails because production behavior is missing or broken, set `outputs/test_automation_result.json` to `"status": "failed"` and write a detailed `outputs/bug_description.md`. Missing product behavior is a failed test/product bug, not `blocked_by_human`; the downstream workflow creates or links a Bug from the failed Test Case.
 
-## Output files
-
-**⚠️ CRITICAL: All output files MUST be written to `outputs/` at the repository root** (e.g. `/home/runner/work/repo/repo/outputs/`).
-Do NOT write them inside `input/`, `input/TICKET-KEY/`, or any subfolder of `input/`. The post-processing script reads from `outputs/` at the repo root — writing elsewhere means all results will be silently lost.
-
-Run `mkdir -p outputs` first to ensure the directory exists.
-
-- `outputs/tracker_comment.md` — tracker-formatted test result summary (format via cliPromptsByTracker)
-- `outputs/pr_body.md` — GitHub Markdown PR body
-- `outputs/response.md` — backward-compatible Markdown summary
-- `outputs/test_automation_result.json` — **MANDATORY — always write this file**, even if the test failed or errored. Use exactly this format:
-  ```json
-  { "status": "passed", "passed": 1, "failed": 0, "skipped": 0, "summary": "1 passed, 0 failed" }
-  ```
-  or for failure:
-  ```json
-  { "status": "failed", "passed": 0, "failed": 1, "skipped": 0, "summary": "0 passed, 1 failed", "error": "AssertionError: <exact error message>" }
-  ```
-  The `"status"` field **must** be exactly `"passed"` or `"failed"` (lowercase). Missing or wrong field name causes the pipeline to break.
-- `outputs/bug_description.md` — detailed tracker-formatted bug report (only if test FAILED)
-
-`tracker_comment.md` and `pr_body.md` contain the same facts but are formatted for different consumers: tracker markup vs GitHub Markdown. Do not put GitHub Markdown into `tracker_comment.md`.
-
 ## Real human-style verification
 
 In addition to automated assertions, verify the behavior as a user would experience it.
