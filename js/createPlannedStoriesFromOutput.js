@@ -154,6 +154,10 @@ function createStory(entry, resolvedParentKey, params, config) {
         parent: { key: resolvedParentKey }
     };
 
+    if (priority) {
+        fieldsJson.priority = { name: priority };
+    }
+
     var result = jira_create_ticket_with_json({
         project: projectKey,
         fieldsJson: fieldsJson

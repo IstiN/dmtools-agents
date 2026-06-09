@@ -154,14 +154,14 @@ function createBug(entry, projectKey) {
             description: description,
             issuetype: { name: ISSUE_TYPES.BUG }
         };
+        if (entry.priority) {
+            bugFields.priority = { name: entry.priority };
+        }
         var result = jira_create_ticket_with_json({
             project: projectKey,
             fieldsJson: bugFields
         });
         var key = extractTicketKey(result);
-        if (key && entry.priority) {
-            try { jira_set_priority({ key: key, priority: entry.priority }); } catch (e) { console.warn('Failed to set priority on ' + key, e); }
-        }
         console.log('Created Bug: ' + (key || '(unknown key)') + ' - ' + summary);
         return key;
     } catch (error) {
@@ -186,14 +186,14 @@ function createEpic(entry, projectKey) {
             description: description,
             issuetype: { name: ISSUE_TYPES.EPIC }
         };
+        if (entry.priority) {
+            epicFields.priority = { name: entry.priority };
+        }
         var result = jira_create_ticket_with_json({
             project: projectKey,
             fieldsJson: epicFields
         });
         var key = extractTicketKey(result);
-        if (key && entry.priority) {
-            try { jira_set_priority({ key: key, priority: entry.priority }); } catch (e) { console.warn('Failed to set priority on ' + key, e); }
-        }
         console.log('Created Epic: ' + (key || '(unknown key)') + ' - ' + summary);
         return key;
     } catch (error) {
@@ -220,14 +220,14 @@ function createStory(entry, resolvedParent, projectKey) {
             issuetype: { name: ISSUE_TYPES.STORY },
             parent: { key: resolvedParent }
         };
+        if (entry.priority) {
+            storyFields.priority = { name: entry.priority };
+        }
         var result = jira_create_ticket_with_json({
             project: projectKey,
             fieldsJson: storyFields
         });
         var key = extractTicketKey(result);
-        if (key && entry.priority) {
-            try { jira_set_priority({ key: key, priority: entry.priority }); } catch (e) { console.warn('Failed to set priority on ' + key, e); }
-        }
         console.log('Created Story: ' + (key || '(unknown key)') + ' under ' + resolvedParent + ' - ' + summary);
         return key;
     } catch (error) {
