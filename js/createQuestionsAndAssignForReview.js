@@ -102,7 +102,7 @@ function createQuestion(entry, parentKey, projectKey, jiraConfig, priorityMap) {
 
     if (entry.priority) {
         var resolvedPriority = (priorityMap && priorityMap[entry.priority]) || entry.priority;
-        fieldsJson.priority = { name: resolvedPriority };
+        fieldsJson.priority = resolvedPriority;
     }
 
     if (entry.answer) {

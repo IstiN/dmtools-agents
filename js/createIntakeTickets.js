@@ -155,7 +155,7 @@ function createBug(entry, projectKey) {
             issuetype: { name: ISSUE_TYPES.BUG }
         };
         if (entry.priority) {
-            bugFields.priority = { name: entry.priority };
+            bugFields.priority = entry.priority;
         }
         var result = jira_create_ticket_with_json({
             project: projectKey,
@@ -187,7 +187,7 @@ function createEpic(entry, projectKey) {
             issuetype: { name: ISSUE_TYPES.EPIC }
         };
         if (entry.priority) {
-            epicFields.priority = { name: entry.priority };
+            epicFields.priority = entry.priority;
         }
         var result = jira_create_ticket_with_json({
             project: projectKey,
@@ -221,7 +221,7 @@ function createStory(entry, resolvedParent, projectKey) {
             parent: { key: resolvedParent }
         };
         if (entry.priority) {
-            storyFields.priority = { name: entry.priority };
+            storyFields.priority = entry.priority;
         }
         var result = jira_create_ticket_with_json({
             project: projectKey,

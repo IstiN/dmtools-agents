@@ -31,7 +31,7 @@ function processQuestionTickets(response, parentKey) {
             
             // Add priority if provided
             if (question.priority) {
-                fieldsJson.priority = { name: question.priority };
+                fieldsJson.priority = question.priority;
             }
             
             const result = jira_create_ticket_with_json({
