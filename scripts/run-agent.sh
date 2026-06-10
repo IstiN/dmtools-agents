@@ -385,43 +385,16 @@ elif [ "$PROVIDER" = "kimi" ]; then
     KIMI_MODEL_ARGS=(--model "${KIMI_MODEL}")
   fi
 
-  # For large prompts, stdin is safer than -p to avoid ARG_MAX limits.
-  # When PASS_ARGS contains session-related flags, use -p explicitly because
-  # kimi may not read stdin when resuming a session.
-  kimi_should_use_prompt_flag() {
-    for pass_arg in "${PASS_ARGS[@]:-}"; do
-      case "${pass_arg}" in
-        --continue|--resume|--resume=*|--session|--session=*)
-          return 0
-          ;;
-      esac
-    done
-    return 1
-  }
-
+  # Always use -p (non-interactive prompt mode) when stdin is not a TTY (CI).
+  # Stdin mode causes kimi to enter interactive TUI which hangs/does nothing in CI.
+  # For local interactive use, stdin is fine but -p is still preferred for reliability.
   kimi_log="$(mktemp)"
-  if kimi_should_use_prompt_flag; then
-    echo "Running: kimi ${KIMI_MODEL_ARGS[*]:-} ${PASS_ARGS[*]:-} -p <prompt:${PROMPT_BYTES} bytes>"
-    echo ""
-    set +e
-    kimi ${KIMI_MODEL_ARGS[@]+"${KIMI_MODEL_ARGS[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$kimi_log"
-    exit_code=${PIPESTATUS[0]}
-    set -e
-  elif [ -f "${PROMPT_ARG}" ]; then
-    echo "Running: kimi ${KIMI_MODEL_ARGS[*]:-} ${PASS_ARGS[*]:-} (prompt: ${PROMPT_BYTES} bytes via stdin)"
-    echo ""
-    set +e
-    kimi ${KIMI_MODEL_ARGS[@]+"${KIMI_MODEL_ARGS[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${PROMPT_ARG}" 2>&1 | tee "$kimi_log"
-    exit_code=${PIPESTATUS[0]}
-    set -e
-  else
-    echo "Running: kimi ${KIMI_MODEL_ARGS[*]:-} ${PASS_ARGS[*]:-} -p <inline prompt>"
-    echo ""
-    set +e
-    kimi ${KIMI_MODEL_ARGS[@]+"${KIMI_MODEL_ARGS[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$kimi_log"
-    exit_code=${PIPESTATUS[0]}
-    set -e
-  fi
+  echo "Running: kimi ${KIMI_MODEL_ARGS[*]:-} ${PASS_ARGS[*]:-} -p <prompt:${PROMPT_BYTES} bytes>"
+  echo ""
+  set +e
+  kimi ${KIMI_MODEL_ARGS[@]+"${KIMI_MODEL_ARGS[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$kimi_log"
+  exit_code=${PIPESTATUS[0]}
+  set -e
 
   record_codegraph_usage "$kimi_log"
   rm -f "$kimi_log"
