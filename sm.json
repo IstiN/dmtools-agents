@@ -104,6 +104,13 @@
           "enabled": true
         },
         {
+          "description": "Blocked Stories & Bugs with all resolved dependencies → move to Backlog",
+          "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('Blocked') ORDER BY updated ASC",
+          "configFile": "agents/unblock_resolved_dependencies.json",
+          "localExecution": true,
+          "enabled": true
+        },
+        {
           "description": "In Review Stories & Bugs → trigger pr_review",
           "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('In Review') AND (labels is EMPTY OR labels NOT IN ('pr_approved'))",
           "configFile": "agents/pr_review.json",
