@@ -140,6 +140,7 @@ function action(params) {
         var jobParamPatch = projectConfig.jobParamPatches && projectConfig.jobParamPatches[agentId];
         var priorityMap = customParams.priorityMap
             || (jobParamPatch && jobParamPatch.customParams && jobParamPatch.customParams.priorityMap)
+            || projectConfig.priorityMap
             || null;
 
         console.log('Processing question creation for:', ticketKey);
