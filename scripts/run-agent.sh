@@ -378,7 +378,6 @@ elif [ "$PROVIDER" = "kimi" ]; then
   echo ""
 
   # Build kimi command.
-  # --print runs in non-interactive mode (auto-approves tools, dismisses questions).
   # PASS_ARGS support: flags like --continue --resume --session are forwarded.
   # By default we do NOT pass --model unless KIMI_MODEL is explicitly set.
   KIMI_MODEL_ARGS=()
@@ -402,24 +401,24 @@ elif [ "$PROVIDER" = "kimi" ]; then
 
   kimi_log="$(mktemp)"
   if kimi_should_use_prompt_flag; then
-    echo "Running: kimi --print --yolo ${KIMI_MODEL_ARGS[*]:-} ${PASS_ARGS[*]:-} -p <prompt:${PROMPT_BYTES} bytes>"
+    echo "Running: kimi ${KIMI_MODEL_ARGS[*]:-} ${PASS_ARGS[*]:-} -p <prompt:${PROMPT_BYTES} bytes>"
     echo ""
     set +e
-    kimi --print --yolo ${KIMI_MODEL_ARGS[@]+"${KIMI_MODEL_ARGS[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$kimi_log"
+    kimi ${KIMI_MODEL_ARGS[@]+"${KIMI_MODEL_ARGS[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$kimi_log"
     exit_code=${PIPESTATUS[0]}
     set -e
   elif [ -f "${PROMPT_ARG}" ]; then
-    echo "Running: kimi --print --yolo ${KIMI_MODEL_ARGS[*]:-} ${PASS_ARGS[*]:-} (prompt: ${PROMPT_BYTES} bytes via stdin)"
+    echo "Running: kimi ${KIMI_MODEL_ARGS[*]:-} ${PASS_ARGS[*]:-} (prompt: ${PROMPT_BYTES} bytes via stdin)"
     echo ""
     set +e
-    kimi --print --yolo ${KIMI_MODEL_ARGS[@]+"${KIMI_MODEL_ARGS[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${PROMPT_ARG}" 2>&1 | tee "$kimi_log"
+    kimi ${KIMI_MODEL_ARGS[@]+"${KIMI_MODEL_ARGS[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${PROMPT_ARG}" 2>&1 | tee "$kimi_log"
     exit_code=${PIPESTATUS[0]}
     set -e
   else
-    echo "Running: kimi --print --yolo ${KIMI_MODEL_ARGS[*]:-} ${PASS_ARGS[*]:-} -p <inline prompt>"
+    echo "Running: kimi ${KIMI_MODEL_ARGS[*]:-} ${PASS_ARGS[*]:-} -p <inline prompt>"
     echo ""
     set +e
-    kimi --print --yolo ${KIMI_MODEL_ARGS[@]+"${KIMI_MODEL_ARGS[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$kimi_log"
+    kimi ${KIMI_MODEL_ARGS[@]+"${KIMI_MODEL_ARGS[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$kimi_log"
     exit_code=${PIPESTATUS[0]}
     set -e
   fi

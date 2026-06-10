@@ -11,14 +11,14 @@
 #   install.sh dmtools maestro copilot playwright
 #   install.sh java:17 dmtools:v1.7.195 node:20 maestro copilot playwright
 #   install.sh all
-#   install.sh all -cursor -codemie
+#   install.sh all -cursor -codemie -kimi
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"
 
 # Canonical order for "all" (node before copilot, java before dmtools)
-ALL_TOOLS="java node dmtools maestro copilot codemie cursor codegraph playwright"
+ALL_TOOLS="java node dmtools maestro copilot codemie cursor codegraph playwright kimi"
 
 if [ $# -eq 0 ]; then
   echo "Usage: install.sh tool1[:version] tool2[:version] ..."
@@ -34,12 +34,13 @@ if [ $# -eq 0 ]; then
   echo "  cursor    — cursor-agent (check only; cannot be auto-installed)"
   echo "  codegraph — CodeGraph CLI (npm).     Default version: latest"
   echo "  playwright — Playwright + Chromium.  Default version: latest"
+  echo "  kimi      — Kimi Code CLI.           Default version: latest"
   echo ""
   echo "Examples:"
   echo "  install.sh dmtools maestro copilot playwright"
   echo "  install.sh java:17 dmtools:v1.7.195 node:20 maestro copilot playwright"
   echo "  install.sh all"
-  echo "  install.sh all -cursor -codemie"
+  echo "  install.sh all -cursor -codemie -kimi"
   exit 0
 fi
 
@@ -176,6 +177,7 @@ for tool in ${TOOL_LIST}; do
     cursor)  BIN="cursor-agent" ;;
     codegraph) BIN="codegraph" ;;
     playwright) BIN="playwright" ;;
+    kimi)    BIN="kimi" ;;
     *)       continue ;;
   esac
 
