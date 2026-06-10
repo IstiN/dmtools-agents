@@ -15,7 +15,7 @@ source "${SCRIPT_DIR}/_common.sh"
 KIMI_VERSION="${1:-${KIMI_VERSION:-}}"
 KIMI_INSTALL_DIR="${HOME}/.kimi-code"
 KIMI_BIN_DIR="${KIMI_INSTALL_DIR}/bin"
-KIMI_CONFIG_DIR="${HOME}/.config/kimi"
+KIMI_CONFIG_DIR="${HOME}/.kimi-code"
 KIMI_CONFIG_FILE="${KIMI_CONFIG_DIR}/config.toml"
 
 # ── Write config ──────────────────────────────────────────────────────────────
