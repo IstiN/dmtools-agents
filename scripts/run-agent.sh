@@ -355,19 +355,24 @@ elif [ "$PROVIDER" = "copilot" ]; then
   exit $exit_code
 
 elif [ "$PROVIDER" = "kimi" ]; then
-  if [ -z "${KIMI_API_KEY:-}" ]; then
-    echo "Error: KIMI_API_KEY environment variable is required for kimi provider" >&2
-    echo "Set it in dmtools.env or as an environment variable" >&2
-    exit 1
-  fi
-
   if ! command -v kimi >/dev/null 2>&1; then
     echo "Error: kimi not found in PATH" >&2
     echo "Install Kimi Code CLI: https://code.kimi.com/kimi-code/install.sh" >&2
     exit 127
   fi
 
+  # Kimi can authenticate via OAuth (local installs) or API key (CI).
+  # Only require KIMI_API_KEY when OAuth is not configured.
+  KIMI_AUTH_SOURCE=""
+  KIMI_AUTH_SOURCE="$(kimi provider list 2>/dev/null | grep 'managed:kimi-code' | grep -o 'source=[^ ]*' | cut -d'=' -f2 || true)"
+  if [ "${KIMI_AUTH_SOURCE:-}" != "oauth" ] && [ -z "${KIMI_API_KEY:-}" ]; then
+    echo "Error: KIMI_API_KEY environment variable is required for kimi provider" >&2
+    echo "Set it in dmtools.env or as an environment variable" >&2
+    exit 1
+  fi
+
   echo "Kimi Configuration:"
+  echo "  Auth source: ${KIMI_AUTH_SOURCE:-api_key}"
   if [ -n "${KIMI_BASE_URL:-}" ]; then
     echo "  Base URL: ${KIMI_BASE_URL}"
   fi
@@ -385,19 +390,11 @@ elif [ "$PROVIDER" = "kimi" ]; then
     KIMI_MODEL_ARGS=(--model "${KIMI_MODEL}")
   fi
 
-  # Use an isolated share dir so we can reliably locate the wire file after the
-  # run and extract token usage from it.
-  KIMI_SHARE_DIR_DEFAULT="${HOME}/.kimi"
-  KIMI_SHARE_DIR_ISOLATED="${RUNNER_TEMP:-/tmp}/kimi-share-run-$$"
-  mkdir -p "${KIMI_SHARE_DIR_ISOLATED}"
-  export KIMI_SHARE_DIR="${KIMI_SHARE_DIR_ISOLATED}"
-
   # Always use -p (non-interactive prompt mode) when stdin is not a TTY (CI).
   # Stdin mode causes kimi to enter interactive TUI which hangs/does nothing in CI.
   # For local interactive use, stdin is fine but -p is still preferred for reliability.
   kimi_log="$(mktemp)"
   echo "Running: kimi ${KIMI_MODEL_ARGS[*]:-} ${PASS_ARGS[*]:-} -p <prompt:${PROMPT_BYTES} bytes>"
-  echo "  KIMI_SHARE_DIR: ${KIMI_SHARE_DIR}"
   echo ""
   set +e
   kimi ${KIMI_MODEL_ARGS[@]+"${KIMI_MODEL_ARGS[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} --output-format "stream-json" -p "${PROMPT}" 2>&1 | tee "$kimi_log"
@@ -405,14 +402,23 @@ elif [ "$PROVIDER" = "kimi" ]; then
   set -e
 
   record_codegraph_usage "$kimi_log"
-  rm -f "$kimi_log"
+
+  # Extract the session id from Kimi's resume_hint so we can locate the wire file
+  # for this specific run. Kimi stores runtime data under KIMI_CODE_HOME.
+  KIMI_SESSION_ID=""
+  KIMI_SESSION_ID="$(grep -o '"session_id":"[^"]*"' "$kimi_log" | head -1 | cut -d'"' -f4 || true)"
 
   # Extract token usage from the wire file Kimi CLI wrote during the run.
-  # Wire file location: $KIMI_SHARE_DIR/sessions/<work-dir-hash>/<session-id>/agents/main/wire.jsonl
+  # Wire file location: $KIMI_CODE_HOME/sessions/<work-dir-hash>/<session-id>/agents/main/wire.jsonl
   print_kimi_usage_summary() {
-    local share_dir="$1"
-    local wire_file
-    wire_file="$(find "${share_dir}/sessions" -name "wire.jsonl" -type f 2>/dev/null | head -1)"
+    local session_id="$1"
+    local kimi_code_home="${KIMI_CODE_HOME:-${HOME}/.kimi-code}"
+    local wire_file=""
+
+    if [ -n "${session_id}" ]; then
+      wire_file="$(find "${kimi_code_home}/sessions" -path "*/${session_id}/agents/main/wire.jsonl" -type f 2>/dev/null | head -1 || true)"
+    fi
+
     if [ -z "${wire_file}" ] || [ ! -f "${wire_file}" ]; then
       echo "⚠️  No Kimi wire file found; cannot report token usage."
       return 0
@@ -470,12 +476,9 @@ print("================================")
 PYEOF
   }
 
-  print_kimi_usage_summary "${KIMI_SHARE_DIR}"
+  print_kimi_usage_summary "${KIMI_SESSION_ID}"
 
-  # Clean up the isolated share dir to avoid leaking disk space in CI.
-  rm -rf "${KIMI_SHARE_DIR_ISOLATED}"
-  # Restore default only if we exported it; otherwise leave env as-is.
-  export KIMI_SHARE_DIR="${KIMI_SHARE_DIR_DEFAULT}"
+  rm -f "$kimi_log"
 
   echo ""
   echo "=== Agent completed with exit code: $exit_code ==="
