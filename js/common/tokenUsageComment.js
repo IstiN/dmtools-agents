@@ -35,12 +35,28 @@ function readJsonSafe(filePath) {
     }
 }
 
-function formatUsageComment(filePath, data) {
+function formatJiraMention(notifierId) {
+    if (!notifierId) {
+        return '';
+    }
+    var id = String(notifierId);
+    if (id.indexOf('~') !== -1) {
+        return '[' + id + ']';
+    }
+    return '[~accountid:' + id + ']';
+}
+
+function formatUsageComment(filePath, data, initiator) {
     var baseName = path.basename(filePath, '.json');
     // Strip the _usage suffix so the comment label matches the agent name
     // (e.g. outputs/story_acceptance_criteria_usage.json -> [story_acceptance_criteria]: {...})
     var label = baseName.replace(/_usage$/, '');
-    return '[' + label + ']: ' + JSON.stringify(data);
+    var comment = '[' + label + ']: ' + JSON.stringify(data);
+    var mention = formatJiraMention(initiator);
+    if (mention) {
+        comment += '\nInitiator: ' + mention;
+    }
+    return comment;
 }
 
 /**
@@ -49,11 +65,13 @@ function formatUsageComment(filePath, data) {
  * @param {string} ticketKey - Jira ticket key to comment on.
  * @param {object} options - Optional settings.
  * @param {string} options.outputsDir - Directory to scan for *_usage.json files (default: outputs).
+ * @param {string} options.initiator - Optional initiator account id to mention in the comment.
  * @returns {object} Result summary { posted: number, files: string[], errors: string[] }.
  */
 function postTokenUsageComments(ticketKey, options) {
     options = options || {};
     var outputsDir = options.outputsDir || OUTPUTS_DIR;
+    var initiator = options.initiator || '';
     var posted = 0;
     var files = [];
     var errors = [];
@@ -71,7 +89,7 @@ function postTokenUsageComments(ticketKey, options) {
             return;
         }
 
-        var comment = formatUsageComment(filePath, data);
+        var comment = formatUsageComment(filePath, data, initiator);
         try {
             jira_post_comment({ key: ticketKey, comment: comment });
             console.log('Posted token usage comment for ' + ticketKey + ' from ' + filePath);

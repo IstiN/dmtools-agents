@@ -74,7 +74,7 @@ function action(params) {
         // Post token usage summary comments (e.g. [kimi_usage]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
         try {
-            tokenUsageComment.postTokenUsageComments(ticketKey);
+            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }
