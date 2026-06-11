@@ -67,14 +67,14 @@ flowchart LR
 
 ### [7] `./agents/instructions/common/media_handling.md`
 
-if you can't read file yourself for instance images you must use the terminal (CLI) command "dmtools gemini_ai_chat_with_files --data '{"message": "Your request what you need to understand from file", "filePaths": ["/path/to/image.png"]}'"
+Images and attachments are pre-downloaded to the input folder. Read them directly — no extra API call is needed.
 
-Use the terminal (cli) command to get png file of figma designs and then read it via gemini_ai_chat_with_files: dmtools figma_download_image_of_file <<EOF
+To download a Figma design image use the terminal command:
+dmtools figma_download_image_of_file <<EOF
 {
   "href": "https://www.figma.com/design/asdsadasdasdasd/Business-App?m=auto&node-id=NODEID&t=ASdasdsadas-1"
 }
 EOF
-
 
 
 ---
