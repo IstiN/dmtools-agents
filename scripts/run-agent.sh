@@ -392,7 +392,7 @@ elif [ "$PROVIDER" = "kimi" ]; then
   echo "Running: kimi ${KIMI_MODEL_ARGS[*]:-} ${PASS_ARGS[*]:-} -p <prompt:${PROMPT_BYTES} bytes>"
   echo ""
   set +e
-  kimi ${KIMI_MODEL_ARGS[@]+"${KIMI_MODEL_ARGS[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$kimi_log"
+  kimi ${KIMI_MODEL_ARGS[@]+"${KIMI_MODEL_ARGS[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} --output-format "stream-json" -p "${PROMPT}" 2>&1 | tee "$kimi_log"
   exit_code=${PIPESTATUS[0]}
   set -e
 
