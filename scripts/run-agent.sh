@@ -113,8 +113,10 @@ echo "AI Agent Provider: $PROVIDER"
 
 # Derive a human-readable usage name for token-report files.
 # Prefer the agent config name (e.g. story_acceptance_criteria from CONFIG_FILE),
-# fall back to the provider name for standalone/local runs.
+# then fall back to the workflow-provided AI_TEAMMATE_CONFIG_FILE,
+# and finally fall back to the provider name for standalone/local runs.
 AI_AGENT_USAGE_NAME="${PROVIDER}"
+CONFIG_FILE="${CONFIG_FILE:-${AI_TEAMMATE_CONFIG_FILE:-}}"
 if [ -n "${CONFIG_FILE:-}" ]; then
   AI_AGENT_USAGE_NAME="$(basename "${CONFIG_FILE}" .json)"
 fi
