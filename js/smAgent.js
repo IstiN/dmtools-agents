@@ -78,6 +78,20 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
         if (base && base !== 'config') projectKey = base;
     }
 
+    // Inject explicit task prompt with the ticket key so the LLM knows what to process.
+    // dmtools-core writes ticket content to input/TICKET/ but the placeholder in static
+    // instructions is never resolved, leaving the agent without a clear task.
+    if (ticketKey) {
+        var taskPrompt = 'Process ticket ' + ticketKey +
+            '. Read the ticket description and context from input/' + ticketKey +
+            '/, then follow the instructions below to complete the task.';
+        if (Array.isArray(p.cliPrompts)) {
+            p.cliPrompts.unshift(taskPrompt);
+        } else {
+            p.cliPrompts = [taskPrompt];
+        }
+    }
+
     // Load target agent's customParams and include them in encoded_config so they survive
     // regardless of whether dmtools merges or replaces customParams at the job level.
     if (resolvedCf) {
