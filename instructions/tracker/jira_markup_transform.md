@@ -1,9 +1,9 @@
-# Jira Markup Transform
+# Jira Markup Reference
 
-When writing output for Jira tracker fields or comments, transform the generic XML-style formatting tags below into Jira wiki markup. Do not write literal XML tags in the final output.
+When the target tracker is Jira, replace every generic placeholder tag from the Solution Design template with the Jira wiki markup shown below. Do not write literal XML-style tags in the final output.
 
-| Generic tag | Jira wiki markup | Example |
-|-------------|------------------|---------|
+| Generic placeholder | Jira wiki markup | Example |
+|---------------------|------------------|---------|
 | `<bold>X</bold>` | `*X*` | `*Background:*` |
 | `<italic>X</italic>` | `_X_` | `_hint_` |
 | `<strike>X</strike>` | `-X-` | `-deprecated-` |
@@ -24,14 +24,16 @@ When writing output for Jira tracker fields or comments, transform the generic X
 | `<color color="red">X</color>` | `{color:red}X{color}` | `{color:red}alert{color}` |
 | `<hr>` | `----` | `----` |
 
-**Rules:**
-- Replace every `<tag>...</tag>` or self-closing tag with the Jira wiki markup shown above.
+## Rules
+
+- Replace every placeholder tag with the Jira wiki markup shown above.
 - Do NOT use Markdown syntax in Jira output: no `**bold**`, no `- item` bullets, no `# headings`, no triple backticks.
 - Use `* item` for bullets and `# item` for numbered lists.
 - For Mermaid diagrams in Jira fields that support them, wrap the diagram in `{code:mermaid}...{code}`.
 - For plain preformatted blocks, use `{noformat}...{noformat}`.
 
-**Full Jira wiki markup reference (Atlassian):**
+## Full Jira wiki markup reference (Atlassian)
+
 - `*text*` — bold
 - `_text_` — italic
 - `-text-` — strikethrough

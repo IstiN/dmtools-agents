@@ -5,6 +5,7 @@
 suite('writeSolutionAndDiagrams — module export', function() {
     test('exports action for GraalJS require wrappers', function() {
         var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({}), {});
+        var tokenUsageComment = { postTokenUsageComments: function() {} };
         var module = loadModule(
             'js/writeSolutionAndDiagrams.js',
             makeRequire({
@@ -12,7 +13,8 @@ suite('writeSolutionAndDiagrams — module export', function() {
                 './configLoader.js': configLoaderModule,
                 './common/scm.js': { createScm: function() { return {}; } },
                 './common/autoStart.js': {},
-                './common/outputFiles.js': outputFiles
+                './common/outputFiles.js': outputFiles,
+                './common/tokenUsageComment.js': tokenUsageComment
             }),
             {}
         );
@@ -30,6 +32,7 @@ suite('writeSolutionAndDiagrams — required outputs', function() {
                 throw new Error('not found: ' + path);
             }
         });
+        var tokenUsageComment = { postTokenUsageComments: function() {} };
         var module = loadModule(
             'js/writeSolutionAndDiagrams.js',
             makeRequire({
@@ -37,7 +40,8 @@ suite('writeSolutionAndDiagrams — required outputs', function() {
                 './configLoader.js': configLoaderModule,
                 './common/scm.js': { createScm: function() { return {}; } },
                 './common/autoStart.js': {},
-                './common/outputFiles.js': outputFiles
+                './common/outputFiles.js': outputFiles,
+                './common/tokenUsageComment.js': tokenUsageComment
             }),
             {
                 file_read: function(opts) {
