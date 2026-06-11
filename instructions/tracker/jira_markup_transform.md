@@ -1,6 +1,6 @@
 # Jira Markup Reference
 
-When the target tracker is Jira, replace every generic placeholder tag from the Solution Design template with the Jira wiki markup shown below. Do not write literal XML-style tags in the final output.
+When the target tracker is Jira, replace every generic placeholder tag from the template with the Jira wiki markup shown below. Do not write literal XML-style tags in the final output.
 
 | Generic placeholder | Jira wiki markup | Example |
 |---------------------|------------------|---------|
