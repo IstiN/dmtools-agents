@@ -281,36 +281,37 @@ flowchart TD
 
 # Jira Question Description Format
 
-When writing question descriptions for Jira tracker, render the generic formatting tags as Jira Markdown:
+When writing question descriptions for Jira tracker, use **Jira wiki markup**.
 
-| Generic tag | Jira Markdown |
-|-------------|---------------|
-| `<bold>X</bold>` | `*X*` |
-| `<bullet>` | `-` |
+| Element | Jira wiki markup | Example |
+|---------|------------------|---------|
+| Bold | `*text*` | `*Background:*` |
+| Italic | `_text_` | `_hint_` |
+| Bullet list | `* item` | `* Option A: ...` |
+| Numbered list | `# item` | `# Step one` |
+| Inline code | `{{code}}` | `{{main.dart}}` |
+| Link | `[title|url]` | `[TS-24|https://...]` |
 
-Additional formatting rules:
-- `*bold*` — single asterisks for bold text
-- `- item` — dashes for bullet lists
-- Do NOT use `**` double asterisks
-- Do NOT use `#` Markdown headers
+**Rules:**
+- Use `*text*` for bold — single asterisks, NOT `**` double asterisks.
+- Use `* item` for bullets — asterisk + space, NOT `- item` or Markdown lists.
+- Do NOT use Markdown headings (`#`, `##`, `###`).
+- Do NOT use fenced code blocks (triple backticks). Use `{code}...{code}` if needed.
+- Do NOT write literal XML tags like `<bold>` or `<bullet>`.
 
-```mermaid
-flowchart TD
-    subgraph SYNTAX["Jira Markdown Syntax"]
-        S1["<bold>X</bold> → *X*"]
-        S2["<bullet> → - item"]
-        S3["Do NOT use ** double asterisks"]
-        S4["Do NOT use # Markdown headers"]
-    end
+**Correct example:**
 
-    subgraph EXAMPLE["Rendered Example"]
-        T1["*Background:* 1-2 sentences explaining why this matters"]
-        T2["*Question:* clear, specific question"]
-        T3["*Options:* 2-3 bullets (omit if only one valid path)"]
-        T4["*Recommended Decision:* always provide your best guess even if uncertain"]
-    end
+```text
+*Background:* 1-2 sentences explaining why this matters.
 
-    SYNTAX --> EXAMPLE
+*Question:* clear, specific question.
+
+*Options:*
+* Option A: description
+* Option B: description
+* Option C: description
+
+*Recommended Decision:* always provide your best guess even if uncertain.
 ```
 
 

@@ -27,7 +27,8 @@
     ],
     "cliPromptsByTracker": {
       "jira": [
-        "./agents/instructions/tracker/jira_comment_format.md"
+        "./agents/instructions/tracker/jira_comment_format.md",
+        "./agents/instructions/tracker/jira_wiki_markup.md"
       ],
       "ado": [
         "./agents/instructions/tracker/ado_comment_format.md"
