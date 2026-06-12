@@ -150,7 +150,8 @@ function attemptResumeIfReviewOutputsMissing(ticketKey) {
         'Write these files before stopping:\n' +
         '1. outputs/pr_review.json with fields recommendation, generalComment, resolvedThreadIds, inlineComments, issueCounts.\n' +
         '2. outputs/pr_review_general.md with a short GitHub Markdown review summary.\n' +
-        '3. outputs/pr_review_comments/*.md for any detailed inline comments; reference them via the "comment" field in pr_review.json.\n\n' +
+        '3. outputs/pr_review_comments/*.md for every inline comment; reference each via the "comment" field in pr_review.json.\n' +
+        '   Never put comment text inline in the JSON (no "body" field).\n\n' +
         'Do NOT write outputs/response.md.\n\n' +
         'If you found a BLOCK or REQUEST_CHANGES result, still write the files. Do not return only plain text.\n' +
         'If the finding is not on a changed diff line, put it in outputs/pr_review_general.md and leave inlineComments empty.\n' +
