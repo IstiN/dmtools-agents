@@ -29,6 +29,7 @@
       "./agents/instructions/common/coding_guidelines.md",
       "./agents/instructions/pr_rework/general_guidelines.md",
       "./agents/instructions/pr_rework/formatting_rules.md",
+      "./agents/instructions/pr_rework/output_rules.md",
       "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md"
     ]

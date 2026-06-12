@@ -13,7 +13,15 @@ function loadPushReworkChanges() {
             './common/pullRequest.js': {},
             './common/feedbackLoop.js': {},
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
-            './common/outputFiles.js': { readOutputFile: function() { return null; } },
+            './common/outputFiles.js': {
+                readOutputFile: function(path) {
+                    if (mocks.outputFiles && mocks.outputFiles[path] !== undefined) {
+                        return mocks.outputFiles[path];
+                    }
+                    return null;
+                }
+            },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './cacheToReleases.js': {}
         }),
         {}
@@ -33,7 +41,10 @@ function loadPushReworkChangesForAction(mocks) {
                         getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'trackstate' }; },
                         listPrs: function() { return [{ number: 1571, title: 'TS-1293 Fix', html_url: 'https://github.com/IstiN/trackstate/pull/1571', head: { ref: 'ai/TS-1293' } }]; },
                         addComment: function() { mocks.prComments = (mocks.prComments || 0) + 1; },
-                        replyToThread: function() { mocks.threadReplies = (mocks.threadReplies || 0) + 1; },
+                        replyToThread: function(prId, thread, text) {
+                            mocks.threadReplies = (mocks.threadReplies || 0) + 1;
+                            mocks.replyTexts = (mocks.replyTexts || []).concat(text);
+                        },
                         resolveThread: function() { mocks.resolvedThreads = (mocks.resolvedThreads || 0) + 1; }
                     };
                 }
@@ -57,7 +68,15 @@ function loadPushReworkChangesForAction(mocks) {
                 triggerConfiguredWorkflowForTicket: function() { mocks.autoStartReview = true; return true; },
                 triggerSmIfIdle: function() { mocks.triggerSm = true; return true; }
             },
-            './common/outputFiles.js': { readOutputFile: function() { return null; } },
+            './common/outputFiles.js': {
+                readOutputFile: function(path) {
+                    if (mocks.outputFiles && mocks.outputFiles[path] !== undefined) {
+                        return mocks.outputFiles[path];
+                    }
+                    return null;
+                }
+            },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './cacheToReleases.js': { action: function() {} }
         }),
         {
@@ -94,7 +113,8 @@ function loadPostTestReworkResults() {
             './configLoader.js': configLoaderModule,
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
             './common/feedbackLoop.js': {},
-            './common/pullRequest.js': {}
+            './common/pullRequest.js': {},
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
         {}
     );
@@ -223,6 +243,45 @@ suite('rework custom params', function() {
             -1,
             'must not force-push over remote PR updates'
         );
+    });
+
+    test('pr_rework posts thread replies from files referenced in review_replies.json and resolves threads', function() {
+        var mocks = {
+            outputFiles: {
+                'review_replies.json': JSON.stringify({
+                    replies: [
+                        {
+                            inReplyToId: 111,
+                            threadId: 'PRRT_abc',
+                            reply: 'outputs/review_replies/thread_111.md'
+                        },
+                        {
+                            inReplyToId: 222,
+                            threadId: 'PRRT_def',
+                            reply: 'outputs/review_replies/thread_222.md'
+                        }
+                    ]
+                }),
+                'outputs/review_replies/thread_111.md': '✅ Fixed in `ai/TS-1293`.',
+                'outputs/review_replies/thread_222.md': '✅ Renamed variable per review.'
+            }
+        };
+        var mod = loadPushReworkChangesForAction(mocks);
+
+        var result = mod.action({
+            jobParams: {
+                ticket: { key: 'TS-1293', fields: { labels: [] } },
+                response: 'Implemented fix and wrote outputs/response.md',
+                customParams: {
+                    removeLabels: ['sm_story_rework_triggered']
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(mocks.threadReplies, 2);
+        assert.equal(mocks.resolvedThreads, 2);
+        assert.deepEqual(mocks.replyTexts, ['✅ Fixed in `ai/TS-1293`.', '✅ Renamed variable per review.']);
     });
 
     test('merges pr_test_automation_rework jobParamPatches into runtime customParams', function() {

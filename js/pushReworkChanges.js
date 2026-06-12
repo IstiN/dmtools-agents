@@ -1,10 +1,11 @@
 /**
  * Push Rework Changes Post-Action
  * postJSAction for pr_rework agent:
- * 1. Stages, commits, and force-pushes changes to the existing PR branch
- * 2. Posts the fix summary (outputs/response.md) as a PR comment
- * 3. Moves ticket to "In Review"
- * 4. Posts completion comment to Jira
+ * 1. Stages, commits, and pushes changes to the existing PR branch
+ * 2. Posts replies to each open PR review thread and resolves the threads
+ * 3. Posts the fix summary (outputs/response.md) as a top-level PR comment
+ * 4. Moves ticket to "In Review"
+ * 5. Posts completion comment to Jira
  */
 
 var configLoader = require('./configLoader.js');
@@ -242,10 +243,12 @@ function commitAndPush(ticketKey, config, customParams) {
  * Post replies to each review thread and resolve them.
  * Reads outputs/review_replies.json produced by the cursor agent.
  *
- * JSON format: { "replies": [{ "inReplyToId": 123, "threadId": "PRRT_...", "reply": "..." }] }
+ * JSON format: { "replies": [{ "inReplyToId": 123, "threadId": "PRRT_...", "reply": "outputs/review_replies/thread1.md" }] }
+ * The "reply" field may be a path to a Markdown file (preferred) or inline text (legacy).
  */
-function postThreadReplies(scm, pullRequestId) {
-    let repliesJson = outputFiles.readOutputFile('review_replies.json', {});
+function postThreadReplies(scm, pullRequestId, outputOptions) {
+    outputOptions = outputOptions || {};
+    let repliesJson = outputFiles.readOutputFile('review_replies.json', outputOptions);
     if (!repliesJson) {
         console.warn('outputs/review_replies.json not found — skipping thread replies');
         return 0;
@@ -265,9 +268,23 @@ function postThreadReplies(scm, pullRequestId) {
         return 0;
     }
 
+    function resolveReplyText(replyRef) {
+        if (!replyRef) return '✅ Addressed.';
+        const looksLikePath = replyRef.indexOf('outputs/') === 0 ||
+            replyRef.indexOf('/') !== -1 ||
+            replyRef.indexOf('.md') !== -1;
+        if (looksLikePath) {
+            const fileContent = outputFiles.readOutputFile(replyRef, outputOptions);
+            if (fileContent && fileContent.trim()) {
+                return fileContent.trim();
+            }
+        }
+        return replyRef;
+    }
+
     let posted = 0;
     replies.forEach(function(item) {
-        const replyText = item.reply || '✅ Addressed.';
+        const replyText = resolveReplyText(item.reply);
         const thread = { rootCommentId: item.inReplyToId || null, threadId: item.threadId || null };
 
         try {
@@ -482,7 +499,10 @@ function action(params) {
 
         if (pr && repoInfo) {
             // Reply to each review thread and resolve it
-            const repliesPosted = postThreadReplies(scm, pr.number);
+            const repliesPosted = postThreadReplies(scm, pr.number, {
+                ticketKey: ticketKey,
+                workingDir: config.workingDir || null
+            });
             console.log('Thread replies posted:', repliesPosted);
 
             // Post general fix summary as a top-level PR comment

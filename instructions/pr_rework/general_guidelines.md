@@ -20,7 +20,10 @@ flowchart TD
     SUGGESTIONS -->|No| TEST[Run tests and verify]
     SKIP --> TEST
     TEST --> OUTPUT[Write outputs/response.md]
-    OUTPUT --> END([End])
+    OUTPUT --> REPLIES{Open review threads?}
+    REPLIES -->|Yes| REVIEW_REPLIES["Write outputs/review_replies.json with one reply per open thread using threadId + inReplyToId"]
+    REPLIES -->|No| END([End])
+    REVIEW_REPLIES --> END
 ```
 
 ## 1. Input context — MANDATORY reading order

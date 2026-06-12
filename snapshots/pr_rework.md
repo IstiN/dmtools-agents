@@ -57,7 +57,10 @@ flowchart TD
     SUGGESTIONS -->|No| TEST[Run tests and verify]
     SKIP --> TEST
     TEST --> OUTPUT[Write outputs/response.md]
-    OUTPUT --> END([End])
+    OUTPUT --> REPLIES{Open review threads?}
+    REPLIES -->|Yes| REVIEW_REPLIES["Write outputs/review_replies.json with one reply per open thread using threadId + inReplyToId"]
+    REPLIES -->|No| END([End])
+    REVIEW_REPLIES --> END
 ```
 
 ## 1. Input context — MANDATORY reading order
@@ -98,16 +101,66 @@ Read PR files to understand WHAT changed. Read ticket files to understand WHY it
 
 ```mermaid
 flowchart TD
-    F1["outputs/response.md must be a markdown document"]
+    F1["outputs/response.md must be Markdown (# headings, - bullets, ``` code fences)"]
     F2["Required sections: ## Issues/Notes (if any), ## Approach, ## Files Modified, ## Test Coverage"]
     F3["Be surgical but thorough — fix exact issues flagged, then check same pattern across codebase"]
     F4["Do NOT refactor unrelated code or add unrequested features"]
+    F5["When open PR review threads exist, create outputs/review_replies/*.md files and reference them from outputs/review_replies.json"]
 ```
+
+- When `input/<TICKET>/pr_discussions_raw.json` contains open PR review threads:
+  - Write one Markdown file per open thread under `outputs/review_replies/`.
+  - Write `outputs/review_replies.json` with one entry per open thread, including `inReplyToId`, `threadId`, and a `reply` field that contains the path to the matching `.md` file.
+  - Do **not** put reply bodies inline in the JSON.
 
 
 ---
 
-### [6] `./agents/instructions/common/dmtools_cli.md`
+### [6] `./agents/instructions/pr_rework/output_rules.md`
+
+## PR Rework — Output Rules
+
+Rework posts **only** to the Pull Request. All output must be Markdown.
+
+### Required files
+
+1. `outputs/response.md`
+   - GitHub Markdown fix summary for the top-level PR comment.
+   - Use `#`/`##` headings, ` ``` ` code fences, `-` bullets.
+   - Required sections: `## Issues/Notes`, `## Approach`, `## Files Modified`, `## Test Coverage`.
+
+2. `outputs/review_replies.json`
+   - **Mandatory** when the PR has open review threads.
+   - If there are no open threads, write `{ "replies": [] }`.
+   - Format:
+
+```json
+{
+  "replies": [
+    {
+      "inReplyToId": 1234567890,
+      "threadId": "PRRT_<graphQL_id>",
+      "reply": "outputs/review_replies/thread_1.md"
+    }
+  ]
+}
+```
+
+3. `outputs/review_replies/*.md`
+   - One Markdown file per open PR review thread.
+   - The file path is referenced from `outputs/review_replies.json` via the `reply` field.
+   - Keep each reply concise and factual; reference the fix location when possible.
+
+Rules for review replies:
+- Read `input/<TICKET>/pr_discussions_raw.json` to obtain each open thread's `threadId` and `rootCommentId` (`inReplyToId`).
+- Create one reply entry and one `.md` file for **every** open review thread — do not skip any unresolved conversation.
+- `threadId` is required for GitHub to resolve/close the conversation; `inReplyToId` is required to post the reply in the correct thread.
+- Do **not** put the reply body inline in the JSON; use the `reply` field only as a file path reference.
+
+
+---
+
+### [7] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 
@@ -145,7 +198,7 @@ flowchart TD
 
 ---
 
-### [7] `./agents/prompts/bash_tools.md`
+### [8] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
