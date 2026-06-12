@@ -1,6 +1,6 @@
 ```mermaid
 flowchart TD
-    F1["outputs/pr_review_general.md — brief GitHub Markdown summary, under 20 lines, bullet-focused"]
+    F1["outputs/pr_review_general.md — brief Markdown summary, under 20 lines, bullet-focused"]
     F2["Required sections: Summary, Key Issues, Next Steps"]
     F3["outputs/pr_review.json — valid JSON with recommendation, summary, inlineComments, issueCounts"]
     F4["Each inline comment: path, line, startLine, side, comment, severity (BLOCKING|IMPORTANT|SUGGESTION)"]

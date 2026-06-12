@@ -45,7 +45,8 @@ flowchart TD
     FILES --> CODEGRAPH["4. Use CodeGraph:<br/>callers/callees of changed symbols,<br/>search for sensitive patterns,<br/>impact analysis"]
     CODEGRAPH --> DIMS["5. Evaluate review dimensions:<br/>Security · Architecture/OOP · Code quality<br/>Test coverage · Duplication · Backward compatibility"]
     DIMS --> SEVERITY["6. Classify each finding:<br/>BLOCKING / IMPORTANT / SUGGESTION"]
-    SEVERITY --> OUTPUT["7. Write outputs:<br/>pr_review.json · pr_review_general.md · pr_review_comments/*.md"]
+    SEVERITY --> EXHAUST["7. Exhaustive pass:<br/>re-read changed files,<br/>surface ALL remaining issues"]
+    EXHAUST --> OUTPUT["8. Write outputs:<br/>pr_review.json · pr_review_general.md · pr_review_comments/*.md"]
     OUTPUT --> END([End])
 ```
 
@@ -92,6 +93,7 @@ For every hunk, ask at least these questions:
 - [ ] Is dead code, unused imports, or obvious duplication introduced?
 - [ ] Are error paths handled, or are failures silently swallowed?
 - [ ] Are new dependencies justified and compatible with the existing stack?
+- [ ] Beyond blockers: what other maintainability, correctness, or quality improvements are visible in the changed code?
 
 ## 3. Changed-file deep read
 
@@ -143,7 +145,16 @@ Classify every finding before writing outputs:
 
 When in doubt, start one level higher; downgrade only after confirming the risk is negligible.
 
-## 7. Outputs
+## 7. Exhaustive single-pass review
+
+Treat **every** review as the final and only review pass. The author will not get another chance to catch missed findings cheaply.
+
+- Do not defer SUGGESTION or IMPORTANT items to a later round because a BLOCKING issue exists.
+- After classifying all findings, re-read every changed file and ask: *"What else is improvable here?"*
+- Before writing outputs, verify that no obvious quality, maintainability, or correctness issue was left unreported.
+- Aim to surface the maximum number of actionable findings in this single iteration.
+
+## 8. Outputs
 
 Write the standard review artifacts:
 
@@ -174,7 +185,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    F1["outputs/pr_review_general.md — brief GitHub Markdown summary, under 20 lines, bullet-focused"]
+    F1["outputs/pr_review_general.md — brief Markdown summary, under 20 lines, bullet-focused"]
     F2["Required sections: Summary, Key Issues, Next Steps"]
     F3["outputs/pr_review.json — valid JSON with recommendation, summary, inlineComments, issueCounts"]
     F4["Each inline comment: path, line, startLine, side, comment, severity (BLOCKING|IMPORTANT|SUGGESTION)"]
