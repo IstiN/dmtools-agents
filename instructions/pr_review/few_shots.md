@@ -7,9 +7,9 @@ Example PR review outputs — keep concise:
   "summary": "SQL injection in UserService.js must be fixed before merge.",
   "generalComment": "outputs/pr_review_general.md",
   "inlineComments": [
-    {"path":"src/auth/UserService.js","line":45,"comment":"outputs/pr_review_comments/UserService_sql_injection.md","severity":"BLOCKING"},
-    {"path":"src/auth/LoginController.js","line":78,"body":"⚠️ IMPORTANT: Weak Password Validation — Require 8+ chars with mixed case, numbers, symbols.","severity":"IMPORTANT"},
-    {"path":"src/utils/validation.js","line":23,"body":"💡 SUGGESTION: DRY — Email validation duplicated in 3 files. Extract to shared utility.","severity":"SUGGESTION"}
+    {"path":"src/auth/UserService.js","line":45,"comment":"outputs/pr_review_comments/comment1.md","severity":"BLOCKING"},
+    {"path":"src/auth/LoginController.js","line":78,"comment":"outputs/pr_review_comments/comment2.md","severity":"IMPORTANT"},
+    {"path":"src/utils/validation.js","line":23,"comment":"outputs/pr_review_comments/comment3.md","severity":"SUGGESTION"}
   ],
   "issueCounts": {"blocking":1,"important":1,"suggestions":1}
 }
@@ -27,7 +27,7 @@ Example PR review outputs — keep concise:
 3. Extract shared email validation utility
 ```
 
-### outputs/pr_review_comments/UserService_sql_injection.md
+### outputs/pr_review_comments/comment1.md
 ```markdown
 🚨 **BLOCKING: SQL Injection**
 

@@ -163,7 +163,7 @@ flowchart TD
     O1["Write outputs/pr_review.json — structured data for GitHub PR review"]
     O2["Write outputs/pr_review_general.md — brief general PR comment (1-2 paragraphs max)"]
     O3["Write outputs/pr_review_comments/*.md — detailed inline comment files"]
-    O4["Keep inline comment JSON small — use 'comment' field pointing to file instead of inline 'body'"]
+    O4["Always reference inline comment files via the 'comment' field — do NOT use inline 'body'"]
     O1 --> O2 --> O3 --> O4
 ```
 
@@ -177,11 +177,11 @@ flowchart TD
     F1["outputs/pr_review_general.md — brief GitHub Markdown summary, under 20 lines, bullet-focused"]
     F2["Required sections: Summary, Key Issues, Next Steps"]
     F3["outputs/pr_review.json — valid JSON with recommendation, summary, inlineComments, issueCounts"]
-    F4["Each inline comment: path, line, startLine, side, body|comment, severity (BLOCKING|IMPORTANT|SUGGESTION)"]
-    F5["For long/detailed inline comments → write outputs/pr_review_comments/<file>.md and use 'comment' field"]
+    F4["Each inline comment: path, line, startLine, side, comment, severity (BLOCKING|IMPORTANT|SUGGESTION)"]
+    F5["comment must be a path to a file under outputs/pr_review_comments/<name>.md"]
     F6["outputs/pr_review_general.md — max 1-2 paragraphs, factual, no essays"]
     F7["If ci_failures.md present → include each failure as 🚨 BLOCKING"]
-    F8["Keep summary under 2 sentences — put details in inline comments, not in general text"]
+    F8["Keep summary under 2 sentences — put details in inline comment files, not in general text"]
     F9["Severity classification follows general_guidelines.md:<br/>BLOCKING = must fix · IMPORTANT = should fix · SUGGESTION = optional"]
     F10["Ticket context: verify PR changes satisfy ticket ACs — note gaps in review"]
 ```
@@ -200,9 +200,9 @@ Example PR review outputs — keep concise:
   "summary": "SQL injection in UserService.js must be fixed before merge.",
   "generalComment": "outputs/pr_review_general.md",
   "inlineComments": [
-    {"path":"src/auth/UserService.js","line":45,"comment":"outputs/pr_review_comments/UserService_sql_injection.md","severity":"BLOCKING"},
-    {"path":"src/auth/LoginController.js","line":78,"body":"⚠️ IMPORTANT: Weak Password Validation — Require 8+ chars with mixed case, numbers, symbols.","severity":"IMPORTANT"},
-    {"path":"src/utils/validation.js","line":23,"body":"💡 SUGGESTION: DRY — Email validation duplicated in 3 files. Extract to shared utility.","severity":"SUGGESTION"}
+    {"path":"src/auth/UserService.js","line":45,"comment":"outputs/pr_review_comments/comment1.md","severity":"BLOCKING"},
+    {"path":"src/auth/LoginController.js","line":78,"comment":"outputs/pr_review_comments/comment2.md","severity":"IMPORTANT"},
+    {"path":"src/utils/validation.js","line":23,"comment":"outputs/pr_review_comments/comment3.md","severity":"SUGGESTION"}
   ],
   "issueCounts": {"blocking":1,"important":1,"suggestions":1}
 }
@@ -220,7 +220,7 @@ Example PR review outputs — keep concise:
 3. Extract shared email validation utility
 ```
 
-### outputs/pr_review_comments/UserService_sql_injection.md
+### outputs/pr_review_comments/comment1.md
 ```markdown
 🚨 **BLOCKING: SQL Injection**
 
