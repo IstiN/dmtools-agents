@@ -1,4 +1,5 @@
 var scmModule = require('./scm.js');
+var buildEncodedConfigModule = require('./buildEncodedConfig.js');
 var STALE_NON_RUNNING_WORKFLOW_MS = 6 * 60 * 60 * 1000;
 
 function deriveProjectKey(customParams) {
@@ -8,22 +9,6 @@ function deriveProjectKey(customParams) {
     if (!cp) return '';
     var base = cp.substring(cp.lastIndexOf('/') + 1).replace(/\.js$/, '');
     return (base && base !== 'config') ? base : '';
-}
-
-function buildAutoStartEncodedConfig(ticketKey, customParams, stripKeys) {
-    var p = { inputJql: 'key = ' + ticketKey };
-
-    if (customParams) {
-        var nextCustomParams = Object.assign({}, customParams);
-        (stripKeys || []).forEach(function(key) {
-            delete nextCustomParams[key];
-        });
-        if (Object.keys(nextCustomParams).length > 0) {
-            p.customParams = nextCustomParams;
-        }
-    }
-
-    return encodeURIComponent(JSON.stringify({ params: p }));
 }
 
 function parseWorkflowRuns(raw) {
@@ -188,8 +173,6 @@ function triggerConfiguredWorkflowForTicket(options) {
     var workflowFile = options.workflowFile || 'ai-teammate.yml';
     var ref = options.ref || 'main';
     var label = options.label || configFile || workflowFile;
-    var stripKeys = options.stripKeys || [];
-
     if (!ticketKey || !configFile) {
         console.warn('autoStart: missing ticketKey or configFile — skipping');
         return false;
@@ -206,7 +189,11 @@ function triggerConfiguredWorkflowForTicket(options) {
 
     var scm = options.scm || scmModule.createScm(config);
     var projectKey = deriveProjectKey(customParams);
-    var encodedCfg = buildAutoStartEncodedConfig(ticketKey, customParams, stripKeys);
+    var encodedCfg = buildEncodedConfigModule.buildEncodedConfig(
+        ticketKey,
+        { configFile: configFile, projectKey: projectKey },
+        config
+    );
 
     if (isGlobalWorkflowCapReached(scm, workflowFile, {
             config: config,
@@ -302,7 +289,6 @@ function triggerSmIfIdle(options) {
 
 module.exports = {
     deriveProjectKey: deriveProjectKey,
-    buildAutoStartEncodedConfig: buildAutoStartEncodedConfig,
     triggerConfiguredWorkflowForTicket: triggerConfiguredWorkflowForTicket,
     hasActiveTargetRun: hasActiveTargetRun,
     countActiveWorkflowRuns: countActiveWorkflowRuns,

@@ -46,6 +46,7 @@
 
 var configLoader = require('./configLoader.js');
 var scmModule = require('./common/scm.js');
+var buildEncodedConfigModule = require('./common/buildEncodedConfig.js');
 
 // Project config loaded once in action() — used as global default for rules without configPath
 var projectConfig = null;
@@ -64,155 +65,6 @@ function loadRuleConfig(rule) {
     console.log('  🔧 Rule config: ' + rule.configPath +
         (ruleConfig.jira.project ? ' (project: ' + ruleConfig.jira.project + ')' : ''));
     return ruleConfig;
-}
-
-function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
-    var p = { inputJql: 'key = ' + ticketKey };
-    var resolvedCf = resolveConfigFile(rule, effectiveConfig);
-
-    // Derive project key to resolve project-specific agent JSON (e.g. "agents/pr_review.json" → "ai_teammate/myproject/pr_review.json")
-    var projectKey = rule.projectKey || '';
-    if (!projectKey && effectiveConfig && effectiveConfig._configPath) {
-        var cp = effectiveConfig._configPath;
-        var base = cp.substring(cp.lastIndexOf('/') + 1).replace(/\.js$/, '');
-        if (base && base !== 'config') projectKey = base;
-    }
-
-    // Load target agent's customParams and include them in encoded_config so they survive
-    // regardless of whether dmtools merges or replaces customParams at the job level.
-    if (resolvedCf) {
-        var agentJsonPath = resolvedCf;
-        if (projectKey) {
-            var filename = resolvedCf.replace(/^.*\//, '');
-            var projectSpecific = 'ai_teammate/' + projectKey + '/' + filename;
-            try {
-                var testRaw = file_read({ path: projectSpecific });
-                if (testRaw) agentJsonPath = projectSpecific;
-            } catch (e) { /* file not found — use generic path */ }
-        }
-        try {
-            var agentJson = JSON.parse(file_read({ path: agentJsonPath }));
-            var agentParamsRoot = agentJson.params || {};
-            // Keys that are already set in p (e.g. inputJql with the real ticket) must not be overwritten
-            var skipKeys = { inputJql: true };
-            Object.keys(agentParamsRoot).forEach(function(paramKey) {
-                if (skipKeys[paramKey]) return;
-                var value = agentParamsRoot[paramKey];
-                if (typeof value === 'string') {
-                    // Always copy string params; interpolate JQL placeholders when present
-                    if (value.indexOf('{jiraProject}') !== -1 || value.indexOf('{parentTicket}') !== -1) {
-                        p[paramKey] = configLoader.interpolateJql(value, effectiveConfig);
-                    } else {
-                        p[paramKey] = value;
-                    }
-                } else if (typeof value === 'boolean' || typeof value === 'number') {
-                    p[paramKey] = value;
-                } else if (Array.isArray(value)) {
-                    // Copy arrays (e.g. cliPrompts, cliCommands) so encoded_config carries the full original list
-                    p[paramKey] = value.slice();
-                } else if (typeof value === 'object' && value !== null) {
-                    if (paramKey === 'cliPromptsByTracker') {
-                        // Skip copying cliPromptsByTracker as a separate object.
-                        // Tracker prompts are merged into cliPrompts by resolveInstructions
-                        // so they combine with .dmtools/config.js additions instead of
-                        // being silently dropped or overridden.
-                        return;
-                    }
-                    // Deep copy plain objects (e.g. customParams, agentParams)
-                    p[paramKey] = JSON.parse(JSON.stringify(value));
-                }
-            });
-            var agentParams = (agentJson.params || {}).agentParams;
-            if (agentParams && typeof agentParams === 'object') {
-                p.agentParams = configLoader.deepMerge({}, agentParams);
-            }
-            var agentCustomParams = (agentJson.params || {}).customParams;
-            if (agentCustomParams && typeof agentCustomParams === 'object') {
-                p.customParams = Object.assign({}, agentCustomParams);
-            }
-        } catch (e) { /* ignore — agent JSON not readable */ }
-    }
-
-    if (effectiveConfig && resolvedCf) {
-        var agentName = extractAgentName(resolvedCf);
-        var resolved = configLoader.resolveInstructions(agentName, null, effectiveConfig, agentParamsRoot.cliPromptsByTracker);
-
-        if (resolved.instructionsOverridden) {
-            if (!p.agentParams) p.agentParams = {};
-            p.agentParams.instructions = resolved.instructions;
-        }
-        if (resolved.additionalInstructions && resolved.additionalInstructions.length > 0) {
-            p.additionalInstructions = resolved.additionalInstructions;
-        }
-        if (resolved.cliPrompts && resolved.cliPrompts.length > 0) {
-            // Merge: keep original cliPrompts from agent JSON, append resolved (globalCliPrompts etc.)
-            var existing = Array.isArray(p.cliPrompts) ? p.cliPrompts : [];
-            p.cliPrompts = existing.concat(resolved.cliPrompts);
-        }
-        if (resolved.cliPrompt) {
-            p.cliPrompt = resolved.cliPrompt;
-        }
-        if (resolved.agentParamPatch) {
-            if (!p.agentParams) p.agentParams = {};
-            p.agentParams = configLoader.deepMerge(p.agentParams, resolved.agentParamPatch);
-        }
-        if (resolved.jobParamPatch) {
-            p = configLoader.deepMerge(p, resolved.jobParamPatch);
-        }
-
-        // Inject project-specific field name overrides from jira.fields config
-        var jiraFields = effectiveConfig.jira && effectiveConfig.jira.fields;
-        if (jiraFields) {
-            var fieldMap = {
-                'story_acceptance_criteria': jiraFields.acceptanceCriteria,
-                'story_acceptance_criterias': jiraFields.acceptanceCriteria
-            };
-            var override = fieldMap[agentName];
-            if (override) {
-                p.fieldName = override;
-            }
-        }
-    }
-
-    // configPath from effectiveConfig always overrides — so the triggered agent also finds the project config
-    if (effectiveConfig && effectiveConfig._configPath) {
-        if (!p.customParams) p.customParams = {};
-        p.customParams.configPath = effectiveConfig._configPath;
-    }
-
-    // Ensure agentParams is always present — Teammate.java calls getAgentParams() unconditionally
-    // and will NPE if it returns null (even when skipAIProcessing=true).
-    if (!p.agentParams) p.agentParams = {};
-
-    return encodeURIComponent(JSON.stringify({ params: p }));
-}
-
-function extractAgentName(configFile) {
-    if (!configFile) return '';
-    var name = configFile;
-    var slashIdx = name.lastIndexOf('/');
-    if (slashIdx !== -1) name = name.substring(slashIdx + 1);
-    if (name.indexOf('.json') !== -1) name = name.replace('.json', '');
-    return name;
-}
-
-/**
- * Resolve the full path to an agent config JSON.
- * If rule.configFile is a bare filename (no "/"), prefix with agentConfigsDir from config.
- * Example: "TestCasesGenerator.json" + agentConfigsDir "projects/alpha"
- *        → "projects/alpha/TestCasesGenerator.json"
- */
-function resolveConfigFile(rule, effectiveConfig) {
-    var cf = rule.configFile;
-    if (!cf) return cf;
-    // Already a path (contains "/") — use as-is
-    if (cf.indexOf('/') !== -1) return cf;
-    // Short filename — prefix with agentConfigsDir if available
-    var dir = effectiveConfig && effectiveConfig.agentConfigsDir;
-    if (dir) {
-        return dir.replace(/\/$/, '') + '/' + cf;
-    }
-    return cf;
 }
 
 function parseWorkflowRuns(raw) {
@@ -395,7 +247,7 @@ function isWorkflowBudgetExhausted(rule, effectiveConfig, workflowBudget) {
 function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBudget) {
     var workflowFile = rule.workflowFile || 'ai-teammate.yml';
     var workflowRef  = rule.workflowRef  || 'main';
-    var resolvedCf   = resolveConfigFile(rule, effectiveConfig);
+    var resolvedCf   = buildEncodedConfigModule.resolveConfigFile(rule, effectiveConfig);
     var concurrencyKey = rule.concurrencyKey || ticketKey;
 
     // Resolve project_key: explicit rule field takes priority, then auto-derive from configPath
@@ -427,7 +279,7 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
                 display_key:     ticketKey,
                 input_jql:       'key = ' + ticketKey,
                 config_file:     resolvedCf,
-                encoded_config:  buildEncodedConfig(ticketKey, rule, effectiveConfig),
+                encoded_config:  buildEncodedConfigModule.buildEncodedConfig(ticketKey, rule, effectiveConfig),
                 project_key:     projectKey
             }),
             workflowRef
@@ -560,7 +412,7 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
         return { processedKeys: [], skippedKeys: [] };
     }
 
-    var resolvedCf = resolveConfigFile(rule, effectiveConfig);
+    var resolvedCf = buildEncodedConfigModule.resolveConfigFile(rule, effectiveConfig);
     var agentConfig;
     try {
         var raw = file_read({ path: resolvedCf });
@@ -730,7 +582,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         if (skipLabel) {
             if (shouldRecoverStaleTriggerLabel(rule, skipLabel)) {
                 var workflowFile = rule.workflowFile || 'ai-teammate.yml';
-                var resolvedCf = resolveConfigFile(rule, effectiveConfig);
+                var resolvedCf = buildEncodedConfigModule.resolveConfigFile(rule, effectiveConfig);
                 var scm = scmModule.createScm(effectiveConfig);
                 var activeKey = rule.concurrencyKey || key;
                 if (hasActiveTargetWorkflowRun(scm, workflowFile, resolvedCf, activeKey)) {

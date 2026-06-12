@@ -2,18 +2,40 @@
  * Unit tests for js/common/autoStart.js
  */
 
-function loadAutoStartHelper(mocks) {
+function makeBuildEncodedConfigMock() {
+    return {
+        extractAgentName: function(configFile) {
+            return (configFile || '').replace(/^.*\//, '').replace(/\.json$/, '');
+        },
+        resolveConfigFile: function(rule) {
+            return rule && rule.configFile;
+        },
+        buildEncodedConfig: function(ticketKey, rule, effectiveConfig) {
+            return encodeURIComponent(JSON.stringify({
+                params: {
+                    inputJql: 'key = ' + ticketKey,
+                    configFile: rule && rule.configFile,
+                    projectKey: rule && rule.projectKey || '',
+                    fromSharedBuilder: true
+                }
+            }));
+        }
+    };
+}
+
+function loadAutoStartHelper(scmMocks, builderMock) {
     var scm = loadModule(
         'js/common/scm.js',
         null,
         Object.assign({
             github_list_workflow_runs: function() { return JSON.stringify({ workflow_runs: [] }); },
             github_trigger_workflow: function() {}
-        }, mocks || {})
+        }, scmMocks || {})
     );
+    var buildEncodedConfig = builderMock || makeBuildEncodedConfigMock();
     return loadModule(
         'js/common/autoStart.js',
-        makeRequire({ './scm.js': scm })
+        makeRequire({ './scm.js': scm, './buildEncodedConfig.js': buildEncodedConfig })
     );
 }
 
@@ -85,6 +107,11 @@ suite('autoStart helper', function() {
         assert.equal(triggeredPayload.payload.display_key, 'TS-90');
         assert.equal(triggeredPayload.payload.config_file, 'agents/pr_test_automation_rework.json');
         assert.equal(triggeredPayload.ref, 'main');
+        assert.ok(triggeredPayload.payload.encoded_config, 'encoded_config should be present');
+        var decoded = JSON.parse(decodeURIComponent(triggeredPayload.payload.encoded_config));
+        assert.equal(decoded.params.inputJql, 'key = TS-90', 'encoded_config should contain ticket inputJql');
+        assert.equal(decoded.params.configFile, 'agents/pr_test_automation_rework.json', 'encoded_config should come from shared builder');
+        assert.equal(decoded.params.fromSharedBuilder, true, 'encoded_config should be built by shared builder');
     });
 
     test('skips trigger when global active workflow cap is reached', function() {

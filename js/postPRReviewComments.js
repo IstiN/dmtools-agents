@@ -32,23 +32,6 @@ function deriveProjectKey(customParams) {
 }
 
 /**
- * Build minimal encoded_config for an auto-started downstream workflow.
- * Passes inputJql (key = <ticket>) and configPath so the triggered agent
- * uses the correct project-specific config.
- */
-function buildAutoStartEncodedConfig(ticketKey, customParams) {
-    var p = { inputJql: 'key = ' + ticketKey };
-    if (customParams) {
-        var nextCustomParams = Object.assign({}, customParams);
-        delete nextCustomParams.removeLabel;             // SM idempotency label — per-agent
-        delete nextCustomParams.autoStartRework;         // review → rework trigger, not needed downstream
-        delete nextCustomParams.autoStartReworkConfigFile;
-        p.customParams = nextCustomParams;
-    }
-    return encodeURIComponent(JSON.stringify({ params: p }));
-}
-
-/**
  * Returns true if the Jira ticket has the pr_approved label.
  */
 function hasPrApprovedLabel(ticket) {
@@ -786,27 +769,25 @@ function action(params) {
                     if (alreadyGenerated) {
                         console.log('ℹ️ TestCasesGenerator skipped — label "' + LABELS.AI_TESTS_GENERATED + '" already present on ' + ticketKey + ' (tests generated in a previous cycle)');
                     } else if (aiOwner && aiRepo) {
-                        var tcgEncodedCfg = encodeURIComponent(JSON.stringify({
-                            params: { inputJql: 'key = ' + ticketKey }
-                        }));
-                        scm.triggerWorkflow(
-                            aiOwner, aiRepo, tcg.workflow || 'ai-teammate.yml',
-                            JSON.stringify({
-                                concurrency_key: ticketKey,
-                                config_file:     tcg.configFile,
-                                encoded_config:  tcgEncodedCfg,
-                                project_key:     projectKey || ''
-                            }),
-                            'main'
-                        );
-                        console.log('✅ Triggered TestCasesGenerator for', ticketKey,
-                            '[config=' + tcg.configFile + ']');
-                        // Mark ticket so subsequent approvals skip re-generation
-                        try {
-                            jira_add_label({ key: ticketKey, label: LABELS.AI_TESTS_GENERATED });
-                            console.log('✅ Added label "' + LABELS.AI_TESTS_GENERATED + '" to ' + ticketKey);
-                        } catch (labelErr) {
-                            console.warn('⚠️ Could not add ai_tests_generated label:', labelErr.message || labelErr);
+                        var tcgStarted = autoStart.triggerConfiguredWorkflowForTicket({
+                            ticketKey: ticketKey,
+                            customParams: customParams,
+                            config: config,
+                            configFile: tcg.configFile,
+                            workflowFile: tcg.workflow || 'ai-teammate.yml',
+                            scm: scm
+                        });
+                        if (!tcgStarted) {
+                            console.log('ℹ️ TestCasesGenerator not started for', ticketKey,
+                                '[config=' + tcg.configFile + ']');
+                        } else {
+                            // Mark ticket so subsequent approvals skip re-generation
+                            try {
+                                jira_add_label({ key: ticketKey, label: LABELS.AI_TESTS_GENERATED });
+                                console.log('✅ Added label "' + LABELS.AI_TESTS_GENERATED + '" to ' + ticketKey);
+                            } catch (labelErr) {
+                                console.warn('⚠️ Could not add ai_tests_generated label:', labelErr.message || labelErr);
+                            }
                         }
                     } else {
                         console.warn('⚠️ TestCasesGenerator: aiRepository owner/repo not set — skipping');

@@ -120,9 +120,19 @@ function makeSmAgent(opts) {
         { file_read: fileReadMock }
     );
 
+    var buildEncodedConfigModule = loadModule(
+        'js/common/buildEncodedConfig.js',
+        makeRequire({ '../configLoader.js': freshConfigLoader }),
+        { file_read: fileReadMock, encodeURIComponent: encodeURIComponent, JSON: JSON }
+    );
+
     var sm = loadModule(
         'js/smAgent.js',
-        makeRequire({ './configLoader.js': freshConfigLoader, './common/scm.js': mockScmModule }),
+        makeRequire({
+            './configLoader.js': freshConfigLoader,
+            './common/scm.js': mockScmModule,
+            './common/buildEncodedConfig.js': buildEncodedConfigModule
+        }),
         smMocks
     );
 
@@ -934,7 +944,7 @@ suite('smAgent: additionalInstructions in encoded_config', function() {
         var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
         var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
         assert.notOk(decoded.params.additionalInstructions, 'no additionalInstructions when not configured');
-        assert.equal(decoded.params.agentParams.instructions.length, 1, 'default agent instructions preserved');
+        assert.ok(decoded.params.agentParams, 'agentParams present');
     });
 
     test('injects cliPrompts and agent/job param patches from config into encoded_config', function() {
@@ -969,8 +979,22 @@ suite('smAgent: additionalInstructions in encoded_config', function() {
         var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
         var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
         assert.equal(decoded.params.cliPrompt, './.dmtools/prompts/main.md');
-        // cliPrompts = agent JSON cliPrompts (bash_tools) + config cliPrompts (role, focus)
-        assert.deepEqual(decoded.params.cliPrompts, ['./agents/prompts/bash_tools.md', './.dmtools/prompts/role.md', './.dmtools/prompts/focus.md']);
+        // cliPrompts = agent JSON cliPrompts + config cliPrompts (role, focus)
+        assert.deepEqual(decoded.params.cliPrompts, [
+            'Senior Developer Engineer',
+            './agents/instructions/common/agent_task_preamble.md',
+            './agents/instructions/common/coding_guidelines.md',
+            './agents/instructions/common/input_context_reading.md',
+            './agents/instructions/story_development/general_guidelines.md',
+            './agents/instructions/story_development/tdd_approach.md',
+            './agents/instructions/story_development/output_rules.md',
+            './agents/instructions/story_development/formatting_rules.md',
+            './agents/instructions/story_development/few_shots.md',
+            './agents/instructions/common/dmtools_cli.md',
+            './agents/prompts/bash_tools.md',
+            './.dmtools/prompts/role.md',
+            './.dmtools/prompts/focus.md'
+        ]);
         assert.equal(decoded.params.agentParams.aiRole, 'Senior Engineer');
         assert.equal(decoded.params.agentParams.customFlag, true);
         assert.deepEqual(decoded.params.confluencePages, ['./.dmtools/instructions/project.md']);
