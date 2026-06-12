@@ -513,11 +513,14 @@ function action(params) {
             });
             console.log('Thread replies posted:', repliesPosted);
 
-            // Post general fix summary as a top-level PR comment
-            // Post if: code was committed, thread replies were posted, or agent produced a meaningful summary
+            // Post general fix summary as a top-level PR comment only when there are no
+            // review thread replies. When replies exist, the thread replies themselves are
+            // sufficient; an extra top-level comment is noise.
             var hasMeaningfulSummary = fixSummary && fixSummary.length > 50
                 && fixSummary !== '_(No fix summary generated)_';
-            if (repliesPosted > 0 || codeChangesCommitted || hasMeaningfulSummary) {
+            if (repliesPosted > 0) {
+                console.log('ℹ️ Review thread replies posted — skipping general PR comment');
+            } else if (codeChangesCommitted || hasMeaningfulSummary) {
                 prCommentPosted = postPRComment(scm, pr.number, fixSummary, ticketKey, repliesPosted);
             } else {
                 console.log('ℹ️ No thread replies, no code changes, and no meaningful summary — skipping general PR comment');

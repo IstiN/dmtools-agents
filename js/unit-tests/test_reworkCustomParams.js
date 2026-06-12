@@ -282,10 +282,7 @@ suite('rework custom params', function() {
         assert.equal(mocks.threadReplies, 2);
         assert.equal(mocks.resolvedThreads, 2);
         assert.deepEqual(mocks.replyTexts, ['✅ Fixed in `ai/TS-1293`.', '✅ Renamed variable per review.']);
-        assert.equal(mocks.prComments, 1, 'must post a single minimal top-level PR comment');
-        assert.ok(mocks.prCommentTexts[0].indexOf('Rework Complete') !== -1, 'top-level comment should mention rework complete');
-        assert.ok(mocks.prCommentTexts[0].indexOf('thread replies') !== -1, 'top-level comment should point to thread replies');
-        assert.ok(mocks.prCommentTexts[0].indexOf('✅ Fixed in') === -1, 'top-level comment must not duplicate thread reply bodies');
+        assert.equal(mocks.prComments || 0, 0, 'must not post a top-level PR comment when thread replies exist');
     });
 
     test('merges pr_test_automation_rework jobParamPatches into runtime customParams', function() {
