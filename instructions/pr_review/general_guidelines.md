@@ -14,9 +14,36 @@ flowchart TD
     OUTPUT --> END([End])
 ```
 
-## 1. Input context
+## 1. Input context — MANDATORY reading order
 
-Read everything prepared in `input/TICKET/` first. Do not re-fetch external data that is already local.
+```mermaid
+flowchart TD
+    subgraph PR_CONTEXT["⚠️ PR-specific files (read first)"]
+        P1["1️⃣ instruction.md (repo root) — project stack, conventions"]
+        P2["2️⃣ input/TICKET/pr_info.md — PR title, author, branch, description"]
+        P3["3️⃣ input/TICKET/pr_diff.txt — the diff to review"]
+        P4["4️⃣ input/TICKET/pr_files.txt — list of changed files"]
+        P5["5️⃣ input/TICKET/ci_failures.md — CI failures = BLOCKING"]
+        P6["6️⃣ input/TICKET/pr_discussions.md + pr_discussions_raw.json — existing comments"]
+        P1 --> P2 --> P3 --> P4 --> P5 --> P6
+    end
+
+    subgraph TICKET_CONTEXT["Ticket context (for understanding PR purpose)"]
+        T1["7️⃣ input/TICKET/ticket.md — linked ticket description, ACs"]
+        T2["8️⃣ input/TICKET/comments.md — ticket discussion if present"]
+        T3["9️⃣ input/TICKET/parent-*.md — parent story context"]
+        T4["🔟 input/TICKET/confluence/*.md — linked specifications"]
+        T1 --> T2 --> T3 --> T4
+    end
+
+    subgraph RULE["⚠️ Rule"]
+        R1["If file exists in input/ → read locally, do NOT re-fetch via dmtools"]
+    end
+
+    PR_CONTEXT --> TICKET_CONTEXT --> RULE
+```
+
+Read PR files to understand WHAT changed. Read ticket files to understand WHY it changed and verify against requirements.
 
 ## 2. Diff checklist — apply to `pr_diff.txt`
 
@@ -26,9 +53,6 @@ For every hunk, ask at least these questions:
 - [ ] Are new or changed public APIs contract-safe for existing callers?
 - [ ] Is user/external input validated, sanitized, or escaped?
 - [ ] Are secrets, tokens, or PATs handled safely — not logged, not interpolated into shell scripts?
-- [ ] Is platform-specific code guarded (`kIsWeb`, `Platform.isX`)?
-- [ ] Are async state changes followed by `notifyListeners()`?
-- [ ] Does any workspace state reuse `previousViewModel.repository` instead of fresh state?
 - [ ] Are new or modified files present under `testing/` in a non-test-automation PR?
 - [ ] Is dead code, unused imports, or obvious duplication introduced?
 - [ ] Are error paths handled, or are failures silently swallowed?
@@ -45,15 +69,19 @@ Do not review from the diff alone. Read the full content of every changed file:
 - test coverage for changed behavior
 - backward-compatibility and migration impact
 
-## 4. CodeGraph risk search (mandatory)
+## 4. Impact analysis (CodeGraph or grep fallback)
 
-Use CodeGraph to move from "what changed" to "what could break":
+Use CodeGraph to find "what could break":
 
-- `codegraph_callers` / `codegraph_callees` on every new or modified public function, class, or exported symbol
-- `codegraph_search` for sensitive patterns such as: `PAT_TOKEN`, `secrets.`, `vars.`, `Process.run`, `File(`, `github.ref`, `github.token`, `previousViewModel`
-- `codegraph_impact` before flagging any architectural or contract change
+- `codegraph_callers` / `codegraph_callees` on modified public symbols
+- `codegraph_search` for: `PAT_TOKEN`, `secrets.`, `github.token`, `previousViewModel`
+- `codegraph_impact` before flagging architectural changes
 
-If CodeGraph is unavailable, use `grep` / `rg` / `git grep` equivalents and document the search in your notes.
+**If CodeGraph unavailable**, use grep and document it:
+```bash
+grep -rn "changedFunctionName" --include="*.ts" .
+grep -rn "secrets\.\|github\.token" .
+```
 
 ## 5. Review dimensions
 

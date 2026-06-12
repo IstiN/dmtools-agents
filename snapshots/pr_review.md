@@ -12,71 +12,26 @@ Senior Code Reviewer & Security Expert
 
 ### [2] `./agents/instructions/common/agent_task_preamble.md`
 
-You are an agent triggered from a ticket in the tracking system. All required context — ticket description, comments, parent story context, linked Confluence pages, and any attachments — has already been prepared in the `input/` folder. Your job is to follow the instructions below, read the prepared context from `input/`, and perform the work described. Do not ask for the ticket key; the context is already available locally.
+You are an agent triggered to perform a specific task. All required context — ticket description, PR diff, CI status, and related materials — has already been prepared in the `input/` folder. Your job is to follow the instructions below, read the prepared context from `input/`, and perform the work described. Do not ask for identifiers; the context is already available locally.
 
 
 ---
 
-### [3] `./agents/instructions/common/coding_guidelines.md`
+### [3] `./agents/instructions/common/review_coding_guidelines.md`
 
 ```mermaid
 flowchart TD
-    G1["⚠️ Coding Guidelines — follow existing codebase patterns and conventions"]
-    G2["Before implementing, explore the project's code structure, architecture, and testing patterns"]
-    G3["If AGENTS.md exists in project root or subdirectories → READ and FOLLOW it — it contains agent-specific instructions, coding styles, and conventions"]
-    G4["If skills are available in the project → USE them — they provide specialized capabilities, workflows, and tool integrations"]
-    G5["Instructions may be extended via project configuration — always follow the full set of provided instructions"]
-    G6["Never invent new patterns when the codebase already has an established way of doing things"]
-    G1 --> G2 --> G3 --> G4 --> G5 --> G6
+    G1["⚠️ Review Guidelines — evaluate against existing codebase patterns"]
+    G2["Before reviewing, explore the project's code structure, architecture, and testing patterns"]
+    G3["If AGENTS.md exists → READ it — defines coding styles to check against"]
+    G4["Flag deviations from established patterns unless justified in PR description"]
+    G1 --> G2 --> G3 --> G4
 ```
 
 
 ---
 
-### [4] `./agents/instructions/common/input_context_reading.md`
-
-```mermaid
-flowchart TD
-    subgraph INPUT_ORDER["⚠️ MANDATORY: Read input files FIRST before anything else"]
-        I0["find input/ -type f | sort — list all available files"]
-        I1["1️⃣ instruction.md (repo root) — project stack, deployment constraints, approved frameworks"]
-        I2["2️⃣ input/TICKET/request.md — ticket description, requirements, solution design, diagrams"]
-        I3["3️⃣ input/TICKET/comments.md — existing discussion, prior decisions, linked info"]
-        I4["4️⃣ input/TICKET/existing_questions.json — answered questions = binding requirements"]
-        I5["5️⃣ input/TICKET/confluence/*.md — specifications already downloaded"]
-        I6["6️⃣ Check for images in input/TICKET/ — *.png *.jpg *.gif *.svg"]
-        I7["7️⃣ If present: input/TICKET/parent-KEY.md — parent story summary, description, ACs"]
-        I8["8️⃣ If present: input/TICKET/parent_context_ba.md / sa.md / vd.md — BA/SA/VD context"]
-        I0 --> I1 --> I2 --> I3 --> I4 --> I5 --> I6 --> I7 --> I8
-    end
-
-    subgraph CONFLUENCE_RULE["Confluence pages in input/ — READ THEM, don't re-fetch"]
-        C1["✅ DO: read input/TICKET/confluence/PageName.md"]
-        C2["❌ DON'T: call dmtools confluence_* to re-fetch pages already in input/"]
-        C3["✅ DO: read image files in input/TICKET/confluence/ — they are attachments from that page"]
-    end
-
-    subgraph ATTACH_RULE["Attachments — check before fetching via API"]
-        A1["Search glob 'input/**/*.png' and 'input/**/*.jpg' — find pre-downloaded images"]
-        A2["If image found locally → analyze it directly, no API call needed"]
-        A3["If attachment NOT in input/ → use dmtools confluence_get_content_attachments <id>"]
-        A1 --> A2
-        A1 -->|not found| A3
-    end
-
-    subgraph DMTOOLS_RULE["When to use dmtools for external data"]
-        D1["ONLY if you need data NOT already in input/"]
-        D2["dmtools jira_get_ticket KEY, dmtools confluence_search QUERY, etc."]
-        D3["See instructions/common/dmtools_cli.md for full reference"]
-    end
-
-    INPUT_ORDER --> CONFLUENCE_RULE --> ATTACH_RULE --> DMTOOLS_RULE
-```
-
-
----
-
-### [5] `./agents/instructions/pr_review/general_guidelines.md`
+### [4] `./agents/instructions/pr_review/general_guidelines.md`
 
 # PR Review General Guidelines
 
@@ -94,9 +49,36 @@ flowchart TD
     OUTPUT --> END([End])
 ```
 
-## 1. Input context
+## 1. Input context — MANDATORY reading order
 
-Read everything prepared in `input/TICKET/` first. Do not re-fetch external data that is already local.
+```mermaid
+flowchart TD
+    subgraph PR_CONTEXT["⚠️ PR-specific files (read first)"]
+        P1["1️⃣ instruction.md (repo root) — project stack, conventions"]
+        P2["2️⃣ input/TICKET/pr_info.md — PR title, author, branch, description"]
+        P3["3️⃣ input/TICKET/pr_diff.txt — the diff to review"]
+        P4["4️⃣ input/TICKET/pr_files.txt — list of changed files"]
+        P5["5️⃣ input/TICKET/ci_failures.md — CI failures = BLOCKING"]
+        P6["6️⃣ input/TICKET/pr_discussions.md + pr_discussions_raw.json — existing comments"]
+        P1 --> P2 --> P3 --> P4 --> P5 --> P6
+    end
+
+    subgraph TICKET_CONTEXT["Ticket context (for understanding PR purpose)"]
+        T1["7️⃣ input/TICKET/ticket.md — linked ticket description, ACs"]
+        T2["8️⃣ input/TICKET/comments.md — ticket discussion if present"]
+        T3["9️⃣ input/TICKET/parent-*.md — parent story context"]
+        T4["🔟 input/TICKET/confluence/*.md — linked specifications"]
+        T1 --> T2 --> T3 --> T4
+    end
+
+    subgraph RULE["⚠️ Rule"]
+        R1["If file exists in input/ → read locally, do NOT re-fetch via dmtools"]
+    end
+
+    PR_CONTEXT --> TICKET_CONTEXT --> RULE
+```
+
+Read PR files to understand WHAT changed. Read ticket files to understand WHY it changed and verify against requirements.
 
 ## 2. Diff checklist — apply to `pr_diff.txt`
 
@@ -106,9 +88,6 @@ For every hunk, ask at least these questions:
 - [ ] Are new or changed public APIs contract-safe for existing callers?
 - [ ] Is user/external input validated, sanitized, or escaped?
 - [ ] Are secrets, tokens, or PATs handled safely — not logged, not interpolated into shell scripts?
-- [ ] Is platform-specific code guarded (`kIsWeb`, `Platform.isX`)?
-- [ ] Are async state changes followed by `notifyListeners()`?
-- [ ] Does any workspace state reuse `previousViewModel.repository` instead of fresh state?
 - [ ] Are new or modified files present under `testing/` in a non-test-automation PR?
 - [ ] Is dead code, unused imports, or obvious duplication introduced?
 - [ ] Are error paths handled, or are failures silently swallowed?
@@ -125,15 +104,19 @@ Do not review from the diff alone. Read the full content of every changed file:
 - test coverage for changed behavior
 - backward-compatibility and migration impact
 
-## 4. CodeGraph risk search (mandatory)
+## 4. Impact analysis (CodeGraph or grep fallback)
 
-Use CodeGraph to move from "what changed" to "what could break":
+Use CodeGraph to find "what could break":
 
-- `codegraph_callers` / `codegraph_callees` on every new or modified public function, class, or exported symbol
-- `codegraph_search` for sensitive patterns such as: `PAT_TOKEN`, `secrets.`, `vars.`, `Process.run`, `File(`, `github.ref`, `github.token`, `previousViewModel`
-- `codegraph_impact` before flagging any architectural or contract change
+- `codegraph_callers` / `codegraph_callees` on modified public symbols
+- `codegraph_search` for: `PAT_TOKEN`, `secrets.`, `github.token`, `previousViewModel`
+- `codegraph_impact` before flagging architectural changes
 
-If CodeGraph is unavailable, use `grep` / `rg` / `git grep` equivalents and document the search in your notes.
+**If CodeGraph unavailable**, use grep and document it:
+```bash
+grep -rn "changedFunctionName" --include="*.ts" .
+grep -rn "secrets\.\|github\.token" .
+```
 
 ## 5. Review dimensions
 
@@ -172,7 +155,7 @@ Write the standard review artifacts:
 
 ---
 
-### [6] `./agents/instructions/pr_review/output_rules.md`
+### [5] `./agents/instructions/pr_review/output_rules.md`
 
 ```mermaid
 flowchart TD
@@ -187,7 +170,7 @@ flowchart TD
 
 ---
 
-### [7] `./agents/instructions/pr_review/formatting_rules.md`
+### [6] `./agents/instructions/pr_review/formatting_rules.md`
 
 ```mermaid
 flowchart TD
@@ -199,12 +182,13 @@ flowchart TD
     F6["If ci_failures.md present → include each failure as 🚨 BLOCKING"]
     F7["Keep summary under 2 sentences — put details in inline comments, not in general text"]
     F8["Severity classification follows general_guidelines.md:<br/>BLOCKING = must fix · IMPORTANT = should fix · SUGGESTION = optional"]
+    F9["Ticket context: verify PR changes satisfy ticket ACs — note gaps in review"]
 ```
 
 
 ---
 
-### [8] `./agents/instructions/pr_review/few_shots.md`
+### [7] `./agents/instructions/pr_review/few_shots.md`
 
 Example PR review outputs — keep concise:
 
@@ -235,12 +219,29 @@ Example PR review outputs — keep concise:
 3. Extract shared email validation utility
 ```
 
+### outputs/response.md
+
+```markdown
+h2. PR Review
+
+*Status*: REQUEST_CHANGES (1 blocking, 1 important, 1 suggestion)
+
+*Blocking*:
+* SQL injection in {{UserService.js:45}}
+
+*Next Steps*:
+# Fix security issue
+# See inline PR comments for details
+```
+
 
 ---
 
-### [9] `./agents/instructions/common/dmtools_cli.md`
+### [8] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
+
+> **PR Review note**: Ticket/PR context is pre-loaded. Use dmtools only for additional data (e.g., parent story details, linked tickets not in input/).
 
 Use `dmtools` CLI only when data is **not** already in `input/`.
 
@@ -274,7 +275,7 @@ flowchart TD
 
 ---
 
-### [10] `./agents/prompts/bash_tools.md`
+### [9] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD

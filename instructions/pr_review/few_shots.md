@@ -26,3 +26,18 @@ Example PR review outputs — keep concise:
 2. Strengthen password validation (8+ chars, mixed case, numbers, symbols)
 3. Extract shared email validation utility
 ```
+
+### outputs/response.md
+
+```markdown
+h2. PR Review
+
+*Status*: REQUEST_CHANGES (1 blocking, 1 important, 1 suggestion)
+
+*Blocking*:
+* SQL injection in {{UserService.js:45}}
+
+*Next Steps*:
+# Fix security issue
+# See inline PR comments for details
+```

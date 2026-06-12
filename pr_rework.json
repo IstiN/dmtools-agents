@@ -27,7 +27,6 @@
       "Senior Developer Engineer focused on code fixes",
       "./agents/instructions/common/agent_task_preamble.md",
       "./agents/instructions/common/coding_guidelines.md",
-      "./agents/instructions/common/input_context_reading.md",
       "./agents/instructions/pr_rework/general_guidelines.md",
       "./agents/instructions/pr_rework/formatting_rules.md",
       "./agents/instructions/common/dmtools_cli.md",

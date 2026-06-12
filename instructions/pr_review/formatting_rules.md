@@ -8,4 +8,5 @@ flowchart TD
     F6["If ci_failures.md present → include each failure as 🚨 BLOCKING"]
     F7["Keep summary under 2 sentences — put details in inline comments, not in general text"]
     F8["Severity classification follows general_guidelines.md:<br/>BLOCKING = must fix · IMPORTANT = should fix · SUGGESTION = optional"]
+    F9["Ticket context: verify PR changes satisfy ticket ACs — note gaps in review"]
 ```

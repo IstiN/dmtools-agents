@@ -12,7 +12,7 @@ Experienced Product Owner and Business Analyst
 
 ### [2] `./agents/instructions/common/agent_task_preamble.md`
 
-You are an agent triggered from a ticket in the tracking system. All required context — ticket description, comments, parent story context, linked Confluence pages, and any attachments — has already been prepared in the `input/` folder. Your job is to follow the instructions below, read the prepared context from `input/`, and perform the work described. Do not ask for the ticket key; the context is already available locally.
+You are an agent triggered to perform a specific task. All required context — ticket description, PR diff, CI status, and related materials — has already been prepared in the `input/` folder. Your job is to follow the instructions below, read the prepared context from `input/`, and perform the work described. Do not ask for identifiers; the context is already available locally.
 
 
 ---

@@ -12,7 +12,7 @@ Senior Developer Engineer focused on code fixes
 
 ### [2] `./agents/instructions/common/agent_task_preamble.md`
 
-You are an agent triggered from a ticket in the tracking system. All required context — ticket description, comments, parent story context, linked Confluence pages, and any attachments — has already been prepared in the `input/` folder. Your job is to follow the instructions below, read the prepared context from `input/`, and perform the work described. Do not ask for the ticket key; the context is already available locally.
+You are an agent triggered to perform a specific task. All required context — ticket description, PR diff, CI status, and related materials — has already been prepared in the `input/` folder. Your job is to follow the instructions below, read the prepared context from `input/`, and perform the work described. Do not ask for identifiers; the context is already available locally.
 
 
 ---
@@ -33,50 +33,7 @@ flowchart TD
 
 ---
 
-### [4] `./agents/instructions/common/input_context_reading.md`
-
-```mermaid
-flowchart TD
-    subgraph INPUT_ORDER["⚠️ MANDATORY: Read input files FIRST before anything else"]
-        I0["find input/ -type f | sort — list all available files"]
-        I1["1️⃣ instruction.md (repo root) — project stack, deployment constraints, approved frameworks"]
-        I2["2️⃣ input/TICKET/request.md — ticket description, requirements, solution design, diagrams"]
-        I3["3️⃣ input/TICKET/comments.md — existing discussion, prior decisions, linked info"]
-        I4["4️⃣ input/TICKET/existing_questions.json — answered questions = binding requirements"]
-        I5["5️⃣ input/TICKET/confluence/*.md — specifications already downloaded"]
-        I6["6️⃣ Check for images in input/TICKET/ — *.png *.jpg *.gif *.svg"]
-        I7["7️⃣ If present: input/TICKET/parent-KEY.md — parent story summary, description, ACs"]
-        I8["8️⃣ If present: input/TICKET/parent_context_ba.md / sa.md / vd.md — BA/SA/VD context"]
-        I0 --> I1 --> I2 --> I3 --> I4 --> I5 --> I6 --> I7 --> I8
-    end
-
-    subgraph CONFLUENCE_RULE["Confluence pages in input/ — READ THEM, don't re-fetch"]
-        C1["✅ DO: read input/TICKET/confluence/PageName.md"]
-        C2["❌ DON'T: call dmtools confluence_* to re-fetch pages already in input/"]
-        C3["✅ DO: read image files in input/TICKET/confluence/ — they are attachments from that page"]
-    end
-
-    subgraph ATTACH_RULE["Attachments — check before fetching via API"]
-        A1["Search glob 'input/**/*.png' and 'input/**/*.jpg' — find pre-downloaded images"]
-        A2["If image found locally → analyze it directly, no API call needed"]
-        A3["If attachment NOT in input/ → use dmtools confluence_get_content_attachments <id>"]
-        A1 --> A2
-        A1 -->|not found| A3
-    end
-
-    subgraph DMTOOLS_RULE["When to use dmtools for external data"]
-        D1["ONLY if you need data NOT already in input/"]
-        D2["dmtools jira_get_ticket KEY, dmtools confluence_search QUERY, etc."]
-        D3["See instructions/common/dmtools_cli.md for full reference"]
-    end
-
-    INPUT_ORDER --> CONFLUENCE_RULE --> ATTACH_RULE --> DMTOOLS_RULE
-```
-
-
----
-
-### [5] `./agents/instructions/pr_rework/general_guidelines.md`
+### [4] `./agents/instructions/pr_rework/general_guidelines.md`
 
 ```mermaid
 flowchart TD
@@ -103,10 +60,41 @@ flowchart TD
     OUTPUT --> END([End])
 ```
 
+## 1. Input context — MANDATORY reading order
+
+```mermaid
+flowchart TD
+    subgraph PR_CONTEXT["⚠️ PR-specific files (read first)"]
+        P1["1️⃣ instruction.md (repo root) — project stack, conventions"]
+        P2["2️⃣ input/TICKET/pr_info.md — PR title, author, branch, description"]
+        P3["3️⃣ input/TICKET/pr_diff.txt — the diff to review"]
+        P4["4️⃣ input/TICKET/pr_files.txt — list of changed files"]
+        P5["5️⃣ input/TICKET/ci_failures.md — CI failures = BLOCKING"]
+        P6["6️⃣ input/TICKET/pr_discussions.md + pr_discussions_raw.json — existing comments"]
+        P1 --> P2 --> P3 --> P4 --> P5 --> P6
+    end
+
+    subgraph TICKET_CONTEXT["Ticket context (for understanding PR purpose)"]
+        T1["7️⃣ input/TICKET/ticket.md — linked ticket description, ACs"]
+        T2["8️⃣ input/TICKET/comments.md — ticket discussion if present"]
+        T3["9️⃣ input/TICKET/parent-*.md — parent story context"]
+        T4["🔟 input/TICKET/confluence/*.md — linked specifications"]
+        T1 --> T2 --> T3 --> T4
+    end
+
+    subgraph RULE["⚠️ Rule"]
+        R1["If file exists in input/ → read locally, do NOT re-fetch via dmtools"]
+    end
+
+    PR_CONTEXT --> TICKET_CONTEXT --> RULE
+```
+
+Read PR files to understand WHAT changed. Read ticket files to understand WHY it changed and verify against requirements.
+
 
 ---
 
-### [6] `./agents/instructions/pr_rework/formatting_rules.md`
+### [5] `./agents/instructions/pr_rework/formatting_rules.md`
 
 ```mermaid
 flowchart TD
@@ -119,9 +107,11 @@ flowchart TD
 
 ---
 
-### [7] `./agents/instructions/common/dmtools_cli.md`
+### [6] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
+
+> **PR Review note**: Ticket/PR context is pre-loaded. Use dmtools only for additional data (e.g., parent story details, linked tickets not in input/).
 
 Use `dmtools` CLI only when data is **not** already in `input/`.
 
@@ -155,7 +145,7 @@ flowchart TD
 
 ---
 
-### [8] `./agents/prompts/bash_tools.md`
+### [7] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
