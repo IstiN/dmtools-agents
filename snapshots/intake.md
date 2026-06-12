@@ -161,8 +161,12 @@ flowchart LR
 ### [6] `./agents/instructions/common/no_development.md`
 
 ```mermaid
-flowchart LR
-    RULE["NO development or implementation<br/>ONLY assessment / analysis / enhancement of description<br/>Check codebase for context<br/>Actual development is PROHIBITED"]
+flowchart TD
+    subgraph RULE["This agent is NOT for implementation"]
+        R1["❌ NO development or coding"]
+        R2["✅ ONLY assessment / analysis / description enhancement"]
+        R3["✅ Check codebase for context"]
+    end
 ```
 
 

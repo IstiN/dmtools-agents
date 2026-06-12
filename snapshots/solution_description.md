@@ -86,8 +86,12 @@ flowchart TD
 ### [6] `./agents/instructions/common/no_development.md`
 
 ```mermaid
-flowchart LR
-    RULE["NO development or implementation<br/>ONLY assessment / analysis / enhancement of description<br/>Check codebase for context<br/>Actual development is PROHIBITED"]
+flowchart TD
+    subgraph RULE["This agent is NOT for implementation"]
+        R1["❌ NO development or coding"]
+        R2["✅ ONLY assessment / analysis / description enhancement"]
+        R3["✅ Check codebase for context"]
+    end
 ```
 
 
@@ -131,13 +135,69 @@ EOF
 
 ### [10] `./agents/instructions/enhancement/solution_design_formatting_rules.md`
 
-**IMPORTANT** Write the enhanced SD CORE technical description using the generic markup tags from the tracker-specific transform file to outputs/response.md. The transform file converts tags such as `<bold>`, `<bullet>`, `<code>`, and `<link>` into the correct Jira wiki markup or Azure DevOps Markdown syntax.
-**IMPORTANT** Write the valid Mermaid diagram syntax to outputs/diagram.md
+# Solution Design Output Format
+
+Write the enhanced SD CORE technical description to `outputs/response.md` and a valid Mermaid diagram to `outputs/diagram.md`.
+
+The block below is a **structural template / example only**. The tags such as `<bold>`, `<bullet>`, `<code>`, and `<link>` are placeholders that show the required shape of the document.
+
+**CRITICAL: Never write the final `outputs/response.md` using these literal metatags.** Use the tracker-specific transformation table (for example `agents/instructions/tracker/jira_markup_transform.md` when the tracker is Jira) to convert every placeholder into the correct tracker markup.
+
+```
+<bold>Purpose:</bold>
+[One-paragraph summary of the solution goal and scope.]
+
+<bold>Background and Constraints:</bold>
+<bullet> Existing workflow, system, or business constraint.
+<bullet> Relevant prior decision or dependency.
+<bullet> Non-negotiable technical or process limitation.
+
+<bold>Architecture Decisions:</bold>
+<bullet> Decision: [chosen approach] — Rationale: [why it fits best].
+<bullet> Decision: [alternative considered and rejected] — Rationale: [trade-off].
+
+<bold>Component Responsibilities:</bold>
+<bullet> <code>ComponentName</code>: [what it does and how it interacts with others].
+<bullet> <code>AnotherComponent</code>: [responsibility].
+
+<bold>Data Flow:</bold>
+<bullet> Step 1: [actor / trigger → component].
+<bullet> Step 2: [component → component / store].
+<bullet> Step 3: [result / side effect].
+
+<bold>API Contracts:</bold>
+<bullet> <code>POST /api/example</code>: [request payload shape] → [response shape].
+<bullet> <code>GET /api/example/{id}</code>: [purpose and return shape].
+
+<bold>AC Coverage:</bold>
+The Acceptance Criteria are defined in the BA ticket (<link>BA-TICKET|https://jira.example.com/browse/BA-TICKET</link>) and are the single source of truth.
+<bullet> AC1 (Feature Display) → Addressed by [component / flow].
+<bullet> AC2 (Dialog Content) → Addressed by [component / flow].
+<bullet> AC3 (Core Logic) → Addressed by [component / flow].
+<bullet> AC4 (Error Handling) → Addressed by [component / flow].
+
+<bold>Out of Scope:</bold>
+<bullet> Item deliberately not covered by this solution.
+
+<bold>Risks and Security Notes:</bold>
+<bullet> Risk: [description] — Mitigation: [approach].
+<bullet> Security: [credential, secret, or permission consideration].
+```
+
+## Rules
+
+- The template above is a structural example. Replace every `<bold>`, `<italic>`, `<strike>`, `<underline>`, `<code>`, `<codeblock>`, `<bullet>`, `<numbered>`, `<heading1>`, `<heading2>`, `<heading3>`, `<link>`, `<image>`, `<quote>`, `<panel>`, `<color>`, and `<hr>` placeholder with the equivalent markup defined in the tracker-specific transformation table.
+- Do NOT leave literal XML-style tags such as `<bold>` or `<code>` in the final `outputs/response.md`.
+- Do NOT use Markdown syntax in Jira output: no `**bold**`, no `- item` bullets, no `# headings`, no triple backticks.
+- Use the tracker-specific link format when referencing tickets or URLs.
+- Write the Mermaid diagram to `outputs/diagram.md` using plain Mermaid syntax — do not wrap it in markup tags.
 
 
 ---
 
 ### [11] `./agents/instructions/enhancement/solution_design_few_shots.md`
+
+The examples below use generic XML-style tags (`<bold>`, `<bullet>`, `<code>`, etc.) only to illustrate the required structure. In the final `outputs/response.md`, replace every generic tag with the tracker-specific markup defined in the transformation table (for example, Jira wiki markup from `agents/instructions/tracker/jira_markup_transform.md`). Do not leave literal XML-style tags in the final output.
 
 **Example content for outputs/response.md:**
 
@@ -220,12 +280,12 @@ EOF
 
 #### [2] `./agents/instructions/tracker/jira_markup_transform.md`
 
-# Jira Markup Transform
+# Jira Markup Reference
 
-When writing output for Jira tracker fields or comments, transform the generic XML-style formatting tags below into Jira wiki markup. Do not write literal XML tags in the final output.
+When the target tracker is Jira, replace every generic placeholder tag from the template with the Jira wiki markup shown below. Do not write literal XML-style tags in the final output.
 
-| Generic tag | Jira wiki markup | Example |
-|-------------|------------------|---------|
+| Generic placeholder | Jira wiki markup | Example |
+|---------------------|------------------|---------|
 | `<bold>X</bold>` | `*X*` | `*Background:*` |
 | `<italic>X</italic>` | `_X_` | `_hint_` |
 | `<strike>X</strike>` | `-X-` | `-deprecated-` |
@@ -246,14 +306,23 @@ When writing output for Jira tracker fields or comments, transform the generic X
 | `<color color="red">X</color>` | `{color:red}X{color}` | `{color:red}alert{color}` |
 | `<hr>` | `----` | `----` |
 
-**Rules:**
-- Replace every `<tag>...</tag>` or self-closing tag with the Jira wiki markup shown above.
+## Rules
+
+- Replace every placeholder tag with the Jira wiki markup shown above.
 - Do NOT use Markdown syntax in Jira output: no `**bold**`, no `- item` bullets, no `# headings`, no triple backticks.
 - Use `* item` for bullets and `# item` for numbered lists.
 - For Mermaid diagrams in Jira fields that support them, wrap the diagram in `{code:mermaid}...{code}`.
 - For plain preformatted blocks, use `{noformat}...{noformat}`.
 
-**Full Jira wiki markup reference (Atlassian):**
+## ⚠️ Common Markdown mistakes — NEVER do this in Jira output
+
+- **NEVER use `**text**` for bold.** In Jira `**text**` is rendered as plain text with asterisks, not bold. Use `*text*` for bold.
+- **NEVER use `*text*` for italic.** In Jira `*text*` means bold. Use `_text_` for italic.
+- **NEVER use `## Heading`.** Use `h2. Heading`.
+- **NEVER use triple backticks for code blocks.** Use `{code}...{code}` or `{code:lang}...{code}`.
+
+## Full Jira wiki markup reference (Atlassian)
+
 - `*text*` — bold
 - `_text_` — italic
 - `-text-` — strikethrough
@@ -293,12 +362,12 @@ EOF
 
 #### [2] `./agents/instructions/tracker/ado_markup_transform.md`
 
-# ADO Markup Transform
+# ADO Markup Reference
 
-When writing output for Azure DevOps tracker fields or comments, transform the generic XML-style formatting tags below into GitHub-flavored Markdown. Do not write literal XML tags in the final output.
+When the target tracker is Azure DevOps, replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown below. Do not write literal XML-style tags in the final output.
 
-| Generic tag | Markdown | Example |
-|-------------|----------|---------|
+| Generic placeholder | Markdown | Example |
+|---------------------|----------|---------|
 | `<bold>X</bold>` | `**X**` | `**Background:**` |
 | `<italic>X</italic>` | `*X*` | `*hint*` |
 | `<strike>X</strike>` | `~~X~~` | `~~deprecated~~` |
@@ -318,8 +387,9 @@ When writing output for Azure DevOps tracker fields or comments, transform the g
 | `<color color="red">X</color>` | `<span style="color:red">X</span>` | `<span style="color:red">alert</span>` |
 | `<hr>` | `---` | `---` |
 
-**Rules:**
-- Replace every `<tag>...</tag>` or self-closing tag with the Markdown shown above.
+## Rules
+
+- Replace every placeholder tag with the Markdown shown above.
 - Do NOT use Jira wiki markup in ADO output: no `*bold*`, no `* item` bullets, no `h2.` headings, no `{code}...{code}` blocks.
 - Use `- item` for bullets and `1. item` for numbered lists.
 - For Mermaid diagrams in ADO fields that support them, wrap the diagram in ` ```mermaid\n...\n``` `.

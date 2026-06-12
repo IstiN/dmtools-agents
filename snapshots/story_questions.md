@@ -133,6 +133,10 @@ flowchart TD
 
 Each question `.md` file (referenced from `questions.json` as `description`) must follow this template. If a tracker-specific template is provided in the instructions, use that instead.
 
+The block below is a **structural template / example only**. The tags such as `<bold>` and `<bullet>` are placeholders that show the required shape of the document.
+
+**CRITICAL: Never write the final question description using these literal metatags.** Use the tracker-specific transformation table (for example `agents/instructions/tracker/jira_markup_transform.md` when the tracker is Jira) to convert every placeholder into the correct tracker markup.
+
 Structure:
 ```
 <bold>Background</bold>: [Brief context — 1-2 sentences explaining why this matters]
@@ -151,6 +155,8 @@ Rules:
 - Do NOT repeat the summary in the description — start directly with <bold>Background</bold>
 - <bold>Recommended Decision</bold> is required — always provide your best guess even if uncertain
 - Keep options focused: 2–3 max; omit if only one valid path exists
+- Replace every placeholder tag with the equivalent markup defined in the tracker-specific transformation table
+- Do NOT leave literal XML-style tags such as `<bold>` or `<bullet>` in the final question description
 
 
 ---
@@ -286,12 +292,12 @@ flowchart TD
 
 #### [1] `./agents/instructions/tracker/jira_markup_transform.md`
 
-# Jira Markup Transform
+# Jira Markup Reference
 
-When writing output for Jira tracker fields or comments, transform the generic XML-style formatting tags below into Jira wiki markup. Do not write literal XML tags in the final output.
+When the target tracker is Jira, replace every generic placeholder tag from the template with the Jira wiki markup shown below. Do not write literal XML-style tags in the final output.
 
-| Generic tag | Jira wiki markup | Example |
-|-------------|------------------|---------|
+| Generic placeholder | Jira wiki markup | Example |
+|---------------------|------------------|---------|
 | `<bold>X</bold>` | `*X*` | `*Background:*` |
 | `<italic>X</italic>` | `_X_` | `_hint_` |
 | `<strike>X</strike>` | `-X-` | `-deprecated-` |
@@ -312,14 +318,23 @@ When writing output for Jira tracker fields or comments, transform the generic X
 | `<color color="red">X</color>` | `{color:red}X{color}` | `{color:red}alert{color}` |
 | `<hr>` | `----` | `----` |
 
-**Rules:**
-- Replace every `<tag>...</tag>` or self-closing tag with the Jira wiki markup shown above.
+## Rules
+
+- Replace every placeholder tag with the Jira wiki markup shown above.
 - Do NOT use Markdown syntax in Jira output: no `**bold**`, no `- item` bullets, no `# headings`, no triple backticks.
 - Use `* item` for bullets and `# item` for numbered lists.
 - For Mermaid diagrams in Jira fields that support them, wrap the diagram in `{code:mermaid}...{code}`.
 - For plain preformatted blocks, use `{noformat}...{noformat}`.
 
-**Full Jira wiki markup reference (Atlassian):**
+## ⚠️ Common Markdown mistakes — NEVER do this in Jira output
+
+- **NEVER use `**text**` for bold.** In Jira `**text**` is rendered as plain text with asterisks, not bold. Use `*text*` for bold.
+- **NEVER use `*text*` for italic.** In Jira `*text*` means bold. Use `_text_` for italic.
+- **NEVER use `## Heading`.** Use `h2. Heading`.
+- **NEVER use triple backticks for code blocks.** Use `{code}...{code}` or `{code:lang}...{code}`.
+
+## Full Jira wiki markup reference (Atlassian)
+
 - `*text*` — bold
 - `_text_` — italic
 - `-text-` — strikethrough
@@ -348,12 +363,12 @@ When writing output for Jira tracker fields or comments, transform the generic X
 
 #### [1] `./agents/instructions/tracker/ado_markup_transform.md`
 
-# ADO Markup Transform
+# ADO Markup Reference
 
-When writing output for Azure DevOps tracker fields or comments, transform the generic XML-style formatting tags below into GitHub-flavored Markdown. Do not write literal XML tags in the final output.
+When the target tracker is Azure DevOps, replace every generic placeholder tag from the template with the GitHub-flavored Markdown shown below. Do not write literal XML-style tags in the final output.
 
-| Generic tag | Markdown | Example |
-|-------------|----------|---------|
+| Generic placeholder | Markdown | Example |
+|---------------------|----------|---------|
 | `<bold>X</bold>` | `**X**` | `**Background:**` |
 | `<italic>X</italic>` | `*X*` | `*hint*` |
 | `<strike>X</strike>` | `~~X~~` | `~~deprecated~~` |
@@ -373,8 +388,9 @@ When writing output for Azure DevOps tracker fields or comments, transform the g
 | `<color color="red">X</color>` | `<span style="color:red">X</span>` | `<span style="color:red">alert</span>` |
 | `<hr>` | `---` | `---` |
 
-**Rules:**
-- Replace every `<tag>...</tag>` or self-closing tag with the Markdown shown above.
+## Rules
+
+- Replace every placeholder tag with the Markdown shown above.
 - Do NOT use Jira wiki markup in ADO output: no `*bold*`, no `* item` bullets, no `h2.` headings, no `{code}...{code}` blocks.
 - Use `- item` for bullets and `1. item` for numbered lists.
 - For Mermaid diagrams in ADO fields that support them, wrap the diagram in ` ```mermaid\n...\n``` `.
