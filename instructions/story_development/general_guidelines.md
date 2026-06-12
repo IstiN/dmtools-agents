@@ -6,7 +6,8 @@ flowchart TD
     ANALYZE --> ARCH["Understand existing codebase patterns, architecture, and test structure"]
     ARCH --> PRINCIPLES["Apply OOP principles: SRP, OCP, DI, Encapsulation, Composition over inheritance"]
     PRINCIPLES --> TDD["Follow TDD approach — see tdd_approach.md"]
-    TDD --> IMPLEMENT["Implement source code and unit tests following existing patterns"]
+    TDD --> TEST_LOC["Write TDD tests in the standard unit-test tree only<br/>— Flutter/Dart: test/<br/>— NEVER in testing/ (owned by test-automation agents)"]
+    TEST_LOC --> IMPLEMENT["Implement source code and unit tests following existing patterns"]
     IMPLEMENT --> DOCS["Update documentation ONLY if ticket explicitly requires it"]
     DOCS --> RUN["Run all unit tests — MUST pass before finishing"]
     RUN --> PASS{Tests pass?}
