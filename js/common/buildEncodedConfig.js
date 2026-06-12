@@ -32,7 +32,7 @@ function extractAgentName(configFile) {
  */
 function resolveConfigFile(rule, effectiveConfig) {
     var cf = (rule && rule.configFile) || rule;
-    if (!cf) return cf;
+    if (!cf || typeof cf !== 'string') return null;
     if (cf.indexOf('/') !== -1) return cf;
     var dir = effectiveConfig && effectiveConfig.agentConfigsDir;
     if (dir) {
