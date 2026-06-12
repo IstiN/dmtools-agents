@@ -45,7 +45,7 @@ flowchart TD
     FILES --> CODEGRAPH["4. Use CodeGraph:<br/>callers/callees of changed symbols,<br/>search for sensitive patterns,<br/>impact analysis"]
     CODEGRAPH --> DIMS["5. Evaluate review dimensions:<br/>Security · Architecture/OOP · Code quality<br/>Test coverage · Duplication · Backward compatibility"]
     DIMS --> SEVERITY["6. Classify each finding:<br/>BLOCKING / IMPORTANT / SUGGESTION"]
-    SEVERITY --> OUTPUT["7. Write outputs:<br/>response.md · pr_review.json · pr_review_general.md · pr_review_comments/"]
+    SEVERITY --> OUTPUT["7. Write outputs:<br/>pr_review.json · pr_review_general.md · pr_review_comments/*.md"]
     OUTPUT --> END([End])
 ```
 
@@ -147,10 +147,11 @@ When in doubt, start one level higher; downgrade only after confirming the risk 
 
 Write the standard review artifacts:
 
-- `outputs/response.md` — concise summary, key issues, next steps
 - `outputs/pr_review.json` — structured data with `recommendation`, `summary`, `inlineComments`, `issueCounts`
 - `outputs/pr_review_general.md` — 1-2 paragraph general PR comment
-- `outputs/pr_review_comments/*.md` — one file per inline comment
+- `outputs/pr_review_comments/*.md` — one file per detailed inline comment
+
+Do NOT write `outputs/response.md`; the review is posted to GitHub only.
 
 
 ---
@@ -159,12 +160,11 @@ Write the standard review artifacts:
 
 ```mermaid
 flowchart TD
-    O1["Write outputs/response.md — concise tracker-agnostic summary"]
-    O2["Write outputs/pr_review.json — structured data for GitHub PR review"]
-    O3["Write outputs/pr_review_general.md — brief general PR comment (1-2 paragraphs max)"]
-    O4["Write outputs/pr_review_comments/ — detailed inline comment files"]
-    O5["Tracker-specific formatting is injected via cliPromptsByTracker — do NOT hardcode Jira/ADO markup in response.md"]
-    O1 --> O2 --> O3 --> O4 --> O5
+    O1["Write outputs/pr_review.json — structured data for GitHub PR review"]
+    O2["Write outputs/pr_review_general.md — brief general PR comment (1-2 paragraphs max)"]
+    O3["Write outputs/pr_review_comments/*.md — detailed inline comment files"]
+    O4["Keep inline comment JSON small — use 'comment' field pointing to file instead of inline 'body'"]
+    O1 --> O2 --> O3 --> O4
 ```
 
 
@@ -174,15 +174,16 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    F1["outputs/response.md — tracker-agnostic Markdown, under 20 lines, bullet-focused"]
+    F1["outputs/pr_review_general.md — brief GitHub Markdown summary, under 20 lines, bullet-focused"]
     F2["Required sections: Summary, Key Issues, Next Steps"]
     F3["outputs/pr_review.json — valid JSON with recommendation, summary, inlineComments, issueCounts"]
-    F4["Each inline comment: path, line, startLine, side, body, severity (BLOCKING|IMPORTANT|SUGGESTION)"]
-    F5["outputs/pr_review_general.md — max 1-2 paragraphs, factual, no essays"]
-    F6["If ci_failures.md present → include each failure as 🚨 BLOCKING"]
-    F7["Keep summary under 2 sentences — put details in inline comments, not in general text"]
-    F8["Severity classification follows general_guidelines.md:<br/>BLOCKING = must fix · IMPORTANT = should fix · SUGGESTION = optional"]
-    F9["Ticket context: verify PR changes satisfy ticket ACs — note gaps in review"]
+    F4["Each inline comment: path, line, startLine, side, body|comment, severity (BLOCKING|IMPORTANT|SUGGESTION)"]
+    F5["For long/detailed inline comments → write outputs/pr_review_comments/<file>.md and use 'comment' field"]
+    F6["outputs/pr_review_general.md — max 1-2 paragraphs, factual, no essays"]
+    F7["If ci_failures.md present → include each failure as 🚨 BLOCKING"]
+    F8["Keep summary under 2 sentences — put details in inline comments, not in general text"]
+    F9["Severity classification follows general_guidelines.md:<br/>BLOCKING = must fix · IMPORTANT = should fix · SUGGESTION = optional"]
+    F10["Ticket context: verify PR changes satisfy ticket ACs — note gaps in review"]
 ```
 
 
@@ -199,7 +200,7 @@ Example PR review outputs — keep concise:
   "summary": "SQL injection in UserService.js must be fixed before merge.",
   "generalComment": "outputs/pr_review_general.md",
   "inlineComments": [
-    {"path":"src/auth/UserService.js","line":45,"body":"🚨 BLOCKING: SQL Injection — Use parameterized queries.","severity":"BLOCKING"},
+    {"path":"src/auth/UserService.js","line":45,"comment":"outputs/pr_review_comments/UserService_sql_injection.md","severity":"BLOCKING"},
     {"path":"src/auth/LoginController.js","line":78,"body":"⚠️ IMPORTANT: Weak Password Validation — Require 8+ chars with mixed case, numbers, symbols.","severity":"IMPORTANT"},
     {"path":"src/utils/validation.js","line":23,"body":"💡 SUGGESTION: DRY — Email validation duplicated in 3 files. Extract to shared utility.","severity":"SUGGESTION"}
   ],
@@ -219,19 +220,22 @@ Example PR review outputs — keep concise:
 3. Extract shared email validation utility
 ```
 
-### outputs/response.md
-
+### outputs/pr_review_comments/UserService_sql_injection.md
 ```markdown
-h2. PR Review
+🚨 **BLOCKING: SQL Injection**
 
-*Status*: REQUEST_CHANGES (1 blocking, 1 important, 1 suggestion)
+User input is interpolated directly into the query at `UserService.js:45`:
 
-*Blocking*:
-* SQL injection in {{UserService.js:45}}
+```javascript
+const query = `SELECT * FROM users WHERE email = '${email}'`;
+```
 
-*Next Steps*:
-# Fix security issue
-# See inline PR comments for details
+Use parameterized queries instead:
+
+```javascript
+const query = 'SELECT * FROM users WHERE email = ?';
+await db.query(query, [email]);
+```
 ```
 
 

@@ -4,7 +4,7 @@
  * 1. Reads outputs/pr_review.json with structured review data
  * 2. Posts general review comment to GitHub PR using github_add_pr_comment
  * 3. Posts inline code comments to GitHub PR using github_add_inline_comment
- * 4. Posts Jira-formatted review from outputs/response.md to Jira ticket
+ * 4. Posts a formatted review summary to the Jira ticket
  * 5. Updates ticket status based on review outcome
  * 6. Adds labels to indicate review completion
  */
@@ -150,7 +150,8 @@ function attemptResumeIfReviewOutputsMissing(ticketKey) {
         'Write these files before stopping:\n' +
         '1. outputs/pr_review.json with fields recommendation, generalComment, resolvedThreadIds, inlineComments, issueCounts.\n' +
         '2. outputs/pr_review_general.md with a short GitHub Markdown review summary.\n' +
-        '3. outputs/response.md with a short Jira review summary.\n\n' +
+        '3. outputs/pr_review_comments/*.md for any detailed inline comments; reference them via the "comment" field in pr_review.json.\n\n' +
+        'Do NOT write outputs/response.md.\n\n' +
         'If you found a BLOCK or REQUEST_CHANGES result, still write the files. Do not return only plain text.\n' +
         'If the finding is not on a changed diff line, put it in outputs/pr_review_general.md and leave inlineComments empty.\n' +
         'Validate outputs/pr_review.json as parseable JSON before stopping.\n' +

@@ -10,7 +10,7 @@ flowchart TD
     FILES --> CODEGRAPH["4. Use CodeGraph:<br/>callers/callees of changed symbols,<br/>search for sensitive patterns,<br/>impact analysis"]
     CODEGRAPH --> DIMS["5. Evaluate review dimensions:<br/>Security · Architecture/OOP · Code quality<br/>Test coverage · Duplication · Backward compatibility"]
     DIMS --> SEVERITY["6. Classify each finding:<br/>BLOCKING / IMPORTANT / SUGGESTION"]
-    SEVERITY --> OUTPUT["7. Write outputs:<br/>response.md · pr_review.json · pr_review_general.md · pr_review_comments/"]
+    SEVERITY --> OUTPUT["7. Write outputs:<br/>pr_review.json · pr_review_general.md · pr_review_comments/*.md"]
     OUTPUT --> END([End])
 ```
 
@@ -112,7 +112,8 @@ When in doubt, start one level higher; downgrade only after confirming the risk 
 
 Write the standard review artifacts:
 
-- `outputs/response.md` — concise summary, key issues, next steps
 - `outputs/pr_review.json` — structured data with `recommendation`, `summary`, `inlineComments`, `issueCounts`
 - `outputs/pr_review_general.md` — 1-2 paragraph general PR comment
-- `outputs/pr_review_comments/*.md` — one file per inline comment
+- `outputs/pr_review_comments/*.md` — one file per detailed inline comment
+
+Do NOT write `outputs/response.md`; the review is posted to GitHub only.

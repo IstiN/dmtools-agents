@@ -7,7 +7,7 @@ Example PR review outputs — keep concise:
   "summary": "SQL injection in UserService.js must be fixed before merge.",
   "generalComment": "outputs/pr_review_general.md",
   "inlineComments": [
-    {"path":"src/auth/UserService.js","line":45,"body":"🚨 BLOCKING: SQL Injection — Use parameterized queries.","severity":"BLOCKING"},
+    {"path":"src/auth/UserService.js","line":45,"comment":"outputs/pr_review_comments/UserService_sql_injection.md","severity":"BLOCKING"},
     {"path":"src/auth/LoginController.js","line":78,"body":"⚠️ IMPORTANT: Weak Password Validation — Require 8+ chars with mixed case, numbers, symbols.","severity":"IMPORTANT"},
     {"path":"src/utils/validation.js","line":23,"body":"💡 SUGGESTION: DRY — Email validation duplicated in 3 files. Extract to shared utility.","severity":"SUGGESTION"}
   ],
@@ -27,17 +27,20 @@ Example PR review outputs — keep concise:
 3. Extract shared email validation utility
 ```
 
-### outputs/response.md
-
+### outputs/pr_review_comments/UserService_sql_injection.md
 ```markdown
-h2. PR Review
+🚨 **BLOCKING: SQL Injection**
 
-*Status*: REQUEST_CHANGES (1 blocking, 1 important, 1 suggestion)
+User input is interpolated directly into the query at `UserService.js:45`:
 
-*Blocking*:
-* SQL injection in {{UserService.js:45}}
+```javascript
+const query = `SELECT * FROM users WHERE email = '${email}'`;
+```
 
-*Next Steps*:
-# Fix security issue
-# See inline PR comments for details
+Use parameterized queries instead:
+
+```javascript
+const query = 'SELECT * FROM users WHERE email = ?';
+await db.query(query, [email]);
+```
 ```
