@@ -13,7 +13,8 @@ function loadPostPRReviewComments() {
             './common/scm.js': { createScm: function() { return {}; } },
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
             './configLoader.js': configLoaderModule,
-            './common/outputFiles.js': outputFiles
+            './common/outputFiles.js': outputFiles,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
         {
             file_read: function() { return null; }
