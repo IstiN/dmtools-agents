@@ -78,6 +78,80 @@ run_kimi() {
     [ -n "$(_kimi_session_dir "$1")" ]
   }
 
+  _kimi_index_file() {
+    local home="${KIMI_CODE_HOME:-${HOME}/.kimi-code}"
+    printf '%s/session_index.jsonl' "${home}"
+  }
+
+  _kimi_canonical_work_dir() {
+    # Use the physical current directory; Kimi indexes sessions by the
+    # canonical work-dir path, and symlinks such as /tmp -> /private/tmp
+    # must be resolved for the index lookup to succeed.
+    pwd -P
+  }
+
+  # Update Kimi's session index so that the deterministic session id can be
+  # found by --session on the next run. Kimi resolves sessions through the
+  # index (session_index.jsonl), not only by scanning the sessions tree, so
+  # after we rename a freshly-created session we must rewrite the index entry.
+  _kimi_update_session_index() {
+    local home="$1"
+    local work_dir="$2"
+    local session_id="$3"
+    local session_dir="$4"
+    local index_file
+    index_file="$(_kimi_index_file)"
+    if [ ! -f "${index_file}" ]; then
+      return 0
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+      echo "⚠️  python3 not available; cannot update Kimi session index" >&2
+      return 0
+    fi
+    python3 - "${index_file}" "${work_dir}" "${session_id}" "${session_dir}" <<'PY'
+import json, sys
+index_file, work_dir, session_id, session_dir = sys.argv[1:5]
+out = []
+updated = False
+with open(index_file, "r", encoding="utf-8") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        rec = json.loads(line)
+        rec_session_id = rec.get("sessionId", "")
+        rec_work_dir = rec.get("workDir", "")
+        # Drop stale entries that point to the same session or same work-dir/session combo.
+        if rec_session_id == session_id or (rec_work_dir == work_dir and rec.get("sessionDir", "") == session_dir):
+            if not updated:
+                out.append(json.dumps({"sessionId": session_id, "sessionDir": session_dir, "workDir": work_dir}, ensure_ascii=False))
+                updated = True
+            continue
+        out.append(json.dumps(rec, ensure_ascii=False))
+if not updated:
+    out.append(json.dumps({"sessionId": session_id, "sessionDir": session_dir, "workDir": work_dir}, ensure_ascii=False))
+with open(index_file, "w", encoding="utf-8") as f:
+    for line in out:
+        f.write(line + "\n")
+PY
+  }
+
+  # If a cached session directory exists but the index does not reference it
+  # (e.g. restored from an older cache or after manual fs changes), add the
+  # missing index entry so Kimi can resume it.
+  _kimi_ensure_session_index() {
+    local sid="$1"
+    local session_dir
+    session_dir="$(_kimi_session_dir "${sid}")"
+    if [ -z "${session_dir}" ]; then
+      return 0
+    fi
+    local home="${KIMI_CODE_HOME:-${HOME}/.kimi-code}"
+    local work_dir
+    work_dir="$(_kimi_canonical_work_dir)"
+    _kimi_update_session_index "${home}" "${work_dir}" "session_${sid}" "${session_dir}"
+  }
+
   if [ "${kimi_has_resume_arg}" = "true" ] && [ "${kimi_has_session_arg}" = "false" ]; then
     if [ -z "${kimi_session_id}" ] && [ -f "outputs/kimi_session_id.txt" ]; then
       kimi_session_id="$(tr -d '[:space:]' < outputs/kimi_session_id.txt || true)"
@@ -89,6 +163,8 @@ run_kimi() {
       echo "Set KIMI_SESSION_ID or run a non-resume agent first so the session id can be persisted." >&2
       return 1
     fi
+    # Make sure the index references the session we are about to resume.
+    _kimi_ensure_session_index "${kimi_session_id}"
     echo "Resuming Kimi session: ${kimi_session_id}"
     kimi_session_args=(--session "session_${kimi_session_id}")
     # Drop --continue/--resume flags; keep any other pass-through args.
@@ -106,6 +182,10 @@ run_kimi() {
     # should resume the same session across CI runs. The session id is made
     # deterministic by agents/setup/kimi-session.sh and the session tree is cached.
     if _kimi_session_exists "${kimi_session_id}"; then
+      # Make sure Kimi's session index points the current work-dir at the cached
+      # session directory; otherwise --session will report "Session not found"
+      # even though the directory exists.
+      _kimi_ensure_session_index "${kimi_session_id}"
       echo "Resuming Kimi session: ${kimi_session_id}"
       kimi_session_args=(--session "session_${kimi_session_id}")
     else
@@ -148,6 +228,11 @@ run_kimi() {
         mv "${src_dir}" "${dest_dir}"
         echo "✅ Normalized Kimi session id to deterministic id: ${KIMI_SESSION_ID}"
       fi
+      # Kimi resolves sessions through its index, so after renaming we must
+      # update the index entry to point at the new directory/id.
+      local work_dir
+      work_dir="$(_kimi_canonical_work_dir)"
+      _kimi_update_session_index "${home}" "${work_dir}" "session_${KIMI_SESSION_ID}" "${dest_dir}"
     fi
     effective_session_id="${KIMI_SESSION_ID}"
   fi
