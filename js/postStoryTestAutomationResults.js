@@ -1,0 +1,439 @@
+/**
+ * Post Story Test Automation Results Action
+ * 1. Reads outputs/story_test_automation_result.json
+ * 2. Commits/pushes testing/ folder on test/{STORY_KEY} branch
+ * 3. Creates PR to main
+ * 4. Per linked Test Case:
+ *    - status → In Review - Passed / In Review - Failed
+ *    - failed TC: attach outputs/failed_description_{TC_KEY}.md and set Failed Reason field
+ * 5. Moves Story → In Testing
+ * 6. Triggers pr_story_test_automation_review
+ */
+
+var configLoader = require('./configLoader.js');
+var prHelper = require('./common/pullRequest.js');
+var autoStart = require('./common/autoStart.js');
+const { GIT_CONFIG, STATUSES, LABELS, JIRA_FIELDS } = require('./config.js');
+var outputFiles = require('./common/outputFiles.js');
+var tokenUsageComment = require('./common/tokenUsageComment.js');
+
+function cleanCommandOutput(output) {
+    return prHelper.cleanCommandOutput(output);
+}
+
+function readFile(path) {
+    return outputFiles.readOutputFile(path, {});
+}
+
+function readOutputFile(relativePath, workingDir, ticketKey) {
+    return outputFiles.readOutputFile(relativePath, {
+        workingDir: workingDir,
+        ticketKey: ticketKey
+    });
+}
+
+function readResultJson(workingDir, storyKey) {
+    try {
+        const raw = readOutputFile('story_test_automation_result.json', workingDir, storyKey);
+        if (!raw) {
+            console.warn('outputs/story_test_automation_result.json is empty or missing');
+            return null;
+        }
+        const parsed = JSON.parse(raw);
+        console.log('Story test result overall:', parsed.overall);
+        return parsed;
+    } catch (e) {
+        console.error('Failed to parse story_test_automation_result.json:', e);
+        return null;
+    }
+}
+
+function markdownToJiraWiki(markdown) {
+    if (!markdown) return '';
+    var text = String(markdown);
+    text = text.replace(/```(\w+)?\n([\s\S]*?)```/g, function(_, language, code) {
+        return '{code' + (language ? ':' + language : '') + '}\n' + code.trim() + '\n{code}';
+    });
+    text = text
+        .replace(/^####\s+(.+)$/gm, 'h4. $1')
+        .replace(/^###\s+(.+)$/gm, 'h3. $1')
+        .replace(/^##\s+(.+)$/gm, 'h2. $1')
+        .replace(/^#\s+(.+)$/gm, 'h1. $1')
+        .replace(/^\s*-\s+/gm, '* ')
+        .replace(/\*\*([^*\n]+)\*\*/g, '*$1*')
+        .replace(/`([^`\n]+)`/g, '{{$1}}')
+        .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '[$1|$2]');
+    return text.trim();
+}
+
+function readJiraComment(params, workingDir, storyKey) {
+    var jiraComment = readOutputFile('tracker_comment.md', workingDir, storyKey);
+    if (jiraComment) return jiraComment;
+
+    jiraComment = readOutputFile('comment.md', workingDir, storyKey);
+    if (jiraComment) return jiraComment;
+
+    jiraComment = readOutputFile('jira_comment.md', workingDir, storyKey);
+    if (jiraComment) return jiraComment;
+
+    return markdownToJiraWiki(params.response || readOutputFile('response.md', workingDir, storyKey) || '');
+}
+
+function runInRepo(command, workingDir) {
+    var args = { command: command };
+    if (workingDir) args.workingDirectory = workingDir;
+    return cli_execute_command(args);
+}
+
+function performGitOperations(branchName, commitMessage, workingDir, testFilesPath) {
+    var addPath = testFilesPath || 'testing/';
+    var inspectPath = addPath.replace(/\/$/, '') || '.';
+    try {
+        try {
+            var lsOutput = runInRepo('git status --short -- ' + inspectPath, workingDir) || '';
+            console.log('Git status for ' + inspectPath + ':', cleanCommandOutput(lsOutput) || '(empty)');
+        } catch (e) {
+            console.warn('Could not list ' + inspectPath + ':', e);
+        }
+
+        console.log('Staging test path:', addPath);
+        runInRepo('git add ' + addPath, workingDir);
+
+        var stagedOutput = cleanCommandOutput(runInRepo('git diff --cached --stat', workingDir) || '');
+        console.log('Staged changes:', stagedOutput || '(none)');
+
+        if (!stagedOutput || !stagedOutput.trim()) {
+            console.warn('No new staged changes in ' + addPath + ' (files may already exist on branch)');
+            var remoteBranchCheck = cleanCommandOutput(
+                runInRepo('git ls-remote --heads origin ' + branchName, workingDir) || ''
+            );
+            if (!remoteBranchCheck.trim()) {
+                console.log('No remote branch found, pushing current branch state...');
+                try {
+                    runInRepo('git push -u origin ' + branchName, workingDir);
+                } catch (pushErr) {
+                    console.warn('Failed to push branch:', pushErr);
+                    return { success: false, error: 'No test files were written and could not push branch' };
+                }
+            } else {
+                console.log('Branch exists on remote — pushing current branch state');
+                try {
+                    runInRepo('git push -u origin ' + branchName, workingDir);
+                } catch (pushErr) {
+                    console.log('Normal push failed, retrying with --force-with-lease...');
+                    try {
+                        runInRepo('git push -u origin ' + branchName + ' --force-with-lease', workingDir);
+                    } catch (forcePushErr) {
+                        console.warn('Failed to publish synced existing branch:', forcePushErr);
+                        return { success: false, error: 'No test files were written and the synced branch could not be pushed' };
+                    }
+                }
+            }
+            return { success: true, branchName: branchName, noNewCommit: true };
+        }
+
+        console.log('Committing...');
+        runInRepo('git commit -m "' + commitMessage.replace(/"/g, '\\"') + '"', workingDir);
+
+        console.log('Pushing to remote...');
+        try {
+            runInRepo('git push -u origin ' + branchName, workingDir);
+        } catch (e) {
+            console.log('Normal push failed, force pushing...');
+            runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
+        }
+
+        const remoteBranch = cleanCommandOutput(
+            runInRepo('git ls-remote --heads origin ' + branchName, workingDir) || ''
+        );
+        if (!remoteBranch.trim()) {
+            throw new Error('Branch not found on remote after push');
+        }
+
+        console.log('✅ Git operations completed');
+        return { success: true, branchName: branchName };
+
+    } catch (error) {
+        console.error('Git operations failed:', error);
+        return { success: false, error: error.toString() };
+    }
+}
+
+function createPullRequest(title, branchName, baseBranch, workingDir, scm) {
+    console.log('Creating Pull Request...');
+    return prHelper.createPullRequest({
+        title: title,
+        branchName: branchName,
+        baseBranch: baseBranch,
+        workingDir: workingDir,
+        scm: scm,
+        bodyFileCandidates: ['outputs/pr_body.md', 'outputs/response.md'],
+        defaultBody: 'Automated story test automation changes.',
+        runCommand: runInRepo,
+        readFile: readFile
+    });
+}
+
+function getFailedReasonField(config) {
+    return (config.jira && config.jira.fields && config.jira.fields.failedReason)
+        || JIRA_FIELDS.FAILED_REASON
+        || 'Failed Reason';
+}
+
+function attachFailedDescription(tcKey, filePath) {
+    try {
+        if (!filePath) return null;
+        var name = filePath.split('/').pop();
+        jira_attach_file_to_ticket({
+            ticketKey: tcKey,
+            name: name,
+            filePath: filePath,
+            contentType: 'text/markdown'
+        });
+        console.log('✅ Attached failed description to', tcKey, ':', name);
+        return name;
+    } catch (e) {
+        console.warn('Failed to attach failed description to', tcKey, ':', e);
+        return null;
+    }
+}
+
+function updateFailedReasonField(tcKey, attachmentName, failureSummary, fieldName) {
+    try {
+        var value = 'h3. Failure Summary\n\n' + (failureSummary || 'See attached file for full failure details.') + '\n\n';
+        if (attachmentName) {
+            value += '*Attachment*: [^' + attachmentName + ']\n';
+        }
+        jira_update_field({ key: tcKey, field: fieldName, value: value });
+        console.log('✅ Updated Failed Reason field for', tcKey);
+    } catch (e) {
+        console.warn('Failed to update Failed Reason field for', tcKey, ':', e);
+    }
+}
+
+function updateTestCaseStatus(tcKey, status, workingDir, storyKey, config) {
+    try {
+        var targetStatus = status === 'passed' ? STATUSES.IN_REVIEW_PASSED : STATUSES.IN_REVIEW_FAILED;
+        jira_move_to_status({ key: tcKey, statusName: targetStatus });
+        console.log('✅ Moved', tcKey, 'to', targetStatus);
+
+        if (status === 'failed') {
+            var result = readResultJson(workingDir, storyKey);
+            var resultItem = null;
+            if (result && result.results) {
+                resultItem = result.results.find(function(r) { return r.testCaseKey === tcKey; });
+            }
+            var filePath = resultItem && resultItem.failedDescriptionFile
+                ? resultItem.failedDescriptionFile
+                : 'outputs/failed_description_' + tcKey + '.md';
+            var attachmentName = attachFailedDescription(tcKey, filePath);
+            updateFailedReasonField(tcKey, attachmentName, resultItem ? resultItem.failureSummary : '', getFailedReasonField(config));
+        }
+    } catch (e) {
+        console.warn('Failed to update Test Case', tcKey, ':', e);
+    }
+}
+
+function autoStartStoryTestReview(storyKey, config, customParams, noCodeChanges) {
+    if (noCodeChanges) {
+        console.log('ℹ️ autoStartReview: skipped — no test code changes to review');
+        return false;
+    }
+    if (!customParams || !customParams.autoStartReview || !customParams.autoStartReviewConfigFile) {
+        return false;
+    }
+    try {
+        return autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: storyKey,
+            customParams: customParams,
+            config: config,
+            configFile: customParams.autoStartReviewConfigFile,
+            label: 'pr_story_test_automation_review',
+            stripKeys: ['removeLabel', 'autoStartReview', 'autoStartReviewConfigFile']
+        });
+    } catch (e) {
+        console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
+        return false;
+    }
+}
+
+function removeAutomationLabels(storyKey, params) {
+    try {
+        const wipLabel = params.metadata && params.metadata.contextId
+            ? params.metadata.contextId + '_wip'
+            : 'story_test_automation_wip';
+        jira_remove_label({ key: storyKey, label: wipLabel });
+    } catch (e) {}
+
+    try {
+        const smTriggerLabel = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.removeLabel;
+        if (smTriggerLabel) {
+            jira_remove_label({ key: storyKey, label: smTriggerLabel });
+            console.log('✅ Removed SM trigger label:', smTriggerLabel);
+        }
+    } catch (e) {}
+}
+
+function action(params) {
+    try {
+        const storyKey = params.ticket.key;
+        const storySummary = params.ticket.fields ? params.ticket.fields.summary : storyKey;
+        var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var customParams = (params.jobParams || params).customParams || {};
+        var scm = configLoader.createScm(config);
+        var workingDir = config.workingDir || null;
+        var testFilesPath = customParams.testFilesGlob || 'testing/';
+        const jiraComment = readJiraComment(params, workingDir, storyKey);
+
+        console.log('=== Processing story test automation results for', storyKey, '===');
+
+        // Step 1: Read structured result
+        const result = readResultJson(workingDir, storyKey);
+        if (!result) {
+            var commentMsg = 'h3. ⚠️ Story Test Automation Error\n\nCLI exited without producing result JSON. The Story will stay in Ready For Testing so SM can retry.';
+            jira_post_comment({ key: storyKey, comment: commentMsg });
+            removeAutomationLabels(storyKey, params);
+            return { success: false, error: 'No story test result JSON found' };
+        }
+
+        const overall = (result.overall || '').toLowerCase();
+        const blockedByHuman = overall === 'blocked_by_human';
+
+        // Step 2: Configure git author
+        try {
+            runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
+            runInRepo('git config user.email "' + config.git.authorEmail + '"', workingDir);
+        } catch (e) {
+            console.warn('Failed to configure git author:', e);
+        }
+
+        // Step 3: Read current branch
+        var rawBranch = runInRepo('git branch --show-current', workingDir) || '';
+        const branchName = cleanCommandOutput(rawBranch);
+        console.log('Cleaned branch name:', JSON.stringify(branchName));
+
+        // Step 4: Commit + push + create PR
+        let prUrl = null;
+        let noCodeChanges = false;
+        if (branchName) {
+            const commitMessage = configLoader.formatTemplate(config.formats.commitMessage.testAutomation, {ticketKey: storyKey, ticketSummary: storySummary});
+            const gitResult = performGitOperations(branchName, commitMessage, workingDir, testFilesPath);
+
+            if (gitResult.success && !gitResult.noNewCommit) {
+                const prTitle = configLoader.formatTemplate(config.formats.prTitle.testAutomation, {ticketKey: storyKey, ticketSummary: storySummary});
+                const prResult = createPullRequest(prTitle, branchName, config.git.baseBranch, workingDir, scm);
+                prUrl = prResult.prUrl;
+                if (!prResult.success || !prUrl) {
+                    console.error('PR creation failed');
+                    jira_post_comment({ key: storyKey, comment: 'h3. ⚠️ PR Creation Failed\n\nTest code was pushed to branch {code}' + branchName + '{code} but the Pull Request could not be created.' });
+                    removeAutomationLabels(storyKey, params);
+                    return { success: false, error: 'PR creation failed' };
+                }
+            } else if (gitResult.noNewCommit) {
+                noCodeChanges = true;
+                console.log('ℹ️ No test code changes — skipping PR review, moving Story directly');
+            } else {
+                console.warn('Git operations failed:', gitResult.error);
+                jira_post_comment({ key: storyKey, comment: 'h3. ⚠️ Git Operations Failed\n\n' + gitResult.error });
+                removeAutomationLabels(storyKey, params);
+                return { success: false, error: 'Git operations failed: ' + gitResult.error };
+            }
+        }
+
+        // Step 5: Post Story Jira comment
+        try {
+            let comment = jiraComment || '';
+            if (prUrl) {
+                comment += '\n\n*Story Test Branch PR*: ' + prUrl;
+            }
+            if (noCodeChanges) {
+                comment += '\n\nℹ️ _Test code unchanged from previous run._';
+            }
+            if (comment) {
+                jira_post_comment({ key: storyKey, comment: comment });
+                console.log('✅ Posted story test result comment to Jira');
+            }
+        } catch (e) {
+            console.warn('Failed to post Jira comment:', e);
+        }
+
+        // Step 6: Handle blocked_by_human
+        if (blockedByHuman) {
+            var blockedComment = 'h3. 🚫 Story Test Automation Blocked — Awaiting Human Setup\n\n' +
+                (result.blockedReason || 'Missing credentials or test data.') + '\n\n' +
+                'Once setup is complete, move this Story back to *Ready For Testing* to trigger re-run.';
+            try {
+                jira_post_comment({ key: storyKey, comment: blockedComment });
+                jira_move_to_status({ key: storyKey, statusName: STATUSES.BLOCKED });
+                console.log('✅ Blocked — moved', storyKey, 'to', STATUSES.BLOCKED);
+            } catch (e) {
+                console.warn('Failed to handle blocked story:', e);
+            }
+            removeAutomationLabels(storyKey, params);
+            return { success: true, status: 'blocked_by_human', storyKey: storyKey };
+        }
+
+        // Step 7: Update per-Test Case statuses
+        if (result.results && result.results.length > 0) {
+            result.results.forEach(function(item) {
+                if (item.status === 'passed' || item.status === 'failed') {
+                    updateTestCaseStatus(item.testCaseKey, item.status, workingDir, storyKey, config);
+                } else {
+                    console.log('Skipping status update for', item.testCaseKey, '— status:', item.status);
+                }
+            });
+        }
+
+        // Step 8: Move Story to In Testing
+        try {
+            jira_move_to_status({ key: storyKey, statusName: STATUSES.IN_TESTING });
+            console.log('✅ Moved Story', storyKey, 'to', STATUSES.IN_TESTING);
+        } catch (e) {
+            console.warn('Failed to move Story to In Testing:', e);
+        }
+
+        // Step 9: Trigger review
+        if (!blockedByHuman) {
+            if (!autoStartStoryTestReview(storyKey, config, customParams, noCodeChanges)) {
+                autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
+            }
+        }
+
+        // Step 10: Labels cleanup
+        removeAutomationLabels(storyKey, params);
+        try {
+            jira_add_label({ key: storyKey, label: LABELS.AI_TEST_AUTOMATION });
+        } catch (e) {
+            console.warn('Failed to add ai_test_automation label:', e);
+        }
+
+        // Step 11: Token usage comments
+        try {
+            tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator });
+        } catch (e) {
+            console.warn('Failed to post token usage comments:', e);
+        }
+
+        return {
+            success: true,
+            status: overall,
+            storyKey: storyKey,
+            prUrl: prUrl
+        };
+
+    } catch (error) {
+        console.error('❌ Error in postStoryTestAutomationResults:', error);
+        try {
+            jira_post_comment({
+                key: params.ticket.key,
+                comment: 'h3. ❌ Story Test Automation Error\n\n{code}' + error.toString() + '{code}'
+            });
+        } catch (e) {}
+        removeAutomationLabels(params.ticket.key, params);
+        return { success: false, error: error.toString() };
+    }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { action };
+}

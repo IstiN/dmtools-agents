@@ -102,7 +102,8 @@ const DIAGRAM_FORMAT = {
 // Field Names
 const JIRA_FIELDS = {
     DIAGRAMS: 'Diagrams',
-    SOLUTION: 'Solution'
+    SOLUTION: 'Solution',
+    FAILED_REASON: 'Failed Reason'
 };
 
 // Summary Length Constraints

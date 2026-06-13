@@ -1,0 +1,35 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": { "contextId": "pr_story_test_automation_review" },
+    "cliCommands": ["./agents/scripts/run-agent.sh"],
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "preJSAction": "agents/js/checkWipLabel.js",
+    "preCliJSAction": "agents/js/prepareTestPRForReview.js",
+    "postJSAction": "agents/js/postStoryTestAutomationReview.js",
+    "customParams": {
+      "removeLabel": "sm_story_test_review_triggered"
+    },
+    "inputJql": "key = JD-111",
+    "cliPrompts": [
+      "Senior QA Engineer & Code Reviewer",
+      "./agents/instructions/common/agent_task_preamble.md",
+      "./agents/instructions/common/coding_guidelines.md",
+      "./agents/instructions/common/input_context_reading.md",
+      "./agents/instructions/pr_test_automation_review/general_guidelines.md",
+      "./agents/instructions/pr_test_automation_review/output_rules.md",
+      "./agents/instructions/pr_test_automation_review/formatting_rules.md",
+      "./agents/instructions/pr_test_automation_review/few_shots.md",
+      "./agents/prompts/story_test_automation_review_prompt.md",
+      "./agents/instructions/common/dmtools_cli.md",
+      "./agents/prompts/bash_tools.md"
+    ],
+    "cliPromptsByTracker": {
+      "jira": ["./agents/instructions/tracker/jira_comment_format.md"],
+      "ado": ["./agents/instructions/tracker/ado_comment_format.md"]
+    }
+  }
+}

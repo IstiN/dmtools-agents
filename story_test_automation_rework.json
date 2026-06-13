@@ -1,0 +1,35 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": { "contextId": "story_test_automation_rework" },
+    "cliCommands": ["./agents/scripts/run-agent.sh"],
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "preJSAction": "agents/js/checkWipLabel.js",
+    "preCliJSAction": "agents/js/preCliStoryTestAutomationSetup.js",
+    "postJSAction": "agents/js/storyTestAutomationRework.js",
+    "customParams": {
+      "removeLabel": "sm_story_test_rework_triggered"
+    },
+    "inputJql": "key = JD-111",
+    "cliPrompts": [
+      "Senior QA Automation Engineer",
+      "./agents/instructions/common/agent_task_preamble.md",
+      "./agents/instructions/common/coding_guidelines.md",
+      "./agents/instructions/common/input_context_reading.md",
+      "./agents/instructions/test_automation/test_automation_architecture.md",
+      "./agents/instructions/test_automation/test_automation_instructions.md",
+      "./agents/instructions/test_automation/test_automation_output_files.md",
+      "./agents/instructions/test_automation/test_automation_json_output.md",
+      "./agents/prompts/story_test_automation_rework_prompt.md",
+      "./agents/prompts/bash_tools.md",
+      "./agents/instructions/common/dmtools_cli.md"
+    ],
+    "cliPromptsByTracker": {
+      "jira": ["./agents/instructions/tracker/jira_comment_format.md"],
+      "ado": ["./agents/instructions/tracker/ado_comment_format.md"]
+    }
+  }
+}

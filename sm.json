@@ -167,6 +167,14 @@
           "enabled": true
         },
         {
+          "description": "Ready For Testing Stories → automate linked test cases in bulk",
+          "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('Ready For Testing')",
+          "configFile": "agents/story_test_automation.json",
+          "skipIfLabel": "sm_story_test_automation_triggered",
+          "addLabel": "sm_story_test_automation_triggered",
+          "enabled": true
+        },
+        {
           "description": "In Testing Stories → check all TCs passed → Done",
           "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('In Testing')",
           "configFile": "agents/story_done_check.json",
