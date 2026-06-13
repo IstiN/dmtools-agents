@@ -39,6 +39,24 @@ function hasPrApprovedLabel(ticket) {
     return labels.indexOf(LABELS.PR_APPROVED) !== -1;
 }
 
+/**
+ * Count open review threads / general comments on a PR.
+ * Used as a safety valve: after many review rounds, an APPROVE with remaining
+ * suggestions is allowed so the loop terminates.
+ */
+function countReviewThreads(scm, pullRequestId) {
+    var count = 0;
+    try {
+        var discussions = scm.fetchDiscussions(pullRequestId);
+        if (discussions && discussions.rawThreads && discussions.rawThreads.threads) {
+            count += discussions.rawThreads.threads.length;
+        }
+    } catch (e) {
+        console.warn('Could not count review threads:', e.message || e);
+    }
+    return count;
+}
+
 function markForSmStoryRework(ticketKey) {
     try {
         jira_add_label({ key: ticketKey, label: 'sm_story_rework_triggered' });
@@ -571,9 +589,32 @@ function action(params) {
                               (issueCounts.important || 0) > 0 ||
                               (issueCounts.suggestions || 0) > 0;
         const allowApproveWithSuggestions = customParams && customParams.allowApproveWithSuggestions === true;
-        const isApproved = recommendation === 'APPROVE' && (!hasOpenIssues || allowApproveWithSuggestions);
 
-        if (recommendation === 'APPROVE' && hasOpenIssues && !allowApproveWithSuggestions) {
+        // Safety valve: after many review rounds, force-approve an APPROVE verdict
+        // even if suggestions remain, so the review/rework loop cannot run forever.
+        var forceApproveDueToThreadLimit = false;
+        var reviewThreadCount = 0;
+        var maxThreadLimit = customParams && customParams.maxReviewThreadsBeforeForceApprove;
+        if (recommendation === 'APPROVE' && hasOpenIssues && !allowApproveWithSuggestions &&
+            prNumber && repoInfo && maxThreadLimit && maxThreadLimit > 0) {
+            try {
+                reviewThreadCount = countReviewThreads(scm, prNumber);
+                if (reviewThreadCount >= maxThreadLimit) {
+                    forceApproveDueToThreadLimit = true;
+                    console.warn(
+                        '⚠️ PR has ' + reviewThreadCount + ' review threads (>= limit ' + maxThreadLimit + '). ' +
+                        'Forcing APPROVE despite remaining suggestions to break the review loop.'
+                    );
+                }
+            } catch (e) {
+                console.warn('Could not apply review-thread limit:', e.message || e);
+            }
+        }
+
+        const isApproved = recommendation === 'APPROVE' &&
+                           (!hasOpenIssues || allowApproveWithSuggestions || forceApproveDueToThreadLimit);
+
+        if (recommendation === 'APPROVE' && hasOpenIssues && !allowApproveWithSuggestions && !forceApproveDueToThreadLimit) {
             console.warn(
                 '⚠️ Agent returned APPROVE but there are open issues ' +
                 '(blocking=' + issueCounts.blocking + ', important=' + issueCounts.important +
@@ -849,5 +890,5 @@ function action(params) {
 
 // Export for dmtools standalone execution
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, resolveCustomParams, isLinePresentInDiff };
+    module.exports = { action, resolveCustomParams, isLinePresentInDiff, countReviewThreads };
 }

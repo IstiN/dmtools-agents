@@ -84,4 +84,30 @@ suite('postPRReviewComments', function() {
 
         assert.equal(mod.isLinePresentInDiff(diff, '.codegraph/.gitignore', 1), false);
     });
+
+    test('countReviewThreads counts rawThreads from scm.fetchDiscussions', function() {
+        var mod = loadPostPRReviewComments();
+        var scm = {
+            fetchDiscussions: function() {
+                return { rawThreads: { threads: [{ id: 1 }, { id: 2 }, { id: 3 }] } };
+            }
+        };
+        assert.equal(mod.countReviewThreads(scm, 42), 3);
+    });
+
+    test('countReviewThreads returns 0 when fetchDiscussions throws', function() {
+        var mod = loadPostPRReviewComments();
+        var scm = {
+            fetchDiscussions: function() {
+                throw new Error('graphql failure');
+            }
+        };
+        assert.equal(mod.countReviewThreads(scm, 42), 0);
+    });
+
+    test('countReviewThreads returns 0 when rawThreads are missing', function() {
+        var mod = loadPostPRReviewComments();
+        var scm = { fetchDiscussions: function() { return {}; } };
+        assert.equal(mod.countReviewThreads(scm, 42), 0);
+    });
 });
