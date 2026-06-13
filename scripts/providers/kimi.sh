@@ -68,9 +68,21 @@ run_kimi() {
     kimi_pass_args=("${PASS_ARGS[@]}")
   fi
 
+  _kimi_session_dir() {
+    local sid="$1"
+    local home="${KIMI_CODE_HOME:-${HOME}/.kimi-code}"
+    find "${home}/sessions" -maxdepth 2 -type d -name "session_${sid}" 2>/dev/null | head -1
+  }
+
+  _kimi_session_exists() {
+    [ -n "$(_kimi_session_dir "$1")" ]
+  }
+
   if [ "${kimi_has_resume_arg}" = "true" ] && [ "${kimi_has_session_arg}" = "false" ]; then
     if [ -z "${kimi_session_id}" ] && [ -f "outputs/kimi_session_id.txt" ]; then
       kimi_session_id="$(tr -d '[:space:]' < outputs/kimi_session_id.txt || true)"
+      # Normalise: older runs may have persisted the full directory name (session_<uuid>).
+      kimi_session_id="${kimi_session_id#session_}"
     fi
     if [ -z "${kimi_session_id}" ]; then
       echo "Error: Kimi resume requested but no session id is available." >&2
@@ -78,7 +90,7 @@ run_kimi() {
       return 1
     fi
     echo "Resuming Kimi session: ${kimi_session_id}"
-    kimi_session_args=(--session "${kimi_session_id}")
+    kimi_session_args=(--session "session_${kimi_session_id}")
     # Drop --continue/--resume flags; keep any other pass-through args.
     kimi_pass_args=()
     if [ "${#PASS_ARGS[@]}" -gt 0 ]; then
@@ -88,6 +100,16 @@ run_kimi() {
           *) kimi_pass_args+=("$pass_arg") ;;
         esac
       done
+    fi
+  elif [ -n "${kimi_session_id}" ] && [ "${kimi_has_session_arg}" = "false" ]; then
+    # AI Teammate session persistence: every normal run for a given ticket/group
+    # should resume the same session across CI runs. The session id is made
+    # deterministic by agents/setup/kimi-session.sh and the session tree is cached.
+    if _kimi_session_exists "${kimi_session_id}"; then
+      echo "Resuming Kimi session: ${kimi_session_id}"
+      kimi_session_args=(--session "session_${kimi_session_id}")
+    else
+      echo "Kimi session ${kimi_session_id} not found; starting new session (will normalize to deterministic id after run)"
     fi
   fi
 
@@ -110,12 +132,32 @@ run_kimi() {
   # Kimi stores runtime data under KIMI_CODE_HOME.
   local new_session_id=""
   new_session_id="$(grep -o '"session_id":"[^"]*"' "$kimi_log" | head -1 | cut -d'"' -f4 || true)"
-  if [ -n "${new_session_id}" ]; then
-    mkdir -p outputs
-    printf '%s\n' "${new_session_id}" > outputs/kimi_session_id.txt
+
+  # Normalize the Kimi-generated session id to the deterministic id configured
+  # by agents/setup/kimi-session.sh. This makes the cached session path stable
+  # across CI runs for the same ticket/agent-group pair.
+  local effective_session_id="${kimi_session_id:-${new_session_id}}"
+  if [ -n "${KIMI_SESSION_ID:-}" ] && [ -n "${new_session_id}" ] && [ "${new_session_id}" != "session_${KIMI_SESSION_ID}" ] && [ "${new_session_id}" != "${KIMI_SESSION_ID}" ]; then
+    local home="${KIMI_CODE_HOME:-${HOME}/.kimi-code}"
+    local new_uuid="${new_session_id#session_}"
+    local src_dir=""
+    src_dir="$(find "${home}/sessions" -maxdepth 2 -type d -name "session_${new_uuid}" 2>/dev/null | head -1 || true)"
+    if [ -n "${src_dir}" ]; then
+      local dest_dir="${src_dir%/*}/session_${KIMI_SESSION_ID}"
+      if [ "${src_dir}" != "${dest_dir}" ] && [ ! -e "${dest_dir}" ]; then
+        mv "${src_dir}" "${dest_dir}"
+        echo "✅ Normalized Kimi session id to deterministic id: ${KIMI_SESSION_ID}"
+      fi
+    fi
+    effective_session_id="${KIMI_SESSION_ID}"
   fi
 
-  print_kimi_usage_summary_and_write_json "${new_session_id:-${kimi_session_id}}"
+  if [ -n "${effective_session_id}" ]; then
+    mkdir -p outputs
+    printf '%s\n' "${effective_session_id}" > outputs/kimi_session_id.txt
+  fi
+
+  print_kimi_usage_summary_and_write_json "${effective_session_id}"
 
   rm -f "$kimi_log"
 
