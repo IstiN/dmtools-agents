@@ -97,6 +97,11 @@ _cache_kimi() {
   export_var "KIMI_CACHE_KEY"  "kimi-${version}-${OS_TAG}"
 }
 
+_cache_kimi_session() {
+  # shellcheck source=/dev/null
+  source "${SCRIPT_DIR}/kimi-session.sh" env
+}
+
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 
 _dispatch_tool() {
@@ -108,6 +113,7 @@ _dispatch_tool() {
     maestro)  _cache_maestro  "${version}" ;;
     copilot)  _cache_copilot  "${version}" ;;
     copilot-session) _cache_copilot_session ;;
+    kimi-session) _cache_kimi_session ;;
     codegraph) _cache_codegraph "${version}" ;;
     playwright) _cache_playwright "${version}" ;;
     codemie)  _cache_codemie  "${version}" ;;
@@ -148,7 +154,7 @@ _print_info() {
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-ALL_TOOLS="java node dmtools maestro copilot copilot-session codemie codegraph playwright kimi"  # cursor has no cache
+ALL_TOOLS="java node dmtools maestro copilot copilot-session kimi-session codemie codegraph playwright kimi"  # cursor has no cache
 
 MODE="${1:-info}"
 shift || true

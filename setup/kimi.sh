@@ -79,12 +79,27 @@ EOF
   echo "✅ kimi config written: ${KIMI_CONFIG_FILE}"
 }
 
+# ── Configure isolated Kimi session for AI Teammate runs ──────────────────────
+_configure_session() {
+  # When running inside AI Teammate, derive a stable session id per
+  # repo:ticket:agent_group and isolate KIMI_CODE_HOME so the session can be
+  # cached and resumed across CI runs.
+  if [ -z "${AI_TEAMMATE_CONFIG_FILE:-}" ]; then
+    return 0
+  fi
+  if [ -f "${SCRIPT_DIR}/kimi-session.sh" ]; then
+    # shellcheck source=/dev/null
+    source "${SCRIPT_DIR}/kimi-session.sh" env
+  fi
+}
+
 echo "🌙 Kimi Code CLI"
 
 # ── Already installed? ────────────────────────────────────────────────────────
 if is_installed kimi; then
   echo "✅ kimi already installed: $(kimi --version 2>/dev/null || echo "cached")"
   _write_config
+  _configure_session
   exit 0
 fi
 
@@ -92,6 +107,7 @@ if [ -x "${KIMI_BIN_DIR}/kimi" ]; then
   register_path "${KIMI_BIN_DIR}"
   echo "✅ kimi already installed: ${KIMI_BIN_DIR}/kimi"
   _write_config
+  _configure_session
   exit 0
 fi
 
@@ -112,6 +128,7 @@ if [ -x "${KIMI_BIN_DIR}/kimi" ]; then
   register_path "${KIMI_BIN_DIR}"
   echo "✅ kimi installed: ${KIMI_BIN_DIR}/kimi"
   _write_config
+  _configure_session
 else
   echo "⚠️  kimi could not be installed automatically."
   echo "    Install manually: curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash"
