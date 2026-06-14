@@ -179,4 +179,51 @@ suite('postStoryTestAutomationResults: bulk result processing', function() {
         assert.equal(result.error, 'No story test result JSON found');
     });
 
+    test('finalizes TC statuses to Passed/Failed when there are no code changes', function() {
+        var statusMoves = [];
+
+        var module = loadPostStoryTestAutomationResults({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/story_test_automation_result.json') {
+                    return JSON.stringify({
+                        storyKey: 'TS-100',
+                        overall: 'mixed',
+                        summary: 'Re-test after bug fixes',
+                        results: [
+                            { testCaseKey: 'TS-101', status: 'passed', testPath: 'testing/tests/TS-101/test.py' },
+                            { testCaseKey: 'TS-102', status: 'failed', testPath: 'testing/tests/TS-102/test.py', failedDescriptionFile: 'outputs/failed_description_TS-102.md', failureSummary: 'still failing' }
+                        ]
+                    });
+                }
+                if (opts.path === 'outputs/tracker_comment.md') return 'h3. Re-test Result';
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git branch --show-current') return 'test/TS-100';
+                if (opts.command === 'git status --short -- testing') return '';
+                if (opts.command === 'git diff --cached --stat') return '';
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-100') === 0) return 'abc\trefs/heads/test/TS-100';
+                return '';
+            },
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            jira_attach_file_to_ticket: function() {},
+            jira_update_field: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-100', fields: { summary: 'Re-test story' } },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.deepEqual(statusMoves, [
+            { key: 'TS-101', statusName: 'In Review - Passed' },
+            { key: 'TS-101', statusName: 'Passed' },
+            { key: 'TS-102', statusName: 'In Review - Failed' },
+            { key: 'TS-102', statusName: 'Failed' },
+            { key: 'TS-100', statusName: 'In Testing' }
+        ]);
+    });
+
 });

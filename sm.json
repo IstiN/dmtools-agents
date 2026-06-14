@@ -248,8 +248,8 @@
           "enabled": true
         },
         {
-          "description": "Bug To Fix Test Cases → all linked Bugs Done → move to Backlog",
-          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('Bug To Fix')",
+          "description": "Bug To Fix Tickets → all linked Bugs Done → move to Backlog / Ready For Testing",
+          "jql": "project = {jiraProject} AND issuetype in ('Test Case', 'Story') AND status in ('Bug To Fix')",
           "configFile": "agents/bug_to_fix_check.json",
           "skipIfLabel": "sm_bug_to_fix_check_triggered",
           "localExecution": true,

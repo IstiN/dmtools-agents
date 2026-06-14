@@ -2,9 +2,16 @@
  * Check Story Tests Passed — postJSAction for story_done_check agent.
  *
  * Runs on every SM cycle for each Story in "In Testing".
- * - If all linked Test Cases are in "Passed" status → moves the Story to Done.
- * - Otherwise → removes the SM idempotency label so the SM re-triggers
- *   this check on the next cycle.
+ * - If all linked Test Cases are "Passed" → moves the Story to "Done".
+ * - If any linked Test Case is still in an in-flight review/automation status
+ *   (In Review - Passed/Failed, In Development, etc.) → releases the lock and
+ *   waits for the review/merge/automation agents to finish.
+ * - If any linked Test Case is "Failed" and has no linked non-Done bug → waits
+ *   for bulk_bugs_creation to create/link the bug.
+ * - If any linked Test Case has a linked non-Done bug → moves the Story to
+ *   "Bug To Fix" so the bug-fix pipeline can run.
+ * - Otherwise all non-passed Test Cases are ready for re-test (bugs Done or no
+ *   bugs) → moves the Story back to "Ready For Testing" to trigger a re-run.
  */
 
 const { STATUSES } = require('./config.js');
@@ -16,11 +23,10 @@ function action(params) {
     const customParams = params.jobParams && params.jobParams.customParams;
     const removeLabel = customParams && customParams.removeLabel;
 
-    // Load project config to get testCaseIssueType (default: "Test Case")
     const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-    const testCaseType = projectConfig.jira.issueTypes.TEST_CASE || 'Test Case';
+    const testCaseType = (projectConfig.jira && projectConfig.jira.issueTypes && projectConfig.jira.issueTypes.TEST_CASE) || 'Test Case';
+    const bugType = (projectConfig.jira && projectConfig.jira.issueTypes && projectConfig.jira.issueTypes.BUG) || 'Bug';
 
-    // Helper: remove SM label so the check re-runs on the next SM cycle
     function releaseLock() {
         if (ticketKey && removeLabel) {
             try {
@@ -32,17 +38,53 @@ function action(params) {
         }
     }
 
+    function findLinkedTCs() {
+        try {
+            return jira_search_by_jql({
+                jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "' + testCaseType + '"',
+                maxResults: 100
+            }) || [];
+        } catch (e) {
+            console.warn('Failed to fetch linked Test Cases:', e);
+            return [];
+        }
+    }
+
+    function findLinkedBugs(tcKey) {
+        try {
+            return jira_search_by_jql({
+                jql: 'issue in linkedIssues("' + tcKey + '") AND issuetype = "' + bugType + '"',
+                maxResults: 50
+            }) || [];
+        } catch (e) {
+            console.warn('Failed to fetch linked bugs for', tcKey, e);
+            return [];
+        }
+    }
+
+    function findPendingBugKey(tcKey) {
+        var bugs = findLinkedBugs(tcKey);
+        for (var i = 0; i < bugs.length; i++) {
+            var status = bugs[i].fields && bugs[i].fields.status && bugs[i].fields.status.name;
+            if (status !== STATUSES.DONE) {
+                return bugs[i].key;
+            }
+        }
+        return null;
+    }
+
+    function isInFlightStatus(status) {
+        return status === STATUSES.IN_REVIEW_PASSED ||
+            status === STATUSES.IN_REVIEW_FAILED ||
+            status === STATUSES.IN_DEVELOPMENT ||
+            status === STATUSES.READY_FOR_DEVELOPMENT;
+    }
+
     try {
         if (!ticketKey) throw new Error('params.ticket.key is missing');
         console.log('=== Story done check for', ticketKey, '===');
 
-        // Step 1: Find all linked Test Cases for this story
-        // jira_search_by_jql returns a plain array
-        const allTCs = jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "' + testCaseType + '"',
-            maxResults: 100
-        }) || [];
-
+        const allTCs = findLinkedTCs();
         const totalTCs = allTCs.length;
         console.log('Linked Test Cases:', totalTCs);
 
@@ -52,48 +94,133 @@ function action(params) {
             return { success: true, action: 'no_test_cases', ticketKey };
         }
 
-        // Step 2: Find linked Test Cases that are NOT yet Passed
-        const notPassedTCs = jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "' + testCaseType + '" AND status != "Passed"',
-            maxResults: 1
-        }) || [];
+        const inFlightTCs = [];
+        const pendingBugTCs = [];
+        const waitingForBugsTCs = [];
+        const readyForRetestTCs = [];
 
-        const notPassedCount = notPassedTCs.length;
+        allTCs.forEach(function(tc) {
+            var status = tc.fields && tc.fields.status && tc.fields.status.name;
 
-        console.log('Test Cases not yet Passed:', notPassedCount, '/', totalTCs);
+            if (status === STATUSES.PASSED) {
+                return;
+            }
 
-        if (notPassedCount > 0) {
-            console.log('Not all Test Cases passed — releasing lock, will re-check next cycle');
-            releaseLock();
-            return { success: true, action: 'waiting', totalTCs, notPassedCount, ticketKey };
+            if (isInFlightStatus(status)) {
+                inFlightTCs.push(tc.key);
+                return;
+            }
+
+            var pendingBugKey = findPendingBugKey(tc.key);
+            if (pendingBugKey) {
+                pendingBugTCs.push({ key: tc.key, status: status, bugKey: pendingBugKey });
+                return;
+            }
+
+            if (status === STATUSES.FAILED) {
+                waitingForBugsTCs.push(tc.key);
+            } else {
+                readyForRetestTCs.push(tc.key);
+            }
+        });
+
+        // Step 1: All Test Cases passed
+        if (inFlightTCs.length === 0 && pendingBugTCs.length === 0 && waitingForBugsTCs.length === 0 && readyForRetestTCs.length === 0) {
+            console.log('All', totalTCs, 'Test Case(s) passed — moving', ticketKey, 'to Done');
+
+            jira_move_to_status({
+                key: ticketKey,
+                statusName: STATUSES.DONE
+            });
+
+            jira_post_comment({
+                key: ticketKey,
+                comment: 'h3. ✅ Story Complete — All Test Cases Passed\n\n' +
+                    'All *' + totalTCs + '* linked Test Case(s) are in *Passed* status.\n\n' +
+                    'The story has been automatically moved to *Done*.'
+            });
+
+            console.log('✅ Story', ticketKey, 'moved to Done');
+
+            try {
+                tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
+            } catch (e) {
+                console.warn('Failed to post token usage comments:', e);
+            }
+
+            return { success: true, action: 'moved_to_done', totalTCs, ticketKey };
         }
 
-        // Step 3: All Test Cases are Passed — move Story to Done
-        console.log('All', totalTCs, 'Test Case(s) passed — moving', ticketKey, 'to Done');
+        // Step 2: Some TCs are still being reviewed/developed — wait for those agents
+        if (inFlightTCs.length > 0) {
+            console.log(inFlightTCs.length, 'TC(s) still in review/automation — releasing lock, will re-check next cycle');
+            releaseLock();
+            return { success: true, action: 'waiting_in_flight', totalTCs, inFlightTCs, ticketKey };
+        }
+
+        // Step 3: Some TCs have open bugs → Story must wait in Bug To Fix
+        if (pendingBugTCs.length > 0) {
+            var bugList = pendingBugTCs.map(function(item) {
+                return '*' + item.bugKey + '* (from ' + item.key + ')';
+            }).join('\n');
+
+            console.log('Found', pendingBugTCs.length, 'TC(s) with pending bugs — moving Story to Bug To Fix');
+
+            jira_move_to_status({
+                key: ticketKey,
+                statusName: STATUSES.BUG_TO_FIX
+            });
+
+            jira_post_comment({
+                key: ticketKey,
+                comment: 'h3. 🐛 Story Moved to Bug To Fix\n\n' +
+                    'The following linked Test Cases have open bugs:\n\n' + bugList + '\n\n' +
+                    'The Story has been moved to *Bug To Fix*. It will return to *Ready For Testing* once all linked bugs are *Done*.'
+            });
+
+            console.log('✅ Story', ticketKey, 'moved to Bug To Fix');
+            releaseLock();
+
+            try {
+                tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
+            } catch (e) {
+                console.warn('Failed to post token usage comments:', e);
+            }
+
+            return { success: true, action: 'moved_to_bug_to_fix', pendingBugTCs: pendingBugTCs.length, ticketKey };
+        }
+
+        // Step 4: Some Failed TCs still have no linked bug — wait for bulk_bugs_creation
+        if (waitingForBugsTCs.length > 0) {
+            console.log('Failed TCs without linked bugs — releasing lock, will re-check next cycle');
+            releaseLock();
+            return { success: true, action: 'waiting_for_bugs', totalTCs, waitingForBugsTCs, ticketKey };
+        }
+
+        // Step 5: All remaining non-passed TCs are ready for re-test → back to Ready For Testing
+        console.log('All non-passed TCs are ready for re-test — moving Story to Ready For Testing');
 
         jira_move_to_status({
             key: ticketKey,
-            statusName: STATUSES.DONE
+            statusName: STATUSES.READY_FOR_TESTING
         });
 
         jira_post_comment({
             key: ticketKey,
-            comment: 'h3. ✅ Story Complete — All Test Cases Passed\n\n' +
-                'All *' + totalTCs + '* linked Test Case(s) are in *Passed* status.\n\n' +
-                'The story has been automatically moved to *Done*.'
+            comment: 'h3. 🔄 Story Ready for Re-test\n\n' +
+                'All linked bugs are resolved. The Story has been moved back to *Ready For Testing* to re-run the linked Test Cases.'
         });
 
-        console.log('✅ Story', ticketKey, 'moved to Done');
+        console.log('✅ Story', ticketKey, 'moved to Ready For Testing');
+        releaseLock();
 
-        // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
-        // wrote outputs/*_usage.json during the agent run.
         try {
             tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }
 
-        return { success: true, action: 'moved_to_done', totalTCs, ticketKey };
+        return { success: true, action: 'moved_to_ready_for_testing', readyForRetestTCs: readyForRetestTCs.length, ticketKey };
 
     } catch (error) {
         console.error('❌ Error in checkStoryTestsPassed:', error);

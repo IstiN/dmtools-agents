@@ -234,6 +234,16 @@ function updateTestCaseStatus(tcKey, status, workingDir, storyKey, config) {
     }
 }
 
+function finalizeTestCaseStatus(tcKey, status) {
+    try {
+        var targetStatus = status === 'passed' ? STATUSES.PASSED : STATUSES.FAILED;
+        jira_move_to_status({ key: tcKey, statusName: targetStatus });
+        console.log('✅ Finalized', tcKey, 'to', targetStatus, '(no code changes)');
+    } catch (e) {
+        console.warn('Failed to finalize Test Case', tcKey, ':', e);
+    }
+}
+
 function autoStartStoryTestReview(storyKey, config, customParams, noCodeChanges) {
     if (noCodeChanges) {
         console.log('ℹ️ autoStartReview: skipped — no test code changes to review');
@@ -378,6 +388,11 @@ function action(params) {
             result.results.forEach(function(item) {
                 if (item.status === 'passed' || item.status === 'failed') {
                     updateTestCaseStatus(item.testCaseKey, item.status, workingDir, storyKey, config);
+                    // When there are no test code changes we skip the PR/review/merge flow,
+                    // so we must finalize TC statuses immediately so story_done_check can act.
+                    if (noCodeChanges) {
+                        finalizeTestCaseStatus(item.testCaseKey, item.status);
+                    }
                 } else {
                     console.log('Skipping status update for', item.testCaseKey, '— status:', item.status);
                 }

@@ -273,6 +273,89 @@ flowchart TD
     dec_done -->|"No — wait"| s_btf
 ```
 
+### Story Test Automation Bug-Fix Loop
+
+End-to-end flow when a Story reaches `In Testing`, some linked Test Cases fail, bugs are created and fixed, and the Story is re-tested. This diagram complements the [Story Pipeline](#story-pipeline) and [Test Case Pipeline](#test-case-pipeline) diagrams above.
+
+```mermaid
+flowchart TD
+    classDef humanInput fill:#fef3c7,stroke:#f59e0b,color:#92400e,font-weight:bold
+    classDef action fill:#f0f9ff,stroke:#0ea5e9,color:#0c4a6e
+    classDef status fill:#f0fdf4,stroke:#16a34a,color:#14532d
+
+    s_int([Story: In Testing]):::status
+
+    act_done["story_done_check.json · localExecution<br/>✅ all linked TCs Passed?<br/>🐛 pending bugs → Story → Bug To Fix<br/>🔄 bugs Done → Story → Ready For Testing"]:::action
+    s_int --> act_done
+
+    s_don([Story: Done ✅]):::status
+    act_done -->|"Yes — all Passed"| s_don
+
+    s_btf([Story: Bug To Fix]):::status
+    act_done -->|"No — pending bugs"| s_btf
+
+    act_bulk["bulk_bugs_creation.json · dispatch<br/>🤖 creates / links Bug tickets from Failed TCs<br/>🔗 links each Bug to its TC and to the parent Story<br/>TC → Bug To Fix · 🏷️➕ sm_bug_creation_triggered"]:::action
+    s_int -.->|"Failed TCs (no bugs yet)"| act_bulk
+    act_bulk --> s_btf
+
+    tc_btf([TC: Bug To Fix]):::status
+    act_bulk --> tc_btf
+
+    act_btf_tc["bug_to_fix_check.json · localExecution<br/>✅ all linked Bugs Done? → TC → Backlog"]:::action
+    tc_btf --> act_btf_tc
+
+    tc_back([TC: Backlog]):::status
+    act_btf_tc -->|"Yes"| tc_back
+    act_btf_tc -->|"No — wait"| tc_btf
+
+    b_rfd([Bug: Ready For Development]):::status
+    s_btf -.->|"Bug ticket ready"| b_rfd
+
+    act_bug_dev["bug_development.json · dispatch<br/>💻 writes fix · opens GitHub PR"]:::action
+    b_rfd --> act_bug_dev
+
+    b_inr([Bug: In Review]):::status
+    act_bug_dev --> b_inr
+
+    act_bug_review["pr_review.json · dispatch<br/>✅ approved · 🏷️➕ pr_approved"]:::action
+    b_inr --> act_bug_review
+
+    b_app([Bug: In Review + pr_approved]):::status
+    act_bug_review --> b_app
+
+    act_bug_merge["retry_merge.json · localExecution<br/>🔀 squash-merge · 🏷️➖ pr_approved"]:::action
+    b_app --> act_bug_merge
+
+    b_mrg([Bug: Merged]):::status
+    act_bug_merge --> b_mrg
+
+    act_bug_merged["bug_merged.json · localExecution<br/>Bug → Ready For Testing"]:::action
+    b_mrg --> act_bug_merged
+
+    b_rft([Bug: Ready For Testing]):::status
+    act_bug_merged --> b_rft
+
+    act_bug_test["bug_test_automation.json · dispatch<br/>🔄 runs linked TCs against the fix"]:::action
+    b_rft --> act_bug_test
+
+    b_don([Bug: Done ✅]):::status
+    act_bug_test -->|"all linked TCs Passed"| b_don
+
+    act_btf_story["bug_to_fix_check.json · localExecution<br/>✅ all Bugs linked to Story = Done?"]:::action
+    s_btf --> act_btf_story
+
+    s_rft([Story: Ready For Testing]):::status
+    act_btf_story -->|"Yes"| s_rft
+    act_btf_story -->|"No — wait"| s_btf
+
+    act_retest["story_test_automation.json · dispatch<br/>🔄 re-runs all linked TCs<br/>no code changes → TCs finalized to Passed/Failed immediately"]:::action
+    s_rft --> act_retest
+    act_retest --> s_int
+
+    h_review["👤 Human reviews Blocked / unclear tickets"]:::humanInput
+    s_btf -.->|"unclear / blocked"| h_review
+```
+
 ---
 
 ## Full System Overview

@@ -73,6 +73,46 @@ function linkBugToTC(tcKey, bugKey) {
     console.log('  ✅ Linked:', bugKey, 'blocks', tcKey);
 }
 
+function findLinkedStoryForTC(tcKey) {
+    if (!tcKey || typeof jira_search_by_jql !== 'function') return null;
+    try {
+        var result = jira_search_by_jql({
+            jql: 'issue in linkedIssues("' + tcKey + '") AND issuetype = Story',
+            fields: ['key'],
+            maxResults: 1
+        });
+        var tickets = extractTickets(result);
+        return tickets.length > 0 ? (tickets[0].key || null) : null;
+    } catch (e) {
+        console.warn('  ⚠️ Could not find linked Story for', tcKey, e);
+        return null;
+    }
+}
+
+function linkBugToStory(storyKey, bugKey) {
+    try {
+        jira_link_issues({
+            sourceKey: bugKey,
+            anotherKey: storyKey,
+            relationship: 'Relates'
+        });
+        console.log('  ✅ Linked bug', bugKey, 'to Story', storyKey);
+    } catch (e) {
+        console.warn('  ⚠️ Could not link bug', bugKey, 'to Story', storyKey, e);
+    }
+}
+
+function linkBugToStories(bugKey, linkedTCs) {
+    var seen = {};
+    linkedTCs.forEach(function(tcKey) {
+        var storyKey = findLinkedStoryForTC(tcKey);
+        if (storyKey && !seen[storyKey]) {
+            seen[storyKey] = true;
+            linkBugToStory(storyKey, bugKey);
+        }
+    });
+}
+
 function extractTickets(result) {
     if (!result) return [];
     if (Array.isArray(result)) return result;
@@ -340,6 +380,9 @@ function action(params) {
                         results.errors.push({ tcKey: tcKey, bugKey: existingBugKey, error: e.toString() });
                     }
                 });
+
+                // Link the existing bug to the parent Story(ies) of the linked TCs
+                linkBugToStories(existingBugKey, linkedTCs);
                 return;
             }
 
@@ -390,6 +433,9 @@ function action(params) {
                     results.errors.push({ tcKey: tcKey, bugKey: bugKey, error: e.toString() });
                 }
             });
+
+            // Also link the new bug to the parent Story(ies) of the linked TCs
+            linkBugToStories(bugKey, linkedTCs);
         });
 
         // ── 2. Link TCs to existing bugs ─────────────────────────────────────
@@ -421,6 +467,9 @@ function action(params) {
                 console.error('  ❌ Failed to link', tcKey, '→', bugKey, ':', e);
                 results.errors.push({ tcKey: tcKey, bugKey: bugKey, error: e.toString() });
             }
+
+            // Ensure the existing bug is also linked to the parent Story of this TC
+            linkBugToStories(bugKey, [tcKey]);
         });
 
         // ── 3. Test-code issues → In Rework so they leave Failed and rework runs ─

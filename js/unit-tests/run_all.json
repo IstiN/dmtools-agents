@@ -32,6 +32,8 @@
         "js/unit-tests/test_prepareBugCreationContext.js",
         "js/unit-tests/test_postBugCreation.js",
         "js/unit-tests/test_postBulkBugsCreation.js",
+        "js/unit-tests/test_checkStoryTestsPassed.js",
+        "js/unit-tests/test_checkBugToFixReady.js",
         "js/unit-tests/test_preCliStoryTestAutomationSetup.js",
         "js/unit-tests/test_postStoryTestAutomationResults.js",
         "js/unit-tests/test_postStoryTestAutomationReview.js",

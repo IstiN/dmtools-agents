@@ -475,4 +475,56 @@ suite('postBulkBugsCreation', function() {
         assert.notContains(created[0].description, 'should not be used');
     });
 
+    test('links new bug to parent Story of linked TC', function() {
+        var links = [];
+
+        var module = loadPostBulkBugsCreation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/bulk_bug_decisions.json') {
+                    return JSON.stringify({
+                        processed: ['TS-800'],
+                        newBugs: [
+                            {
+                                summary: 'Bug linked to story',
+                                priority: 'Medium',
+                                descriptionFile: 'outputs/bug_800_description.md',
+                                linkedTCs: ['TS-800']
+                            }
+                        ],
+                        links: [],
+                        skipped: []
+                    });
+                }
+                if (opts.path === 'outputs/bug_800_description.md') return 'Bug description';
+                return null;
+            },
+            jira_search_by_jql: function(args) {
+                if (args.jql.indexOf('issuetype = Story') !== -1) {
+                    return [{ key: 'TS-100' }];
+                }
+                return [];
+            },
+            jira_create_ticket_basic: function() { return '{"key":"TS-900"}'; },
+            jira_link_issues: function(args) { links.push(args); },
+            jira_attach_file_to_ticket: function() {},
+            jira_move_to_status: function() {},
+            jira_remove_label: function() {}
+        });
+
+        var result = module.action({
+            jobParams: {
+                customParams: {
+                    removeLabel: 'sm_bug_creation_triggered',
+                    smTriggerLabel: 'sm_bulk_bugs_creation_triggered'
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        var storyLinks = links.filter(function(l) { return l.anotherKey === 'TS-100'; });
+        assert.equal(storyLinks.length, 1);
+        assert.equal(storyLinks[0].sourceKey, 'TS-900');
+        assert.equal(storyLinks[0].relationship, 'Relates');
+    });
+
 });
