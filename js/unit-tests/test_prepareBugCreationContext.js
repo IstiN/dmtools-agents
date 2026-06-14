@@ -158,4 +158,39 @@ suite('prepareBulkBugsCreationContext', function() {
         assert.contains(contextWrite.content, 'Historical Done linked bugs**: 1');
     });
 
+    test('customParams.failedReasonField overrides config field name', function() {
+        var loaded = loadPrepareBulkBugsCreationContext({
+            jira_search_by_jql: function(args) {
+                loaded.calls.searches.push(args);
+                if (args.jql.indexOf('status = Failed') !== -1) {
+                    return [{
+                        key: 'TS-800',
+                        fields: {
+                            summary: 'Custom field TC',
+                            description: 'Testing custom failed reason field',
+                            'Custom Failed Reason': 'Custom field value'
+                        }
+                    }];
+                }
+                return [];
+            }
+        });
+
+        loaded.mod.action({
+            inputFolderPath: 'input/bulk-custom',
+            customParams: {
+                batchSize: 50,
+                failedReasonField: 'Custom Failed Reason'
+            },
+            jira: { project: 'TS' }
+        });
+
+        var failedWrite = loaded.calls.writes.filter(function(w) {
+            return w.path === 'input/bulk-custom/failed_tcs.json';
+        })[0];
+        assert.ok(failedWrite, 'failed_tcs.json should be written');
+        assert.contains(failedWrite.content, '"failedReason"');
+        assert.contains(failedWrite.content, 'Custom field value');
+    });
+
 });

@@ -139,8 +139,9 @@ function postComment(tcKey, comment) {
     }
 }
 
-function getFailedReasonFieldName(config) {
-    return (config && config.jira && config.jira.fields && config.jira.fields.failedReason)
+function getFailedReasonFieldName(config, customParams) {
+    return (customParams && customParams.failedReasonField)
+        || (config && config.jira && config.jira.fields && config.jira.fields.failedReason)
         || JIRA_FIELDS.FAILED_REASON
         || 'Failed Reason';
 }
@@ -212,7 +213,7 @@ function action(params) {
         var triggerLabel = customParams.removeLabel || 'sm_bug_creation_triggered';
         var smTriggerLabel = customParams.smTriggerLabel || 'sm_bulk_bugs_creation_triggered';
         var projectConfig = configLoader.loadProjectConfig(actualParams);
-        var failedReasonFieldName = getFailedReasonFieldName(projectConfig);
+        var failedReasonFieldName = getFailedReasonFieldName(projectConfig, customParams);
 
         console.log('=== Processing bulk bug creation decisions ===');
 

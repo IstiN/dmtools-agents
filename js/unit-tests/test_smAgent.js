@@ -945,6 +945,16 @@ suite('smAgent: additionalInstructions in encoded_config', function() {
         var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
         assert.notOk(decoded.params.additionalInstructions, 'no additionalInstructions when not configured');
         assert.ok(decoded.params.agentParams, 'agentParams present');
+        // The story_development agent now keeps its default instructions in cliPrompts,
+        // not in agentParams.instructions, so we verify the default cliPrompts survive.
+        var storyDevRaw = file_read({ path: 'agents/story_development.json' }) ||
+                          file_read({ path: 'story_development.json' });
+        var storyDevJson = JSON.parse(storyDevRaw);
+        var defaultCliPrompts = storyDevJson.params.cliPrompts;
+        assert.ok(Array.isArray(decoded.params.cliPrompts) && decoded.params.cliPrompts.length > 0,
+            'default cliPrompts preserved');
+        assert.deepEqual(decoded.params.cliPrompts, defaultCliPrompts,
+            'default cliPrompts match the agent JSON');
     });
 
     test('injects cliPrompts and agent/job param patches from config into encoded_config', function() {
@@ -980,21 +990,14 @@ suite('smAgent: additionalInstructions in encoded_config', function() {
         var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
         assert.equal(decoded.params.cliPrompt, './.dmtools/prompts/main.md');
         // cliPrompts = agent JSON cliPrompts + config cliPrompts (role, focus)
-        assert.deepEqual(decoded.params.cliPrompts, [
-            'Senior Developer Engineer',
-            './agents/instructions/common/agent_task_preamble.md',
-            './agents/instructions/common/coding_guidelines.md',
-            './agents/instructions/common/input_context_reading.md',
-            './agents/instructions/story_development/general_guidelines.md',
-            './agents/instructions/story_development/tdd_approach.md',
-            './agents/instructions/story_development/output_rules.md',
-            './agents/instructions/story_development/formatting_rules.md',
-            './agents/instructions/story_development/few_shots.md',
-            './agents/instructions/common/dmtools_cli.md',
-            './agents/prompts/bash_tools.md',
+        var storyDevRaw = file_read({ path: 'agents/story_development.json' }) ||
+                          file_read({ path: 'story_development.json' });
+        var storyDevJson = JSON.parse(storyDevRaw);
+        var expectedCliPrompts = storyDevJson.params.cliPrompts.concat([
             './.dmtools/prompts/role.md',
             './.dmtools/prompts/focus.md'
         ]);
+        assert.deepEqual(decoded.params.cliPrompts, expectedCliPrompts);
         assert.equal(decoded.params.agentParams.aiRole, 'Senior Engineer');
         assert.equal(decoded.params.agentParams.customFlag, true);
         assert.deepEqual(decoded.params.confluencePages, ['./.dmtools/instructions/project.md']);

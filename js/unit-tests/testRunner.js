@@ -15,6 +15,17 @@
 var _results_ = { passed: 0, failed: 0, errors: [] };
 var _currentSuite_ = 'default';
 
+// Provide a stub java global for tests that mock java.lang.System.getenv.
+// In a real GraalJS environment java is already present; we never overwrite it.
+if (typeof java === 'undefined') {
+    var _javaStub_ = { lang: { System: { getenv: function() { return null; } } } };
+    if (typeof globalThis !== 'undefined') {
+        globalThis.java = _javaStub_;
+    } else if (typeof this !== 'undefined') {
+        this.java = _javaStub_;
+    }
+}
+
 // Pre-loaded base modules available to all test files as globals
 var configModule = null;
 var configLoaderModule = null;

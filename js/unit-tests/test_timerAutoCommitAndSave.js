@@ -180,10 +180,12 @@ suite('timerAutoCommitAndSave — saveSessionArtefact', function() {
             currentCliOutput: 'Hello CLI output\nline 2'
         });
 
-        // file_write should write the CLI output
+        // file_write should write the CLI output wrapped in a snapshot
         assert.equal(fileWriteCalls.length, 1);
         assert.equal(fileWriteCalls[0].path, '.dmtools-session-output.log');
-        assert.equal(fileWriteCalls[0].content, 'Hello CLI output\nline 2');
+        assert.contains(fileWriteCalls[0].content, 'Hello CLI output\nline 2', 'raw CLI output preserved');
+        assert.contains(fileWriteCalls[0].content, 'TIMER SESSION SNAPSHOT START', 'snapshot header present');
+        assert.contains(fileWriteCalls[0].content, 'TIMER SESSION SNAPSHOT END', 'snapshot footer present');
 
         // Should call github_get_or_create_draft_release
         assert.equal(releaseCalls.length, 1);

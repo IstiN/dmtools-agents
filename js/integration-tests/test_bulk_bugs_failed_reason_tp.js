@@ -31,6 +31,7 @@ suite('TP bulk bugs Failed Reason integration', function() {
             jira: { project: 'TP' },
             customParams: {
                 batchSize: 5,
+                failedReasonField: 'Failed Reason',
                 failedTCsJql: 'project = TP AND issuetype = "Test Case" AND status = Failed AND (labels is EMPTY OR labels NOT IN (sm_bug_creation_triggered)) ORDER BY created DESC'
             }
         });

@@ -361,4 +361,61 @@ suite('postBulkBugsCreation', function() {
         assert.equal(attached[0].filePath, 'outputs/bug_700_description.md');
     });
 
+    test('uses customParams.failedReasonField as description fallback', function() {
+        var created = [];
+
+        var module = loadPostBulkBugsCreation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/bulk_bug_decisions.json') {
+                    return JSON.stringify({
+                        processed: ['TS-701'],
+                        newBugs: [
+                            {
+                                summary: 'Custom field fallback bug',
+                                priority: 'Medium',
+                                descriptionFile: 'outputs/bug_701_description.md',
+                                linkedTCs: ['TS-701']
+                            }
+                        ],
+                        links: [],
+                        skipped: []
+                    });
+                }
+                if (opts.path === 'outputs/bug_701_description.md') return null;
+                return null;
+            },
+            jira_get_ticket: function(args) {
+                return {
+                    fields: {
+                        'Failed Reason': 'should not be used',
+                        'Custom Failed Reason': 'custom field fallback value'
+                    }
+                };
+            },
+            jira_create_ticket_basic: function(project, type, summary, description) {
+                created.push({ summary: summary, description: description });
+                return '{"key":"TS-7001"}';
+            },
+            jira_attach_file_to_ticket: function() {},
+            jira_link_issues: function() {},
+            jira_move_to_status: function() {},
+            jira_remove_label: function() {}
+        });
+
+        var result = module.action({
+            jobParams: {
+                customParams: {
+                    removeLabel: 'sm_bug_creation_triggered',
+                    smTriggerLabel: 'sm_bulk_bugs_creation_triggered',
+                    failedReasonField: 'Custom Failed Reason'
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(created.length, 1);
+        assert.contains(created[0].description, 'custom field fallback value');
+        assert.notContains(created[0].description, 'should not be used');
+    });
+
 });

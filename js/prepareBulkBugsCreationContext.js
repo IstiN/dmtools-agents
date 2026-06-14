@@ -27,8 +27,9 @@ function summarizeDoneBug(bug) {
     };
 }
 
-function getFailedReasonFieldName(config) {
-    return (config && config.jira && config.jira.fields && config.jira.fields.failedReason)
+function getFailedReasonFieldName(config, customParams) {
+    return (customParams && customParams.failedReasonField)
+        || (config && config.jira && config.jira.fields && config.jira.fields.failedReason)
         || JIRA_FIELDS.FAILED_REASON
         || 'Failed Reason';
 }
@@ -80,7 +81,7 @@ function action(params) {
             .replace('{jiraProject}', projectKey);
 
         var config = configLoader.loadProjectConfig(actualParams);
-        var failedReasonFieldName = getFailedReasonFieldName(config);
+        var failedReasonFieldName = getFailedReasonFieldName(config, customParams);
         console.log('Failed Reason field name:', failedReasonFieldName);
 
         console.log('=== Preparing bulk bugs creation context ===');
