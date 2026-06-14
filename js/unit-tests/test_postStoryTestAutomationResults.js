@@ -24,6 +24,7 @@ function loadPostStoryTestAutomationResults(mocks) {
         jira_remove_label: function() {},
         jira_update_field: function() {},
         jira_attach_file_to_ticket: function() {},
+        jira_search_by_jql: function() { return []; },
         cli_execute_command: function() { return ''; },
         file_read: fileReadMock,
         file_write: function() {}
@@ -224,6 +225,105 @@ suite('postStoryTestAutomationResults: bulk result processing', function() {
             { key: 'TS-102', statusName: 'Failed' },
             { key: 'TS-100', statusName: 'In Testing' }
         ]);
+    });
+
+    test('resumes agent when linked Test Cases are missing from result', function() {
+        var resumeCommands = [];
+        var filesWritten = {};
+        var resultReads = 0;
+
+        var module = loadPostStoryTestAutomationResults({
+            file_read: function(opts) {
+                var p = opts.path;
+                if (p === 'input/TS-110/linked_test_cases.json') {
+                    return JSON.stringify({ storyKey: 'TS-110', testCases: [{ key: 'TS-111' }, { key: 'TS-112' }] });
+                }
+                if (p === 'outputs/story_test_automation_result.json') {
+                    resultReads++;
+                    if (resultReads === 1) {
+                        return JSON.stringify({
+                            storyKey: 'TS-110',
+                            overall: 'mixed',
+                            results: [{ testCaseKey: 'TS-111', status: 'passed', testPath: 'testing/tests/TS-111/test.py' }]
+                        });
+                    }
+                    return JSON.stringify({
+                        storyKey: 'TS-110',
+                        overall: 'mixed',
+                        results: [
+                            { testCaseKey: 'TS-111', status: 'passed', testPath: 'testing/tests/TS-111/test.py' },
+                            { testCaseKey: 'TS-112', status: 'passed', testPath: 'testing/tests/TS-112/test.py' }
+                        ]
+                    });
+                }
+                if (p === 'outputs/tracker_comment.md') return 'h3. Story Test Result';
+                if (p && p.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            file_write: function(opts) { filesWritten[opts.path] = opts.content; },
+            cli_execute_command: function(opts) {
+                if (opts.command.indexOf('bash agents/scripts/run-agent.sh') === 0) {
+                    resumeCommands.push(opts.command);
+                    return '';
+                }
+                if (opts.command === 'git branch --show-current') return 'test/TS-110';
+                if (opts.command === 'git status --short -- testing') return '';
+                if (opts.command === 'git diff --cached --stat') return '';
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-110') === 0) return 'abc\trefs/heads/test/TS-110';
+                return '';
+            },
+            jira_move_to_status: function() {},
+            jira_attach_file_to_ticket: function() {},
+            jira_update_field: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-110', fields: { summary: 'Resume story' } },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(resumeCommands.length, 1);
+        assert.ok(resumeCommands[0].indexOf('outputs/.story-test-resume-prompt.md') !== -1);
+        assert.ok(filesWritten['outputs/.story-test-resume-attempted'] === '1');
+        assert.ok(filesWritten['outputs/.story-test-resume-prompt.md'] && filesWritten['outputs/.story-test-resume-prompt.md'].indexOf('TS-112') !== -1);
+    });
+
+    test('returns error when linked Test Cases remain missing after max resume attempts', function() {
+        var resumeCommands = [];
+
+        var module = loadPostStoryTestAutomationResults({
+            file_read: function(opts) {
+                var p = opts.path;
+                if (p === 'input/TS-120/linked_test_cases.json') {
+                    return JSON.stringify({ storyKey: 'TS-120', testCases: [{ key: 'TS-121' }] });
+                }
+                if (p === 'outputs/story_test_automation_result.json') {
+                    return JSON.stringify({ storyKey: 'TS-120', overall: 'mixed', results: [] });
+                }
+                if (p === 'outputs/.story-test-resume-attempted') return '2';
+                if (p && p.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            cli_execute_command: function(opts) {
+                if (opts.command.indexOf('bash agents/scripts/run-agent.sh') === 0) {
+                    resumeCommands.push(opts.command);
+                }
+                return '';
+            },
+            jira_post_comment: function() {},
+            jira_move_to_status: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-120', fields: { summary: 'Exhausted resume story' } },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, false);
+        assert.ok(result.error.indexOf('Missing Test Case results') !== -1);
+        assert.ok(result.error.indexOf('TS-121') !== -1);
+        assert.equal(resumeCommands.length, 0);
     });
 
 });

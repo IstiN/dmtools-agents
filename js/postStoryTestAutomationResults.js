@@ -17,6 +17,8 @@ const { GIT_CONFIG, STATUSES, LABELS, JIRA_FIELDS } = require('./config.js');
 var outputFiles = require('./common/outputFiles.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
+var RESUME_MARKER = 'outputs/.story-test-resume-attempted';
+
 function cleanCommandOutput(output) {
     return prHelper.cleanCommandOutput(output);
 }
@@ -46,6 +48,117 @@ function readResultJson(workingDir, storyKey) {
         console.error('Failed to parse story_test_automation_result.json:', e);
         return null;
     }
+}
+
+function readLinkedTestCases(storyKey, testCaseType) {
+    try {
+        var raw = readFile('input/' + storyKey + '/linked_test_cases.json');
+        if (raw) {
+            var parsed = JSON.parse(raw);
+            if (parsed && Array.isArray(parsed.testCases)) {
+                console.log('Loaded', parsed.testCases.length, 'linked Test Case(s) from input folder');
+                return parsed.testCases;
+            }
+        }
+    } catch (e) {
+        console.warn('Could not read linked_test_cases.json, falling back to JQL:', e);
+    }
+
+    try {
+        var jql = 'issue in linkedIssues("' + storyKey + '") AND issuetype = "' + testCaseType + '"';
+        var results = jira_search_by_jql({ jql: jql, maxResults: 100 });
+        return Array.isArray(results) ? results : [];
+    } catch (e) {
+        console.warn('Failed to fetch linked Test Cases from Jira:', e);
+        return [];
+    }
+}
+
+function getMissingTestCaseKeys(result, linkedTestCases) {
+    var resultKeys = {};
+    if (result && Array.isArray(result.results)) {
+        result.results.forEach(function(r) {
+            if (r.testCaseKey) resultKeys[r.testCaseKey] = true;
+        });
+    }
+    return linkedTestCases
+        .map(function(tc) { return tc.key; })
+        .filter(function(key) { return key && !resultKeys[key]; });
+}
+
+function readAttempt(markerPath) {
+    try {
+        var raw = file_read({ path: markerPath });
+        var value = parseInt(raw || '0', 10);
+        return isNaN(value) ? 0 : value;
+    } catch (e) {
+        return 0;
+    }
+}
+
+function writeAttempt(markerPath, attempt) {
+    try {
+        file_write({ path: markerPath, content: String(attempt) });
+    } catch (e) {
+        console.warn('Could not write resume attempt marker:', e);
+    }
+}
+
+function attemptResumeIfOutputsIncomplete(storyKey, result, linkedTestCases, workingDir) {
+    var missingKeys = getMissingTestCaseKeys(result, linkedTestCases);
+    if (missingKeys.length === 0) {
+        return { attempted: false, reason: 'complete' };
+    }
+
+    var attempt = readAttempt(RESUME_MARKER);
+    var maxAttempts = 2;
+    if (attempt >= maxAttempts) {
+        console.warn('Story test resume attempts exhausted (' + attempt + '/' + maxAttempts + '). Missing TCs:', missingKeys.join(', '));
+        return { attempted: false, reason: 'attempts-exhausted', missingKeys: missingKeys };
+    }
+
+    attempt += 1;
+    writeAttempt(RESUME_MARKER, attempt);
+
+    var checkedKeys = [];
+    if (result && Array.isArray(result.results)) {
+        checkedKeys = result.results.map(function(r) { return r.testCaseKey; }).filter(Boolean);
+    }
+
+    var prompt = 'RESUME TASK: The previous story test automation run did not verify all linked Test Cases.\n\n' +
+        'Story: ' + storyKey + '\n' +
+        'Linked Test Cases (' + linkedTestCases.length + '): ' + linkedTestCases.map(function(tc) { return tc.key; }).join(', ') + '\n' +
+        'Already checked (' + checkedKeys.length + '): ' + (checkedKeys.join(', ') || 'none') + '\n' +
+        'Still missing (' + missingKeys.length + '): ' + missingKeys.join(', ') + '\n\n' +
+        'Instructions:\n' +
+        '- Continue the same story test automation task in the same repository.\n' +
+        '- For every missing Test Case, run/verify the corresponding automated test.\n' +
+        '- Append a result entry to outputs/story_test_automation_result.json for each missing Test Case:\n' +
+        '  { "testCaseKey": "TS-XXX", "status": "passed" | "failed", "testPath": "testing/tests/TS-XXX/...", "failedDescriptionFile": "outputs/failed_description_TS-XXX.md", "failureSummary": "..." }\n' +
+        '- If a test fails, write a failed description file and reference it in the result entry.\n' +
+        '- Do NOT push changes; the post-action will commit and push after you finish.\n' +
+        '- Do NOT move the Story to another status.\n' +
+        '- Update outputs/response.md with a short summary of what was verified.\n' +
+        '- Validate that outputs/story_test_automation_result.json is parseable JSON before stopping.\n';
+
+    var promptPath = 'outputs/.story-test-resume-prompt.md';
+    try {
+        file_write({ path: promptPath, content: prompt });
+    } catch (e) {
+        console.error('Failed to write story test resume prompt:', e);
+        return { attempted: false, reason: 'write-failed', missingKeys: missingKeys };
+    }
+
+    var command = 'bash agents/scripts/run-agent.sh --continue --resume ' + promptPath;
+    console.log('Story test output incomplete — resuming agent for missing TCs (attempt ' + attempt + '/' + maxAttempts + '):', missingKeys.join(', '));
+    try {
+        var output = runInRepo(command, workingDir);
+        console.log('Resume run output:', String(output || '').substring(0, 500));
+    } catch (e) {
+        console.warn('Story test resume run failed:', e);
+    }
+
+    return { attempted: true, attempt: attempt, missingKeys: missingKeys };
 }
 
 function markdownToJiraWiki(markdown) {
@@ -297,13 +410,37 @@ function action(params) {
 
         console.log('=== Processing story test automation results for', storyKey, '===');
 
-        // Step 1: Read structured result
-        const result = readResultJson(workingDir, storyKey);
+        // Step 1: Read structured result and ensure all linked Test Cases were checked
+        var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+        var testCaseType = (projectConfig.jira && projectConfig.jira.issueTypes && projectConfig.jira.issueTypes.TEST_CASE) || 'Test Case';
+        var linkedTestCases = readLinkedTestCases(storyKey, testCaseType);
+
+        var result = readResultJson(workingDir, storyKey);
+        var resumeInfo = null;
+        if (result && linkedTestCases.length > 0) {
+            resumeInfo = attemptResumeIfOutputsIncomplete(storyKey, result, linkedTestCases, workingDir);
+            if (resumeInfo.attempted) {
+                result = readResultJson(workingDir, storyKey);
+            }
+        }
+
         if (!result) {
             var commentMsg = 'h3. ⚠️ Story Test Automation Error\n\nCLI exited without producing result JSON. The Story will stay in Ready For Testing so SM can retry.';
             jira_post_comment({ key: storyKey, comment: commentMsg });
             removeAutomationLabels(storyKey, params);
             return { success: false, error: 'No story test result JSON found' };
+        }
+
+        var stillMissingKeys = getMissingTestCaseKeys(result, linkedTestCases);
+        if (stillMissingKeys.length > 0) {
+            console.warn('Linked Test Cases still missing from result after resume:', stillMissingKeys.join(', '));
+            var missingComment = 'h3. ⚠️ Story Test Automation Incomplete\n\n' +
+                'The automation could not verify all linked Test Cases. Missing results for:\n\n' +
+                stillMissingKeys.map(function(k) { return '* ' + k; }).join('\n') + '\n\n' +
+                'The Story will stay in Ready For Testing so SM can retry.';
+            jira_post_comment({ key: storyKey, comment: missingComment });
+            removeAutomationLabels(storyKey, params);
+            return { success: false, error: 'Missing Test Case results: ' + stillMissingKeys.join(', ') };
         }
 
         const overall = (result.overall || '').toLowerCase();
