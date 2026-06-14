@@ -524,7 +524,7 @@ suite('postBulkBugsCreation', function() {
         var storyLinks = links.filter(function(l) { return l.anotherKey === 'TS-100'; });
         assert.equal(storyLinks.length, 1);
         assert.equal(storyLinks[0].sourceKey, 'TS-900');
-        assert.equal(storyLinks[0].relationship, 'Relates');
+        assert.equal(storyLinks[0].relationship, 'relates to');
     });
 
 });

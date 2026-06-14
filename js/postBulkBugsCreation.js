@@ -94,7 +94,7 @@ function linkBugToStory(storyKey, bugKey) {
         jira_link_issues({
             sourceKey: bugKey,
             anotherKey: storyKey,
-            relationship: 'Relates'
+            relationship: 'relates to'
         });
         console.log('  ✅ Linked bug', bugKey, 'to Story', storyKey);
     } catch (e) {

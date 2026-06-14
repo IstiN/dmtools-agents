@@ -179,6 +179,7 @@
           "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('Ready For Testing')",
           "configFile": "agents/story_test_automation.json",
           "skipIfLabel": "sm_story_test_automation_triggered",
+          "skipIfLabels": ["sm_test_cases_triggered"],
           "addLabel": "sm_story_test_automation_triggered",
           "enabled": true
         },
