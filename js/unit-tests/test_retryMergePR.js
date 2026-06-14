@@ -51,7 +51,8 @@ function loadRetryMergePR(options) {
                     autoStartCalls.push(opts);
                     return true;
                 }
-            }
+            },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
         {
             jira_remove_label: function() {},

@@ -20,7 +20,8 @@ function loadRecoverStuckTestCase(options) {
                     return { repository: { owner: 'IstiN', repo: 'trackstate' } };
                 }
             },
-            './common/scm.js': { createScm: function() { return scm; } }
+            './common/scm.js': { createScm: function() { return scm; } },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
         {
             jira_move_to_status: function(args) { statusMoves.push(args); },

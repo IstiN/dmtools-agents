@@ -19,7 +19,8 @@ function loadDevelopTicketAndCreatePR(mocks) {
             './common/outputFiles.js': { readOutputFile: function() { return null; } },
             './cacheToReleases.js': {},
             './configLoader.js': configLoaderModule,
-            './config.js': configModule
+            './config.js': configModule,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
         Object.assign({
             cli_execute_command: function() { return ''; },

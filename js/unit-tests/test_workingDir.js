@@ -602,7 +602,8 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
             './common/autoStart.js': {
                 triggerConfiguredWorkflowForTicket: function() { return false; }
             },
-            './common/outputFiles.js': outputFiles
+            './common/outputFiles.js': outputFiles,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
         allMocks
     );

@@ -52,7 +52,10 @@ function loadPrepareBulkBugsCreationContext(mocks) {
 
     var mod = loadModule(
         'js/prepareBulkBugsCreationContext.js',
-        makeRequire({}),
+        makeRequire({
+            './configLoader.js': configLoaderModule,
+            './config.js': configModule
+        }),
         Object.assign({}, defaults, mocks || {})
     );
 

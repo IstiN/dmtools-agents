@@ -1,0 +1,16 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "js/unit-tests/testRunner.js",
+    "jobParams": {
+      "testFiles": [
+        "js/unit-tests/test_preCliStoryTestAutomationSetup.js",
+        "js/unit-tests/test_postStoryTestAutomationResults.js",
+        "js/unit-tests/test_postStoryTestAutomationReview.js",
+        "js/unit-tests/test_mergeStoryTestAutomationPR.js",
+        "js/unit-tests/test_triggerStoryTestAutomation.js",
+        "js/unit-tests/test_triggerBugTestAutomation.js"
+      ]
+    }
+  }
+}

@@ -22,7 +22,10 @@ function loadRecoverFailedTCBugStatus(mocks) {
 
     var mod = loadModule(
         'js/recoverFailedTCBugStatus.js',
-        makeRequire({ './config.js': configModule }),
+        makeRequire({
+            './config.js': configModule,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        }),
         Object.assign({}, defaults, mocks || {})
     );
 

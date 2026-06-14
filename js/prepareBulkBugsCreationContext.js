@@ -13,6 +13,9 @@
  * fetches ALL eligible failed TCs up to batchSize.
  */
 
+var configLoader = require('./configLoader.js');
+const { JIRA_FIELDS } = require('./config.js');
+
 function summarizeDoneBug(bug) {
     var fields = bug.fields || {};
     return {
@@ -22,6 +25,26 @@ function summarizeDoneBug(bug) {
         updated: fields.updated || '',
         description: (fields.description || '').substring(0, 500)
     };
+}
+
+function getFailedReasonFieldName(config) {
+    return (config && config.jira && config.jira.fields && config.jira.fields.failedReason)
+        || JIRA_FIELDS.FAILED_REASON
+        || 'Failed Reason';
+}
+
+function extractFailedReason(fields, fieldName) {
+    if (!fields || !fieldName) return '';
+    var raw = fields[fieldName];
+    if (typeof raw === 'string') return raw;
+    if (raw && typeof raw.value === 'string') return raw.value;
+    return '';
+}
+
+function extractAttachmentNames(fields) {
+    var attachments = fields && fields.attachment;
+    if (!Array.isArray(attachments)) return [];
+    return attachments.map(function(a) { return a.filename || ''; }).filter(function(n) { return n; });
 }
 
 function fetchHistoricalDoneBugs(tcKey) {
@@ -56,6 +79,10 @@ function action(params) {
             'project = {jiraProject} AND issuetype = "Test Case" AND status = Failed AND (labels is EMPTY OR labels NOT IN (sm_bug_creation_triggered)) ORDER BY created ASC')
             .replace('{jiraProject}', projectKey);
 
+        var config = configLoader.loadProjectConfig(actualParams);
+        var failedReasonFieldName = getFailedReasonFieldName(config);
+        console.log('Failed Reason field name:', failedReasonFieldName);
+
         console.log('=== Preparing bulk bugs creation context ===');
         console.log('Project:', projectKey, '| batchSize:', batchSize);
 
@@ -63,9 +90,13 @@ function action(params) {
         console.log('Fetching failed TCs with JQL:', failedTCsJql);
         var failedTCs = [];
         try {
+            var tcFields = ['key', 'summary', 'description', 'comment', 'status', 'labels', 'parent', 'attachment'];
+            if (failedReasonFieldName && failedReasonFieldName.indexOf('customfield_') === 0) {
+                tcFields.push(failedReasonFieldName);
+            }
             var tcResults = jira_search_by_jql({
                 jql: failedTCsJql,
-                fields: ['key', 'summary', 'description', 'comment', 'status', 'labels', 'parent'],
+                fields: tcFields,
                 maxResults: batchSize
             });
             failedTCs = tcResults || [];
@@ -95,6 +126,8 @@ function action(params) {
                 key: tc.key,
                 summary: fields.summary || '',
                 description: fields.description || '',
+                failedReason: extractFailedReason(fields, failedReasonFieldName),
+                attachmentNames: extractAttachmentNames(fields),
                 lastComment: lastComment,
                 parent: fields.parent ? fields.parent.key + ' — ' + (fields.parent.fields && fields.parent.fields.summary || '') : '',
                 historicalDoneBugs: historicalDoneBugs
@@ -143,8 +176,11 @@ function action(params) {
         var contextMd = '# Bulk Bug Creation Context\n\n' +
             '- **Project**: ' + projectKey + '\n' +
             '- **Failed TCs to process**: ' + tcList.length + '\n' +
-            '- **Non-Done bugs for dedup check**: ' + bugList.length + '\n\n' +
+            '- **Non-Done bugs for dedup check**: ' + bugList.length + '\n' +
             '- **Historical Done linked bugs**: ' + totalHistoricalDoneBugs + ' (recurrence context only; not open matches)\n\n' +
+            'Each failed TC in `input/failed_tcs.json` now includes `failedReason` (from the Failed Reason field) ' +
+            'and `attachmentNames` (any files attached to the TC, including the failed-description file). ' +
+            'Use these as the *primary* failure evidence when creating or matching bugs.\n\n' +
             'Read `input/failed_tcs.json` and `input/open_bugs.json`, then follow the prompt instructions.\n';
         file_write(inputFolder + '/context.md', contextMd);
         console.log('=== Context preparation complete ===');

@@ -50,7 +50,8 @@ function loadPostTestAutomation(mocks) {
                     return { success: true };
                 }
             },
-            './common/outputFiles.js': outputFiles
+            './common/outputFiles.js': outputFiles,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
         allMocks
     );

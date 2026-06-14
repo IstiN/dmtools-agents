@@ -27,6 +27,8 @@
 const { STATUSES, LABELS } = require('./config.js');
 var feedbackLoop = require('./common/feedbackLoop.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
+var configLoader = require('./configLoader.js');
+const { JIRA_FIELDS } = require('./config.js');
 
 function readFile(path) {
     try {
@@ -137,6 +139,44 @@ function postComment(tcKey, comment) {
     }
 }
 
+function getFailedReasonFieldName(config) {
+    return (config && config.jira && config.jira.fields && config.jira.fields.failedReason)
+        || JIRA_FIELDS.FAILED_REASON
+        || 'Failed Reason';
+}
+
+function getFailedReasonForTc(tcKey, fieldName) {
+    if (!tcKey || !fieldName) return '';
+    try {
+        var result = jira_get_ticket({ key: tcKey });
+        var fields = result && result.fields ? result.fields : {};
+        var raw = fields[fieldName];
+        if (typeof raw === 'string') return raw;
+        if (raw && typeof raw.value === 'string') return raw.value;
+        return '';
+    } catch (e) {
+        console.warn('Could not read Failed Reason for', tcKey, ':', e);
+        return '';
+    }
+}
+
+function attachFileToBug(bugKey, filePath) {
+    if (!bugKey || !filePath) return false;
+    try {
+        jira_attach_file_to_ticket({
+            ticketKey: bugKey,
+            name: filePath.split('/').pop(),
+            filePath: filePath,
+            contentType: 'text/markdown'
+        });
+        console.log('  ✅ Attached description file to bug', bugKey, ':', filePath);
+        return true;
+    } catch (e) {
+        console.warn('  ⚠️ Could not attach description file to bug', bugKey, ':', e);
+        return false;
+    }
+}
+
 function removeTriggerLabel(ticketKey, label) {
     if (!ticketKey || !label) return;
     try {
@@ -171,6 +211,8 @@ function action(params) {
         var customParams = actualParams.customParams || {};
         var triggerLabel = customParams.removeLabel || 'sm_bug_creation_triggered';
         var smTriggerLabel = customParams.smTriggerLabel || 'sm_bulk_bugs_creation_triggered';
+        var projectConfig = configLoader.loadProjectConfig(actualParams);
+        var failedReasonFieldName = getFailedReasonFieldName(projectConfig);
 
         console.log('=== Processing bulk bug creation decisions ===');
 
@@ -242,18 +284,26 @@ function action(params) {
                 return;
             }
 
+            var linkedTCs = bugDef.linkedTCs || [];
+
             var description = null;
             if (bugDef.descriptionFile) {
                 description = readFile(bugDef.descriptionFile);
                 if (!description) {
-                    console.warn('  ⚠️ descriptionFile not found:', bugDef.descriptionFile, '— using summary as fallback');
-                    description = summary;
+                    console.warn('  ⚠️ descriptionFile not found:', bugDef.descriptionFile, '— using Failed Reason as fallback');
                 }
-            } else {
+            }
+            if (!description && linkedTCs.length > 0) {
+                var failedReason = getFailedReasonForTc(linkedTCs[0], failedReasonFieldName);
+                if (failedReason) {
+                    description = failedReason;
+                    console.log('  ℹ️ Using Failed Reason from', linkedTCs[0], 'as bug description fallback');
+                }
+            }
+            if (!description) {
                 description = summary;
             }
 
-            var linkedTCs = bugDef.linkedTCs || [];
             console.log('  Creating bug:', summary, '| links to:', linkedTCs.join(', '));
 
             var existingBugKey = findAnyLinkedNonDoneBug(linkedTCs);
@@ -301,6 +351,11 @@ function action(params) {
             }
 
             console.log('  🐛 Created bug:', bugKey);
+
+            // Attach the description file to the new bug if it exists
+            if (bugDef.descriptionFile) {
+                attachFileToBug(bugKey, bugDef.descriptionFile);
+            }
 
             // Link each TC to the new bug
             linkedTCs.forEach(function(tcKey) {

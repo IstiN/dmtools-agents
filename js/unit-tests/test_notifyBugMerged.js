@@ -22,7 +22,8 @@ suite('notifyBugMerged — solution field config', function() {
                             }
                         };
                     }
-                }
+                },
+                './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
             }, makeAiChatMock('h4. Root Cause\nPolicy field mismatch.'))),
             {
                 jira_get_comments: function() {
@@ -61,7 +62,8 @@ suite('notifyBugMerged — solution field config', function() {
                     loadProjectConfig: function() {
                         return { jira: { fields: {} } };
                     }
-                }
+                },
+                './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
             }, makeAiChatMock('RCA'))),
             {
                 jira_get_comments: function() { return []; },

@@ -53,7 +53,8 @@ function loadPostTestReviewComments(mocks, moduleMocks) {
             './common/githubHelpers.js': gh,
             './common/autoStart.js': autoStartMock,
             './configLoader.js': configLoaderModule,
-            './common/outputFiles.js': outputFiles
+            './common/outputFiles.js': outputFiles,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
         allMocks
     );

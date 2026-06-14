@@ -78,45 +78,82 @@ flowchart TD
 
 ### [5] `./agents/instructions/bulk_bugs_creation/general_guidelines.md`
 
-```mermaid
-flowchart TD
-    START([Bulk bug creation triggered]) --> READ_TC["Read input/failed_tcs.json<br/>or input/&lt;trigger-key&gt;/failed_tcs.json when root file is absent"]
-    READ_TC --> READ_BUGS["Read input/open_bugs.json — non-Done bugs only"]
-    READ_BUGS --> LOOP[For each failed Test Case]
-    LOOP --> EVAL[Use lastComment as primary failure evidence]
-    EVAL --> MATCH{Matching non-Done bug exists?<br/>same component + symptom,<br/>summary functionally identical,<br/>or steps overlap ≥70%}
-    MATCH -->|Yes| LINK[Add links entry — TC linked to existing bug]
-    MATCH -->|No| ROOT{Failure is purely test code / infra?}
-    ROOT -->|Yes| SKIP[Add skipped entry with detailed reason]
-    ROOT -->|No| GROUP{Same root cause as other TCs in batch?}
-    GROUP -->|Yes| GROUP_BUG[Group TCs under one new bug entry with all linkedTCs]
-    GROUP -->|No| NEW[Create one new bug entry for this TC]
-    LINK --> NEXT[Next TC]
-    SKIP --> NEXT
-    GROUP_BUG --> DESC[Write outputs/bug_NNN_description.md]
-    NEW --> DESC
-    DESC --> DECISION[Reference descriptionFile in outputs/bulk_bug_decisions.json]
-    DECISION --> NEXT
-    NEXT --> MORE{More TCs?}
-    MORE -->|Yes| LOOP
-    MORE -->|No| END([End])
-```
+# Bulk Bugs Creation Guidelines
+
+When a Test Case fails and the failure is a real application bug, create or link a Bug ticket.
+
+## Primary failure evidence
+
+1. **`failedReason`** field from the Test Case — this is the most authoritative failure summary.
+2. **Attached failed-description file** — the full failure report written by test automation.
+3. **Last comment** on the Test Case — supplementary discussion/context.
+
+Use the `failedReason` and attachment content as the basis for every bug `descriptionFile`. Do not rely only on the last comment or test summary.
+
+## Matching existing bugs
+
+Before creating a new bug, check `input/open_bugs.json` for non-Done bugs with:
+- the same component/symptom,
+- functionally identical summary,
+- overlapping reproduction steps (≥70%).
+
+If a match exists, add a `links` entry instead of a `newBugs` entry.
+
+## When to skip
+
+Only skip a failed TC as a `skipped` entry when you are confident the failure is purely:
+- test-code issue,
+- infra/flake,
+- outdated selector/locator.
+
+Prefer creating a bug over skipping.
+
+## Grouping
+
+If multiple failed TCs share the same root cause, group them under one `newBugs` entry with all linked TC keys.
 
 
 ---
 
 ### [6] `./agents/instructions/bulk_bugs_creation/output_rules.md`
 
-```mermaid
-flowchart TD
-    O1["Write outputs/bulk_bug_decisions.json — valid JSON"]
-    O2["processed: array of every TC key the AI made a decision for"]
-    O3["newBugs[]: summary, priority, descriptionFile (path to outputs/bug_NNN_description.md), linkedTCs[]"]
-    O4["links[]: tcKey → bugKey for existing non-Done bugs"]
-    O5["skipped[]: tcKey + detailed reason why it is a test code issue"]
-    O6["Do NOT embed multi-line description text directly inside bulk_bug_decisions.json"]
-    O1 --> O2 --> O3 --> O4 --> O5 --> O6
+# Bulk Bug Creation Output Rules
+
+## Required JSON
+
+Write `outputs/bulk_bug_decisions.json`:
+
+```json
+{
+  "processed": ["TS-984", "TS-954", "TS-909"],
+  "newBugs": [
+    {
+      "summary": "...",
+      "priority": "High|Medium|Low",
+      "descriptionFile": "outputs/bug_001_description.md",
+      "linkedTCs": ["TS-984", "TS-954"]
+    }
+  ],
+  "links": [
+    { "tcKey": "TS-909", "bugKey": "TS-123" }
+  ],
+  "skipped": [
+    {
+      "tcKey": "TS-800",
+      "reason": "Detailed reason why this is a test-code issue"
+    }
+  ]
+}
 ```
+
+### Rules
+
+- `processed` must list every TC the AI made a decision for.
+- `newBugs[].descriptionFile` must point to an existing `outputs/bug_NNN_description.md`.
+- The description file must incorporate the TC's `failedReason` field and any attached failed-description file content.
+- Do not embed multi-line description text directly inside `bulk_bug_decisions.json`.
+- Do not output `fixedByBug` — Done bugs are excluded from matching.
+- `skipped[].reason` must be detailed and specific.
 
 
 ---
