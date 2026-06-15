@@ -21,15 +21,23 @@
 7. No dead code, debug prints, or commented-out experiments.
 8. Shared helpers are reused; no unnecessary duplication.
 
-## Output format
+## Output files
 
-Write the same `outputs/pr_review.json` format used by `pr_test_automation_review`:
+You MUST write the following files before finishing:
+
+1. `outputs/response.md` — concise tracker-agnostic Markdown summary of the review (1-2 paragraphs).
+2. `outputs/pr_review.json` — structured data for the GitHub PR review.
+3. `outputs/pr_review_general.md` — brief general PR comment (1-2 paragraphs max).
+4. `outputs/pr_review_comments/` — directory with individual inline comment files (only if you have inline comments).
+
+## Output format for `outputs/pr_review.json`
 
 ```json
 {
   "recommendation": "APPROVE|REQUEST_CHANGES|BLOCK",
   "summary": "...",
   "generalComment": "outputs/pr_review_general.md",
+  "resolvedThreadIds": [],
   "inlineComments": [
     {
       "path": "testing/tests/TS-124/...",
@@ -37,10 +45,18 @@ Write the same `outputs/pr_review.json` format used by `pr_test_automation_revie
       "body": "💡 **Suggestion**: ...",
       "severity": "BLOCKING|IMPORTANT|SUGGESTION"
     }
-  ]
+  ],
+  "issueCounts": {
+    "blocking": 0,
+    "important": 0,
+    "suggestion": 0
+  }
 }
 ```
 
-- APPROVE only when all blocking checks pass.
-- REQUEST_CHANGES for issues that can be fixed by the rework agent.
-- BLOCK only for fundamental misunderstandings of the Test Case.
+- `recommendation` rules:
+  - `APPROVE` only when all blocking checks pass.
+  - `REQUEST_CHANGES` for issues that can be fixed by the rework agent.
+  - `BLOCK` only for fundamental misunderstandings of the Test Case.
+- If `pr_discussions.md` is present and contains resolved review threads, include their IDs in `resolvedThreadIds`.
+- Validate `outputs/pr_review.json` as parseable JSON before stopping.
