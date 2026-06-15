@@ -162,6 +162,8 @@ Write the standard review artifacts:
 - `outputs/pr_review_general.md` — 1-2 paragraph general PR comment
 - `outputs/pr_review_comments/*.md` — one file per detailed inline comment
 
+**Inline comment lines must be present in the PR diff.** GitHub review threads can only be attached to added or context lines inside a diff hunk. If `pr_diff.txt` is truncated, run `git diff origin/{baseBranch}...HEAD` to locate the correct line numbers. Findings on unchanged code outside the diff belong in `outputs/pr_review_general.md`, not as inline comments.
+
 Do NOT write `outputs/response.md`; the review is posted to GitHub only.
 
 
@@ -175,7 +177,9 @@ flowchart TD
     O2["Write outputs/pr_review_general.md — brief general PR comment (1-2 paragraphs max)"]
     O3["Write outputs/pr_review_comments/*.md — detailed inline comment files"]
     O4["Always reference inline comment files via the 'comment' field — do NOT use inline 'body'"]
-    O1 --> O2 --> O3 --> O4
+    O5["Inline comments MUST use a line number that exists in the PR diff"]
+    O6["If a finding is on unchanged code outside the diff, put it in outputs/pr_review_general.md instead"]
+    O1 --> O2 --> O3 --> O4 --> O5 --> O6
 ```
 
 
@@ -195,6 +199,8 @@ flowchart TD
     F8["Keep summary under 2 sentences — put details in inline comment files, not in general text"]
     F9["Severity classification follows general_guidelines.md:<br/>BLOCKING = must fix · IMPORTANT = should fix · SUGGESTION = optional"]
     F10["Ticket context: verify PR changes satisfy ticket ACs — note gaps in review"]
+    F11["Inline comments MUST target a line that appears in the PR diff<br/>If the line is not in the diff, the comment becomes a general PR comment instead of a review thread"]
+    F12["Use line numbers from the right-hand side of diff hunks<br/>If pr_diff.txt is truncated, run git diff origin/{base}...HEAD to see the full diff"]
 ```
 
 

@@ -439,3 +439,80 @@ suite('scm GitLab provider', function() {
         });
     });
 });
+
+suite('scm GitHub provider getPrDiff fallback', function() {
+
+    test('uses github_get_pr_diff directly when it returns a usable diff', function() {
+        var prCalls = [];
+        var gitCalls = [];
+        var scmModule = loadScm({
+            github_get_pr_diff: function(args) {
+                return 'diff --git a/file.txt b/file.txt\n+change\n';
+            },
+            github_get_pr: function(args) { prCalls.push(args); return {}; },
+            cli_execute_command: function(args) { gitCalls.push(args.command); return ''; }
+        });
+
+        var provider = scmModule._createGithubProvider('IstiN', 'trackstate');
+        var diff = provider.getPrDiff('1789');
+
+        assert.ok(diff.indexOf('diff --git') !== -1, 'should return usable diff');
+        assert.equal(prCalls.length, 0, 'must not fetch PR details when MCP diff is usable');
+        assert.equal(gitCalls.length, 0, 'must not run git diff when MCP diff is usable');
+    });
+
+    test('falls back to local git diff when github_get_pr_diff returns a Java object string', function() {
+        var prDiffCalls = [];
+        var prCalls = [];
+        var gitCalls = [];
+        var scmModule = loadScm({
+            github_get_pr_diff: function(args) {
+                prDiffCalls.push(args);
+                return 'com.github.istin.dmtools.github.GitHub$1@61edc883';
+            },
+            github_get_pr: function(args) {
+                prCalls.push(args);
+                return { base: { ref: 'main' }, head: { ref: 'ai/TS-577' } };
+            },
+            cli_execute_command: function(args) {
+                gitCalls.push(args.command);
+                if (args.command === 'git diff main...ai/TS-577') {
+                    return 'diff --git a/file.txt b/file.txt\n+change\nCOMMAND_EXIT_CODE=0';
+                }
+                return 'COMMAND_EXIT_CODE=128';
+            }
+        });
+
+        var provider = scmModule._createGithubProvider('IstiN', 'trackstate');
+        var diff = provider.getPrDiff('1789');
+
+        assert.ok(diff.indexOf('diff --git') !== -1, 'should return usable local diff');
+        assert.equal(prDiffCalls.length, 1);
+        assert.equal(prDiffCalls[0].pullRequestID, '1789');
+        assert.equal(prCalls.length, 1);
+        assert.equal(prCalls[0].pullRequestId, '1789');
+        assert.ok(gitCalls.indexOf('git diff main...ai/TS-577') !== -1, 'should try three-dot local diff');
+    });
+
+    test('falls back to origin-prefixed git diff when bare refs are not available', function() {
+        var gitCalls = [];
+        var scmModule = loadScm({
+            github_get_pr_diff: function() { return ''; },
+            github_get_pr: function() { return { base: { ref: 'main' }, head: { ref: 'ai/TS-577' } }; },
+            cli_execute_command: function(args) {
+                gitCalls.push(args.command);
+                if (args.command === 'git diff origin/main...ai/TS-577') {
+                    return 'diff --git a/file.txt b/file.txt\n+change\nCOMMAND_EXIT_CODE=0';
+                }
+                return 'COMMAND_EXIT_CODE=128';
+            }
+        });
+
+        var provider = scmModule._createGithubProvider('IstiN', 'trackstate');
+        var diff = provider.getPrDiff('1789');
+
+        assert.ok(diff.indexOf('diff --git') !== -1, 'should return usable origin-prefixed diff');
+        assert.ok(gitCalls.indexOf('git diff main...ai/TS-577') !== -1, 'should try bare refs first');
+        assert.ok(gitCalls.indexOf('git diff origin/main...ai/TS-577') !== -1, 'should fall back to origin/ prefix');
+    });
+});
