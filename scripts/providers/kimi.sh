@@ -265,9 +265,14 @@ print_kimi_usage_summary_and_write_json() {
   echo "  Session ID: ${session_id}"
 
   if [ -n "${session_id}" ]; then
+    # Kimi session directories may be named either <session_id> or session_<session_id>,
+    # and the wire file may live at the session root or under agents/main/.
+    local sid="${session_id#session_}"
     wire_file="$(find "${kimi_code_home}/sessions" -type f \( \
-      -path "*/${session_id}/wire.jsonl" -o \
-      -path "*/${session_id}/agents/main/wire.jsonl" \
+      -path "*/${sid}/wire.jsonl" -o \
+      -path "*/${sid}/agents/main/wire.jsonl" -o \
+      -path "*/session_${sid}/wire.jsonl" -o \
+      -path "*/session_${sid}/agents/main/wire.jsonl" \
     \) 2>/dev/null | head -1 || true)"
   fi
 
