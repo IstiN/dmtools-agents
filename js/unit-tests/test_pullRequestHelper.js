@@ -243,4 +243,33 @@ suite('pullRequest helper', function() {
         }), 'expected merge after merge-base is found');
     });
 
+    test('truncates oversized PR body to fit GitHub limit', function() {
+        var writes = [];
+        var pr = loadPullRequestHelper({
+            cli_execute_command: function(args) {
+                if (args.command.indexOf('gh pr list --head feature/DMC-9') === 0) return '';
+                if (args.command.indexOf('gh pr create') === 0) return 'https://github.com/org/repo/pull/999';
+                return '';
+            },
+            file_write: function(path, content) {
+                writes.push({ path: path, content: content });
+            }
+        });
+
+        var hugeBody = 'x'.repeat(70000);
+        var result = pr.createPullRequest({
+            title: 'DMC-9 Huge body',
+            branchName: 'feature/DMC-9',
+            baseBranch: 'main',
+            workingDir: 'repo',
+            bodyContent: hugeBody
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.prUrl, 'https://github.com/org/repo/pull/999');
+        assert.equal(writes.length, 1);
+        assert.ok(writes[0].content.length <= 60000, 'body should be truncated to <= 60000 chars');
+        assert.contains(writes[0].content, 'PR body truncated by automation');
+    });
+
 });
