@@ -61,6 +61,33 @@ function _isUsableDiff(value) {
     return typeof value === 'string' && value.indexOf('diff --git') !== -1 && !_looksLikeJavaObjectString(value);
 }
 
+function _extractDiffFromToolResult(raw) {
+    if (typeof raw !== 'string') {
+        return raw;
+    }
+    // Some DMTools versions wrap the diff in a JSON envelope like {"result": "diff ..."}
+    // or serialize an IBody lambda as {"arg$1": "diff ..."}. Unwrap those first.
+    var trimmed = raw.trim();
+    if (trimmed.charAt(0) === '{' || trimmed.charAt(0) === '[') {
+        try {
+            var parsed = JSON.parse(raw);
+            var candidates = [parsed.result, parsed['arg$1'], parsed.body, parsed.diff];
+            for (var i = 0; i < candidates.length; i++) {
+                var candidate = candidates[i];
+                if (typeof candidate === 'string' && _isUsableDiff(candidate)) {
+                    return candidate;
+                }
+            }
+        } catch (e) {
+            // Not valid JSON — fall through to raw diff check
+        }
+    }
+    if (_isUsableDiff(raw)) {
+        return raw;
+    }
+    return raw;
+}
+
 function _runGitDiff(baseRef, headRef) {
     var variants = [
         'git diff ' + baseRef + '...' + headRef,
@@ -139,23 +166,34 @@ function _createGithubProvider(workspace, repository) {
         },
         getPrDiff: function(prId) {
             var prIdStr = String(prId);
-            var raw = '';
 
-            // Note: the generated GitHub MCP executor expects the parameter name
-            // to be exactly 'pullRequestID' (capital D). Passing 'pullRequestId'
-            // causes a "Required parameter 'pullRequestID' is missing" error.
+            // Primary: DMTools v1.7.210+ exposes a tool that returns the raw diff text.
+            if (typeof github_get_pr_diff_text !== 'undefined') {
+                try {
+                    var textRaw = github_get_pr_diff_text({ workspace: workspace, repository: repository, pullRequestID: prIdStr });
+                    var textDiff = _extractDiffFromToolResult(textRaw);
+                    if (_isUsableDiff(textDiff)) {
+                        return textDiff;
+                    }
+                } catch (e) {
+                    console.warn('github_get_pr_diff_text failed:', e.message || e);
+                }
+            }
+
+            // Legacy fallback: the old tool returns diff statistics (an object) in most builds.
+            var raw = '';
             try {
                 raw = github_get_pr_diff({ workspace: workspace, repository: repository, pullRequestID: prIdStr });
             } catch (e) {
                 console.warn('github_get_pr_diff failed:', e.message || e);
             }
 
-            if (_isUsableDiff(raw)) {
-                return raw;
+            var extracted = _extractDiffFromToolResult(raw);
+            if (_isUsableDiff(extracted)) {
+                return extracted;
             }
 
-            // Fallback: some DMTools builds return a Java object toString instead
-            // of the diff text. Generate the diff locally from the checked-out branch.
+            // Final fallback: generate the diff locally from the checked-out branch.
             console.log('GitHub PR diff MCP returned no usable diff; falling back to local git diff');
             try {
                 var pr = github_get_pr({ workspace: workspace, repository: repository, pullRequestId: prIdStr });
