@@ -21,7 +21,7 @@
  *
  * For newBugs:  create bug, link all linkedTCs, move linkedTCs to "Bug To Fix"
  * For links:    link TC to existing bug, move TC to "Bug To Fix"
- * For skipped:  move TC to In Rework so test automation can be fixed
+ * For skipped:  move TC to Backlog so test automation can be re-automated/reworked
  */
 
 const { STATUSES, LABELS } = require('./config.js');
@@ -248,9 +248,9 @@ function markResolved(resolvedSet, tcKey) {
     if (tcKey) resolvedSet[tcKey] = true;
 }
 
-function moveFailedTcToRework(tcKey) {
-    jira_move_to_status({ key: tcKey, statusName: STATUSES.IN_REWORK || 'In Rework' });
-    console.log('  🔧 Moved to ' + (STATUSES.IN_REWORK || 'In Rework') + ':', tcKey);
+function moveSkippedTcToBacklog(tcKey) {
+    jira_move_to_status({ key: tcKey, statusName: STATUSES.BACKLOG || 'Backlog' });
+    console.log('  🔧 Moved to ' + (STATUSES.BACKLOG || 'Backlog') + ':', tcKey);
     try {
         jira_remove_label({ key: tcKey, label: 'sm_test_automation_triggered' });
     } catch (e) {}
@@ -472,7 +472,7 @@ function action(params) {
             linkBugToStories(bugKey, [tcKey]);
         });
 
-        // ── 3. Test-code issues → In Rework so they leave Failed and rework runs ─
+        // ── 3. Test-code issues → Backlog so they leave Failed and can be re-automated ─
         skipped.forEach(function(skipDef) {
             var tcKey = skipDef.tcKey;
             if (!tcKey) return;
@@ -481,15 +481,15 @@ function action(params) {
                 return;
             }
             console.log('  Skipping', tcKey, '—', skipDef.reason || 'no reason given');
-            moveFailedTcToRework(tcKey);
+            moveSkippedTcToBacklog(tcKey);
             try {
                 removeProcessingLabels(tcKey, [triggerLabel, smTriggerLabel]);
-                console.log('  🏷️ Removed trigger labels from', tcKey, '— eligible for rework');
+                console.log('  🏷️ Removed trigger labels from', tcKey, '— eligible for re-automation');
             } catch (e) {}
             postComment(tcKey,
                 'h3. ℹ️ No Bug Created (Batch) — Test Code Issue\n\n' +
                 '*Reason*: ' + (skipDef.reason || 'AI determined this is a test code issue, not an application bug.') +
-                '\n\n_TC moved to *In Rework* so the test automation can be fixed instead of staying in *Failed*._'
+                '\n\n_TC moved to *Backlog* so the test automation can be reworked instead of staying in *Failed*._'
             );
             results.skipped.push({ tcKey: tcKey, reason: skipDef.reason });
             markResolved(resolvedSet, tcKey);

@@ -45,7 +45,7 @@ function loadPostBulkBugsCreation(mocks) {
 
 suite('postBulkBugsCreation', function() {
 
-    test('moves skipped test-code issues to In Rework and clears trigger labels', function() {
+    test('moves skipped test-code issues to Backlog and clears trigger labels', function() {
         var statusMoves = [];
         var removedLabels = [];
         var comments = [];
@@ -82,7 +82,7 @@ suite('postBulkBugsCreation', function() {
         assert.equal(result.success, true);
         assert.equal(result.results.skipped.length, 1);
         assert.deepEqual(statusMoves, [
-            { key: 'TS-396', statusName: 'In Rework' }
+            { key: 'TS-396', statusName: 'Backlog' }
         ]);
         assert.deepEqual(removedLabels, [
             { key: 'TS-396', label: 'sm_test_automation_triggered' },
@@ -90,7 +90,7 @@ suite('postBulkBugsCreation', function() {
             { key: 'TS-396', label: 'sm_bulk_bugs_creation_triggered' }
         ]);
         assert.equal(comments.length, 1);
-        assert.contains(comments[0].comment, 'In Rework');
+        assert.contains(comments[0].comment, 'Backlog');
     });
 
     test('rejects fixedByBug decisions and does not move TC to Backlog', function() {
