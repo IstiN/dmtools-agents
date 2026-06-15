@@ -515,4 +515,58 @@ suite('scm GitHub provider getPrDiff fallback', function() {
         assert.ok(gitCalls.indexOf('git diff main...ai/TS-577') !== -1, 'should try bare refs first');
         assert.ok(gitCalls.indexOf('git diff origin/main...ai/TS-577') !== -1, 'should fall back to origin/ prefix');
     });
+
+    test('prefers github_get_pr_diff_text when available', function() {
+        var calls = [];
+        var scmModule = loadScm({
+            github_get_pr_diff_text: function(args) {
+                calls.push(args);
+                return 'diff --git a/file.txt b/file.txt\n+change\n';
+            },
+            github_get_pr_diff: function() { throw new Error('legacy tool should not be called'); },
+            github_get_pr: function() { throw new Error('github_get_pr should not be called'); },
+            cli_execute_command: function() { throw new Error('git diff should not be called'); }
+        });
+
+        var provider = scmModule._createGithubProvider('IstiN', 'trackstate');
+        var diff = provider.getPrDiff('1789');
+
+        assert.ok(diff.indexOf('diff --git') !== -1, 'should return diff from new tool');
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].pullRequestID, '1789');
+    });
+
+    test('extracts diff from JSON result wrapper', function() {
+        var scmModule = loadScm({
+            github_get_pr_diff_text: function() {
+                return JSON.stringify({ result: 'diff --git a/file.txt b/file.txt\n+change\n' });
+            },
+            github_get_pr_diff: function() { throw new Error('legacy tool should not be called'); },
+            github_get_pr: function() { throw new Error('github_get_pr should not be called'); },
+            cli_execute_command: function() { throw new Error('git diff should not be called'); }
+        });
+
+        var provider = scmModule._createGithubProvider('IstiN', 'trackstate');
+        var diff = provider.getPrDiff('1789');
+
+        assert.ok(diff.indexOf('diff --git') !== -1, 'should unwrap JSON result');
+        assert.ok(diff.indexOf('diff --git') === 0, 'should return raw diff, not JSON envelope');
+    });
+
+    test('extracts diff from IBody arg$1 wrapper', function() {
+        var scmModule = loadScm({
+            github_get_pr_diff_text: function() {
+                return JSON.stringify({ 'arg$1': 'diff --git a/file.txt b/file.txt\n+change\n' });
+            },
+            github_get_pr_diff: function() { throw new Error('legacy tool should not be called'); },
+            github_get_pr: function() { throw new Error('github_get_pr should not be called'); },
+            cli_execute_command: function() { throw new Error('git diff should not be called'); }
+        });
+
+        var provider = scmModule._createGithubProvider('IstiN', 'trackstate');
+        var diff = provider.getPrDiff('1789');
+
+        assert.ok(diff.indexOf('diff --git') !== -1, 'should unwrap arg$1 field');
+        assert.ok(diff.indexOf('diff --git') === 0, 'should return raw diff, not JSON envelope');
+    });
 });
