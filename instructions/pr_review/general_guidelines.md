@@ -127,4 +127,6 @@ Write the standard review artifacts:
 - `outputs/pr_review_general.md` — 1-2 paragraph general PR comment
 - `outputs/pr_review_comments/*.md` — one file per detailed inline comment
 
+**Inline comment lines must be present in the PR diff.** GitHub review threads can only be attached to added or context lines inside a diff hunk. If `pr_diff.txt` is truncated, run `git diff origin/{baseBranch}...HEAD` to locate the correct line numbers. Findings on unchanged code outside the diff belong in `outputs/pr_review_general.md`, not as inline comments.
+
 Do NOT write `outputs/response.md`; the review is posted to GitHub only.

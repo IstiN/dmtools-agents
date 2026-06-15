@@ -10,4 +10,6 @@ flowchart TD
     F8["Keep summary under 2 sentences — put details in inline comment files, not in general text"]
     F9["Severity classification follows general_guidelines.md:<br/>BLOCKING = must fix · IMPORTANT = should fix · SUGGESTION = optional"]
     F10["Ticket context: verify PR changes satisfy ticket ACs — note gaps in review"]
+    F11["Inline comments MUST target a line that appears in the PR diff<br/>If the line is not in the diff, the comment becomes a general PR comment instead of a review thread"]
+    F12["Use line numbers from the right-hand side of diff hunks<br/>If pr_diff.txt is truncated, run git diff origin/{base}...HEAD to see the full diff"]
 ```

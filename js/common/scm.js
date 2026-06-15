@@ -43,6 +43,45 @@ function _readFileMaybe(path) {
     return null;
 }
 
+function _cleanCommandOutput(output) {
+    if (!output) return '';
+    return output.split('\n').filter(function(line) {
+        return line.indexOf('Script started') === -1 &&
+               line.indexOf('Script done') === -1 &&
+               line.indexOf('COMMAND=') === -1 &&
+               line.indexOf('COMMAND_EXIT_CODE=') === -1;
+    }).join('\n').trim();
+}
+
+function _looksLikeJavaObjectString(value) {
+    return typeof value === 'string' && /^[A-Za-z0-9_.$]+@[0-9a-f]+$/.test(value.trim());
+}
+
+function _isUsableDiff(value) {
+    return typeof value === 'string' && value.indexOf('diff --git') !== -1 && !_looksLikeJavaObjectString(value);
+}
+
+function _runGitDiff(baseRef, headRef) {
+    var variants = [
+        'git diff ' + baseRef + '...' + headRef,
+        'git diff origin/' + baseRef + '...' + headRef,
+        'git diff origin/' + baseRef + '...origin/' + headRef
+    ];
+    for (var i = 0; i < variants.length; i++) {
+        try {
+            var raw = cli_execute_command({ command: variants[i] }) || '';
+            var cleaned = _cleanCommandOutput(raw);
+            if (_isUsableDiff(cleaned)) {
+                console.log('Generated local git diff using: ' + variants[i] + ' (' + cleaned.length + ' chars)');
+                return cleaned;
+            }
+        } catch (e) {
+            console.warn('Git diff variant failed (' + variants[i] + '):', e.message || e);
+        }
+    }
+    return '';
+}
+
 function _createGithubProvider(workspace, repository) {
     return {
         listPrs: function(state) {
@@ -99,10 +138,40 @@ function _createGithubProvider(workspace, repository) {
             return github_remove_pr_label({ workspace: workspace, repository: repository, pullRequestId: String(prId), label: label });
         },
         getPrDiff: function(prId) {
+            var prIdStr = String(prId);
+            var raw = '';
+
             // Note: the generated GitHub MCP executor expects the parameter name
             // to be exactly 'pullRequestID' (capital D). Passing 'pullRequestId'
             // causes a "Required parameter 'pullRequestID' is missing" error.
-            return github_get_pr_diff({ workspace: workspace, repository: repository, pullRequestID: String(prId) });
+            try {
+                raw = github_get_pr_diff({ workspace: workspace, repository: repository, pullRequestID: prIdStr });
+            } catch (e) {
+                console.warn('github_get_pr_diff failed:', e.message || e);
+            }
+
+            if (_isUsableDiff(raw)) {
+                return raw;
+            }
+
+            // Fallback: some DMTools builds return a Java object toString instead
+            // of the diff text. Generate the diff locally from the checked-out branch.
+            console.log('GitHub PR diff MCP returned no usable diff; falling back to local git diff');
+            try {
+                var pr = github_get_pr({ workspace: workspace, repository: repository, pullRequestId: prIdStr });
+                if (!pr) throw new Error('github_get_pr returned empty PR details');
+                var baseRef = pr.base && pr.base.ref ? pr.base.ref : null;
+                var headRef = pr.head && pr.head.ref ? pr.head.ref : null;
+                if (!baseRef || !headRef) throw new Error('PR missing base or head ref');
+                var localDiff = _runGitDiff(baseRef, headRef);
+                if (_isUsableDiff(localDiff)) {
+                    return localDiff;
+                }
+            } catch (e2) {
+                console.warn('Local git diff fallback failed:', e2.message || e2);
+            }
+
+            return raw || '';
         },
         getCommitCheckRuns: function(sha) {
             return github_get_commit_check_runs({ workspace: workspace, repository: repository, commitSha: sha });
