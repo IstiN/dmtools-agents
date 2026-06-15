@@ -2,7 +2,7 @@
 
 ## Mandatory JSON output
 
-Write `outputs/story_test_automation_result.json` with exactly this schema:
+Write `outputs/story_test_automation_result.json` with exactly this schema in a single `Write` call. Do NOT use `Edit` on this file — if you need to correct it, rewrite the entire file. The post-action parses this file with a strict JSON parser; any `Edit`-induced formatting corruption will cause the whole run to fail.
 
 ```json
 {

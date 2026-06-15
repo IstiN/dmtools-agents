@@ -1,6 +1,6 @@
 # Bug Test Automation Output Rules
 
-Use the same output schema as Story test automation. Write `outputs/story_test_automation_result.json`:
+Use the same output schema as Story test automation. Write `outputs/story_test_automation_result.json` in a single `Write` call. Do NOT use `Edit` on this file; rewrite it entirely if corrections are needed.
 
 ```json
 {

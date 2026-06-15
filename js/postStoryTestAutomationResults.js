@@ -41,11 +41,19 @@ function readResultJson(workingDir, storyKey) {
             console.warn('outputs/story_test_automation_result.json is empty or missing');
             return null;
         }
-        const parsed = JSON.parse(raw);
-        console.log('Story test result overall:', parsed.overall);
-        return parsed;
+        const rawString = String(raw);
+        try {
+            const parsed = JSON.parse(rawString);
+            console.log('Story test result overall:', parsed.overall);
+            return parsed;
+        } catch (parseErr) {
+            console.error('Failed to parse story_test_automation_result.json:', parseErr);
+            console.error('Raw content preview (first 1000 chars):', rawString.substring(0, 1000));
+            console.error('Raw content preview around error:', rawString.substring(Math.max(0, parseErr.pos - 100), parseErr.pos + 100));
+            return null;
+        }
     } catch (e) {
-        console.error('Failed to parse story_test_automation_result.json:', e);
+        console.error('Failed to read story_test_automation_result.json:', e);
         return null;
     }
 }
