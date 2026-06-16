@@ -84,6 +84,15 @@ function updatePullRequestBody(scm, prNumber, ticketKey, testStatus, bodyContent
     }
 }
 
+function isMergeInProgress() {
+    try {
+        cli_execute_command({ command: 'git rev-parse --quiet --verify MERGE_HEAD' });
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
 function stageUnmergedPaths() {
     const unmerged = cleanCommandOutput(
         cli_execute_command({ command: 'git diff --name-only --diff-filter=U' }) || ''
@@ -131,13 +140,11 @@ function stageUnmergedPaths() {
     }
 }
 
-function commitIfNeeded(ticketKey, passed) {
+function commitIfNeeded(ticketKey, passed, config) {
     const statusOutput = prHelper.readStagedDiffStat(function(command) {
         return cli_execute_command({ command: command });
     });
-    const mergeInProgress = cleanCommandOutput(
-        cli_execute_command({ command: 'git rev-parse --quiet --verify MERGE_HEAD' }) || ''
-    ).trim();
+    const mergeInProgress = isMergeInProgress();
 
     if (!statusOutput.trim() && !mergeInProgress) {
         console.warn('No changes to commit in testing/ — pushing existing commits only');
@@ -176,14 +183,12 @@ function commitAndPush(ticketKey, passed, config, prIsDirty) {
         console.warn('Could not fetch origin/' + baseBranch + ':', e);
     }
 
-    var mergeInProgress = cleanCommandOutput(
-        cli_execute_command({ command: 'git rev-parse --quiet --verify MERGE_HEAD' }) || ''
-    ).trim();
+    var mergeInProgress = isMergeInProgress();
 
     if (!mergeInProgress && prIsDirty) {
         // Commit any test fixes first so the working tree/index is clean for the merge.
         cli_execute_command({ command: 'git add testing/' });
-        commitIfNeeded(ticketKey, passed);
+        commitIfNeeded(ticketKey, passed, config);
         console.log('PR is dirty — starting merge of origin/' + baseBranch);
         try {
             cli_execute_command({ command: 'git merge origin/' + baseBranch + ' --no-commit --no-ff' });
@@ -197,7 +202,7 @@ function commitAndPush(ticketKey, passed, config, prIsDirty) {
     stageUnmergedPaths();
 
     // Commit. If a merge is in progress this creates the merge commit.
-    commitIfNeeded(ticketKey, passed);
+    commitIfNeeded(ticketKey, passed, config);
 
     // Get local HEAD SHA to verify push actually succeeded
     const localSha = cleanCommandOutput(
