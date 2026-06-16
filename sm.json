@@ -245,6 +245,13 @@
           "enabled": true
         },
         {
+          "description": "In Review Test Cases with dirty PR → move to In Rework",
+          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('In Review - Passed', 'In Review - Failed')",
+          "configFile": "agents/recover_dirty_review_test_case.json",
+          "localExecution": true,
+          "enabled": true
+        },
+        {
           "description": "Failed Test Cases → create or link bug (single, disabled by default — use bulk_bugs_creation instead)",
           "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('Failed')",
           "configFile": "agents/bug_creation.json",

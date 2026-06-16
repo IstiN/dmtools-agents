@@ -1,0 +1,15 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "recover_dirty_review_test_case"
+    },
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "postJSAction": "agents/js/recoverDirtyReviewTestCase.js",
+    "customParams": {},
+    "inputJql": "key = PROJ-111"
+  }
+}
