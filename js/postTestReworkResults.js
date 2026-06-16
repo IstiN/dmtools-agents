@@ -84,7 +84,76 @@ function updatePullRequestBody(scm, prNumber, ticketKey, testStatus, bodyContent
     }
 }
 
-function commitAndPush(ticketKey, passed, config) {
+function stageUnmergedPaths() {
+    const unmerged = cleanCommandOutput(
+        cli_execute_command({ command: 'git diff --name-only --diff-filter=U' }) || ''
+    ).split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
+
+    if (unmerged.length === 0) return;
+
+    console.log('Staging ' + unmerged.length + ' unmerged path(s):', unmerged.join(', '));
+    unmerged.forEach(function(f) {
+        cli_execute_command({ command: 'git add -- "' + f + '"' });
+    });
+
+    // If the agent left conflict markers in a resolved file, fall back to a deterministic side.
+    const diffCheck = cleanCommandOutput(
+        cli_execute_command({ command: 'git diff --cached --check' }) || ''
+    );
+    const filesWithMarkers = [];
+    diffCheck.split('\n').forEach(function(line) {
+        const match = line.match(/^(.+?):\d+:\s+conflict marker/);
+        if (match) {
+            const path = match[1].trim();
+            if (filesWithMarkers.indexOf(path) === -1) filesWithMarkers.push(path);
+        }
+    });
+
+    if (filesWithMarkers.length > 0) {
+        console.warn('⚠️ Conflict markers remain in ' + filesWithMarkers.length + ' file(s); auto-resolving');
+        filesWithMarkers.forEach(function(f) {
+            if (f.indexOf('testing/') === 0) {
+                console.log('  Keeping test-branch version for', f);
+                cli_execute_command({ command: 'git checkout --ours -- "' + f + '"' });
+            } else {
+                console.log('  Keeping main version for', f);
+                cli_execute_command({ command: 'git checkout --theirs -- "' + f + '"' });
+            }
+            cli_execute_command({ command: 'git add -- "' + f + '"' });
+        });
+    }
+
+    const stillUnmerged = cleanCommandOutput(
+        cli_execute_command({ command: 'git diff --name-only --diff-filter=U' }) || ''
+    ).trim();
+    if (stillUnmerged) {
+        throw new Error('Unable to resolve merge conflicts: ' + stillUnmerged);
+    }
+}
+
+function commitIfNeeded(ticketKey, passed) {
+    const statusOutput = prHelper.readStagedDiffStat(function(command) {
+        return cli_execute_command({ command: command });
+    });
+    const mergeInProgress = cleanCommandOutput(
+        cli_execute_command({ command: 'git rev-parse --quiet --verify MERGE_HEAD' }) || ''
+    ).trim();
+
+    if (!statusOutput.trim() && !mergeInProgress) {
+        console.warn('No changes to commit in testing/ — pushing existing commits only');
+        return false;
+    }
+
+    const result = passed ? 'fix' : 'update';
+    const reworkCommitMsg = configLoader.formatTemplate(config.formats.commitMessage.testRework, {ticketKey: ticketKey, result: result});
+    cli_execute_command({
+        command: 'git commit -m "' + reworkCommitMsg.replace(/"/g, '\\"') + '"'
+    });
+    console.log('✅ Committed rework changes');
+    return true;
+}
+
+function commitAndPush(ticketKey, passed, config, prIsDirty) {
     const branchName = cleanCommandOutput(
         cli_execute_command({ command: 'git branch --show-current' }) || ''
     );
@@ -95,29 +164,43 @@ function commitAndPush(ticketKey, passed, config) {
         throw new Error('Refusing to commit rework directly to "' + branchName + '". Expected test/' + ticketKey + ' branch. preCliJSAction may have failed to checkout the correct branch.');
     }
 
-    console.log('Current branch:', branchName);
+    const baseBranch = (config.git && config.git.baseBranch) || 'main';
+    console.log('Current branch:', branchName, '| base:', baseBranch, '| PR dirty:', !!prIsDirty);
 
-    // Stage only testing/ folder
-    cli_execute_command({ command: 'git add testing/' });
+    cli_execute_command({ command: 'git config user.name "' + config.git.authorName + '"' });
+    cli_execute_command({ command: 'git config user.email "' + config.git.authorEmail + '"' });
 
-    const statusOutput = prHelper.readStagedDiffStat(function(command) {
-        return cli_execute_command({ command: command });
-    });
-
-    var localSha = '';
-    if (statusOutput.trim()) {
-        const result = passed ? 'fix' : 'update';
-        var reworkCommitMsg = configLoader.formatTemplate(config.formats.commitMessage.testRework, {ticketKey: ticketKey, result: result});
-        cli_execute_command({
-            command: 'git commit -m "' + reworkCommitMsg.replace(/"/g, '\\"') + '"'
-        });
-        console.log('✅ Committed rework changes');
-    } else {
-        console.warn('No changes to commit in testing/ — pushing existing commits only');
+    try {
+        cli_execute_command({ command: 'git fetch origin ' + baseBranch });
+    } catch (e) {
+        console.warn('Could not fetch origin/' + baseBranch + ':', e);
     }
 
+    var mergeInProgress = cleanCommandOutput(
+        cli_execute_command({ command: 'git rev-parse --quiet --verify MERGE_HEAD' }) || ''
+    ).trim();
+
+    if (!mergeInProgress && prIsDirty) {
+        // Commit any test fixes first so the working tree/index is clean for the merge.
+        cli_execute_command({ command: 'git add testing/' });
+        commitIfNeeded(ticketKey, passed);
+        console.log('PR is dirty — starting merge of origin/' + baseBranch);
+        try {
+            cli_execute_command({ command: 'git merge origin/' + baseBranch + ' --no-commit --no-ff' });
+        } catch (e) {
+            // Conflicts are expected for a dirty PR.
+        }
+    }
+
+    // Stage test fixes and any resolved conflict files.
+    cli_execute_command({ command: 'git add testing/' });
+    stageUnmergedPaths();
+
+    // Commit. If a merge is in progress this creates the merge commit.
+    commitIfNeeded(ticketKey, passed);
+
     // Get local HEAD SHA to verify push actually succeeded
-    localSha = cleanCommandOutput(
+    const localSha = cleanCommandOutput(
         cli_execute_command({ command: 'git rev-parse HEAD' }) || ''
     ).substring(0, 40);
 
@@ -313,9 +396,19 @@ function action(params) {
             throw new Error('Policy gate failed before test rework publish: ' + policyResult.failedGate + '\n' + policyResult.error);
         }
 
+        // Step 2.5: Determine whether the test PR is dirty so the git step can merge main.
+        var pr = findTestPRForTicket(scm, ticketKey);
+        var prIsDirty = false;
+        if (pr) {
+            prIsDirty = (pr.mergeable_state === 'dirty' || pr.mergeStateStatus === 'DIRTY' || pr.mergeable === false);
+            if (prIsDirty) {
+                console.log('PR #' + pr.number + ' is dirty — will merge origin/' + ((config.git && config.git.baseBranch) || 'main'));
+            }
+        }
+
         let branchName;
         try {
-            branchName = commitAndPush(ticketKey, passed, config);
+            branchName = commitAndPush(ticketKey, passed, config, prIsDirty);
         } catch (e) {
             console.error('Git operations failed:', e);
             var resume = feedbackLoop.resumeAgent({
@@ -337,7 +430,6 @@ function action(params) {
         }
 
         // Step 3: Ensure PR exists; create if missing (e.g. preCliJSAction failed to create it)
-        var pr = findTestPRForTicket(scm, ticketKey);
         if (!pr && branchName) {
             pr = createPRIfMissing(scm, branchName, ticketKey, config);
         }
