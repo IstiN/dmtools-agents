@@ -41,6 +41,17 @@ function action(params) {
 
         console.log('=== Test rework setup for:', ticketKey, '===');
 
+        // Clear stale output files from any previous run so the post-action
+        // never reads a result JSON that belongs to a different ticket.
+        try {
+            cli_execute_command({
+                command: 'bash -c "rm -f outputs/test_automation_result.json outputs/story_test_automation_result.json outputs/tracker_comment.md outputs/comment.md outputs/jira_comment.md outputs/response.md outputs/pr_body.md outputs/bug_description.md outputs/failed_description_*.md"'
+            });
+            console.log('Cleared stale output files before rework');
+        } catch (e) {
+            console.warn('Could not clear output files:', e);
+        }
+
         // Step 1: GitHub repo info
         var repoInfo = scm.getRemoteRepoInfo();
         if (!repoInfo) {

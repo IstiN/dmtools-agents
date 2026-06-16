@@ -27,6 +27,9 @@
       "./agents/instructions/common/input_context_reading.md",
       "./agents/instructions/pr_test_automation_rework/general_guidelines.md",
       "./agents/instructions/pr_test_automation_rework/formatting_rules.md",
+      "./agents/instructions/test_automation/test_automation_instructions.md",
+      "./agents/instructions/test_automation/test_automation_output_files.md",
+      "./agents/instructions/test_automation/test_automation_json_output.md",
       "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md"
     ],
