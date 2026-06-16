@@ -52,9 +52,11 @@ function action(params) {
             return { success: true, action: 'no_test_cases', ticketKey };
         }
 
-        // Step 2: Find linked Test Cases that are NOT yet Passed
+        // Step 2: Find linked Test Cases that are NOT yet Passed.
+        // Skipped and Irrelevant Test Cases are intentionally non-blocking
+        // (same as checkStoryTestsPassed).
         const notPassedTCs = jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "' + testCaseType + '" AND status not in ("Passed")',
+            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "' + testCaseType + '" AND status not in ("Passed", "Skipped", "Irrelevant")',
             maxResults: 1
         }) || [];
 
