@@ -182,6 +182,15 @@ function action(params) {
             console.error('Branch checkout failed (non-fatal):', e);
         }
 
+        // Step 2b: Clear stale output files from previous runs so the post-action
+        // does not accidentally read a result JSON belonging to a different ticket.
+        try {
+            runGit('bash -c "rm -f outputs/test_automation_result.json outputs/story_test_automation_result.json outputs/tracker_comment.md outputs/comment.md outputs/jira_comment.md outputs/response.md outputs/pr_body.md outputs/bug_description.md outputs/failed_description_*.md"', config.workingDir || null);
+            console.log('✅ Cleared stale output files');
+        } catch (e) {
+            console.warn('Could not clear stale output files (non-fatal):', e);
+        }
+
         // Step 3: Fetch linked bugs (with fix comments) into input folder
         // This gives the test agent context about HOW bugs were fixed (timing, delays, etc.)
         try {

@@ -32,6 +32,18 @@ function readOutputFile(relativePath, workingDir, ticketKey) {
     });
 }
 
+function resultBelongsToTicket(parsed, ticketKey) {
+    if (!parsed || typeof parsed !== 'object') return true;
+    var keys = [parsed.ticketKey, parsed.storyKey, parsed.testCaseKey, parsed.issueKey];
+    for (var i = 0; i < keys.length; i++) {
+        if (keys[i] && keys[i] !== ticketKey) {
+            console.warn('outputs/test_automation_result.json belongs to ' + keys[i] + ', not ' + ticketKey + ' — treating as stale');
+            return false;
+        }
+    }
+    return true;
+}
+
 function readResultJson(workingDir, ticketKey) {
     try {
         const raw = readOutputFile('test_automation_result.json', workingDir, ticketKey);
@@ -40,6 +52,9 @@ function readResultJson(workingDir, ticketKey) {
             return null;
         }
         const parsed = JSON.parse(raw);
+        if (!resultBelongsToTicket(parsed, ticketKey)) {
+            return null;
+        }
         console.log('Test result status:', parsed.status);
         return parsed;
     } catch (e) {
