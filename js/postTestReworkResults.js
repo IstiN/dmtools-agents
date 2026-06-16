@@ -93,7 +93,20 @@ function isMergeInProgress() {
     }
 }
 
-function stageUnmergedPaths() {
+function isSubmodulePath(path) {
+    try {
+        const stageOutput = cleanCommandOutput(
+            cli_execute_command({ command: 'git ls-files --stage -- "' + path + '"' }) || ''
+        );
+        return stageOutput.split('\n').some(function(line) {
+            return line.trim().indexOf('160000 ') !== -1;
+        });
+    } catch (e) {
+        return false;
+    }
+}
+
+function stageUnmergedPaths(config) {
     const unmerged = cleanCommandOutput(
         cli_execute_command({ command: 'git diff --name-only --diff-filter=U' }) || ''
     ).split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
@@ -132,7 +145,25 @@ function stageUnmergedPaths() {
         });
     }
 
-    const stillUnmerged = cleanCommandOutput(
+    var stillUnmerged = cleanCommandOutput(
+        cli_execute_command({ command: 'git diff --name-only --diff-filter=U' }) || ''
+    ).split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
+
+    if (stillUnmerged.length > 0) {
+        // Submodule conflicts cannot be resolved with `git add` or marker cleanup.
+        // For rework branches we always want the base-branch (origin/main) submodule
+        // state; feature work should not change submodules directly.
+        const submoduleConflicts = stillUnmerged.filter(function(f) { return isSubmodulePath(f); });
+        if (submoduleConflicts.length > 0) {
+            console.warn('⚠️ Submodule merge conflict(s); adopting origin/' + ((config.git && config.git.baseBranch) || 'main') + ' version:', submoduleConflicts.join(', '));
+            submoduleConflicts.forEach(function(f) {
+                cli_execute_command({ command: 'git checkout --theirs -- "' + f + '"' });
+                cli_execute_command({ command: 'git add -- "' + f + '"' });
+            });
+        }
+    }
+
+    stillUnmerged = cleanCommandOutput(
         cli_execute_command({ command: 'git diff --name-only --diff-filter=U' }) || ''
     ).trim();
     if (stillUnmerged) {
@@ -199,7 +230,7 @@ function commitAndPush(ticketKey, passed, config, prIsDirty) {
 
     // Stage test fixes and any resolved conflict files.
     cli_execute_command({ command: 'git add testing/' });
-    stageUnmergedPaths();
+    stageUnmergedPaths(config);
 
     // Commit. If a merge is in progress this creates the merge commit.
     commitIfNeeded(ticketKey, passed, config);
