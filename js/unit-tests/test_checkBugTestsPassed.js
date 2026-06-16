@@ -9,7 +9,8 @@ function loadCheckBugTestsPassed(mocks) {
             return {
                 jira: {
                     issueTypes: {
-                        TEST_CASE: 'Test Case'
+                        TEST_CASE: 'Test Case',
+                        BUG: 'Bug'
                     }
                 }
             };
@@ -240,6 +241,83 @@ suite('checkBugTestsPassed', function() {
         assert.equal(result.action, 'waiting');
         assert.deepEqual(moved, []);
         assert.deepEqual(removedLabels, [{ key: 'TS-50', label: 'sm_bug_done_check_triggered' }]);
+    });
+
+    test('treats Bug To Fix TC as non-blocking when tracked by another Bug', function() {
+        var moved = [];
+        var comments = [];
+        var removedLabels = [];
+
+        var module = loadCheckBugTestsPassed({
+            jira_get_ticket: function() {
+                return {
+                    fields: {
+                        issuelinks: [
+                            { outwardIssue: makeTc('TS-61', 'Passed') },
+                            { outwardIssue: makeTc('TS-62', 'Bug To Fix') }
+                        ]
+                    }
+                };
+            },
+            jira_search_by_jql: function(args) {
+                // Query for linked Bugs of TS-62
+                if (args.jql.indexOf('TS-62') !== -1 && args.jql.indexOf('issuetype = "Bug"') !== -1) {
+                    return [{ key: 'TS-70', fields: { status: { name: 'In Progress' } } }];
+                }
+                return [];
+            },
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_post_comment: function(args) { comments.push(args); },
+            jira_remove_label: function(args) { removedLabels.push(args); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-60' },
+            jobParams: { customParams: { removeLabel: 'sm_bug_done_check_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'moved_to_done');
+        assert.deepEqual(moved, [{ key: 'TS-60', statusName: 'Done' }]);
+        assert.contains(comments[0].comment, 'Bug Complete');
+        assert.equal(removedLabels.length, 0);
+    });
+
+    test('waits when Bug To Fix TC is only tracked by the current Bug', function() {
+        var moved = [];
+        var removedLabels = [];
+
+        var module = loadCheckBugTestsPassed({
+            jira_get_ticket: function() {
+                return {
+                    fields: {
+                        issuelinks: [
+                            { outwardIssue: makeTc('TS-81', 'Passed') },
+                            { outwardIssue: makeTc('TS-82', 'Bug To Fix') }
+                        ]
+                    }
+                };
+            },
+            jira_search_by_jql: function(args) {
+                if (args.jql.indexOf('TS-82') !== -1 && args.jql.indexOf('issuetype = "Bug"') !== -1) {
+                    return [{ key: 'TS-80', fields: { status: { name: 'In Progress' } } }];
+                }
+                return [];
+            },
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_post_comment: function() {},
+            jira_remove_label: function(args) { removedLabels.push(args); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-80' },
+            jobParams: { customParams: { removeLabel: 'sm_bug_done_check_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'waiting');
+        assert.deepEqual(moved, []);
+        assert.deepEqual(removedLabels, [{ key: 'TS-80', label: 'sm_bug_done_check_triggered' }]);
     });
 
 });

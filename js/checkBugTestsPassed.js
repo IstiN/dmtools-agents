@@ -2,10 +2,14 @@
  * Check Bug Tests Passed — postJSAction for bug_done_check agent.
  *
  * Runs on every SM cycle for each Bug in "In Testing".
- * - Looks at *directly* linked Test Cases only (avoids blocking a bug on
+ * - Looks at *directly* linked Test Cases first (avoids blocking a bug on
  *   unrelated Test Cases that happen to be connected through a parent Story
  *   or other transitive links).
- * - If all directly linked Test Cases are in "Passed" status → moves the Bug to Done.
+ * - A Test Case in "Bug To Fix" is treated as non-blocking when it already
+ *   has at least one linked Bug other than the current Bug. That bug will be
+ *   handled by the bug-fix pipeline, and the current Bug must not deadlock
+ *   waiting for it.
+ * - Skipped and Irrelevant Test Cases are also non-blocking.
  * - If there are no direct Test Case links → falls back to the broad
  *   linkedIssues query for backward compatibility.
  * - Otherwise → removes the SM idempotency label so the SM re-triggers
@@ -21,9 +25,10 @@ function action(params) {
     const customParams = params.jobParams && params.jobParams.customParams;
     const removeLabel = customParams && customParams.removeLabel;
 
-    // Load project config to get testCaseIssueType (default: "Test Case")
+    // Load project config to get issue types (default: "Test Case" / "Bug")
     const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
     const testCaseType = projectConfig.jira.issueTypes.TEST_CASE || 'Test Case';
+    const bugType = projectConfig.jira.issueTypes.BUG || 'Bug';
 
     // Helper: remove SM label so the check re-runs on the next SM cycle
     function releaseLock() {
@@ -71,11 +76,43 @@ function action(params) {
         }
     }
 
-    function hasNotPassedTC(tcList) {
-        return tcList.some(function(tc) {
-            var status = tc.fields && tc.fields.status && tc.fields.status.name;
-            return status !== STATUSES.PASSED && status !== STATUSES.SKIPPED && status !== STATUSES.IRRELEVANT;
-        });
+    function findLinkedBugs(tcKey) {
+        try {
+            return jira_search_by_jql({
+                jql: 'issue in linkedIssues("' + tcKey + '") AND issuetype = "' + bugType + '"',
+                maxResults: 50
+            }) || [];
+        } catch (e) {
+            console.warn('Failed to fetch linked Bugs for', tcKey, ':', e);
+            return [];
+        }
+    }
+
+    function isBlockingTC(tc) {
+        var status = tc.fields && tc.fields.status && tc.fields.status.name;
+
+        // Passed / intentionally skipped / no longer applicable are always non-blocking.
+        if (status === STATUSES.PASSED || status === STATUSES.SKIPPED || status === STATUSES.IRRELEVANT) {
+            return false;
+        }
+
+        // A TC that is already tracked as "Bug To Fix" is non-blocking when it
+        // has its own linked Bug(s) other than the current Bug. Those Bugs will
+        // be fixed through the normal bug-fix pipeline; waiting for them here
+        // creates deadlocks (e.g. TS-1356 was stuck because parent-Story
+        // regression TCs TS-501/TS-252 were Bug To Fix).
+        if (status === STATUSES.BUG_TO_FIX) {
+            var linkedBugs = findLinkedBugs(tc.key);
+            var hasOtherBug = linkedBugs.some(function(bug) {
+                return bug.key !== ticketKey;
+            });
+            if (hasOtherBug) {
+                console.log('TC', tc.key, 'is Bug To Fix but already tracked by another Bug — treating as non-blocking');
+                return false;
+            }
+        }
+
+        return true;
     }
 
     try {
@@ -102,25 +139,20 @@ function action(params) {
             return { success: true, action: 'no_test_cases', ticketKey };
         }
 
-        // Step 2: Check whether any linked Test Case is not yet Passed.
-        // Skipped and Irrelevant Test Cases are intentionally non-blocking
-        // (same as checkStoryTestsPassed).
-        const notPassedTCs = allTCs.filter(function(tc) {
-            var status = tc.fields && tc.fields.status && tc.fields.status.name;
-            return status !== STATUSES.PASSED && status !== STATUSES.SKIPPED && status !== STATUSES.IRRELEVANT;
-        });
-        const notPassedCount = notPassedTCs.length;
+        // Step 2: Check whether any linked Test Case still blocks this Bug.
+        const blockingTCs = allTCs.filter(isBlockingTC);
+        const blockingCount = blockingTCs.length;
 
-        console.log('Test Cases not yet Passed:', notPassedCount, '/', totalTCs);
+        console.log('Blocking Test Cases:', blockingCount, '/', totalTCs);
 
-        if (notPassedCount > 0) {
+        if (blockingCount > 0) {
             console.log('Not all Test Cases passed — releasing lock, will re-check next cycle');
             releaseLock();
-            return { success: true, action: 'waiting', totalTCs, notPassedCount, ticketKey };
+            return { success: true, action: 'waiting', totalTCs, blockingCount, blockingTCs: blockingTCs.map(function(tc) { return tc.key; }), ticketKey };
         }
 
-        // Step 3: All Test Cases are Passed — move Bug to Done
-        console.log('All', totalTCs, 'Test Case(s) passed — moving', ticketKey, 'to Done');
+        // Step 3: All blocking Test Cases are resolved — move Bug to Done
+        console.log('All', totalTCs, 'linked Test Case(s) resolved — moving', ticketKey, 'to Done');
 
         jira_move_to_status({
             key: ticketKey,
@@ -129,8 +161,9 @@ function action(params) {
 
         jira_post_comment({
             key: ticketKey,
-            comment: 'h3. ✅ Bug Complete — All Test Cases Passed\n\n' +
-                'All *' + totalTCs + '* linked Test Case(s) are in *Passed* status.\n\n' +
+            comment: 'h3. ✅ Bug Complete — All Linked Test Cases Resolved\n\n' +
+                'All *' + totalTCs + '* linked Test Case(s) are either *Passed*, *Skipped*, *Irrelevant*, ' +
+                'or already tracked by another Bug.\n\n' +
                 'The bug has been automatically moved to *Done*.'
         });
 
