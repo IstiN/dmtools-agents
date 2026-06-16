@@ -16,6 +16,17 @@ Example PR test automation review outputs — keep concise:
 }
 ```
 
+### outputs/pr_review.json (APPROVE example)
+```json
+{
+  "recommendation": "APPROVE",
+  "summary": "Test correctly exercises the ticket's acceptance criteria with self-sufficient data and proper architecture.",
+  "generalComment": "outputs/pr_review_general.md",
+  "inlineComments": [],
+  "issueCounts": {"blocking":0,"important":0,"suggestions":0}
+}
+```
+
 ### outputs/pr_review_general.md
 ```markdown
 ## Automated Test PR Review — BLOCK
