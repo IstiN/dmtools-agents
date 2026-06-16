@@ -236,6 +236,77 @@ function runInRepo(command, workingDir) {
     return cli_execute_command(args);
 }
 
+function fetchRemoteBranch(branchName, workingDir) {
+    try {
+        runInRepo('git fetch origin ' + branchName, workingDir);
+        return true;
+    } catch (e) {
+        console.warn('Could not fetch remote branch origin/' + branchName + ':', e);
+        return false;
+    }
+}
+
+function revParse(ref, workingDir) {
+    try {
+        return cleanCommandOutput(runInRepo('git rev-parse ' + ref, workingDir) || '').trim();
+    } catch (e) {
+        return '';
+    }
+}
+
+function findMergeBase(left, right, workingDir) {
+    try {
+        return cleanCommandOutput(runInRepo('git merge-base ' + left + ' ' + right, workingDir) || '').trim();
+    } catch (e) {
+        return '';
+    }
+}
+
+function publishExistingBranch(branchName, workingDir) {
+    // Ensure the local remote-tracking ref is fresh before any push decision.
+    fetchRemoteBranch(branchName, workingDir);
+
+    var localSha = revParse('HEAD', workingDir);
+    var remoteSha = revParse('origin/' + branchName, workingDir);
+
+    if (localSha && remoteSha && localSha === remoteSha) {
+        console.log('Local branch already matches origin/' + branchName + '; no push needed');
+        return { success: true, noNewCommit: true };
+    }
+
+    var mergeBase = (localSha && remoteSha) ? findMergeBase('HEAD', 'origin/' + branchName, workingDir) : '';
+
+    if (mergeBase === remoteSha && mergeBase !== localSha) {
+        // Local is strictly ahead of remote (fast-forward).
+        try {
+            runInRepo('git push -u origin ' + branchName, workingDir);
+            return { success: true, noNewCommit: true };
+        } catch (e) {
+            console.warn('Fast-forward push failed:', e);
+        }
+    } else if (mergeBase === localSha && mergeBase !== remoteSha) {
+        // Remote moved ahead while we had no local changes to keep. Adopt remote state.
+        console.log('Remote ' + branchName + ' is ahead of local branch; resetting to origin/' + branchName);
+        runInRepo('git reset --hard origin/' + branchName, workingDir);
+        return { success: true, noNewCommit: true };
+    }
+
+    // Branches diverged or no remote yet; fall back to push with refreshed lease.
+    try {
+        runInRepo('git push -u origin ' + branchName, workingDir);
+        return { success: true, noNewCommit: true };
+    } catch (pushErr) {
+        console.log('Normal push failed, retrying with --force-with-lease...');
+        try {
+            runInRepo('git push -u origin ' + branchName + ' --force-with-lease', workingDir);
+            return { success: true, noNewCommit: true };
+        } catch (forcePushErr) {
+            console.warn('Failed to publish existing branch:', forcePushErr);
+            return { success: false, error: 'No test files were written and the synced branch could not be pushed' };
+        }
+    }
+}
+
 function performGitOperations(branchName, commitMessage, workingDir, testFilesPath) {
     var addPath = testFilesPath || 'testing/';
     var inspectPath = addPath.replace(/\/$/, '') || '.';
@@ -267,17 +338,9 @@ function performGitOperations(branchName, commitMessage, workingDir, testFilesPa
                     return { success: false, error: 'No test files were written and could not push branch' };
                 }
             } else {
-                console.log('Branch exists on remote — pushing current branch state');
-                try {
-                    runInRepo('git push -u origin ' + branchName, workingDir);
-                } catch (pushErr) {
-                    console.log('Normal push failed, retrying with --force-with-lease...');
-                    try {
-                        runInRepo('git push -u origin ' + branchName + ' --force-with-lease', workingDir);
-                    } catch (forcePushErr) {
-                        console.warn('Failed to publish synced existing branch:', forcePushErr);
-                        return { success: false, error: 'No test files were written and the synced branch could not be pushed' };
-                    }
+                var publishResult = publishExistingBranch(branchName, workingDir);
+                if (!publishResult.success) {
+                    return publishResult;
                 }
             }
             return { success: true, branchName: branchName, noNewCommit: true };
@@ -287,11 +350,17 @@ function performGitOperations(branchName, commitMessage, workingDir, testFilesPa
         runInRepo('git commit -m "' + commitMessage.replace(/"/g, '\\"') + '"', workingDir);
 
         console.log('Pushing to remote...');
+        fetchRemoteBranch(branchName, workingDir);
         try {
             runInRepo('git push -u origin ' + branchName, workingDir);
         } catch (e) {
-            console.log('Normal push failed, force pushing...');
-            runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
+            console.log('Normal push failed, retrying with --force-with-lease...');
+            try {
+                runInRepo('git push -u origin ' + branchName + ' --force-with-lease', workingDir);
+            } catch (leaseErr) {
+                console.log('Force-with-lease push failed, force pushing...');
+                runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
+            }
         }
 
         const remoteBranch = cleanCommandOutput(
