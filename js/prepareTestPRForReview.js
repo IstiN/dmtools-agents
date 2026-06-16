@@ -39,6 +39,49 @@ function findTestPRForTicket(scm, ticketKey) {
     }
 }
 
+function clearStaleReviewOutputs() {
+    try {
+        cli_execute_command({
+            command: 'rm -f outputs/pr_review.json outputs/response.md outputs/pr_review_general.md && rm -rf outputs/pr_review_comments'
+        });
+        console.log('✅ Cleared stale review outputs');
+    } catch (e) {
+        console.warn('Could not clear stale review outputs:', e);
+    }
+}
+
+function isNoCommitsError(error) {
+    const msg = error && error.toString ? error.toString() : String(error);
+    return msg.indexOf('No commits between') !== -1 ||
+           msg.indexOf('no commits between') !== -1;
+}
+
+function finalizeAlreadyMergedTestCase(ticketKey, branchName) {
+    try {
+        const ticket = jira_get_ticket({ key: ticketKey });
+        const currentStatus = ticket && ticket.fields && ticket.fields.status
+            ? ticket.fields.status.name
+            : '';
+        const finalStatus = currentStatus === 'In Review - Failed' ? 'Failed' : 'Passed';
+        jira_move_to_status({ key: ticketKey, statusName: finalStatus });
+        jira_post_comment({
+            key: ticketKey,
+            comment: 'h3. ✅ Test Code Already Merged\n\n' +
+                'Branch {code}' + branchName + '{code} has no commits ahead of main, so the test code is already in main.\n\n' +
+                'Moved ticket to *' + finalStatus + '* and removed the stale branch.'
+        });
+        console.log('✅ Branch has no commits ahead of main — moved', ticketKey, 'to', finalStatus);
+        try {
+            cli_execute_command({ command: 'git push origin --delete ' + branchName });
+            console.log('✅ Deleted stale branch:', branchName);
+        } catch (delErr) {
+            console.warn('Could not delete stale branch', branchName + ':', delErr);
+        }
+    } catch (e) {
+        console.warn('Failed to finalize already-merged test case:', e);
+    }
+}
+
 function action(params) {
     try {
         const inputFolder = params.inputFolderPath;
@@ -47,6 +90,8 @@ function action(params) {
         var scm = configLoader.createScm(config);
 
         console.log('=== Preparing test PR for review:', ticketKey, '===');
+
+        clearStaleReviewOutputs();
 
         // Step 1: GitHub repo info
         var repoInfo = scm.getRemoteRepoInfo();
@@ -105,6 +150,11 @@ function action(params) {
                     throw new Error('PR was created but could not be found immediately after creation');
                 }
             } catch (createErr) {
+                if (isNoCommitsError(createErr)) {
+                    console.log('Branch test/' + ticketKey + ' has no commits ahead of main — test code is already merged.');
+                    finalizeAlreadyMergedTestCase(ticketKey, branchName);
+                    return false;
+                }
                 const err = 'Branch test/' + ticketKey + ' exists but could not create PR: ' + createErr.toString();
                 try { jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Test PR Review Setup Failed\n\n' + err + '\n\n_Review cancelled._' }); } catch (e) {}
                 return false;
