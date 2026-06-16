@@ -17,7 +17,8 @@
     "preCliJSAction": "agents/js/preparePRForReview.js",
     "postJSAction": "agents/js/postPRReviewComments.js",
     "customParams": {
-      "removeLabel": "sm_story_review_triggered"
+      "removeLabel": "sm_story_review_triggered",
+      "allowApproveWithSuggestions": true
     },
     "inputJql": "key = JD-107",
     "cliPrompts": [
