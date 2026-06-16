@@ -312,8 +312,16 @@ function action(params) {
             return { success: false, error: 'No review data found' };
         }
 
-        // Normalize: LLM sometimes returns "APPROVED" instead of "APPROVE"
-        const isApproved = (reviewData.recommendation || '').replace(/^APPROVED$/, 'APPROVE') === 'APPROVE';
+        // Normalize recommendation: LLM may return "PASS"/"PASSED" or "APPROVED" instead of "APPROVE",
+        // and "FAIL"/"FAILED" instead of "BLOCK".
+        function normalizeRecommendation(rec) {
+            const value = String(rec || '').toUpperCase().trim();
+            if (value === 'PASS' || value === 'PASSED' || value === 'APPROVED') return 'APPROVE';
+            if (value === 'FAIL' || value === 'FAILED' || value === 'REJECT') return 'BLOCK';
+            return rec;
+        }
+        reviewData.recommendation = normalizeRecommendation(reviewData.recommendation);
+        const isApproved = reviewData.recommendation === 'APPROVE';
         console.log('Review recommendation:', reviewData.recommendation);
 
         // Step 2: Get current ticket status (to determine Passed vs Failed on approval)
