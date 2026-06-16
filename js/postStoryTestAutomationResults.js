@@ -133,6 +133,33 @@ function attemptResumeIfOutputsIncomplete(storyKey, result, linkedTestCases, wor
         checkedKeys = result.results.map(function(r) { return r.testCaseKey; }).filter(Boolean);
     }
 
+    var resultSchema = JSON.stringify({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "required": ["storyKey", "overall", "summary", "results"],
+        "properties": {
+            "storyKey": { "type": "string", "const": storyKey },
+            "overall": { "type": "string", "enum": ["passed", "failed", "in_progress"] },
+            "summary": { "type": "string" },
+            "results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["testCaseKey", "status"],
+                    "properties": {
+                        "testCaseKey": { "type": "string", "pattern": "^TS-[0-9]+$" },
+                        "status": { "type": "string", "enum": ["passed", "failed", "skipped", "irrelevant"] },
+                        "testPath": { "type": "string" },
+                        "failedDescriptionFile": { "type": "string" },
+                        "failureSummary": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                }
+            }
+        },
+        "additionalProperties": false
+    }, null, 2);
+
     var prompt = 'RESUME TASK: The previous story test automation run did not verify all linked Test Cases.\n\n' +
         'Story: ' + storyKey + '\n' +
         'Linked Test Cases (' + linkedTestCases.length + '): ' + linkedTestCases.map(function(tc) { return tc.key; }).join(', ') + '\n' +
@@ -141,7 +168,7 @@ function attemptResumeIfOutputsIncomplete(storyKey, result, linkedTestCases, wor
         'Instructions:\n' +
         '- Continue the same story test automation task in the same repository.\n' +
         '- For every missing Test Case, run/verify the corresponding automated test.\n' +
-        '- Create or update outputs/story_test_automation_result.json with a top-level object: { "storyKey": "' + storyKey + '", "overall": "passed|failed", "summary": "...", "results": [...] }.\n' +
+        '- Create or update outputs/story_test_automation_result.json with a top-level object that matches the JSON Schema below.\n' +
         '- Append a result entry for each missing Test Case:\n' +
         '  { "testCaseKey": "TS-XXX", "status": "passed" | "failed" | "skipped" | "irrelevant", "testPath": "testing/tests/TS-XXX/...", "failedDescriptionFile": "outputs/failed_description_TS-XXX.md", "failureSummary": "..." }\n' +
         '- If the result JSON file is missing, create it from scratch using the existing outputs/response.md and testing/tests/ files as evidence.\n' +
@@ -149,7 +176,8 @@ function attemptResumeIfOutputsIncomplete(storyKey, result, linkedTestCases, wor
         '- Do NOT push changes; the post-action will commit and push after you finish.\n' +
         '- Do NOT move the Story to another status.\n' +
         '- Update outputs/response.md with a short summary of what was verified.\n' +
-        '- Validate that outputs/story_test_automation_result.json is parseable JSON before stopping.\n';
+        '- Validate that outputs/story_test_automation_result.json is parseable JSON that conforms to the schema before stopping.\n\n' +
+        'Required JSON schema for outputs/story_test_automation_result.json:\n' + resultSchema + '\n';
 
     var promptPath = 'outputs/.story-test-resume-prompt.md';
     try {
