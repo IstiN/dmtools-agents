@@ -33,6 +33,7 @@
         "js/unit-tests/test_postBugCreation.js",
         "js/unit-tests/test_postBulkBugsCreation.js",
         "js/unit-tests/test_checkStoryTestsPassed.js",
+        "js/unit-tests/test_checkBugTestsPassed.js",
         "js/unit-tests/test_checkBugToFixReady.js",
         "js/unit-tests/test_finishTestCasesGeneration.js",
         "js/unit-tests/test_preCliStoryTestAutomationSetup.js",

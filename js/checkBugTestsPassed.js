@@ -2,7 +2,12 @@
  * Check Bug Tests Passed — postJSAction for bug_done_check agent.
  *
  * Runs on every SM cycle for each Bug in "In Testing".
- * - If all linked Test Cases are in "Passed" status → moves the Bug to Done.
+ * - Looks at *directly* linked Test Cases only (avoids blocking a bug on
+ *   unrelated Test Cases that happen to be connected through a parent Story
+ *   or other transitive links).
+ * - If all directly linked Test Cases are in "Passed" status → moves the Bug to Done.
+ * - If there are no direct Test Case links → falls back to the broad
+ *   linkedIssues query for backward compatibility.
  * - Otherwise → removes the SM idempotency label so the SM re-triggers
  *   this check on the next cycle.
  */
@@ -32,19 +37,64 @@ function action(params) {
         }
     }
 
+    function findDirectLinkedTCs() {
+        try {
+            const ticket = jira_get_ticket({ key: ticketKey });
+            const issueLinks = ticket && ticket.fields && ticket.fields.issuelinks;
+            if (!Array.isArray(issueLinks) || issueLinks.length === 0) {
+                return [];
+            }
+            const tcs = [];
+            issueLinks.forEach(function(link) {
+                var other = link.outwardIssue || link.inwardIssue;
+                if (!other || !other.fields || !other.fields.issuetype) return;
+                if (other.fields.issuetype.name === testCaseType) {
+                    tcs.push(other);
+                }
+            });
+            return tcs;
+        } catch (e) {
+            console.warn('Failed to read direct issue links for', ticketKey, ':', e);
+            return [];
+        }
+    }
+
+    function findAllLinkedTCs() {
+        try {
+            return jira_search_by_jql({
+                jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "' + testCaseType + '"',
+                maxResults: 100
+            }) || [];
+        } catch (e) {
+            console.warn('Failed to fetch linked Test Cases via JQL:', e);
+            return [];
+        }
+    }
+
+    function hasNotPassedTC(tcList) {
+        return tcList.some(function(tc) {
+            var status = tc.fields && tc.fields.status && tc.fields.status.name;
+            return status !== STATUSES.PASSED && status !== STATUSES.SKIPPED && status !== STATUSES.IRRELEVANT;
+        });
+    }
+
     try {
         if (!ticketKey) throw new Error('params.ticket.key is missing');
         console.log('=== Bug done check for', ticketKey, '===');
 
-        // Step 1: Find all linked Test Cases for this bug
-        // jira_search_by_jql returns a plain array
-        const allTCs = jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "' + testCaseType + '"',
-            maxResults: 100
-        }) || [];
+        // Step 1: Prefer directly linked Test Cases so a bug is only held up by
+        // its own acceptance tests, not by every Test Case connected to a parent Story.
+        var allTCs = findDirectLinkedTCs();
+        var linkSource = 'direct';
+
+        if (allTCs.length === 0) {
+            console.log('No direct Test Case links found — falling back to linkedIssues query');
+            allTCs = findAllLinkedTCs();
+            linkSource = 'linkedIssues';
+        }
 
         const totalTCs = allTCs.length;
-        console.log('Linked Test Cases:', totalTCs);
+        console.log('Linked Test Cases (' + linkSource + '):', totalTCs);
 
         if (totalTCs === 0) {
             console.log('No linked Test Cases found — releasing lock, will re-check next cycle');
@@ -52,14 +102,13 @@ function action(params) {
             return { success: true, action: 'no_test_cases', ticketKey };
         }
 
-        // Step 2: Find linked Test Cases that are NOT yet Passed.
+        // Step 2: Check whether any linked Test Case is not yet Passed.
         // Skipped and Irrelevant Test Cases are intentionally non-blocking
         // (same as checkStoryTestsPassed).
-        const notPassedTCs = jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "' + testCaseType + '" AND status not in ("Passed", "Skipped", "Irrelevant")',
-            maxResults: 1
-        }) || [];
-
+        const notPassedTCs = allTCs.filter(function(tc) {
+            var status = tc.fields && tc.fields.status && tc.fields.status.name;
+            return status !== STATUSES.PASSED && status !== STATUSES.SKIPPED && status !== STATUSES.IRRELEVANT;
+        });
         const notPassedCount = notPassedTCs.length;
 
         console.log('Test Cases not yet Passed:', notPassedCount, '/', totalTCs);
