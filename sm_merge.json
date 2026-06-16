@@ -11,6 +11,18 @@
           "localExecution": true
         },
         {
+          "description": "In Testing Stories (pr_approved) → merge test automation PR",
+          "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('In Testing') AND labels = 'pr_approved' ORDER BY created ASC",
+          "configFile": "agents/story_test_automation_merge.json",
+          "localExecution": true
+        },
+        {
+          "description": "In Testing Bugs (pr_approved) → merge test automation PR",
+          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('In Testing') AND labels = 'pr_approved' ORDER BY created ASC",
+          "configFile": "agents/bug_test_automation_merge.json",
+          "localExecution": true
+        },
+        {
           "description": "In Review Test Cases (pr_approved) → retry merge",
           "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('In Review - Passed', 'In Review - Failed') AND labels = 'pr_approved' ORDER BY created ASC",
           "configFile": "agents/retry_merge_test.json",

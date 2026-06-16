@@ -133,6 +133,20 @@
           "enabled": true
         },
         {
+          "description": "In Testing Stories (pr_approved) → merge test automation PR",
+          "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('In Testing') AND labels = 'pr_approved' ORDER BY created ASC",
+          "configFile": "agents/story_test_automation_merge.json",
+          "localExecution": true,
+          "enabled": true
+        },
+        {
+          "description": "In Testing Bugs (pr_approved) → merge test automation PR",
+          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('In Testing') AND labels = 'pr_approved' ORDER BY created ASC",
+          "configFile": "agents/bug_test_automation_merge.json",
+          "localExecution": true,
+          "enabled": true
+        },
+        {
           "description": "In Rework Stories & Bugs → trigger pr_rework",
           "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('In Rework')",
           "configFile": "agents/pr_rework.json",

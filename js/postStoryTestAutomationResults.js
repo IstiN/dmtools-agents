@@ -141,8 +141,10 @@ function attemptResumeIfOutputsIncomplete(storyKey, result, linkedTestCases, wor
         'Instructions:\n' +
         '- Continue the same story test automation task in the same repository.\n' +
         '- For every missing Test Case, run/verify the corresponding automated test.\n' +
-        '- Append a result entry to outputs/story_test_automation_result.json for each missing Test Case:\n' +
-        '  { "testCaseKey": "TS-XXX", "status": "passed" | "failed", "testPath": "testing/tests/TS-XXX/...", "failedDescriptionFile": "outputs/failed_description_TS-XXX.md", "failureSummary": "..." }\n' +
+        '- Create or update outputs/story_test_automation_result.json with a top-level object: { "storyKey": "' + storyKey + '", "overall": "passed|failed", "summary": "...", "results": [...] }.\n' +
+        '- Append a result entry for each missing Test Case:\n' +
+        '  { "testCaseKey": "TS-XXX", "status": "passed" | "failed" | "skipped" | "irrelevant", "testPath": "testing/tests/TS-XXX/...", "failedDescriptionFile": "outputs/failed_description_TS-XXX.md", "failureSummary": "..." }\n' +
+        '- If the result JSON file is missing, create it from scratch using the existing outputs/response.md and testing/tests/ files as evidence.\n' +
         '- If a test fails, write a failed description file and reference it in the result entry.\n' +
         '- Do NOT push changes; the post-action will commit and push after you finish.\n' +
         '- Do NOT move the Story to another status.\n' +
@@ -460,7 +462,7 @@ function action(params) {
 
         var result = readResultJson(workingDir, storyKey);
         var resumeInfo = null;
-        if (result && linkedTestCases.length > 0) {
+        if (linkedTestCases.length > 0) {
             resumeInfo = attemptResumeIfOutputsIncomplete(storyKey, result, linkedTestCases, workingDir);
             if (resumeInfo.attempted) {
                 result = readResultJson(workingDir, storyKey);
