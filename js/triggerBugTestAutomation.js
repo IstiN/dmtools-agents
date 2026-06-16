@@ -40,14 +40,13 @@ function action(params) {
             console.log('✅ Triggered bug_test_automation for', bugKey);
         }
 
-        // Remove the generator SM trigger label so bug_test_cases_generator does not keep re-running
-        const generatorLabel = 'sm_bug_test_cases_triggered';
-        try {
-            jira_remove_label({ key: bugKey, label: generatorLabel });
-            console.log('✅ Removed generator SM label:', generatorLabel);
-        } catch (e) {
-            console.warn('Failed to remove generator SM label:', e);
-        }
+        // Keep the generator SM trigger label on the bug. The SM rule for
+        // bug_test_cases_generator uses it as a skip label, so removing it here
+        // caused the generator to re-run while bug_test_automation was still
+        // waiting for a workflow slot. Leaving the label prevents that loop;
+        // bug_test_automation will move the bug out of Ready For Testing when it
+        // completes, which stops the generator rule from matching.
+        console.log('Keeping generator SM label sm_bug_test_cases_triggered to prevent re-run loop.');
 
         // Post token usage summary comments from the test-case generation run
         try {
