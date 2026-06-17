@@ -5,7 +5,7 @@
 
 // Import common Jira helper functions
 const { assignForReview } = require('./common/jiraHelpers.js');
-const tokenUsageComment = require('./common/tokenUsageComment.js');
+const tokenUsageComment = require('./js/common/tokenUsageComment.js');
 
 function action(params) {
     try {
