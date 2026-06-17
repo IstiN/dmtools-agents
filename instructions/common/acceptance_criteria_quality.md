@@ -3,10 +3,13 @@
 ## Prohibited patterns
 
 ### ❌ Never write "follows standard X behavior"
-If a step "follows standard behavior", you MUST:
-1. Use codegraph/code search to find the reference implementation
-2. Describe the actual behavior: columns, validations, file names, error messages
-3. If code is unavailable, flag explicitly: "⚠️ Requires clarification from dev team"
+Instead of writing "follows [Workflow X] behavior" or "same as [Workflow X]",
+you MUST first search the codebase using codegraph_search or codegraph_explore
+for that reference workflow, read its implementation, and describe the actual
+behavior in detail: exact columns, validations, file names, transitions, and
+error messages. A single-sentence reference to another workflow is never
+acceptable as an AC — it is not testable and cannot be implemented or verified
+without additional research.
 
 ### ❌ Never include generic UI/accessibility AC
 WCAG AA, contrast ratios, focus states, style guide compliance —
