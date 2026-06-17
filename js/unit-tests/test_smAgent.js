@@ -1285,3 +1285,189 @@ suite('smAgent: agentConfigsDir (config.js owns agent paths)', function() {
     });
 
 });
+
+// ── Targeted mode ─────────────────────────────────────────────────────────────
+
+suite('smAgent: targeted mode', function() {
+
+    test('targetTicket + targetAgent bypasses all rules and dispatches exactly that ticket', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "JD" }, repository: { owner: "o", repo: "r" } };'
+            },
+            tickets: [{ key: 'JD-123', fields: { labels: [] } }]
+        });
+
+        sm.action({
+            jobParams: {
+                targetTicket: 'JD-123',
+                targetAgent: 'agents/story_solution.json'
+            }
+        });
+
+        assert.equal(sm.capturedJqls.length, 1, 'exactly one JQL executed');
+        assert.equal(sm.capturedJqls[0], 'key = JD-123', 'JQL targets exact ticket');
+        assert.equal(sm.capturedTriggers.length, 1, 'one workflow triggered');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.config_file, 'agents/story_solution.json', 'correct agent used');
+        assert.contains(inputs.input_jql, 'JD-123', 'input_jql contains ticket key');
+    });
+
+    test('inherits localExecution and concurrencyKey from matching rule', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'P-7', fields: { labels: [] } }]
+        });
+
+        // sm.json has a rule for bulk_bugs_creation with localExecution=false and concurrencyKey
+        // Use story_solution rule which exists in sm.json
+        sm.action({
+            jobParams: {
+                targetTicket: 'P-7',
+                targetAgent: 'agents/story_solution.json',
+                rules: [
+                    {
+                        description: 'Story solution rule',
+                        jql: "project = TEST AND status = 'Solution Architecture'",
+                        configFile: 'agents/story_solution.json',
+                        skipIfLabel: 'sm_story_solution_triggered',
+                        addLabel: 'sm_story_solution_triggered',
+                        enabled: true
+                    }
+                ],
+                owner: 'o',
+                repo: 'r'
+            }
+        });
+
+        assert.equal(sm.capturedJqls.length, 1, 'only targeted JQL ran');
+        assert.equal(sm.capturedJqls[0], 'key = P-7', 'JQL overridden to ticket key');
+        // addLabel is inherited, skipIfLabel is stripped
+        assert.equal(sm.capturedTriggers.length, 1, 'workflow triggered');
+    });
+
+    test('strips skipIfLabel from inherited rule so label on ticket does not block run', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'X-9', fields: { labels: ['sm_story_solution_triggered'] } }]
+        });
+
+        sm.action({
+            jobParams: {
+                targetTicket: 'X-9',
+                targetAgent: 'agents/story_solution.json',
+                rules: [
+                    {
+                        description: 'Story solution rule',
+                        jql: "project = TEST AND status = 'Solution Architecture'",
+                        configFile: 'agents/story_solution.json',
+                        skipIfLabel: 'sm_story_solution_triggered',
+                        enabled: true
+                    }
+                ],
+                owner: 'o',
+                repo: 'r'
+            }
+        });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'skipIfLabel stripped — run proceeds');
+    });
+
+    test('falls back to minimal synthetic rule when no matching rule found', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'Z-1', fields: { labels: [] } }]
+        });
+
+        sm.action({
+            jobParams: {
+                targetTicket: 'Z-1',
+                targetAgent: 'agents/story_solution.json',
+                rules: [], // no rules — no match possible
+                owner: 'o',
+                repo: 'r'
+            }
+        });
+
+        assert.equal(sm.capturedJqls.length, 1, 'synthetic rule JQL ran');
+        assert.equal(sm.capturedJqls[0], 'key = Z-1', 'synthetic JQL correct');
+        assert.equal(sm.capturedTriggers.length, 1, 'workflow triggered via synthetic rule');
+    });
+
+    test('matches rule by configFile regardless of agents/ prefix', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'M-2', fields: { labels: [] } }]
+        });
+
+        sm.action({
+            jobParams: {
+                targetTicket: 'M-2',
+                targetAgent: 'story_solution.json',  // no agents/ prefix
+                rules: [
+                    {
+                        description: 'Story solution rule',
+                        jql: "project = TEST AND status = 'Solution Architecture'",
+                        configFile: 'agents/story_solution.json', // has agents/ prefix
+                        enabled: true
+                    }
+                ],
+                owner: 'o',
+                repo: 'r'
+            }
+        });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'rule matched despite agents/ prefix mismatch');
+    });
+
+    test('targeted mode disables workflow cap', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'T-5', fields: { labels: [] } }]
+        });
+
+        sm.action({
+            jobParams: {
+                targetTicket: 'T-5',
+                targetAgent: 'agents/pr_review.json',
+                maxTriggeredWorkflows: 0,
+                rules: [],
+                owner: 'o',
+                repo: 'r'
+            }
+        });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'trigger not blocked by workflow cap');
+    });
+
+    test('targeted mode does not trigger when targetTicket is missing', function() {
+        var sm = makeSmAgent({ fileMap: {}, tickets: [] });
+
+        var result = sm.action({
+            jobParams: {
+                targetAgent: 'agents/story_solution.json',
+                owner: 'o',
+                repo: 'r',
+                rules: []
+            }
+        });
+
+        assert.equal(result.success, false, 'fails without rules when no targetTicket');
+    });
+
+    test('targeted mode does not trigger when targetAgent is missing', function() {
+        var sm = makeSmAgent({ fileMap: {}, tickets: [] });
+
+        var result = sm.action({
+            jobParams: {
+                targetTicket: 'P-1',
+                owner: 'o',
+                repo: 'r',
+                rules: []
+            }
+        });
+
+        assert.equal(result.success, false, 'falls through to no-rules error without targetAgent');
+    });
+
+});

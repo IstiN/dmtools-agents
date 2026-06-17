@@ -668,6 +668,52 @@ function action(params) {
         });
     }
 
+    // Targeted mode: bypass all JQL rules and dispatch a single agent to a single ticket.
+    // Activated when targetTicket + targetAgent are present in jobParams (or encoded_config override).
+    // Finds the existing rule for targetAgent (respecting smRules/smRuleOverrides) and inherits all
+    // its properties (localExecution, concurrencyKey, addLabel, etc.) — only the JQL is replaced.
+    // Idempotency skip labels are stripped so targeted runs always proceed regardless of prior state.
+    var targetTicket = p.targetTicket;
+    var targetAgent  = p.targetAgent;
+    if (targetTicket && targetAgent) {
+        console.log('SM Agent: Targeted mode — ticket: ' + targetTicket + ', agent: ' + targetAgent);
+
+        var matchedRule = null;
+        if (rules) {
+            var normalizeAgent = function(cf) { return cf ? cf.replace(/^agents\//, '') : ''; };
+            var normalizedTarget = normalizeAgent(targetAgent);
+            for (var ri = 0; ri < rules.length; ri++) {
+                if (normalizeAgent(rules[ri].configFile) === normalizedTarget) {
+                    matchedRule = rules[ri];
+                    break;
+                }
+            }
+        }
+
+        var targetedRule;
+        if (matchedRule) {
+            targetedRule = {};
+            Object.keys(matchedRule).forEach(function(k) { targetedRule[k] = matchedRule[k]; });
+            targetedRule.jql = 'key = ' + targetTicket;
+            targetedRule.description = 'Targeted: ' + targetAgent + ' for ' + targetTicket;
+            delete targetedRule.skipIfLabel;
+            delete targetedRule.skipIfLabels;
+            console.log('  Found matching rule — inheriting localExecution=' + (!!targetedRule.localExecution) +
+                ', concurrencyKey=' + (targetedRule.concurrencyKey || targetTicket));
+        } else {
+            console.log('  No matching rule found for ' + targetAgent + ' — using minimal synthetic rule');
+            targetedRule = {
+                description: 'Targeted: ' + targetAgent + ' for ' + targetTicket,
+                jql: 'key = ' + targetTicket,
+                configFile: targetAgent,
+                enabled: true
+            };
+        }
+
+        rules = [targetedRule];
+        workflowBudget = null; // no cap for explicit single-ticket runs
+    }
+
     if (!rules || rules.length === 0) {
         console.error('❌ No rules defined in jobParams.rules or project config');
         return { success: false, error: 'No rules defined' };
