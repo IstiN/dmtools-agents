@@ -7,6 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/providers/_common.sh"
 # shellcheck source=/dev/null
+source "${SCRIPT_DIR}/providers/claude.sh"
+# shellcheck source=/dev/null
 source "${SCRIPT_DIR}/providers/codemie.sh"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/providers/copilot.sh"
@@ -23,10 +25,11 @@ Runs the configured AI agent with the provided prompt.
 Provider is controlled by AI_AGENT_PROVIDER environment variable (default: cursor).
 
 Providers:
-  cursor   - Uses cursor-agent (default)
-  codemie  - Uses codemie-claude
-  copilot  - Uses GitHub Copilot CLI (npx @github/copilot)
-  kimi     - Uses Kimi Code CLI (kimi)
+  cursor       - Uses cursor-agent (default)
+  claude-code  - Uses Claude Code CLI via Bedrock proxy (ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY)
+  codemie      - Uses codemie-claude
+  copilot      - Uses GitHub Copilot CLI (npx @github/copilot)
+  kimi         - Uses Kimi Code CLI (kimi)
 
 Example:
   $(basename "$0") "process the input folder"
@@ -125,6 +128,9 @@ echo "AI Agent Usage Name: ${AI_AGENT_USAGE_NAME}"
 
 exit_code=0
 case "$PROVIDER" in
+  claude-code)
+    run_claude_code || exit_code=$?
+    ;;
   codemie)
     run_codemie || exit_code=$?
     ;;
