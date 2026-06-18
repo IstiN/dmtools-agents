@@ -334,6 +334,160 @@ suite('fetchParentContextToInput — re-fetch fallback', function() {
 
 });
 
+// ── Suite: parentAsContext ────────────────────────────────────────────────────
+
+suite('fetchParentContextToInput — parentAsContext', function() {
+
+    function makeParentTicket(key, summaryPrefix, extraFields) {
+        var fields = Object.assign({
+            summary: summaryPrefix + ' Parent Story Title',
+            description: 'Parent description content',
+            status: { name: 'In Progress' }
+        }, extraFields || {});
+        return { key: key, fields: fields };
+    }
+
+    test('writes named context file when parentAsContext is configured', function() {
+        var writtenFiles = [];
+        var m = loadFetchParentContext({
+            jira_get_ticket: function(opts) {
+                return makeParentTicket(opts.key || PARENT_KEY, '[LIMS]');
+            },
+            jira_search_by_jql: function() { return []; },
+            file_write: function(p, c) { writtenFiles.push(p); }
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, {
+            parentAsContext: {
+                file: 'parent_context_ba.md',
+                label: 'Business Analysis',
+                description: 'BA context from parent story'
+            }
+        });
+        m.action(makeParams(cfg));
+        var contextFiles = writtenFiles.filter(function(p) { return p.indexOf('parent_context_ba.md') !== -1; });
+        assert.equal(contextFiles.length, 1, 'parent_context_ba.md written via parentAsContext');
+    });
+
+    test('does not write named context file when parentAsContext is absent', function() {
+        var writtenFiles = [];
+        var m = loadFetchParentContext({
+            jira_get_ticket: function(opts) {
+                return makeParentTicket(opts.key || PARENT_KEY, '[LIMS]');
+            },
+            jira_search_by_jql: function() { return []; },
+            file_write: function(p, c) { writtenFiles.push(p); }
+        });
+        m.action(makeParams(MINIMAL_PARENT_CONTEXT_FETCH));
+        var contextFiles = writtenFiles.filter(function(p) { return p.indexOf('parent_context_ba.md') !== -1; });
+        assert.equal(contextFiles.length, 0, 'parent_context_ba.md NOT written without parentAsContext');
+    });
+
+    test('always writes parent-{KEY}.md alongside the named context file', function() {
+        var writtenFiles = [];
+        var m = loadFetchParentContext({
+            jira_get_ticket: function(opts) {
+                return makeParentTicket(opts.key || PARENT_KEY, '[LIMS]');
+            },
+            jira_search_by_jql: function() { return []; },
+            file_write: function(p, c) { writtenFiles.push(p); }
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, {
+            parentAsContext: { file: 'parent_context_ba.md', label: 'Business Analysis' }
+        });
+        m.action(makeParams(cfg));
+        var rawParent = writtenFiles.filter(function(p) { return p.indexOf('parent-' + PARENT_KEY + '.md') !== -1; });
+        var ctxFile   = writtenFiles.filter(function(p) { return p.indexOf('parent_context_ba.md') !== -1; });
+        assert.equal(rawParent.length, 1, 'parent-KEY.md always written');
+        assert.equal(ctxFile.length, 1, 'parent_context_ba.md also written');
+        assert.equal(writtenFiles.length, 2, 'exactly two files written total');
+    });
+
+    test('named context file content includes label heading and ticket key', function() {
+        var writtenContents = {};
+        var m = loadFetchParentContext({
+            jira_get_ticket: function(opts) {
+                return makeParentTicket(opts.key || PARENT_KEY, '[LIMS]');
+            },
+            jira_search_by_jql: function() { return []; },
+            file_write: function(p, c) { writtenContents[p] = c; }
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, {
+            parentAsContext: {
+                file: 'parent_context_ba.md',
+                label: 'Business Analysis',
+                description: 'This is the authoritative source'
+            }
+        });
+        m.action(makeParams(cfg));
+        var key = INPUT_FOLDER + '/parent_context_ba.md';
+        var content = writtenContents[key];
+        assert.ok(content !== undefined, 'content written for parent_context_ba.md');
+        assert.ok(content.indexOf('Business Analysis') !== -1, 'label heading present');
+        assert.ok(content.indexOf(PARENT_KEY) !== -1, 'parent key present');
+        assert.ok(content.indexOf('This is the authoritative source') !== -1, 'description blurb present');
+        assert.ok(content.indexOf('Parent description content') !== -1, 'parent description field present');
+    });
+
+    test('named context file includes extra fields like Acceptance Criteria', function() {
+        var writtenContents = {};
+        var m = loadFetchParentContext({
+            jira_get_ticket: function(opts) {
+                return makeParentTicket(opts.key || PARENT_KEY, '[LIMS]', {
+                    'Acceptance Criteria': 'AC 1 - User can login\nAC 2 - User can logout'
+                });
+            },
+            jira_search_by_jql: function() { return []; },
+            file_write: function(p, c) { writtenContents[p] = c; }
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, {
+            fields: ['key', 'summary', 'description', 'status', 'Acceptance Criteria'],
+            parentAsContext: { file: 'parent_context_ba.md', label: 'Business Analysis' }
+        });
+        m.action(makeParams(cfg));
+        var content = writtenContents[INPUT_FOLDER + '/parent_context_ba.md'];
+        assert.ok(content !== undefined, 'file written');
+        assert.ok(content.indexOf('AC 1 - User can login') !== -1, 'Acceptance Criteria content present');
+    });
+
+    test('parentAsContext is non-fatal when jira_get_ticket throws', function() {
+        var writtenFiles = [];
+        var m = loadFetchParentContext({
+            jira_get_ticket: function() { throw new Error('network error'); },
+            jira_search_by_jql: function() { return []; },
+            file_write: function(p, c) { writtenFiles.push(p); }
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, {
+            parentAsContext: { file: 'parent_context_ba.md', label: 'Business Analysis' }
+        });
+        var threw = false;
+        try { m.action(makeParams(cfg)); } catch (e) { threw = true; }
+        assert.ok(!threw, 'jira_get_ticket error is non-fatal');
+        assert.equal(writtenFiles.length, 0, 'no files written on fetch error');
+    });
+
+    test('parentAsContext works alongside sibling context matching', function() {
+        var writtenFiles = [];
+        var m = loadFetchParentContext({
+            jira_get_ticket: function(opts) {
+                return makeParentTicket(opts.key || PARENT_KEY, '[LIMS]');
+            },
+            jira_search_by_jql: function() {
+                return [makeSearchResult('PROJ-300', '[SA]')];
+            },
+            file_write: function(p, c) { writtenFiles.push(p); }
+        });
+        var cfg = Object.assign({}, MINIMAL_PARENT_CONTEXT_FETCH, {
+            parentAsContext: { file: 'parent_context_ba.md', label: 'Business Analysis' }
+        });
+        m.action(makeParams(cfg));
+        var baFiles = writtenFiles.filter(function(p) { return p.indexOf('parent_context_ba.md') !== -1; });
+        var saFiles = writtenFiles.filter(function(p) { return p.indexOf('sa.md') !== -1; });
+        assert.equal(baFiles.length, 1, 'BA context from parentAsContext');
+        assert.equal(saFiles.length, 1, 'SA context from sibling match');
+    });
+
+});
+
 // ── Suite: error resilience ───────────────────────────────────────────────────
 
 suite('fetchParentContextToInput — error resilience', function() {

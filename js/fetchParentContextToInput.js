@@ -272,7 +272,15 @@ function renderCommentsMarkdown(commentField) {
 }
 
 /**
- * Fetch the parent story itself and write it to parent-{KEY}.md.
+ * Fetch the parent story itself and write it to parent-{KEY}.md,
+ * and optionally also as a named context file (e.g. parent_context_ba.md)
+ * when cfg.parentAsContext is configured.
+ *
+ * cfg.parentAsContext = {
+ *   file:        'parent_context_ba.md',  // output file in input folder
+ *   label:       'Business Analysis',     // heading label
+ *   description: 'Short explanation...'   // optional blurb shown to AI
+ * }
  */
 function fetchParentStory(folder, parentKey, cfg, projectConfig, projectKey, fieldLabels) {
     var parentFields = cfg.parentFields || cfg.fields || buildDefaultFields(projectConfig);
@@ -291,18 +299,40 @@ function fetchParentStory(folder, parentKey, cfg, projectConfig, projectKey, fie
         }
 
         var pf = parentTicket.fields;
-        var md = '# Parent Story — ' + (pf.summary || parentKey) + '\n\n';
-        md += '**Ticket:** ' + parentKey + '\n';
-        md += '**Status:** ' + (pf.status && pf.status.name || 'Unknown') + '\n\n';
-        md += '---\n\n';
-
+        var summary = pf.summary || parentKey;
+        var status = pf.status && pf.status.name || 'Unknown';
         var fieldsContent = renderFieldsMarkdown(pf, fetchParentFields, fieldLabels);
+
+        // Always write parent-{KEY}.md
+        var md = '# Parent Story — ' + summary + '\n\n';
+        md += '**Ticket:** ' + parentKey + '\n';
+        md += '**Status:** ' + status + '\n\n';
+        md += '---\n\n';
         md += fieldsContent || '_No content available._';
         md += '\n';
 
         var filePath = folder + '/parent-' + parentKey + '.md';
         file_write(filePath, md);
         console.log('✅ fetchParentContextToInput: wrote parent-' + parentKey + '.md');
+
+        // Optionally also write as a named context file (e.g. parent_context_ba.md)
+        var pac = cfg.parentAsContext;
+        if (pac && pac.file) {
+            var label = pac.label || 'Parent Context';
+            var ctxMd = '# ' + label + ' — ' + summary + '\n\n';
+            if (pac.description) {
+                ctxMd += '> **' + label + '** (' + parentKey + '): ' + pac.description + '\n\n';
+            }
+            ctxMd += '**Ticket:** ' + parentKey + '\n';
+            ctxMd += '**Status:** ' + status + '\n\n';
+            ctxMd += '---\n\n';
+            ctxMd += fieldsContent || '_No content available._';
+            ctxMd += '\n';
+
+            var ctxFilePath = folder + '/' + pac.file;
+            file_write(ctxFilePath, ctxMd);
+            console.log('✅ fetchParentContextToInput: wrote ' + pac.file + ' (parentAsContext from ' + parentKey + ')');
+        }
     } catch (e) {
         console.warn('fetchParentContextToInput: failed to fetch parent story ' + parentKey + ' (non-fatal):', e.message || e);
     }
