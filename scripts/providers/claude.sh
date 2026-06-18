@@ -49,19 +49,23 @@ run_claude_code() {
 
   set +e
   if [ -f "${PROMPT_ARG}" ]; then
-    echo "Running: claude --allowedTools all --model ${claude_code_model} --max-turns ${claude_code_max_turns} -p (prompt: ${PROMPT_BYTES} bytes via stdin)"
+    echo "Running: claude --allowedTools all --output-format stream-json --verbose --model ${claude_code_model} --max-turns ${claude_code_max_turns} -p (prompt: ${PROMPT_BYTES} bytes via stdin)"
     echo ""
     # Use stdin redirect to avoid "Argument list too long" for large prompts (E2BIG).
     claude --allowedTools all \
+      --output-format stream-json \
+      --verbose \
       --model "${claude_code_model}" \
       --max-turns "${claude_code_max_turns}" \
       ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} \
       -p < "${PROMPT_ARG}" \
       2>&1 | tee "${claude_code_log}"
   else
-    echo "Running: claude --allowedTools all --model ${claude_code_model} --max-turns ${claude_code_max_turns} -p (inline prompt: ${PROMPT_BYTES} bytes)"
+    echo "Running: claude --allowedTools all --output-format stream-json --verbose --model ${claude_code_model} --max-turns ${claude_code_max_turns} -p (inline prompt: ${PROMPT_BYTES} bytes)"
     echo ""
     claude --allowedTools all \
+      --output-format stream-json \
+      --verbose \
       --model "${claude_code_model}" \
       --max-turns "${claude_code_max_turns}" \
       -p "${PROMPT}" \
