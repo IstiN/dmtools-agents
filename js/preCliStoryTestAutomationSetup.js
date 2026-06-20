@@ -290,7 +290,10 @@ function action(params) {
 
     } catch (error) {
         console.error('❌ Error in preCliStoryTestAutomationSetup:', error);
+        return { success: false, error: error.toString() };
     }
+
+    return { success: true };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
