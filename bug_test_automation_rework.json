@@ -4,7 +4,7 @@
     "metadata": { "contextId": "bug_test_automation_rework" },
     "cliCommands": ["./agents/scripts/run-agent.sh"],
     "outputType": "none",
-    "ticketContextDepth": 1,
+    "ticketContextDepth": 0,
     "skipAIProcessing": true,
     "alwaysPostComments": true,
     "preJSAction": "agents/js/checkWipLabel.js",
