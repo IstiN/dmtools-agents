@@ -37,6 +37,14 @@ function runInRepo(command, workingDir) {
 
 function mergeMain(storyKey, config) {
     var workingDir = config.workingDir || null;
+
+    try {
+        runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
+        runInRepo('git config user.email "' + config.git.authorEmail + '"', workingDir);
+    } catch (e) {
+        console.warn('Could not configure git author:', e);
+    }
+
     console.log('Fetching origin/main to keep test branch up to date...');
     try {
         runInRepo('git fetch origin main', workingDir);
@@ -44,18 +52,28 @@ function mergeMain(storyKey, config) {
         throw new Error('Failed to fetch origin/main: ' + e);
     }
 
+    console.log('Unshallowing repository so git merge can find merge base...');
     try {
-        runInRepo('git merge origin/main --no-edit', workingDir);
+        runInRepo('git fetch --unshallow', workingDir);
+    } catch (e) {
+        console.warn('Unshallow fetch failed (may already be complete):', e);
+    }
+
+    var mergeOutput = '';
+    try {
+        mergeOutput = cleanCommandOutput(runInRepo('git merge origin/main --no-edit', workingDir) || '');
         console.log('✅ Merged origin/main into test branch');
         return;
     } catch (mergeError) {
-        console.warn('Merge conflicts detected, attempting auto-resolution for ticket test files...');
+        var mergeErrStr = (mergeError && mergeError.toString ? mergeError.toString() : String(mergeError)) + ' ' + mergeOutput;
+        console.warn('git merge origin/main failed:', mergeErrStr);
+        console.warn('Attempting auto-resolution for ticket test files...');
     }
 
     var status = cleanCommandOutput(runInRepo('git diff --name-only --diff-filter=U', workingDir) || '');
     var conflicts = status.split('\n').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
     if (conflicts.length === 0) {
-        throw new Error('git merge failed but no conflicted files found');
+        throw new Error('git merge origin/main failed and no conflicted files were found');
     }
 
     var nonTestConflicts = conflicts.filter(function(f) {
