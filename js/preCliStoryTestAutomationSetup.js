@@ -152,7 +152,7 @@ function fetchLinkedTestCases(storyKey, testCaseType) {
     var jql = 'issue in linkedIssues("' + storyKey + '") AND issuetype = "' + testCaseType + '"';
     console.log('Fetching linked Test Cases with JQL:', jql);
     try {
-        var results = jira_search_by_jql({ jql: jql, maxResults: 100, fields: ['key', 'summary', 'status', 'priority', 'description', 'Acceptance Criteria'] });
+        var results = jira_search_by_jql({ jql: jql, maxResults: 100, fields: ['key', 'summary', 'status'] });
         return Array.isArray(results) ? results : [];
     } catch (e) {
         console.warn('Failed to fetch linked Test Cases:', e);
@@ -163,19 +163,8 @@ function fetchLinkedTestCases(storyKey, testCaseType) {
 function renderTestCase(tc) {
     var fields = tc.fields || {};
     var lines = [];
-    lines.push('## ' + tc.key + ' — ' + (fields.summary || '(no summary)'));
-    lines.push('');
-    lines.push('- **Status**: ' + (fields.status && fields.status.name ? fields.status.name : 'Unknown'));
-    lines.push('- **Priority**: ' + (fields.priority && fields.priority.name ? fields.priority.name : 'Unknown'));
-    lines.push('');
-    lines.push('### Description');
-    lines.push(fields.description || '(no description)');
-    lines.push('');
-    if (fields['Acceptance Criteria']) {
-        lines.push('### Acceptance Criteria');
-        lines.push(fields['Acceptance Criteria']);
-        lines.push('');
-    }
+    lines.push('- ' + tc.key + ' — ' + (fields.summary || '(no summary)') +
+               ' [' + (fields.status && fields.status.name ? fields.status.name : 'Unknown') + ']');
     return lines.join('\n');
 }
 
@@ -195,6 +184,7 @@ function writeLinkedTestCases(storyKey, testCases) {
     testCases.forEach(function(tc) {
         md += renderTestCase(tc) + '\n';
     });
+    md += '\n';
 
     try {
         file_write({
