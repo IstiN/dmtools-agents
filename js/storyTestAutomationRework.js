@@ -35,6 +35,55 @@ function runInRepo(command, workingDir) {
     return cli_execute_command(args);
 }
 
+function mergeMain(storyKey, config) {
+    var workingDir = config.workingDir || null;
+    console.log('Fetching origin/main to keep test branch up to date...');
+    try {
+        runInRepo('git fetch origin main', workingDir);
+    } catch (e) {
+        throw new Error('Failed to fetch origin/main: ' + e);
+    }
+
+    try {
+        runInRepo('git merge origin/main --no-edit', workingDir);
+        console.log('✅ Merged origin/main into test branch');
+        return;
+    } catch (mergeError) {
+        console.warn('Merge conflicts detected, attempting auto-resolution for ticket test files...');
+    }
+
+    var status = cleanCommandOutput(runInRepo('git diff --name-only --diff-filter=U', workingDir) || '');
+    var conflicts = status.split('\n').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
+    if (conflicts.length === 0) {
+        throw new Error('git merge failed but no conflicted files found');
+    }
+
+    var nonTestConflicts = conflicts.filter(function(f) {
+        return f.indexOf('testing/tests/' + storyKey + '/') !== 0;
+    });
+    if (nonTestConflicts.length > 0) {
+        throw new Error('Merge conflicts outside the ticket test folder cannot be auto-resolved: ' + nonTestConflicts.join(', '));
+    }
+
+    conflicts.forEach(function(file) {
+        try {
+            runInRepo('git checkout --ours -- "' + file + '"', workingDir);
+            runInRepo('git add "' + file + '"', workingDir);
+            console.log('✅ Resolved conflict keeping branch version:', file);
+        } catch (e) {
+            throw new Error('Failed to resolve conflict for ' + file + ': ' + e);
+        }
+    });
+
+    try {
+        var mergeMsg = storyKey + ' test rework: merge origin/main and resolve test conflicts';
+        runInRepo('git commit -m "' + mergeMsg.replace(/"/g, '\\"') + '"', workingDir);
+        console.log('✅ Committed merge with auto-resolved test conflicts');
+    } catch (e) {
+        throw new Error('Failed to commit auto-resolved merge: ' + e);
+    }
+}
+
 function commitAndPush(storyKey, config) {
     var workingDir = config.workingDir || null;
     var branchName = cleanCommandOutput(runInRepo('git branch --show-current', workingDir) || '');
@@ -44,6 +93,7 @@ function commitAndPush(storyKey, config) {
     }
 
     console.log('Current branch:', branchName);
+    mergeMain(storyKey, config);
     runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
     runInRepo('git config user.email "' + config.git.authorEmail + '"', workingDir);
     runInRepo('git add testing/', workingDir);
