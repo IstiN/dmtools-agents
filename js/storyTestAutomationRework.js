@@ -144,6 +144,11 @@ function action(params) {
                 console.log('✅ Removed SM label:', removeLabel);
             } catch (e) {}
         }
+        try {
+            const { LABELS } = require('./config.js');
+            jira_remove_label({ key: storyKey, label: LABELS.TEST_PR_REWORK_NEEDED });
+            console.log('✅ Removed test_pr_rework_needed label');
+        } catch (e) {}
     }
 
     try {

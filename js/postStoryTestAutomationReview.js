@@ -326,6 +326,19 @@ function action(params) {
                 } catch (e) {
                     console.warn('Failed to add pr_approved to Jira Story:', e);
                 }
+            } else {
+                try {
+                    scm.addLabel(prNumber, LABELS.TEST_PR_REWORK_NEEDED);
+                    console.log('✅ Added test_pr_rework_needed label to GitHub PR');
+                } catch (e) {
+                    console.warn('Failed to add test_pr_rework_needed to GitHub PR:', e);
+                }
+                try {
+                    jira_add_label({ key: storyKey, label: LABELS.TEST_PR_REWORK_NEEDED });
+                    console.log('✅ Added test_pr_rework_needed label to Jira Story');
+                } catch (e) {
+                    console.warn('Failed to add test_pr_rework_needed to Jira Story:', e);
+                }
             }
         } else {
             console.warn('No PR number found — skipping GitHub comments');
