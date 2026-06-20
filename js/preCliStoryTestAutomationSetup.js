@@ -97,18 +97,8 @@ function alignBranchWithBase(storyKey, branchName, baseBranch, workingDir) {
     }
 
     console.warn('Test branch does not contain origin/' + baseBranch + ':', branchName);
-    var details = '';
-    try {
-        var mergeBase = findMergeBase('HEAD', 'origin/' + baseBranch, workingDir);
-        if (mergeBase) {
-            details = cleanCommandOutput(runGit('git merge-tree ' + mergeBase + ' HEAD origin/' + baseBranch, workingDir) || '');
-        } else {
-            details = 'No merge base found between HEAD and origin/' + baseBranch + '. The branch history may be unrelated to the current base or too shallow.';
-        }
-    } catch (mergeTreeError) {
-        details = mergeTreeError && mergeTreeError.toString ? mergeTreeError.toString() : String(mergeTreeError);
-    }
-    writeBranchConflictGuidance(storyKey, branchName, baseBranch, details.substring(0, 6000));
+    var details = 'Branch is behind origin/' + baseBranch + '. The post-action will merge origin/main and auto-resolve conflicts inside the ticket test folder.';
+    writeBranchConflictGuidance(storyKey, branchName, baseBranch, details);
     console.warn('Keeping divergent test branch ' + branchName + '; conflict guidance written for the agent.');
 }
 
