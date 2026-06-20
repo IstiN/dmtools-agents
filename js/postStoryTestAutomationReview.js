@@ -8,7 +8,7 @@
  * inline comments become diff conversation threads rather than generic PR comments.
  */
 
-const { STATUSES, LABELS } = require('./config.js');
+const { LABELS } = require('./config.js');
 const scmModule = require('./common/scm.js');
 const autoStart = require('./common/autoStart.js');
 const configLoader = require('./configLoader.js');
@@ -358,13 +358,7 @@ function action(params) {
                 autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
             }
         } else {
-            console.log('📝 Changes requested on story PR — moving Story to In Rework');
-            try {
-                jira_move_to_status({ key: storyKey, statusName: STATUSES.IN_REWORK });
-                console.log('✅ Moved Story', storyKey, 'to', STATUSES.IN_REWORK);
-            } catch (e) {
-                console.warn('Failed to move Story to In Rework:', e);
-            }
+            console.log('📝 Changes requested on test-automation PR — keeping ticket in In Testing for rework');
             if (!triggerRework(storyKey, config, customParams)) {
                 autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
             }
