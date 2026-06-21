@@ -6,11 +6,14 @@
 - `input/{BUG_KEY}/ticket.md` — Bug details, description, reproduction steps.
 - `input/{BUG_KEY}/linked_test_cases.md` — all linked Test Cases.
 - `input/{BUG_KEY}/linked_test_cases.json` — machine-readable list.
+- `input/{BUG_KEY}/merge_conflicts.md` *(if present)* — unresolved merge conflicts from syncing the test branch with `origin/main`.
+- `input/{BUG_KEY}/pr_diff.txt` *(if present)* — diff context for resolving conflicts.
 - `testing/` — existing tests and reusable helpers.
 
 ## Task steps
 
-1. Run `codegraph context "{BUG_KEY} test automation existing tests and reusable helpers"` before grepping.
+1. **If `input/{BUG_KEY}/merge_conflicts.md` exists**, resolve all `<<<<<<<` / `=======` / `>>>>>>>` conflict markers in the listed files first, using `input/{BUG_KEY}/pr_diff.txt` for context. Stage each resolved file with `git add <file>`. Do NOT `git commit` or `git merge --abort`. Only proceed to test automation after the working directory is clean of conflicts.
+2. Run `codegraph context "{BUG_KEY} test automation existing tests and reusable helpers"` before grepping.
 2. For each linked Test Case `{TC_KEY}`:
    - Check `testing/tests/{TC_KEY}/`.
    - If it exists, run it.
