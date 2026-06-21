@@ -20,6 +20,42 @@
       "removeLabel": "sm_story_review_triggered",
       "allowApproveWithSuggestions": true
     },
+    "outputSchemas": {
+      "pr_review.json": {
+        "type": "object",
+        "required": ["recommendation", "summary", "generalComment", "inlineComments", "issueCounts"],
+        "properties": {
+          "recommendation": { "type": "string", "enum": ["APPROVE", "REQUEST_CHANGES", "BLOCK"] },
+          "summary": { "type": "string" },
+          "generalComment": { "type": "string" },
+          "resolvedThreadIds": { "type": "array", "items": { "type": "string" } },
+          "inlineComments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["path", "line", "body", "severity"],
+              "properties": {
+                "path": { "type": "string" },
+                "line": { "type": "integer" },
+                "startLine": { "type": ["integer", "null"] },
+                "side": { "type": ["string", "null"], "enum": ["RIGHT", "LEFT", null] },
+                "body": { "type": "string" },
+                "severity": { "type": "string", "enum": ["BLOCKING", "IMPORTANT", "SUGGESTION"] }
+              }
+            }
+          },
+          "issueCounts": {
+            "type": "object",
+            "required": ["blocking", "important", "suggestion"],
+            "properties": {
+              "blocking": { "type": "integer" },
+              "important": { "type": "integer" },
+              "suggestion": { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
     "inputJql": "key = JD-107",
     "cliPrompts": [
       "Senior Code Reviewer & Security Expert",
