@@ -354,15 +354,19 @@ function postThreadReplies(scm, pullRequestId) {
         };
         const replyText = item.reply ? String(item.reply).trim() : '';
 
-        // Only post a reply when the agent explicitly wrote one. Default "✅ Addressed."
-        // replies to every unresolved thread quickly exhaust GitHub's secondary rate limit.
-        if (replyText) {
+        // Only post a reply when the agent explicitly wrote one AND we have the
+        // identifiers needed to reply inside the existing review thread. Without
+        // rootCommentId GitHub's SCM fallback creates a generic issue comment,
+        // which is what produces the huge "✅ Addressed." comment floods.
+        if (replyText && item.inReplyToId) {
             try {
                 scm.replyToThread(pullRequestId, thread, replyText);
                 posted++;
             } catch (e) {
                 console.warn('Failed to reply to comment #' + item.inReplyToId + ':', e);
             }
+        } else if (replyText) {
+            console.log('Skipping reply for thread without rootCommentId — would become a generic issue comment');
         }
 
         if (item.threadId) {
