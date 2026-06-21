@@ -136,10 +136,9 @@ function isLinePresentInDiff(diffText, filePath, targetLine) {
     return false;
 }
 
-function postFallbackInlineComment(scm, prNumber, filePath, line, commentText) {
+function postFallbackInlineComment(filePath, line, commentText) {
     var lineRef = filePath + (line ? ':' + line : '');
-    scm.addComment(prNumber, '📍 **`' + lineRef + '`**\n\n' + commentText);
-    console.log('✅ Posted fallback PR comment for ' + lineRef);
+    return '📍 **`' + lineRef + '`**\n\n' + commentText;
 }
 
 function postInlineComment(scm, prNumber, inlineComment, storyKey, workingDir) {
@@ -149,11 +148,11 @@ function postInlineComment(scm, prNumber, inlineComment, storyKey, workingDir) {
     try {
         if (!commentText) {
             console.warn('No comment content found for inline comment on', filePath);
-            return false;
+            return null;
         }
         if (!filePath) {
             console.warn('No file path found for inline comment');
-            return false;
+            return null;
         }
 
         console.log('Posting inline comment on ' + filePath + ':' + inlineComment.line);
@@ -166,15 +165,13 @@ function postInlineComment(scm, prNumber, inlineComment, storyKey, workingDir) {
         }
 
         if (diffText === null || diffText === '') {
-            console.warn('PR diff unavailable; falling back to general PR comment on ' + filePath + ':' + inlineComment.line);
-            postFallbackInlineComment(scm, prNumber, filePath, inlineComment.line, commentText);
-            return true;
+            console.warn('PR diff unavailable; collecting fallback text for ' + filePath + ':' + inlineComment.line);
+            return postFallbackInlineComment(filePath, inlineComment.line, commentText);
         }
 
         if (!isLinePresentInDiff(diffText, filePath, inlineComment.line)) {
-            console.warn('Inline comment line is not present in PR diff; falling back to PR comment on ' + filePath + ':' + inlineComment.line);
-            postFallbackInlineComment(scm, prNumber, filePath, inlineComment.line, commentText);
-            return true;
+            console.warn('Inline comment line is not present in PR diff; collecting fallback text for ' + filePath + ':' + inlineComment.line);
+            return postFallbackInlineComment(filePath, inlineComment.line, commentText);
         }
 
         scm.addInlineComment(
@@ -183,15 +180,14 @@ function postInlineComment(scm, prNumber, inlineComment, storyKey, workingDir) {
         );
 
         console.log('✅ Posted inline comment on ' + filePath + ':' + inlineComment.line);
-        return true;
+        return null;
     } catch (error) {
-        console.warn('Inline comment failed (line not in diff?), falling back to PR comment on ' + filePath + ':' + inlineComment.line);
+        console.warn('Inline comment failed (line not in diff?), collecting fallback text for ' + filePath + ':' + inlineComment.line);
         try {
-            postFallbackInlineComment(scm, prNumber, filePath, inlineComment.line, commentText);
-            return true;
+            return postFallbackInlineComment(filePath, inlineComment.line, commentText);
         } catch (fallbackError) {
-            console.error('Failed to post fallback PR comment for ' + filePath + ':', fallbackError);
-            return false;
+            console.error('Failed to build fallback text for ' + filePath + ':', fallbackError);
+            return null;
         }
     }
 }
@@ -359,10 +355,21 @@ function action(params) {
             }
             if (reviewData.inlineComments && reviewData.inlineComments.length > 0) {
                 console.log('Posting ' + reviewData.inlineComments.length + ' inline comment(s)');
+                var fallbackComments = [];
                 reviewData.inlineComments.forEach(function(ic, index) {
                     console.log('Processing inline comment ' + (index + 1) + '/' + reviewData.inlineComments.length);
-                    postInlineComment(scm, prNumber, ic, storyKey, workingDir);
+                    var fallback = postInlineComment(scm, prNumber, ic, storyKey, workingDir);
+                    if (fallback) fallbackComments.push(fallback);
                 });
+                if (fallbackComments.length > 0) {
+                    var groupedBody = '## Review feedback (lines not shown in diff)\n\n' + fallbackComments.join('\n\n---\n\n');
+                    try {
+                        scm.addComment(prNumber, groupedBody);
+                        console.log('✅ Posted ' + fallbackComments.length + ' fallback inline comment(s) as one grouped PR comment');
+                    } catch (e) {
+                        console.warn('Failed to post grouped fallback comment:', e);
+                    }
+                }
             }
             resolveApprovedThreads(scm, prNumber, reviewData.resolvedThreadIds);
 

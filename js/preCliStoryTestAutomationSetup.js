@@ -274,7 +274,9 @@ function writePrContext(storyKey, scm, pr) {
                         file: t.path,
                         line: t.line,
                         comment: t.body,
-                        severity: 'important'
+                        severity: 'important',
+                        threadId: t.threadId || t.id || null,
+                        inReplyToId: t.rootCommentId || t.id || null
                     };
                 });
             if (replies.length > 0) {
