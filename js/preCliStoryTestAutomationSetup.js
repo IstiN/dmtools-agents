@@ -197,9 +197,9 @@ function writeLinkedTestCases(storyKey, testCases) {
     }
 }
 
-function findTestPr(scm, storyKey) {
+function findTestPr(scm, storyKey, config) {
     try {
-        var branchName = configLoader.formatBranchName('test/', storyKey);
+        var branchName = configLoader.formatBranchName(config.git.branchPrefix.test, storyKey);
         var openPRs = scm.listPrs('open') || [];
         return openPRs.find(function(pr) {
             return pr.head && pr.head.ref && pr.head.ref === branchName;
@@ -326,7 +326,7 @@ function action(params) {
         // Step 3: Fetch PR context for rework when an open test PR exists
         try {
             var scm = scmModule.createScm(projectConfig);
-            var pr = findTestPr(scm, storyKey);
+            var pr = findTestPr(scm, storyKey, config);
             if (pr && pr.number) {
                 console.log('Open test PR found:', pr.number, '— fetching diff and discussions');
                 writePrContext(storyKey, scm, pr);
