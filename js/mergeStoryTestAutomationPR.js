@@ -108,6 +108,12 @@ function finalizeAlreadyMergedPR(params, scm, storyKey, pr, testCaseType, custom
     } catch (e) {
         console.warn('Could not remove test_pr_merged label:', e);
     }
+    try {
+        jira_add_label({ key: storyKey, label: LABELS.TEST_PR_FINALIZED });
+        console.log('Added test_pr_finalized label to', storyKey);
+    } catch (e) {
+        console.warn('Could not add test_pr_finalized label:', e);
+    }
 
     releaseLock(storyKey, customParams);
 
@@ -252,6 +258,12 @@ function action(params) {
             jira_remove_label({ key: storyKey, label: LABELS.TEST_PR_MERGED });
         } catch (e) {
             console.warn('Could not remove test_pr_merged label:', e);
+        }
+        try {
+            jira_add_label({ key: storyKey, label: LABELS.TEST_PR_FINALIZED });
+            console.log('Added test_pr_finalized label to', storyKey);
+        } catch (e) {
+            console.warn('Could not add test_pr_finalized label:', e);
         }
 
         releaseLock(storyKey, customParams);
