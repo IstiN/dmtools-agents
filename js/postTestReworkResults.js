@@ -346,27 +346,36 @@ function postThreadReplies(scm, pullRequestId) {
     if (replies.length === 0) return 0;
 
     let posted = 0;
+    let resolved = 0;
     replies.forEach(function(item) {
-        try {
-            scm.replyToThread(pullRequestId, {
-                rootCommentId: item.inReplyToId,
-                threadId: item.threadId || item.discussionId
-            }, item.reply || '✅ Addressed.');
-            posted++;
-        } catch (e) {
-            console.warn('Failed to reply to comment #' + item.inReplyToId + ':', e);
+        const thread = {
+            rootCommentId: item.inReplyToId,
+            threadId: item.threadId || item.discussionId
+        };
+        const replyText = item.reply ? String(item.reply).trim() : '';
+
+        // Only post a reply when the agent explicitly wrote one. Default "✅ Addressed."
+        // replies to every unresolved thread quickly exhaust GitHub's secondary rate limit.
+        if (replyText) {
+            try {
+                scm.replyToThread(pullRequestId, thread, replyText);
+                posted++;
+            } catch (e) {
+                console.warn('Failed to reply to comment #' + item.inReplyToId + ':', e);
+            }
         }
 
         if (item.threadId) {
             try {
                 scm.resolveThread(pullRequestId, { threadId: item.threadId });
+                resolved++;
             } catch (e) {
                 console.warn('Failed to resolve thread', item.threadId + ':', e);
             }
         }
     });
 
-    console.log('Posted ' + posted + '/' + replies.length + ' thread replies');
+    console.log('Resolved ' + resolved + '/' + replies.length + ' review thread(s); posted ' + posted + ' explicit reply(ies)');
     return posted;
 }
 

@@ -20,6 +20,21 @@ function cleanCommandOutput(output) {
     }).join('\n').trim();
 }
 
+var MAX_DISCUSSION_THREADS = 100;
+
+function trimDiscussionsMarkdown(markdown, maxThreads) {
+    if (!markdown || maxThreads <= 0) return markdown;
+    var marker = '\n### Thread ';
+    var idx = markdown.indexOf(marker);
+    if (idx === -1) return markdown;
+    var header = markdown.substring(0, idx);
+    var rest = markdown.substring(idx + marker.length);
+    var sections = rest.split(marker);
+    if (sections.length <= maxThreads) return markdown;
+    var kept = sections.slice(sections.length - maxThreads);
+    return header + marker + kept.join(marker);
+}
+
 function runGit(command, workingDir) {
     var args = { command: command };
     if (workingDir) args.workingDirectory = workingDir;
@@ -239,11 +254,20 @@ function writePrContext(storyKey, scm, pr) {
     try {
         var discussions = scm.fetchDiscussions(pr.number);
         if (discussions && discussions.markdown) {
-            file_write({ path: inputDir + '/pr_discussions.md', content: discussions.markdown });
+            var trimmedMarkdown = trimDiscussionsMarkdown(discussions.markdown, MAX_DISCUSSION_THREADS);
+            if (trimmedMarkdown !== discussions.markdown) {
+                console.warn('⚠️ PR discussions markdown truncated from full history to last ' + MAX_DISCUSSION_THREADS + ' threads to keep agent context bounded');
+            }
+            file_write({ path: inputDir + '/pr_discussions.md', content: trimmedMarkdown });
             console.log('✅ Wrote pr_discussions.md');
         }
         if (discussions && discussions.rawThreads && discussions.rawThreads.threads) {
-            var replies = discussions.rawThreads.threads
+            var rawThreads = discussions.rawThreads.threads;
+            if (rawThreads.length > MAX_DISCUSSION_THREADS) {
+                console.warn('⚠️ PR discussions raw threads truncated from ' + rawThreads.length + ' to last ' + MAX_DISCUSSION_THREADS + ' for review replies');
+                rawThreads = rawThreads.slice(rawThreads.length - MAX_DISCUSSION_THREADS);
+            }
+            var replies = rawThreads
                 .filter(function(t) { return !t.resolved && t.body; })
                 .map(function(t) {
                     return {
