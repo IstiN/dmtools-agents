@@ -90,6 +90,8 @@ flowchart TD
 
 **IMPORTANT** Your task is to write an enhanced story-ready Acceptance Criteria field using the configured formatting rules. User request is in the `input` folder; read all files there and do what is requested.
 
+**You MUST follow the Acceptance Criteria Quality Rules defined in `acceptance_criteria_quality.md` throughout this entire task. These rules take priority over any default patterns.**
+
 Always read these files first if present:
 - `request.md` — full ticket details and requirements
 - `comments.md` — ticket comment history with context and prior decisions

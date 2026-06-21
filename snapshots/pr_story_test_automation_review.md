@@ -124,7 +124,7 @@ flowchart TD
 flowchart TD
     F1["outputs/response.md — tracker-agnostic Markdown, under 20 lines, bullet-focused"]
     F2["Required sections: Summary, Correctness, Architecture, Code Quality, Framework Usage, Test Data, Recommendation"]
-    F3["outputs/pr_review.json — valid JSON with recommendation, summary, inlineComments, issueCounts"]
+    F3["outputs/pr_review.json — valid JSON with recommendation (APPROVE|BLOCK|REQUEST_CHANGES), summary, inlineComments, issueCounts"]
     F4["Each inline comment: path, line, startLine, side, body, severity (BLOCKING|IMPORTANT|SUGGESTION)"]
     F5["outputs/pr_review_general.md — max 1-2 paragraphs, factual, no essays"]
     F6["If ci_failures.md present → include each failure as 🚨 BLOCKING"]
@@ -155,6 +155,17 @@ Example PR test automation review outputs — keep concise:
 }
 ```
 
+### outputs/pr_review.json (APPROVE example)
+```json
+{
+  "recommendation": "APPROVE",
+  "summary": "Test correctly exercises the ticket's acceptance criteria with self-sufficient data and proper architecture.",
+  "generalComment": "outputs/pr_review_general.md",
+  "inlineComments": [],
+  "issueCounts": {"blocking":0,"important":0,"suggestions":0}
+}
+```
+
 ### outputs/pr_review_general.md
 ```markdown
 ## Automated Test PR Review — BLOCK
@@ -170,7 +181,21 @@ Example PR test automation review outputs — keep concise:
 
 ---
 
-### [9] `./agents/prompts/story_test_automation_review_prompt.md`
+### [9] `./agents/instructions/scm/github_pr_review_format.md`
+
+# GitHub PR review format
+
+- `outputs/pr_review_general.md` uses GitHub Markdown.
+- `inlineComments[].body` uses GitHub Markdown.
+- Use `path`, `line`, optional `startLine`, and `side`.
+- Use `side: "RIGHT"` for new code unless commenting on removed code.
+- `resolvedThreadIds` contains GitHub review thread IDs from `pr_discussions_raw.json`.
+
+
+
+---
+
+### [10] `./agents/prompts/story_test_automation_review_prompt.md`
 
 > Role: Senior QA Engineer & Code Reviewer
 > Task: Review the bulk test automation Pull Request for a Story.
@@ -235,10 +260,34 @@ You MUST write the following files before finishing:
 - If `pr_discussions.md` is present and contains resolved review threads, include their IDs in `resolvedThreadIds`.
 - Validate `outputs/pr_review.json` as parseable JSON before stopping.
 
+## Inline comment line mapping (CRITICAL)
+
+Every `inlineComments` entry MUST correspond to an actual line in `input/{STORY_KEY}/pr_diff.txt`. Review comments that are not anchored to the diff are posted as noisy top-level PR comments instead of review threads.
+
+1. Read `input/{STORY_KEY}/pr_diff.txt` before choosing line numbers.
+2. For each issue, pick the exact line number shown in the diff hunk for that file.
+   - For **new or modified files**, use the new/resulting line number and `side: "RIGHT"`.
+   - For **deleted files**, use the original line number from the `--- a/...` side and `side: "LEFT"`.
+   - For **removed lines** inside a modified file, use the original line number and `side: "LEFT"`.
+3. If an issue applies to a whole file and no specific diff line exists (e.g. a missing file), put it in `outputs/pr_review_general.md` instead of creating a generic `line: 1` inline comment.
+4. Do NOT use `line: 1` as a default. If you cannot find a matching diff line, move the comment to the general comment or omit it.
+5. Prefer fewer, high-quality inline comments over dozens of generic line-1 comments.
+
+Example:
+```json
+{
+  "path": "testing/tests/TS-123/test_ts_123.py",
+  "line": 45,
+  "side": "RIGHT",
+  "body": "🚨 BLOCKING: ...",
+  "severity": "BLOCKING"
+}
+```
+
 
 ---
 
-### [10] `./agents/instructions/common/dmtools_cli.md`
+### [11] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 
@@ -276,7 +325,7 @@ flowchart TD
 
 ---
 
-### [11] `./agents/prompts/bash_tools.md`
+### [12] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD

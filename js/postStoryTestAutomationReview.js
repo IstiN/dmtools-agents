@@ -15,6 +15,7 @@ const autoStart = require('./common/autoStart.js');
 const configLoader = require('./configLoader.js');
 const outputFiles = require('./common/outputFiles.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+const prReviewComments = require('./postPRReviewComments.js');
 
 function readFile(path) {
     return outputFiles.readOutputFile(path, {});
@@ -86,57 +87,7 @@ function resolveCustomParams(params, config) {
     return merged;
 }
 
-function isLinePresentInDiff(diffText, filePath, targetLine) {
-    if (!diffText || !filePath || !targetLine) return true;
-
-    var lineNumber = parseInt(targetLine, 10);
-    if (!lineNumber) return true;
-
-    var currentFile = null;
-    var newLine = null;
-    var lines = String(diffText).split(/\r?\n/);
-
-    for (var i = 0; i < lines.length; i++) {
-        var line = lines[i];
-
-        if (line.indexOf('diff --git ') === 0) {
-            currentFile = null;
-            newLine = null;
-            continue;
-        }
-
-        if (line.indexOf('+++ b/') === 0) {
-            currentFile = line.substring('+++ b/'.length);
-            if (currentFile === '/dev/null') currentFile = null;
-            continue;
-        }
-
-        if (currentFile !== filePath) continue;
-
-        var hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-        if (hunk) {
-            newLine = parseInt(hunk[1], 10);
-            continue;
-        }
-
-        if (newLine === null) continue;
-
-        if (line.indexOf('+') === 0 || line.indexOf(' ') === 0) {
-            if (newLine === lineNumber) return true;
-            newLine++;
-        } else if (line.indexOf('-') === 0) {
-            continue;
-        } else if (line === '\\ No newline at end of file') {
-            continue;
-        } else {
-            newLine++;
-        }
-    }
-
-    return false;
-}
-
-function postFallbackInlineComment(filePath, line, commentText) {
+function fallbackInlineMarkdown(filePath, line, commentText) {
     var lineRef = filePath + (line ? ':' + line : '');
     return '📍 **`' + lineRef + '`**\n\n' + commentText;
 }
@@ -166,25 +117,37 @@ function postInlineComment(scm, prNumber, inlineComment, storyKey, workingDir) {
 
         if (diffText === null || diffText === '') {
             console.warn('PR diff unavailable; collecting fallback text for ' + filePath + ':' + inlineComment.line);
-            return postFallbackInlineComment(filePath, inlineComment.line, commentText);
+            return fallbackInlineMarkdown(filePath, inlineComment.line, commentText);
         }
 
-        if (!isLinePresentInDiff(diffText, filePath, inlineComment.line)) {
+        var requestedSide = inlineComment.side || null;
+        var lineInfo = prReviewComments.parseDiffLineInfo(diffText, filePath, inlineComment.line);
+
+        // If the AI did not specify a side, infer it from the diff so deleted files get LEFT.
+        if (!requestedSide) {
+            if (lineInfo.present) {
+                requestedSide = lineInfo.side;
+            } else if (prReviewComments.isFileDeletedInDiff(diffText, filePath)) {
+                requestedSide = 'LEFT';
+            }
+        }
+
+        if (!lineInfo.present) {
             console.warn('Inline comment line is not present in PR diff; collecting fallback text for ' + filePath + ':' + inlineComment.line);
-            return postFallbackInlineComment(filePath, inlineComment.line, commentText);
+            return fallbackInlineMarkdown(filePath, inlineComment.line, commentText);
         }
 
         scm.addInlineComment(
             prNumber, filePath, inlineComment.line, commentText,
-            inlineComment.startLine || null, inlineComment.side || null
+            inlineComment.startLine || null, requestedSide
         );
 
         console.log('✅ Posted inline comment on ' + filePath + ':' + inlineComment.line);
         return null;
     } catch (error) {
-        console.warn('Inline comment failed (line not in diff?), collecting fallback text for ' + filePath + ':' + inlineComment.line);
+        console.warn('Inline comment failed, collecting fallback text for ' + filePath + ':' + inlineComment.line, error.message || error);
         try {
-            return postFallbackInlineComment(filePath, inlineComment.line, commentText);
+            return fallbackInlineMarkdown(filePath, inlineComment.line, commentText);
         } catch (fallbackError) {
             console.error('Failed to build fallback text for ' + filePath + ':', fallbackError);
             return null;
@@ -192,9 +155,37 @@ function postInlineComment(scm, prNumber, inlineComment, storyKey, workingDir) {
     }
 }
 
-function postGeneralComment(scm, prNumber, generalComment, storyKey, workingDir) {
+function postGeneralComment(scm, prNumber, generalComment, storyKey, workingDir, fallbackComments) {
     try {
-        const text = readFile(generalComment);
+        var text = '';
+        var generalPath = null;
+        if (generalComment) {
+            var detailed = outputFiles.readOutputFileDetailed(generalComment, {
+                ticketKey: storyKey,
+                workingDir: workingDir
+            });
+            if (detailed) {
+                text = detailed.content || '';
+                generalPath = detailed.path;
+            }
+        }
+
+        if (fallbackComments && fallbackComments.length > 0) {
+            var fallbackSection = '\n\n## Review feedback (lines not shown in diff)\n\n' +
+                fallbackComments.join('\n\n---\n\n');
+            text = (text || '') + fallbackSection;
+            // Persist the appended version back to the general comment file so the
+            // single PR comment contains everything and we avoid extra issue comments.
+            if (generalPath) {
+                try {
+                    file_write({ path: generalPath, content: text });
+                } catch (writeErr) {
+                    console.warn('Could not write appended general comment back to file:', writeErr.message || writeErr);
+                }
+            }
+        }
+
+        text = (text || '').trim();
         if (text) {
             scm.addComment(prNumber, text);
             console.log('✅ Posted general review comment to PR');
@@ -202,19 +193,6 @@ function postGeneralComment(scm, prNumber, generalComment, storyKey, workingDir)
     } catch (e) {
         console.warn('Failed to post general comment:', e);
     }
-}
-
-function resolveApprovedThreads(scm, prNumber, resolvedThreadIds) {
-    if (!resolvedThreadIds || resolvedThreadIds.length === 0) return;
-    console.log('Resolving ' + resolvedThreadIds.length + ' fixed review thread(s)...');
-    resolvedThreadIds.forEach(function(threadId) {
-        try {
-            scm.resolveThread(prNumber, { threadId: threadId });
-            console.log('✅ Resolved thread', threadId);
-        } catch (e) {
-            console.warn('Failed to resolve thread ' + threadId + ':', e.message || e);
-        }
-    });
 }
 
 function getRepoInfo(config) {
@@ -350,28 +328,21 @@ function action(params) {
         if (prNumber) {
             resolveExistingAgentReviewThreads(scm, prNumber, repoInfo);
 
-            if (reviewData.generalComment) {
-                postGeneralComment(scm, prNumber, reviewData.generalComment, storyKey, workingDir);
-            }
+            var fallbackComments = [];
             if (reviewData.inlineComments && reviewData.inlineComments.length > 0) {
                 console.log('Posting ' + reviewData.inlineComments.length + ' inline comment(s)');
-                var fallbackComments = [];
                 reviewData.inlineComments.forEach(function(ic, index) {
                     console.log('Processing inline comment ' + (index + 1) + '/' + reviewData.inlineComments.length);
                     var fallback = postInlineComment(scm, prNumber, ic, storyKey, workingDir);
                     if (fallback) fallbackComments.push(fallback);
                 });
-                if (fallbackComments.length > 0) {
-                    var groupedBody = '## Review feedback (lines not shown in diff)\n\n' + fallbackComments.join('\n\n---\n\n');
-                    try {
-                        scm.addComment(prNumber, groupedBody);
-                        console.log('✅ Posted ' + fallbackComments.length + ' fallback inline comment(s) as one grouped PR comment');
-                    } catch (e) {
-                        console.warn('Failed to post grouped fallback comment:', e);
-                    }
-                }
             }
-            resolveApprovedThreads(scm, prNumber, reviewData.resolvedThreadIds);
+
+            // Post the general comment AFTER inline comments so any fallback items can be appended.
+            if (reviewData.generalComment || fallbackComments.length > 0) {
+                postGeneralComment(scm, prNumber, reviewData.generalComment, storyKey, workingDir, fallbackComments);
+            }
+            prReviewComments.resolveApprovedThreads(scm, prNumber, reviewData.resolvedThreadIds);
 
             if (isApproved) {
                 try {

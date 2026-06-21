@@ -305,13 +305,16 @@ function postGeneralComment(scm, pullRequestId, commentPath, ticketKey, workingD
     }
 }
 
-function isLinePresentInDiff(diffText, filePath, targetLine) {
-    if (!diffText || !filePath || !targetLine) return true;
+function parseDiffLineInfo(diffText, filePath, targetLine) {
+    // Returns { present: true/false, side: 'RIGHT'|'LEFT'|null }.
+    if (!diffText || !filePath || !targetLine) return { present: true, side: null };
 
     var lineNumber = parseInt(targetLine, 10);
-    if (!lineNumber) return true;
+    if (!lineNumber) return { present: true, side: null };
 
     var currentFile = null;
+    var oldFile = null;
+    var oldLine = null;
     var newLine = null;
     var lines = String(diffText).split(/\r?\n/);
 
@@ -320,39 +323,92 @@ function isLinePresentInDiff(diffText, filePath, targetLine) {
 
         if (line.indexOf('diff --git ') === 0) {
             currentFile = null;
+            oldFile = null;
+            oldLine = null;
             newLine = null;
+            continue;
+        }
+
+        if (line.indexOf('--- a/') === 0) {
+            oldFile = line.substring('--- a/'.length);
+            if (oldFile === '/dev/null') oldFile = null;
             continue;
         }
 
         if (line.indexOf('+++ b/') === 0) {
             currentFile = line.substring('+++ b/'.length);
-            if (currentFile === '/dev/null') currentFile = null;
+            continue;
+        }
+        if (line.indexOf('+++ /dev/null') === 0) {
+            // Deleted files have +++ /dev/null; use the old path so comments can be anchored.
+            currentFile = oldFile;
             continue;
         }
 
         if (currentFile !== filePath) continue;
 
-        var hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+        var hunk = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
         if (hunk) {
-            newLine = parseInt(hunk[1], 10);
+            oldLine = parseInt(hunk[1], 10);
+            newLine = parseInt(hunk[2], 10);
             continue;
         }
 
-        if (newLine === null) continue;
+        if (oldLine === null || newLine === null) continue;
 
-        if (line.indexOf('+') === 0 || line.indexOf(' ') === 0) {
-            if (newLine === lineNumber) return true;
+        if (line.indexOf('+') === 0) {
+            if (newLine === lineNumber) return { present: true, side: 'RIGHT' };
             newLine++;
         } else if (line.indexOf('-') === 0) {
-            continue;
+            if (oldLine === lineNumber) return { present: true, side: 'LEFT' };
+            oldLine++;
+        } else if (line.indexOf(' ') === 0) {
+            // Context lines exist on both sides; prefer RIGHT (new version).
+            if (newLine === lineNumber) return { present: true, side: 'RIGHT' };
+            if (oldLine === lineNumber) return { present: true, side: 'LEFT' };
+            oldLine++;
+            newLine++;
         } else if (line === '\\ No newline at end of file') {
             continue;
         } else {
+            oldLine++;
             newLine++;
         }
     }
 
+    return { present: false, side: null };
+}
+
+function isFileDeletedInDiff(diffText, filePath) {
+    if (!diffText || !filePath) return false;
+    var lines = String(diffText).split(/\r?\n/);
+    var currentFile = null;
+    var oldFile = null;
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (line.indexOf('--- a/') === 0) {
+            oldFile = line.substring('--- a/'.length);
+            if (oldFile === '/dev/null') oldFile = null;
+        } else if (line.indexOf('+++ b/') === 0) {
+            currentFile = line.substring('+++ b/'.length);
+        } else if (line.indexOf('+++ /dev/null') === 0) {
+            currentFile = oldFile;
+        } else if (line.indexOf('diff --git ') === 0) {
+            currentFile = null;
+            oldFile = null;
+        }
+        if (currentFile === filePath && line.indexOf('deleted file mode') === 0) {
+            return true;
+        }
+    }
     return false;
+}
+
+function isLinePresentInDiff(diffText, filePath, targetLine, side) {
+    var info = parseDiffLineInfo(diffText, filePath, targetLine);
+    if (!info.present) return false;
+    if (!side) return true;
+    return info.side === side;
 }
 
 function postFallbackInlineComment(scm, pullRequestId, filePath, line, commentText) {
@@ -393,15 +449,31 @@ function postInlineComment(scm, pullRequestId, inlineComment, ticketKey, working
             return true;
         }
 
-        if (!isLinePresentInDiff(diffText, filePath, inlineComment.line)) {
+        var requestedSide = inlineComment.side || null;
+        var lineInfo = parseDiffLineInfo(diffText, filePath, inlineComment.line);
+        if (!requestedSide) {
+            if (lineInfo.present) {
+                requestedSide = lineInfo.side;
+            } else if (isFileDeletedInDiff(diffText, filePath)) {
+                requestedSide = 'LEFT';
+            }
+        }
+
+        if (!lineInfo.present) {
             console.warn('Inline comment line is not present in PR diff; falling back to PR comment on ' + filePath + ':' + inlineComment.line);
+            postFallbackInlineComment(scm, pullRequestId, filePath, inlineComment.line, commentText);
+            return true;
+        }
+
+        if (inlineComment.side && lineInfo.side !== inlineComment.side) {
+            console.warn('Inline comment line is not present on requested side ' + inlineComment.side + '; falling back to PR comment on ' + filePath + ':' + inlineComment.line);
             postFallbackInlineComment(scm, pullRequestId, filePath, inlineComment.line, commentText);
             return true;
         }
 
         scm.addInlineComment(
             pullRequestId, filePath, inlineComment.line, commentText,
-            inlineComment.startLine || null, inlineComment.side || null
+            inlineComment.startLine || null, requestedSide
         );
 
         console.log('✅ Posted inline comment on ' + filePath + ':' + inlineComment.line);
@@ -898,5 +970,15 @@ function action(params) {
 
 // Export for dmtools standalone execution
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, resolveCustomParams, isLinePresentInDiff, countReviewThreads };
+    module.exports = {
+        action,
+        resolveCustomParams,
+        isLinePresentInDiff,
+        countReviewThreads,
+        postInlineComment,
+        postGeneralComment,
+        resolveApprovedThreads,
+        parseDiffLineInfo,
+        isFileDeletedInDiff
+    };
 }

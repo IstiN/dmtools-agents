@@ -23,6 +23,7 @@
       "./agents/instructions/pr_test_automation_review/output_rules.md",
       "./agents/instructions/pr_test_automation_review/formatting_rules.md",
       "./agents/instructions/pr_test_automation_review/few_shots.md",
+      "./agents/instructions/scm/github_pr_review_format.md",
       "./agents/prompts/bug_test_automation_review_prompt.md",
       "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md"
