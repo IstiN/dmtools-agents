@@ -29,6 +29,23 @@ suite('pullRequest helper', function() {
         assert.notContains(title, '`', 'removes backtick');
     });
 
+    test('sanitizes commit messages and escapes quotes', function() {
+        var pr = loadPullRequestHelper();
+        var msg = pr.sanitizeCommitMessage("TS-1 Use <repo> and --header \"bad\" -> ok\nline");
+
+        assert.notContains(msg, '<', 'removes less-than');
+        assert.notContains(msg, '>', 'removes greater-than');
+        assert.notContains(msg, '|', 'removes pipe');
+        assert.notContains(msg, '&', 'removes ampersand');
+        assert.notContains(msg, ';', 'removes semicolon');
+        assert.notContains(msg, '$', 'removes dollar');
+        assert.notContains(msg, '`', 'removes backtick');
+        assert.notContains(msg, '\n', 'removes newline');
+        assert.contains(msg, '\\"bad\\"', 'escapes internal quotes');
+        assert.contains(msg, '→ ok', 'keeps readable arrow');
+        assert.equal(msg.indexOf('  '), -1, 'collapses whitespace');
+    });
+
     test('creates PR from temp body file and returns URL', function() {
         var commands = [];
         var writes = [];

@@ -26,6 +26,19 @@ function sanitizeTitle(title) {
         .trim();
 }
 
+/** Escape a string so it can safely be placed inside a double-quoted shell argument.
+ *  CliCommandExecutor rejects: ; \n \r ` $(...) ${...} && || | > <
+ *  Jira summaries often contain angle brackets, arrows, etc. */
+function sanitizeCommitMessage(message) {
+    return String(message || '')
+        .replace(/->/g, '→')
+        .replace(/<-/g, '←')
+        .replace(/"/g, '\\"')
+        .replace(/[<>\`\|&;$\r\n]/g, ' ')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+}
+
 function extractPrUrl(output, runCommand, branchName, workingDir) {
     var cleaned = cleanCommandOutput(output);
     var urlMatch = cleaned.match(/https:\/\/(?:github\.com|[^/\s]*gitlab[^/\s]*|git\.epam\.com)\/[^\s]+/);
@@ -424,6 +437,7 @@ function createPullRequest(options) {
 module.exports = {
     cleanCommandOutput: cleanCommandOutput,
     sanitizeTitle: sanitizeTitle,
+    sanitizeCommitMessage: sanitizeCommitMessage,
     buildOriginFetchCommand: buildOriginFetchCommand,
     readTrackedStatus: readTrackedStatus,
     readStagedDiffStat: readStagedDiffStat,

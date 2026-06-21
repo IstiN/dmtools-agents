@@ -223,7 +223,7 @@ function performGitOperations(branchName, commitMessage, workingDir, testFilesPa
         }
 
         console.log('Committing...');
-        runInRepo('git commit -m "' + commitMessage.replace(/"/g, '\\"') + '"', workingDir);
+        runInRepo('git commit -m "' + prHelper.sanitizeCommitMessage(commitMessage) + '"', workingDir);
 
         console.log('Pushing to remote...');
         fetchRemoteBranch(branchName, workingDir);
