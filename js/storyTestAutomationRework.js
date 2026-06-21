@@ -6,7 +6,7 @@
 var configLoader = require('./configLoader.js');
 var autoStart = require('./common/autoStart.js');
 var prHelper = require('./common/pullRequest.js');
-const { STATUSES } = require('./config.js');
+const { STATUSES, LABELS } = require('./config.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
 function smLabelForContext(contextId) {
@@ -229,10 +229,18 @@ function action(params) {
     function releaseLock() {
         releaseWipLock();
         try {
-            const { LABELS } = require('./config.js');
             jira_remove_label({ key: storyKey, label: LABELS.TEST_PR_REWORK_NEEDED });
             console.log('✅ Removed test_pr_rework_needed label');
         } catch (e) {}
+
+        // The review agent adds this label to both Jira and the GitHub PR,
+        // so the rework agent must remove it from both places.
+        if (pr && pr.number) {
+            try {
+                scm.removeLabel(pr.number, LABELS.TEST_PR_REWORK_NEEDED);
+                console.log('✅ Removed test_pr_rework_needed label from GitHub PR');
+            } catch (e) {}
+        }
     }
 
     try {
