@@ -115,7 +115,7 @@ suite('developBugAndCreatePR', function() {
         );
     });
 
-    test('rejects already_fixed output when CodeGraph was not used', function() {
+    test('accepts already_fixed output without CodeGraph and moves bug to Done', function() {
         var loaded = loadDevelopBugAndCreatePR({
             file_read: function(args) {
                 if (args.path === 'outputs/already_fixed.json') {
@@ -144,11 +144,11 @@ suite('developBugAndCreatePR', function() {
         });
 
         assert.equal(result.success, true);
-        assert.equal(result.path, 'already_fixed_without_codegraph');
+        assert.equal(result.path, 'already_fixed');
         assert.deepEqual(loaded.moves, [
-            { key: 'TS-1303', statusName: 'Ready For Development' }
+            { key: 'TS-1303', statusName: 'Done' }
         ]);
-        assert.contains(loaded.comments[0].comment, 'Needs CodeGraph Verification');
+        assert.contains(loaded.comments[0].comment, 'No CodeGraph usage was recorded');
         assert.deepEqual(loaded.removed, [
             { key: 'TS-1303', label: 'bug_development_wip' },
             { key: 'TS-1303', label: 'sm_bug_development_triggered' }
@@ -223,7 +223,7 @@ suite('developBugAndCreatePR', function() {
         assert.equal(result.success, true);
         assert.equal(result.path, 'already_fixed');
         assert.deepEqual(loaded.moves, [
-            { key: 'TS-1303', statusName: 'Merged' }
+            { key: 'TS-1303', statusName: 'Done' }
         ]);
         assert.contains(loaded.comments[0].comment, 'Bug Already Fixed');
     });
