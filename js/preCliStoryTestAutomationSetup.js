@@ -2,12 +2,16 @@
  * Pre-CLI Story Test Automation Setup Action
  * 1. Fetches all linked Test Cases for the Story.
  * 2. Writes input/{STORY_KEY}/linked_test_cases.json and .md.
- * 3. Checks out test/{STORY_KEY} branch aligned with main.
+ * 3. Checks out test/{STORY_KEY} branch and keeps it synced with origin/main:
+ *    - if the branch was already merged → delete it and recreate from fresh main;
+ *    - if it has unmerged test work → merge origin/main into it;
+ *    - on merge conflicts → write merge_conflicts.md + pr_diff.txt so the agent can resolve them.
  */
 
 var configLoader = require('./configLoader.js');
 var prHelper = require('./common/pullRequest.js');
 var scmModule = require('./common/scm.js');
+var gh = require('./common/githubHelpers.js');
 const { STATUSES, resolveStatuses } = require('./config.js');
 
 function cleanCommandOutput(output) {
@@ -59,21 +63,6 @@ function writeBranchConflictGuidance(storyKey, branchName, baseBranch, details) 
     }
 }
 
-function branchHasUniquePatches(baseBranch, workingDir) {
-    try {
-        var cherry = cleanCommandOutput(runGit('git cherry origin/' + baseBranch + ' HEAD', workingDir) || '');
-        if (!cherry.trim()) return false;
-        var lines = cherry.split('\n');
-        for (var i = 0; i < lines.length; i++) {
-            if (lines[i].trim().indexOf('+') === 0) return true;
-        }
-        return false;
-    } catch (e) {
-        console.warn('Could not inspect unique test branch patches:', e);
-        return true;
-    }
-}
-
 function isAncestorRef(ancestor, descendant, workingDir) {
     try {
         var output = cleanCommandOutput(
@@ -86,39 +75,88 @@ function isAncestorRef(ancestor, descendant, workingDir) {
     }
 }
 
-function findMergeBase(left, right, workingDir) {
+function alignBranchWithBase(storyKey, branchName, baseBranch, workingDir, inputFolder) {
+    // Make sure remote refs are fresh before any merge/ancestor decision.
     try {
-        return cleanCommandOutput(runGit('bash agents/scripts/git-merge-base-or-empty.sh ' + left + ' ' + right, workingDir) || '');
+        runGit(prHelper.buildOriginFetchCommand('--prune'), workingDir);
     } catch (e) {
-        return '';
+        console.warn('Could not fetch remote branches during align:', e);
     }
-}
 
-function alignBranchWithBase(storyKey, branchName, baseBranch, workingDir) {
+    var localExists = cleanCommandOutput(
+        runGit('git branch --list "' + branchName + '"', workingDir) || ''
+    ).trim() !== '';
+    var remoteExists = cleanCommandOutput(
+        runGit('git ls-remote --heads origin ' + branchName, workingDir) || ''
+    ).trim() !== '';
+
+    if (!localExists && !remoteExists) {
+        console.log('Creating new test branch from', baseBranch + ':', branchName);
+        runGit('git checkout ' + baseBranch, workingDir);
+        runGit('git pull origin ' + baseBranch, workingDir);
+        runGit('git checkout -b ' + branchName, workingDir);
+        return;
+    }
+
+    if (!localExists && remoteExists) {
+        console.log('Checking out remote test branch:', branchName);
+        runGit('git checkout -b ' + branchName + ' origin/' + branchName, workingDir);
+    } else {
+        console.log('Switching to existing local test branch:', branchName);
+        runGit('git checkout ' + branchName, workingDir);
+    }
+
+    // Case 1: the test branch has already been merged into main.
+    // Drop the stale branch (local + remote) and create a fresh one from main.
     if (isAncestorRef('HEAD', 'origin/' + baseBranch, workingDir)) {
-        console.log('Test branch changes are already included in origin/' + baseBranch + ', resetting local branch:', branchName);
-        runGit('git reset --hard origin/' + baseBranch, workingDir);
+        console.log('Test branch ' + branchName + ' is already merged into origin/' + baseBranch + '; recreating from fresh ' + baseBranch);
+        runGit('git checkout ' + baseBranch, workingDir);
+        try {
+            runGit('git branch -D ' + branchName, workingDir);
+        } catch (e) {
+            console.warn('Could not delete local test branch:', e);
+        }
+        try {
+            runGit('git push origin --delete ' + branchName, workingDir);
+        } catch (e) {
+            console.warn('Could not delete remote test branch:', e);
+        }
+        runGit('git pull origin ' + baseBranch, workingDir);
+        runGit('git checkout -b ' + branchName, workingDir);
         return;
     }
 
-    if (!branchHasUniquePatches(baseBranch, workingDir)) {
-        console.log('Test branch has no unique patches versus origin/' + baseBranch + ', resetting local branch:', branchName);
-        runGit('git reset --hard origin/' + baseBranch, workingDir);
-        return;
+    // Case 2: branch has unmerged test work — always pull main into it.
+    console.log('Merging origin/' + baseBranch + ' into test branch ' + branchName);
+    var conflictFiles = gh.detectMergeConflicts(baseBranch, inputFolder, workingDir);
+    if (conflictFiles.length > 0) {
+        console.warn('⚠️ Merge conflicts detected after pulling origin/' + baseBranch + ':', conflictFiles.join(', '));
+        try {
+            var diff = gh.getPRDiff(baseBranch, branchName, workingDir);
+            if (diff) {
+                file_write({
+                    path: inputFolder + '/pr_diff.txt',
+                    content: gh.trimLargeTextForInput(diff, 'PR Diff', 12000)
+                });
+                console.log('✅ Wrote pr_diff.txt for conflict resolution');
+            }
+        } catch (e) {
+            console.warn('Could not write pr_diff.txt:', e);
+        }
+        writeBranchConflictGuidance(
+            storyKey,
+            branchName,
+            baseBranch,
+            'Merge conflicts after pulling origin/' + baseBranch + ' into ' + branchName + ':\n\n' +
+            conflictFiles.map(function(f) { return '* ' + f; }).join('\n') + '\n\n' +
+            'Resolve conflicts, stage the files, and continue. The post-action will commit and push the resolved test code.'
+        );
+    } else {
+        console.log('✅ Merged origin/' + baseBranch + ' cleanly into test branch ' + branchName);
     }
-
-    if (isAncestorRef('origin/' + baseBranch, 'HEAD', workingDir)) {
-        console.log('Test branch already contains origin/' + baseBranch + ':', branchName);
-        return;
-    }
-
-    console.warn('Test branch does not contain origin/' + baseBranch + ':', branchName);
-    var details = 'Branch is behind origin/' + baseBranch + '. The post-action will merge origin/main and auto-resolve conflicts inside the ticket test folder.';
-    writeBranchConflictGuidance(storyKey, branchName, baseBranch, details);
-    console.warn('Keeping divergent test branch ' + branchName + '; conflict guidance written for the agent.');
 }
 
-function checkoutBranch(storyKey, config) {
+function checkoutBranch(storyKey, config, inputFolder) {
     var branchName = configLoader.formatBranchName(config.git.branchPrefix.test, storyKey);
     var workingDir = config.workingDir || null;
     console.log('Setting up branch:', branchName);
@@ -136,30 +174,7 @@ function checkoutBranch(storyKey, config) {
         console.warn('Could not fetch remote branches:', e);
     }
 
-    var localBranches = cleanCommandOutput(
-        runGit('git branch --list "' + branchName + '"', workingDir) || ''
-    );
-
-    if (localBranches.trim()) {
-        console.log('Branch exists locally, aligning with base:', branchName);
-        runGit('git checkout ' + branchName, workingDir);
-        alignBranchWithBase(storyKey, branchName, config.git.baseBranch, workingDir);
-    } else {
-        var remoteBranches = cleanCommandOutput(
-            runGit('git ls-remote --heads origin ' + branchName, workingDir) || ''
-        );
-
-        if (remoteBranches.trim()) {
-            console.log('Branch exists on remote, checking out and aligning with base:', branchName);
-            runGit('git checkout -b ' + branchName + ' origin/' + branchName, workingDir);
-            alignBranchWithBase(storyKey, branchName, config.git.baseBranch, workingDir);
-        } else {
-            console.log('Creating new branch from', config.git.baseBranch + ':', branchName);
-            runGit('git checkout ' + config.git.baseBranch, workingDir);
-            runGit('git pull origin ' + config.git.baseBranch, workingDir);
-            runGit('git checkout -b ' + branchName, workingDir);
-        }
-    }
+    alignBranchWithBase(storyKey, branchName, config.git.baseBranch, workingDir, inputFolder);
 
     console.log('✅ Branch ready:', branchName);
 }
@@ -342,9 +357,9 @@ function action(params) {
 
         writeLinkedTestCases(storyKey, testCases);
 
-        // Step 2: Checkout test/{STORY_KEY} branch
+        // Step 2: Checkout test/{STORY_KEY} branch, always synced with origin/main
         try {
-            checkoutBranch(storyKey, config);
+            checkoutBranch(storyKey, config, folder);
         } catch (e) {
             console.error('Branch checkout failed (non-fatal):', e);
         }
