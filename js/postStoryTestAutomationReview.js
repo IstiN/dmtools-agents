@@ -352,6 +352,35 @@ function action(params) {
             }
         }
 
+        if (!isApproved && reviewData.inlineComments && reviewData.inlineComments.length > 0) {
+            try {
+                var feedback = 'h3. 📝 Test Automation Rework Feedback\n\n';
+                feedback += 'The following review comments must be addressed before the test PR can be merged:\n\n';
+                reviewData.inlineComments.forEach(function(ic, idx) {
+                    var path = ic.path || ic.file || '(file unknown)';
+                    var line = ic.line ? ':' + ic.line : '';
+                    var body = ic.body;
+                    if (!body && ic.comment) {
+                        try { body = readFile(ic.comment); } catch (e) {}
+                    }
+                    body = (body || '').trim();
+                    if (!body) return;
+                    feedback += '#' + (idx + 1) + '. *' + path + line + '*\n';
+                    feedback += '{code}' + body + '{code}\n\n';
+                });
+                if (reviewData.generalComment) {
+                    var generalBody = readFile(reviewData.generalComment);
+                    if (generalBody && generalBody.trim()) {
+                        feedback += 'h4. General comment\n\n{code}' + generalBody.trim() + '{code}\n';
+                    }
+                }
+                jira_post_comment({ key: storyKey, comment: feedback });
+                console.log('✅ Posted detailed rework feedback to Jira');
+            } catch (e) {
+                console.warn('Failed to post detailed rework feedback:', e);
+            }
+        }
+
         if (isApproved) {
             console.log('✅ Story PR approved — triggering merge agent');
             if (!triggerMerge(storyKey, config, customParams)) {
