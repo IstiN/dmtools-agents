@@ -7,6 +7,7 @@ function loadPrepareTestPRForReview(mocks) {
         jira_get_ticket: function() { return { fields: { status: { name: 'In Testing' } } }; },
         jira_move_to_status: function() {},
         jira_post_comment: function() {},
+        jira_add_label: function() {},
         cli_execute_command: function() { return ''; },
         file_read: function() { return null; },
         file_write: function() {}
@@ -61,10 +62,12 @@ suite('prepareTestPRForReview', function() {
         var statusMoves = [];
         var comments = [];
         var commands = [];
+        var labelsAdded = [];
 
         var module = loadPrepareTestPRForReview({
             jira_move_to_status: function(args) { statusMoves.push(args); },
             jira_post_comment: function(args) { comments.push(args.comment); },
+            jira_add_label: function(args) { labelsAdded.push(args); },
             cli_execute_command: function(opts) {
                 commands.push(opts.command);
                 if (opts.command.indexOf('git push origin --delete') === 0) return '';
@@ -102,6 +105,33 @@ suite('prepareTestPRForReview', function() {
         assert.deepEqual(statusMoves, [{ key: 'TS-90', statusName: 'In Testing' }]);
         assert.ok(commands.some(function(c) { return c === 'git push origin --delete test/TS-90'; }));
         assert.ok(comments.some(function(c) { return c.indexOf('already in main') !== -1; }));
+        assert.deepEqual(labelsAdded, [{ key: 'TS-90', label: 'test_pr_merged' }]);
+    });
+
+    test('adds test_pr_merged label when PR is already merged', function() {
+        var labelsAdded = [];
+        var statusMoves = [];
+
+        var module = loadPrepareTestPRForReview({
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            jira_add_label: function(args) { labelsAdded.push(args); },
+            scmMock: {
+                listPrs: function(state) {
+                    if (state === 'open') return [];
+                    return [{ number: 57, head: { ref: 'test/TS-92' }, html_url: 'https://github.com/IstiN/trackstate/pull/57', merged_at: '2026-06-21T14:00:00Z' }];
+                }
+            }
+        });
+
+        var result = module.action({
+            inputFolderPath: 'input/TS-92',
+            ticket: { key: 'TS-92', fields: { issuetype: { name: 'Story' } } },
+            jobParams: { customParams: {} }
+        });
+
+        assert.equal(result, false);
+        assert.deepEqual(labelsAdded, [{ key: 'TS-92', label: 'test_pr_merged' }]);
+        assert.deepEqual(statusMoves, [{ key: 'TS-92', statusName: 'In Testing' }]);
     });
 
     test('proceeds with review when PR has changed files', function() {

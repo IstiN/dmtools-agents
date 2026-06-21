@@ -103,6 +103,11 @@ function finalizeAlreadyMergedPR(params, scm, storyKey, pr, testCaseType, custom
     } catch (e) {
         console.warn('Could not remove pr_approved label:', e);
     }
+    try {
+        jira_remove_label({ key: storyKey, label: LABELS.TEST_PR_MERGED });
+    } catch (e) {
+        console.warn('Could not remove test_pr_merged label:', e);
+    }
 
     releaseLock(storyKey, customParams);
 
@@ -242,6 +247,11 @@ function action(params) {
             console.log('Removed pr_approved label from Jira Story');
         } catch (e) {
             console.warn('Could not remove pr_approved from Jira Story:', e);
+        }
+        try {
+            jira_remove_label({ key: storyKey, label: LABELS.TEST_PR_MERGED });
+        } catch (e) {
+            console.warn('Could not remove test_pr_merged label:', e);
         }
 
         releaseLock(storyKey, customParams);

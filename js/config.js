@@ -65,6 +65,7 @@ const LABELS = {
     AI_TEST_AUTOMATION: 'ai_test_automation',
     PR_APPROVED: 'pr_approved',             // Added to PR and ticket when AI approves, removed after merge attempt
     TEST_PR_REWORK_NEEDED: 'test_pr_rework_needed', // Added when test-automation review requests changes; removed after rework
+    TEST_PR_MERGED: 'test_pr_merged',       // Added when a test-automation PR is already merged but not yet finalized
     AI_TESTS_GENERATED: 'ai_tests_generated' // Added after TestCasesGenerator runs — guards against re-generation on re-approval
 };
 

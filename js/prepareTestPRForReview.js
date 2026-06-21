@@ -7,7 +7,7 @@
 var configLoader = require('./configLoader.js');
 const gh = require('./common/githubHelpers.js');
 var prHelper = require('./common/pullRequest.js');
-const { STATUSES } = require('./config.js');
+const { STATUSES, LABELS } = require('./config.js');
 
 function findTestPRForTicket(scm, ticketKey) {
     try {
@@ -75,8 +75,18 @@ function resolveFinalStatus(currentStatus, issueType) {
     return STATUSES.IN_TESTING;
 }
 
+function markTestPrMerged(ticketKey) {
+    try {
+        jira_add_label({ key: ticketKey, label: LABELS.TEST_PR_MERGED });
+        console.log('Added label', LABELS.TEST_PR_MERGED, 'to', ticketKey);
+    } catch (e) {
+        console.warn('Could not add test_pr_merged label:', e);
+    }
+}
+
 function finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType) {
     try {
+        markTestPrMerged(ticketKey);
         const ticket = jira_get_ticket({ key: ticketKey });
         const currentStatus = ticket && ticket.fields && ticket.fields.status
             ? ticket.fields.status.name
@@ -184,6 +194,7 @@ function action(params) {
         // If PR is already merged — move ticket to final status without re-reviewing
         if (found.merged) {
             const pr = found.pr;
+            markTestPrMerged(ticketKey);
             try {
                 const ticket = jira_get_ticket({ key: ticketKey });
                 const currentStatus = ticket && ticket.fields && ticket.fields.status
