@@ -112,4 +112,74 @@ suite('postPRReviewComments', function() {
         var scm = { fetchDiscussions: function() { return {}; } };
         assert.equal(mod.countReviewThreads(scm, 42), 0);
     });
+
+    test('detects submodule pointer changes in PR diff', function() {
+        var mod = loadPostPRReviewComments();
+        var diff =
+            'diff --git a/trackstate-setup b/trackstate-setup\n' +
+            'index bab3e4453..20a4bc2a1 160000\n' +
+            '--- a/trackstate-setup\n' +
+            '+++ b/trackstate-setup\n' +
+            '@@ -1 +1 @@\n' +
+            '-Subproject commit bab3e445305c78295b72f1fa4fe5e85f12055546\n' +
+            '+Subproject commit 20a4bc2a11e528d173e9fbe046b1ee31514e9259\n';
+
+        assert.equal(mod.isSubmodulePathInDiff(diff, 'trackstate-setup'), true);
+        assert.equal(mod.isSubmodulePathInDiff(diff, 'lib/example.dart'), false);
+    });
+
+    test('maps comments on submodule content to the submodule diff line as inline threads', function() {
+        var mod = loadPostPRReviewComments();
+        var diff =
+            'diff --git a/trackstate-setup b/trackstate-setup\n' +
+            'index bab3e4453..20a4bc2a1 160000\n' +
+            '--- a/trackstate-setup\n' +
+            '+++ b/trackstate-setup\n' +
+            '@@ -1 +1 @@\n' +
+            '-Subproject commit bab3e445305c78295b72f1fa4fe5e85f12055546\n' +
+            '+Subproject commit 20a4bc2a11e528d173e9fbe046b1ee31514e9259\n';
+        var calls = [];
+        var scm = {
+            getPrDiff: function() { return diff; },
+            addInlineComment: function(prId, path, line, text, startLine, side) {
+                calls.push({ prId: prId, path: path, line: line, text: text, startLine: startLine, side: side });
+            }
+        };
+
+        mod.postInlineComment(scm, 1930, { path: 'trackstate-setup', line: 7, body: 'description issue' }, 'TS-1383', null);
+
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].path, 'trackstate-setup');
+        assert.equal(calls[0].line, 1);
+        assert.equal(calls[0].side, 'RIGHT');
+        assert.equal(calls[0].startLine, null);
+        assert.ok(calls[0].text.indexOf('trackstate-setup:7') !== -1);
+        assert.ok(calls[0].text.indexOf('description issue') !== -1);
+    });
+
+    test('maps comments on files inside a submodule to the submodule diff line', function() {
+        var mod = loadPostPRReviewComments();
+        var diff =
+            'diff --git a/trackstate-setup b/trackstate-setup\n' +
+            'index bab3e4453..20a4bc2a1 160000\n' +
+            '--- a/trackstate-setup\n' +
+            '+++ b/trackstate-setup\n' +
+            '@@ -1 +1 @@\n' +
+            '-Subproject commit bab3e445305c78295b72f1fa4fe5e85f12055546\n' +
+            '+Subproject commit 20a4bc2a11e528d173e9fbe046b1ee31514e9259\n';
+        var calls = [];
+        var scm = {
+            getPrDiff: function() { return diff; },
+            addInlineComment: function(prId, path, line, text, startLine, side) {
+                calls.push({ prId: prId, path: path, line: line, text: text, startLine: startLine, side: side });
+            }
+        };
+
+        mod.postInlineComment(scm, 1930, { path: 'trackstate-setup/README.md', line: 12, body: 'readme issue' }, 'TS-1383', null);
+
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].path, 'trackstate-setup');
+        assert.equal(calls[0].line, 1);
+        assert.ok(calls[0].text.indexOf('trackstate-setup/README.md:12') !== -1);
+    });
 });
