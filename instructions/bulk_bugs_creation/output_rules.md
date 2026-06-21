@@ -34,4 +34,5 @@ Write `outputs/bulk_bug_decisions.json`:
 - The description file must incorporate the TC's `failedReason` field and any attached failed-description file content.
 - Do not embed multi-line description text directly inside `bulk_bug_decisions.json`.
 - Do not output `fixedByBug` — Done bugs are excluded from matching.
+- `skipped` must be empty unless the failure is a confirmed test-only issue with no possible product cause. When in doubt, create a bug.
 - `skipped[].reason` must be detailed and specific.

@@ -99,12 +99,15 @@ Before creating a new bug, check `input/open_bugs.json` for non-Done bugs with:
 
 If a match exists, add a `links` entry instead of a `newBugs` entry.
 
-## When to skip
+## When to skip (very restrictive)
 
-Only skip a failed TC as a `skipped` entry when you are confident the failure is purely:
-- test-code issue,
-- infra/flake,
-- outdated selector/locator.
+Do **not** skip a failed Test Case just because the failure looks environment-specific, flaky, or infra-related. If a Test Case fails in CI, treat it as a real bug unless you have direct, incontrovertible evidence that the product behavior is correct and **only** the test code is wrong.
+
+You may only output a `skipped` entry when **both** of the following are true:
+- the test code itself is provably wrong (e.g., outdated selector, incorrect assertion, missing mock), AND
+- the product behavior described in the Test Case is demonstrably correct.
+
+In all other cases — including environment timeouts, live-service flakes, infrastructure hangs, or unclear root cause — **create a Bug ticket**. These failures should flow through the bug-fix pipeline so the agents can fix them and the tests can be re-run.
 
 Prefer creating a bug over skipping.
 
@@ -153,6 +156,7 @@ Write `outputs/bulk_bug_decisions.json`:
 - The description file must incorporate the TC's `failedReason` field and any attached failed-description file content.
 - Do not embed multi-line description text directly inside `bulk_bug_decisions.json`.
 - Do not output `fixedByBug` — Done bugs are excluded from matching.
+- `skipped` must be empty unless the failure is a confirmed test-only issue with no possible product cause. When in doubt, create a bug.
 - `skipped[].reason` must be detailed and specific.
 
 
@@ -166,7 +170,7 @@ flowchart TD
     F2["newBugs[].descriptionFile must be a relative path to an existing outputs/*.md file"]
     F3["Do not output fixedByBug — Done bugs are excluded from matching"]
     F4["skipped[].reason must be a detailed explanation of the test code issue"]
-    F5["Prefer creating a bug over skipping. Only skip when confident the failure is purely test code / infra"]
+    F5["Only skip when the failure is a confirmed test-only issue with no possible product cause. When in doubt, create a bug."]
 ```
 
 
