@@ -9,6 +9,15 @@ var prHelper = require('./common/pullRequest.js');
 const { STATUSES } = require('./config.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
+function smLabelForContext(contextId) {
+    if (!contextId) return null;
+    var map = {
+        'story_test_automation_rework': 'sm_story_test_rework_triggered',
+        'bug_test_automation_rework': 'sm_bug_test_rework_triggered'
+    };
+    return map[contextId] || null;
+}
+
 function cleanCommandOutput(output) {
     if (!output) return '';
     return output.split('\n').filter(function(line) {
@@ -197,13 +206,18 @@ function action(params) {
     const config = configLoader.loadProjectConfig(params.jobParams || params);
     const scm = configLoader.createScm(config);
     const customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
-    const removeLabel = customParams.removeLabel;
-    const wipLabel = actualParams.metadata && actualParams.metadata.contextId
-        ? actualParams.metadata.contextId + '_wip'
-        : 'story_test_automation_rework_wip';
+    const contextId = actualParams.metadata && actualParams.metadata.contextId;
+    const removeLabel = customParams.removeLabel || smLabelForContext(contextId);
+    const wipLabel = contextId ? contextId + '_wip' : null;
 
     function releaseWipLock() {
-        try { jira_remove_label({ key: storyKey, label: wipLabel }); } catch (e) {}
+        if (wipLabel) {
+            try { jira_remove_label({ key: storyKey, label: wipLabel }); } catch (e) {}
+        } else {
+            // If contextId is missing, clean up both known WIP labels defensively.
+            try { jira_remove_label({ key: storyKey, label: 'story_test_automation_rework_wip' }); } catch (e) {}
+            try { jira_remove_label({ key: storyKey, label: 'bug_test_automation_rework_wip' }); } catch (e) {}
+        }
         if (removeLabel) {
             try {
                 jira_remove_label({ key: storyKey, label: removeLabel });
