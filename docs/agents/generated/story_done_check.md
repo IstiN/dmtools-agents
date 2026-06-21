@@ -1,13 +1,34 @@
 # Teammate (`story_done_check.json`)
 
+## Attributes
+
 | Attribute | Value |
 |---|---|
 | ContextId | `story_done_check` |
 | outputType | `none` |
 | skipAIProcessing | `true` |
-| preJSAction | `—` |
-| preCliJSAction | `—` |
-| postJSAction | `agents/js/checkStoryTestsPassed.js` |
+
+## Prompt snapshot
+
+Full prompt / instruction set: [`agents/snapshots/story_done_check.md`](agents/snapshots/story_done_check.md)
+
+## Actions
+
+
+
+
+### postJSAction: `checkStoryTestsPassed.js`
+
+_Check Story Tests Passed — postJSAction for story_done_check agent._
+
+- Source: `agents/js/checkStoryTestsPassed.js`
+- Side effects:
+  - post Jira comment
+
+## LLM step
+
+- outputType: `none`
+- Prompt snapshot: `agents/snapshots/story_done_check.md`
 
 ## Custom params
 

@@ -1,13 +1,34 @@
 # Teammate (`task_done_check.json`)
 
+## Attributes
+
 | Attribute | Value |
 |---|---|
 | ContextId | `task_done_check` |
 | outputType | `none` |
 | skipAIProcessing | `true` |
-| preJSAction | `—` |
-| preCliJSAction | `—` |
-| postJSAction | `agents/js/checkTaskStoriesDone.js` |
+
+## Prompt snapshot
+
+Full prompt / instruction set: [`agents/snapshots/task_done_check.md`](agents/snapshots/task_done_check.md)
+
+## Actions
+
+
+
+
+### postJSAction: `checkTaskStoriesDone.js`
+
+_Check Task Stories Done — postJSAction for task_done_check agent._
+
+- Source: `agents/js/checkTaskStoriesDone.js`
+- Side effects:
+  - post Jira comment
+
+## LLM step
+
+- outputType: `none`
+- Prompt snapshot: `agents/snapshots/task_done_check.md`
 
 ## Custom params
 

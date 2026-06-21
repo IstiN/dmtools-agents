@@ -1,13 +1,34 @@
 # Teammate (`retry_merge.json`)
 
+## Attributes
+
 | Attribute | Value |
 |---|---|
 | ContextId | `retry_merge` |
 | outputType | `none` |
 | skipAIProcessing | `true` |
-| preJSAction | `—` |
-| preCliJSAction | `—` |
-| postJSAction | `agents/js/retryMergePR.js` |
+
+## Prompt snapshot
+
+Full prompt / instruction set: [`agents/snapshots/retry_merge.md`](agents/snapshots/retry_merge.md)
+
+## Actions
+
+
+
+
+### postJSAction: `retryMergePR.js`
+
+_retryMergePR.js_
+
+- Source: `agents/js/retryMergePR.js`
+- Side effects:
+  - post Jira comment
+
+## LLM step
+
+- outputType: `none`
+- Prompt snapshot: `agents/snapshots/retry_merge.md`
 
 ## Custom params
 

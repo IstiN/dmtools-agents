@@ -1,13 +1,34 @@
 # Teammate (`bug_test_automation_merge.json`)
 
+## Attributes
+
 | Attribute | Value |
 |---|---|
 | ContextId | `bug_test_automation_merge` |
 | outputType | `none` |
 | skipAIProcessing | `true` |
-| preJSAction | `—` |
-| preCliJSAction | `—` |
-| postJSAction | `agents/js/mergeStoryTestAutomationPR.js` |
+
+## Prompt snapshot
+
+Full prompt / instruction set: [`agents/snapshots/bug_test_automation_merge.md`](agents/snapshots/bug_test_automation_merge.md)
+
+## Actions
+
+
+
+
+### postJSAction: `mergeStoryTestAutomationPR.js`
+
+_Merge Story Test Automation PR_
+
+- Source: `agents/js/mergeStoryTestAutomationPR.js`
+- Side effects:
+  - post Jira comment
+
+## LLM step
+
+- outputType: `none`
+- Prompt snapshot: `agents/snapshots/bug_test_automation_merge.md`
 
 ## Custom params
 

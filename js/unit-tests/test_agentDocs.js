@@ -39,7 +39,15 @@ function makeMockFs(initialFiles) {
             writeFileSync: function(p, content) {
                 calls.write.push({ path: p, content: content });
                 files[normalize(p)] = content;
-            }
+            },
+            accessSync: function(p, mode) {
+                calls.access = calls.access || [];
+                calls.access.push(p);
+                if (files[normalize(p)] === undefined) {
+                    throw new Error('ENOENT: ' + p);
+                }
+            },
+            constants: { F_OK: 0 }
         }
     };
 }
@@ -78,7 +86,8 @@ suite('agentDocGenerator', function() {
             'agents/pr_review.json': sampleAgent,
             'agents/sm.json': '{}',
             'agents/sm_merge.json': '{}',
-            'agents/run_all.json': '{}'
+            'agents/run_all.json': '{}',
+            'agents/snapshots/pr_review.md': '# snapshot'
         });
 
         var generator = loadModule(
@@ -100,6 +109,7 @@ suite('agentDocGenerator', function() {
         assert.contains(written.content, 'pr_review');
         assert.contains(written.content, 'checkWipLabel.js');
         assert.contains(written.content, 'outputs/pr_review.json');
+        assert.contains(written.content, 'agents/snapshots/pr_review.md');
     });
 
     test('ignores sm.json, sm_merge.json and run_ files', function() {
@@ -131,20 +141,22 @@ suite('agentWorkflowGraph', function() {
     test('generates workflow markdown from sm.json', function() {
         var sm = JSON.stringify({
             params: {
-                rules: [
-                    {
-                        description: 'Ready For Development → development',
-                        jql: "project = TS AND issuetype = 'Story' AND status = 'Ready For Development'",
-                        configFile: 'agents/story_development.json',
-                        targetStatus: 'In Review',
-                        enabled: true
-                    },
-                    {
-                        description: 'Disabled rule',
-                        configFile: 'agents/disabled.json',
-                        enabled: false
-                    }
-                ]
+                jobParams: {
+                    rules: [
+                        {
+                            description: 'Ready For Development → development',
+                            jql: "project = TS AND issuetype = 'Story' AND status = 'Ready For Development'",
+                            configFile: 'agents/story_development.json',
+                            targetStatus: 'In Review',
+                            enabled: true
+                        },
+                        {
+                            description: 'Disabled rule',
+                            configFile: 'agents/disabled.json',
+                            enabled: false
+                        }
+                    ]
+                }
             }
         }, null, 2);
 
@@ -172,6 +184,7 @@ suite('agentWorkflowGraph', function() {
         assert.contains(written.content, 'Ready For Development');
         assert.contains(written.content, 'story_development');
         assert.contains(written.content, 'In Review');
+        assert.contains(written.content, 'SM rules');
         assert.ok(written.content.indexOf('disabled') === -1, 'disabled rule should not appear');
     });
 

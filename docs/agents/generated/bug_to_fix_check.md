@@ -1,13 +1,36 @@
 # Teammate (`bug_to_fix_check.json`)
 
+## Attributes
+
 | Attribute | Value |
 |---|---|
 | ContextId | `bug_to_fix_check` |
 | outputType | `none` |
 | skipAIProcessing | `true` |
-| preJSAction | `—` |
-| preCliJSAction | `—` |
-| postJSAction | `agents/js/checkBugToFixReady.js` |
+
+## Prompt snapshot
+
+Full prompt / instruction set: [`agents/snapshots/bug_to_fix_check.md`](agents/snapshots/bug_to_fix_check.md)
+
+## Actions
+
+
+
+
+### postJSAction: `checkBugToFixReady.js`
+
+_Check Bug To Fix Ready — postJSAction for bug_to_fix_check agent._
+
+- Source: `agents/js/checkBugToFixReady.js`
+- Side effects:
+  - remove label "sm_story_done_check_triggered"
+  - remove label "sm_test_automation_triggered"
+  - post Jira comment
+
+## LLM step
+
+- outputType: `none`
+- Prompt snapshot: `agents/snapshots/bug_to_fix_check.md`
 
 ## Custom params
 

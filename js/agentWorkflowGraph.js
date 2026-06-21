@@ -1,10 +1,9 @@
 /**
  * Workflow graph generator
  *
- * Reads agents/sm.json and writes a Mermaid flowchart to
- * docs/agents/workflow.md. This is a prototype: it draws one node per rule
- * and shows status -> agent -> target status edges where a targetStatus is
- * declared.
+ * Reads agents/sm.json and writes docs/agents/workflow.md with:
+ *  - a human-readable rule table
+ *  - a Mermaid flowchart of status -> agent -> target status edges
  *
  * Usage:
  *   dmtools run agents/js/unit-tests/run_agentDocs.json
@@ -28,50 +27,115 @@ function statusNode(status) {
 
 function agentNode(configFile, idx) {
     var name = configFile.replace(/^agents\//, '').replace(/\.json$/, '');
-    return 'A' + idx + '_[' + name + ']';
+    return 'A' + idx + '_["' + name + '"]';
+}
+
+function parseSourceStatuses(jql) {
+    if (!jql) return [];
+    var statuses = [];
+    var m = jql.match(/status\s+in\s+\(([^)]+)\)/i);
+    if (m) {
+        statuses = m[1].split(',').map(function(s) {
+            return s.trim().replace(/^['"]|['"]$/g, '');
+        });
+    } else {
+        m = jql.match(/status\s*=\s*['"]([^'"]+)['"]/i);
+        if (m) statuses.push(m[1]);
+    }
+    return statuses.filter(Boolean);
+}
+
+function parseIssueTypes(jql) {
+    if (!jql) return [];
+    var types = [];
+    var m = jql.match(/issuetype\s+in\s+\(([^)]+)\)/i);
+    if (m) {
+        types = m[1].split(',').map(function(s) {
+            return s.trim().replace(/^['"]|['"]$/g, '');
+        });
+    } else {
+        m = jql.match(/issuetype\s*=\s*['"]([^'"]+)['"]/i);
+        if (m) types.push(m[1]);
+    }
+    return types.filter(Boolean);
+}
+
+function escapeMdCell(text) {
+    return String(text || '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
 }
 
 function generate() {
     var sm = readJson(SM_JSON);
-    var rules = (sm && sm.params && sm.params.rules) || [];
+    var rules = ((sm && sm.params && sm.params.jobParams && sm.params.jobParams.rules) ||
+                 (sm && sm.params && sm.params.rules) ||
+                 []);
 
     var lines = [];
     lines.push('# dmtools-agents workflow (generated)');
     lines.push('');
-    lines.push('```mermaid');
-    lines.push('flowchart TD');
+    lines.push('Generated from `agents/sm.json`. Only enabled SM rules are shown.');
+    lines.push('');
+
+    // Rule table
+    lines.push('## SM rules');
+    lines.push('');
+    lines.push('| # | Description | Types | Source statuses | Config file | Skip labels | Add label | Target status |');
+    lines.push('|---:|---|---|---|---|---|---|---|');
 
     var usedStatuses = {};
     var usedAgents = {};
+    var diagramEdges = [];
 
     rules.forEach(function(rule, idx) {
-        if (!rule.enabled) return;
+        if (rule.enabled === false) return;
+
+        var sourceStatuses = parseSourceStatuses(rule.jql);
+        var issueTypes = parseIssueTypes(rule.jql);
         var agent = agentNode(rule.configFile, idx);
         usedAgents[agent] = true;
 
-        // Source statuses from JQL heuristics
-        var sourceStatuses = [];
-        if (rule.jql) {
-            var statusMatch = rule.jql.match(/status\s+in\s+\(([^)]+)\)/i);
-            if (statusMatch) {
-                sourceStatuses = statusMatch[1].split(',').map(function(s) {
-                    return s.trim().replace(/^'|'$/g, '').replace(/^"|"$/g, '');
-                });
-            } else {
-                statusMatch = rule.jql.match(/status\s*=\s*['"]([^'"]+)['"]/i);
-                if (statusMatch) sourceStatuses.push(statusMatch[1]);
-            }
-        }
-
         sourceStatuses.forEach(function(status) {
             usedStatuses[status] = true;
-            lines.push('    ' + statusNode(status) + ' --> ' + agent);
+            diagramEdges.push('    ' + statusNode(status) + ' --> ' + agent);
         });
 
         if (rule.targetStatus) {
             usedStatuses[rule.targetStatus] = true;
-            lines.push('    ' + agent + ' --> ' + statusNode(rule.targetStatus));
+            diagramEdges.push('    ' + agent + ' --> ' + statusNode(rule.targetStatus));
         }
+
+        var skipLabels = '';
+        if (rule.skipIfLabel) skipLabels = '`' + rule.skipIfLabel + '`';
+        else if (rule.skipIfLabels && rule.skipIfLabels.length) {
+            skipLabels = rule.skipIfLabels.map(function(l) { return '`' + l + '`'; }).join(', ');
+        }
+
+        lines.push([
+            idx + 1,
+            escapeMdCell(rule.description),
+            issueTypes.join(', '),
+            sourceStatuses.join(', '),
+            '`' + rule.configFile + '`',
+            skipLabels,
+            rule.addLabel ? '`' + rule.addLabel + '`' : '',
+            rule.targetStatus || '—'
+        ].join(' | '));
+    });
+
+    lines.push('');
+
+    // Mermaid flowchart
+    lines.push('## Flow diagram');
+    lines.push('');
+    lines.push('```mermaid');
+    lines.push('flowchart TD');
+
+    Object.keys(usedStatuses).sort().forEach(function(status) {
+        lines.push('    ' + statusNode(status));
+    });
+
+    diagramEdges.forEach(function(edge) {
+        lines.push(edge);
     });
 
     lines.push('```');

@@ -1,13 +1,34 @@
 # Teammate (`story_ba_check.json`)
 
+## Attributes
+
 | Attribute | Value |
 |---|---|
 | ContextId | `story_ba_check` |
 | outputType | `none` |
 | skipAIProcessing | `true` |
-| preJSAction | `—` |
-| preCliJSAction | `—` |
-| postJSAction | `agents/js/checkSubtasksDoneForBA.js` |
+
+## Prompt snapshot
+
+Full prompt / instruction set: [`agents/snapshots/story_ba_check.md`](agents/snapshots/story_ba_check.md)
+
+## Actions
+
+
+
+
+### postJSAction: `checkSubtasksDoneForBA.js`
+
+_Check Subtasks Done For BA — postJSAction for story_ba_check agent._
+
+- Source: `agents/js/checkSubtasksDoneForBA.js`
+- Side effects:
+  - post Jira comment
+
+## LLM step
+
+- outputType: `none`
+- Prompt snapshot: `agents/snapshots/story_ba_check.md`
 
 ## Custom params
 

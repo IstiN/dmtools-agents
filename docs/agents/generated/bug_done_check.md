@@ -1,13 +1,34 @@
 # Teammate (`bug_done_check.json`)
 
+## Attributes
+
 | Attribute | Value |
 |---|---|
 | ContextId | `bug_done_check` |
 | outputType | `none` |
 | skipAIProcessing | `true` |
-| preJSAction | `—` |
-| preCliJSAction | `—` |
-| postJSAction | `agents/js/checkBugTestsPassed.js` |
+
+## Prompt snapshot
+
+Full prompt / instruction set: [`agents/snapshots/bug_done_check.md`](agents/snapshots/bug_done_check.md)
+
+## Actions
+
+
+
+
+### postJSAction: `checkBugTestsPassed.js`
+
+_Check Bug Tests Passed — postJSAction for bug_done_check agent._
+
+- Source: `agents/js/checkBugTestsPassed.js`
+- Side effects:
+  - post Jira comment
+
+## LLM step
+
+- outputType: `none`
+- Prompt snapshot: `agents/snapshots/bug_done_check.md`
 
 ## Custom params
 

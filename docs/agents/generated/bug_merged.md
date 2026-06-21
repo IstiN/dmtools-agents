@@ -1,13 +1,34 @@
 # Teammate (`bug_merged.json`)
 
+## Attributes
+
 | Attribute | Value |
 |---|---|
 | ContextId | `bug_merged` |
 | outputType | `none` |
 | skipAIProcessing | `true` |
-| preJSAction | `—` |
-| preCliJSAction | `—` |
-| postJSAction | `agents/js/notifyBugMerged.js` |
+
+## Prompt snapshot
+
+Full prompt / instruction set: [`agents/snapshots/bug_merged.md`](agents/snapshots/bug_merged.md)
+
+## Actions
+
+
+
+
+### postJSAction: `notifyBugMerged.js`
+
+_Notify Bug Merged Post-Action_
+
+- Source: `agents/js/notifyBugMerged.js`
+- Side effects:
+  - post Jira comment
+
+## LLM step
+
+- outputType: `none`
+- Prompt snapshot: `agents/snapshots/bug_merged.md`
 
 ## Custom params
 
