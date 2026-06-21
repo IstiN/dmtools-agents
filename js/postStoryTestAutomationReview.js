@@ -10,6 +10,7 @@
 
 const { LABELS } = require('./config.js');
 const scmModule = require('./common/scm.js');
+const ghHelpers = require('./common/githubHelpers.js');
 const autoStart = require('./common/autoStart.js');
 const configLoader = require('./configLoader.js');
 const outputFiles = require('./common/outputFiles.js');
@@ -220,6 +221,55 @@ function resolveApprovedThreads(scm, prNumber, resolvedThreadIds) {
     });
 }
 
+function getRepoInfo(config) {
+    if (config && config.repository && config.repository.owner && config.repository.repo) {
+        return { owner: config.repository.owner, repo: config.repository.repo };
+    }
+    try {
+        return ghHelpers.getGitHubRepoInfo();
+    } catch (e) {
+        console.warn('Could not determine repo info:', e.message || e);
+        return null;
+    }
+}
+
+function resolveExistingBotReviewThreads(scm, prNumber, repoInfo) {
+    if (!repoInfo || !repoInfo.owner || !repoInfo.repo || !prNumber) return;
+    try {
+        var discussions = ghHelpers.fetchDiscussionsAndRawData(repoInfo.owner, repoInfo.repo, prNumber);
+        if (!discussions || !discussions.rawThreads || !discussions.rawThreads.threads) return;
+
+        var botThreads = discussions.rawThreads.threads.filter(function(t) {
+            return t.bot === true && t.threadId && !t.resolved;
+        });
+        if (botThreads.length === 0) return;
+
+        console.log('Resolving ' + botThreads.length + ' stale bot-authored review thread(s) before posting new feedback...');
+        botThreads.forEach(function(t) {
+            try {
+                scm.resolveThread(prNumber, { threadId: t.threadId });
+                console.log('✅ Resolved stale bot thread', t.threadId);
+            } catch (e) {
+                console.warn('Failed to resolve stale bot thread', t.threadId + ':', e.message || e);
+            }
+        });
+    } catch (e) {
+        console.warn('Could not resolve stale bot review threads:', e.message || e);
+    }
+}
+
+function countOpenReviewThreads(scm, prNumber, repoInfo) {
+    if (!repoInfo || !repoInfo.owner || !repoInfo.repo || !prNumber) return 0;
+    try {
+        var discussions = ghHelpers.fetchDiscussionsAndRawData(repoInfo.owner, repoInfo.repo, prNumber);
+        if (!discussions || !discussions.rawThreads || !discussions.rawThreads.threads) return 0;
+        return discussions.rawThreads.threads.filter(function(t) { return !t.resolved; }).length;
+    } catch (e) {
+        console.warn('Could not count open review threads:', e.message || e);
+        return 0;
+    }
+}
+
 function triggerMerge(storyKey, config, customParams) {
     if (!customParams || !customParams.autoStartMerge || !customParams.autoStartMergeConfigFile) {
         return false;
@@ -299,8 +349,11 @@ function action(params) {
         console.log('Review recommendation:', reviewData.recommendation);
 
         const { prNumber, prUrl } = getPRNumber(params, storyKey, scm);
+        const repoInfo = getRepoInfo(config);
 
         if (prNumber) {
+            resolveExistingBotReviewThreads(scm, prNumber, repoInfo);
+
             if (reviewData.generalComment) {
                 postGeneralComment(scm, prNumber, reviewData.generalComment, storyKey, workingDir);
             }
