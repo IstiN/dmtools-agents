@@ -40,9 +40,19 @@ function _readCache() {
 
 function _writeCache(prList) {
     try {
-        file_write({ path: PR_CACHE_FILE, content: JSON.stringify({ timestamp: _now(), prList: prList }) });
+        var slim = prList.map(function(pr) {
+            return {
+                number: pr.number,
+                title: pr.title,
+                head: { ref: pr.head && pr.head.ref ? pr.head.ref : '' },
+                mergeable: pr.mergeable,
+                mergeable_state: pr.mergeable_state || pr.mergeableState,
+                mergeableState: pr.mergeableState || pr.mergeable_state
+            };
+        });
+        file_write({ path: PR_CACHE_FILE, content: JSON.stringify({ timestamp: _now(), prList: slim }) });
     } catch (e) {
-        // ignore cache write errors
+        console.warn('Failed to write PR cache:', e.message || e);
     }
 }
 
