@@ -7,6 +7,7 @@
 
 var configLoader = require('./configLoader.js');
 var prHelper = require('./common/pullRequest.js');
+var scmModule = require('./common/scm.js');
 const { STATUSES, resolveStatuses } = require('./config.js');
 
 function cleanCommandOutput(output) {
@@ -196,6 +197,72 @@ function writeLinkedTestCases(storyKey, testCases) {
     }
 }
 
+function findTestPr(scm, storyKey) {
+    try {
+        var branchName = configLoader.formatBranchName('test/', storyKey);
+        var openPRs = scm.listPrs('open') || [];
+        return openPRs.find(function(pr) {
+            return pr.head && pr.head.ref && pr.head.ref === branchName;
+        }) || null;
+    } catch (e) {
+        console.warn('Could not list open PRs for test branch:', e);
+        return null;
+    }
+}
+
+function writePrContext(storyKey, scm, pr) {
+    var inputDir = 'input/' + storyKey;
+    try {
+        var prInfo = '# Pull Request Information\n\n' +
+            '- **PR #**: ' + (pr.number || '') + '\n' +
+            '- **URL**: ' + (pr.html_url || '') + '\n' +
+            '- **Title**: ' + (pr.title || '') + '\n' +
+            '- **Author**: ' + (pr.user && pr.user.login ? pr.user.login : '') + '\n' +
+            '- **Branch**: `' + (pr.head && pr.head.ref ? pr.head.ref : '') + '` → `' + (pr.base && pr.base.ref ? pr.base.ref : '') + '`\n' +
+            '- **State**: ' + (pr.state || '') + '\n';
+        file_write({ path: inputDir + '/pr_info.md', content: prInfo });
+        console.log('✅ Wrote pr_info.md for PR #' + pr.number);
+    } catch (e) {
+        console.warn('Could not write pr_info.md:', e);
+    }
+
+    try {
+        var diff = scm.getPrDiff(pr.number);
+        if (diff) {
+            file_write({ path: inputDir + '/pr_diff.txt', content: diff });
+            console.log('✅ Wrote pr_diff.txt (' + diff.length + ' chars)');
+        }
+    } catch (e) {
+        console.warn('Could not write pr_diff.txt:', e);
+    }
+
+    try {
+        var discussions = scm.fetchDiscussions(pr.number);
+        if (discussions && discussions.markdown) {
+            file_write({ path: inputDir + '/pr_discussions.md', content: discussions.markdown });
+            console.log('✅ Wrote pr_discussions.md');
+        }
+        if (discussions && discussions.rawThreads && discussions.rawThreads.threads) {
+            var replies = discussions.rawThreads.threads
+                .filter(function(t) { return !t.resolved && t.body; })
+                .map(function(t) {
+                    return {
+                        file: t.path,
+                        line: t.line,
+                        comment: t.body,
+                        severity: 'important'
+                    };
+                });
+            if (replies.length > 0) {
+                file_write({ path: 'outputs/review_replies.json', content: JSON.stringify({ replies: replies }, null, 2) });
+                console.log('✅ Wrote outputs/review_replies.json with', replies.length, 'open review thread(s)');
+            }
+        }
+    } catch (e) {
+        console.warn('Could not write PR discussions:', e);
+    }
+}
+
 function getTestCaseDirectory(tcKey, testFilesPath) {
     var basePath = (testFilesPath || 'testing/').replace(/\/$/, '');
     return basePath + '/tests/' + tcKey;
@@ -256,7 +323,21 @@ function action(params) {
             console.error('Branch checkout failed (non-fatal):', e);
         }
 
-        // Step 3: Remove test code for linked TCs that are marked Irrelevant
+        // Step 3: Fetch PR context for rework when an open test PR exists
+        try {
+            var scm = scmModule.createScm(projectConfig);
+            var pr = findTestPr(scm, storyKey);
+            if (pr && pr.number) {
+                console.log('Open test PR found:', pr.number, '— fetching diff and discussions');
+                writePrContext(storyKey, scm, pr);
+            } else {
+                console.log('No open test PR found for', storyKey);
+            }
+        } catch (e) {
+            console.warn('Fetching PR context failed (non-fatal):', e);
+        }
+
+        // Step 4: Remove test code for linked TCs that are marked Irrelevant
         try {
             var removed = removeIrrelevantTestCode(testCases, config.workingDir || null, testFilesPath, statuses.IRRELEVANT || 'Irrelevant');
             if (removed.length > 0) {
