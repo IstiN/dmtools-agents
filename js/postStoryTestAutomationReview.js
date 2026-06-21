@@ -229,28 +229,28 @@ function getRepoInfo(config) {
     }
 }
 
-function resolveExistingBotReviewThreads(scm, prNumber, repoInfo) {
+function resolveExistingAgentReviewThreads(scm, prNumber, repoInfo) {
     if (!repoInfo || !repoInfo.owner || !repoInfo.repo || !prNumber) return;
     try {
         var discussions = ghHelpers.fetchDiscussionsAndRawData(repoInfo.owner, repoInfo.repo, prNumber);
         if (!discussions || !discussions.rawThreads || !discussions.rawThreads.threads) return;
 
-        var botThreads = discussions.rawThreads.threads.filter(function(t) {
-            return t.bot === true && t.threadId && !t.resolved;
+        var staleThreads = discussions.rawThreads.threads.filter(function(t) {
+            return t.threadId && !t.resolved;
         });
-        if (botThreads.length === 0) return;
+        if (staleThreads.length === 0) return;
 
-        console.log('Resolving ' + botThreads.length + ' stale bot-authored review thread(s) before posting new feedback...');
-        botThreads.forEach(function(t) {
+        console.log('Resolving ' + staleThreads.length + ' stale review thread(s) before posting new feedback...');
+        staleThreads.forEach(function(t) {
             try {
                 scm.resolveThread(prNumber, { threadId: t.threadId });
-                console.log('✅ Resolved stale bot thread', t.threadId);
+                console.log('✅ Resolved stale review thread', t.threadId);
             } catch (e) {
-                console.warn('Failed to resolve stale bot thread', t.threadId + ':', e.message || e);
+                console.warn('Failed to resolve stale review thread', t.threadId + ':', e.message || e);
             }
         });
     } catch (e) {
-        console.warn('Could not resolve stale bot review threads:', e.message || e);
+        console.warn('Could not resolve stale review threads:', e.message || e);
     }
 }
 
@@ -348,7 +348,7 @@ function action(params) {
         const repoInfo = getRepoInfo(config);
 
         if (prNumber) {
-            resolveExistingBotReviewThreads(scm, prNumber, repoInfo);
+            resolveExistingAgentReviewThreads(scm, prNumber, repoInfo);
 
             if (reviewData.generalComment) {
                 postGeneralComment(scm, prNumber, reviewData.generalComment, storyKey, workingDir);
