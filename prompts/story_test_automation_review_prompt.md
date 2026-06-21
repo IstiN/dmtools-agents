@@ -60,3 +60,27 @@ You MUST write the following files before finishing:
   - `BLOCK` only for fundamental misunderstandings of the Test Case.
 - If `pr_discussions.md` is present and contains resolved review threads, include their IDs in `resolvedThreadIds`.
 - Validate `outputs/pr_review.json` as parseable JSON before stopping.
+
+## Inline comment line mapping (CRITICAL)
+
+Every `inlineComments` entry MUST correspond to an actual line in `input/{STORY_KEY}/pr_diff.txt`. Review comments that are not anchored to the diff are posted as noisy top-level PR comments instead of review threads.
+
+1. Read `input/{STORY_KEY}/pr_diff.txt` before choosing line numbers.
+2. For each issue, pick the exact line number shown in the diff hunk for that file.
+   - For **new or modified files**, use the new/resulting line number and `side: "RIGHT"`.
+   - For **deleted files**, use the original line number from the `--- a/...` side and `side: "LEFT"`.
+   - For **removed lines** inside a modified file, use the original line number and `side: "LEFT"`.
+3. If an issue applies to a whole file and no specific diff line exists (e.g. a missing file), put it in `outputs/pr_review_general.md` instead of creating a generic `line: 1` inline comment.
+4. Do NOT use `line: 1` as a default. If you cannot find a matching diff line, move the comment to the general comment or omit it.
+5. Prefer fewer, high-quality inline comments over dozens of generic line-1 comments.
+
+Example:
+```json
+{
+  "path": "testing/tests/TS-123/test_ts_123.py",
+  "line": 45,
+  "side": "RIGHT",
+  "body": "🚨 BLOCKING: ...",
+  "severity": "BLOCKING"
+}
+```

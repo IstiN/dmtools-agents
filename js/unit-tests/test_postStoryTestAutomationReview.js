@@ -48,6 +48,22 @@ function loadPostStoryTestAutomationReview(mocks) {
 
     var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({}), allMocks);
 
+    var prReviewComments = loadModule(
+        'js/postPRReviewComments.js',
+        makeRequire({
+            './config.js': configModule,
+            './common/scm.js': { createScm: function() { return scmMock; } },
+            './common/autoStart.js': {
+                triggerConfiguredWorkflowForTicket: function() { return false; },
+                triggerSmIfIdle: function() { return { success: true }; }
+            },
+            './configLoader.js': freshConfigLoader,
+            './common/outputFiles.js': outputFiles,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        }),
+        allMocks
+    );
+
     var module = loadModule(
         'js/postStoryTestAutomationReview.js',
         makeRequire({
@@ -63,7 +79,12 @@ function loadPostStoryTestAutomationReview(mocks) {
                 triggerSmIfIdle: function() { return { success: true }; }
             },
             './common/outputFiles.js': outputFiles,
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/githubHelpers.js': {
+                getGitHubRepoInfo: function() { return { owner: 'IstiN', repo: 'trackstate' }; },
+                fetchDiscussionsAndRawData: function() { return { rawThreads: { threads: [] } }; }
+            },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './postPRReviewComments.js': prReviewComments
         }),
         allMocks
     );
@@ -186,7 +207,8 @@ suite('postStoryTestAutomationReview', function() {
         assert.equal(result.success, true);
         assert.equal(result.recommendation, 'REQUEST_CHANGES');
         assert.equal(reworkTriggered, true);
-        assert.deepEqual(statusMoves, [{ key: 'TS-301', statusName: 'In Rework' }]);
+        // The post action triggers the rework workflow; the status move is handled by that workflow.
+        assert.deepEqual(statusMoves, []);
     });
 
     test('falls back to PR comment when inline line is not in diff', function() {
@@ -225,6 +247,48 @@ suite('postStoryTestAutomationReview', function() {
         assert.ok(module._scmCalls.addComment.some(function(c) {
             return c.text.indexOf('testing/tests/TS-302/test.ts:999') !== -1;
         }));
+    });
+
+    test('posts LEFT-side inline comment for deleted files', function() {
+        var module = loadPostStoryTestAutomationReview({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/pr_review.json') {
+                    return JSON.stringify({
+                        recommendation: 'REQUEST_CHANGES',
+                        inlineComments: [
+                            { path: 'testing/tests/TS-303/test.ts', line: 5, body: 'Do not delete this test' }
+                        ]
+                    });
+                }
+                if (opts.path === 'input/TS-303/pr_info.md') {
+                    return '**PR #**: 33\n**URL**: https://github.com/IstiN/trackstate/pull/33';
+                }
+                return null;
+            },
+            prDiff: 'diff --git a/testing/tests/TS-303/test.ts b/testing/tests/TS-303/test.ts\n' +
+                'deleted file mode 100644\n' +
+                '--- a/testing/tests/TS-303/test.ts\n' +
+                '+++ /dev/null\n' +
+                '@@ -1,8 +0,0 @@\n' +
+                '-line 1\n' +
+                '-line 2\n' +
+                '-line 3\n' +
+                '-line 4\n' +
+                '-line 5\n' +
+                '-line 6\n' +
+                '-line 7\n' +
+                '-line 8\n'
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-303' },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_review_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(module._scmCalls.addInlineComment.length, 1);
+        assert.equal(module._scmCalls.addInlineComment[0].side, 'LEFT');
+        assert.equal(module._scmCalls.addInlineComment[0].line, 5);
     });
 
 });

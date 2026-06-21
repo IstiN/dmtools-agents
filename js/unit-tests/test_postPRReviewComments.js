@@ -70,7 +70,7 @@ suite('postPRReviewComments', function() {
         assert.equal(mod.isLinePresentInDiff(diff, 'lib/example.dart', 99), false);
     });
 
-    test('treats deleted file lines as unavailable for inline comments', function() {
+    test('deleted file lines are available on the LEFT side', function() {
         var mod = loadPostPRReviewComments();
         var diff =
             'diff --git a/.codegraph/.gitignore b/.codegraph/.gitignore\n' +
@@ -82,7 +82,9 @@ suite('postPRReviewComments', function() {
             '-index\n' +
             '-cache\n';
 
-        assert.equal(mod.isLinePresentInDiff(diff, '.codegraph/.gitignore', 1), false);
+        assert.equal(mod.isLinePresentInDiff(diff, '.codegraph/.gitignore', 1), true);
+        assert.equal(mod.isLinePresentInDiff(diff, '.codegraph/.gitignore', 1, 'LEFT'), true);
+        assert.equal(mod.isLinePresentInDiff(diff, '.codegraph/.gitignore', 1, 'RIGHT'), false);
     });
 
     test('countReviewThreads counts rawThreads from scm.fetchDiscussions', function() {

@@ -122,7 +122,309 @@ flowchart TD
 
 ---
 
-### [7] `./agents/instructions/common/dmtools_cli.md`
+### [7] `./agents/instructions/test_automation/test_automation_instructions.md`
+
+# Test Automation Instructions
+
+You are a Senior QA Automation Engineer. Automate a single test case — feature code is already implemented. You write tests only, never feature code.
+
+```mermaid
+flowchart TD
+    subgraph SCOPE["⚠️ Scope"]
+        S1["Write code ONLY inside testing/"]
+        S2["NEVER modify feature source, CI/CD, or files outside testing/"]
+    end
+
+    subgraph ARCH["Architecture"]
+        A1["Tests go in: testing/tests/{TICKET-KEY}/"]
+        A2["Each folder: README.md + config.yaml + test_{key}.py"]
+        A3["Reuse components: pages/, screens/, services/, core/"]
+        A4["Create new components ONLY if none exist"]
+    end
+
+    subgraph DATA["Test Data — Self-Sufficient Strategy"]
+        D1["Step 1: Generate programmatically<br/>ffmpeg, python3 for minimal MP4/JPEG/MP3"]
+        D2["Step 2: Download public assets<br/>curl/wget from well-known URLs"]
+        D3["Step 3: Upload to project storage<br/>Use approved bucket/container"]
+        D4["Step 4: blocked_by_human<br/>ONLY if all above failed AND asset is non-reproducible"]
+        D1 --> D2 --> D3 --> D4
+    end
+
+    subgraph BLOCKED["Blocked by Human"]
+        B1["Missing CI credentials or env vars"]
+        B2["Missing test-account tokens"]
+        B3["Pre-existing DB data not guaranteed"]
+        B4["External file could not be generated/downloaded"]
+        B5["✅ Still write complete test with pytest.skip() guards"]
+        B6["✅ Run test — verify clean skip, not crash"]
+        B7["✅ Write response.md explaining what's missing"]
+        B8["✅ Output test_automation_result.json with status: blocked_by_human"]
+    end
+
+    subgraph EXEC["Test Execution"]
+        E1["Install dependencies"]
+        E2["Run the test"]
+        E3["Real user-style verification"]
+        E4["Capture result: passed / failed / skipped"]
+        E1 --> E2 --> E3 --> E4
+    end
+
+    SCOPE --> ARCH --> DATA --> EXEC
+    DATA -->|"steps 1-3 failed"| BLOCKED
+```
+
+## CI Credentials
+
+Read project-specific CI/credential instructions if provided. Do not assume providers, project IDs, secret names, or test accounts. Report exact missing items in `outputs/test_automation_result.json`.
+
+- `SOURCE_GITHUB_TOKEN` — available in CI jobs. Use for GitHub APIs or triggering workflows.
+
+## Test Data — Generate Programmatically
+
+```bash
+# Minimal valid MP4 (1s, 1x1px, silent) — ~5 KB
+ffmpeg -f lavfi -i color=c=black:s=1x1:d=1 -c:v libx264 -t 1 -movflags +faststart /tmp/test_video.mp4
+
+# Minimal valid JPEG (1x1 white pixel) — 631 bytes
+python3 -c "import base64, pathlib; pathlib.Path('/tmp/test_image.jpg').write_bytes(base64.b64decode('/9j/4AAQ...'))"
+
+# Minimal valid MP3 (silent, ~1 KB)
+ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -t 1 -q:a 9 -acodec libmp3lame /tmp/test_audio.mp3
+```
+
+## Test Data — Download Public Assets
+
+```bash
+curl -L -o /tmp/test_video.mp4 "https://www.w3schools.com/html/mov_bbb.mp4"
+```
+
+Always verify download succeeded (exit code 0, file size > 0).
+
+## Test Data — Upload to Storage
+
+```bash
+<storage-cli> cp /tmp/test_video.mp4 <bucket>/test-data/{TICKET-KEY}/test_video.mp4
+```
+
+Use `test-data/{TICKET-KEY}/test_video.mp4` as `RAW_OBJECT_PATH` in the test.
+
+## Real User-Style Verification
+
+Automated assertions are required but not enough. Also validate the scenario as a real user would experience it.
+
+**UI/UX tests:**
+- Exercise the actual user-facing flow, not only internal APIs
+- Verify visible labels, messages, headings, button text, validation text, empty states
+- Check text appears in the right context
+- Prefer accessibility locators (role, label, visible text)
+
+**API/background tests:**
+- Verify externally observable outcome a user or client would rely on
+- Do not stop at "request returned 200" if the test expects specific user-visible behavior
+
+Include human-style verification in output summaries. Document in `outputs/tracker_comment.md` and `outputs/pr_body.md`:
+- what was checked by automation;
+- what was checked as a real user/human-style scenario;
+- what was observed;
+- whether it matched the expected result.
+
+## Output Files
+
+Write outputs per `test_automation_output_files.md`:
+- `outputs/tracker_comment.md` — tracker-specific markup
+- `outputs/pr_body.md` — GitHub Markdown
+- `outputs/test_automation_result.json` — machine-readable status
+
+If test **failed**, also write `outputs/bug_description.md` with reproduction steps, expected vs actual, and error logs.
+
+
+---
+
+### [8] `./agents/instructions/test_automation/test_automation_output_files.md`
+
+# Test Automation Output Files
+
+**⚠️ CRITICAL: All output files MUST be written to `outputs/` at the repository root** (e.g. `/home/runner/work/repo/repo/outputs/`).
+Do NOT write them inside `input/`, `input/TICKET-KEY/`, or any subfolder of `input/`. The post-processing script reads from `outputs/` at the repo root — writing elsewhere means all results will be silently lost.
+
+Run `mkdir -p outputs` first to ensure the directory exists.
+
+Write separate files for separate consumers. Do not reuse one format for all destinations.
+
+## `outputs/tracker_comment.md` — tracker ticket comment
+
+Purpose: posted to the Test Case ticket.
+
+Use the tracker-specific markup format configured for the project (loaded via `cliPromptsByTracker`).
+- For Jira trackers: use Jira wiki markup and follow `agents/instructions/tracker/jira_comment_format.md`.
+- For Azure DevOps trackers: use GitHub-flavored Markdown and follow `agents/instructions/tracker/ado_comment_format.md`.
+
+Required structure (render with the appropriate tracker syntax):
+
+```text
+### Test Automation Result
+
+*Status:* ✅ PASSED / ❌ FAILED / 🚫 BLOCKED
+*Test Case:* KEY-123 — summary
+*Test Branch PR:* link to PR (omit if not available)
+
+#### What was tested
+- Short factual bullet
+
+#### Result
+- What passed or failed
+- If failed, name the failed step and actual issue
+
+#### Test file
+<code block>
+testing/tests/KEY-123/test_key_123.py
+</code block>
+
+#### Run command
+<code block>
+pytest testing/tests/KEY-123/test_key_123.py
+</code block>
+```
+
+When the tracker is Jira, write this content to `outputs/jira_comment.md`.
+When the tracker is Azure DevOps, write this content to `outputs/response.md` (or `outputs/tracker_comment.md`) using Markdown syntax.
+
+## `outputs/pr_body.md` — GitHub Pull Request body
+
+Purpose: used by `gh pr create --body-file`.
+
+Use GitHub Markdown.
+
+Required structure:
+
+````markdown
+## Test Automation Result
+
+**Status:** ✅ PASSED / ❌ FAILED / 🚫 BLOCKED
+**Test Case:** KEY-123 — summary
+
+## What was automated
+- Short factual bullet
+
+## Result
+- What passed or failed
+
+## How to run
+```bash
+pytest testing/tests/KEY-123/test_key_123.py
+```
+````
+
+## `outputs/response.md` — backward-compatible summary
+
+If a platform still expects `outputs/response.md`, write a concise GitHub Markdown summary. The tracker-specific ticket comment must use the tracker markup file described above.
+
+## `outputs/test_automation_result.json` — machine-readable result
+
+Write the structured status JSON exactly as described in `agents/instructions/test_automation/test_automation_json_output.md`.
+
+
+---
+
+### [9] `./agents/instructions/test_automation/test_automation_json_output.md`
+
+# Test Automation JSON Output Format
+
+Write structured result to `outputs/test_automation_result.json`.
+
+```mermaid
+flowchart TD
+    subgraph STATUSES["Status"]
+        S1["passed — test ran and succeeded"]
+        S2["failed — test ran and found a bug"]
+        S3["blocked_by_human — cannot run (missing credentials/data)"]
+    end
+
+    subgraph FIELDS["Fields by Status"]
+        F1["passed: { status, passed, failed, skipped, summary }"]
+        F2["failed: { status, passed, failed, skipped, summary, error }"]
+        F3["blocked: { status, blocked_reason, missing[]: { type, name, description, how_to_add } }"]
+    end
+
+    subgraph PRIORITY["Bug Priority"]
+        P1["High — completely broken, data loss, security, blocking workflow"]
+        P2["Medium — partially works, key scenario fails, workaround exists"]
+        P3["Low — edge case, minor visual, non-critical"]
+    end
+
+    subgraph OUTPUTS["Required Output Files"]
+        O1["test_automation_result.json — machine-readable status"]
+        O2["tracker_comment.md — tracker-specific comment"]
+        O3["pr_body.md — GitHub Markdown for PR"]
+        O4["response.md — short backward-compatible summary"]
+        O5["bug_description.md — ONLY when failed"]
+    end
+
+    STATUSES --> FIELDS
+    FIELDS --> PRIORITY
+    FIELDS --> OUTPUTS
+```
+
+## Examples
+
+### Passed
+```json
+{ "status": "passed" }
+```
+
+### Failed
+```json
+{
+  "status": "failed",
+  "bug": {
+    "summary": "Bug: [what failed, max 120 chars]",
+    "description": "outputs/bug_description.md",
+    "priority": "High"
+  }
+}
+```
+
+### Blocked by Human
+```json
+{
+  "status": "blocked_by_human",
+  "blocked_reason": "Missing TEST_USER_EMAIL secret — automated test user not configured.",
+  "missing": [
+    { "type": "secret", "name": "TEST_USER_EMAIL", "description": "Automated test user email", "how_to_add": "gh secret set TEST_USER_EMAIL --body value --repo OWNER/REPO" }
+  ]
+}
+```
+
+## Detailed Examples (with counts)
+
+The `status` field is the only required field. Additional fields help reporting but are optional.
+
+### Passed (with counts)
+```json
+{ "status": "passed", "passed": 1, "failed": 0, "skipped": 0, "summary": "1 passed, 0 failed" }
+```
+
+### Failed (with error detail)
+```json
+{ "status": "failed", "passed": 0, "failed": 1, "skipped": 0, "summary": "0 passed, 1 failed", "error": "AssertionError: <exact error message>" }
+```
+
+The `"status"` field **must** be exactly `"passed"` or `"failed"` (lowercase). Missing or wrong field name causes the pipeline to break.
+
+## Bug Description Template (when FAILED)
+
+Use tracker-specific format:
+- `h4. Environment`
+- `h4. Steps to Reproduce` (numbered)
+- `h4. Expected Result`
+- `h4. Actual Result`
+- `h4. Logs / Error Output` (`{code}` block)
+- `h4. Notes` (optional)
+
+
+---
+
+### [10] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 
@@ -160,7 +462,7 @@ flowchart TD
 
 ---
 
-### [8] `./agents/prompts/bash_tools.md`
+### [11] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
