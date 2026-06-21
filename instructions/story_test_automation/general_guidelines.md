@@ -5,13 +5,14 @@ You are automating a Story that has reached **Ready For Testing**. The Story alr
 ## Workflow
 
 1. Read the Story ticket and all linked Test Cases from `input/{STORY_KEY}/linked_test_cases.md`.
-2. For each linked Test Case:
+2. If `input/{STORY_KEY}/merge_conflicts.md` is present, the test branch could not be cleanly synced with `origin/main`. Resolve every `<<<<<<<` / `=======` / `>>>>>>>` conflict marker in the listed files, using `input/{STORY_KEY}/pr_diff.txt` for context. Stage each resolved file with `git add <file>`. Do NOT `git commit` or `git merge --abort`.
+3. For each linked Test Case:
    - Check if an automated test already exists under `testing/tests/{TC_KEY}/`.
    - If it exists, run it.
    - If it is missing, write a new automated test for it.
-3. Produce a single result JSON: `outputs/story_test_automation_result.json`.
-4. For every failed Test Case, produce `outputs/failed_description_{TC_KEY}.md`.
-5. If environment/credentials are missing, produce `outputs/blocked.json` instead of running tests.
+4. Produce a single result JSON: `outputs/story_test_automation_result.json`.
+5. For every failed Test Case, produce `outputs/failed_description_{TC_KEY}.md`.
+6. If environment/credentials are missing, produce `outputs/blocked.json` instead of running tests.
 
 ## Scope rules
 
