@@ -211,7 +211,7 @@ suite('postStoryTestAutomationReview', function() {
         assert.deepEqual(statusMoves, []);
     });
 
-    test('falls back to PR comment when inline line is not in diff', function() {
+    test('skips inline comments whose line is not in diff', function() {
         var module = loadPostStoryTestAutomationReview({
             file_read: function(opts) {
                 if (opts.path === 'outputs/pr_review.json') {
@@ -244,9 +244,40 @@ suite('postStoryTestAutomationReview', function() {
 
         assert.equal(result.success, true);
         assert.equal(module._scmCalls.addInlineComment.length, 0);
-        assert.ok(module._scmCalls.addComment.some(function(c) {
-            return c.text.indexOf('testing/tests/TS-302/test.ts:999') !== -1;
-        }));
+        assert.equal(module._scmCalls.addComment.length, 0, 'should not post fallback "lines not shown in diff" comments');
+    });
+
+    test('drops all inline comments when PR diff is unavailable', function() {
+        var module = loadPostStoryTestAutomationReview({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/pr_review.json') {
+                    return JSON.stringify({
+                        recommendation: 'REQUEST_CHANGES',
+                        generalComment: 'outputs/pr_review_general.md',
+                        inlineComments: [
+                            { path: 'testing/tests/TS-302/test.ts', line: 2, body: 'No diff' }
+                        ]
+                    });
+                }
+                if (opts.path === 'outputs/pr_review_general.md') {
+                    return 'General feedback';
+                }
+                if (opts.path === 'input/TS-302/pr_info.md') {
+                    return '**PR #**: 32\n**URL**: https://github.com/IstiN/trackstate/pull/32';
+                }
+                return null;
+            },
+            prDiff: null
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-302' },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_review_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(module._scmCalls.addInlineComment.length, 0);
+        assert.ok(module._scmCalls.addComment.some(function(c) { return c.text === 'General feedback'; }));
     });
 
     test('posts LEFT-side inline comment for deleted files', function() {

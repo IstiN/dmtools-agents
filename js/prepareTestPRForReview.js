@@ -212,8 +212,17 @@ function action(params) {
             return false;
         }
 
-        // Step 4: Checkout test branch
         const branchName = prDetails.head ? prDetails.head.ref : null;
+
+        // If the PR has no actual changes, the test code is already in main. Finalize and skip review.
+        var changedFiles = prDetails.changed_files;
+        if (typeof changedFiles === 'number' && changedFiles === 0) {
+            console.log('PR #' + pr.number + ' has 0 changed files — test code is already in main');
+            finalizeAlreadyMergedTestCase(ticketKey, branchName || ('test/' + ticketKey), issueType);
+            return false;
+        }
+
+        // Step 4: Checkout test branch
         try {
             if (branchName) {
                 gh.checkoutPRBranch(branchName);

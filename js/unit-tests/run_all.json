@@ -39,6 +39,7 @@
         "js/unit-tests/test_preCliStoryTestAutomationSetup.js",
         "js/unit-tests/test_postStoryTestAutomationResults.js",
         "js/unit-tests/test_postStoryTestAutomationReview.js",
+        "js/unit-tests/test_prepareTestPRForReview.js",
         "js/unit-tests/test_mergeStoryTestAutomationPR.js",
         "js/unit-tests/test_triggerStoryTestAutomation.js",
         "js/unit-tests/test_triggerBugTestAutomation.js",

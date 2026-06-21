@@ -87,9 +87,46 @@ function resolveCustomParams(params, config) {
     return merged;
 }
 
-function fallbackInlineMarkdown(filePath, line, commentText) {
-    var lineRef = filePath + (line ? ':' + line : '');
-    return '📍 **`' + lineRef + '`**\n\n' + commentText;
+function isInlineCommentInDiff(diffText, inlineComment) {
+    var filePath = inlineComment.path || inlineComment.file;
+    var line = inlineComment.line;
+    if (!diffText || !filePath || !line) return false;
+
+    var lineInfo = prReviewComments.parseDiffLineInfo(diffText, filePath, line);
+    if (lineInfo.present) return true;
+
+    // Allow comments targeting content inside a submodule to be anchored on the
+    // submodule pointer change in the parent PR diff.
+    var submodulePath = prReviewComments.findSubmodulePathForFile(diffText, filePath);
+    if (submodulePath) {
+        var subInfo = prReviewComments.parseDiffLineInfo(diffText, submodulePath, 1);
+        if (subInfo.present) return true;
+    }
+    return false;
+}
+
+function filterInlineCommentsByDiff(scm, prNumber, inlineComments) {
+    if (!inlineComments || inlineComments.length === 0) return [];
+
+    var diffText = null;
+    try {
+        diffText = scm.getPrDiff(prNumber);
+    } catch (diffError) {
+        console.warn('Could not fetch PR diff for inline comment filtering:', diffError.message || diffError);
+    }
+
+    if (diffText === null || diffText === '') {
+        // Without a diff we cannot anchor inline comments safely. Drop them to avoid
+        // the noisy "lines not shown in diff" fallback comments.
+        console.warn('PR diff unavailable — dropping all inline comments to avoid out-of-diff noise');
+        return [];
+    }
+
+    return inlineComments.filter(function(ic) {
+        if (isInlineCommentInDiff(diffText, ic)) return true;
+        console.warn('Skipping inline comment not present in PR diff:', (ic.path || ic.file) + ':' + ic.line);
+        return false;
+    });
 }
 
 function postInlineComment(scm, prNumber, inlineComment, storyKey, workingDir) {
@@ -99,66 +136,70 @@ function postInlineComment(scm, prNumber, inlineComment, storyKey, workingDir) {
     try {
         if (!commentText) {
             console.warn('No comment content found for inline comment on', filePath);
-            return null;
+            return false;
         }
         if (!filePath) {
             console.warn('No file path found for inline comment');
-            return null;
+            return false;
         }
 
         console.log('Posting inline comment on ' + filePath + ':' + inlineComment.line);
 
-        var diffText = null;
-        try {
-            diffText = scm.getPrDiff(prNumber);
-        } catch (diffError) {
-            console.warn('Could not fetch PR diff for inline comment validation:', diffError.message || diffError);
-        }
-
-        if (diffText === null || diffText === '') {
-            console.warn('PR diff unavailable; collecting fallback text for ' + filePath + ':' + inlineComment.line);
-            return fallbackInlineMarkdown(filePath, inlineComment.line, commentText);
-        }
-
+        var diffText = scm.getPrDiff(prNumber);
         var requestedSide = inlineComment.side || null;
-        var lineInfo = prReviewComments.parseDiffLineInfo(diffText, filePath, inlineComment.line);
+        var effectivePath = filePath;
+        var effectiveLine = inlineComment.line;
+        var startLine = inlineComment.startLine || null;
+        var lineInfo = prReviewComments.parseDiffLineInfo(diffText, effectivePath, effectiveLine);
+
+        if (!lineInfo.present) {
+            var submodulePath = prReviewComments.findSubmodulePathForFile(diffText, filePath);
+            if (submodulePath) {
+                effectivePath = submodulePath;
+                effectiveLine = 1;
+                startLine = null;
+                lineInfo = prReviewComments.parseDiffLineInfo(diffText, effectivePath, effectiveLine);
+                requestedSide = (lineInfo.side === 'LEFT' && prReviewComments.submoduleHasNewPointer(diffText, effectivePath))
+                    ? 'RIGHT'
+                    : (lineInfo.side || 'RIGHT');
+                if (submodulePath !== filePath || inlineComment.line != 1) {
+                    commentText = '📍 **`' + filePath + ':' + inlineComment.line + '`** (submodule content line)\n\n' + commentText;
+                }
+            }
+        }
 
         // If the AI did not specify a side, infer it from the diff so deleted files get LEFT.
         if (!requestedSide) {
             if (lineInfo.present) {
                 requestedSide = lineInfo.side;
-            } else if (prReviewComments.isFileDeletedInDiff(diffText, filePath)) {
+            } else if (prReviewComments.isFileDeletedInDiff(diffText, effectivePath)) {
                 requestedSide = 'LEFT';
             }
         }
 
         if (!lineInfo.present) {
-            console.warn('Inline comment line is not present in PR diff; collecting fallback text for ' + filePath + ':' + inlineComment.line);
-            return fallbackInlineMarkdown(filePath, inlineComment.line, commentText);
+            console.warn('Inline comment line is not present in PR diff; skipping ' + filePath + ':' + inlineComment.line);
+            return false;
         }
 
         scm.addInlineComment(
-            prNumber, filePath, inlineComment.line, commentText,
-            inlineComment.startLine || null, requestedSide
+            prNumber, effectivePath, effectiveLine, commentText,
+            startLine, requestedSide
         );
 
-        console.log('✅ Posted inline comment on ' + filePath + ':' + inlineComment.line);
-        return null;
+        console.log('✅ Posted inline comment on ' + effectivePath + ':' + effectiveLine +
+            (effectivePath !== filePath || effectiveLine !== inlineComment.line ?
+                ' (mapped from ' + filePath + ':' + inlineComment.line + ')' : ''));
+        return true;
     } catch (error) {
-        console.warn('Inline comment failed, collecting fallback text for ' + filePath + ':' + inlineComment.line, error.message || error);
-        try {
-            return fallbackInlineMarkdown(filePath, inlineComment.line, commentText);
-        } catch (fallbackError) {
-            console.error('Failed to build fallback text for ' + filePath + ':', fallbackError);
-            return null;
-        }
+        console.warn('Inline comment failed for ' + filePath + ':' + inlineComment.line, error.message || error);
+        return false;
     }
 }
 
-function postGeneralComment(scm, prNumber, generalComment, storyKey, workingDir, fallbackComments) {
+function postGeneralComment(scm, prNumber, generalComment, storyKey, workingDir) {
     try {
         var text = '';
-        var generalPath = null;
         if (generalComment) {
             var detailed = outputFiles.readOutputFileDetailed(generalComment, {
                 ticketKey: storyKey,
@@ -166,22 +207,6 @@ function postGeneralComment(scm, prNumber, generalComment, storyKey, workingDir,
             });
             if (detailed) {
                 text = detailed.content || '';
-                generalPath = detailed.path;
-            }
-        }
-
-        if (fallbackComments && fallbackComments.length > 0) {
-            var fallbackSection = '\n\n## Review feedback (lines not shown in diff)\n\n' +
-                fallbackComments.join('\n\n---\n\n');
-            text = (text || '') + fallbackSection;
-            // Persist the appended version back to the general comment file so the
-            // single PR comment contains everything and we avoid extra issue comments.
-            if (generalPath) {
-                try {
-                    file_write({ path: generalPath, content: text });
-                } catch (writeErr) {
-                    console.warn('Could not write appended general comment back to file:', writeErr.message || writeErr);
-                }
             }
         }
 
@@ -325,22 +350,22 @@ function action(params) {
         const { prNumber, prUrl } = getPRNumber(params, storyKey, scm);
         const repoInfo = getRepoInfo(config);
 
+        var inlineComments = filterInlineCommentsByDiff(scm, prNumber, reviewData.inlineComments);
+
         if (prNumber) {
             resolveExistingAgentReviewThreads(scm, prNumber, repoInfo);
 
-            var fallbackComments = [];
-            if (reviewData.inlineComments && reviewData.inlineComments.length > 0) {
-                console.log('Posting ' + reviewData.inlineComments.length + ' inline comment(s)');
-                reviewData.inlineComments.forEach(function(ic, index) {
-                    console.log('Processing inline comment ' + (index + 1) + '/' + reviewData.inlineComments.length);
-                    var fallback = postInlineComment(scm, prNumber, ic, storyKey, workingDir);
-                    if (fallback) fallbackComments.push(fallback);
+            if (inlineComments && inlineComments.length > 0) {
+                console.log('Posting ' + inlineComments.length + ' inline comment(s)');
+                inlineComments.forEach(function(ic, index) {
+                    console.log('Processing inline comment ' + (index + 1) + '/' + inlineComments.length);
+                    postInlineComment(scm, prNumber, ic, storyKey, workingDir);
                 });
             }
 
-            // Post the general comment AFTER inline comments so any fallback items can be appended.
-            if (reviewData.generalComment || fallbackComments.length > 0) {
-                postGeneralComment(scm, prNumber, reviewData.generalComment, storyKey, workingDir, fallbackComments);
+            // Post the general comment AFTER inline comments.
+            if (reviewData.generalComment) {
+                postGeneralComment(scm, prNumber, reviewData.generalComment, storyKey, workingDir);
             }
             prReviewComments.resolveApprovedThreads(scm, prNumber, reviewData.resolvedThreadIds);
 
@@ -383,11 +408,11 @@ function action(params) {
             }
         }
 
-        if (!isApproved && reviewData.inlineComments && reviewData.inlineComments.length > 0) {
+        if (!isApproved && inlineComments && inlineComments.length > 0) {
             try {
                 var feedback = 'h3. 📝 Test Automation Rework Feedback\n\n';
                 feedback += 'The following review comments must be addressed before the test PR can be merged:\n\n';
-                reviewData.inlineComments.forEach(function(ic, idx) {
+                inlineComments.forEach(function(ic, idx) {
                     var path = ic.path || ic.file || '(file unknown)';
                     var line = ic.line ? ':' + ic.line : '';
                     var body = ic.body;
