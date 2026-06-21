@@ -411,6 +411,70 @@ function isLinePresentInDiff(diffText, filePath, targetLine, side) {
     return info.side === side;
 }
 
+/**
+ * Returns true if the PR diff contains a submodule pointer change for `filePath`
+ * (e.g. "Subproject commit ...").
+ */
+function isSubmodulePathInDiff(diffText, filePath) {
+    if (!diffText || !filePath) return false;
+    var lines = String(diffText).split(/\r?\n/);
+    var escaped = filePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var segmentRe = new RegExp('diff --git a/' + escaped + '(?:\\s+b/' + escaped + '(?:\\s|$))?');
+    var inSegment = false;
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (line.indexOf('diff --git ') === 0) {
+            inSegment = segmentRe.test(line);
+            continue;
+        }
+        if (inSegment && line.indexOf('Subproject commit') !== -1) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * For comments targeting a file inside a submodule (e.g. "trackstate-setup/README.md:7")
+ * when the parent PR diff only contains the submodule pointer change, map the comment
+ * to the submodule path itself (e.g. "trackstate-setup"). Returns the submodule path or
+ * null if no matching submodule segment exists.
+ */
+function findSubmodulePathForFile(diffText, filePath) {
+    if (!diffText || !filePath) return null;
+    var parts = filePath.split('/');
+    for (var i = parts.length; i > 0; i--) {
+        var candidate = parts.slice(0, i).join('/');
+        if (isSubmodulePathInDiff(diffText, candidate)) {
+            return candidate;
+        }
+    }
+    return null;
+}
+
+/**
+ * Returns true if the submodule segment for `filePath` contains a new pointer
+ * ("+Subproject commit ..."), i.e. the submodule was updated rather than deleted.
+ */
+function submoduleHasNewPointer(diffText, filePath) {
+    if (!diffText || !filePath) return false;
+    var lines = String(diffText).split(/\r?\n/);
+    var escaped = filePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var segmentRe = new RegExp('diff --git a/' + escaped + '(?:\\s+b/' + escaped + '(?:\\s|$))?');
+    var inSegment = false;
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (line.indexOf('diff --git ') === 0) {
+            inSegment = segmentRe.test(line);
+            continue;
+        }
+        if (inSegment && line.indexOf('+Subproject commit') === 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function postFallbackInlineComment(scm, pullRequestId, filePath, line, commentText) {
     var lineRef = filePath + (line ? ':' + line : '');
     scm.addComment(pullRequestId, '📍 **`' + lineRef + '`**\n\n' + commentText);
@@ -421,8 +485,8 @@ function postInlineComment(scm, pullRequestId, inlineComment, ticketKey, working
     // Accept both spec formats:
     //   old spec: { file, comment: "path/to/file.md" }
     //   agent output: { path, body: "inline text" }
-    const filePath = inlineComment.path || inlineComment.file;
-    const commentText = inlineComment.body || readMarkdownFile(inlineComment.comment, ticketKey, workingDir);
+    var filePath = inlineComment.path || inlineComment.file;
+    var commentText = inlineComment.body || readMarkdownFile(inlineComment.comment, ticketKey, workingDir);
 
     try {
         if (!commentText) {
@@ -450,11 +514,37 @@ function postInlineComment(scm, pullRequestId, inlineComment, ticketKey, working
         }
 
         var requestedSide = inlineComment.side || null;
-        var lineInfo = parseDiffLineInfo(diffText, filePath, inlineComment.line);
+        var effectivePath = filePath;
+        var effectiveLine = inlineComment.line;
+        var startLine = inlineComment.startLine || null;
+        var lineInfo = parseDiffLineInfo(diffText, effectivePath, effectiveLine);
+        var submodulePath = null;
+
+        if (!lineInfo.present) {
+            submodulePath = findSubmodulePathForFile(diffText, filePath);
+            if (submodulePath) {
+                console.log('Comment target ' + filePath + ':' + inlineComment.line +
+                    ' is inside submodule ' + submodulePath +
+                    '; mapping to submodule diff line 1 to create a review thread');
+                effectivePath = submodulePath;
+                effectiveLine = 1;
+                startLine = null;
+                lineInfo = parseDiffLineInfo(diffText, effectivePath, effectiveLine);
+                // Submodule updates expose both old and new pointers; anchor on the new side
+                // so the review thread appears on the updated submodule line.
+                requestedSide = (lineInfo.side === 'LEFT' && submoduleHasNewPointer(diffText, effectivePath))
+                    ? 'RIGHT'
+                    : (lineInfo.side || 'RIGHT');
+                if (submodulePath !== filePath || inlineComment.line != 1) {
+                    commentText = '📍 **`' + filePath + ':' + inlineComment.line + '`** (submodule content line)\n\n' + commentText;
+                }
+            }
+        }
+
         if (!requestedSide) {
             if (lineInfo.present) {
                 requestedSide = lineInfo.side;
-            } else if (isFileDeletedInDiff(diffText, filePath)) {
+            } else if (isFileDeletedInDiff(diffText, effectivePath)) {
                 requestedSide = 'LEFT';
             }
         }
@@ -472,11 +562,13 @@ function postInlineComment(scm, pullRequestId, inlineComment, ticketKey, working
         }
 
         scm.addInlineComment(
-            pullRequestId, filePath, inlineComment.line, commentText,
-            inlineComment.startLine || null, requestedSide
+            pullRequestId, effectivePath, effectiveLine, commentText,
+            startLine, requestedSide
         );
 
-        console.log('✅ Posted inline comment on ' + filePath + ':' + inlineComment.line);
+        console.log('✅ Posted inline comment on ' + effectivePath + ':' + effectiveLine +
+            (effectivePath !== filePath || effectiveLine !== inlineComment.line ?
+                ' (mapped from ' + filePath + ':' + inlineComment.line + ')' : ''));
         return true;
 
     } catch (error) {
@@ -979,6 +1071,9 @@ if (typeof module !== 'undefined' && module.exports) {
         postGeneralComment,
         resolveApprovedThreads,
         parseDiffLineInfo,
-        isFileDeletedInDiff
+        isFileDeletedInDiff,
+        isSubmodulePathInDiff,
+        findSubmodulePathForFile,
+        submoduleHasNewPointer
     };
 }
