@@ -424,4 +424,54 @@ suite('postStoryTestAutomationResults: bulk result processing', function() {
         assert.equal(resumeCommands.length, 0);
     });
 
+    test('sanitizes shell metacharacters in commit message from ticket summary', function() {
+        var commands = [];
+
+        var module = loadPostStoryTestAutomationResults({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/story_test_automation_result.json') {
+                    return JSON.stringify({
+                        storyKey: 'TS-140',
+                        overall: 'passed',
+                        summary: 'Mixed',
+                        results: [
+                            { testCaseKey: 'TS-141', status: 'passed', testPath: 'testing/tests/TS-141/test.py' }
+                        ]
+                    });
+                }
+                if (opts.path === 'outputs/tracker_comment.md') return 'h3. Story Test Result';
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                return null;
+            },
+            cli_execute_command: function(opts) {
+                commands.push(opts.command);
+                if (opts.command === 'git branch --show-current') return 'test/TS-140';
+                if (opts.command === 'git status --short -- testing') return '?? testing/tests/TS-141/test.py';
+                if (opts.command === 'git diff --cached --stat') return ' testing/tests/TS-141/test.py | 1 +';
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-140') === 0) return 'abc\trefs/heads/test/TS-140';
+                if (opts.command.indexOf('gh pr list --head test/TS-140') === 0) return '';
+                if (opts.command.indexOf('gh pr create') === 0) return 'https://github.com/IstiN/trackstate/pull/140';
+                return '';
+            },
+            jira_move_to_status: function() {},
+            jira_attach_file_to_ticket: function() {},
+            jira_update_field: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-140', fields: { summary: "README uses '<repository>' and --header instead of '<fork>' and -H" } },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_automation_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        var commitCmd = commands.filter(function(c) { return c.indexOf('git commit -m') === 0; })[0];
+        assert.ok(commitCmd, 'commit command was issued');
+        assert.notContains(commitCmd, '<');
+        assert.notContains(commitCmd, '>');
+        assert.notContains(commitCmd, ';');
+        assert.notContains(commitCmd, '|');
+        assert.notContains(commitCmd, '&');
+        assert.contains(commitCmd, 'TS-140 test: automate README uses');
+    });
+
 });

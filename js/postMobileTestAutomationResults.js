@@ -279,7 +279,7 @@ function performGitOperations(branchName, commitMessage, workingDir, testFilesPa
             return { success: true, branchName: branchName, noNewCommit: true };
         }
 
-        runInRepo('git commit -m "' + commitMessage.replace(/"/g, '\\"') + '"', workingDir);
+        runInRepo('git commit -m "' + prHelper.sanitizeCommitMessage(commitMessage) + '"', workingDir);
 
         try {
             runInRepo('git push -u origin ' + branchName, workingDir);
