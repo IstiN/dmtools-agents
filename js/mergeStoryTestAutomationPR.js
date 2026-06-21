@@ -13,10 +13,19 @@ var tokenUsageComment = require('./common/tokenUsageComment.js');
 function findPRForStory(scm, storyKey) {
     try {
         const branchName = 'test/' + storyKey;
-        const prList = scm.listPrs('open');
-        return (Array.isArray(prList) ? prList : []).find(function(pr) {
-            return pr.head && pr.head.ref && pr.head.ref === branchName;
-        }) || null;
+        const openList = scm.listPrs('open');
+        const openMatch = (Array.isArray(openList) ? openList : []).find(function(pr) {
+            return pr.head && pr.head.ref && pr.head.ref === branchName && !pr.merged_at;
+        });
+        if (openMatch) return { pr: openMatch, merged: false };
+
+        const closedList = scm.listPrs('closed');
+        const mergedMatch = (Array.isArray(closedList) ? closedList : []).find(function(pr) {
+            return pr.head && pr.head.ref && pr.head.ref === branchName && pr.merged_at;
+        });
+        if (mergedMatch) return { pr: mergedMatch, merged: true };
+
+        return null;
     } catch (e) {
         console.error('Failed to list PRs:', e);
         return null;
@@ -70,6 +79,50 @@ function moveLinkedTestCases(storyKey, testCaseType) {
     return { moved: moved, skipped: skipped, total: testCases.length };
 }
 
+function finalizeAlreadyMergedPR(params, scm, storyKey, pr, testCaseType, customParams) {
+    const prNumber = pr.number;
+    const prUrl = pr.html_url;
+    console.log('PR #' + prNumber + ' already merged for story ' + storyKey + ' — finalizing');
+
+    var issueType = params.ticket && params.ticket.fields &&
+        params.ticket.fields.issuetype && params.ticket.fields.issuetype.name;
+
+    var tcResult = moveLinkedTestCases(storyKey, testCaseType);
+
+    if (issueType === 'Bug') {
+        try {
+            jira_move_to_status({ key: storyKey, statusName: STATUSES.DONE });
+            console.log('Moved Bug', storyKey, 'to Done after merged test PR');
+        } catch (e) {
+            console.warn('Could not move Bug', storyKey, 'to Done:', e);
+        }
+    }
+
+    try {
+        jira_remove_label({ key: storyKey, label: LABELS.PR_APPROVED });
+    } catch (e) {
+        console.warn('Could not remove pr_approved label:', e);
+    }
+
+    releaseLock(storyKey, customParams);
+
+    var ticketLabel = issueType || 'Story';
+    jira_post_comment({
+        key: storyKey,
+        comment: 'h3. ✅ ' + ticketLabel + ' Test PR Already Merged\n\n' +
+            'PR [#' + prNumber + '|' + prUrl + '] for branch {code}test/' + storyKey + '{code} was already merged.\n\n' +
+            'Linked Test Cases moved to final status: *' + tcResult.moved + '* moved, *' + tcResult.skipped + '* skipped.'
+    });
+
+    try {
+        tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator });
+    } catch (e) {
+        console.warn('Failed to post token usage comments:', e);
+    }
+
+    return true;
+}
+
 function action(params) {
     const storyKey = params.ticket && params.ticket.key;
     if (!storyKey) {
@@ -92,13 +145,18 @@ function action(params) {
         return false;
     }
 
-    const pr = findPRForStory(scm, storyKey);
-    if (!pr) {
-        console.warn('No open PR found for story', storyKey, '— releasing lock');
+    const found = findPRForStory(scm, storyKey);
+    if (!found) {
+        console.warn('No open or merged PR found for story', storyKey, '— releasing lock');
         releaseLock(storyKey, customParams);
         return false;
     }
 
+    if (found.merged) {
+        return finalizeAlreadyMergedPR(params, scm, storyKey, found.pr, testCaseType, customParams);
+    }
+
+    const pr = found.pr;
     const prNumber = pr.number;
     const prUrl = pr.html_url;
     console.log('Found PR #' + prNumber + ' for story ' + storyKey);

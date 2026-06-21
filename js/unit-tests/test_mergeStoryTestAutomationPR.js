@@ -182,4 +182,83 @@ suite('mergeStoryTestAutomationPR', function() {
         assert.ok(comments[0].indexOf('MERGE CONFLICT') !== -1);
     });
 
+    test('finalizes already-merged Story PR without re-merging', function() {
+        var merged = [];
+        var statusMoves = [];
+        var labelsRemoved = [];
+        var comments = [];
+
+        var module = loadMergeStoryTestAutomationPR({
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git config --get remote.origin.url') return 'https://github.com/IstiN/trackstate.git';
+                return '';
+            },
+            github_list_prs: function(state) {
+                if (state === 'open') return [];
+                return [{ number: 88, head: { ref: 'test/TS-90' }, html_url: 'https://github.com/IstiN/trackstate/pull/88', merged_at: '2026-06-21T14:00:00Z' }];
+            },
+            github_get_pr: function() { return { mergeable: true, mergeable_state: 'clean' }; },
+            github_merge_pr: function(args) { merged.push(args); },
+            github_remove_pr_label: function() {},
+            jira_search_by_jql: function(args) {
+                assert.contains(args.jql, 'linkedIssues("TS-90")');
+                return [
+                    { key: 'TS-91', fields: { status: { name: 'In Review - Passed' } } },
+                    { key: 'TS-92', fields: { status: { name: 'In Review - Failed' } } }
+                ];
+            },
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            jira_remove_label: function(args) { labelsRemoved.push(args); },
+            jira_post_comment: function(args) { comments.push(args.comment); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-90' },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_merge_triggered' } }
+        });
+
+        assert.equal(result, true);
+        assert.deepEqual(merged, [], 'should not merge an already-merged PR');
+        assert.deepEqual(statusMoves, [
+            { key: 'TS-91', statusName: 'Passed' },
+            { key: 'TS-92', statusName: 'Failed' }
+        ]);
+        assert.ok(comments[0].indexOf('Already Merged') !== -1);
+    });
+
+    test('finalizes already-merged Bug PR and moves Bug to Done', function() {
+        var statusMoves = [];
+        var comments = [];
+
+        var module = loadMergeStoryTestAutomationPR({
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git config --get remote.origin.url') return 'https://github.com/IstiN/trackstate.git';
+                return '';
+            },
+            github_list_prs: function(state) {
+                if (state === 'open') return [];
+                return [{ number: 99, head: { ref: 'test/TS-100' }, html_url: 'https://github.com/IstiN/trackstate/pull/99', merged_at: '2026-06-21T14:00:00Z' }];
+            },
+            github_get_pr: function() { return { mergeable: true, mergeable_state: 'clean' }; },
+            github_remove_pr_label: function() {},
+            jira_search_by_jql: function(args) {
+                return [{ key: 'TS-101', fields: { status: { name: 'In Review - Passed' } } }];
+            },
+            jira_move_to_status: function(args) { statusMoves.push(args); },
+            jira_remove_label: function() {},
+            jira_post_comment: function(args) { comments.push(args.comment); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-100', fields: { issuetype: { name: 'Bug' } } },
+            jobParams: { customParams: { removeLabel: 'sm_bug_test_merge_triggered' } }
+        });
+
+        assert.equal(result, true);
+        assert.deepEqual(statusMoves, [
+            { key: 'TS-101', statusName: 'Passed' },
+            { key: 'TS-100', statusName: 'Done' }
+        ]);
+    });
+
 });
