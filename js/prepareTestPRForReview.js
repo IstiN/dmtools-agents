@@ -7,6 +7,7 @@
 var configLoader = require('./configLoader.js');
 const gh = require('./common/githubHelpers.js');
 var prHelper = require('./common/pullRequest.js');
+const { STATUSES } = require('./config.js');
 
 function findTestPRForTicket(scm, ticketKey) {
     try {
@@ -56,13 +57,31 @@ function isNoCommitsError(error) {
            msg.indexOf('no commits between') !== -1;
 }
 
-function finalizeAlreadyMergedTestCase(ticketKey, branchName) {
+function getIssueType(params) {
+    try {
+        return params.ticket.fields.issuetype.name;
+    } catch (e) {
+        return null;
+    }
+}
+
+function resolveFinalStatus(currentStatus, issueType) {
+    // Test Cases finish in Passed/Failed; Stories and Bugs stay in In Testing
+    // so the done-check agents (checkStoryTestsPassed / checkBugTestsPassed)
+    // can evaluate all linked Test Cases and move to Done / Bug To Fix / Ready For Testing.
+    if (issueType === 'Test Case') {
+        return currentStatus === 'In Review - Failed' ? 'Failed' : 'Passed';
+    }
+    return STATUSES.IN_TESTING;
+}
+
+function finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType) {
     try {
         const ticket = jira_get_ticket({ key: ticketKey });
         const currentStatus = ticket && ticket.fields && ticket.fields.status
             ? ticket.fields.status.name
             : '';
-        const finalStatus = currentStatus === 'In Review - Failed' ? 'Failed' : 'Passed';
+        const finalStatus = resolveFinalStatus(currentStatus, issueType);
         jira_move_to_status({ key: ticketKey, statusName: finalStatus });
         jira_post_comment({
             key: ticketKey,
@@ -86,6 +105,7 @@ function action(params) {
     try {
         const inputFolder = params.inputFolderPath;
         const ticketKey = inputFolder.split('/').pop();
+        const issueType = getIssueType(params);
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var scm = configLoader.createScm(config);
 
@@ -152,7 +172,7 @@ function action(params) {
             } catch (createErr) {
                 if (isNoCommitsError(createErr)) {
                     console.log('Branch test/' + ticketKey + ' has no commits ahead of main — test code is already merged.');
-                    finalizeAlreadyMergedTestCase(ticketKey, branchName);
+                    finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType);
                     return false;
                 }
                 const err = 'Branch test/' + ticketKey + ' exists but could not create PR: ' + createErr.toString();
@@ -168,7 +188,7 @@ function action(params) {
                 const ticket = jira_get_ticket({ key: ticketKey });
                 const currentStatus = ticket && ticket.fields && ticket.fields.status
                     ? ticket.fields.status.name : '';
-                const finalStatus = currentStatus === 'In Review - Failed' ? 'Failed' : 'Passed';
+                const finalStatus = resolveFinalStatus(currentStatus, issueType);
                 jira_move_to_status({ key: ticketKey, statusName: finalStatus });
                 jira_post_comment({
                     key: ticketKey,
