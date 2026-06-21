@@ -76,18 +76,16 @@ function mergeMain(storyKey, config) {
         throw new Error('git merge origin/main failed and no conflicted files were found');
     }
 
-    var nonTestConflicts = conflicts.filter(function(f) {
-        return f.indexOf('testing/tests/' + storyKey + '/') !== 0;
-    });
-    if (nonTestConflicts.length > 0) {
-        throw new Error('Merge conflicts outside the ticket test folder cannot be auto-resolved: ' + nonTestConflicts.join(', '));
-    }
-
     conflicts.forEach(function(file) {
         try {
-            runInRepo('git checkout --ours -- "' + file + '"', workingDir);
+            if (file.indexOf('testing/tests/' + storyKey + '/') === 0) {
+                runInRepo('git checkout --ours -- "' + file + '"', workingDir);
+                console.log('✅ Resolved conflict keeping branch version for ticket test file:', file);
+            } else {
+                runInRepo('git checkout --theirs -- "' + file + '"', workingDir);
+                console.log('✅ Resolved conflict keeping origin/main version:', file);
+            }
             runInRepo('git add "' + file + '"', workingDir);
-            console.log('✅ Resolved conflict keeping branch version:', file);
         } catch (e) {
             throw new Error('Failed to resolve conflict for ' + file + ': ' + e);
         }
@@ -204,7 +202,7 @@ function action(params) {
         ? actualParams.metadata.contextId + '_wip'
         : 'story_test_automation_rework_wip';
 
-    function releaseLock() {
+    function releaseWipLock() {
         try { jira_remove_label({ key: storyKey, label: wipLabel }); } catch (e) {}
         if (removeLabel) {
             try {
@@ -212,6 +210,10 @@ function action(params) {
                 console.log('✅ Removed SM label:', removeLabel);
             } catch (e) {}
         }
+    }
+
+    function releaseLock() {
+        releaseWipLock();
         try {
             const { LABELS } = require('./config.js');
             jira_remove_label({ key: storyKey, label: LABELS.TEST_PR_REWORK_NEEDED });
@@ -233,7 +235,7 @@ function action(params) {
                 key: storyKey,
                 comment: 'h3. ❌ Story Test Rework Push Failed\n\n{code}' + e.toString() + '{code}'
             });
-            releaseLock();
+            releaseWipLock();
             return { success: false, error: e.toString() };
         }
 
