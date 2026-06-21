@@ -20,8 +20,10 @@ function findOpenPRForTicket(scm, ticketKey) {
     try {
         var prList = scm.listPrs('open');
         return (Array.isArray(prList) ? prList : []).find(function(pr) {
-            var titleMatch = pr.title && pr.title.indexOf(ticketKey) !== -1;
-            var branchMatch = pr.head && pr.head.ref && pr.head.ref.indexOf(ticketKey) !== -1;
+            // Exact ticket match only — avoid false positives like TS-135 matching TS-1359
+            var titleMatch = pr.title && new RegExp('^' + ticketKey + '(\\b|\\s|[-:_])').test(pr.title);
+            var ref = pr.head && pr.head.ref ? pr.head.ref : '';
+            var branchMatch = ref === ticketKey || ref.endsWith('/' + ticketKey);
             return titleMatch || branchMatch;
         }) || null;
     } catch (e) {
