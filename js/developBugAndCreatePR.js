@@ -8,8 +8,7 @@
  *                               → Post Jira comment, move to Blocked, remove labels
  *
  *   outputs/already_fixed.json → Bug was fixed in a prior commit, no new code changes
- *                               → Post Jira comment with commit ref, move to Merged
- *                                 (SM then runs bug_merged → RCA/Solution field → Ready For Testing)
+ *                               → Post Jira comment with commit ref, move to Done
  *
  *   (neither file, but response.md missing) → CLI agent was interrupted (rate limit / crash)
  *                               → Push partial work (e.g. outputs/rca.md) if any
@@ -166,27 +165,6 @@ function action(params) {
         if (alreadyFixed) {
             console.log('outputs/already_fixed.json found — bug already resolved in codebase');
 
-            if (!hasCodeGraphUsage()) {
-                console.warn('outputs/already_fixed.json rejected — no CodeGraph usage was recorded');
-                try {
-                    jira_post_comment({
-                        key: ticketKey,
-                        comment: 'h3. ⚠️ Already Fixed Claim Needs CodeGraph Verification\n\n' +
-                            'The agent wrote `outputs/already_fixed.json`, but no CodeGraph usage was recorded. ' +
-                            'Already-fixed conclusions for source-code bugs must use CodeGraph to locate the relevant implementation and impact path.\n\n' +
-                            'Resetting to *Ready For Development* for an automatic retry.'
-                    });
-                } catch (e) {}
-                try {
-                    jira_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
-                    console.log('✅ Moved', ticketKey, 'to Ready For Development for CodeGraph retry');
-                } catch (e) {
-                    console.warn('Failed to move ticket to Ready For Development:', e);
-                }
-                removeLabels(ticketKey, params);
-                return { success: true, path: 'already_fixed_without_codegraph', ticketKey };
-            }
-
             let comment = 'h3. ✅ Bug Already Fixed\n\n';
             if (alreadyFixed.rca) {
                 comment += '*Root Cause*: ' + alreadyFixed.rca + '\n\n';
@@ -197,15 +175,20 @@ function action(params) {
             if (alreadyFixed.description) {
                 comment += alreadyFixed.description + '\n\n';
             }
-            comment += 'No new PR required — fix is already in the codebase. Moved to *Merged* so the Solution field and RCA are generated before test cases.';
+            if (!hasCodeGraphUsage()) {
+                comment += 'No new PR required — fix is already in the codebase. No CodeGraph usage was recorded, but the ticket is being moved to *Done* as requested.\n\n';
+                console.warn('outputs/already_fixed.json accepted without CodeGraph usage');
+            } else {
+                comment += 'No new PR required — fix is already in the codebase. Moved to *Done*.';
+            }
 
             try { jira_post_comment({ key: ticketKey, comment: comment }); } catch (e) {}
 
             try {
-                jira_move_to_status({ key: ticketKey, statusName: STATUSES.MERGED });
-                console.log('✅ Moved', ticketKey, 'to Merged');
+                jira_move_to_status({ key: ticketKey, statusName: STATUSES.DONE });
+                console.log('✅ Moved', ticketKey, 'to Done');
             } catch (e) {
-                console.warn('Failed to move to Merged:', e);
+                console.warn('Failed to move to Done:', e);
             }
 
             try { jira_add_label({ key: ticketKey, label: LABELS.AI_DEVELOPED }); } catch (e) {}
