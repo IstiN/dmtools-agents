@@ -165,6 +165,19 @@ function action(params) {
         // Move linked Test Cases to final status before removing Jira pr_approved label
         var tcResult = moveLinkedTestCases(storyKey, testCaseType);
 
+        var issueType = params.ticket && params.ticket.fields &&
+            params.ticket.fields.issuetype && params.ticket.fields.issuetype.name;
+
+        if (issueType === 'Bug') {
+            // Bug test-automation PR merged: move Bug straight to Done
+            try {
+                jira_move_to_status({ key: storyKey, statusName: STATUSES.DONE });
+                console.log('Moved Bug', storyKey, 'to Done after test PR merge');
+            } catch (e) {
+                console.warn('Could not move Bug', storyKey, 'to Done:', e);
+            }
+        }
+
         // Story stays In Testing; story_done_check will move it to Done when all TCs are Passed
         try {
             jira_remove_label({ key: storyKey, label: LABELS.PR_APPROVED });
@@ -175,9 +188,10 @@ function action(params) {
 
         releaseLock(storyKey, customParams);
 
+        var ticketLabel = issueType || 'Story';
         jira_post_comment({
             key: storyKey,
-            comment: 'h3. ✅ Story Test PR Merged\n\n' +
+            comment: 'h3. ✅ ' + ticketLabel + ' Test PR Merged\n\n' +
                 'PR [#' + prNumber + '|' + prUrl + '] for branch {code}test/' + storyKey + '{code} was merged.\n\n' +
                 'Linked Test Cases moved to final status: *' + tcResult.moved + '* moved, *' + tcResult.skipped + '* skipped.'
         });
