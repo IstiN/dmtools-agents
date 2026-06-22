@@ -1,13 +1,44 @@
 /**
- * Prepare Test PR For Review Action (preCliJSAction for pr_test_automation_review)
+ * Prepare Test PR For Review Action (preJSAction for test-automation review agents)
  * Same as preparePRForReview.js but specifically targets test/{TICKET-KEY} branches,
  * not feature ai/{TICKET-KEY} branches.
+ *
+ * Runs as preJSAction so that returning `false` skips the whole agent when the PR is
+ * already merged or has no changes.
  */
 
 var configLoader = require('./configLoader.js');
 const gh = require('./common/githubHelpers.js');
 var prHelper = require('./common/pullRequest.js');
 const { STATUSES, LABELS } = require('./config.js');
+
+function getTicketKey(params) {
+    if (params.ticket && params.ticket.key) {
+        return params.ticket.key;
+    }
+    if (params.inputFolderPath) {
+        return params.inputFolderPath.split('/').pop();
+    }
+    if (params.jobParams && params.jobParams.inputFolderPath) {
+        return params.jobParams.inputFolderPath.split('/').pop();
+    }
+    throw new Error('Cannot determine ticket key from params.ticket.key or params.inputFolderPath');
+}
+
+function getInputFolder(params, ticketKey) {
+    if (params.inputFolderPath) {
+        return params.inputFolderPath;
+    }
+    return 'input/' + ticketKey;
+}
+
+function ensureInputFolder(inputFolder) {
+    try {
+        cli_execute_command({ command: 'mkdir -p ' + inputFolder });
+    } catch (e) {
+        console.warn('Could not create input folder:', e);
+    }
+}
 
 function findTestPRForTicket(scm, ticketKey) {
     try {
@@ -65,6 +96,21 @@ function getIssueType(params) {
     }
 }
 
+function isWip(pr, ticket) {
+    if (pr && (pr.draft || (pr.title && /^\s*(WIP|DRAFT)\b/i.test(pr.title)))) {
+        return true;
+    }
+    if (ticket && ticket.labels) {
+        const labels = Array.isArray(ticket.labels) ? ticket.labels : (ticket.labels.value || []);
+        for (var i = 0; i < labels.length; i++) {
+            if (/_(wip|draft)$/i.test(labels[i]) || /^(wip|draft)$/i.test(labels[i])) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 function resolveFinalStatus(currentStatus, issueType) {
     // Test Cases finish in Passed/Failed; Stories and Bugs stay in In Testing
     // so the done-check agents (checkStoryTestsPassed / checkBugTestsPassed)
@@ -113,14 +159,15 @@ function finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType) {
 
 function action(params) {
     try {
-        const inputFolder = params.inputFolderPath;
-        const ticketKey = inputFolder.split('/').pop();
+        const ticketKey = getTicketKey(params);
+        const inputFolder = getInputFolder(params, ticketKey);
         const issueType = getIssueType(params);
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var scm = configLoader.createScm(config);
 
         console.log('=== Preparing test PR for review:', ticketKey, '===');
 
+        ensureInputFolder(inputFolder);
         clearStaleReviewOutputs();
 
         // Step 1: GitHub repo info
@@ -216,6 +263,18 @@ function action(params) {
 
         const pr = found.pr;
 
+        // Skip WIP / draft PRs
+        if (isWip(pr, params.ticket)) {
+            console.log('PR #' + pr.number + ' is WIP/draft — skipping review for', ticketKey);
+            try {
+                jira_post_comment({
+                    key: ticketKey,
+                    comment: 'h3. ⏸️ Test PR Review Skipped\n\nPR [#' + pr.number + '|' + (pr.html_url || '') + '] is WIP/draft. Review will run once it is ready.'
+                });
+            } catch (e) {}
+            return false;
+        }
+
         // Step 3: PR details
         const prDetails = gh.getPRDetails(scm, pr.number);
         if (!prDetails) {
@@ -280,7 +339,7 @@ function action(params) {
     } catch (error) {
         console.error('❌ Error in prepareTestPRForReview:', error);
         try {
-            const ticketKey = params.inputFolderPath.split('/').pop();
+            const ticketKey = getTicketKey(params);
             jira_post_comment({
                 key: ticketKey,
                 comment: 'h3. ❌ Test PR Review Setup Error\n\n{code}' + error.toString() + '{code}'

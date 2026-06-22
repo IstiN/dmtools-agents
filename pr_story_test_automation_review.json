@@ -7,8 +7,7 @@
     "ticketContextDepth": 1,
     "skipAIProcessing": true,
     "alwaysPostComments": true,
-    "preJSAction": "agents/js/checkWipLabel.js",
-    "preCliJSAction": "agents/js/prepareTestPRForReview.js",
+    "preJSAction": "agents/js/prepareTestPRForReview.js",
     "postJSAction": "agents/js/postStoryTestAutomationReview.js",
     "customParams": {
       "removeLabel": "sm_story_test_review_triggered"
