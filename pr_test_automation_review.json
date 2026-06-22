@@ -13,8 +13,7 @@
     "cleanupInputFolder": false,
     "skipAIProcessing": true,
     "alwaysPostComments": true,
-    "preJSAction": "agents/js/checkWipLabel.js",
-    "preCliJSAction": "agents/js/prepareTestPRForReview.js",
+    "preJSAction": "agents/js/prepareTestPRForReview.js",
     "postJSAction": "agents/js/postTestReviewComments.js",
     "customParams": {
       "removeLabel": "sm_test_review_triggered"
