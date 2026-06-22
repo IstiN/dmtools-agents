@@ -69,11 +69,14 @@ function checkCiStatus(scm, headSha) {
     return result;
 }
 
-function triggerReworkDueToCIFailure(storyKey, prNumber, prUrl, scm, customParams, failedNames) {
-    console.log('CI checks failed — moving Story to test-automation rework');
+function triggerReworkDueToCIFailure(storyKey, prNumber, prUrl, scm, customParams, failedNames, issueType) {
+    console.log('CI checks failed — moving ticket to test-automation rework');
     try { scm.removeLabel(prNumber, LABELS.PR_APPROVED); } catch (e) {}
     try { jira_remove_label({ key: storyKey, label: LABELS.PR_APPROVED }); } catch (e) {}
     try { jira_add_label({ key: storyKey, label: LABELS.TEST_PR_REWORK_NEEDED }); } catch (e) {}
+    // Remove the SM skip label so the rework rule can actually trigger on the next cycle.
+    var reworkSkipLabel = issueType === 'Bug' ? 'sm_bug_test_rework_triggered' : 'sm_story_test_rework_triggered';
+    try { jira_remove_label({ key: storyKey, label: reworkSkipLabel }); } catch (e) {}
     releaseLock(storyKey, customParams);
     var checksList = failedNames && failedNames.length ? failedNames.join(', ') : 'unknown';
     jira_post_comment({
@@ -192,6 +195,8 @@ function action(params) {
     var testCaseType = projectConfig.jira && projectConfig.jira.issueTypes && projectConfig.jira.issueTypes.TEST_CASE
         ? projectConfig.jira.issueTypes.TEST_CASE
         : 'Test Case';
+    var issueType = params.ticket && params.ticket.fields &&
+        params.ticket.fields.issuetype && params.ticket.fields.issuetype.name;
 
     const repoInfo = scm.getRemoteRepoInfo();
     if (!repoInfo) {
@@ -240,7 +245,7 @@ function action(params) {
         mergeableState === 'ci_still_running') {
         const ci = checkCiStatus(scm, headSha);
         if (ci.failed) {
-            return triggerReworkDueToCIFailure(storyKey, prNumber, prUrl, scm, customParams, ci.failedNames);
+            return triggerReworkDueToCIFailure(storyKey, prNumber, prUrl, scm, customParams, ci.failedNames, issueType);
         }
         if (ci.inProgress || ci.total === 0) {
             console.log('PR not ready to merge (' + mergeableState + ') — checks still running or unknown — will retry next cycle');
@@ -287,9 +292,6 @@ function action(params) {
 
         // Move linked Test Cases to final status before removing Jira pr_approved label
         var tcResult = moveLinkedTestCases(storyKey, testCaseType);
-
-        var issueType = params.ticket && params.ticket.fields &&
-            params.ticket.fields.issuetype && params.ticket.fields.issuetype.name;
 
         if (issueType === 'Bug') {
             // Bug test-automation PR merged: move Bug straight to Done
@@ -347,7 +349,7 @@ function action(params) {
         if (!isConflict && (isCIBlocking || errMsg === '')) {
             const ci = checkCiStatus(scm, headSha);
             if (ci.failed) {
-                return triggerReworkDueToCIFailure(storyKey, prNumber, prUrl, scm, customParams, ci.failedNames);
+                return triggerReworkDueToCIFailure(storyKey, prNumber, prUrl, scm, customParams, ci.failedNames, issueType);
             }
             if (ci.inProgress || ci.total === 0) {
                 console.log('Merge blocked temporarily — checks still running or unknown — will retry next cycle');
