@@ -536,6 +536,15 @@ function removeAutomationLabels(storyKey, params) {
             console.log('✅ Removed SM trigger label:', smTriggerLabel);
         }
     } catch (e) {}
+
+    // Clean up stale finalization labels from a previous test-automation cycle so the
+    // new bulk PR can go through review/merge again.
+    [LABELS.PR_APPROVED, LABELS.TEST_PR_MERGED, LABELS.TEST_PR_FINALIZED, LABELS.TEST_PR_REWORK_NEEDED].forEach(function(staleLabel) {
+        try {
+            jira_remove_label({ key: storyKey, label: staleLabel });
+            console.log('✅ Removed stale label:', staleLabel);
+        } catch (e) {}
+    });
 }
 
 function action(params) {
