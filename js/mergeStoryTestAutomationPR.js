@@ -39,6 +39,50 @@ function releaseLock(storyKey, customParams) {
     }
 }
 
+function checkCiStatus(scm, headSha) {
+    var result = { inProgress: false, failed: false, failedNames: [], total: 0 };
+    if (!scm || typeof scm.getCommitCheckRuns !== 'function' || !headSha) {
+        return result;
+    }
+    try {
+        var raw = scm.getCommitCheckRuns(headSha);
+        if (typeof raw === 'string') {
+            try { raw = JSON.parse(raw); } catch (e) {}
+        }
+        var checkRuns = Array.isArray(raw) ? raw
+            : (raw && raw.check_runs ? raw.check_runs : []);
+        result.total = checkRuns.length;
+        checkRuns.forEach(function(c) {
+            var status = (c.status || '').toLowerCase();
+            var conclusion = (c.conclusion || '').toLowerCase();
+            if (status === 'in_progress' || status === 'queued' || status === 'pending' || status === 'waiting') {
+                result.inProgress = true;
+            }
+            if (conclusion === 'failure' || conclusion === 'timed_out' || conclusion === 'action_required') {
+                result.failed = true;
+                if (c.name) result.failedNames.push(c.name);
+            }
+        });
+    } catch (e) {
+        console.warn('Could not determine CI status:', e);
+    }
+    return result;
+}
+
+function triggerReworkDueToCIFailure(storyKey, prNumber, prUrl, scm, customParams, failedNames) {
+    console.log('CI checks failed — moving Story to test-automation rework');
+    try { scm.removeLabel(prNumber, LABELS.PR_APPROVED); } catch (e) {}
+    try { jira_remove_label({ key: storyKey, label: LABELS.PR_APPROVED }); } catch (e) {}
+    try { jira_add_label({ key: storyKey, label: LABELS.TEST_PR_REWORK_NEEDED }); } catch (e) {}
+    releaseLock(storyKey, customParams);
+    var checksList = failedNames && failedNames.length ? failedNames.join(', ') : 'unknown';
+    jira_post_comment({
+        key: storyKey,
+        comment: '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *CI CHECKS FAILED* — PR #' + prNumber + ' is approved but required checks failed: ' + checksList + '. Moving to test-automation rework.\n\n[View PR|' + prUrl + ']{panel}'
+    });
+    return true;
+}
+
 function fetchLinkedTestCases(storyKey, testCaseType) {
     var jql = 'issue in linkedIssues("' + storyKey + '") AND issuetype = "' + testCaseType + '"';
     try {
@@ -174,11 +218,13 @@ function action(params) {
 
     let mergeableState = null;
     let mergeable = null;
+    let headSha = null;
     try {
         const prDetail = scm.getPr(prNumber);
         mergeable = prDetail && prDetail.mergeable;
         mergeableState = prDetail && prDetail.mergeable_state;
-        console.log('PR mergeable: ' + mergeable + ', state: ' + mergeableState);
+        headSha = prDetail && prDetail.head && prDetail.head.sha;
+        console.log('PR mergeable: ' + mergeable + ', state: ' + mergeableState + ', headSha: ' + (headSha ? headSha.substring(0, 8) : 'n/a'));
     } catch (e) {
         console.warn('Could not get PR details, will attempt merge anyway:', e);
     }
@@ -192,6 +238,14 @@ function action(params) {
         mergeableState === 'preparing' ||
         mergeableState === 'ci_must_pass' ||
         mergeableState === 'ci_still_running') {
+        const ci = checkCiStatus(scm, headSha);
+        if (ci.failed) {
+            return triggerReworkDueToCIFailure(storyKey, prNumber, prUrl, scm, customParams, ci.failedNames);
+        }
+        if (ci.inProgress || ci.total === 0) {
+            console.log('PR not ready to merge (' + mergeableState + ') — checks still running or unknown — will retry next cycle');
+            return false;
+        }
         console.log('PR not ready to merge (' + mergeableState + ') — will retry next cycle');
         return false;
     }
@@ -291,6 +345,14 @@ function action(params) {
         const isCIBlocking = errMsg.indexOf('blocked') !== -1 || errMsg.indexOf('422') !== -1 || errMsg.indexOf('405') !== -1;
 
         if (!isConflict && (isCIBlocking || errMsg === '')) {
+            const ci = checkCiStatus(scm, headSha);
+            if (ci.failed) {
+                return triggerReworkDueToCIFailure(storyKey, prNumber, prUrl, scm, customParams, ci.failedNames);
+            }
+            if (ci.inProgress || ci.total === 0) {
+                console.log('Merge blocked temporarily — checks still running or unknown — will retry next cycle');
+                return false;
+            }
             console.log('Merge blocked temporarily — will retry next cycle');
             return false;
         }
