@@ -466,6 +466,7 @@ suite('scm GitHub provider getPrDiff fallback', function() {
         var prCalls = [];
         var gitCalls = [];
         var scmModule = loadScm({
+            github_get_pr_diff_text: function() { return ''; },
             github_get_pr_diff: function(args) {
                 prDiffCalls.push(args);
                 return 'com.github.istin.dmtools.github.GitHub$1@61edc883';
@@ -497,6 +498,7 @@ suite('scm GitHub provider getPrDiff fallback', function() {
     test('falls back to origin-prefixed git diff when bare refs are not available', function() {
         var gitCalls = [];
         var scmModule = loadScm({
+            github_get_pr_diff_text: function() { return ''; },
             github_get_pr_diff: function() { return ''; },
             github_get_pr: function() { return { base: { ref: 'main' }, head: { ref: 'ai/TS-577' } }; },
             cli_execute_command: function(args) {

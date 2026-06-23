@@ -35,7 +35,7 @@ function loadTriggerBugTestAutomation(mocks) {
 
 suite('triggerBugTestAutomation', function() {
 
-    test('triggers bug_test_automation and removes generator label', function() {
+    test('triggers bug_test_automation and keeps generator label to prevent re-run loop', function() {
         var triggered = false;
         var removedLabels = [];
 
@@ -63,7 +63,8 @@ suite('triggerBugTestAutomation', function() {
         assert.equal(result.success, true);
         assert.equal(result.triggered, true);
         assert.equal(triggered, true);
-        assert.deepEqual(removedLabels, [{ key: 'TP-200', label: 'sm_bug_test_cases_triggered' }]);
+        // Implementation deliberately keeps the generator SM label to avoid a re-run loop.
+        assert.deepEqual(removedLabels, []);
     });
 
     test('falls back to SM when autoStart config is missing', function() {
