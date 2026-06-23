@@ -1,0 +1,17 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "bug_fix_batch_merge_finalize"
+    },
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "postJSAction": "agents/js/finalizeBugFixBatchMerge.js",
+    "customParams": {
+      "removeLabel": "sm_bug_fix_batch_finalize_triggered"
+    },
+    "inputJql": "key = PROJ-999"
+  }
+}

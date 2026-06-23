@@ -1,0 +1,37 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "bug_fix_batch_development"
+    },
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "attachResponseAsFile": false,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "preJSAction": "agents/js/checkWipLabel.js",
+    "preCliJSAction": "agents/js/prepareBugFixBatchContext.js",
+    "postJSAction": "agents/js/developBugFixBatchAndCreatePR.js",
+    "customParams": {
+      "removeLabel": "sm_bug_fix_batch_development_triggered"
+    },
+    "inputJql": "key = PROJ-999",
+    "cliPrompts": [
+      "Senior Developer Engineer specializing in root cause analysis and bug fixing",
+      "./agents/instructions/common/agent_task_preamble.md",
+      "./agents/instructions/common/coding_guidelines.md",
+      "./agents/instructions/common/input_context_reading.md",
+      "./agents/instructions/bug_fix_batch_development/batch_scope.md",
+      "./agents/instructions/bug_fix_development/general_guidelines.md",
+      "./agents/instructions/bug_fix_development/tdd_approach.md",
+      "./agents/instructions/bug_fix_development/output_rules.md",
+      "./agents/instructions/bug_fix_development/formatting_rules.md",
+      "./agents/instructions/bug_fix_development/few_shots.md",
+      "./agents/instructions/common/dmtools_cli.md",
+      "./agents/prompts/bash_tools.md"
+    ]
+  }
+}
