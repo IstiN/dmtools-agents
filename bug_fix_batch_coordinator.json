@@ -1,0 +1,18 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "bug_fix_batch_coordinator"
+    },
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "postJSAction": "agents/js/createBugFixBatchEpic.js",
+    "customParams": {
+      "removeLabel": "sm_bug_fix_batch_coordinator_triggered",
+      "batchSize": 5
+    },
+    "inputJql": "key = PROJ-1"
+  }
+}
