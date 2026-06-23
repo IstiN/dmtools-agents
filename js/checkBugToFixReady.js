@@ -9,9 +9,9 @@
  * - Otherwise → releases the SM idempotency label so the check re-runs next cycle.
  *
  * Story:
- * - Finds all linked Bugs.
- * - If all linked Bugs are in "Done" → moves Story to "Ready For Testing" to trigger
- *   a full re-test of all linked Test Cases.
+ * - Finds all linked Bugs AND all Bugs linked to linked Test Cases.
+ * - If every linked Bug (direct or through a Test Case) is in "Done" → moves Story
+ *   to "Ready For Testing" to trigger a full re-test of all linked Test Cases.
  * - Otherwise → releases the SM idempotency label so the check re-runs next cycle.
  */
 
@@ -36,18 +36,40 @@ function action(params) {
         }
     }
 
-    function findLinkedBugs() {
+    function findLinkedBugs(entityKey) {
+        var key = entityKey || ticketKey;
         return jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug',
+            jql: 'issue in linkedIssues("' + key + '") AND issuetype = Bug',
             maxResults: 50
         }) || [];
     }
 
-    function findNotDoneBugs() {
+    function findNotDoneBugs(entityKey) {
+        var key = entityKey || ticketKey;
         return jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug AND status != "Done"',
-            maxResults: 1
+            jql: 'issue in linkedIssues("' + key + '") AND issuetype = Bug AND status != "Done"',
+            maxResults: 50
         }) || [];
+    }
+
+    function findLinkedTestCases() {
+        return jira_search_by_jql({
+            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "Test Case"',
+            maxResults: 100
+        }) || [];
+    }
+
+    function findPendingBugsInLinkedTestCases() {
+        var testCases = findLinkedTestCases();
+        var pending = [];
+        testCases.forEach(function(tc) {
+            var tcKey = tc.key;
+            var notDone = findNotDoneBugs(tcKey);
+            notDone.forEach(function(bug) {
+                pending.push({ tcKey: tcKey, bugKey: bug.key, status: bug.fields && bug.fields.status && bug.fields.status.name });
+            });
+        });
+        return pending;
     }
 
     try {
@@ -75,6 +97,18 @@ function action(params) {
         }
 
         if (issueType === 'Story') {
+            // Also check bugs linked to linked Test Cases before allowing the Story to re-test.
+            const pendingTcBugs = findPendingBugsInLinkedTestCases();
+            if (pendingTcBugs.length > 0) {
+                var details = pendingTcBugs.map(function(item) {
+                    return '* ' + item.bugKey + ' (' + item.status + ') via Test Case ' + item.tcKey;
+                }).join('\n');
+                console.log('Found', pendingTcBugs.length, 'pending Bug(s) linked to linked Test Cases — keeping Story in Bug To Fix');
+                console.log(details);
+                releaseLock();
+                return { success: true, action: 'waiting_for_tc_bugs', issueType, pendingTcBugs: pendingTcBugs, ticketKey };
+            }
+
             // All linked Bugs are Done → move Story back to Ready For Testing for re-test
             console.log('All', totalBugs, 'linked Bug(s) are Done — moving Story', ticketKey, 'to Ready For Testing');
 
