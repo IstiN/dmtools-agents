@@ -113,4 +113,50 @@ suite('checkBugToFixReady', function() {
         assert.deepEqual(removedLabels, [{ key: 'TS-90', label: 'sm_bug_to_fix_check_triggered' }]);
     });
 
+    test('keeps Story in Bug To Fix when a linked Test Case has a pending Bug', function() {
+        var moved = [];
+        var comments = [];
+        var removedLabels = [];
+
+        var module = loadCheckBugToFixReady({
+            jira_search_by_jql: function(args) {
+                var jql = args.jql;
+                // Direct linked bugs of the Story: one Done bug.
+                if (jql.indexOf('linkedIssues("TS-90")') !== -1 && jql.indexOf('issuetype = Bug') !== -1) {
+                    if (jql.indexOf('status != "Done"') !== -1) {
+                        return [];
+                    }
+                    return [{ key: 'TS-92', fields: { status: { name: 'Done' } } }];
+                }
+                // Linked Test Cases of the Story.
+                if (jql.indexOf('linkedIssues("TS-90")') !== -1 && jql.indexOf('issuetype = "Test Case"') !== -1) {
+                    return [{ key: 'TS-TC-1', fields: { status: { name: 'Bug To Fix' } } }];
+                }
+                // Bugs linked to the Test Case: one not-Done bug.
+                if (jql.indexOf('linkedIssues("TS-TC-1")') !== -1 && jql.indexOf('issuetype = Bug') !== -1) {
+                    if (jql.indexOf('status != "Done"') !== -1) {
+                        return [{ key: 'TS-95', fields: { status: { name: 'Ready For Testing' } } }];
+                    }
+                    return [
+                        { key: 'TS-95', fields: { status: { name: 'Ready For Testing' } } }
+                    ];
+                }
+                return [];
+            },
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_post_comment: function(args) { comments.push(args); },
+            jira_remove_label: function(args) { removedLabels.push(args); }
+        });
+
+        var result = module.action({
+            ticket: makeTicket('TS-90', 'Story'),
+            jobParams: { customParams: { removeLabel: 'sm_bug_to_fix_check_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'waiting_for_tc_bugs');
+        assert.deepEqual(moved, []);
+        assert.deepEqual(removedLabels, [{ key: 'TS-90', label: 'sm_bug_to_fix_check_triggered' }]);
+    });
+
 });
