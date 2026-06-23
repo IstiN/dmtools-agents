@@ -320,4 +320,82 @@ suite('checkBugTestsPassed', function() {
         assert.deepEqual(removedLabels, [{ key: 'TS-80', label: 'sm_bug_done_check_triggered' }]);
     });
 
+    test('moves finalized Bug to In Rework when any linked TC is still blocking', function() {
+        var moved = [];
+        var comments = [];
+        var removedLabels = [];
+
+        var module = loadCheckBugTestsPassed({
+            jira_get_ticket: function() {
+                return {
+                    fields: {
+                        labels: ['test_pr_finalized'],
+                        issuelinks: [
+                            { outwardIssue: makeTc('TS-91', 'Passed') },
+                            { outwardIssue: makeTc('TS-92', 'Failed') }
+                        ]
+                    }
+                };
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_post_comment: function(args) { comments.push(args); },
+            jira_remove_label: function(args) { removedLabels.push(args); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-90' },
+            jobParams: { customParams: { removeLabel: 'sm_bug_done_check_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'moved_to_rework');
+        assert.deepEqual(moved, [{ key: 'TS-90', statusName: 'In Rework' }]);
+        assert.contains(comments[0].comment, 'Test PR Merged But Acceptance Tests Still Blocking');
+        assert.deepEqual(removedLabels, [{ key: 'TS-90', label: 'sm_bug_done_check_triggered' }]);
+    });
+
+    test('does not treat a Done linked Bug as handling an active Bug To Fix TC', function() {
+        var moved = [];
+        var comments = [];
+        var removedLabels = [];
+
+        var module = loadCheckBugTestsPassed({
+            jira_get_ticket: function() {
+                return {
+                    fields: {
+                        labels: ['test_pr_finalized'],
+                        issuelinks: [
+                            { outwardIssue: makeTc('TS-91', 'Passed') },
+                            { outwardIssue: makeTc('TS-92', 'Bug To Fix') }
+                        ]
+                    }
+                };
+            },
+            jira_search_by_jql: function(args) {
+                if (args.jql.indexOf('TS-92') !== -1 && args.jql.indexOf('issuetype = "Bug"') !== -1) {
+                    return [
+                        { key: 'TS-90', fields: { status: { name: 'In Testing' } } },
+                        { key: 'TS-99', fields: { status: { name: 'Done' } } }
+                    ];
+                }
+                return [];
+            },
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_post_comment: function(args) { comments.push(args); },
+            jira_remove_label: function(args) { removedLabels.push(args); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-90' },
+            jobParams: { customParams: { removeLabel: 'sm_bug_done_check_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'moved_to_rework');
+        assert.deepEqual(moved, [{ key: 'TS-90', statusName: 'In Rework' }]);
+        assert.contains(comments[0].comment, 'Test PR Merged But Acceptance Tests Still Blocking');
+        assert.deepEqual(removedLabels, [{ key: 'TS-90', label: 'sm_bug_done_check_triggered' }]);
+    });
+
 });

@@ -98,7 +98,7 @@ suite('mergeStoryTestAutomationPR', function() {
         ]);
     });
 
-    test('merges Bug PR and moves Bug to Done after linked Test Cases', function() {
+    test('merges Bug PR and keeps Bug in In Testing for bug_done_check', function() {
         var merged = [];
         var statusMoves = [];
 
@@ -131,8 +131,7 @@ suite('mergeStoryTestAutomationPR', function() {
 
         assert.equal(result, true);
         assert.deepEqual(statusMoves, [
-            { key: 'TS-81', statusName: 'Passed' },
-            { key: 'TS-80', statusName: 'Done' }
+            { key: 'TS-81', statusName: 'Passed' }
         ]);
     });
 
@@ -226,7 +225,7 @@ suite('mergeStoryTestAutomationPR', function() {
         assert.ok(comments[0].indexOf('Already Merged') !== -1);
     });
 
-    test('finalizes already-merged Bug PR and moves Bug to Done', function() {
+    test('finalizes already-merged Bug PR and keeps Bug in In Testing', function() {
         var statusMoves = [];
         var comments = [];
 
@@ -256,8 +255,7 @@ suite('mergeStoryTestAutomationPR', function() {
 
         assert.equal(result, true);
         assert.deepEqual(statusMoves, [
-            { key: 'TS-101', statusName: 'Passed' },
-            { key: 'TS-100', statusName: 'Done' }
+            { key: 'TS-101', statusName: 'Passed' }
         ]);
     });
 

@@ -16,7 +16,7 @@
  *   this check on the next cycle.
  */
 
-const { STATUSES } = require('./config.js');
+const { STATUSES, LABELS } = require('./config.js');
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 
@@ -42,9 +42,17 @@ function action(params) {
         }
     }
 
-    function findDirectLinkedTCs() {
+    function getTicket() {
         try {
-            const ticket = jira_get_ticket({ key: ticketKey });
+            return jira_get_ticket({ key: ticketKey }) || {};
+        } catch (e) {
+            console.warn('Failed to read ticket', ticketKey, ':', e);
+            return {};
+        }
+    }
+
+    function findDirectLinkedTCs(ticket) {
+        try {
             const issueLinks = ticket && ticket.fields && ticket.fields.issuelinks;
             if (!Array.isArray(issueLinks) || issueLinks.length === 0) {
                 return [];
@@ -104,10 +112,11 @@ function action(params) {
         if (status === STATUSES.BUG_TO_FIX) {
             var linkedBugs = findLinkedBugs(tc.key);
             var hasOtherBug = linkedBugs.some(function(bug) {
-                return bug.key !== ticketKey;
+                return bug.key !== ticketKey &&
+                    bug.fields && bug.fields.status && bug.fields.status.name !== STATUSES.DONE;
             });
             if (hasOtherBug) {
-                console.log('TC', tc.key, 'is Bug To Fix but already tracked by another Bug — treating as non-blocking');
+                console.log('TC', tc.key, 'is Bug To Fix but already tracked by another active Bug — treating as non-blocking');
                 return false;
             }
         }
@@ -119,9 +128,12 @@ function action(params) {
         if (!ticketKey) throw new Error('params.ticket.key is missing');
         console.log('=== Bug done check for', ticketKey, '===');
 
+        const ticket = getTicket();
+        const labels = (ticket && ticket.fields && ticket.fields.labels) || [];
+
         // Step 1: Prefer directly linked Test Cases so a bug is only held up by
         // its own acceptance tests, not by every Test Case connected to a parent Story.
-        var allTCs = findDirectLinkedTCs();
+        var allTCs = findDirectLinkedTCs(ticket);
         var linkSource = 'direct';
 
         if (allTCs.length === 0) {
@@ -146,6 +158,24 @@ function action(params) {
         console.log('Blocking Test Cases:', blockingCount, '/', totalTCs);
 
         if (blockingCount > 0) {
+            // If the test-automation PR has already been merged and finalized, any still-blocking
+            // Test Case means the fix did not work. Route the Bug to In Rework instead of
+            // waiting forever.
+            const isFinalized = labels.indexOf(LABELS.TEST_PR_FINALIZED) !== -1;
+            if (isFinalized) {
+                console.log('Test PR finalized but', blockingCount, 'linked Test Case(s) still block — moving', ticketKey, 'to In Rework');
+                jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REWORK });
+                jira_post_comment({
+                    key: ticketKey,
+                    comment: 'h3. 🔄 Test PR Merged But Acceptance Tests Still Blocking\n\n' +
+                        'The test-automation PR was merged and finalized, but the following linked Test Case(s) are still not *Passed*:\n' +
+                        blockingTCs.map(function(tc) { return '- ' + tc.key + ' (' + (tc.fields && tc.fields.status && tc.fields.status.name || 'unknown') + ')'; }).join('\n') + '\n\n' +
+                        'Moving the Bug to *In Rework* so the fix can be revisited.'
+                });
+                releaseLock();
+                return { success: true, action: 'moved_to_rework', totalTCs, blockingCount, blockingTCs: blockingTCs.map(function(tc) { return tc.key; }), ticketKey };
+            }
+
             console.log('Not all Test Cases passed — releasing lock, will re-check next cycle');
             releaseLock();
             return { success: true, action: 'waiting', totalTCs, blockingCount, blockingTCs: blockingTCs.map(function(tc) { return tc.key; }), ticketKey };

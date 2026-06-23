@@ -136,14 +136,9 @@ function finalizeAlreadyMergedPR(params, scm, storyKey, pr, testCaseType, custom
 
     var tcResult = moveLinkedTestCases(storyKey, testCaseType);
 
-    if (issueType === 'Bug') {
-        try {
-            jira_move_to_status({ key: storyKey, statusName: STATUSES.DONE });
-            console.log('Moved Bug', storyKey, 'to Done after merged test PR');
-        } catch (e) {
-            console.warn('Could not move Bug', storyKey, 'to Done:', e);
-        }
-    }
+    // Bug stays In Testing; bug_done_check will move it to Done only when all
+    // directly linked Test Cases are Passed. Moving it here allowed bugs to be
+    // closed while their acceptance tests were still failing.
 
     try {
         jira_remove_label({ key: storyKey, label: LABELS.PR_APPROVED });
@@ -293,17 +288,9 @@ function action(params) {
         // Move linked Test Cases to final status before removing Jira pr_approved label
         var tcResult = moveLinkedTestCases(storyKey, testCaseType);
 
-        if (issueType === 'Bug') {
-            // Bug test-automation PR merged: move Bug straight to Done
-            try {
-                jira_move_to_status({ key: storyKey, statusName: STATUSES.DONE });
-                console.log('Moved Bug', storyKey, 'to Done after test PR merge');
-            } catch (e) {
-                console.warn('Could not move Bug', storyKey, 'to Done:', e);
-            }
-        }
-
-        // Story stays In Testing; story_done_check will move it to Done when all TCs are Passed
+        // Bug stays In Testing; bug_done_check will move it to Done only when all
+        // directly linked Test Cases are Passed. Story stays In Testing;
+        // story_done_check will move it to Done when all TCs are Passed
         try {
             jira_remove_label({ key: storyKey, label: LABELS.PR_APPROVED });
             console.log('Removed pr_approved label from Jira Story');
