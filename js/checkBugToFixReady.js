@@ -25,6 +25,18 @@ function action(params) {
     const customParams = params.jobParams && params.jobParams.customParams;
     const removeLabel = customParams && customParams.removeLabel;
 
+    /**
+     * DMTools returns issue search results as host objects. In some runtime
+     * environments (CI/GraalJS) direct property access (obj.key) returns
+     * undefined; serialising to JSON and back gives a plain JS object we can
+     * rely on.
+     */
+    function toPlain(value) {
+        if (value === null || value === undefined) return value;
+        if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+        return JSON.parse(JSON.stringify(value));
+    }
+
     function releaseLock() {
         if (ticketKey && removeLabel) {
             try {
@@ -38,34 +50,40 @@ function action(params) {
 
     function findLinkedBugs(entityKey) {
         var key = entityKey || ticketKey;
-        return jira_search_by_jql({
+        return toPlain(jira_search_by_jql({
             jql: 'issue in linkedIssues("' + key + '") AND issuetype = Bug',
             maxResults: 50
-        }) || [];
+        })) || [];
     }
 
     function findNotDoneBugs(entityKey) {
         var key = entityKey || ticketKey;
-        return jira_search_by_jql({
+        return toPlain(jira_search_by_jql({
             jql: 'issue in linkedIssues("' + key + '") AND issuetype = Bug AND status != "Done"',
             maxResults: 50
-        }) || [];
+        })) || [];
     }
 
     function findLinkedTestCases() {
-        return jira_search_by_jql({
+        return toPlain(jira_search_by_jql({
             jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "Test Case"',
             maxResults: 100
-        }) || [];
+        })) || [];
     }
 
     function findPendingBugsInLinkedTestCases() {
         var testCases = findLinkedTestCases();
         var pending = [];
-        testCases.forEach(function(tc) {
+        testCases.forEach(function(tcRaw) {
+            var tc = toPlain(tcRaw);
             var tcKey = tc.key;
+            if (!tcKey) {
+                console.warn('Skipping Test Case without key:', tc);
+                return;
+            }
             var notDone = findNotDoneBugs(tcKey);
-            notDone.forEach(function(bug) {
+            notDone.forEach(function(bugRaw) {
+                var bug = toPlain(bugRaw);
                 pending.push({ tcKey: tcKey, bugKey: bug.key, status: bug.fields && bug.fields.status && bug.fields.status.name });
             });
         });
