@@ -80,7 +80,13 @@ function formatUsageComment(filePath, data, initiator) {
     var fileName = fileNameFromPath(filePath);
     // Strip the _usage suffix so the comment label matches the agent name
     // (e.g. outputs/story_acceptance_criteria_usage.json -> [story_acceptance_criteria]: {...})
-    var label = fileName.replace(/_usage\.json$/, '');
+    // Use string operations instead of a regex literal because the GraalJS
+    // bridge in this environment does not always have the regex language enabled.
+    var label = fileName;
+    var suffixIndex = fileName.lastIndexOf(USAGE_SUFFIX);
+    if (suffixIndex !== -1 && fileName.substring(suffixIndex) === USAGE_SUFFIX) {
+        label = fileName.substring(0, suffixIndex);
+    }
     var comment = '[' + label + ']: ' + JSON.stringify(data);
     var mention = formatJiraMention(initiator);
     if (mention) {
