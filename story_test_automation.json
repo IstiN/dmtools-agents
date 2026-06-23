@@ -11,9 +11,7 @@
       "CLI_ALLOWED_COMMANDS": "find,ls,cat,mkdir,bash,pytest,python3,pip3,run-agent.sh"
     },
     "customParams": {
-      "removeLabel": "sm_story_test_automation_triggered",
-      "autoStartReview": true,
-      "autoStartReviewConfigFile": "agents/pr_story_test_automation_review.json"
+      "removeLabel": "sm_story_test_automation_triggered"
     },
     "preJSAction": "agents/js/checkWipLabel.js",
     "preCliJSAction": "agents/js/preCliStoryTestAutomationSetup.js",
