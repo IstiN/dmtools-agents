@@ -103,6 +103,9 @@ function file_read(args) {
     if (!fs.existsSync(resolved) && p.indexOf('js/') === 0) {
         resolved = path.resolve(process.cwd(), 'agents', p);
     }
+    if (!fs.existsSync(resolved) && p.indexOf('agents/') !== 0) {
+        resolved = path.resolve(process.cwd(), 'agents', p);
+    }
     if (!fs.existsSync(resolved)) {
         throw new Error('file_read: file not found: ' + p);
     }
