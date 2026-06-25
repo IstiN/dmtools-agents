@@ -12,6 +12,10 @@
  * @param {Object} params.metadata - Job metadata containing contextId
  * @returns {boolean} false to stop processing, true to continue
  */
+
+var configLoader = require('./configLoader.js');
+var gh = require('./common/githubHelpers.js');
+
 function action(params) {
     try {
         const ticket = params.ticket;
@@ -58,6 +62,33 @@ function action(params) {
         }
         
         console.log('✅ Ticket ' + ticketKey + ' does not have WIP label "' + wipLabel + '" - continuing with processing');
+
+        // Optional: verify an open PR exists for review/rework agents.
+        var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+        if (customParams.checkOpenPR) {
+            try {
+                var config = configLoader.loadProjectConfig(params.jobParams || params);
+                var scm = configLoader.createScm(config);
+                var pr = gh.findPRForTicket(scm, ticketKey);
+                if (!pr) {
+                    console.log('⏸️  No open PR found for ' + ticketKey + ' - skipping processing');
+                    try {
+                        jira_post_comment({
+                            key: ticketKey,
+                            comment: 'h3. *Processing Skipped*\n\nNo open Pull Request found for this ticket. The review/rework agent cannot run without an existing PR.\n\n_Ticket will be processed again once a PR is available._'
+                        });
+                    } catch (commentError) {
+                        console.warn('Failed to post skip comment:', commentError);
+                    }
+                    console.log('checkWipLabel result: stop processing (no open PR)');
+                    return false;
+                }
+                console.log('✅ Found open PR #' + pr.number + ' for ' + ticketKey + ' - continuing');
+            } catch (prError) {
+                console.warn('Failed to check open PR (non-fatal):', prError);
+            }
+        }
+
         console.log('checkWipLabel result: continue processing');
         return true; // Continue processing
         
