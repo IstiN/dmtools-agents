@@ -18,7 +18,8 @@
     "postJSAction": "agents/js/postPRReviewComments.js",
     "customParams": {
       "removeLabel": "sm_story_review_triggered",
-      "allowApproveWithSuggestions": true
+      "allowApproveWithSuggestions": true,
+      "checkOpenPR": true
     },
     "outputSchemas": {
       "pr_review.json": {

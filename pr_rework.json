@@ -20,7 +20,8 @@
       "removeLabels": [
         "sm_story_rework_triggered",
         "sm_story_review_triggered"
-      ]
+      ],
+      "checkOpenPR": true
     },
     "inputJql": "key = PROJ-243",
     "cliPrompts": [
