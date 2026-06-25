@@ -218,6 +218,26 @@ suite('sm.json rule ordering', function() {
         assert.equal(bugDevelopment.concurrencyKey, 'bug_development', 'bug development should use shared active-run detection across SM cycles');
     });
 
+    test('recover merged PR runs before pr_rework so In Rework tickets with merged PR are recovered first', function() {
+        var config = JSON.parse(file_read({ path: 'sm.json' }));
+        var rules = config.params.jobParams.rules;
+        var indexByDescription = {};
+
+        rules.forEach(function(rule, index) {
+            indexByDescription[rule.description] = index;
+        });
+
+        var recoverMerged = indexByDescription['Review/Rework/Blocked Stories & Bugs with already merged PR → recover Merged status'];
+        var prRework = indexByDescription['In Rework Stories & Bugs → trigger pr_rework'];
+
+        assert.ok(recoverMerged >= 0, 'recover merged PR rule exists');
+        assert.ok(prRework >= 0, 'pr_rework rule exists');
+        assert.ok(
+            recoverMerged < prRework,
+            'recover_merged_pr must run before pr_rework to avoid starting rework on tickets whose PR is already merged'
+        );
+    });
+
     test('stuck test case recovery has a cooldown to avoid racing active automation', function() {
         var config = JSON.parse(file_read({ path: 'sm.json' }));
         var rules = config.params.jobParams.rules;
