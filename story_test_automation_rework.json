@@ -11,7 +11,8 @@
     "preCliJSAction": "agents/js/preCliStoryTestAutomationSetup.js",
     "postJSAction": "agents/js/storyTestAutomationRework.js",
     "customParams": {
-      "removeLabel": "sm_story_test_rework_triggered"
+      "removeLabel": "sm_story_test_rework_triggered",
+      "checkOpenPR": true
     },
     "inputJql": "key = JD-111",
     "cliPrompts": [

@@ -4,6 +4,7 @@
     "jsPath": "js/unit-tests/testRunner.js",
     "jobParams": {
       "testFiles": [
+        "js/unit-tests/test_checkWipLabel.js",
         "js/unit-tests/test_configLoader.js",
         "js/unit-tests/test_fetchQuestionsToInput.js",
         "js/unit-tests/test_smAgent.js",

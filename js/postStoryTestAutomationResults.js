@@ -597,6 +597,50 @@ function action(params) {
         const overall = (result.overall || '').toLowerCase();
         const blockedByHuman = overall === 'blocked_by_human';
 
+        // Determine whether this is a Bug with a real product failure.
+        var issueType = (params.ticket && params.ticket.fields &&
+            params.ticket.fields.issuetype && params.ticket.fields.issuetype.name) || 'Story';
+        var failedResults = (result.results || []).filter(function(r) {
+            return r.status === 'failed';
+        });
+        var hasProductFailure = failedResults.length > 0;
+
+        // For a Bug, a product failure means the fix did not work. Send the Bug
+        // straight back to development and finalize the failing Test Cases as Failed.
+        if (issueType === 'Bug' && hasProductFailure) {
+            console.log('Bug', storyKey, 'has', failedResults.length, 'product failure(s) — returning to development');
+            failedResults.forEach(function(item) {
+                updateTestCaseStatus(item.testCaseKey, 'failed', workingDir, storyKey, config);
+                finalizeTestCaseStatus(item.testCaseKey, 'failed');
+            });
+
+            var bugReturnStatus = statuses.READY_FOR_DEVELOPMENT || STATUSES.READY_FOR_DEVELOPMENT;
+            try {
+                jira_move_to_status({ key: storyKey, statusName: bugReturnStatus });
+                console.log('✅ Moved Bug', storyKey, 'back to', bugReturnStatus);
+            } catch (moveErr) {
+                console.warn('Failed to move Bug', storyKey, 'to', bugReturnStatus, ':', moveErr);
+            }
+
+            try {
+                var failureList = failedResults.map(function(r) { return '* ' + r.testCaseKey + (r.failureSummary ? ' — ' + r.failureSummary : ''); }).join('\n');
+                jira_post_comment({
+                    key: storyKey,
+                    comment: 'h3. ⚠️ Bug Fix Did Not Pass Automated Tests\n\nThe following Test Cases failed with a product regression:\n' + failureList + '\n\nThe Bug is being returned to *Ready For Development* for a corrected fix.'
+                });
+            } catch (e) {
+                console.warn('Failed to post bug return comment:', e);
+            }
+
+            removeAutomationLabels(storyKey, params);
+            return {
+                success: true,
+                status: 'failed',
+                storyKey: storyKey,
+                failedTestCases: failedResults.map(function(r) { return r.testCaseKey; })
+            };
+        }
+
         // Step 2: Configure git author
         try {
             runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);

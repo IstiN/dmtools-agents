@@ -87,8 +87,8 @@
           "enabled": true
         },
         {
-          "description": "Backlog / To Do / Ready For Development / In Development Bugs → trigger bug_development",
-          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('Backlog', 'To Do', 'Ready For Development', 'In Development', 'In Progress') AND updated <= -15m ORDER BY updated ASC",
+          "description": "Backlog / To Do / Ready For Development / In Development / In Rework Bugs → trigger bug_development",
+          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('Backlog', 'To Do', 'Ready For Development', 'In Development', 'In Progress', 'In Rework') AND updated <= -15m ORDER BY updated ASC",
           "configFile": "agents/bug_development.json",
           "concurrencyKey": "bug_development",
           "skipIfLabel": "sm_bug_development_triggered",

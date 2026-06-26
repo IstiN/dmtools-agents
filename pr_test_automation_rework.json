@@ -17,7 +17,8 @@
     "preCliJSAction": "agents/js/preCliTestReworkSetup.js",
     "postJSAction": "agents/js/postTestReworkResults.js",
     "customParams": {
-      "removeLabel": "sm_test_rework_triggered"
+      "removeLabel": "sm_test_rework_triggered",
+      "checkOpenPR": true
     },
     "inputJql": "project = JD AND issuetype = 'Test Case' AND status = 'In Rework'",
     "cliPrompts": [

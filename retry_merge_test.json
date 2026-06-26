@@ -8,8 +8,9 @@
     "ticketContextDepth": 1,
     "skipAIProcessing": true,
     "alwaysPostComments": true,
+    "preJSAction": "agents/js/checkWipLabel.js",
     "postJSAction": "agents/js/retryMergePR.js",
-    "customParams": {"removeLabel": "sm_test_merge_triggered", "testCaseMerge": true},
+    "customParams": {"removeLabel": "sm_test_merge_triggered", "testCaseMerge": true, "checkOpenPR": true},
     "inputJql": "key = PROJ-1"
   }
 }

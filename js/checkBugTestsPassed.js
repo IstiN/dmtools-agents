@@ -108,15 +108,16 @@ function action(params) {
         // has its own linked Bug(s) other than the current Bug. Those Bugs will
         // be fixed through the normal bug-fix pipeline; waiting for them here
         // creates deadlocks (e.g. TS-1356 was stuck because parent-Story
-        // regression TCs TS-501/TS-252 were Bug To Fix).
+        // regression TCs TS-501/TS-252 were Bug To Fix). We count *any* other
+        // linked Bug (even Done) so stale TCs that were already addressed do not
+        // hold the current Bug hostage.
         if (status === STATUSES.BUG_TO_FIX) {
             var linkedBugs = findLinkedBugs(tc.key);
             var hasOtherBug = linkedBugs.some(function(bug) {
-                return bug.key !== ticketKey &&
-                    bug.fields && bug.fields.status && bug.fields.status.name !== STATUSES.DONE;
+                return bug.key !== ticketKey;
             });
             if (hasOtherBug) {
-                console.log('TC', tc.key, 'is Bug To Fix but already tracked by another active Bug — treating as non-blocking');
+                console.log('TC', tc.key, 'is Bug To Fix but already tracked by another Bug — treating as non-blocking');
                 return false;
             }
         }
@@ -163,14 +164,34 @@ function action(params) {
             // waiting forever.
             const isFinalized = labels.indexOf(LABELS.TEST_PR_FINALIZED) !== -1;
             if (isFinalized) {
-                console.log('Test PR finalized but', blockingCount, 'linked Test Case(s) still block — moving', ticketKey, 'to In Rework');
+                // Anti-cycle guard: do not bounce a finalized Bug back to In Rework
+                // more than once for the same blockers. After one rework attempt,
+                // move to Blocked so a human triages persistent blockers instead of
+                // burning CI minutes in an infinite loop.
+                var reworkAttempted = labels.indexOf('sm_bug_rework_attempted') !== -1;
+                if (reworkAttempted) {
+                    console.log('Test PR finalized and one rework already attempted — moving', ticketKey, 'to Blocked for triage');
+                    jira_move_to_status({ key: ticketKey, statusName: STATUSES.BLOCKED });
+                    jira_post_comment({
+                        key: ticketKey,
+                        comment: 'h3. 🚫 Test PR Finalized But Acceptance Tests Still Blocking After Rework\n\n' +
+                            'The test-automation PR was merged and finalized, and one rework was already attempted, but the following linked Test Case(s) are still not *Passed*:\n' +
+                            blockingTCs.map(function(tc) { return '- ' + tc.key + ' (' + (tc.fields && tc.fields.status && tc.fields.status.name || 'unknown') + ')'; }).join('\n') + '\n\n' +
+                            'Moving the Bug to *Blocked* for manual triage instead of cycling indefinitely.'
+                    });
+                    releaseLock();
+                    return { success: true, action: 'moved_to_blocked', totalTCs, blockingCount, blockingTCs: blockingTCs.map(function(tc) { return tc.key; }), ticketKey };
+                }
+
+                console.log('Test PR finalized but', blockingCount, 'linked Test Case(s) still block — moving', ticketKey, 'to In Rework (one attempt)');
                 jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REWORK });
+                jira_add_label({ key: ticketKey, label: 'sm_bug_rework_attempted' });
                 jira_post_comment({
                     key: ticketKey,
                     comment: 'h3. 🔄 Test PR Merged But Acceptance Tests Still Blocking\n\n' +
                         'The test-automation PR was merged and finalized, but the following linked Test Case(s) are still not *Passed*:\n' +
                         blockingTCs.map(function(tc) { return '- ' + tc.key + ' (' + (tc.fields && tc.fields.status && tc.fields.status.name || 'unknown') + ')'; }).join('\n') + '\n\n' +
-                        'Moving the Bug to *In Rework* so the fix can be revisited.'
+                        'Moving the Bug to *In Rework* for one more fix attempt. If it still fails, it will be moved to *Blocked*.'
                 });
                 releaseLock();
                 return { success: true, action: 'moved_to_rework', totalTCs, blockingCount, blockingTCs: blockingTCs.map(function(tc) { return tc.key; }), ticketKey };
@@ -188,6 +209,13 @@ function action(params) {
             key: ticketKey,
             statusName: STATUSES.DONE
         });
+
+        // Clean up anti-cycle label on successful completion.
+        try {
+            jira_remove_label({ key: ticketKey, label: 'sm_bug_rework_attempted' });
+        } catch (e) {
+            console.warn('Could not remove sm_bug_rework_attempted label:', e);
+        }
 
         jira_post_comment({
             key: ticketKey,

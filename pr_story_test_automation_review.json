@@ -7,10 +7,12 @@
     "ticketContextDepth": 1,
     "skipAIProcessing": true,
     "alwaysPostComments": true,
-    "preJSAction": "agents/js/prepareTestPRForReview.js",
+    "preJSAction": "agents/js/checkWipLabel.js",
+    "preCliJSAction": "agents/js/prepareTestPRForReview.js",
     "postJSAction": "agents/js/postStoryTestAutomationReview.js",
     "customParams": {
-      "removeLabel": "sm_story_test_review_triggered"
+      "removeLabel": "sm_story_test_review_triggered",
+      "checkOpenPR": true
     },
     "inputJql": "key = JD-111",
     "cliPrompts": [

@@ -14,6 +14,12 @@ You are automating a Story that has reached **Ready For Testing**. The Story alr
 5. For every failed Test Case, produce `outputs/failed_description_{TC_KEY}.md`.
 6. If environment/credentials are missing, produce `outputs/blocked.json` instead of running tests.
 
+## Failure classification
+
+- A **product failure** — the test ran and found a real bug in the product — must be recorded as `failed`. The Story and the failing Test Case follow the normal review flow.
+- An **access / credential / permission / infrastructure failure** — the test account cannot reach a required service, repository, secret, or token — is **NOT a product failure**. Mark that Test Case as `skipped`, explain the blocker in `failureSummary`, and keep the overall result as `passed` if all other Test Cases passed. Do **not** mark it `failed`.
+- If **every** linked Test Case is blocked by missing setup, set `overall` to `blocked_by_human` and produce `outputs/blocked.json`.
+
 ## Scope rules
 
 - You may ONLY write code inside the `testing/` folder.
