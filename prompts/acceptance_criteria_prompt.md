@@ -10,10 +10,14 @@ Always read these files first if present:
 
 Use the configured formatting rules to write the final output to `outputs/response.md`.
 
-**MANDATORY OUTPUT SHAPE:** The response must include `<bold>Story Points:</bold>`, `<bold>Business Context:</bold>`, `<bold>User Story:</bold>`, `<bold>Acceptance Criteria:</bold>`, `<bold>Business Rules:</bold>`, and `<bold>Out of Scope:</bold>` in that order. Do not skip Business Context, Business Rules, or Out of Scope. If a section has no confirmed details, include `<bullet> Not identified from available context.` for that section.
+**MANDATORY OUTPUT SHAPE:** The response must contain the following sections in this order. Do not skip any section. If a section has no confirmed details, include `<bullet> Not identified from available context.`
 
-**UI & visual quality ACs (include whenever the story touches any UI):**
-<bullet> All interactive elements (buttons, links, inputs) must have clearly visible focus and hover states with sufficient contrast.
-<bullet> Text and icon colours must meet WCAG AA contrast ratio (minimum 4.5:1 for normal text, 3:1 for large text/icons) against their background. No grey-on-white or light-on-light combinations unless contrast ratio is verified.
-<bullet> Placeholder text in inputs must be visually distinct from entered text but still readable (minimum 3:1 contrast against input background).
-<bullet> All colour and typography choices must follow the project style guide or design tokens; no ad-hoc hex values.
+<bullet> *Story Points:*
+<bullet> *Business Context:*
+<bullet> *User Story:*
+<bullet> *Design / Mockups:* — link to Figma or attach mockup images. If design is required but unavailable, add `*⚠ BLOCKER:*` with a description of what is missing.
+<bullet> *Acceptance Criteria:* — numbered list. Each AC must be self-contained: include the rule, the trigger, and the expected outcome in the AC text itself. Do not assume the reader will search Confluence or the spec.
+<bullet> *Existing vs New Behavior:* — table with columns `||Behavior||Existing||New / Changed||`. List every behavior touched by this story. Mark unchanged copied behaviors as `Copied as-is from {source}`.
+<bullet> *Business Rules:*
+<bullet> *Out of Scope:*
+<bullet> *Source References:* — list every source read: Jira tickets, Confluence pages, Figma links, attachments. Mark any source that was inaccessible with ⚠.
