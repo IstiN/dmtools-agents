@@ -1,13 +1,12 @@
 /**
- * Merge Story Test Automation PR
- * Merges the PR on branch test/{STORY_KEY} and moves all linked Test Cases
+ * Merge Story/Bug Test Automation PR
+ * Merges the PR on branch test/{TICKET_KEY} and moves all linked Test Cases
  * from In Review - Passed/Failed to Passed/Failed.
  */
 
 const { STATUSES, LABELS } = require('./config.js');
 var scmModule = require('./common/scm.js');
 var configLoader = require('./configLoader.js');
-var autoStart = require('./common/autoStart.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
 function findPRForStory(scm, storyKey) {
@@ -67,23 +66,6 @@ function checkCiStatus(scm, headSha) {
         console.warn('Could not determine CI status:', e);
     }
     return result;
-}
-
-function triggerReworkDueToCIFailure(storyKey, prNumber, prUrl, scm, customParams, failedNames, issueType) {
-    console.log('CI checks failed — moving ticket to test-automation rework');
-    try { scm.removeLabel(prNumber, LABELS.PR_APPROVED); } catch (e) {}
-    try { jira_remove_label({ key: storyKey, label: LABELS.PR_APPROVED }); } catch (e) {}
-    try { jira_add_label({ key: storyKey, label: LABELS.TEST_PR_REWORK_NEEDED }); } catch (e) {}
-    // Remove the SM skip label so the rework rule can actually trigger on the next cycle.
-    var reworkSkipLabel = issueType === 'Bug' ? 'sm_bug_test_rework_triggered' : 'sm_story_test_rework_triggered';
-    try { jira_remove_label({ key: storyKey, label: reworkSkipLabel }); } catch (e) {}
-    releaseLock(storyKey, customParams);
-    var checksList = failedNames && failedNames.length ? failedNames.join(', ') : 'unknown';
-    jira_post_comment({
-        key: storyKey,
-        comment: '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *CI CHECKS FAILED* — PR #' + prNumber + ' is approved but required checks failed: ' + checksList + '. Moving to test-automation rework.\n\n[View PR|' + prUrl + ']{panel}'
-    });
-    return true;
 }
 
 function fetchLinkedTestCases(storyKey, testCaseType) {
@@ -157,8 +139,6 @@ function finalizeAlreadyMergedPR(params, scm, storyKey, pr, testCaseType, custom
         console.warn('Could not add test_pr_finalized label:', e);
     }
 
-    releaseLock(storyKey, customParams);
-
     var ticketLabel = issueType || 'Story';
     jira_post_comment({
         key: storyKey,
@@ -176,11 +156,24 @@ function finalizeAlreadyMergedPR(params, scm, storyKey, pr, testCaseType, custom
     return true;
 }
 
-function action(params) {
+/**
+ * Attempts to merge/finalize the test-automation PR for the given ticket.
+ * Does NOT move the ticket to a different status and does NOT release SM locks.
+ *
+ * Returns an object:
+ *   { success: true, noPr: true }                              — no PR found, nothing to do
+ *   { success: true, alreadyMerged: true, prNumber, prUrl }    — PR already merged, finalized
+ *   { success: true, reason: 'merged', prNumber, prUrl, tcResult } — PR merged now
+ *   { success: false, reason: 'missing_key'|'no_repo'|'no_pr'|     — could not proceed
+ *                             'ci_running'|'not_ready'|'behind'|
+ *                             'conflict'|'ci_failed'|'merge_failed',
+ *     prNumber?, prUrl?, failedNames?, error? }
+ */
+function attemptMerge(params) {
     const storyKey = params.ticket && params.ticket.key;
     if (!storyKey) {
         console.error('No storyKey provided');
-        return false;
+        return { success: false, reason: 'missing_key' };
     }
 
     var config = configLoader.loadProjectConfig(params.jobParams || params);
@@ -196,19 +189,24 @@ function action(params) {
     const repoInfo = scm.getRemoteRepoInfo();
     if (!repoInfo) {
         console.error('Could not determine owner/repo');
-        releaseLock(storyKey, customParams);
-        return false;
+        return { success: false, reason: 'no_repo' };
     }
 
     const found = findPRForStory(scm, storyKey);
     if (!found) {
-        console.warn('No open or merged PR found for story', storyKey, '— releasing lock');
-        releaseLock(storyKey, customParams);
-        return false;
+        console.log('No open or merged PR found for', storyKey, '— nothing to merge');
+        return { success: true, noPr: true };
     }
 
     if (found.merged) {
-        return finalizeAlreadyMergedPR(params, scm, storyKey, found.pr, testCaseType, customParams);
+        finalizeAlreadyMergedPR(params, scm, storyKey, found.pr, testCaseType, customParams);
+        return {
+            success: true,
+            alreadyMerged: true,
+            prNumber: found.pr.number,
+            prUrl: found.pr.html_url,
+            reason: 'already_merged'
+        };
     }
 
     const pr = found.pr;
@@ -240,14 +238,15 @@ function action(params) {
         mergeableState === 'ci_still_running') {
         const ci = checkCiStatus(scm, headSha);
         if (ci.failed) {
-            return triggerReworkDueToCIFailure(storyKey, prNumber, prUrl, scm, customParams, ci.failedNames, issueType);
+            console.log('PR #' + prNumber + ' CI checks failed');
+            return { success: false, reason: 'ci_failed', prNumber, prUrl, failedNames: ci.failedNames };
         }
         if (ci.inProgress || ci.total === 0) {
-            console.log('PR not ready to merge (' + mergeableState + ') — checks still running or unknown — will retry next cycle');
-            return false;
+            console.log('PR not ready to merge (' + mergeableState + ') — checks still running or unknown — will retry');
+            return { success: false, reason: 'ci_running', prNumber, prUrl };
         }
-        console.log('PR not ready to merge (' + mergeableState + ') — will retry next cycle');
-        return false;
+        console.log('PR not ready to merge (' + mergeableState + ') — will retry');
+        return { success: false, reason: 'not_ready', prNumber, prUrl };
     }
 
     if (mergeableState === 'behind') {
@@ -261,22 +260,14 @@ function action(params) {
         } catch (updateErr) {
             console.warn('Could not update branch:', updateErr);
         }
-        return false;
+        return { success: false, reason: 'behind', prNumber, prUrl };
     }
 
     if ((mergeable === false && mergeableState === 'dirty') ||
         mergeableState === 'cannot_be_merged' ||
         mergeableState === 'conflict') {
-        console.log('PR has merge conflict — moving Story to In Rework');
-        try { scm.removeLabel(prNumber, LABELS.PR_APPROVED); } catch (e) {}
-        try { jira_remove_label({ key: storyKey, label: LABELS.PR_APPROVED }); } catch (e) {}
-        releaseLock(storyKey, customParams);
-        jira_post_comment({
-            key: storyKey,
-            comment: '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *MERGE CONFLICT* — PR #' + prNumber + ' has a merge conflict with main.\n\n[View PR|' + prUrl + ']{panel}'
-        });
-        jira_move_to_status({ key: storyKey, statusName: STATUSES.IN_REWORK });
-        return true;
+        console.log('PR #' + prNumber + ' has merge conflict');
+        return { success: false, reason: 'conflict', prNumber, prUrl };
     }
 
     try {
@@ -285,17 +276,13 @@ function action(params) {
 
         try { scm.removeLabel(prNumber, LABELS.PR_APPROVED); } catch (e) {}
 
-        // Move linked Test Cases to final status before removing Jira pr_approved label
         var tcResult = moveLinkedTestCases(storyKey, testCaseType);
 
-        // Bug stays In Testing; bug_done_check will move it to Done only when all
-        // directly linked Test Cases are Passed. Story stays In Testing;
-        // story_done_check will move it to Done when all TCs are Passed
         try {
             jira_remove_label({ key: storyKey, label: LABELS.PR_APPROVED });
-            console.log('Removed pr_approved label from Jira Story');
+            console.log('Removed pr_approved label from Jira ticket');
         } catch (e) {
-            console.warn('Could not remove pr_approved from Jira Story:', e);
+            console.warn('Could not remove pr_approved from Jira ticket:', e);
         }
         try {
             jira_remove_label({ key: storyKey, label: LABELS.TEST_PR_MERGED });
@@ -308,8 +295,6 @@ function action(params) {
         } catch (e) {
             console.warn('Could not add test_pr_finalized label:', e);
         }
-
-        releaseLock(storyKey, customParams);
 
         var ticketLabel = issueType || 'Story';
         jira_post_comment({
@@ -325,7 +310,7 @@ function action(params) {
             console.warn('Failed to post token usage comments:', e);
         }
 
-        return true;
+        return { success: true, reason: 'merged', prNumber, prUrl, tcResult };
 
     } catch (mergeErr) {
         console.warn('Merge failed:', mergeErr);
@@ -336,29 +321,80 @@ function action(params) {
         if (!isConflict && (isCIBlocking || errMsg === '')) {
             const ci = checkCiStatus(scm, headSha);
             if (ci.failed) {
-                return triggerReworkDueToCIFailure(storyKey, prNumber, prUrl, scm, customParams, ci.failedNames, issueType);
+                return { success: false, reason: 'ci_failed', prNumber, prUrl, failedNames: ci.failedNames };
             }
             if (ci.inProgress || ci.total === 0) {
-                console.log('Merge blocked temporarily — checks still running or unknown — will retry next cycle');
-                return false;
+                console.log('Merge blocked temporarily — checks still running or unknown — will retry');
+                return { success: false, reason: 'ci_running', prNumber, prUrl };
             }
-            console.log('Merge blocked temporarily — will retry next cycle');
-            return false;
         }
 
-        try { scm.removeLabel(prNumber, LABELS.PR_APPROVED); } catch (e) {}
-        try { jira_remove_label({ key: storyKey, label: LABELS.PR_APPROVED }); } catch (e) {}
-        releaseLock(storyKey, customParams);
-        const reason = isConflict ? 'merge conflict' : 'CI checks failing or PR not mergeable';
-        jira_post_comment({
-            key: storyKey,
-            comment: '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *MERGE FAILED* — Could not merge PR #' + prNumber + ': ' + reason + '.\n\n[View PR|' + prUrl + ']{panel}'
-        });
-        jira_move_to_status({ key: storyKey, statusName: STATUSES.IN_REWORK });
-        return true;
+        return { success: false, reason: isConflict ? 'conflict' : 'merge_failed', prNumber, prUrl, error: errMsg };
     }
 }
 
+function action(params) {
+    const storyKey = params.ticket && params.ticket.key;
+    if (!storyKey) {
+        console.error('No storyKey provided');
+        return false;
+    }
+
+    var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+    var issueType = params.ticket && params.ticket.fields &&
+        params.ticket.fields.issuetype && params.ticket.fields.issuetype.name;
+
+    var config = configLoader.loadProjectConfig(params.jobParams || params);
+    var scm = scmModule.createScm(config);
+
+    const mergeResult = attemptMerge(params);
+
+    if (mergeResult.success) {
+        releaseLock(storyKey, customParams);
+        return true;
+    }
+
+    const prNumber = mergeResult.prNumber;
+    const prUrl = mergeResult.prUrl;
+
+    if (mergeResult.reason === 'ci_running' || mergeResult.reason === 'behind' || mergeResult.reason === 'not_ready') {
+        // Keep lock; SM will retry on the next cycle.
+        return false;
+    }
+
+    if (mergeResult.reason === 'missing_key' || mergeResult.reason === 'no_repo') {
+        releaseLock(storyKey, customParams);
+        return false;
+    }
+
+    // Conflict, CI failure, or other merge failure — move ticket to test-automation rework.
+    console.log('Test-automation PR merge failed (' + mergeResult.reason + ') — moving ticket to In Rework');
+
+    if (prNumber) {
+        try { scm.removeLabel(prNumber, LABELS.PR_APPROVED); } catch (e) {}
+    }
+    try { jira_remove_label({ key: storyKey, label: LABELS.PR_APPROVED }); } catch (e) {}
+    try { jira_add_label({ key: storyKey, label: LABELS.TEST_PR_REWORK_NEEDED }); } catch (e) {}
+    var reworkSkipLabel = issueType === 'Bug' ? 'sm_bug_test_rework_triggered' : 'sm_story_test_rework_triggered';
+    try { jira_remove_label({ key: storyKey, label: reworkSkipLabel }); } catch (e) {}
+
+    releaseLock(storyKey, customParams);
+
+    var checksList = mergeResult.failedNames && mergeResult.failedNames.length ? mergeResult.failedNames.join(', ') : 'unknown';
+    var isConflict = mergeResult.reason === 'conflict';
+    var panelTitle = isConflict ? 'MERGE CONFLICT' : 'MERGE FAILED';
+    var reasonText = isConflict ? 'merge conflict' : 'CI checks failing or PR not mergeable';
+    if (mergeResult.reason === 'ci_failed' && mergeResult.failedNames) {
+        reasonText = 'required checks failed: ' + checksList;
+    }
+    jira_post_comment({
+        key: storyKey,
+        comment: '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *' + panelTitle + '* — Could not merge PR #' + (prNumber || 'unknown') + ': ' + reasonText + '.\n\n' + (prUrl ? '[View PR|' + prUrl + ']' : '') + '{panel}'
+    });
+    jira_move_to_status({ key: storyKey, statusName: STATUSES.IN_REWORK });
+    return true;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = { action, attemptMerge };
 }
