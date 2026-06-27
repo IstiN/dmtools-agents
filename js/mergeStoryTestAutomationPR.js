@@ -395,6 +395,11 @@ function action(params) {
     return true;
 }
 
+// Expose attemptMerge on the action function as well, so callers that receive
+// the action as the module default (common in the GraalJS/SM loader) can still
+// invoke attemptMerge directly.
+action.attemptMerge = attemptMerge;
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { action, attemptMerge };
 }
