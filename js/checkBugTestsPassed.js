@@ -19,7 +19,7 @@
 const { STATUSES, LABELS } = require('./config.js');
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
-const mergeTestAutomationPR = require('./mergeStoryTestAutomationPR.js');
+const scmModule = require('./common/scm.js');
 
 function action(params) {
     const ticketKey = params.ticket && params.ticket.key;
@@ -204,38 +204,39 @@ function action(params) {
         }
 
         // Step 3: All blocking Test Cases are resolved.
-        // Before moving the Bug to Done, ensure any open test-automation PR is
-        // merged/finalized so it does not become an orphaned open PR.
-        console.log('All', totalTCs, 'linked Test Case(s) resolved — checking test-automation PR before Done');
+        // Before moving the Bug to Done, ensure there is no open test-automation
+        // PR for this ticket. If there is, wait for the dedicated merge rule
+        // (or the new auto-merge rule) to finalize it so it does not become an
+        // orphaned open PR.
+        console.log('All', totalTCs, 'linked Test Case(s) resolved — checking for open test-automation PR before Done');
 
-        // The GraalJS module loader used by SM returns either the module exports
-        // object or the action function itself, and the exports cache may lag.
-        // Resolve attemptMerge from both shapes to avoid TypeErrors.
-        var attemptMerge = mergeTestAutomationPR && mergeTestAutomationPR.attemptMerge;
-        if (typeof attemptMerge !== 'function' &&
-            mergeTestAutomationPR &&
-            typeof mergeTestAutomationPR.action === 'function' &&
-            typeof mergeTestAutomationPR.action.attemptMerge === 'function') {
-            attemptMerge = mergeTestAutomationPR.action.attemptMerge;
+        var openTestPR = null;
+        try {
+            var scm = scmModule.createScm(projectConfig);
+            var prList = scm.listPrs('open') || [];
+            openTestPR = prList.find(function(pr) {
+                var titleMatch = pr.title && pr.title.indexOf(ticketKey) !== -1;
+                var branchMatch = pr.head && pr.head.ref && pr.head.ref.indexOf(ticketKey) !== -1;
+                return titleMatch || branchMatch;
+            });
+        } catch (e) {
+            console.warn('Could not list open PRs for', ticketKey, ':', e);
         }
-        if (typeof attemptMerge !== 'function') {
-            throw new Error('Could not resolve attemptMerge from mergeStoryTestAutomationPR.js (typeof=' + (typeof mergeTestAutomationPR) + ')');
-        }
-        var mergeResult = attemptMerge(params);
-        if (!mergeResult.success) {
-            console.log('Test-automation PR not ready to merge (' + (mergeResult.reason || 'unknown') + ') — keeping', ticketKey, 'in In Testing');
+
+        if (openTestPR) {
+            console.log('Open test-automation PR found:', openTestPR.number, '— keeping', ticketKey, 'in In Testing until it is merged');
             releaseLock();
             return {
                 success: true,
                 action: 'waiting_for_test_pr_merge',
-                reason: mergeResult.reason,
-                prNumber: mergeResult.prNumber,
-                prUrl: mergeResult.prUrl,
+                reason: 'open_pr',
+                prNumber: openTestPR.number,
+                prUrl: openTestPR.html_url,
                 totalTCs,
                 ticketKey
             };
         }
-        console.log('Test-automation PR resolved:', mergeResult.reason, mergeResult.prNumber || 'none');
+        console.log('No open test-automation PR found — safe to move', ticketKey, 'to Done');
 
         // Step 4: Move Bug to Done
         console.log('Moving', ticketKey, 'to Done');
