@@ -208,7 +208,14 @@ function action(params) {
         // merged/finalized so it does not become an orphaned open PR.
         console.log('All', totalTCs, 'linked Test Case(s) resolved — checking test-automation PR before Done');
 
-        var mergeResult = mergeTestAutomationPR.attemptMerge(params);
+        // The GraalJS module loader may return the action function as the module
+        // default, so attemptMerge is not reliably available as a named export.
+        // Pass a flag to ask the action to run only the merge attempt.
+        var mergeParams = JSON.parse(JSON.stringify(params));
+        if (!mergeParams.jobParams) mergeParams.jobParams = {};
+        if (!mergeParams.jobParams.customParams) mergeParams.jobParams.customParams = {};
+        mergeParams.jobParams.customParams.onlyAttemptMerge = true;
+        var mergeResult = mergeTestAutomationPR(mergeParams);
         if (!mergeResult.success) {
             console.log('Test-automation PR not ready to merge (' + (mergeResult.reason || 'unknown') + ') — keeping', ticketKey, 'in In Testing');
             releaseLock();
