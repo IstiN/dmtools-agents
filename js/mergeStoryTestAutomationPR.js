@@ -335,12 +335,21 @@ function attemptMerge(params) {
 
 function action(params) {
     const storyKey = params.ticket && params.ticket.key;
+    var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+
+    // Some callers (e.g. checkBugTestsPassed.js) only need the merge attempt
+    // without the surrounding finalize/retry logic. The GraalJS loader may return
+    // the action function as the module default, so we also support an explicit
+    // flag instead of relying on attemptMerge being reachable as a named export.
+    if (customParams.onlyAttemptMerge) {
+        return attemptMerge(params);
+    }
+
     if (!storyKey) {
         console.error('No storyKey provided');
         return false;
     }
 
-    var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
     var issueType = params.ticket && params.ticket.fields &&
         params.ticket.fields.issuetype && params.ticket.fields.issuetype.name;
 
