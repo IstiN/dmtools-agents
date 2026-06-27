@@ -19,6 +19,7 @@
 const { STATUSES, LABELS } = require('./config.js');
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+const mergeTestAutomationPR = require('./mergeStoryTestAutomationPR.js');
 
 function action(params) {
     const ticketKey = params.ticket && params.ticket.key;
@@ -202,8 +203,29 @@ function action(params) {
             return { success: true, action: 'waiting', totalTCs, blockingCount, blockingTCs: blockingTCs.map(function(tc) { return tc.key; }), ticketKey };
         }
 
-        // Step 3: All blocking Test Cases are resolved — move Bug to Done
-        console.log('All', totalTCs, 'linked Test Case(s) resolved — moving', ticketKey, 'to Done');
+        // Step 3: All blocking Test Cases are resolved.
+        // Before moving the Bug to Done, ensure any open test-automation PR is
+        // merged/finalized so it does not become an orphaned open PR.
+        console.log('All', totalTCs, 'linked Test Case(s) resolved — checking test-automation PR before Done');
+
+        var mergeResult = mergeTestAutomationPR.attemptMerge(params);
+        if (!mergeResult.success) {
+            console.log('Test-automation PR not ready to merge (' + (mergeResult.reason || 'unknown') + ') — keeping', ticketKey, 'in In Testing');
+            releaseLock();
+            return {
+                success: true,
+                action: 'waiting_for_test_pr_merge',
+                reason: mergeResult.reason,
+                prNumber: mergeResult.prNumber,
+                prUrl: mergeResult.prUrl,
+                totalTCs,
+                ticketKey
+            };
+        }
+        console.log('Test-automation PR resolved:', mergeResult.reason, mergeResult.prNumber || 'none');
+
+        // Step 4: Move Bug to Done
+        console.log('Moving', ticketKey, 'to Done');
 
         jira_move_to_status({
             key: ticketKey,
