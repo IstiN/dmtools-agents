@@ -172,7 +172,7 @@ function action(params) {
                     return;
                 }
                 try {
-                    jira_link_issues({ sourceKey: c.key, anotherKey: blockerKey, relationship: blocksRelationship });
+                    jira_link_issues({ sourceKey: blockerKey, anotherKey: c.key, relationship: blocksRelationship });
                     console.log(blockerKey + ' ' + blocksRelationship + ' ' + c.key);
                     anyLinked = true;
                 } catch (e) {

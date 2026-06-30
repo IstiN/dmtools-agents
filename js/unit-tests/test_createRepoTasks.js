@@ -125,8 +125,8 @@ suite('createRepoTasks — action', function() {
         // gens-igt depends_on gens-igt-db → gens-igt-db (GENSGENP-201) blocks gens-igt (GENSGENP-202)
         assert.equal(links.length, 1, 'one Blocks link created');
         assert.equal(links[0].relationship, 'Blocks', 'relationship is Blocks');
-        assert.equal(links[0].anotherKey, 'GENSGENP-201', 'blocker is gens-igt-db ticket');
-        assert.equal(links[0].sourceKey, 'GENSGENP-202', 'dependent is gens-igt ticket');
+        assert.equal(links[0].sourceKey, 'GENSGENP-201', 'blocker is gens-igt-db ticket');
+        assert.equal(links[0].anotherKey, 'GENSGENP-202', 'dependent is gens-igt ticket');
         assert.equal(moved.length, 1, 'one ticket moved to Blocked');
         assert.equal(moved[0].key, 'GENSGENP-202', 'gens-igt moved to Blocked');
         assert.equal(moved[0].statusName, 'Blocked', 'status is Blocked');
