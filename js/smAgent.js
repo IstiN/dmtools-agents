@@ -706,11 +706,16 @@ function action(params) {
             // run directly in the SM job (skipping the ai-teammate checkout pipeline).
             var agentLocalExecution = false;
             try {
-                var agentJson = buildEncodedConfigModule.tryReadJson(targetAgent);
-                if (agentJson && agentJson.params && agentJson.params.localExecution === true) {
-                    agentLocalExecution = true;
+                var agentRaw = file_read({ path: targetAgent });
+                if (agentRaw) {
+                    var agentJsonParsed = JSON.parse(agentRaw);
+                    if (agentJsonParsed && agentJsonParsed.params && agentJsonParsed.params.localExecution === true) {
+                        agentLocalExecution = true;
+                    }
                 }
-            } catch (e) { /* ignore */ }
+            } catch (e) {
+                console.warn('  Could not read agent config to detect localExecution:', e);
+            }
             targetedRule = {
                 description: 'Targeted: ' + targetAgent + ' for ' + targetTicket,
                 jql: 'key = ' + targetTicket,
