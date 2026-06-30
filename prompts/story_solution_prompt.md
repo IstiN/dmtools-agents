@@ -16,11 +16,6 @@ List the input folder with `ls -la input/*/` and read every file found:
 **CRITICAL** check existing codebase. Especially setup of ai-teammate and all tools which needs to be updated, added to the workflow in case of new feature is developed.
 **IMPORTANT** Write the solution design to outputs/response.md and the Mermaid diagram to outputs/diagram.md.
 
-**CRITICAL: AFFECTED REPOSITORIES OUTPUT**
-After writing the solution, create a file `outputs/affected_repos.json` containing a JSON array of repository names that are touched by this solution. Include every repository where code, configuration, migrations, or schema changes are required. Use only the short repository name (no org prefix, no URL).
-Example: `["gens-igt","admin-ui","gens-igt-db"]`
-If no repository changes are needed, write an empty array: `[]`
-
 **CRITICAL: DO NOT DUPLICATE ACCEPTANCE CRITERIA**
 - Never copy, rewrite, or repeat Acceptance Criteria from parent or BA tickets.
 - Reference them by ticket key. The BA ticket is the single source of truth for ACs.
