@@ -52,6 +52,17 @@ function makeLabelsModule(fileMap, extraGlobals) {
     );
 }
 
+suite('writeSolutionAndLabels — postJSAction compatibility', function() {
+    test('module.exports is guarded with typeof for direct execution (postJSAction) compatibility', function() {
+        // When dmtools runs a postJSAction it evals the file directly — no CommonJS wrapper,
+        // so bare `module.exports = ...` throws ReferenceError: module is not defined.
+        // This test enforces the guard pattern used by all other postJSAction scripts.
+        var code = file_read({ path: 'js/writeSolutionAndLabels.js' });
+        var hasGuard = code.indexOf('typeof module') !== -1 && code.indexOf('module.exports') !== -1;
+        assert.equal(hasGuard, true, 'module.exports must be inside typeof module guard');
+    });
+});
+
 suite('writeSolutionAndLabels — module export', function() {
     test('exports action, topologicalSort, buildJiraSection, buildMarkdownSection', function() {
         var module = makeLabelsModule({ 'outputs/response.md': 'h2. Solution' });
