@@ -1,0 +1,9 @@
+{
+  "name": "Teammate",
+  "params": {
+    "inputJql": "key = GENSGENP-52851",
+    "skipAIProcessing": true,
+    "postJSAction": "agents/js/createRepoTasks.js",
+    "localExecution": true
+  }
+}
