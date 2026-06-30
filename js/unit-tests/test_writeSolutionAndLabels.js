@@ -58,7 +58,7 @@ suite('writeSolutionAndLabels — module export', function() {
 });
 
 suite('writeSolutionAndLabels — repo label flow', function() {
-    test('adds a label for each repo in affected_repos.json', function() {
+    test('adds a label for each repo — plain string format', function() {
         var addedLabels = [];
         var module = makeLabelsModule(
             {
@@ -79,6 +79,34 @@ suite('writeSolutionAndLabels — repo label flow', function() {
         assert.equal(addedLabels.indexOf('gens-igt') !== -1, true, 'gens-igt label added');
         assert.equal(addedLabels.indexOf('admin-ui') !== -1, true, 'admin-ui label added');
         assert.equal(addedLabels.indexOf('gens-igt-db') !== -1, true, 'gens-igt-db label added');
+    });
+
+    test('adds a label for each repo — enriched object format with name+reason+depends_on', function() {
+        var addedLabels = [];
+        var enriched = JSON.stringify([
+            { name: 'gens-igt-db', reason: 'DB migration required.' },
+            { name: 'gens-igt', reason: 'New API endpoint.', depends_on: ['gens-igt-db'] },
+            { name: 'lims-ui', reason: 'UI column update.', depends_on: ['gens-igt'] }
+        ]);
+        var module = makeLabelsModule(
+            {
+                'outputs/response.md': 'h2. Solution',
+                'outputs/affected_repos.json': enriched
+            },
+            {
+                jira_add_label: function(opts) { addedLabels.push(opts.label); }
+            }
+        );
+
+        var result = module.action({
+            ticket: { key: 'PROJ-14' },
+            customParams: { solutionField: 'description', diagramField: '' }
+        });
+
+        assert.equal(result.success, true, 'action succeeds');
+        assert.equal(addedLabels.indexOf('gens-igt-db') !== -1, true, 'gens-igt-db label added');
+        assert.equal(addedLabels.indexOf('gens-igt') !== -1, true, 'gens-igt label added');
+        assert.equal(addedLabels.indexOf('lims-ui') !== -1, true, 'lims-ui label added');
     });
 
     test('skips labels gracefully when affected_repos.json is missing', function() {

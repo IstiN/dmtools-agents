@@ -1,12 +1,16 @@
 {
   "name": "Teammate",
   "parent": {
-    "path": "story_solution.json"
+    "path": "story_solution.json",
+    "merge": ["params.cliPrompts"]
   },
   "params": {
     "metadata": {
       "contextId": "story_solution_e2e"
     },
-    "postJSAction": "agents/js/writeSolutionAndLabels.js"
+    "postJSAction": "agents/js/writeSolutionAndLabels.js",
+    "cliPrompts": [
+      "./agents/instructions/story_solution/affected_repos_flow.md"
+    ]
   }
 }

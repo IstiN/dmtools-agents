@@ -28,7 +28,11 @@ function action(params) {
             var affectedRepos = JSON.parse(reposJson);
             if (Array.isArray(affectedRepos) && affectedRepos.length > 0) {
                 for (var i = 0; i < affectedRepos.length; i++) {
-                    var repoLabel = (affectedRepos[i] || '').toString().trim();
+                    var entry = affectedRepos[i];
+                    // Support both plain string and enriched object { name, reason, depends_on }
+                    var repoLabel = (typeof entry === 'object' && entry !== null)
+                        ? (entry.name || '').toString().trim()
+                        : (entry || '').toString().trim();
                     if (repoLabel) {
                         try {
                             jira_add_label({ key: ticketKey, label: repoLabel });
