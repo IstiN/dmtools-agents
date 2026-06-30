@@ -145,6 +145,29 @@ function action(params) {
             }
         }
 
+        // 10. Apply affected repository labels from outputs/affected_repos.json (if present)
+        try {
+            var reposJson = readOutput('affected_repos.json');
+            if (reposJson) {
+                var affectedRepos = JSON.parse(reposJson);
+                if (Array.isArray(affectedRepos) && affectedRepos.length > 0) {
+                    for (var ri = 0; ri < affectedRepos.length; ri++) {
+                        var repoLabel = (affectedRepos[ri] || '').toString().trim();
+                        if (repoLabel) {
+                            try {
+                                jira_add_label({ key: ticketKey, label: repoLabel });
+                                console.log('Added repo label "' + repoLabel + '" to ' + ticketKey);
+                            } catch (le) {
+                                console.warn('Failed to add repo label "' + repoLabel + '":', le);
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('Failed to apply affected_repos.json labels:', e);
+        }
+
         var autoStartDevelopment = customParams.autoStartDevelopment === true ||
             customParams.autoStartDevelopment === 'true';
         var developmentConfigFile = customParams.autoStartDevelopmentConfigFile;
