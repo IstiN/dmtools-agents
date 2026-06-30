@@ -1,5 +1,9 @@
 # Affected Repositories Section Format
 
+> **IMPORTANT: Do NOT write this section to `outputs/response.md`.**
+> The post-action script appends it automatically after saving the solution to Jira.
+> Your job is only to produce `outputs/affected_repos.json` with the correct data.
+
 The post-action appends an *Affected Repositories* section to the ticket description
 after the solution is written. Format the section according to the tracker-specific
 markup rules already defined in `jira_markup_transform.md` (Jira) or

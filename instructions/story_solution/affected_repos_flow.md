@@ -69,8 +69,8 @@ flowchart LR
     B -->|"prerequisite"| C
 ```
 
-Generate this diagram inside your solution design (in `outputs/diagram.md` or
-as a dedicated section) whenever three or more repositories form a chain.
+Include this diagram in `outputs/diagram.md` whenever three or more repositories form a chain.
+**Do NOT write an "Affected Repositories" section or table to `outputs/response.md`** — the post-action script appends that section automatically after saving the solution to Jira.
 
 ---
 
