@@ -201,9 +201,11 @@ function action(params) {
     return result;
 }
 
-module.exports = {
-    action: action,
-    topologicalSort: topologicalSort,
-    buildJiraSection: buildJiraSection,
-    buildMarkdownSection: buildMarkdownSection
-};
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        action: action,
+        topologicalSort: topologicalSort,
+        buildJiraSection: buildJiraSection,
+        buildMarkdownSection: buildMarkdownSection
+    };
+}
