@@ -165,21 +165,16 @@ function action(params) {
                     ? buildMarkdownSection(sorted)
                     : buildJiraSection(sorted);
 
-                // Append section to the solution field
+                // Append section to the solution field.
+                // Do NOT re-read the field from Jira — the GET response may be served from
+                // the Jira client cache (populated before the base action wrote the solution),
+                // which would cause the repos-append step to silently overwrite the solution
+                // with just the original description + repos section.
+                // Instead, use response.md as the authoritative base — it is exactly what
+                // writeSolutionAndDiagrams.js wrote to the field moments ago.
                 try {
-                    var freshTicket = jira_get_ticket({ key: ticketKey, fields: [solutionField] });
-                    var freshFields = freshTicket && (freshTicket.fields || freshTicket);
-                    var rawExisting = freshFields && freshFields[solutionField];
-                    var existing;
-                    if (rawExisting && typeof rawExisting === 'object') {
-                        // Jira Cloud returns ADF — converting to string loses content.
-                        // Re-read the solution from response.md (written by base action) to preserve it.
-                        var solutionContent = outputFiles.readOutputFile('response.md');
-                        existing = solutionContent ? solutionContent.trim() : '';
-                        console.warn('Field "' + solutionField + '" is ADF — rebuilding from outputs/response.md to preserve solution');
-                    } else {
-                        existing = (rawExisting || '').toString().trim();
-                    }
+                    var solutionBase = outputFiles.readOutputFile('response.md');
+                    var existing = solutionBase ? solutionBase.trim() : '';
                     jira_update_field({
                         key: ticketKey,
                         field: solutionField,

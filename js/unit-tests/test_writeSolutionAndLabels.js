@@ -224,50 +224,34 @@ suite('writeSolutionAndLabels — repo label flow', function() {
         assert.equal(addedLabels.length, 0, 'no repo labels for empty array');
     });
 
-    test('ADF description: falls back to response.md when field returns object (Jira Cloud ADF)', function() {
+    test('always uses response.md as base (not Jira GET) to avoid stale cache overwrite', function() {
         var writtenValues = [];
-        var adfObject = { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Original text' }] }] };
 
-        var module = loadModule(
-            'js/writeSolutionAndLabels.js',
-            makeRequire({
-                './writeSolutionAndDiagrams.js': { action: function() { return { success: true }; } },
-                './common/outputFiles.js': makeOutputFiles({
-                    'outputs/response.md': 'h2. Solution Design\n\nFull solution text.',
-                    'outputs/affected_repos.json': JSON.stringify([
-                        { name: 'gens-igt-db', reason: 'DB migration' },
-                        { name: 'gens-igt', reason: 'API', depends_on: ['gens-igt-db'] }
-                    ])
-                }),
-                './config.js': configModule,
-                './configLoader.js': configLoaderModule,
-                './common/scm.js': { createScm: function() { return {}; } },
-                './common/autoStart.js': { triggerSmIfIdle: function() {}, triggerConfiguredWorkflowForTicket: function() { return false; } },
-                './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
-            }),
+        var module = makeLabelsModule(
             {
-                file_read: function(opts) {
-                    var p = opts && (opts.path || opts);
-                    if (p === 'outputs/response.md') return 'h2. Solution Design\n\nFull solution text.';
-                    if (p === 'outputs/affected_repos.json') return JSON.stringify([{ name: 'gens-igt-db', reason: 'DB' }, { name: 'gens-igt', reason: 'API', depends_on: ['gens-igt-db'] }]);
-                    return null;
-                },
-                jira_get_ticket: function() { return { fields: { description: adfObject } }; },
-                jira_update_field: function(opts) { writtenValues.push(opts.value); },
-                jira_add_label: function() {}
+                'outputs/response.md': 'h2. Solution Design\n\nFull solution text.',
+                'outputs/affected_repos.json': JSON.stringify([
+                    { name: 'gens-igt-db', reason: 'DB migration' },
+                    { name: 'gens-igt', reason: 'API', depends_on: ['gens-igt-db'] }
+                ])
+            },
+            {
+                // jira_get_ticket returns stale cached value (as happens in real CI)
+                jira_get_ticket: function() { return { fields: { description: 'STALE_CACHED_VALUE' } }; },
+                jira_update_field: function(opts) { writtenValues.push(opts.value); }
             }
         );
 
         var result = module.action({
-            ticket: { key: 'PROJ-ADF' },
+            ticket: { key: 'PROJ-CACHE' },
             customParams: { solutionField: 'description', diagramField: '' }
         });
 
-        assert.equal(result.success, true, 'action succeeds with ADF field');
+        assert.equal(result.success, true, 'action succeeds');
         assert.equal(writtenValues.length, 1, 'description updated once');
-        assert.equal(writtenValues[0].indexOf('h2. Solution Design') !== -1, true, 'response.md content preserved');
+        assert.equal(writtenValues[0].indexOf('h2. Solution Design') !== -1, true, 'response.md content used as base');
         assert.equal(writtenValues[0].indexOf('h2. Affected Repositories') !== -1, true, 'repos section appended');
-        assert.equal(writtenValues[0].indexOf('[object Object]'), -1, 'ADF object toString must NOT appear in output');
+        assert.equal(writtenValues[0].indexOf('STALE_CACHED_VALUE'), -1, 'stale Jira GET value must NOT be used');
     });
 
     test('stops early if base action fails', function() {
