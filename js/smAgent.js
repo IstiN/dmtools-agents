@@ -702,12 +702,25 @@ function action(params) {
                 ', concurrencyKey=' + (targetedRule.concurrencyKey || targetTicket));
         } else {
             console.log('  No matching rule found for ' + targetAgent + ' — using minimal synthetic rule');
+            // Read localExecution from the agent config so agents with localExecution:true
+            // run directly in the SM job (skipping the ai-teammate checkout pipeline).
+            var agentLocalExecution = false;
+            try {
+                var agentJson = buildEncodedConfigModule.tryReadJson(targetAgent);
+                if (agentJson && agentJson.params && agentJson.params.localExecution === true) {
+                    agentLocalExecution = true;
+                }
+            } catch (e) { /* ignore */ }
             targetedRule = {
                 description: 'Targeted: ' + targetAgent + ' for ' + targetTicket,
                 jql: 'key = ' + targetTicket,
                 configFile: targetAgent,
-                enabled: true
+                enabled: true,
+                localExecution: agentLocalExecution
             };
+            if (agentLocalExecution) {
+                console.log('  Agent config has localExecution:true — will run locally (no checkout pipeline)');
+            }
         }
 
         rules = [targetedRule];
