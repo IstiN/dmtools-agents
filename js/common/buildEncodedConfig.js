@@ -168,6 +168,14 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
 
     if (!p.agentParams) p.agentParams = {};
 
+    var agentId = resolvedCf ? extractAgentName(resolvedCf) : null;
+    var contextId = projectKey ? projectKey.toUpperCase() : null;
+    if (agentId || contextId) {
+        p.metadata = {};
+        if (agentId) p.metadata.agentId = agentId;
+        if (contextId) p.metadata.contextId = contextId;
+    }
+
     return encodeURIComponent(JSON.stringify({ params: p }));
 }
 
