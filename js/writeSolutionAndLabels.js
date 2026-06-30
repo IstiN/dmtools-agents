@@ -165,20 +165,36 @@ function action(params) {
                     ? buildMarkdownSection(sorted)
                     : buildJiraSection(sorted);
 
-                // Append section to the solution field.
-                // Do NOT re-read the field from Jira — the GET response may be served from
-                // the Jira client cache (populated before the base action wrote the solution),
-                // which would cause the repos-append step to silently overwrite the solution
-                // with just the original description + repos section.
-                // Instead, use response.md as the authoritative base — it is exactly what
-                // writeSolutionAndDiagrams.js wrote to the field moments ago.
+                // Append repos section to whatever base.action() just wrote (diagram + solution).
+                // Read the field fresh from Jira — with DMTOOLS_CACHE_ENABLED=false and
+                // dmtools ≥ v1.7.219 the JiraClient cache is disabled so we get the value
+                // that was written moments ago (including any prepended diagram block).
+                // Fallback to response.md if the GET fails or returns empty.
                 try {
-                    var solutionBase = outputFiles.readOutputFile('response.md');
-                    var existing = solutionBase ? solutionBase.trim() : '';
+                    var existingBase = '';
+                    try {
+                        var freshTicket = jira_get_ticket({ key: ticketKey, fields: [solutionField] });
+                        var freshFields = (freshTicket && freshTicket.fields) ? freshTicket.fields : freshTicket;
+                        var rawValue = freshFields ? freshFields[solutionField] : null;
+                        if (rawValue && typeof rawValue === 'object') {
+                            console.warn('Field "' + solutionField + '" is ADF — falling back to response.md as base');
+                            rawValue = null;
+                        }
+                        existingBase = rawValue ? rawValue.toString().trim() : '';
+                    } catch (ge) {
+                        console.warn('Could not read current value of "' + solutionField + '" — falling back to response.md:', ge);
+                    }
+                    if (!existingBase) {
+                        var fallback = outputFiles.readOutputFile('response.md');
+                        existingBase = fallback ? fallback.trim() : '';
+                        console.log('Using response.md as fallback base (' + existingBase.length + ' chars)');
+                    } else {
+                        console.log('Using current Jira field as base (' + existingBase.length + ' chars)');
+                    }
                     jira_update_field({
                         key: ticketKey,
                         field: solutionField,
-                        value: existing + '\n\n' + section
+                        value: existingBase + '\n\n' + section
                     });
                     console.log('Appended affected repos section to "' + solutionField + '" for ' + ticketKey);
                 } catch (fe) {

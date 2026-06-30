@@ -224,8 +224,10 @@ suite('writeSolutionAndLabels — repo label flow', function() {
         assert.equal(addedLabels.length, 0, 'no repo labels for empty array');
     });
 
-    test('always uses response.md as base (not Jira GET) to avoid stale cache overwrite', function() {
+    test('uses current Jira field as base (preserves diagram written by base.action)', function() {
         var writtenValues = [];
+        // Simulate what base.action() writes: diagram prepended to solution
+        var freshJiraValue = '{code}\ngraph LR\n    A --> B\n{code}\n\nh2. Solution Design\n\nFull solution text.';
 
         var module = makeLabelsModule(
             {
@@ -236,8 +238,8 @@ suite('writeSolutionAndLabels — repo label flow', function() {
                 ])
             },
             {
-                // jira_get_ticket returns stale cached value (as happens in real CI)
-                jira_get_ticket: function() { return { fields: { description: 'STALE_CACHED_VALUE' } }; },
+                // jira_get_ticket returns fresh value (as with dmtools >= v1.7.219 + DMTOOLS_CACHE_ENABLED=false)
+                jira_get_ticket: function() { return { fields: { description: freshJiraValue } }; },
                 jira_update_field: function(opts) { writtenValues.push(opts.value); }
             }
         );
@@ -249,9 +251,36 @@ suite('writeSolutionAndLabels — repo label flow', function() {
 
         assert.equal(result.success, true, 'action succeeds');
         assert.equal(writtenValues.length, 1, 'description updated once');
-        assert.equal(writtenValues[0].indexOf('h2. Solution Design') !== -1, true, 'response.md content used as base');
+        assert.equal(writtenValues[0].indexOf('{code}') !== -1, true, 'diagram block preserved from Jira field');
+        assert.equal(writtenValues[0].indexOf('h2. Solution Design') !== -1, true, 'solution text preserved');
         assert.equal(writtenValues[0].indexOf('h2. Affected Repositories') !== -1, true, 'repos section appended');
-        assert.equal(writtenValues[0].indexOf('STALE_CACHED_VALUE'), -1, 'stale Jira GET value must NOT be used');
+    });
+
+    test('falls back to response.md when Jira GET returns empty (cache miss / first run)', function() {
+        var writtenValues = [];
+
+        var module = makeLabelsModule(
+            {
+                'outputs/response.md': 'h2. Solution Design\n\nFull solution text.',
+                'outputs/affected_repos.json': JSON.stringify([
+                    { name: 'gens-igt-db', reason: 'DB migration' }
+                ])
+            },
+            {
+                jira_get_ticket: function() { return { fields: { description: '' } }; },
+                jira_update_field: function(opts) { writtenValues.push(opts.value); }
+            }
+        );
+
+        var result = module.action({
+            ticket: { key: 'PROJ-FALLBACK' },
+            customParams: { solutionField: 'description', diagramField: '' }
+        });
+
+        assert.equal(result.success, true, 'action succeeds');
+        assert.equal(writtenValues.length, 1, 'description updated once');
+        assert.equal(writtenValues[0].indexOf('h2. Solution Design') !== -1, true, 'response.md used as fallback base');
+        assert.equal(writtenValues[0].indexOf('h2. Affected Repositories') !== -1, true, 'repos section appended');
     });
 
     test('stops early if base action fails', function() {
