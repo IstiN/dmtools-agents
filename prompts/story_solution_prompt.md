@@ -14,7 +14,18 @@ List the input folder with `ls -la input/*/` and read every file found:
 
 **IMPORTANT** don't start solution from: Solution Design: ... - start from content.
 **CRITICAL** check existing codebase. Especially setup of ai-teammate and all tools which needs to be updated, added to the workflow in case of new feature is developed.
-**IMPORTANT** Write the solution design to outputs/response.md and the Mermaid diagram to outputs/diagram.md.
+
+**CRITICAL: MANDATORY OUTPUT FILES — YOU MUST CREATE ALL THREE**
+Do NOT print the solution to stdout. Write it to files:
+1. `outputs/response.md` — the full solution design text (REQUIRED — without this file nothing is saved to Jira)
+2. `outputs/diagram.md` — the Mermaid architecture diagram
+3. `outputs/affected_repos.json` — affected repositories JSON array
+
+Run this as your LAST step to verify all files exist:
+```
+ls -la outputs/ && echo "=== response.md ===" && head -5 outputs/response.md
+```
+If `outputs/response.md` is missing or empty — create it before finishing.
 
 **CRITICAL: DO NOT DUPLICATE ACCEPTANCE CRITERIA**
 - Never copy, rewrite, or repeat Acceptance Criteria from parent or BA tickets.
