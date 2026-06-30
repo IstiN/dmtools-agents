@@ -59,6 +59,11 @@ function action(params) {
 
         console.log('createRepoTasks: processing SA ticket ' + saKey);
 
+        // Customisable via customParams (or .dmtools/config.js jobParamPatches.createRepoTasks.customParams)
+        var customParams = params.customParams || (params.jobParams && params.jobParams.customParams) || {};
+        var blocksRelationship = customParams.blocksRelationship || 'Blocks';
+        var blockedStatus      = customParams.blockedStatus      || 'Blocked';
+
         // Fetch the SA ticket to get description + parent
         var saTicket = jira_get_ticket({ key: saKey, fields: ['description', 'summary', 'parent'] });
         var saFields = saTicket && saTicket.fields ? saTicket.fields : saTicket;
@@ -106,6 +111,8 @@ function action(params) {
 
         var created = [];
         var skipped = [];
+        // repoName → created Jira key (for dependency linking)
+        var repoKeyMap = {};
 
         repos.forEach(function(repo) {
             var repoName = typeof repo === 'string' ? repo : repo.name;
@@ -145,11 +152,40 @@ function action(params) {
                 } catch (e) { /* key extraction failed — non-critical */ }
 
                 console.log('Created Sub-task ' + (createdKey || '(key unavailable)') + ': ' + summary);
-                created.push({ repo: repoName, key: createdKey, summary: summary });
+                created.push({ repo: repoName, key: createdKey, summary: summary, depends_on: repo.depends_on || [] });
+                if (createdKey) repoKeyMap[repoName] = createdKey;
 
             } catch (e) {
                 console.error('Failed to create Sub-task for ' + repoName + ':', e);
-                created.push({ repo: repoName, key: null, error: e.toString() });
+                created.push({ repo: repoName, key: null, error: e.toString(), depends_on: [] });
+            }
+        });
+
+        // Wire dependencies: blocker Blocks dependent + move dependent to Blocked status
+        created.forEach(function(c) {
+            if (!c.key || !Array.isArray(c.depends_on) || c.depends_on.length === 0) return;
+            var anyLinked = false;
+            c.depends_on.forEach(function(depRepo) {
+                var blockerKey = repoKeyMap[depRepo];
+                if (!blockerKey) {
+                    console.warn('Cannot resolve depends_on "' + depRepo + '" for ' + c.key + ' — skipping link');
+                    return;
+                }
+                try {
+                    jira_link_issues({ sourceKey: c.key, anotherKey: blockerKey, relationship: blocksRelationship });
+                    console.log(blockerKey + ' ' + blocksRelationship + ' ' + c.key);
+                    anyLinked = true;
+                } catch (e) {
+                    console.warn('Failed to link ' + blockerKey + ' ' + blocksRelationship + ' ' + c.key + ':', e);
+                }
+            });
+            if (anyLinked) {
+                try {
+                    jira_move_to_status({ key: c.key, statusName: blockedStatus });
+                    console.log('Moved ' + c.key + ' to ' + blockedStatus);
+                } catch (e) {
+                    console.warn('Failed to move ' + c.key + ' to ' + blockedStatus + ':', e);
+                }
             }
         });
 

@@ -8,6 +8,8 @@ function makeModule(globals) {
         jira_get_ticket: function() { return { fields: {} }; },
         jira_search_by_jql: function() { return []; },
         jira_create_ticket_with_parent: function() { return '{"key":"PROJ-2"}'; },
+        jira_link_issues: function() {},
+        jira_move_to_status: function() {},
         jira_post_comment: function() {}
     };
     for (var k in (globals || {})) { defaultGlobals[k] = globals[k]; }
@@ -79,6 +81,8 @@ suite('createRepoTasks — action', function() {
                 created.push(opts);
                 return '{"key":"GENSGENP-' + (200 + created.length) + '"}';
             },
+            jira_link_issues: function() {},
+            jira_move_to_status: function() {},
             jira_post_comment: function() {}
         });
 
@@ -93,6 +97,70 @@ suite('createRepoTasks — action', function() {
         assert.equal(created[0].description.indexOf('gens-igt-db') !== -1, true, 'repo name in description');
         assert.equal(created[0].description.indexOf('GENSGENP-100') !== -1, true, 'SA ticket link in description');
         assert.equal(created[0].description.indexOf('GENSGENP-50') !== -1, true, 'parent link in description');
+    });
+
+    test('links blocker→dependent and moves dependent to Blocked', function() {
+        var links = [];
+        var moved = [];
+        var ticketCounter = 200;
+        var mod = makeModule({
+            jira_get_ticket: function(opts) {
+                if (opts.key === 'GENSGENP-100') {
+                    return { fields: { description: description, parent: { key: 'GENSGENP-50' } } };
+                }
+                return { fields: { summary: 'Build PacBio workflow' } };
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_create_ticket_with_parent: function() {
+                ticketCounter++;
+                return '{"key":"GENSGENP-' + ticketCounter + '"}';
+            },
+            jira_link_issues: function(opts) { links.push(opts); },
+            jira_move_to_status: function(opts) { moved.push(opts); },
+            jira_post_comment: function() {}
+        });
+
+        mod.action({ ticket: { key: 'GENSGENP-100' } });
+
+        // gens-igt depends_on gens-igt-db → gens-igt-db (GENSGENP-201) blocks gens-igt (GENSGENP-202)
+        assert.equal(links.length, 1, 'one Blocks link created');
+        assert.equal(links[0].relationship, 'Blocks', 'relationship is Blocks');
+        assert.equal(links[0].anotherKey, 'GENSGENP-201', 'blocker is gens-igt-db ticket');
+        assert.equal(links[0].sourceKey, 'GENSGENP-202', 'dependent is gens-igt ticket');
+        assert.equal(moved.length, 1, 'one ticket moved to Blocked');
+        assert.equal(moved[0].key, 'GENSGENP-202', 'gens-igt moved to Blocked');
+        assert.equal(moved[0].statusName, 'Blocked', 'status is Blocked');
+    });
+
+    test('respects custom blocksRelationship and blockedStatus from customParams', function() {
+        var links = [];
+        var moved = [];
+        var ticketCounter = 300;
+        var mod = makeModule({
+            jira_get_ticket: function(opts) {
+                if (opts.key === 'GENSGENP-100') {
+                    return { fields: { description: description, parent: { key: 'GENSGENP-50' } } };
+                }
+                return { fields: { summary: 'Story' } };
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_create_ticket_with_parent: function() {
+                ticketCounter++;
+                return '{"key":"GENSGENP-' + ticketCounter + '"}';
+            },
+            jira_link_issues: function(opts) { links.push(opts); },
+            jira_move_to_status: function(opts) { moved.push(opts); },
+            jira_post_comment: function() {}
+        });
+
+        mod.action({
+            ticket: { key: 'GENSGENP-100' },
+            customParams: { blocksRelationship: 'is blocked by', blockedStatus: 'On Hold' }
+        });
+
+        assert.equal(links.length, 1, 'one link');
+        assert.equal(links[0].relationship, 'is blocked by', 'custom relationship used');
+        assert.equal(moved[0].statusName, 'On Hold', 'custom blocked status used');
     });
 
     test('skips repos that already have a matching Sub-task', function() {
