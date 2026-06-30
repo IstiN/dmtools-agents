@@ -54,6 +54,65 @@ function tryReadJson(path) {
 }
 
 /**
+ * Resolve the directory portion of a file path.
+ * "agents/story_solution_e2e.json" → "agents/"
+ */
+function dirOf(filePath) {
+    var idx = filePath.lastIndexOf('/');
+    return idx >= 0 ? filePath.substring(0, idx + 1) : '';
+}
+
+/**
+ * Recursively resolve parent inheritance for an agent JSON config.
+ *
+ * Supports `parent.merge` for array fields (currently only params.cliPrompts).
+ * Per the JSON config spec: merged array = parent items + child items.
+ *
+ * @param {Object} agentJson   - Parsed agent JSON (may contain a `parent` block).
+ * @param {string} agentPath   - File path used to resolve relative `parent.path` values.
+ * @param {number} [depth=0]   - Recursion guard (max 10 levels).
+ * @returns {Object} Fully-resolved `params` object with parent inheritance applied.
+ */
+function resolveParentMerge(agentJson, agentPath, depth) {
+    depth = depth || 0;
+    var childParams = (agentJson && agentJson.params) ? agentJson.params : {};
+
+    if (!agentJson || !agentJson.parent || !agentJson.parent.path || depth > 10) {
+        return childParams;
+    }
+
+    var parentRelPath = agentJson.parent.path;
+    var parentAbsPath = dirOf(agentPath) + parentRelPath;
+    var parentJson = tryReadJson(parentAbsPath);
+    if (!parentJson) {
+        return childParams;
+    }
+
+    // Resolve grandparent chain first
+    var parentParams = resolveParentMerge(parentJson, parentAbsPath, depth + 1);
+
+    // Deep-merge: parent as base, child overrides
+    var merged = configLoader.deepMerge(parentParams, childParams);
+
+    // Apply merge directives — merge = parent items prepended before child items
+    var mergeFields = (agentJson.parent.merge && Array.isArray(agentJson.parent.merge))
+        ? agentJson.parent.merge : [];
+
+    mergeFields.forEach(function(fieldPath) {
+        // Accept both "params.cliPrompts" and bare "cliPrompts"
+        var key = fieldPath;
+        if (key.indexOf('params.') === 0) {
+            key = key.substring('params.'.length);
+        }
+        var parentArr = Array.isArray(parentParams[key]) ? parentParams[key] : [];
+        var childArr  = Array.isArray(childParams[key])  ? childParams[key]  : [];
+        merged[key] = parentArr.concat(childArr);
+    });
+
+    return merged;
+}
+
+/**
  * Build the encoded config payload for a workflow dispatch.
  *
  * @param {string} ticketKey - Ticket key to process.
@@ -87,7 +146,7 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
 
         var agentJson = tryReadJson(agentJsonPath);
         if (agentJson && agentJson.params) {
-            agentParamsRoot = agentJson.params;
+            agentParamsRoot = resolveParentMerge(agentJson, agentJsonPath);
             var skipKeys = { inputJql: true };
             Object.keys(agentParamsRoot).forEach(function(paramKey) {
                 if (skipKeys[paramKey]) return;
@@ -182,5 +241,6 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
 module.exports = {
     extractAgentName: extractAgentName,
     resolveConfigFile: resolveConfigFile,
+    resolveParentMerge: resolveParentMerge,
     buildEncodedConfig: buildEncodedConfig
 };

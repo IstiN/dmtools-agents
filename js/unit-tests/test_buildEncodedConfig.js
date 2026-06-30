@@ -273,3 +273,78 @@ suite('buildEncodedConfig payload', function() {
         assert.notOk(decoded.params.customParams);
     });
 });
+
+suite('resolveParentMerge — parent inheritance', function() {
+
+    test('returns child params as-is when no parent block', function() {
+        var builder = loadBuilder({});
+        var result = builder.resolveParentMerge(
+            { params: { cliPrompts: ['child.md'] } },
+            'agents/child.json'
+        );
+        assert.deepEqual(result.cliPrompts, ['child.md']);
+    });
+
+    test('deep-merges parent params when parent.path exists but no merge directive', function() {
+        var builder = loadBuilder({
+            'agents/parent.json': JSON.stringify({ params: { postJSAction: 'base.js', cliPrompts: ['parent.md'] } })
+        });
+        var result = builder.resolveParentMerge(
+            { parent: { path: 'parent.json' }, params: { postJSAction: 'child.js' } },
+            'agents/child.json'
+        );
+        // Child scalar wins
+        assert.equal(result.postJSAction, 'child.js');
+        // Parent array replaced by child (no merge directive) — child wins
+        assert.deepEqual(result.cliPrompts, ['parent.md']);
+    });
+
+    test('prepends parent cliPrompts before child when merge contains params.cliPrompts', function() {
+        var builder = loadBuilder({
+            'agents/parent.json': JSON.stringify({
+                params: { cliPrompts: ['parent-a.md', 'parent-b.md'] }
+            })
+        });
+        var result = builder.resolveParentMerge(
+            {
+                parent: { path: 'parent.json', merge: ['params.cliPrompts'] },
+                params: { cliPrompts: ['child-1.md', 'child-2.md'] }
+            },
+            'agents/child.json'
+        );
+        assert.deepEqual(result.cliPrompts, ['parent-a.md', 'parent-b.md', 'child-1.md', 'child-2.md']);
+    });
+
+    test('merge works with bare key notation (without params. prefix)', function() {
+        var builder = loadBuilder({
+            'agents/parent.json': JSON.stringify({ params: { cliPrompts: ['p.md'] } })
+        });
+        var result = builder.resolveParentMerge(
+            { parent: { path: 'parent.json', merge: ['cliPrompts'] }, params: { cliPrompts: ['c.md'] } },
+            'agents/child.json'
+        );
+        assert.deepEqual(result.cliPrompts, ['p.md', 'c.md']);
+    });
+
+    test('resolveParentMerge flows into buildEncodedConfig — child sees merged cliPrompts + config.js appended', function() {
+        var builder = loadBuilder({
+            'agents/parent.json': JSON.stringify({
+                params: { cliPrompts: ['base-a.md', 'base-b.md'] }
+            }),
+            'agents/child.json': JSON.stringify({
+                parent: { path: 'parent.json', merge: ['params.cliPrompts'] },
+                params: { cliPrompts: ['e2e-extra.md'] }
+            })
+        });
+        var config = {
+            cliPrompts: { child: ['project-specific.md'] }
+        };
+        var encoded = builder.buildEncodedConfig('T-99', { configFile: 'agents/child.json' }, config);
+        var decoded = decode(encoded);
+        // Expected: [parent items + child items] + config.js items
+        assert.deepEqual(decoded.params.cliPrompts, [
+            'base-a.md', 'base-b.md', 'e2e-extra.md', 'project-specific.md'
+        ]);
+    });
+});
+
