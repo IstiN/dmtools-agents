@@ -496,6 +496,7 @@ function resolveInstructions(agentName, defaultInstructions, config, agentCliPro
     var instructionsOverridden = false;
     var additional = [];
     var cliPrompts = [];
+    var cliPromptsStrategy = 'merge'; // default: append to existing JSON cliPrompts
     var cliPrompt = null;
     var agentParamPatch = null;
     var jobParamPatch = null;
@@ -519,7 +520,17 @@ function resolveInstructions(agentName, defaultInstructions, config, agentCliPro
     }
 
     if (config.cliPrompts && config.cliPrompts[agentName]) {
-        cliPrompts = config.cliPrompts[agentName];
+        var entry = config.cliPrompts[agentName];
+        if (Array.isArray(entry)) {
+            // Short form: array → merge strategy (default, backward compatible)
+            cliPrompts = entry;
+        } else if (entry && typeof entry === 'object' && Array.isArray(entry.prompts)) {
+            // Long form: { strategy: 'merge'|'replace', prompts: [...] }
+            cliPrompts = entry.prompts;
+            if (entry.strategy === 'replace') {
+                cliPromptsStrategy = 'replace';
+            }
+        }
     }
     // Global CLI prompts injected into every agent
     if (config.globalCliPrompts && config.globalCliPrompts.length > 0) {
@@ -585,6 +596,7 @@ function resolveInstructions(agentName, defaultInstructions, config, agentCliPro
         instructionsOverridden: instructionsOverridden,
         additionalInstructions: additional,
         cliPrompts: cliPrompts,
+        cliPromptsStrategy: cliPromptsStrategy,
         cliPrompt: cliPrompt,
         agentParamPatch: agentParamPatch,
         jobParamPatch: jobParamPatch

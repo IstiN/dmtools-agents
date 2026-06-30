@@ -554,9 +554,40 @@ suite('configLoader.resolveInstructions', function() {
         }
     });
 
+    test('cliPrompts array format returns merge strategy by default', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            cliPrompts: { my_agent: ['./a.md', './b.md'] }
+        });
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.deepEqual(result.cliPrompts, ['./a.md', './b.md']);
+        assert.equal(result.cliPromptsStrategy, 'merge');
+    });
+
+    test('cliPrompts object format with strategy:merge is treated same as array', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            cliPrompts: {
+                my_agent: { strategy: 'merge', prompts: ['./a.md', './b.md'] }
+            }
+        });
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.deepEqual(result.cliPrompts, ['./a.md', './b.md']);
+        assert.equal(result.cliPromptsStrategy, 'merge');
+    });
+
+    test('cliPrompts object format with strategy:replace returns replace strategy', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            cliPrompts: {
+                my_agent: { strategy: 'replace', prompts: ['./override.md'] }
+            }
+        });
+        var result = configLoaderModule.resolveInstructions('my_agent', [], config);
+        assert.deepEqual(result.cliPrompts, ['./override.md']);
+        assert.equal(result.cliPromptsStrategy, 'replace');
+    });
+
 });
 
-// ── configPath top-level param ────────────────────────────────────────────────
+
 
 suite('configLoader.loadProjectConfig top-level configPath', function() {
 

@@ -193,8 +193,14 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
             p.additionalInstructions = resolved.additionalInstructions;
         }
         if (resolved.cliPrompts && resolved.cliPrompts.length > 0) {
-            var existing = Array.isArray(p.cliPrompts) ? p.cliPrompts : [];
-            p.cliPrompts = existing.concat(resolved.cliPrompts);
+            if (resolved.cliPromptsStrategy === 'replace') {
+                // replace: config.js prompts replace the JSON-inherited cliPrompts entirely
+                p.cliPrompts = resolved.cliPrompts;
+            } else {
+                // merge (default): append config.js prompts after the JSON-inherited ones
+                var existing = Array.isArray(p.cliPrompts) ? p.cliPrompts : [];
+                p.cliPrompts = existing.concat(resolved.cliPrompts);
+            }
         }
         if (resolved.cliPrompt) {
             p.cliPrompt = resolved.cliPrompt;

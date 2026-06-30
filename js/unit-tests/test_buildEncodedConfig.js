@@ -346,5 +346,27 @@ suite('resolveParentMerge — parent inheritance', function() {
             'base-a.md', 'base-b.md', 'e2e-extra.md', 'project-specific.md'
         ]);
     });
+
+    test('config.js strategy:replace discards parent cliPrompts and uses only config.js prompts', function() {
+        var builder = loadBuilder({
+            'agents/parent.json': JSON.stringify({
+                params: { cliPrompts: ['base-a.md', 'base-b.md'] }
+            }),
+            'agents/child.json': JSON.stringify({
+                parent: { path: 'parent.json', merge: ['params.cliPrompts'] },
+                params: { cliPrompts: ['e2e-extra.md'] }
+            })
+        });
+        var config = {
+            cliPrompts: {
+                child: { strategy: 'replace', prompts: ['override-only.md'] }
+            }
+        };
+        var encoded = builder.buildEncodedConfig('T-99', { configFile: 'agents/child.json' }, config);
+        var decoded = decode(encoded);
+        // replace: only config.js prompts, parent+child cliPrompts discarded
+        assert.deepEqual(decoded.params.cliPrompts, ['override-only.md']);
+    });
 });
+
 
