@@ -107,6 +107,8 @@ suite('writeSolutionAndLabels — buildJiraSection', function() {
         assert.equal(section.indexOf('{code:json|title=affected_repos}') !== -1, true, 'JSON anchor present');
         assert.equal(section.indexOf('gens-igt-db --> gens-igt') !== -1, true, 'mermaid edge present');
         assert.equal(section.indexOf('----') !== -1, true, 'section delimiters');
+        assert.equal(section.indexOf('{code:mermaid}'), -1, '{code:mermaid} must NOT be used (Jira Server does not support mermaid formatter)');
+        assert.equal(section.indexOf('{code}') !== -1, true, 'plain {code} block used for diagram');
     });
 
     test('omits mermaid block when no depends_on edges', function() {
@@ -220,6 +222,52 @@ suite('writeSolutionAndLabels — repo label flow', function() {
 
         assert.equal(result.success, true, 'action succeeds');
         assert.equal(addedLabels.length, 0, 'no repo labels for empty array');
+    });
+
+    test('ADF description: falls back to response.md when field returns object (Jira Cloud ADF)', function() {
+        var writtenValues = [];
+        var adfObject = { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Original text' }] }] };
+
+        var module = loadModule(
+            'js/writeSolutionAndLabels.js',
+            makeRequire({
+                './writeSolutionAndDiagrams.js': { action: function() { return { success: true }; } },
+                './common/outputFiles.js': makeOutputFiles({
+                    'outputs/response.md': 'h2. Solution Design\n\nFull solution text.',
+                    'outputs/affected_repos.json': JSON.stringify([
+                        { name: 'gens-igt-db', reason: 'DB migration' },
+                        { name: 'gens-igt', reason: 'API', depends_on: ['gens-igt-db'] }
+                    ])
+                }),
+                './config.js': configModule,
+                './configLoader.js': configLoaderModule,
+                './common/scm.js': { createScm: function() { return {}; } },
+                './common/autoStart.js': { triggerSmIfIdle: function() {}, triggerConfiguredWorkflowForTicket: function() { return false; } },
+                './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            }),
+            {
+                file_read: function(opts) {
+                    var p = opts && (opts.path || opts);
+                    if (p === 'outputs/response.md') return 'h2. Solution Design\n\nFull solution text.';
+                    if (p === 'outputs/affected_repos.json') return JSON.stringify([{ name: 'gens-igt-db', reason: 'DB' }, { name: 'gens-igt', reason: 'API', depends_on: ['gens-igt-db'] }]);
+                    return null;
+                },
+                jira_get_ticket: function() { return { fields: { description: adfObject } }; },
+                jira_update_field: function(opts) { writtenValues.push(opts.value); },
+                jira_add_label: function() {}
+            }
+        );
+
+        var result = module.action({
+            ticket: { key: 'PROJ-ADF' },
+            customParams: { solutionField: 'description', diagramField: '' }
+        });
+
+        assert.equal(result.success, true, 'action succeeds with ADF field');
+        assert.equal(writtenValues.length, 1, 'description updated once');
+        assert.equal(writtenValues[0].indexOf('h2. Solution Design') !== -1, true, 'response.md content preserved');
+        assert.equal(writtenValues[0].indexOf('h2. Affected Repositories') !== -1, true, 'repos section appended');
+        assert.equal(writtenValues[0].indexOf('[object Object]'), -1, 'ADF object toString must NOT appear in output');
     });
 
     test('stops early if base action fails', function() {

@@ -70,7 +70,7 @@ function buildJiraSection(sorted) {
     });
     if (edges.length > 0) {
         lines.push('');
-        lines.push('{code:mermaid}');
+        lines.push('{code}');
         lines.push('graph LR');
         edges.forEach(function(e) { lines.push(e); });
         lines.push('{code}');
@@ -169,7 +169,17 @@ function action(params) {
                 try {
                     var freshTicket = jira_get_ticket({ key: ticketKey, fields: [solutionField] });
                     var freshFields = freshTicket && (freshTicket.fields || freshTicket);
-                    var existing = (freshFields && freshFields[solutionField]) || '';
+                    var rawExisting = freshFields && freshFields[solutionField];
+                    var existing;
+                    if (rawExisting && typeof rawExisting === 'object') {
+                        // Jira Cloud returns ADF — converting to string loses content.
+                        // Re-read the solution from response.md (written by base action) to preserve it.
+                        var solutionContent = outputFiles.readOutputFile('response.md');
+                        existing = solutionContent ? solutionContent.trim() : '';
+                        console.warn('Field "' + solutionField + '" is ADF — rebuilding from outputs/response.md to preserve solution');
+                    } else {
+                        existing = (rawExisting || '').toString().trim();
+                    }
                     jira_update_field({
                         key: ticketKey,
                         field: solutionField,

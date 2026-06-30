@@ -66,8 +66,8 @@ function action(params) {
 
         // 3. If no dedicated diagram field — prepend diagram as Jira code block to solution
         if (diagram && !diagramField) {
-            solution = '{code:mermaid}\n' + diagram + '\n{code}\n\n' + solution;
-            console.log('No diagram field configured — diagram prepended to solution as {code:mermaid} block');
+            solution = '{code}\n' + diagram + '\n{code}\n\n' + solution;
+            console.log('No diagram field configured — diagram prepended to solution as {code} block');
             diagram = ''; // mark as handled
         }
 
