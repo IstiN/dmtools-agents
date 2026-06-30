@@ -31,7 +31,9 @@ function makeLabelsModule(fileMap, extraGlobals) {
             return fileMap[path] !== undefined ? fileMap[path] : null;
         },
         jira_add_label: function() {},
-        jira_remove_label: function() {}
+        jira_remove_label: function() {},
+        jira_get_ticket: function() { return { fields: {} }; },
+        jira_update_field: function() {}
     };
     for (var k in (extraGlobals || {})) { globals[k] = extraGlobals[k]; }
 
@@ -51,11 +53,72 @@ function makeLabelsModule(fileMap, extraGlobals) {
 }
 
 suite('writeSolutionAndLabels — module export', function() {
-    test('exports action function', function() {
+    test('exports action, topologicalSort, buildJiraSection, buildMarkdownSection', function() {
         var module = makeLabelsModule({ 'outputs/response.md': 'h2. Solution' });
-        assert.equal(typeof module.action, 'function', 'module.action is a function');
+        assert.equal(typeof module.action, 'function', 'action exported');
+        assert.equal(typeof module.topologicalSort, 'function', 'topologicalSort exported');
+        assert.equal(typeof module.buildJiraSection, 'function', 'buildJiraSection exported');
+        assert.equal(typeof module.buildMarkdownSection, 'function', 'buildMarkdownSection exported');
     });
 });
+
+suite('writeSolutionAndLabels — topologicalSort', function() {
+    test('returns items with no deps first', function() {
+        var mod = makeLabelsModule({});
+        var repos = [
+            { name: 'lims-ui', reason: 'UI', depends_on: ['gens-igt'] },
+            { name: 'gens-igt', reason: 'API', depends_on: ['gens-igt-db'] },
+            { name: 'gens-igt-db', reason: 'DB' }
+        ];
+        var sorted = mod.topologicalSort(repos);
+        var names = sorted.map(function(r) { return r.name; });
+        assert.equal(names.indexOf('gens-igt-db') < names.indexOf('gens-igt'), true, 'gens-igt-db before gens-igt');
+        assert.equal(names.indexOf('gens-igt') < names.indexOf('lims-ui'), true, 'gens-igt before lims-ui');
+    });
+
+    test('handles plain strings', function() {
+        var mod = makeLabelsModule({});
+        var sorted = mod.topologicalSort(['repo-a', 'repo-b']);
+        assert.equal(sorted.length, 2, 'two items');
+        assert.equal(typeof sorted[0], 'object', 'normalised to object');
+    });
+});
+
+suite('writeSolutionAndLabels — buildJiraSection', function() {
+    test('produces wiki table with || headers and {code:json|title=affected_repos} anchor', function() {
+        var mod = makeLabelsModule({});
+        var repos = [
+            { name: 'gens-igt-db', reason: 'DB migration' },
+            { name: 'gens-igt', reason: 'API change', depends_on: ['gens-igt-db'] }
+        ];
+        var section = mod.buildJiraSection(repos);
+        assert.equal(section.indexOf('|| # ||') !== -1, true, 'Jira table header');
+        assert.equal(section.indexOf('{code:json|title=affected_repos}') !== -1, true, 'JSON anchor present');
+        assert.equal(section.indexOf('gens-igt-db --> gens-igt') !== -1, true, 'mermaid edge present');
+        assert.equal(section.indexOf('----') !== -1, true, 'section delimiters');
+    });
+
+    test('omits mermaid block when no depends_on edges', function() {
+        var mod = makeLabelsModule({});
+        var section = mod.buildJiraSection([{ name: 'repo-a', reason: 'standalone' }]);
+        assert.equal(section.indexOf('{code:mermaid}'), -1, 'no mermaid when no edges');
+    });
+});
+
+suite('writeSolutionAndLabels — buildMarkdownSection', function() {
+    test('produces markdown table with --- delimiters and json code block', function() {
+        var mod = makeLabelsModule({});
+        var repos = [
+            { name: 'gens-igt-db', reason: 'DB migration' },
+            { name: 'gens-igt', reason: 'API', depends_on: ['gens-igt-db'] }
+        ];
+        var section = mod.buildMarkdownSection(repos);
+        assert.equal(section.indexOf('| # | Repository |') !== -1, true, 'markdown table header');
+        assert.equal(section.indexOf('```json') !== -1, true, 'json code block');
+        assert.equal(section.indexOf('```mermaid') !== -1, true, 'mermaid block');
+    });
+});
+
 
 suite('writeSolutionAndLabels — repo label flow', function() {
     test('adds a label for each repo — plain string format', function() {

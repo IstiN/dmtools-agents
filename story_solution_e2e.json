@@ -10,7 +10,8 @@
     },
     "postJSAction": "agents/js/writeSolutionAndLabels.js",
     "cliPrompts": [
-      "./agents/instructions/story_solution/affected_repos_flow.md"
+      "./agents/instructions/story_solution/affected_repos_flow.md",
+      "./agents/instructions/story_solution/affected_repos_section_format.md"
     ]
   }
 }
