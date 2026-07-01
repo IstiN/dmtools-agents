@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"
 
 # Canonical order for "all" (node before copilot, java before dmtools)
-ALL_TOOLS="java node dmtools maestro copilot codemie cursor codegraph playwright kimi"
+ALL_TOOLS="java node dmtools maestro copilot codemie cursor codegraph playwright kimi gradle android konan"
 
 if [ $# -eq 0 ]; then
   echo "Usage: install.sh tool1[:version] tool2[:version] ..."
@@ -35,6 +35,9 @@ if [ $# -eq 0 ]; then
   echo "  codegraph — CodeGraph CLI (npm).     Default version: latest"
   echo "  playwright — Playwright + Chromium.  Default version: latest"
   echo "  kimi      — Kimi Code CLI.           Default version: latest"
+  echo "  gradle    — Gradle wrapper pre-warm. Default version: (wrapper version)"
+  echo "  android   — Android SDK cmdline.     Default compileSdk: 36"
+  echo "  konan     — Kotlin/KMP native toolchain pre-warm"
   echo ""
   echo "Examples:"
   echo "  install.sh dmtools maestro copilot playwright"
@@ -178,6 +181,9 @@ for tool in ${TOOL_LIST}; do
     codegraph) BIN="codegraph" ;;
     playwright) BIN="playwright" ;;
     kimi)    BIN="kimi" ;;
+    gradle)  BIN="gradlew" ;;
+    android) BIN="sdkmanager" ;;
+    konan)   continue ;;  # no standalone binary — toolchain lives in ~/.konan
     *)       continue ;;
   esac
 
