@@ -24,7 +24,22 @@ function action(params) {
         return false;
     }
 
-    // 2. Run standard pre-CLI development setup with the resolved targetRepository
+    // 2. Write resolved workingDir to a file so that CLI shell scripts
+    //    (e.g. create_test_commit.sh) can discover the correct dependency dir
+    //    without duplicating the [repo] parsing logic.
+    try {
+        var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+        var targetRepo = customParams.targetRepository || {};
+        var workingDir = targetRepo.workingDir || '';
+        if (workingDir) {
+            file_write({ path: '.dmtools-target-workingdir', content: workingDir });
+            console.log('preCliDevelopmentSetupDynamicRepo: wrote workingDir to .dmtools-target-workingdir:', workingDir);
+        }
+    } catch (e) {
+        console.warn('preCliDevelopmentSetupDynamicRepo: could not write .dmtools-target-workingdir (non-fatal):', e);
+    }
+
+    // 3. Run standard pre-CLI development setup with the resolved targetRepository
     return setupDev.action(params);
 }
 

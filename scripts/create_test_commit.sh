@@ -3,35 +3,29 @@
 # Used by story_development_dynamic_repo_test.json to verify the dynamic-repo pipeline
 # without running a real AI agent.
 #
-# After preCliDevelopmentSetupDynamicRepo.js checks out a feature branch in
-# ./dependencies/{repo}/, that directory is on a non-master/develop branch.
-# This script finds it, creates a test file, and commits it so that
-# postDevelopTicketDynamicRepo.js can push and open a real MR.
+# Reads the target working directory from .dmtools-target-workingdir written by
+# preCliDevelopmentSetupDynamicRepo.js (which parses [repo] from the ticket summary).
+# This avoids duplicating the repo-resolution logic in bash.
 set -euo pipefail
 
-FOUND_DIR=""
-FOUND_BRANCH=""
+TARGET_FILE=".dmtools-target-workingdir"
 
-for dir in ./dependencies/*/; do
-    if [ -d "${dir}.git" ]; then
-        branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
-        # Look specifically for Jira-style ticket branches: KEY-123-some-slug
-        if echo "$branch" | grep -qE '^[A-Z]+-[0-9]+-'; then
-            FOUND_DIR="$dir"
-            FOUND_BRANCH="$branch"
-            break
-        fi
-    fi
-done
-
-if [ -z "$FOUND_DIR" ]; then
-    echo "ERROR: No feature branch found in ./dependencies/. Did preCliJSAction run correctly?" >&2
+if [ ! -f "$TARGET_FILE" ]; then
+    echo "ERROR: $TARGET_FILE not found. Did preCliJSAction (preCliDevelopmentSetupDynamicRepo.js) run?" >&2
     exit 1
 fi
 
-echo "✅ Found feature branch '${FOUND_BRANCH}' in ${FOUND_DIR}"
+FOUND_DIR=$(cat "$TARGET_FILE")
 
-TEST_FILE="${FOUND_DIR}test-agent-$(date +%s).txt"
+if [ -z "$FOUND_DIR" ] || [ ! -d "$FOUND_DIR" ]; then
+    echo "ERROR: workingDir '$FOUND_DIR' from $TARGET_FILE is empty or does not exist" >&2
+    exit 1
+fi
+
+FOUND_BRANCH=$(git -C "$FOUND_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+echo "✅ Target repo dir: ${FOUND_DIR} (branch: ${FOUND_BRANCH})"
+
+TEST_FILE="${FOUND_DIR}/test-agent-$(date +%s).txt"
 cat > "$TEST_FILE" <<EOF
 Test file created by story_development_dynamic_repo agent test
 Branch: ${FOUND_BRANCH}
