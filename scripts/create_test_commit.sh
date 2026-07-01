@@ -15,7 +15,8 @@ FOUND_BRANCH=""
 for dir in ./dependencies/*/; do
     if [ -d "${dir}.git" ]; then
         branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
-        if [ -n "$branch" ] && [ "$branch" != "master" ] && [ "$branch" != "develop" ] && [ "$branch" != "HEAD" ]; then
+        # Look specifically for Jira-style ticket branches: KEY-123-some-slug
+        if echo "$branch" | grep -qE '^[A-Z]+-[0-9]+-'; then
             FOUND_DIR="$dir"
             FOUND_BRANCH="$branch"
             break
