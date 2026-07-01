@@ -1,0 +1,13 @@
+{
+  "name": "Teammate",
+  "parent": {
+    "path": "story_development.json",
+    "merge": ["params.cliPrompts"]
+  },
+  "params": {
+    "metadata": {
+      "contextId": "story_development_dynamic_repo"
+    },
+    "preJSAction": "agents/js/resolveRepoFromTicket.js"
+  }
+}
