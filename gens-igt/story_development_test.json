@@ -1,0 +1,15 @@
+{
+  "name": "Teammate",
+  "parent": {
+    "path": "./story_development.json",
+    "merge": []
+  },
+  "params": {
+    "metadata": {
+      "contextId": "story_development_gens_igt_test"
+    },
+    "cliCommands": [
+      "agents/scripts/create_test_commit.sh"
+    ]
+  }
+}
