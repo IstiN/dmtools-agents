@@ -1,0 +1,15 @@
+{
+  "name": "Teammate",
+  "parent": {
+    "path": "story_development_dynamic_repo.json",
+    "merge": []
+  },
+  "params": {
+    "metadata": {
+      "contextId": "story_development_dynamic_repo_test"
+    },
+    "cliCommands": [
+      "agents/scripts/create_test_commit.sh"
+    ]
+  }
+}
