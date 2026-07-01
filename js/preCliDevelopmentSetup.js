@@ -129,6 +129,11 @@ function alignBranchWithBase(ticketKey, branchName, baseBranch) {
 function checkoutBranch(ticketKey, config, ticket) {
     ticket = ticket || { key: ticketKey, fields: {} };
     _workingDir = config.workingDir || null;
+    // Write workingDir to a known file so CLI shell scripts (e.g. create_test_commit.sh)
+    // can discover the correct dependency dir without duplicating resolution logic.
+    if (_workingDir) {
+        try { file_write({ path: '.dmtools-target-workingdir', content: _workingDir }); } catch (e) {}
+    }
     var branchName = configLoader.resolveBranchName(config, ticket, 'development');
     var rebaseBase = configLoader.resolvePRTargetBranch(config, ticket);
     console.log('Setting up branch:', branchName);
