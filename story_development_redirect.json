@@ -9,10 +9,10 @@
     "attachResponseAsFile": false,
     "alwaysPostComments": false,
     "ticketContextDepth": 0,
-    "preJSAction": "agents/js/resolveRepoNameToFile.js",
-    "cliCommands": [
-      "agents/scripts/redirect_to_repo_agent.sh story_development.json"
-    ],
+    "preJSAction": "agents/js/redirectToRepoAgent.js",
+    "customParams": {
+      "targetAgentName": "story_development.json"
+    },
     "inputJql": "key in (PLACEHOLDER-1)"
   }
 }

@@ -8,8 +8,8 @@
     "metadata": {
       "contextId": "story_development_redirect_test"
     },
-    "cliCommands": [
-      "agents/scripts/redirect_to_repo_agent.sh story_development_test.json"
-    ]
+    "customParams": {
+      "targetAgentName": "story_development_test.json"
+    }
   }
 }
