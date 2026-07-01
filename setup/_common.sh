@@ -145,3 +145,41 @@ _codegraph_init_or_sync() {
     echo "✅ CodeGraph index initialized"
   fi
 }
+
+# ── Portable file hashing ─────────────────────────────────────────────────────
+# macOS ships `md5` (BSD) and `shasum`, but not `md5sum`/`sha256sum`.
+# Linux ships `md5sum`/`sha256sum` (GNU coreutils), usually not `md5`.
+# This helper tries every common tool in order and always returns a value
+# (falls back to "nokey" if the file is missing or no hashing tool exists,
+# so cache keys never end with a literal empty string).
+hash_file() {
+  local file="$1"
+
+  if [ ! -f "${file}" ]; then
+    echo "nokey"
+    return 0
+  fi
+
+  if command -v sha256sum &>/dev/null; then
+    sha256sum "${file}" | cut -d' ' -f1
+  elif command -v shasum &>/dev/null; then
+    shasum -a 256 "${file}" | cut -d' ' -f1
+  elif command -v md5sum &>/dev/null; then
+    md5sum "${file}" | cut -d' ' -f1
+  elif command -v md5 &>/dev/null; then
+    md5 -q "${file}"
+  else
+    echo "nokey"
+  fi
+}
+
+# Hash multiple files together (order-stable, concatenates individual hashes then hashes the result).
+hash_files() {
+  local combined=""
+  for f in "$@"; do
+    combined="${combined}$(hash_file "${f}")"
+  done
+  echo "${combined}" | { command -v sha256sum &>/dev/null && sha256sum | cut -d' ' -f1; } \
+    || echo "${combined}" | { command -v shasum &>/dev/null && shasum -a 256 | cut -d' ' -f1; } \
+    || echo "${combined}"
+}
