@@ -155,9 +155,15 @@ function action(params) {
             '" not found in repositories file — forwarding repoName only');
     }
 
-    // Mutate params so configLoader and preCliDevelopmentSetup pick it up downstream
+    // Mutate params so configLoader and preCliDevelopmentSetup pick it up downstream.
+    // configLoader.loadProjectConfig is called as loadProjectConfig(params.jobParams || params),
+    // so we write into both locations to cover both the Teammate and JSRunner call paths.
     if (!params.customParams) params.customParams = {};
     params.customParams.targetRepository = targetRepository;
+    if (params.jobParams) {
+        if (!params.jobParams.customParams) params.jobParams.customParams = {};
+        params.jobParams.customParams.targetRepository = targetRepository;
+    }
 
     return true;
 }

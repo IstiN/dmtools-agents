@@ -201,6 +201,27 @@ suite('resolveRepoFromTicket — action', function() {
         assert.equal(params.customParams.targetRepository, undefined, 'no targetRepository written');
     });
 
+    test('also writes targetRepository into params.jobParams.customParams for postJSAction path', function() {
+        var mod = makeModule({ '.dmtools/repositories.json': GROUPED_REPOS_JSON });
+        var params = {
+            ticket: { key: 'PROJ-9', fields: { summary: '[gens-igt] Feature' } },
+            jobParams: { customParams: { existingKey: 'value' } }
+        };
+        mod.action(params);
+        assert.equal(params.jobParams.customParams.targetRepository.repo, 'gens-igt', 'jobParams.customParams.targetRepository set');
+        assert.equal(params.jobParams.customParams.existingKey, 'value', 'existing jobParams.customParams fields preserved');
+    });
+
+    test('creates params.jobParams.customParams if absent', function() {
+        var mod = makeModule({ '.dmtools/repositories.json': GROUPED_REPOS_JSON });
+        var params = {
+            ticket: { key: 'PROJ-10', fields: { summary: '[lims-ui] Fix' } },
+            jobParams: {}
+        };
+        mod.action(params);
+        assert.equal(params.jobParams.customParams.targetRepository.repo, 'lims-ui', 'targetRepository created in jobParams.customParams');
+    });
+
     test('preserves existing customParams fields while adding targetRepository', function() {
         var mod = makeModule({ '.dmtools/repositories.json': GROUPED_REPOS_JSON });
         var params = {
