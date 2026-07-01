@@ -8,6 +8,6 @@
     "metadata": {
       "contextId": "story_development_dynamic_repo"
     },
-    "preJSAction": "agents/js/resolveRepoFromTicket.js"
+    "preCliJSAction": "agents/js/preCliDevelopmentSetupDynamicRepo.js"
   }
 }
