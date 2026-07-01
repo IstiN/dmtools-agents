@@ -8,6 +8,7 @@
     "metadata": {
       "contextId": "story_development_dynamic_repo"
     },
-    "preCliJSAction": "agents/js/preCliDevelopmentSetupDynamicRepo.js"
+    "preCliJSAction": "agents/js/preCliDevelopmentSetupDynamicRepo.js",
+    "postJSAction": "agents/js/postDevelopTicketDynamicRepo.js"
   }
 }
