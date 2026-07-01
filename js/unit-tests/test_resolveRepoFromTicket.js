@@ -142,6 +142,7 @@ suite('resolveRepoFromTicket — action', function() {
         assert.equal(params.customParams.targetRepository.repo, 'gens-igt', 'repo name set');
         assert.equal(params.customParams.targetRepository.baseBranch, 'develop', 'baseBranch from file');
         assert.equal(params.customParams.targetRepository.owner, 'gens-sup/develop', 'owner from file');
+        assert.equal(params.customParams.targetRepository.workingDir, './dependencies/gens-igt', 'default workingDir derived');
     });
 
     test('writes only repoName when repo not found in repositories file', function() {
@@ -189,6 +190,26 @@ suite('resolveRepoFromTicket — action', function() {
         };
         mod.action(params);
         assert.equal(params.customParams.targetRepository.baseBranch, 'main', 'branch from custom file');
+    });
+
+    test('derives workingDir from dependenciesDir/repoName by default', function() {
+        var mod = makeModule({ '.dmtools/repositories.json': GROUPED_REPOS_JSON });
+        var params = {
+            ticket: { key: 'PROJ-11', fields: { summary: '[gens-igt-db] Schema' } },
+            customParams: {}
+        };
+        mod.action(params);
+        assert.equal(params.customParams.targetRepository.workingDir, './dependencies/gens-igt-db', 'default workingDir');
+    });
+
+    test('respects custom dependenciesDir from customParams', function() {
+        var mod = makeModule({ '.dmtools/repositories.json': GROUPED_REPOS_JSON });
+        var params = {
+            ticket: { key: 'PROJ-12', fields: { summary: '[lims-ui] Feature' } },
+            customParams: { dependenciesDir: '/workspace/repos' }
+        };
+        mod.action(params);
+        assert.equal(params.customParams.targetRepository.workingDir, '/workspace/repos/lims-ui', 'custom dependenciesDir used');
     });
 
     test('returns true for unknown strategy (graceful skip)', function() {

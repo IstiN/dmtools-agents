@@ -147,9 +147,13 @@ function action(params) {
     if (entry) {
         if (entry.branch)       targetRepository.baseBranch = entry.branch;
         if (entry.gitlabGroup)  targetRepository.owner      = entry.gitlabGroup;
-        if (entry.workingDir)   targetRepository.workingDir = entry.workingDir;
+        // workingDir: explicit entry.workingDir → or derive from dependenciesDir/repoName
+        // (checkout.sh clones repos into ./dependencies/{repo}/ by default)
+        var dependenciesDir = customParams.dependenciesDir || './dependencies';
+        targetRepository.workingDir = entry.workingDir || (dependenciesDir + '/' + repoName);
         console.log('resolveRepoFromTicket: repo entry found — branch=' +
-            (entry.branch || 'n/a') + ', owner=' + (entry.gitlabGroup || 'n/a'));
+            (entry.branch || 'n/a') + ', owner=' + (entry.gitlabGroup || 'n/a') +
+            ', workingDir=' + targetRepository.workingDir);
     } else {
         console.warn('resolveRepoFromTicket: repo "' + repoName +
             '" not found in repositories file — forwarding repoName only');
