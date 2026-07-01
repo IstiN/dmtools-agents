@@ -102,6 +102,53 @@ _cache_kimi_session() {
   source "${SCRIPT_DIR}/kimi-session.sh" env
 }
 
+_cache_gradle() {
+  # Gradle wrapper distribution (~/.gradle/wrapper) and dependency cache (~/.gradle/caches).
+  # Keys hash the files most likely to change the cache content:
+  #   wrapper key  — gradle-wrapper.properties (changes when Gradle version bumps)
+  #   caches key   — libs.versions.toml + *.gradle.kts (changes when deps or build scripts change)
+  local workspace="${GITHUB_WORKSPACE:-${PWD}}"
+  local wrapper_hash=""
+  local caches_hash=""
+
+  if [ -f "${workspace}/gradle/wrapper/gradle-wrapper.properties" ]; then
+    wrapper_hash="$(md5sum "${workspace}/gradle/wrapper/gradle-wrapper.properties" 2>/dev/null | cut -d' ' -f1 || shasum "${workspace}/gradle/wrapper/gradle-wrapper.properties" | cut -d' ' -f1 || true)"
+  fi
+
+  export_var "GRADLE_WRAPPER_CACHE_PATH" "${HOME}/.gradle/wrapper"
+  export_var "GRADLE_WRAPPER_CACHE_KEY"  "gradle-wrapper-${wrapper_hash:-nokey}"
+  export_var "GRADLE_WRAPPER_CACHE_RESTORE_KEY" "gradle-wrapper-"
+
+  export_var "GRADLE_CACHES_CACHE_PATH" "${HOME}/.gradle/caches"
+  export_var "GRADLE_CACHES_CACHE_KEY"  "gradle-caches-${caches_hash:-nokey}"
+  export_var "GRADLE_CACHES_CACHE_RESTORE_KEY" "gradle-caches-"
+}
+
+_cache_konan() {
+  # Kotlin/KMP native toolchain (~/.konan).
+  # Key hashes libs.versions.toml because the Kotlin version bump triggers a new toolchain download.
+  local workspace="${GITHUB_WORKSPACE:-${PWD}}"
+  local konan_hash=""
+
+  if [ -f "${workspace}/gradle/libs.versions.toml" ]; then
+    konan_hash="$(md5sum "${workspace}/gradle/libs.versions.toml" 2>/dev/null | cut -d' ' -f1 || shasum "${workspace}/gradle/libs.versions.toml" | cut -d' ' -f1 || true)"
+  fi
+
+  export_var "KONAN_CACHE_PATH" "${HOME}/.konan"
+  export_var "KONAN_CACHE_KEY"  "konan-${konan_hash:-nokey}"
+  export_var "KONAN_CACHE_RESTORE_KEY" "konan-"
+}
+
+_cache_android() {
+  local compile_sdk="${1:-${ANDROID_COMPILE_SDK:-36}}"
+  # Android SDK packages are large but stable — key on compileSdk version.
+  local android_home="${ANDROID_HOME:-${HOME}/Android/Sdk}"
+
+  export_var "ANDROID_SDK_CACHE_PATH" "${android_home}/platforms/android-${compile_sdk} ${android_home}/build-tools ${android_home}/platform-tools"
+  export_var "ANDROID_SDK_CACHE_KEY"  "android-sdk-${compile_sdk}-${OS_TAG}"
+  export_var "ANDROID_SDK_CACHE_RESTORE_KEY" "android-sdk-${compile_sdk}-"
+}
+
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 
 _dispatch_tool() {
@@ -119,6 +166,9 @@ _dispatch_tool() {
     codemie)  _cache_codemie  "${version}" ;;
     kimi)     _cache_kimi     "${version}" ;;
     cursor)   echo "ℹ️  cursor-agent is not cacheable (part of Cursor IDE)" ;;
+    gradle)   _cache_gradle ;;
+    konan)    _cache_konan ;;
+    android)  _cache_android  "${version}" ;;
     *)        echo "⚠️  Unknown tool '${tool}' — skipping cache config" ;;
   esac
 }
@@ -137,6 +187,9 @@ _print_info() {
   printf "│ %-11s │ %-32s │ %-46s │\n" "cursor"   "(not cacheable)" "-"
   printf "│ %-11s │ %-32s │ %-46s │\n" "codegraph" "~/.npm-global + .codegraph/" "npm-global-codegraph-latest-linux-x86_64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "playwright" "~/.cache/ms-playwright" "playwright-browsers-latest-linux-x86_64"
+  printf "│ %-11s │ %-32s │ %-46s │\n" "gradle"    "~/.gradle/wrapper + caches" "gradle-wrapper-<hash> / gradle-caches-<hash>"
+  printf "│ %-11s │ %-32s │ %-46s │\n" "konan"     "~/.konan"            "konan-<libs.versions.toml-hash>"
+  printf "│ %-11s │ %-32s │ %-46s │\n" "android"   "\$ANDROID_HOME/..."  "android-sdk-36-linux-x86_64"
   echo "└─────────────┴──────────────────────────────────┴────────────────────────────────────────────────┘"
   echo ""
   echo "Exported env vars per tool:"
