@@ -63,6 +63,7 @@ function action(params) {
         var customParams = params.customParams || (params.jobParams && params.jobParams.customParams) || {};
         var blocksRelationship = customParams.blocksRelationship || 'Blocks';
         var blockedStatus      = customParams.blockedStatus      || 'Blocked';
+        var ticketLabels       = customParams.labels             || ['development'];
 
         // Fetch the SA ticket to get description + parent
         var saTicket = jira_get_ticket({ key: saKey, fields: ['description', 'summary', 'parent'] });
@@ -142,7 +143,8 @@ function action(params) {
                     issueType: 'Sub-task',
                     summary: summary,
                     description: desc,
-                    parentKey: parentKey
+                    parentKey: parentKey,
+                    labels: ticketLabels
                 });
 
                 var createdKey = null;

@@ -97,6 +97,7 @@ suite('createRepoTasks — action', function() {
         assert.equal(created[0].description.indexOf('gens-igt-db') !== -1, true, 'repo name in description');
         assert.equal(created[0].description.indexOf('GENSGENP-100') !== -1, true, 'SA ticket link in description');
         assert.equal(created[0].description.indexOf('GENSGENP-50') !== -1, true, 'parent link in description');
+        assert.deepEqual(created[0].labels, ['development'], 'default development label set');
     });
 
     test('links blocker→dependent and moves dependent to Blocked', function() {
