@@ -41,7 +41,8 @@ function action(params) {
         return false;
     }
     var repoName = summary.substring(1, bracketEnd).trim();
-    var agent = repoName + '/' + targetAgentName;
+    var agentsDir = customParams.repoAgentsDir || 'repo-agents';
+    var agent = agentsDir + '/' + repoName + '/' + targetAgentName;
 
     console.log('redirectToRepoAgent: ' + ticketKey + ' \u2192 ' + agent);
 
