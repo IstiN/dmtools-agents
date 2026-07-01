@@ -14,19 +14,22 @@
 function action(params) {
     var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
     var folder = actualParams.inputFolderPath || '';
-    var ticketKey = folder.split('/').pop() || '';
     var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams || {};
     var targetAgentName = customParams.targetAgentName || 'story_development.json';
 
     var ticket = params.ticket || actualParams.ticket;
     if (!ticket || !ticket.fields) {
+        var keyFromFolder = folder.split('/').pop() || '';
         try {
-            ticket = jira_get_ticket({ key: ticketKey });
+            ticket = jira_get_ticket({ key: keyFromFolder });
         } catch (e) {
-            console.error('redirectToRepoAgent: could not fetch ticket ' + ticketKey + ': ' + e);
+            console.error('redirectToRepoAgent: could not fetch ticket: ' + e);
             return false;
         }
     }
+
+    // ticket.key is the authoritative source — inputFolderPath may be empty when ticketContextDepth=0
+    var ticketKey = (ticket && ticket.key) ? ticket.key : (folder.split('/').pop() || '');
 
     var summary = (ticket && ticket.fields && ticket.fields.summary)
         ? ticket.fields.summary.toString()
