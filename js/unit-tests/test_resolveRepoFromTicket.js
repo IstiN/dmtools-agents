@@ -6,7 +6,7 @@ var GROUPED_REPOS_JSON = JSON.stringify({
     git: { userName: 'AI', userEmail: 'ai@test.com' },
     repositories: {
         'gens-sup': [
-            { provider: 'gitlab', repo: 'gens-igt-db', gitlabGroup: 'gens-sup/develop', branch: 'develop' },
+            { provider: 'gitlab', repo: 'sample-db', gitlabGroup: 'gens-sup/develop', branch: 'develop' },
             { provider: 'gitlab', repo: 'gens-igt',    gitlabGroup: 'gens-sup/develop', branch: 'develop' },
             { provider: 'gitlab', repo: 'lims-ui',     gitlabGroup: 'gens-sup/develop', branch: 'develop' },
             { provider: 'gitlab', repo: 'ultraqc',     gitlabGroup: 'gens-sup/develop', branch: 'master'  }
@@ -54,8 +54,8 @@ suite('resolveRepoFromTicket — STRATEGIES.fromSummary', function() {
 
     test('handles hyphenated and dotted repo names', function() {
         var mod = makeModule();
-        var ticket = { key: 'X-2', fields: { summary: '[gens-igt-db] Migrate schema' } };
-        assert.equal(mod.STRATEGIES.fromSummary(ticket), 'gens-igt-db', 'hyphenated name');
+        var ticket = { key: 'X-2', fields: { summary: '[sample-db] Migrate schema' } };
+        assert.equal(mod.STRATEGIES.fromSummary(ticket), 'sample-db', 'hyphenated name');
     });
 
     test('returns null when summary has no leading bracket', function() {
@@ -195,11 +195,11 @@ suite('resolveRepoFromTicket — action', function() {
     test('derives workingDir from dependenciesDir/repoName by default', function() {
         var mod = makeModule({ '.dmtools/repositories.json': GROUPED_REPOS_JSON });
         var params = {
-            ticket: { key: 'PROJ-11', fields: { summary: '[gens-igt-db] Schema' } },
+            ticket: { key: 'PROJ-11', fields: { summary: '[sample-db] Schema' } },
             customParams: {}
         };
         mod.action(params);
-        assert.equal(params.customParams.targetRepository.workingDir, './dependencies/gens-igt-db', 'default workingDir');
+        assert.equal(params.customParams.targetRepository.workingDir, './dependencies/sample-db', 'default workingDir');
     });
 
     test('respects custom dependenciesDir from customParams', function() {
@@ -246,13 +246,13 @@ suite('resolveRepoFromTicket — action', function() {
     test('preserves existing customParams fields while adding targetRepository', function() {
         var mod = makeModule({ '.dmtools/repositories.json': GROUPED_REPOS_JSON });
         var params = {
-            ticket: { key: 'PROJ-8', fields: { summary: '[gens-igt-db] Schema' } },
+            ticket: { key: 'PROJ-8', fields: { summary: '[sample-db] Schema' } },
             customParams: { blocksRelationship: 'Blocks', labels: ['development'] }
         };
         mod.action(params);
         assert.equal(params.customParams.blocksRelationship, 'Blocks', 'existing fields preserved');
         assert.deepEqual(params.customParams.labels, ['development'], 'labels preserved');
-        assert.equal(params.customParams.targetRepository.repo, 'gens-igt-db', 'targetRepository added');
+        assert.equal(params.customParams.targetRepository.repo, 'sample-db', 'targetRepository added');
     });
 });
 

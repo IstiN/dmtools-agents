@@ -78,12 +78,12 @@ suite('writeSolutionAndLabels — topologicalSort', function() {
         var mod = makeLabelsModule({});
         var repos = [
             { name: 'lims-ui', reason: 'UI', depends_on: ['gens-igt'] },
-            { name: 'gens-igt', reason: 'API', depends_on: ['gens-igt-db'] },
-            { name: 'gens-igt-db', reason: 'DB' }
+            { name: 'gens-igt', reason: 'API', depends_on: ['sample-db'] },
+            { name: 'sample-db', reason: 'DB' }
         ];
         var sorted = mod.topologicalSort(repos);
         var names = sorted.map(function(r) { return r.name; });
-        assert.equal(names.indexOf('gens-igt-db') < names.indexOf('gens-igt'), true, 'gens-igt-db before gens-igt');
+        assert.equal(names.indexOf('sample-db') < names.indexOf('gens-igt'), true, 'sample-db before gens-igt');
         assert.equal(names.indexOf('gens-igt') < names.indexOf('lims-ui'), true, 'gens-igt before lims-ui');
     });
 
@@ -99,13 +99,13 @@ suite('writeSolutionAndLabels — buildJiraSection', function() {
     test('produces wiki table with || headers and {code:json|title=affected_repos} anchor', function() {
         var mod = makeLabelsModule({});
         var repos = [
-            { name: 'gens-igt-db', reason: 'DB migration' },
-            { name: 'gens-igt', reason: 'API change', depends_on: ['gens-igt-db'] }
+            { name: 'sample-db', reason: 'DB migration' },
+            { name: 'gens-igt', reason: 'API change', depends_on: ['sample-db'] }
         ];
         var section = mod.buildJiraSection(repos);
         assert.equal(section.indexOf('|| # ||') !== -1, true, 'Jira table header');
         assert.equal(section.indexOf('{code:json|title=affected_repos}') !== -1, true, 'JSON anchor present');
-        assert.equal(section.indexOf('gens-igt-db --> gens-igt') !== -1, true, 'mermaid edge present');
+        assert.equal(section.indexOf('sample-db --> gens-igt') !== -1, true, 'mermaid edge present');
         assert.equal(section.indexOf('----') !== -1, true, 'section delimiters');
         assert.equal(section.indexOf('{code:mermaid}'), -1, '{code:mermaid} must NOT be used (Jira Server does not support mermaid formatter)');
         assert.equal(section.indexOf('{code}') !== -1, true, 'plain {code} block used for diagram');
@@ -122,8 +122,8 @@ suite('writeSolutionAndLabels — buildMarkdownSection', function() {
     test('produces markdown table with --- delimiters and json code block', function() {
         var mod = makeLabelsModule({});
         var repos = [
-            { name: 'gens-igt-db', reason: 'DB migration' },
-            { name: 'gens-igt', reason: 'API', depends_on: ['gens-igt-db'] }
+            { name: 'sample-db', reason: 'DB migration' },
+            { name: 'gens-igt', reason: 'API', depends_on: ['sample-db'] }
         ];
         var section = mod.buildMarkdownSection(repos);
         assert.equal(section.indexOf('| # | Repository |') !== -1, true, 'markdown table header');
@@ -139,7 +139,7 @@ suite('writeSolutionAndLabels — repo label flow', function() {
         var module = makeLabelsModule(
             {
                 'outputs/response.md': 'h2. Solution',
-                'outputs/affected_repos.json': '["gens-igt","admin-ui","gens-igt-db"]'
+                'outputs/affected_repos.json': '["gens-igt","admin-ui","sample-db"]'
             },
             {
                 jira_add_label: function(opts) { addedLabels.push(opts.label); }
@@ -154,14 +154,14 @@ suite('writeSolutionAndLabels — repo label flow', function() {
         assert.equal(result.success, true, 'action succeeds');
         assert.equal(addedLabels.indexOf('gens-igt') !== -1, true, 'gens-igt label added');
         assert.equal(addedLabels.indexOf('admin-ui') !== -1, true, 'admin-ui label added');
-        assert.equal(addedLabels.indexOf('gens-igt-db') !== -1, true, 'gens-igt-db label added');
+        assert.equal(addedLabels.indexOf('sample-db') !== -1, true, 'sample-db label added');
     });
 
     test('adds a label for each repo — enriched object format with name+reason+depends_on', function() {
         var addedLabels = [];
         var enriched = JSON.stringify([
-            { name: 'gens-igt-db', reason: 'DB migration required.' },
-            { name: 'gens-igt', reason: 'New API endpoint.', depends_on: ['gens-igt-db'] },
+            { name: 'sample-db', reason: 'DB migration required.' },
+            { name: 'gens-igt', reason: 'New API endpoint.', depends_on: ['sample-db'] },
             { name: 'lims-ui', reason: 'UI column update.', depends_on: ['gens-igt'] }
         ]);
         var module = makeLabelsModule(
@@ -180,7 +180,7 @@ suite('writeSolutionAndLabels — repo label flow', function() {
         });
 
         assert.equal(result.success, true, 'action succeeds');
-        assert.equal(addedLabels.indexOf('gens-igt-db') !== -1, true, 'gens-igt-db label added');
+        assert.equal(addedLabels.indexOf('sample-db') !== -1, true, 'sample-db label added');
         assert.equal(addedLabels.indexOf('gens-igt') !== -1, true, 'gens-igt label added');
         assert.equal(addedLabels.indexOf('lims-ui') !== -1, true, 'lims-ui label added');
     });
@@ -233,8 +233,8 @@ suite('writeSolutionAndLabels — repo label flow', function() {
             {
                 'outputs/response.md': 'h2. Solution Design\n\nFull solution text.',
                 'outputs/affected_repos.json': JSON.stringify([
-                    { name: 'gens-igt-db', reason: 'DB migration' },
-                    { name: 'gens-igt', reason: 'API', depends_on: ['gens-igt-db'] }
+                    { name: 'sample-db', reason: 'DB migration' },
+                    { name: 'gens-igt', reason: 'API', depends_on: ['sample-db'] }
                 ])
             },
             {
@@ -263,7 +263,7 @@ suite('writeSolutionAndLabels — repo label flow', function() {
             {
                 'outputs/response.md': 'h2. Solution Design\n\nFull solution text.',
                 'outputs/affected_repos.json': JSON.stringify([
-                    { name: 'gens-igt-db', reason: 'DB migration' }
+                    { name: 'sample-db', reason: 'DB migration' }
                 ])
             },
             {

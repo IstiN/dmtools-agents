@@ -62,8 +62,8 @@ suite('createRepoTasks — parseAffectedRepos', function() {
 
 suite('createRepoTasks — action', function() {
     var reposJson = JSON.stringify([
-        { name: 'gens-igt-db', reason: 'DB migration' },
-        { name: 'gens-igt',    reason: 'API change', depends_on: ['gens-igt-db'] }
+        { name: 'sample-db', reason: 'DB migration' },
+        { name: 'gens-igt',    reason: 'API change', depends_on: ['sample-db'] }
     ]);
     var description = 'Solution text\n\n{code:json|title=affected_repos}\n' + reposJson + '\n{code}\n\n----';
 
@@ -92,9 +92,9 @@ suite('createRepoTasks — action', function() {
         assert.equal(created.length, 2, 'two sub-tasks created');
         assert.equal(created[0].parentKey, 'GENSGENP-50', 'parent is story');
         assert.equal(created[0].issueType, 'Sub-task', 'issueType is Sub-task');
-        assert.equal(created[0].summary.indexOf('[gens-igt-db]') === 0, true, 'summary starts with [repo]');
+        assert.equal(created[0].summary.indexOf('[sample-db]') === 0, true, 'summary starts with [repo]');
         assert.equal(created[0].summary.indexOf('Build PacBio workflow') !== -1, true, 'parent summary in subtask summary');
-        assert.equal(created[0].description.indexOf('gens-igt-db') !== -1, true, 'repo name in description');
+        assert.equal(created[0].description.indexOf('sample-db') !== -1, true, 'repo name in description');
         assert.equal(created[0].description.indexOf('GENSGENP-100') !== -1, true, 'SA ticket link in description');
         assert.equal(created[0].description.indexOf('GENSGENP-50') !== -1, true, 'parent link in description');
         assert.deepEqual(created[0].labels, ['development'], 'default development label set');
@@ -123,10 +123,10 @@ suite('createRepoTasks — action', function() {
 
         mod.action({ ticket: { key: 'GENSGENP-100' } });
 
-        // gens-igt depends_on gens-igt-db → gens-igt-db (GENSGENP-201) blocks gens-igt (GENSGENP-202)
+        // gens-igt depends_on sample-db → sample-db (GENSGENP-201) blocks gens-igt (GENSGENP-202)
         assert.equal(links.length, 1, 'one Blocks link created');
         assert.equal(links[0].relationship, 'Blocks', 'relationship is Blocks');
-        assert.equal(links[0].sourceKey, 'GENSGENP-201', 'blocker is gens-igt-db ticket');
+        assert.equal(links[0].sourceKey, 'GENSGENP-201', 'blocker is sample-db ticket');
         assert.equal(links[0].anotherKey, 'GENSGENP-202', 'dependent is gens-igt ticket');
         assert.equal(moved.length, 1, 'one ticket moved to Blocked');
         assert.equal(moved[0].key, 'GENSGENP-202', 'gens-igt moved to Blocked');
@@ -174,7 +174,7 @@ suite('createRepoTasks — action', function() {
                 return { fields: { summary: 'Parent story' } };
             },
             jira_search_by_jql: function() {
-                return [{ fields: { summary: '[gens-igt-db] Parent story' } }]; // already exists
+                return [{ fields: { summary: '[sample-db] Parent story' } }]; // already exists
             },
             jira_create_ticket_with_parent: function(opts) { created.push(opts); return '{"key":"GENSGENP-201"}'; },
             jira_post_comment: function() {}
@@ -183,7 +183,7 @@ suite('createRepoTasks — action', function() {
         var result = mod.action({ ticket: { key: 'GENSGENP-100' } });
 
         assert.equal(result.success, true, 'succeeds');
-        assert.equal(created.length, 1, 'only one created (gens-igt-db skipped)');
+        assert.equal(created.length, 1, 'only one created (sample-db skipped)');
         assert.equal(result.skipped, 1, 'one skipped');
         assert.equal(created[0].summary.indexOf('[gens-igt]') === 0, true, 'gens-igt was created');
     });
