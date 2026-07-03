@@ -14,6 +14,22 @@
  * Used by: preCliDevelopmentSetup.js (story_development), preCliReworkSetup.js
  * (pr_rework) — runs once per ticket, right after the git branch is checked
  * out and before the CLI coding agent starts.
+ *
+ * ⚠️ IMPORTANT — every command here goes through cli_execute_command, which:
+ * 1. Only allows executables in the whitelist: git, gh, dmtools, npm, yarn,
+ *    docker, kubectl, terraform, ansible, aws, gcloud, az (base list). Anything
+ *    else (bash, mvn, gradle, test, python3, ...) MUST be added via
+ *    params.envVariables.CLI_ALLOWED_COMMANDS (comma-separated) on the agent
+ *    JSON — see repo-agents/gens-igt/story_development.json for an example.
+ * 2. Rejects any command string containing shell metacharacters —
+ *    `;`, `&&`, `||`, `|`, `>`, `<`, `` ` ``, `$(...)`, `${...}` — even if the
+ *    leading executable is whitelisted. There is NO way to pass a compound
+ *    command (e.g. "test -n \"$X\" && echo ok") directly.
+ *    If you need conditional/compound logic, put it inside a checked-in .sh
+ *    script file and invoke that file with a single simple command
+ *    (e.g. "bash agents/scripts/check_required_env_vars.sh VAR1 VAR2") — the
+ *    metacharacter check only inspects the command string passed to
+ *    cli_execute_command, not the contents of a script it runs.
  */
 
 function runSetupCommands(customParams, defaultWorkingDir) {
