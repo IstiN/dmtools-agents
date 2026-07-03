@@ -12,6 +12,8 @@
     "attachResponseAsFile": false,
     "skipAIProcessing": true,
     "alwaysPostComments": true,
+    "timerJSAction": "agents/js/timerAutoCommitAndSave.js",
+    "timerIntervalSeconds": 300,
     "preJSAction": "agents/js/checkWipLabel.js",
     "preCliJSAction": "agents/js/preCliDevelopmentSetup.js",
     "postJSAction": "agents/js/developTicketAndCreatePR.js",

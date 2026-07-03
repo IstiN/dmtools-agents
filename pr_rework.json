@@ -13,6 +13,8 @@
     "cleanupInputFolder": false,
     "skipAIProcessing": true,
     "alwaysPostComments": true,
+    "timerJSAction": "agents/js/timerAutoCommitAndSave.js",
+    "timerIntervalSeconds": 300,
     "preJSAction": "agents/js/checkWipLabel.js",
     "preCliJSAction": "agents/js/preCliReworkSetup.js",
     "postJSAction": "agents/js/pushReworkChanges.js",
