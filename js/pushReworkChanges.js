@@ -250,6 +250,12 @@ function commitAndPush(ticketKey, config, customParams) {
  * "body" (instead of "reply", as inline text) — the AI agent frequently mirrors
  * field names from input/<TICKET>/pr_discussions_raw.json (rootCommentId/body)
  * rather than renaming them to the documented output schema.
+ *
+ * Anti-spam: replies without any usable comment id (no inReplyToId/rootCommentId)
+ * cannot be posted as an inline threaded reply. Instead of posting one generic
+ * top-level PR comment per such item (which spams the conversation with
+ * repeated "✅ Addressed." messages), all of them are batched into a single
+ * combined top-level comment.
  */
 function postThreadReplies(scm, pullRequestId, outputOptions) {
     outputOptions = outputOptions || {};
@@ -288,6 +294,7 @@ function postThreadReplies(scm, pullRequestId, outputOptions) {
     }
 
     let posted = 0;
+    const untargeted = [];
     replies.forEach(function(item) {
         // Accept both the documented field names (inReplyToId/reply) and the
         // input-schema field names (rootCommentId/body) — the AI agent commonly
@@ -297,16 +304,21 @@ function postThreadReplies(scm, pullRequestId, outputOptions) {
         const replyText = resolveReplyText(item.reply || item.body);
         const thread = { rootCommentId: inReplyToId, threadId: item.threadId || null };
 
-        try {
-            scm.replyToThread(pullRequestId, thread, replyText);
-            if (inReplyToId) {
+        if (inReplyToId) {
+            // Normal case: post an inline threaded reply — this appears nested
+            // inside the review conversation, not as a new top-level PR comment.
+            try {
+                scm.replyToThread(pullRequestId, thread, replyText);
                 console.log('✅ Replied to comment #' + inReplyToId);
-            } else {
-                console.log('✅ Posted general reply (no threadId)');
+                posted++;
+            } catch (e) {
+                console.warn('Failed to post reply:', e.message || e);
             }
-            posted++;
-        } catch (e) {
-            console.warn('Failed to post reply:', e.message || e);
+        } else {
+            // No comment id available at all — a threaded reply is not possible.
+            // Queue it instead of posting a separate top-level PR comment per
+            // item, which would spam the conversation with repeated generic text.
+            untargeted.push({ threadId: item.threadId || null, text: replyText });
         }
 
         if (item.threadId) {
@@ -318,6 +330,24 @@ function postThreadReplies(scm, pullRequestId, outputOptions) {
             }
         }
     });
+
+    if (untargeted.length > 0) {
+        // Post exactly one combined top-level comment for all untargeted replies
+        // instead of one generic comment per item.
+        const lines = untargeted.map(function(u, i) {
+            return (i + 1) + '. ' + u.text + (u.threadId ? ' (thread ' + u.threadId + ')' : '');
+        });
+        const combinedText = untargeted.length === 1
+            ? untargeted[0].text
+            : '✅ Addressed ' + untargeted.length + ' review comment(s) without a specific inline target:\n\n' + lines.join('\n');
+        try {
+            scm.addComment(pullRequestId, combinedText);
+            console.log('✅ Posted 1 combined comment for ' + untargeted.length + ' untargeted repl' + (untargeted.length === 1 ? 'y' : 'ies'));
+            posted++;
+        } catch (e) {
+            console.warn('Failed to post combined untargeted reply comment:', e.message || e);
+        }
+    }
 
     console.log('Posted ' + posted + '/' + replies.length + ' thread replies');
     return posted;

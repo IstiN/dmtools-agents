@@ -26,6 +26,7 @@ function loadPushReworkChangesModule(fileMap) {
     var outputFiles = makeOutputFiles(fileMap);
     var replyCalls = [];
     var resolveCalls = [];
+    var addCommentCalls = [];
 
     var scm = {
         replyToThread: function(prId, thread, text) {
@@ -33,6 +34,9 @@ function loadPushReworkChangesModule(fileMap) {
         },
         resolveThread: function(prId, thread) {
             resolveCalls.push({ prId: prId, thread: thread });
+        },
+        addComment: function(prId, text) {
+            addCommentCalls.push({ prId: prId, text: text });
         }
     };
 
@@ -59,7 +63,7 @@ function loadPushReworkChangesModule(fileMap) {
         }
     );
 
-    return { mod: mod, scm: scm, replyCalls: replyCalls, resolveCalls: resolveCalls };
+    return { mod: mod, scm: scm, replyCalls: replyCalls, resolveCalls: resolveCalls, addCommentCalls: addCommentCalls };
 }
 
 suite('pushReworkChanges — postThreadReplies field-name fallback', function() {
@@ -141,5 +145,42 @@ suite('pushReworkChanges — postThreadReplies field-name fallback', function() 
         var posted = loaded.mod.postThreadReplies(loaded.scm, '123', {});
         assert.equal(posted, 0);
         assert.equal(loaded.replyCalls.length, 0);
+    });
+
+    test('batches multiple untargeted replies (no comment id at all) into ONE combined top-level comment, not one per item', function() {
+        var loaded = loadPushReworkChangesModule({
+            'outputs/review_replies.json': JSON.stringify({
+                replies: [
+                    { threadId: 'PRRT_x', reply: 'Fix one.' },
+                    { threadId: 'PRRT_y', reply: 'Fix two.' },
+                    { threadId: 'PRRT_z', reply: 'Fix three.' }
+                ]
+            })
+        });
+
+        var posted = loaded.mod.postThreadReplies(loaded.scm, '123', {});
+
+        assert.equal(loaded.replyCalls.length, 0, 'no threaded replies possible without a comment id');
+        assert.equal(loaded.addCommentCalls.length, 1, 'exactly one combined comment posted — not one per item');
+        assert.ok(loaded.addCommentCalls[0].text.indexOf('Fix one.') !== -1, 'combined comment includes item 1');
+        assert.ok(loaded.addCommentCalls[0].text.indexOf('Fix two.') !== -1, 'combined comment includes item 2');
+        assert.ok(loaded.addCommentCalls[0].text.indexOf('Fix three.') !== -1, 'combined comment includes item 3');
+        assert.equal(posted, 1, 'combined comment counts as 1 posted item');
+        assert.equal(loaded.resolveCalls.length, 3, 'each thread is still individually resolved');
+    });
+
+    test('single untargeted reply posts its own text as-is, without the numbered-list wrapper', function() {
+        var loaded = loadPushReworkChangesModule({
+            'outputs/review_replies.json': JSON.stringify({
+                replies: [
+                    { threadId: 'PRRT_x', reply: 'Only fix.' }
+                ]
+            })
+        });
+
+        loaded.mod.postThreadReplies(loaded.scm, '123', {});
+
+        assert.equal(loaded.addCommentCalls.length, 1);
+        assert.equal(loaded.addCommentCalls[0].text, 'Only fix.');
     });
 });
