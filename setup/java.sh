@@ -22,14 +22,19 @@ java_version_ok() {
   # Get major version: "17.0.1" -> 17, "1.8.0" -> 1
   local raw major
   raw="$(java -version 2>&1 | head -1 || true)"
-  # Extract first quoted number group
-  major="$(echo "${raw}" | sed 's/.*"\([0-9]*\).*/\1/' || true)"
-  # Handle old 1.x format
+  # Extract the number group right after 'version "'. Anchoring on the literal
+  # 'version "' prefix (rather than a bare '.*"...' greedy match) is required:
+  # the naive greedy pattern consumes up to the LAST quote in the line (there
+  # are two — opening and closing), leaving nothing for the digit group to
+  # match and silently returning an empty string.
+  major="$(echo "${raw}" | sed 's/.*version "\([0-9]*\).*/\1/' || true)"
+  # Handle old 1.x format (e.g. "1.8.0_292" -> 8)
   if [ "${major}" = "1" ]; then
-    major="$(echo "${raw}" | sed 's/.*"1\.\([0-9]*\).*/\1/' || true)"
+    major="$(echo "${raw}" | sed 's/.*version "1\.\([0-9]*\).*/\1/' || true)"
   fi
-  # If we couldn't parse, assume ok (don't block on parse failure)
-  [ -z "${major}" ] && return 0
+  # If we couldn't parse, assume NOT ok — a failed parse must never silently
+  # skip installing the explicitly requested version.
+  [ -z "${major}" ] && return 1
   [ "${major}" -ge "${JAVA_MIN_VERSION}" ] 2>/dev/null
 }
 
@@ -52,6 +57,18 @@ if [ "${OS}" = "macos" ]; then
 
 elif [ "${OS}" = "linux" ]; then
   SUDO="$(sudo_cmd)"
+
+  # Some base images (e.g. eclipse-temurin:*-jdk-*) bake in a JDK via an
+  # absolute PATH entry like /opt/java/openjdk/bin that always comes before
+  # /usr/bin — so even after apt installs a newer JDK and registers it via
+  # update-alternatives at /usr/bin/java, `java`/`javac` on PATH still resolve
+  # to the OLD baked-in JDK. Remember that shadowing directory now, before
+  # install, so we can override it below.
+  SHADOWING_JAVA_BIN_DIR=""
+  if is_installed java; then
+    SHADOWING_JAVA_BIN_DIR="$(dirname "$(readlink -f "$(command -v java)")" 2>/dev/null || true)"
+  fi
+
   if ! ${SUDO} apt-get install -y "openjdk-${JAVA_MIN_VERSION}-jdk" -qq 2>/dev/null; then
     echo "apt fallback: adding Adoptium Temurin repo..."
     ${SUDO} apt-get install -y wget apt-transport-https gnupg -qq
@@ -62,7 +79,35 @@ elif [ "${OS}" = "linux" ]; then
     ${SUDO} apt-get update -qq
     ${SUDO} apt-get install -y "temurin-${JAVA_MIN_VERSION}-jdk" -qq
   fi
-  JAVA_HOME_RESOLVED="$(dirname "$(dirname "$(readlink -f "$(which java)" 2>/dev/null || true)")" 2>/dev/null || true)"
+
+  # Locate the freshly installed JDK's home directory by glob — NOT via
+  # `which java`/`command -v java`, which (per the shadowing issue above) may
+  # still report the OLD baked-in JDK's path even after a successful install.
+  JAVA_HOME_RESOLVED=""
+  for candidate in /usr/lib/jvm/*"${JAVA_MIN_VERSION}"*openjdk* /usr/lib/jvm/*"${JAVA_MIN_VERSION}"*temurin* /usr/lib/jvm/temurin-"${JAVA_MIN_VERSION}"*; do
+    if [ -x "${candidate}/bin/java" ]; then
+      JAVA_HOME_RESOLVED="${candidate}"
+      break
+    fi
+  done
+
+  # If a pre-existing JDK earlier on PATH shadows the one we just installed,
+  # force every binary in that shadowing directory to point at the new JDK.
+  # This is required because dmtools' cli_execute_command spawns a brand-new
+  # subprocess for every invocation, re-inheriting the SAME original PATH each
+  # time — an `export PATH=...`/`export JAVA_HOME=...` done in THIS script's
+  # own process never survives to a later, independent "mvn ..." call (see
+  # agents/setup/maven.sh's /usr/local/bin/mvn symlink for the same class of
+  # fix). Filesystem symlinks, unlike exported env vars, persist across
+  # independent subprocess invocations within the same job/container.
+  if [ -n "${JAVA_HOME_RESOLVED}" ] && [ -n "${SHADOWING_JAVA_BIN_DIR}" ] \
+     && [ "${SHADOWING_JAVA_BIN_DIR}" != "${JAVA_HOME_RESOLVED}/bin" ]; then
+    echo "⚠️  Pre-existing Java shadows PATH at ${SHADOWING_JAVA_BIN_DIR} — overriding its binaries to point at the newly installed JDK ${JAVA_MIN_VERSION}"
+    for f in "${JAVA_HOME_RESOLVED}/bin"/*; do
+      ${SUDO} ln -sf "${f}" "${SHADOWING_JAVA_BIN_DIR}/$(basename "${f}")" 2>/dev/null \
+        || echo "⚠️  Could not override $(basename "${f}") in ${SHADOWING_JAVA_BIN_DIR} (no write access?) — java/mvn may keep resolving to the old JDK in separate invocations."
+    done
+  fi
 
 else
   echo "❌ Unsupported OS: ${OS}" >&2; exit 1
