@@ -88,15 +88,16 @@ function _extractDiffFromToolResult(raw) {
     return raw;
 }
 
-function _runGitDiff(baseRef, headRef) {
+function _runGitDiff(baseRef, headRef, workingDir) {
     var variants = [
         'git diff ' + baseRef + '...' + headRef,
         'git diff origin/' + baseRef + '...' + headRef,
         'git diff origin/' + baseRef + '...origin/' + headRef
     ];
+    var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
     for (var i = 0; i < variants.length; i++) {
         try {
-            var raw = cli_execute_command({ command: variants[i] }) || '';
+            var raw = cli_execute_command(Object.assign({}, cmdOpts, { command: variants[i] })) || '';
             var cleaned = _cleanCommandOutput(raw);
             if (_isUsableDiff(cleaned)) {
                 console.log('Generated local git diff using: ' + variants[i] + ' (' + cleaned.length + ' chars)');
@@ -164,7 +165,7 @@ function _createGithubProvider(workspace, repository) {
         removeLabel: function(prId, label, labelId) {
             return github_remove_pr_label({ workspace: workspace, repository: repository, pullRequestId: String(prId), label: label });
         },
-        getPrDiff: function(prId) {
+        getPrDiff: function(prId, workingDir) {
             var prIdStr = String(prId);
 
             // Primary: DMTools v1.7.210+ exposes a tool that returns the raw diff text.
@@ -201,7 +202,7 @@ function _createGithubProvider(workspace, repository) {
                 var baseRef = pr.base && pr.base.ref ? pr.base.ref : null;
                 var headRef = pr.head && pr.head.ref ? pr.head.ref : null;
                 if (!baseRef || !headRef) throw new Error('PR missing base or head ref');
-                var localDiff = _runGitDiff(baseRef, headRef);
+                var localDiff = _runGitDiff(baseRef, headRef, workingDir);
                 if (_isUsableDiff(localDiff)) {
                     return localDiff;
                 }
@@ -475,8 +476,42 @@ function _createGitLabProvider(workspace, repository) {
         removeLabel: function(prId, label, labelId) {
             return gitlab_remove_mr_label({ workspace: workspace, repository: repository, pullRequestId: String(prId), label: label });
         },
-        getPrDiff: function(prId) {
-            return gitlab_get_mr_diff({ workspace: workspace, repository: repository, pullRequestId: String(prId) });
+        getPrDiff: function(prId, workingDir) {
+            var prIdStr = String(prId);
+
+            // gitlab_get_mr_diff is known to return diff stats/metadata in some builds, and in
+            // others a broken serialized Java object toString (e.g. "GitLab$4@abc123") instead
+            // of the actual unified diff text. Validate before trusting it.
+            var raw = '';
+            try {
+                raw = gitlab_get_mr_diff({ workspace: workspace, repository: repository, pullRequestId: prIdStr });
+            } catch (e) {
+                console.warn('gitlab_get_mr_diff failed:', e.message || e);
+            }
+
+            var extracted = _extractDiffFromToolResult(raw);
+            if (_isUsableDiff(extracted)) {
+                return extracted;
+            }
+
+            // Fallback: generate the diff locally from the checked-out branch using the MR's
+            // base/head commit SHAs (requires the repo to be checked out at workingDir).
+            console.log('GitLab MR diff MCP returned no usable diff; falling back to local git diff');
+            try {
+                var mr = this.getPr(prIdStr);
+                var refs = (mr && mr.diff_refs) || {};
+                if (!refs.base_sha || !refs.head_sha) {
+                    throw new Error('MR missing diff_refs base_sha/head_sha');
+                }
+                var localDiff = _runGitDiff(refs.base_sha, refs.head_sha, workingDir);
+                if (_isUsableDiff(localDiff)) {
+                    return localDiff;
+                }
+            } catch (e2) {
+                console.warn('Local git diff fallback failed:', e2.message || e2);
+            }
+
+            return raw || '';
         },
         getCommitCheckRuns: function(sha) {
             console.warn('SCM GitLab: commit check runs are represented as pipelines/jobs — returning null');

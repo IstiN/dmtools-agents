@@ -572,3 +572,91 @@ suite('scm GitHub provider getPrDiff fallback', function() {
         assert.ok(diff.indexOf('diff --git') === 0, 'should return raw diff, not JSON envelope');
     });
 });
+
+suite('scm GitLab provider getPrDiff fallback', function() {
+
+    test('uses gitlab_get_mr_diff directly when it returns a usable diff', function() {
+        var mrCalls = [];
+        var gitCalls = [];
+        var scmModule = loadScm({
+            gitlab_get_mr_diff: function() {
+                return 'diff --git a/file.txt b/file.txt\n+change\n';
+            },
+            gitlab_get_mr: function(args) { mrCalls.push(args); return '{}'; },
+            cli_execute_command: function(args) { gitCalls.push(args.command); return ''; }
+        });
+
+        var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
+        var diff = provider.getPrDiff('7860');
+
+        assert.ok(diff.indexOf('diff --git') !== -1, 'should return usable diff');
+        assert.equal(mrCalls.length, 0, 'must not fetch MR details when MCP diff is usable');
+        assert.equal(gitCalls.length, 0, 'must not run git diff when MCP diff is usable');
+    });
+
+    test('falls back to local git diff (using base/head SHAs) when gitlab_get_mr_diff returns a Java object string', function() {
+        var mrDiffCalls = [];
+        var mrCalls = [];
+        var gitCalls = [];
+        var scmModule = loadScm({
+            gitlab_get_mr_diff: function(args) {
+                mrDiffCalls.push(args);
+                return 'com.github.istin.dmtools.gitlab.GitLab$4@b2c4a8b';
+            },
+            gitlab_get_mr: function(args) {
+                mrCalls.push(args);
+                return JSON.stringify({
+                    diff_refs: { base_sha: 'abc111', head_sha: 'def222', start_sha: 'abc111' }
+                });
+            },
+            cli_execute_command: function(args) {
+                gitCalls.push(args.command);
+                if (args.command === 'git diff abc111...def222') {
+                    return 'diff --git a/file.txt b/file.txt\n+change\nCOMMAND_EXIT_CODE=0';
+                }
+                return 'COMMAND_EXIT_CODE=128';
+            }
+        });
+
+        var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
+        var diff = provider.getPrDiff('7860', './dependencies/gens-igt');
+
+        assert.ok(diff.indexOf('diff --git') !== -1, 'should return usable local diff');
+        assert.equal(mrDiffCalls.length, 1);
+        assert.equal(mrDiffCalls[0].pullRequestId, '7860');
+        assert.equal(mrCalls.length, 1, 'should fetch MR to get diff_refs');
+        assert.ok(gitCalls.indexOf('git diff abc111...def222') !== -1, 'should diff using base/head SHAs');
+    });
+
+    test('passes workingDir through to cli_execute_command for local diff fallback', function() {
+        var gitOpts = [];
+        var scmModule = loadScm({
+            gitlab_get_mr_diff: function() { return ''; },
+            gitlab_get_mr: function() {
+                return JSON.stringify({ diff_refs: { base_sha: 'abc111', head_sha: 'def222', start_sha: 'abc111' } });
+            },
+            cli_execute_command: function(args) {
+                gitOpts.push(args);
+                return 'diff --git a/file.txt b/file.txt\n+change\nCOMMAND_EXIT_CODE=0';
+            }
+        });
+
+        var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
+        provider.getPrDiff('7860', './dependencies/gens-igt');
+
+        assert.equal(gitOpts[0].workingDirectory, './dependencies/gens-igt', 'should run git diff in the checked-out repo dir');
+    });
+
+    test('returns raw (unusable) value when both MCP diff and local git diff fail', function() {
+        var scmModule = loadScm({
+            gitlab_get_mr_diff: function() { return 'com.github.istin.dmtools.gitlab.GitLab$4@b2c4a8b'; },
+            gitlab_get_mr: function() { return JSON.stringify({ diff_refs: {} }); },
+            cli_execute_command: function() { throw new Error('should not be called without diff_refs'); }
+        });
+
+        var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
+        var diff = provider.getPrDiff('7860', './dependencies/gens-igt');
+
+        assert.equal(diff, 'com.github.istin.dmtools.gitlab.GitLab$4@b2c4a8b', 'should fall back to raw value, not throw');
+    });
+});

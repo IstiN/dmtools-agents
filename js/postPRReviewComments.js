@@ -502,7 +502,7 @@ function postInlineComment(scm, pullRequestId, inlineComment, ticketKey, working
 
         var diffText = null;
         try {
-            diffText = scm.getPrDiff(pullRequestId);
+            diffText = scm.getPrDiff(pullRequestId, workingDir);
         } catch (diffError) {
             console.warn('Could not fetch PR diff for inline comment validation:', diffError.message || diffError);
         }
