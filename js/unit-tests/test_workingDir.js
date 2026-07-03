@@ -56,7 +56,8 @@ function loadPreCli(workingDir) {
             './fetchParentContextToInput.js': { action: function() {} },
             './fetchQuestionsToInput.js': { action: function() {} },
             './fetchLinkedTestsToInput.js': { action: function() {} },
-            './restoreFromReleases.js': { action: function() {} }
+            './restoreFromReleases.js': { action: function() {} },
+            './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; } }
         }),
         {
             cli_execute_command: mockCli,
@@ -165,7 +166,8 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 './fetchParentContextToInput.js': { action: function() {} },
                 './fetchQuestionsToInput.js': { action: function() {} },
                 './fetchLinkedTestsToInput.js': { action: function() {} },
-                './restoreFromReleases.js': { action: function() {} }
+                './restoreFromReleases.js': { action: function() {} },
+                './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; } }
             }),
             {
                 cli_execute_command: mockCli,
@@ -228,7 +230,8 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 './fetchParentContextToInput.js': { action: function() {} },
                 './fetchQuestionsToInput.js': { action: function() {} },
                 './fetchLinkedTestsToInput.js': { action: function() {} },
-                './restoreFromReleases.js': { action: function() {} }
+                './restoreFromReleases.js': { action: function() {} },
+                './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; } }
             }),
             {
                 cli_execute_command: mockCli,
@@ -295,7 +298,8 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 './fetchParentContextToInput.js': { action: function() {} },
                 './fetchQuestionsToInput.js': { action: function() {} },
                 './fetchLinkedTestsToInput.js': { action: function() {} },
-                './restoreFromReleases.js': { action: function() {} }
+                './restoreFromReleases.js': { action: function() {} },
+                './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; } }
             }),
             {
                 cli_execute_command: mockCli,

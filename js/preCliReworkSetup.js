@@ -12,6 +12,7 @@ const gh = require('./common/githubHelpers.js');
 const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 var restoreFromReleases = require('./restoreFromReleases.js');
+var setupCommands = require('./common/setupCommands.js');
 
 function failSetup(ticketKey, inputFolder, message) {
     try {
@@ -37,6 +38,7 @@ function action(params) {
         var inputFolder = actualParams.inputFolderPath;
         var ticketKey = inputFolder.split('/').pop();
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
         var scm = configLoader.createScm(config);
 
         // Restore configured artefacts (e.g. cosmo test reports) from GitHub Release — non-fatal
@@ -83,6 +85,14 @@ function action(params) {
             gh.checkoutPRBranch(branchName, config.workingDir);
         } catch (e) {
             failSetup(ticketKey, inputFolder, 'Failed to checkout branch: ' + e.toString());
+        }
+
+        // Step 4.5: Run project-specific prerequisite/setup commands (e.g. install
+        // JDK/Maven, verify build credentials) before the CLI agent starts fixing code.
+        try {
+            setupCommands.runSetupCommands(customParams, config.workingDir);
+        } catch (e) {
+            failSetup(ticketKey, inputFolder, 'Environment setup failed: ' + (e && e.toString ? e.toString() : String(e)));
         }
 
         // Step 5: Diff + discussions (human-readable + raw with IDs)

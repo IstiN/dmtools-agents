@@ -28,6 +28,7 @@
         "js/unit-tests/test_recoverStuckTestCase.js",
         "js/unit-tests/test_recoverFailedTCBugStatus.js",
         "js/unit-tests/test_feedbackLoop.js",
+        "js/unit-tests/test_setupCommands.js",
         "js/unit-tests/test_outputFiles.js",
         "js/unit-tests/test_fetchParentContextToInput.js",
         "js/unit-tests/test_testsGeneratedGuard.js",
