@@ -15,6 +15,7 @@ const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchLinkedTestsToInput = require('./fetchLinkedTestsToInput.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 var restoreFromReleases = require('./restoreFromReleases.js');
+var setupCommands = require('./common/setupCommands.js');
 
 // Universal working-directory-aware wrapper for cli_execute_command.
 // When config.workingDir is set (via customParams.targetRepository.workingDir),
@@ -273,6 +274,17 @@ function action(params) {
 
         // 3. Fetch questions with answers into input folder
         fetchQuestionsToInput.action(actualParams);
+
+        // 3.5. Run project-specific prerequisite/setup commands (e.g. install JDK/Maven,
+        // verify build credentials) before the CLI agent starts coding.
+        try {
+            setupCommands.runSetupCommands(customParams, config.workingDir);
+        } catch (e) {
+            var setupError = e && e.toString ? e.toString() : String(e);
+            console.error('Setup commands failed:', setupError);
+            postSetupErrorToJira(ticketKey, 'Environment Setup', setupError);
+            throw new Error('Environment setup failed: ' + setupError);
+        }
 
         // 4. Fetch linked test cases (with failure comments) into input folder
         // Gives the bug agent context about what the test asserts and why it's failing

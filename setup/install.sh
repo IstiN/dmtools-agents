@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"
 
 # Canonical order for "all" (node before copilot, java before dmtools)
-ALL_TOOLS="java node dmtools maestro copilot codemie cursor codegraph playwright kimi gradle android konan"
+ALL_TOOLS="java maven node dmtools maestro copilot codemie cursor codegraph playwright kimi gradle android konan"
 
 if [ $# -eq 0 ]; then
   echo "Usage: install.sh tool1[:version] tool2[:version] ..."
@@ -26,6 +26,7 @@ if [ $# -eq 0 ]; then
   echo ""
   echo "Supported tools (in install order):"
   echo "  java      — Java (Temurin/OpenJDK). Default version: 17"
+  echo "  maven     — Apache Maven.            Default version: 3.9.9"
   echo "  node      — Node.js via nvm.         Default version: 20"
   echo "  dmtools   — DMtools CLI.             Default version: v1.7.215"
   echo "  maestro   — Maestro mobile testing.  Default version: latest"
@@ -172,6 +173,7 @@ for tool in ${TOOL_LIST}; do
   # Map tool name → binary name
   case "${tool}" in
     java)    BIN="java" ;;
+    maven)   BIN="mvn" ;;
     node)    BIN="node" ;;
     dmtools) BIN="dmtools" ;;
     maestro) BIN="maestro" ;;
