@@ -479,9 +479,22 @@ function _createGitLabProvider(workspace, repository) {
         getPrDiff: function(prId, workingDir) {
             var prIdStr = String(prId);
 
-            // gitlab_get_mr_diff is known to return diff stats/metadata in some builds, and in
-            // others a broken serialized Java object toString (e.g. "GitLab$4@abc123") instead
-            // of the actual unified diff text. Validate before trusting it.
+            // Primary: dmtools v1.7.221+ exposes a tool that returns the raw diff text directly.
+            if (typeof gitlab_get_mr_diff_text !== 'undefined') {
+                try {
+                    var textRaw = gitlab_get_mr_diff_text({ workspace: workspace, repository: repository, pullRequestId: prIdStr });
+                    var textDiff = _extractDiffFromToolResult(textRaw);
+                    if (_isUsableDiff(textDiff)) {
+                        return textDiff;
+                    }
+                } catch (e) {
+                    console.warn('gitlab_get_mr_diff_text failed:', e.message || e);
+                }
+            }
+
+            // Legacy fallback: gitlab_get_mr_diff returns diff stats/metadata (IDiffStats) in
+            // most builds, which serializes to a broken Java object toString (e.g.
+            // "GitLab$4@abc123") instead of usable diff text through the MCP/JS bridge.
             var raw = '';
             try {
                 raw = gitlab_get_mr_diff({ workspace: workspace, repository: repository, pullRequestId: prIdStr });
@@ -494,8 +507,8 @@ function _createGitLabProvider(workspace, repository) {
                 return extracted;
             }
 
-            // Fallback: generate the diff locally from the checked-out branch using the MR's
-            // base/head commit SHAs (requires the repo to be checked out at workingDir).
+            // Final fallback: generate the diff locally from the checked-out branch using the
+            // MR's base/head commit SHAs (requires the repo to be checked out at workingDir).
             console.log('GitLab MR diff MCP returned no usable diff; falling back to local git diff');
             try {
                 var mr = this.getPr(prIdStr);

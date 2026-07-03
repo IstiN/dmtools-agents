@@ -575,10 +575,48 @@ suite('scm GitHub provider getPrDiff fallback', function() {
 
 suite('scm GitLab provider getPrDiff fallback', function() {
 
+    test('prefers gitlab_get_mr_diff_text when available', function() {
+        var calls = [];
+        var scmModule = loadScm({
+            gitlab_get_mr_diff_text: function(args) {
+                calls.push(args);
+                return 'diff --git a/file.txt b/file.txt\n+change\n';
+            },
+            gitlab_get_mr_diff: function() { throw new Error('legacy tool should not be called'); },
+            gitlab_get_mr: function() { throw new Error('gitlab_get_mr should not be called'); },
+            cli_execute_command: function() { throw new Error('git diff should not be called'); }
+        });
+
+        var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
+        var diff = provider.getPrDiff('7860');
+
+        assert.ok(diff.indexOf('diff --git') !== -1, 'should return diff from new tool');
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].pullRequestId, '7860');
+    });
+
+    test('falls back to legacy gitlab_get_mr_diff when gitlab_get_mr_diff_text is unavailable or unusable', function() {
+        var legacyCalls = [];
+        var scmModule = loadScm({
+            gitlab_get_mr_diff_text: function() { return 'com.github.istin.dmtools.gitlab.GitLab$5@abc123'; },
+            gitlab_get_mr_diff: function(args) {
+                legacyCalls.push(args);
+                return 'diff --git a/file.txt b/file.txt\n+change\n';
+            }
+        });
+
+        var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
+        var diff = provider.getPrDiff('7860');
+
+        assert.ok(diff.indexOf('diff --git') !== -1, 'should fall back to legacy tool result');
+        assert.equal(legacyCalls.length, 1, 'should call legacy gitlab_get_mr_diff as fallback');
+    });
+
     test('uses gitlab_get_mr_diff directly when it returns a usable diff', function() {
         var mrCalls = [];
         var gitCalls = [];
         var scmModule = loadScm({
+            gitlab_get_mr_diff_text: function() { return ''; },
             gitlab_get_mr_diff: function() {
                 return 'diff --git a/file.txt b/file.txt\n+change\n';
             },
@@ -599,6 +637,7 @@ suite('scm GitLab provider getPrDiff fallback', function() {
         var mrCalls = [];
         var gitCalls = [];
         var scmModule = loadScm({
+            gitlab_get_mr_diff_text: function() { return ''; },
             gitlab_get_mr_diff: function(args) {
                 mrDiffCalls.push(args);
                 return 'com.github.istin.dmtools.gitlab.GitLab$4@b2c4a8b';
@@ -631,6 +670,7 @@ suite('scm GitLab provider getPrDiff fallback', function() {
     test('passes workingDir through to cli_execute_command for local diff fallback', function() {
         var gitOpts = [];
         var scmModule = loadScm({
+            gitlab_get_mr_diff_text: function() { return ''; },
             gitlab_get_mr_diff: function() { return ''; },
             gitlab_get_mr: function() {
                 return JSON.stringify({ diff_refs: { base_sha: 'abc111', head_sha: 'def222', start_sha: 'abc111' } });
@@ -649,6 +689,7 @@ suite('scm GitLab provider getPrDiff fallback', function() {
 
     test('returns raw (unusable) value when both MCP diff and local git diff fail', function() {
         var scmModule = loadScm({
+            gitlab_get_mr_diff_text: function() { return ''; },
             gitlab_get_mr_diff: function() { return 'com.github.istin.dmtools.gitlab.GitLab$4@b2c4a8b'; },
             gitlab_get_mr: function() { return JSON.stringify({ diff_refs: {} }); },
             cli_execute_command: function() { throw new Error('should not be called without diff_refs'); }
