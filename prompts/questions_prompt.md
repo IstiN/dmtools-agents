@@ -23,6 +23,7 @@ flowchart TD
         O1["outputs/questions/question-1.md, question-2.md, ..."]
         O2["outputs/questions.json — plain JSON array [ ... ]"]
         O3["No questions → write []"]
+        O3 --> O4["⚠️ MANDATORY when writing []: also write outputs/response.md<br/>explaining WHY no questions were needed — what was<br/>investigated and what confirmed the story is fully clear"]
     end
 
     subgraph FORMAT["JSON Format"]

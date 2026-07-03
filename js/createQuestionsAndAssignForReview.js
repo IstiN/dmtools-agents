@@ -20,6 +20,7 @@ const configLoader = require('./configLoader.js');
 const scmModule = require('./common/scm.js');
 const autoStart = require('./common/autoStart.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+const outputFiles = require('./common/outputFiles.js');
 
 /**
  * Ensure summary starts with [Q] prefix
@@ -75,6 +76,42 @@ function readDescriptionFile(filePath, fallbackSummary) {
         console.warn('Could not read description file ' + filePath + ':', error);
     }
     return fallbackSummary || '';
+}
+
+/**
+ * When the agent decides no clarifying questions are needed, it must still
+ * explain why in outputs/response.md. Post that explanation as a Jira comment
+ * so a human reviewer sees the reasoning instead of a silent skip.
+ * If the agent did NOT write a response.md, post a visible warning instead of
+ * silently moving the ticket forward with zero explanation.
+ */
+function postNoQuestionsExplanation(ticketKey) {
+    var explanation = outputFiles.readOutputFile('response.md', { ticketKey: ticketKey });
+    if (explanation && explanation.trim()) {
+        try {
+            jira_post_comment({
+                key: ticketKey,
+                comment: 'h3. \u2139\ufe0f No clarifying questions needed\n\n' + explanation.trim()
+            });
+            console.log('Posted no-questions explanation from outputs/response.md');
+        } catch (e) {
+            console.warn('Failed to post no-questions explanation comment:', e);
+        }
+        return;
+    }
+
+    console.warn('No questions were raised AND outputs/response.md is missing/empty — posting fallback warning comment.');
+    try {
+        jira_post_comment({
+            key: ticketKey,
+            comment: 'h3. \u26a0\ufe0f No clarifying questions raised \u2014 no explanation provided\n\n' +
+                'The AI agent did not create any clarifying questions for this ticket, and did not write ' +
+                '{{outputs/response.md}} explaining why. Please verify manually whether the story is actually ' +
+                'clear enough to proceed, or re-run the agent.'
+        });
+    } catch (e) {
+        console.warn('Failed to post fallback no-questions warning comment:', e);
+    }
 }
 
 /**
@@ -153,6 +190,7 @@ function action(params) {
 
         if (questions.length === 0) {
             console.log('No questions to create — skipping ticket creation.');
+            postNoQuestionsExplanation(ticketKey);
         }
 
         // 2. Create question subtasks
@@ -277,4 +315,8 @@ function action(params) {
             error: error.toString()
         };
     }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { action: action };
 }
