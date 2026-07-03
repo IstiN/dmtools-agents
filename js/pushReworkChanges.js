@@ -245,6 +245,11 @@ function commitAndPush(ticketKey, config, customParams) {
  *
  * JSON format: { "replies": [{ "inReplyToId": 123, "threadId": "PRRT_...", "reply": "outputs/review_replies/thread1.md" }] }
  * The "reply" field may be a path to a Markdown file (preferred) or inline text (legacy).
+ *
+ * Defensive fallback: also accepts "rootCommentId" (instead of "inReplyToId") and
+ * "body" (instead of "reply", as inline text) — the AI agent frequently mirrors
+ * field names from input/<TICKET>/pr_discussions_raw.json (rootCommentId/body)
+ * rather than renaming them to the documented output schema.
  */
 function postThreadReplies(scm, pullRequestId, outputOptions) {
     outputOptions = outputOptions || {};
@@ -284,13 +289,18 @@ function postThreadReplies(scm, pullRequestId, outputOptions) {
 
     let posted = 0;
     replies.forEach(function(item) {
-        const replyText = resolveReplyText(item.reply);
-        const thread = { rootCommentId: item.inReplyToId || null, threadId: item.threadId || null };
+        // Accept both the documented field names (inReplyToId/reply) and the
+        // input-schema field names (rootCommentId/body) — the AI agent commonly
+        // mirrors field names from input/<TICKET>/pr_discussions_raw.json
+        // (which uses rootCommentId/body) instead of renaming them for output.
+        const inReplyToId = item.inReplyToId || item.rootCommentId || null;
+        const replyText = resolveReplyText(item.reply || item.body);
+        const thread = { rootCommentId: inReplyToId, threadId: item.threadId || null };
 
         try {
             scm.replyToThread(pullRequestId, thread, replyText);
-            if (item.inReplyToId) {
-                console.log('✅ Replied to comment #' + item.inReplyToId);
+            if (inReplyToId) {
+                console.log('✅ Replied to comment #' + inReplyToId);
             } else {
                 console.log('✅ Posted general reply (no threadId)');
             }
@@ -649,5 +659,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, resolveCustomParams, isInterruptedReworkResponse };
+    module.exports = { action, resolveCustomParams, isInterruptedReworkResponse, postThreadReplies };
 }

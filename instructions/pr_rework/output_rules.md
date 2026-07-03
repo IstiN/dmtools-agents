@@ -36,3 +36,4 @@ Rules for review replies:
 - Create one reply entry and one `.md` file for **every** open review thread — do not skip any unresolved conversation.
 - `threadId` is required for GitHub to resolve/close the conversation; `inReplyToId` is required to post the reply in the correct thread.
 - Do **not** put the reply body inline in the JSON; use the `reply` field only as a file path reference.
+- ⚠️ **Common mistake**: `pr_discussions_raw.json` uses the field names `rootCommentId` and `body`. When writing `review_replies.json`, you MUST rename these to `inReplyToId` and `reply` respectively — do NOT copy the input field names as-is into the output JSON, or the reply will silently post as an untargeted top-level comment instead of a threaded reply.
