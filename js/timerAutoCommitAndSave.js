@@ -98,7 +98,7 @@ function autoCommitAndPush(customParams, ticketKey) {
 
     try {
         cli_execute_command({
-            command: 'git push',
+            command: 'git push origin HEAD',
             workingDirectory: workingDir
         });
         console.log('⏱️ timer: ✅ auto-committed and pushed: ' + commitMsg);

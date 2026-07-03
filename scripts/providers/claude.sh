@@ -46,6 +46,16 @@ run_claude_code() {
   local claude_code_exit_code=0
   local claude_code_log
   claude_code_log="$(mktemp)"
+  # Session resume: if .claude-session-id exists from a previous run, continue that session.
+  local claude_resume_args=()
+  if [ -f ".claude-session-id" ]; then
+    local prev_session_id
+    prev_session_id="$(cat .claude-session-id | tr -d '[:space:]')"
+    if [ -n "${prev_session_id}" ]; then
+      claude_resume_args=(--resume "${prev_session_id}")
+      echo "♻️  Resuming Claude session: ${prev_session_id}"
+    fi
+  fi
 
   set +e
   if [ -f "${PROMPT_ARG}" ]; then
@@ -57,6 +67,7 @@ run_claude_code() {
       --verbose \
       --model "${claude_code_model}" \
       --max-turns "${claude_code_max_turns}" \
+      ${claude_resume_args[@]+"${claude_resume_args[@]}"} \
       ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} \
       -p < "${PROMPT_ARG}" \
       2>&1 | tee "${claude_code_log}"
@@ -68,14 +79,22 @@ run_claude_code() {
       --verbose \
       --model "${claude_code_model}" \
       --max-turns "${claude_code_max_turns}" \
-      -p "${PROMPT}" \
+      ${claude_resume_args[@]+"${claude_resume_args[@]}"} \
       ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} \
+      -p "${PROMPT}" \
       2>&1 | tee "${claude_code_log}"
   fi
   claude_code_exit_code=${PIPESTATUS[0]}
   set -e
 
   record_codegraph_usage "${claude_code_log}"
+  # Save session ID for the next run to resume from.
+  local saved_session_id
+  saved_session_id="$(grep -o '"session_id":"[^"]*"' "${claude_code_log}" 2>/dev/null | head -1 | grep -o '"[^"]*"$' | tr -d '"')"
+  if [ -n "${saved_session_id}" ]; then
+    echo "${saved_session_id}" > .claude-session-id
+    echo "💾 Claude session saved: ${saved_session_id}"
+  fi
   rm -f "${claude_code_log}"
 
   echo ""
