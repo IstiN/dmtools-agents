@@ -55,7 +55,7 @@
 var configLoader = null;
 try { configLoader = require('./configLoader.js'); } catch (e) { /* optional in unit tests */ }
 
-var DEFAULT_JQL = 'parent = {parentKey} AND (summary ~ "[BA]" OR summary ~ "[SA]" OR summary ~ "[VD]") ORDER BY created ASC';
+var DEFAULT_JQL = 'parent = {parentKey} AND (summary ~ "\\[BA\\]" OR summary ~ "\\[SA\\]" OR summary ~ "\\[VD\\]") ORDER BY created ASC';
 
 var DEFAULT_FIELDS = ['key', 'summary', 'description', 'status', 'comment'];
 
