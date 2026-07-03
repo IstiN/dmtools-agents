@@ -20,7 +20,7 @@
  *    docker, kubectl, terraform, ansible, aws, gcloud, az (base list). Anything
  *    else (bash, mvn, gradle, test, python3, ...) MUST be added via
  *    params.envVariables.CLI_ALLOWED_COMMANDS (comma-separated) on the agent
- *    JSON — see repo-agents/gens-igt/story_development.json for an example.
+ *    JSON, e.g. { "envVariables": { "CLI_ALLOWED_COMMANDS": "bash,mvn" } }.
  * 2. Rejects any command string containing shell metacharacters —
  *    `;`, `&&`, `||`, `|`, `>`, `<`, `` ` ``, `$(...)`, `${...}` — even if the
  *    leading executable is whitelisted. There is NO way to pass a compound

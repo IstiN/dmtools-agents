@@ -39,13 +39,13 @@ suite('setupCommands helper', function() {
         var loaded = loadSetupCommands();
         var result = loaded.mod.runSetupCommands({
             setupCommands: ['bash agents/setup/java.sh 25', 'bash agents/setup/maven.sh 3.9.9']
-        }, './dependencies/gens-igt');
+        }, './dependencies/example-repo');
 
         assert.equal(result.ran, 2);
         assert.equal(loaded.commands.length, 2);
         assert.equal(loaded.commands[0].command, 'bash agents/setup/java.sh 25');
-        assert.equal(loaded.commands[0].workingDirectory, './dependencies/gens-igt');
-        assert.equal(loaded.commands[1].workingDirectory, './dependencies/gens-igt');
+        assert.equal(loaded.commands[0].workingDirectory, './dependencies/example-repo');
+        assert.equal(loaded.commands[1].workingDirectory, './dependencies/example-repo');
         assert.equal(result.results[0].success, true);
     });
 
@@ -56,9 +56,9 @@ suite('setupCommands helper', function() {
                 { name: 'install-java', command: 'bash agents/setup/java.sh 25' },
                 { name: 'custom-dir', command: 'ls', workingDir: '/tmp/other' }
             ]
-        }, './dependencies/gens-igt');
+        }, './dependencies/example-repo');
 
-        assert.equal(loaded.commands[0].workingDirectory, './dependencies/gens-igt', 'falls back to default working dir');
+        assert.equal(loaded.commands[0].workingDirectory, './dependencies/example-repo', 'falls back to default working dir');
         assert.equal(loaded.commands[1].workingDirectory, '/tmp/other', 'entry-level workingDir overrides default');
         assert.equal(result.results[0].name, 'install-java');
         assert.equal(result.results[1].name, 'custom-dir');
@@ -84,7 +84,7 @@ suite('setupCommands helper', function() {
             cli_execute_command: function(args) {
                 calls.push(args.command);
                 if (args.command === 'check-required-creds') {
-                    throw new Error('MAVEN_USER not set');
+                    throw new Error('REQUIRED_TOKEN not set');
                 }
                 return 'ok';
             }
@@ -101,7 +101,7 @@ suite('setupCommands helper', function() {
         } catch (e) {
             threw = true;
             assert.ok(e.message.indexOf('required-check') !== -1, 'error should mention the failing step name');
-            assert.ok(e.message.indexOf('MAVEN_USER not set') !== -1, 'error should include the underlying failure');
+            assert.ok(e.message.indexOf('REQUIRED_TOKEN not set') !== -1, 'error should include the underlying failure');
         }
 
         assert.equal(threw, true, 'should throw when a required setup command fails');

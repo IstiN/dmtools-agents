@@ -8,7 +8,7 @@
 # that shell-metacharacter restriction.
 #
 # Usage:
-#   bash check_required_env_vars.sh MAVEN_USER MAVEN_PASSWORD
+#   bash check_required_env_vars.sh MY_REQUIRED_VAR1 MY_REQUIRED_VAR2
 set -u
 
 MISSING=()
