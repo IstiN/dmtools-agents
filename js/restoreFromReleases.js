@@ -1,7 +1,8 @@
 /**
  * Restore From Releases — preJSAction
  *
- * Downloads named assets from a single shared GitHub Release per ticket
+ * Downloads named assets from a single shared Release per ticket (GitHub or
+ * GitLab, resolved from config.scm.provider / customParams.scmProvider)
  * and unpacks them to configured local folders.
  * Always returns true (non-fatal) — if no release or asset exists yet, silently skips.
  *
@@ -24,6 +25,7 @@
  */
 
 var releaseArtefacts = require('./common/releaseArtefacts.js');
+var configLoader = require('./configLoader.js');
 
 function resolveCustomParams(params) {
     return (params.jobParams && params.jobParams.customParams) ||
@@ -64,12 +66,15 @@ function action(params) {
             return true;
         }
 
+        var projectConfig = configLoader.loadProjectConfig(actualParams);
+        var scmProvider = (projectConfig.scm && projectConfig.scm.provider) || 'github';
+
         var releaseConfig = {
             tagTemplate:  config.releaseTagTemplate,
             nameTemplate: config.releaseNameTemplate
         };
 
-        console.log('=== restoreFromReleases for', ticketKey, '===');
+        console.log('=== restoreFromReleases for', ticketKey, '(' + scmProvider + ') ===');
         console.log('Release tag:', releaseArtefacts.buildTag(ticketKey, releaseConfig.tagTemplate));
 
         for (var i = 0; i < assets.length; i++) {
@@ -80,7 +85,7 @@ function action(params) {
             }
 
             var result = releaseArtefacts.downloadArtefact(
-                artefactRepo.owner, artefactRepo.repo, ticketKey, releaseConfig, asset
+                artefactRepo.owner, artefactRepo.repo, ticketKey, releaseConfig, asset, scmProvider
             );
 
             if (result.restored) {

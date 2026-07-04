@@ -2,7 +2,8 @@
  * Cache To Releases — postJSAction
  *
  * Zips configured folders and uploads them as named assets into a single
- * GitHub Release per ticket. The release tag and name are customizable.
+ * Release per ticket (GitHub or GitLab, resolved from config.scm.provider /
+ * customParams.scmProvider). The release tag and name are customizable.
  *
  * customParams.cacheToReleases schema:
  * {
@@ -33,6 +34,7 @@
  */
 
 var releaseArtefacts = require('./common/releaseArtefacts.js');
+var configLoader = require('./configLoader.js');
 
 function resolveCustomParams(params) {
     return (params.jobParams && params.jobParams.customParams) ||
@@ -73,12 +75,15 @@ function action(params) {
             return { success: true, skipped: true };
         }
 
+        var projectConfig = configLoader.loadProjectConfig(actualParams);
+        var scmProvider = (projectConfig.scm && projectConfig.scm.provider) || 'github';
+
         var releaseConfig = {
             tagTemplate:  config.releaseTagTemplate,
             nameTemplate: config.releaseNameTemplate
         };
 
-        console.log('=== cacheToReleases for', ticketKey, '===');
+        console.log('=== cacheToReleases for', ticketKey, '(' + scmProvider + ') ===');
         console.log('Release tag :', releaseArtefacts.buildTag(ticketKey, releaseConfig.tagTemplate));
         console.log('Release name:', releaseArtefacts.buildReleaseName(ticketKey, releaseConfig.nameTemplate));
 
@@ -93,7 +98,7 @@ function action(params) {
             }
 
             var result = releaseArtefacts.uploadArtefact(
-                artefactRepo.owner, artefactRepo.repo, ticketKey, releaseConfig, asset
+                artefactRepo.owner, artefactRepo.repo, ticketKey, releaseConfig, asset, scmProvider
             );
             results.push({ name: asset.name, result: result });
 
@@ -103,28 +108,21 @@ function action(params) {
                 try {
                     var targetRepo = customParams.targetRepository;
                     if (targetRepo && targetRepo.owner && targetRepo.repo) {
-                        // Find open PR for this ticket
-                        var prsJson = github_list_prs({
-                            workspace: targetRepo.owner,
-                            repository: targetRepo.repo,
-                            state: 'open'
-                        });
-                        var prs = typeof prsJson === 'string' ? JSON.parse(prsJson) : prsJson;
-                        var matchingPr = (prs || []).filter(function(pr) {
+                        // Find open PR for this ticket (scm abstraction normalizes GitHub/GitLab shapes)
+                        var scm = configLoader.createScm(projectConfig);
+                        var prs = scm.listPrs('open') || [];
+                        var matchingPr = prs.filter(function(pr) {
                             return (pr.title && pr.title.indexOf(ticketKey) !== -1) ||
                                    (pr.head && pr.head.ref && pr.head.ref.toLowerCase().indexOf(ticketKey.toLowerCase()) !== -1);
                         })[0];
 
                         if (matchingPr) {
-                            github_add_pr_comment({
-                                workspace: targetRepo.owner,
-                                repository: targetRepo.repo,
-                                pullRequestId: String(matchingPr.number),
-                                text: '## 📦 Artefact: ' + asset.name + '\n\n' +
-                                      'Folder `' + releaseArtefacts.resolveTemplate(asset.fromFolder, ticketKey) +
-                                      '` has been archived to GitHub Release.\n\n' +
-                                      '**Release:** ' + result.releaseUrl
-                            });
+                            scm.addComment(matchingPr.number,
+                                '## 📦 Artefact: ' + asset.name + '\n\n' +
+                                'Folder `' + releaseArtefacts.resolveTemplate(asset.fromFolder, ticketKey) +
+                                '` has been archived to a ' + scmProvider + ' Release.\n\n' +
+                                '**Release:** ' + result.releaseUrl
+                            );
                             console.log('✅ Posted release link to PR #' + matchingPr.number + ' for "' + asset.name + '"');
                         } else {
                             console.warn('⚠️  No open PR found for', ticketKey, '— skipping PR comment');

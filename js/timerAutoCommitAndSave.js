@@ -6,7 +6,8 @@
  *
  * Actions performed on each tick:
  * 1. If there are uncommitted changes in targetRepository workingDir → commit + push
- * 2. If copilot session folder exists → zip and upload to releases
+ * 2. If there is accumulated CLI output → save a snapshot as a release asset
+ *    (GitHub or GitLab, resolved from config.scm.provider / customParams.scmProvider)
  *
  * params available:
  *   params.currentCliOutput — accumulated CLI stdout so far
@@ -16,6 +17,7 @@
  */
 
 var releaseArtefacts = require('./common/releaseArtefacts.js');
+var configLoader = require('./configLoader.js');
 
 function resolveCustomParams(params) {
     return (params.jobParams && params.jobParams.customParams) ||
@@ -117,7 +119,7 @@ function autoCommitAndPush(customParams, ticketKey) {
  * Uploads .log directly — no zip needed (timer doesn't inherit CLI_ALLOWED_COMMANDS,
  * so `zip` is not in whitelist; raw .log upload is simpler and sufficient).
  */
-function saveSessionArtefact(customParams, ticketKey, contextId, currentCliOutput) {
+function saveSessionArtefact(params, customParams, ticketKey, contextId, currentCliOutput) {
     var artefactRepo = releaseArtefacts.resolveArtefactRepository(customParams);
     if (!artefactRepo) {
         return;
@@ -127,12 +129,15 @@ function saveSessionArtefact(customParams, ticketKey, contextId, currentCliOutpu
         return;
     }
 
+    var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+    var scmProvider = (projectConfig.scm && projectConfig.scm.provider) || 'github';
+
     var assetName = contextId + '-session.log';
     var tagTemplate = customParams.cacheToReleases && customParams.cacheToReleases.releaseTagTemplate;
     var nameTemplate = customParams.cacheToReleases && customParams.cacheToReleases.releaseNameTemplate;
 
     var tag = releaseArtefacts.buildTag(ticketKey, tagTemplate);
-    var releaseName = releaseArtefacts.buildReleaseName(ticketKey, nameTemplate);
+    var releaseConfig = { tagTemplate: tagTemplate, nameTemplate: nameTemplate };
 
     // Write to working dir (FileTools blocks /tmp/ paths)
     var outputFile = '.dmtools-session-output.log';
@@ -150,27 +155,13 @@ function saveSessionArtefact(customParams, ticketKey, contextId, currentCliOutpu
     }
 
     // Upload .log directly to release (no zip, no CLI commands needed)
-    try {
-        var releaseJson = github_get_or_create_draft_release({
-            workspace: artefactRepo.owner,
-            repository: artefactRepo.repo,
-            tagName: tag,
-            releaseName: releaseName
-        });
-        var release = typeof releaseJson === 'string' ? JSON.parse(releaseJson) : releaseJson;
-        var releaseId = String(release.id);
-
-        github_upload_release_asset({
-            workspace: artefactRepo.owner,
-            repository: artefactRepo.repo,
-            releaseId: releaseId,
-            filePath: outputFile,
-            assetName: assetName,
-            overwrite: 'true'
-        });
-        console.log('⏱️ timer: ✅ session saved: ' + assetName + ' → ' + tag);
-    } catch (e) {
-        console.error('⏱️ timer: session upload failed:', e.toString().substring(0, 150));
+    var result = releaseArtefacts.uploadRawFile(
+        artefactRepo.owner, artefactRepo.repo, ticketKey, releaseConfig, outputFile, assetName, scmProvider
+    );
+    if (result.success) {
+        console.log('⏱️ timer: ✅ session saved: ' + assetName + ' → ' + tag + ' (' + scmProvider + ')');
+    } else {
+        console.error('⏱️ timer: session upload failed:', String(result.error).substring(0, 150));
     }
 
     // Cleanup
@@ -195,7 +186,7 @@ function action(params) {
     autoCommitAndPush(customParams, ticketKey);
 
     // 2. Save currentCliOutput to releases as session artefact
-    saveSessionArtefact(customParams, ticketKey, contextId, currentCliOutput);
+    saveSessionArtefact(params, customParams, ticketKey, contextId, currentCliOutput);
 }
 
 if (typeof module !== 'undefined' && module.exports) {

@@ -59,6 +59,8 @@
         "js/unit-tests/test_createPlannedStoriesFromOutput.js",
         "js/unit-tests/test_releaseArtefacts.js",
         "js/unit-tests/test_timerAutoCommitAndSave.js",
+        "js/unit-tests/test_cacheToReleases.js",
+        "js/unit-tests/test_restoreFromReleases.js",
         "js/unit-tests/test_resolveRepoFromTicket.js",
         "js/unit-tests/test_preCliDevelopmentSetupDynamicRepo.js"
       ]

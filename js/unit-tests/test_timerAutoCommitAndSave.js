@@ -2,13 +2,16 @@
  * Unit tests for js/timerAutoCommitAndSave.js
  *
  * Tests the timer action that auto-commits and saves session artefacts.
- * Mocks all MCP tools (cli_execute_command, file_write, file_delete,
- * github_get_or_create_draft_release, github_upload_release_asset).
+ * Mocks releaseArtefacts.js (uploadRawFile) and configLoader.js
+ * (loadProjectConfig, for scm.provider resolution) so no real MCP tools
+ * or filesystem config discovery are needed.
  *
  * Uses: loadModule(), makeRequire(), assert, test(), suite()
  */
 
-function loadTimer(mocks) {
+function loadTimer(mocks, opts) {
+    opts = opts || {};
+    var uploadRawFileCalls = [];
     var releaseArtefactsMock = {
         buildTag: function(ticketKey, template) {
             var t = (template || 'ai-{ticketKey}').replace(/\{ticketKey\}/g, ticketKey);
@@ -22,18 +25,35 @@ function loadTimer(mocks) {
             var repo = customParams.artefactRepository || customParams.aiRepository || customParams.targetRepository;
             if (!repo || !repo.owner || !repo.repo) return null;
             return { owner: repo.owner, repo: repo.repo };
+        },
+        uploadRawFile: function(owner, repo, ticketKey, releaseConfig, filePath, assetName, providerName) {
+            uploadRawFileCalls.push({
+                owner: owner, repo: repo, ticketKey: ticketKey, releaseConfig: releaseConfig,
+                filePath: filePath, assetName: assetName, providerName: providerName
+            });
+            if (opts.uploadRawFileImpl) return opts.uploadRawFileImpl(arguments);
+            return { success: true, releaseUrl: 'https://example.com/releases/1', assetUrl: 'https://example.com/asset', error: null };
+        }
+    };
+
+    var configLoaderMock = {
+        loadProjectConfig: function(params) {
+            return { scm: { provider: opts.scmProvider || 'github' } };
         }
     };
 
     var requireFn = makeRequire({
-        './common/releaseArtefacts.js': releaseArtefactsMock
+        './common/releaseArtefacts.js': releaseArtefactsMock,
+        './configLoader.js': configLoaderMock
     });
 
-    return loadModule(
+    var mod = loadModule(
         'js/timerAutoCommitAndSave.js',
         requireFn,
         mocks || {}
     );
+    mod._uploadRawFileCalls = uploadRawFileCalls;
+    return mod;
 }
 
 // ── autoCommitAndPush ────────────────────────────────────────────────────────
@@ -143,10 +163,8 @@ suite('timerAutoCommitAndSave — saveSessionArtefact', function() {
         assert.equal(fileWriteCalls.length, 0);
     });
 
-    test('uploads .log directly via MCP tools (no CLI commands)', function() {
+    test('uploads .log via releaseArtefacts.uploadRawFile (no CLI commands, no zip)', function() {
         var fileWriteCalls = [];
-        var releaseCalls = [];
-        var uploadCalls = [];
         var deleteCalls = [];
         var cliCalls = [];
 
@@ -157,15 +175,7 @@ suite('timerAutoCommitAndSave — saveSessionArtefact', function() {
                 return '';
             },
             file_write: function(args) { fileWriteCalls.push(args); },
-            file_delete: function(args) { deleteCalls.push(args); },
-            github_get_or_create_draft_release: function(args) {
-                releaseCalls.push(args);
-                return JSON.stringify({ id: 99999, html_url: 'https://github.com/test/releases/1' });
-            },
-            github_upload_release_asset: function(args) {
-                uploadCalls.push(args);
-                return JSON.stringify({ browser_download_url: 'https://dl.example.com/asset' });
-            }
+            file_delete: function(args) { deleteCalls.push(args); }
         });
 
         m.action({
@@ -187,20 +197,14 @@ suite('timerAutoCommitAndSave — saveSessionArtefact', function() {
         assert.contains(fileWriteCalls[0].content, 'TIMER SESSION SNAPSHOT START', 'snapshot header present');
         assert.contains(fileWriteCalls[0].content, 'TIMER SESSION SNAPSHOT END', 'snapshot footer present');
 
-        // Should call github_get_or_create_draft_release
-        assert.equal(releaseCalls.length, 1);
-        assert.equal(releaseCalls[0].workspace, 'ExampleOrg');
-        assert.equal(releaseCalls[0].repository, 'example-app');
-        assert.equal(releaseCalls[0].tagName, 'ai-proj-123');
-
-        // Should call github_upload_release_asset with overwrite
-        assert.equal(uploadCalls.length, 1);
-        assert.equal(uploadCalls[0].workspace, 'ExampleOrg');
-        assert.equal(uploadCalls[0].repository, 'example-app');
-        assert.equal(uploadCalls[0].releaseId, '99999');
-        assert.equal(uploadCalls[0].filePath, '.dmtools-session-output.log');
-        assert.equal(uploadCalls[0].assetName, 'sf_story_development-session.log');
-        assert.equal(uploadCalls[0].overwrite, 'true');
+        // Should delegate to releaseArtefacts.uploadRawFile with the 'github' provider (default)
+        assert.equal(m._uploadRawFileCalls.length, 1);
+        assert.equal(m._uploadRawFileCalls[0].owner, 'ExampleOrg');
+        assert.equal(m._uploadRawFileCalls[0].repo, 'example-app');
+        assert.equal(m._uploadRawFileCalls[0].ticketKey, 'PROJ-123');
+        assert.equal(m._uploadRawFileCalls[0].filePath, '.dmtools-session-output.log');
+        assert.equal(m._uploadRawFileCalls[0].assetName, 'sf_story_development-session.log');
+        assert.equal(m._uploadRawFileCalls[0].providerName, 'github');
 
         // Should NOT call zip or any other CLI command for session save
         var zipCalls = cliCalls.filter(function(c) { return c.indexOf('zip') !== -1; });
@@ -210,16 +214,36 @@ suite('timerAutoCommitAndSave — saveSessionArtefact', function() {
         assert.ok(deleteCalls.length >= 1, 'should cleanup temp file');
     });
 
+    test('resolves the gitlab provider from configLoader and passes it through', function() {
+        var m = loadTimer({
+            cli_execute_command: function() { return ''; },
+            file_write: function() {},
+            file_delete: function() {}
+        }, { scmProvider: 'gitlab' });
+
+        m.action({
+            ticket: { key: 'PROJ-123' },
+            jobParams: {
+                customParams: {
+                    artefactRepository: { owner: 'mygroup', repo: 'myrepo' }
+                },
+                metadata: { contextId: 'sf_story_development' }
+            },
+            currentCliOutput: 'some output'
+        });
+
+        assert.equal(m._uploadRawFileCalls.length, 1);
+        assert.equal(m._uploadRawFileCalls[0].providerName, 'gitlab');
+    });
+
     test('handles upload failure gracefully', function() {
         var m = loadTimer({
             cli_execute_command: function(args) { return ''; },
             file_write: function(args) {},
-            file_delete: function(args) {},
-            github_get_or_create_draft_release: function(args) {
-                throw new Error('HTTP 401 Unauthorized');
-            },
-            github_upload_release_asset: function(args) {
-                throw new Error('should not be called');
+            file_delete: function(args) {}
+        }, {
+            uploadRawFileImpl: function() {
+                return { success: false, releaseUrl: null, assetUrl: null, error: 'HTTP 401 Unauthorized' };
             }
         });
 
