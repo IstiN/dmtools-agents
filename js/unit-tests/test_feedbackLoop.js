@@ -224,4 +224,119 @@ suite('feedbackLoop helper', function() {
         );
     });
 
+    test('non-blocking gate failure does not fail the overall result and continues to next gate', function() {
+        var loaded = loadFeedbackLoop({
+            cli_execute_command: function(args) {
+                loaded.commands.push(args.command);
+                if (args.command === 'mvn spotbugs:check') {
+                    throw new Error('pre-existing spotbugs findings');
+                }
+                if (args.command === 'mvn clean compile') {
+                    return '';
+                }
+                return '';
+            }
+        });
+
+        var result = loaded.mod.runQualityGates({
+            ticketKey: 'TS-6',
+            customParams: {
+                feedbackLoop: {
+                    qualityGates: {
+                        enabled: true,
+                        gates: [
+                            { name: 'compile', command: 'mvn clean compile', maxAttempts: 2 },
+                            { name: 'spotbugs', command: 'mvn spotbugs:check', maxAttempts: 1, blocking: false }
+                        ]
+                    }
+                }
+            },
+            section: 'qualityGates'
+        });
+
+        assert.equal(result.success, true, 'overall result should still be success — the failing gate is non-blocking');
+        assert.equal(result.nonBlockingFailures.length, 1);
+        assert.equal(result.nonBlockingFailures[0].name, 'spotbugs');
+        assert.contains(result.nonBlockingFailures[0].error, 'pre-existing spotbugs findings');
+
+        // "compile" (blocking, unaffected) should have run and succeeded, then "spotbugs"
+        // (non-blocking, maxAttempts=1) is retried once via the feedback loop before being
+        // recorded as a non-blocking failure — it must never abort/return early.
+        assert.equal(loaded.commands.filter(function(c) { return c === 'mvn clean compile'; }).length, 1);
+        assert.equal(loaded.commands.filter(function(c) { return c === 'mvn spotbugs:check'; }).length, 2);
+        assert.equal(loaded.commands.filter(function(c) { return c.indexOf('run-agent.sh') !== -1; }).length, 1);
+    });
+
+    test('non-blocking gate with resume enabled still tries to resume before giving up', function() {
+        var loaded = loadFeedbackLoop({
+            cli_execute_command: function(args) {
+                loaded.commands.push(args.command);
+                if (args.command === 'mvn spotbugs:check') {
+                    throw new Error('still failing after fix attempt');
+                }
+                return '';
+            }
+        });
+
+        var result = loaded.mod.runQualityGates({
+            ticketKey: 'TS-7',
+            customParams: {
+                feedbackLoop: {
+                    qualityGates: {
+                        enabled: true,
+                        gates: [
+                            {
+                                name: 'spotbugs',
+                                command: 'mvn spotbugs:check',
+                                maxAttempts: 1,
+                                blocking: false
+                            }
+                        ]
+                    }
+                }
+            },
+            section: 'qualityGates'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.nonBlockingFailures.length, 1);
+        // maxAttempts=1 means: 1 initial try + 1 resume-and-retry, then give up non-blockingly
+        assert.equal(loaded.commands.filter(function(c) { return c === 'mvn spotbugs:check'; }).length, 2);
+        assert.equal(loaded.commands.filter(function(c) { return c.indexOf('run-agent.sh') !== -1; }).length, 1);
+    });
+
+    test('blocking gate (default) still aborts the whole run on failure, as before', function() {
+        var loaded = loadFeedbackLoop({
+            cli_execute_command: function(args) {
+                loaded.commands.push(args.command);
+                if (args.command === 'mvn clean compile') {
+                    throw new Error('compile error');
+                }
+                return '';
+            }
+        });
+
+        var result = loaded.mod.runQualityGates({
+            ticketKey: 'TS-8',
+            customParams: {
+                feedbackLoop: {
+                    qualityGates: {
+                        enabled: true,
+                        gates: [
+                            { name: 'compile', command: 'mvn clean compile', maxAttempts: 0 },
+                            { name: 'spotbugs', command: 'mvn spotbugs:check', maxAttempts: 1, blocking: false }
+                        ]
+                    }
+                }
+            },
+            section: 'qualityGates'
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.failedGate, 'compile');
+        // Should not have reached the spotbugs gate at all
+        var spotbugsCalls = loaded.commands.filter(function(c) { return c === 'mvn spotbugs:check'; });
+        assert.equal(spotbugsCalls.length, 0);
+    });
+
 });

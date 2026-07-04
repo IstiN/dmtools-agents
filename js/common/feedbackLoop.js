@@ -150,6 +150,7 @@ function runConfiguredGates(options, section, stagePrefix) {
     var config = normalizeConfig(customParams, options.section || section);
     var gates = getConfiguredGates(customParams, options.section || section, section);
     var results = [];
+    var nonBlockingFailures = [];
 
     for (var i = 0; i < gates.length; i++) {
         var gate = gates[i];
@@ -158,6 +159,10 @@ function runConfiguredGates(options, section, stagePrefix) {
         var command = gate.command ? String(gate.command).replace(/\{ticketKey\}/g, options.ticketKey || '') : null;
         if (!command) continue;
         var workingDir = gate.workingDir || options.workingDir || config.workingDir || null;
+        // blocking defaults to true (backward compatible): set "blocking": false on a gate
+        // (e.g. spotbugs on a codebase with pre-existing findings unrelated to the PR) to
+        // report its failure without aborting the push/PR-reply flow for the whole ticket.
+        var isBlocking = gate.blocking !== false;
 
         var attempts = 0;
         var maxAttempts = gate.maxAttempts;
@@ -174,11 +179,19 @@ function runConfiguredGates(options, section, stagePrefix) {
             } catch (e) {
                 var errorText = e && e.message ? e.message : String(e);
                 if (attempts > maxAttempts || gate.retryWithAgent === false) {
+                    if (!isBlocking) {
+                        console.warn('⚠️ Non-blocking ' + gateType + ' "' + name + '" failed after ' + attempts +
+                            ' attempt(s) — continuing without blocking: ' + errorText);
+                        results.push({ name: name, success: false, attempts: attempts, error: errorText, blocking: false });
+                        nonBlockingFailures.push({ name: name, error: errorText });
+                        break;
+                    }
                     return {
                         success: false,
                         failedGate: name,
                         error: errorText,
-                        results: results
+                        results: results,
+                        nonBlockingFailures: nonBlockingFailures
                     };
                 }
 
@@ -199,11 +212,18 @@ function runConfiguredGates(options, section, stagePrefix) {
                         '\n\n' + errorText
                 });
                 if (!resume.attempted) {
+                    if (!isBlocking) {
+                        console.warn('⚠️ Non-blocking ' + gateType + ' "' + name + '" failed (no resume attempted) — continuing without blocking: ' + errorText);
+                        results.push({ name: name, success: false, attempts: attempts, error: errorText, blocking: false });
+                        nonBlockingFailures.push({ name: name, error: errorText });
+                        break;
+                    }
                     return {
                         success: false,
                         failedGate: name,
                         error: errorText,
-                        results: results
+                        results: results,
+                        nonBlockingFailures: nonBlockingFailures
                     };
                 }
                 if (options.returnAfterResume || config.returnAfterResume || gate.returnAfterResume) {
@@ -212,14 +232,15 @@ function runConfiguredGates(options, section, stagePrefix) {
                         failedGate: name,
                         error: errorText,
                         resumeAttempted: true,
-                        results: results
+                        results: results,
+                        nonBlockingFailures: nonBlockingFailures
                     };
                 }
             }
         }
     }
 
-    return { success: true, results: results };
+    return { success: true, results: results, nonBlockingFailures: nonBlockingFailures };
 }
 
 function runQualityGates(options) {

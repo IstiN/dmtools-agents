@@ -471,6 +471,23 @@ function action(params) {
             throw new Error('Policy gate failed before rework push: ' + policyResult.failedGate + '\n' + policyResult.error);
         }
 
+        // Non-blocking gate failures (e.g. spotbugs findings unrelated to the PR, marked
+        // "blocking": false in config) don't abort the push/PR-reply flow, but should still
+        // be visible to the developer/reviewer rather than silently swallowed.
+        var nonBlockingGateWarnings = [].concat(
+            gateResult.nonBlockingFailures || [],
+            policyResult.nonBlockingFailures || []
+        );
+        var nonBlockingGateWarningBlock = '';
+        if (nonBlockingGateWarnings.length > 0) {
+            var warningLines = nonBlockingGateWarnings.map(function(f) {
+                return '- **' + f.name + '**: ' + String(f.error).substring(0, 500);
+            });
+            nonBlockingGateWarningBlock = '\n\n⚠️ **Non-blocking gate warnings** (did not block this push):\n' + warningLines.join('\n');
+            console.warn('⚠️ Non-blocking gate failures (push/replies continue):\n' + warningLines.join('\n'));
+        }
+        const fixSummaryWithWarnings = fixSummary + nonBlockingGateWarningBlock;
+
         // Commit and push
         let branchName;
         let codeChangesCommitted = false;
@@ -555,13 +572,22 @@ function action(params) {
 
             // Post general fix summary as a top-level PR comment only when there are no
             // review thread replies. When replies exist, the thread replies themselves are
-            // sufficient; an extra top-level comment is noise.
+            // sufficient; an extra top-level comment is noise — except non-blocking gate
+            // warnings, which are worth a short standalone comment even then, since they
+            // wouldn't otherwise be visible anywhere on the PR.
             var hasMeaningfulSummary = fixSummary && fixSummary.length > 50
                 && fixSummary !== '_(No fix summary generated)_';
             if (repliesPosted > 0) {
                 console.log('ℹ️ Review thread replies posted — skipping general PR comment');
+                if (nonBlockingGateWarningBlock) {
+                    try {
+                        scm.addComment(pr.number, '## ⚠️ Non-blocking gate warnings' + nonBlockingGateWarningBlock);
+                    } catch (e) {
+                        console.warn('Failed to post non-blocking gate warning comment:', e);
+                    }
+                }
             } else if (codeChangesCommitted || hasMeaningfulSummary) {
-                prCommentPosted = postPRComment(scm, pr.number, fixSummary, ticketKey, repliesPosted);
+                prCommentPosted = postPRComment(scm, pr.number, fixSummaryWithWarnings, ticketKey, repliesPosted);
             } else {
                 console.log('ℹ️ No thread replies, no code changes, and no meaningful summary — skipping general PR comment');
             }
@@ -590,7 +616,7 @@ function action(params) {
 
         // Post Jira completion comment
         const prUrl = pr ? pr.html_url : null;
-        postJiraComment(ticketKey, prUrl, branchName, prCommentPosted, codeChangesCommitted, fixSummary);
+        postJiraComment(ticketKey, prUrl, branchName, prCommentPosted, codeChangesCommitted, fixSummaryWithWarnings);
 
         // Remove WIP label if present
         const wipLabel = actualParams.metadata && actualParams.metadata.contextId
