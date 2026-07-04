@@ -3,10 +3,20 @@
  * preJSAction for story_development_redirect*.json
  *
  * Extracts [repo] from ticket summary, then runs:
- *   dmtools run "{repo}/{targetAgentName}" --inputJql "key={ticketKey}"
+ *   dmtools run "{repo}/{targetAgentName}" --inputJql "key={ticketKey}" --debug
  *
  * customParams.targetAgentName controls which agent to delegate to
  * (e.g. "story_development.json" or "story_development_test.json").
+ *
+ * IMPORTANT: --debug is required here. Without it, dmtools' launcher selects
+ * log4j2-cli.xml (Root level OFF) for this nested process, which silently
+ * discards EVERY java-side logger.info()/warn() call — including
+ * CliExecutionHelper's "Executing CLI command: ..." announcement and, more
+ * importantly, CommandLineUtils.runCommand()'s real-time streaming of the
+ * actual CLI agent's (Copilot/etc.) own stdout via logger.info(line). Only
+ * plain JS console.log() calls (which bypass log4j, writing straight to
+ * System.out) would have survived — making it look like the CLI agent never
+ * ran at all, when it may well have, just with zero visibility.
  *
  * Returns false to abort own processing — target agent handles everything.
  */
@@ -47,7 +57,7 @@ function action(params) {
     console.log('redirectToRepoAgent: ' + ticketKey + ' \u2192 ' + agent);
 
     try {
-        cli_execute_command({ command: 'dmtools run "' + agent + '" --inputJql "key=' + ticketKey + '"' });
+        cli_execute_command({ command: 'dmtools --debug run "' + agent + '" --inputJql "key=' + ticketKey + '"' });
     } catch (e) {
         console.error('redirectToRepoAgent: failed to run ' + agent + ': ' + e);
         return false;
