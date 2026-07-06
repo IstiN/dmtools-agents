@@ -22,9 +22,11 @@
 #      changed), the check is skipped entirely — nothing to scope it to.
 #
 # Usage:
-#   bash spotbugs_diff_scope.sh <maven-root> <settings-path-relative-to-maven-root> [base-ref]
+#   bash spotbugs_diff_scope.sh <maven-root> <settings-path-relative-to-cwd> [base-ref]
 #
-# Example (matches the gens-igt quality gate config):
+# Example (matches the gens-igt quality gate config — settings.xml lives at the repo
+# checkout root, NOT under tools-app/, consistent with the preceding compile gate's own
+# `mvn -f tools-app/pom.xml -s mvn/settings.xml` invocation):
 #   bash agents/scripts/spotbugs_diff_scope.sh tools-app mvn/settings.xml
 #
 # Must be run with the working directory set to the target repo checkout (same
@@ -32,7 +34,7 @@
 set -euo pipefail
 
 MAVEN_ROOT="${1:?maven root required, e.g. tools-app}"
-SETTINGS_PATH="${2:?settings path (relative to maven root) required, e.g. mvn/settings.xml}"
+SETTINGS_PATH="${2:?settings path (relative to the working directory, e.g. mvn/settings.xml) required}"
 BASE_REF="${3:-}"
 
 if [ -z "${BASE_REF}" ]; then
@@ -102,4 +104,4 @@ if [ -z "${MODULE_LIST}" ]; then
 fi
 
 echo "spotbugs_diff_scope: scoping spotbugs:check to changed module(s): ${MODULE_LIST}"
-mvn --batch-mode -f "${MAVEN_ROOT}/pom.xml" -s "${MAVEN_ROOT}/${SETTINGS_PATH}" -T 1C -pl "${MODULE_LIST}" compile spotbugs:check -q
+mvn --batch-mode -f "${MAVEN_ROOT}/pom.xml" -s "${SETTINGS_PATH}" -T 1C -pl "${MODULE_LIST}" compile spotbugs:check -q
