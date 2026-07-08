@@ -45,14 +45,15 @@ The SM agent (`smAgent.js`) is the central orchestrator. Every 20 minutes:
 2. For each enabled rule, runs the JQL query against Jira
 3. For each matching ticket, checks `skipIfLabel` — skips the ticket if the label is already present (lock is held)
 4. Adds `addLabel` to the ticket (acquires lock)
-5. Either dispatches a GitHub Actions `workflow_dispatch` to `ai-teammate.yml` (with `config_file` and `concurrency_key` inputs), **or** executes the JS logic locally (`localExecution: true`)
+5. Either dispatches a GitHub Actions `workflow_dispatch` to `ai-teammate.yml` (with `config_file` and `concurrency_key` inputs), executes the JS logic locally (`localExecution: true`), **or** runs the full teammate pipeline synchronously on the local machine (`localTeammate: true`)
 
 ### Execution Modes
 
 | Mode | When Used | Behavior |
 |------|-----------|----------|
 | **Dispatch** (default) | Complex AI tasks (development, review, test gen) | Triggers `ai-teammate.yml` workflow on GitHub Actions; runs asynchronously |
-| **localExecution: true** | Fast/safe operations (merge checks, status checks) | Runs the postJS directly inside the SM process; synchronous |
+| **localExecution: true** | Fast/safe operations (merge checks, status checks) | Runs the postJS directly inside the SM process; synchronous; no AI CLI, no checkout |
+| **localTeammate: true** | Running the SM/AI Teammate pipeline on a local machine instead of GitHub Actions (e.g. no self-hosted runner available, or for fast local iteration) | Runs `scripts/run-teammate-local.sh`, which calls the same `dmtools run <config_file>` entrypoint `ai-teammate.yml` uses — full checkout/branch-switch, AI CLI, PR/Jira actions — but in the calling process. Because it blocks until the script exits, tickets are always processed **one at a time**, regardless of `maxTriggeredWorkflows` (see [Local Execution Flow](#local-teammate-execution-flow-localteammate-true)) |
 
 ### Agent Types
 
@@ -751,6 +752,46 @@ SM Agent (smAgent.js)
 │           ├─ Executes synchronously
 │           └─ Transitions Jira ticket status or performs merge operation
 ```
+
+### Local Teammate Execution Flow (localTeammate: true)
+
+Runs the **full** Teammate pipeline (checkout, AI CLI, PR/Jira actions) on the machine
+that runs the SM job, instead of dispatching `ai-teammate.yml` to GitHub Actions. Useful
+when there is no GitHub Actions runner available for this workload, or for fast local
+iteration without waiting on a runner queue.
+
+```
+SM Agent (smAgent.js)
+│
+├─ 1. Run JQL → find matching Jira tickets
+├─ 2. For each ticket (processed strictly one at a time — see below):
+│     ├─ Check skipIfLabel → skip if present (no active-workflow-run recovery check;
+│     │   that logic only makes sense for async GitHub Actions dispatches)
+│     ├─ Write the rule's encoded_config to a temp file (agents/.dmtools/local-run-*.json)
+│     └─ scripts/run-teammate-local.sh --config-file <configFile> --ticket <key> ...
+│           ├─ Refuses to run if the working tree is dirty (protects uncommitted work)
+│           ├─ Syncs the base branch (git fetch + checkout + pull --ff-only)
+│           ├─ dmtools --debug run <config_file> [<encoded_config>] --inputJql "key = <key>"
+│           │     (identical entrypoint to ai-teammate.yml's "Run AI Teammate" step —
+│           │      preJS → CLI agent → postJS all run exactly as they do on a runner)
+│           └─ Fails loudly if the tree is still dirty afterwards (agent should always
+│                 commit + push everything it changed, same contract as on a runner)
+└─ 3. addLabel only after a successful local run
+```
+
+**Why sequential, not worktree-based:** `cli_execute_command()` blocks until the script
+exits, and rules with `localTeammate: true` bypass the `maxTriggeredWorkflows` budget
+entirely (that budget only bounds *outstanding* async GitHub Actions runs). The working
+copy is reused across tickets — no git worktrees — because the teammate agent's own
+`postJSAction` always commits and pushes before finishing; the next ticket simply starts
+from a freshly-synced base branch.
+
+**Secrets:** read from the calling shell's environment first; `run-teammate-local.sh`
+fills in anything missing from `./dmtools.env` (same `KEY=VALUE` format
+`scripts/run-agent.sh` already loads). Real environment variables always take priority —
+`dmtools.env` never overrides an already-exported value. Typical required vars: `JIRA_EMAIL`,
+`JIRA_API_TOKEN`, `JIRA_BASE_PATH`, `GH_TOKEN`/`PAT_TOKEN`, plus whatever the configured
+`AI_AGENT_PROVIDER` needs (e.g. `COPILOT_GITHUB_TOKEN`).
 
 ### TestCasesGenerator Flow
 
