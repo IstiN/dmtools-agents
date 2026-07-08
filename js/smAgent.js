@@ -5,8 +5,13 @@
  * and for each rule:
  *   1. Queries Jira by rule.jql (with {jiraProject}/{parentTicket} interpolation)
  *   2. Optionally transitions each ticket to rule.targetStatus
- *   3. Triggers an ai-teammate GitHub Actions workflow for each ticket
- *      OR executes the postJSAction locally (if localExecution: true)
+ *   3. Runs the agent for each matching ticket, via one of three modes:
+ *      - dispatch (default) — triggers an ai-teammate GitHub Actions workflow (async)
+ *      - localExecution: true — runs the agent config's postJSAction directly in the
+ *        SM process (pure JS, no AI CLI, no checkout — for fast/safe operations)
+ *      - localTeammate: true — runs the FULL teammate pipeline (checkout/branch switch,
+ *        AI CLI, PR/Jira actions) synchronously on the local machine via
+ *        scripts/run-teammate-local.sh, one ticket at a time (no GitHub Actions runner)
  *
  * Configuration:
  *   Loads project config from .dmtools/config.js (via configLoader).
@@ -42,6 +47,17 @@
  *   enabled        (optional) — set to false to disable the rule entirely (default: true)
  *   limit          (optional) — max number of tickets to process per run (default: 50)
  *   localExecution (optional) — if true, run postJSAction directly (no runner, no AI/CLI)
+ *   localTeammate  (optional) — if true, run the full teammate pipeline (checkout, AI CLI,
+ *                               PR/Jira actions) synchronously in-process via
+ *                               scripts/run-teammate-local.sh instead of dispatching a
+ *                               GitHub Actions workflow_dispatch. Tickets are processed
+ *                               strictly one at a time (the local checkout is reused across
+ *                               tickets, so no concurrency/workflowBudget accounting applies).
+ *                               Secrets are read from the calling shell's environment or from
+ *                               dmtools.env (see scripts/run-agent.sh loader) — never from
+ *                               GitHub Actions secrets.
+ *   localTeammateScript (optional) — path to the local runner script
+ *                               (default: agents/scripts/run-teammate-local.sh)
  */
 
 var configLoader = require('./configLoader.js');
@@ -293,6 +309,67 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
     }
 }
 
+/**
+ * Runs the full teammate pipeline locally (synchronously) instead of dispatching a
+ * GitHub Actions workflow_dispatch. Delegates checkout/branch-switching, the AI CLI
+ * run, and PR/Jira post-actions to scripts/run-teammate-local.sh — the same
+ * agents/*.json config and dmtools `run` entrypoint used by ai-teammate.yml, just
+ * invoked on the local machine instead of a runner.
+ *
+ * Because cli_execute_command() blocks until the child process exits, calling this
+ * from the same sequential ticket loop as triggerWorkflow() naturally enforces
+ * one-ticket-at-a-time processing — no separate queue/scheduler is needed.
+ */
+function runTeammateLocally(ticketKey, rule, effectiveConfig) {
+    var resolvedCf = buildEncodedConfigModule.resolveConfigFile(rule, effectiveConfig);
+    var encodedConfig = buildEncodedConfigModule.buildEncodedConfig(ticketKey, rule, effectiveConfig);
+
+    var projectKey = rule.projectKey || '';
+    if (!projectKey && effectiveConfig && effectiveConfig._configPath) {
+        var cp = effectiveConfig._configPath;
+        var base = cp.substring(cp.lastIndexOf('/') + 1).replace(/\.js$/, '');
+        if (base && base !== 'config') projectKey = base;
+    }
+
+    var scriptPath = rule.localTeammateScript || 'agents/scripts/run-teammate-local.sh';
+    // Write the encoded config to a temp file rather than inlining it as a CLI argument —
+    // avoids shell-escaping a large/multiline JSON blob (the script reads it back with $(cat ...)).
+    var encodedConfigFile = '';
+    if (encodedConfig) {
+        var safeTicket = ticketKey.replace(/[^A-Za-z0-9_-]/g, '_');
+        encodedConfigFile = '.dmtools/local-run-encoded-config-' + safeTicket + '.json';
+        try {
+            file_write({ path: encodedConfigFile, content: encodedConfig });
+        } catch (e) {
+            console.warn('  ⚠️  Could not write encoded config file: ' + (e.message || e));
+            encodedConfigFile = '';
+        }
+    }
+
+    var cmd = 'bash ' + scriptPath +
+        ' --config-file ' + resolvedCf +
+        ' --ticket ' + ticketKey +
+        (encodedConfigFile ? ' --encoded-config-file ' + encodedConfigFile : '') +
+        (projectKey ? ' --project-key ' + projectKey : '');
+
+    console.log('  🖥️  [local] ' + cmd);
+
+    var ok = true;
+    try {
+        cli_execute_command({ command: cmd });
+        console.log('  ✅ Local run complete for ' + ticketKey);
+    } catch (e) {
+        ok = false;
+        console.error('  ❌ Local teammate run failed for ' + ticketKey + ': ' + (e.message || e));
+    }
+
+    if (encodedConfigFile) {
+        try { cli_execute_command({ command: 'rm -f ' + encodedConfigFile }); } catch (e2) {}
+    }
+
+    return ok;
+}
+
 function moveStatus(ticketKey, targetStatus) {
     try {
         jira_move_to_status({ key: ticketKey, statusName: targetStatus });
@@ -503,7 +580,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         return processRuleLocally(rule, globalRepoInfo, ruleIndex);
     }
 
-    if (workflowBudget && workflowBudget.remaining <= 0) {
+    // localTeammate runs synchronously in-process — the workflow cap only bounds
+    // concurrent/outstanding GitHub Actions dispatches, so it doesn't apply here.
+    if (!rule.localTeammate && workflowBudget && workflowBudget.remaining <= 0) {
         var skippedLabel = rule.description || ('Rule #' + (ruleIndex + 1));
         var workflowFile = rule.workflowFile || 'ai-teammate.yml';
         console.log('\n══ ' + skippedLabel + ' ══');
@@ -548,7 +627,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
 
     var ruleLimit = (typeof rule.limit === 'number' && rule.limit > 0) ? Math.floor(rule.limit) : null;
     var effectiveLimit = ruleLimit;
-    if (workflowBudget) {
+    if (workflowBudget && !rule.localTeammate) {
         effectiveLimit = effectiveLimit === null
             ? workflowBudget.remaining
             : Math.min(effectiveLimit, workflowBudget.remaining);
@@ -569,7 +648,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     var skippedKeys   = [];
 
     for (var idx = 0; idx < tickets.length; idx++) {
-        if (workflowBudget && workflowBudget.remaining <= 0) {
+        if (!rule.localTeammate && workflowBudget && workflowBudget.remaining <= 0) {
             break;
         }
         if (effectiveLimit !== null && processedKeys.length >= effectiveLimit) {
@@ -580,7 +659,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
 
         var skipLabel = firstMatchingLabel(ticket, normalizeLabels(rule.skipIfLabel, rule.skipIfLabels));
         if (skipLabel) {
-            if (shouldRecoverStaleTriggerLabel(rule, skipLabel)) {
+            // Stale-label recovery is based on inspecting active GitHub Actions runs — not
+            // meaningful for localTeammate (there is no async run to inspect); just skip.
+            if (!rule.localTeammate && shouldRecoverStaleTriggerLabel(rule, skipLabel)) {
                 var workflowFile = rule.workflowFile || 'ai-teammate.yml';
                 var resolvedCf = buildEncodedConfigModule.resolveConfigFile(rule, effectiveConfig);
                 var scm = scmModule.createScm(effectiveConfig);
@@ -599,20 +680,22 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         }
 
         if (rule.targetStatus) {
-            if (isWorkflowBudgetExhausted(rule, effectiveConfig, workflowBudget)) {
+            if (!rule.localTeammate && isWorkflowBudgetExhausted(rule, effectiveConfig, workflowBudget)) {
                 console.log('  ⏭️  ' + key + ' skipped before transition (global workflow cap reached: ' + workflowBudget.initial + ')');
                 break;
             }
             moveStatus(key, rule.targetStatus);
         }
 
-        var triggered = triggerWorkflow(effectiveRepoInfo, key, rule, effectiveConfig, workflowBudget);
+        var triggered = rule.localTeammate
+            ? runTeammateLocally(key, rule, effectiveConfig)
+            : triggerWorkflow(effectiveRepoInfo, key, rule, effectiveConfig, workflowBudget);
 
         if (triggered) addRuleLabels(key, rule);
 
         if (triggered) {
             processedKeys.push(key);
-            if (workflowBudget) workflowBudget.remaining -= 1;
+            if (!rule.localTeammate && workflowBudget) workflowBudget.remaining -= 1;
         }
     }
 

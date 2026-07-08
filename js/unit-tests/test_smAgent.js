@@ -35,6 +35,7 @@ function makeSmAgent(opts) {
     var capturedLabels = [];
     var capturedStatusMoves = [];
     var capturedJqls = [];
+    var capturedCliCommands = [];
 
     // Controlled file_read: config discovery paths from fileMap only; other paths from disk.
     var fileReadMock = function(readOpts) {
@@ -79,7 +80,15 @@ function makeSmAgent(opts) {
             capturedStatusMoves.push(moveOpts);
             if (opts.onMoveStatus) opts.onMoveStatus(moveOpts);
         },
-        cli_execute_command: function() { return ''; },
+        cli_execute_command: function(cmdOpts) {
+            capturedCliCommands.push(cmdOpts);
+            if (opts.onCliExecute) return opts.onCliExecute(cmdOpts);
+            return '';
+        },
+        file_write: function(writeOpts) {
+            if (opts.onFileWrite) opts.onFileWrite(writeOpts);
+            return true;
+        },
         encodeURIComponent: encodeURIComponent,
         JSON: JSON,
         eval: eval
@@ -141,7 +150,8 @@ function makeSmAgent(opts) {
         capturedTriggers: capturedTriggers,
         capturedLabels: capturedLabels,
         capturedStatusMoves: capturedStatusMoves,
-        capturedJqls: capturedJqls
+        capturedJqls: capturedJqls,
+        capturedCliCommands: capturedCliCommands
     };
 }
 
@@ -653,6 +663,143 @@ suite('smAgent: ticket dispatch', function() {
 
         assert.equal(sm.capturedTriggers.length, 0, 'duplicate active workflow should not be dispatched');
         assert.equal(sm.capturedLabels.length, 0, 'skip label should not be added for skipped duplicate');
+    });
+
+});
+
+// ── localTeammate execution mode ────────────────────────────────────────────
+
+// runTeammateLocally() issues two cli_execute_command calls per ticket: the actual
+// run-teammate-local.sh invocation, plus a best-effort `rm -f` cleanup of the temp
+// encoded-config file. Filter to just the script invocations for assertions below.
+function localRunCommands(sm) {
+    return sm.capturedCliCommands.filter(function(c) {
+        return c.command.indexOf('run-teammate-local.sh') !== -1;
+    });
+}
+
+suite('smAgent: localTeammate execution mode', function() {
+
+    test('runs local script instead of dispatching a workflow', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'", {
+                configFile: 'agents/story_development.json',
+                localTeammate: true
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 0, 'no GitHub Actions workflow should be dispatched');
+        var runs = localRunCommands(sm);
+        assert.equal(runs.length, 1, 'exactly one local run invoked');
+        var cmd = runs[0].command;
+        assert.ok(cmd.indexOf('scripts/run-teammate-local.sh') !== -1, 'invokes run-teammate-local.sh');
+        assert.ok(cmd.indexOf('--config-file agents/story_development.json') !== -1, 'passes config file');
+        assert.ok(cmd.indexOf('--ticket P-1') !== -1, 'passes ticket key');
+    });
+
+    test('adds rule labels after a successful local run', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/story_development.json',
+                localTeammate: true,
+                addLabel: 'sm_story_development_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedLabels.length, 1);
+        assert.equal(sm.capturedLabels[0].label, 'sm_story_development_triggered');
+    });
+
+    test('does not add rule labels when the local run throws', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }],
+            onCliExecute: function() { throw new Error('script failed'); }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/story_development.json',
+                localTeammate: true,
+                addLabel: 'sm_story_development_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedLabels.length, 0, 'no label added when the local run fails');
+    });
+
+    test('respects skipIfLabel without checking GitHub Actions run state', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-1', fields: { labels: ['sm_story_development_triggered'] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/story_development.json',
+                localTeammate: true,
+                skipIfLabel: 'sm_story_development_triggered'
+            })
+        ]));
+
+        assert.equal(localRunCommands(sm).length, 0, 'labelled ticket should be skipped, not run locally');
+    });
+
+    test('processes tickets one at a time regardless of maxTriggeredWorkflows', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [
+                { key: 'P-1', fields: { labels: [] } },
+                { key: 'P-2', fields: { labels: [] } },
+                { key: 'P-3', fields: { labels: [] } }
+            ]
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/story_development.json',
+                localTeammate: true
+            })
+        ]);
+        // A tight global cap must not throttle localTeammate rules — they run
+        // synchronously in-process, so there is no outstanding-workflow budget to spend.
+        params.jobParams.maxTriggeredWorkflows = 1;
+
+        var result = sm.action(params);
+
+        assert.equal(localRunCommands(sm).length, 3, 'all three tickets should run locally, uncapped');
+        assert.equal(result.processed, 3);
+    });
+
+    test('writes the encoded config to a temp file and passes its path', function() {
+        var writtenFiles = [];
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-7', fields: { labels: [] } }],
+            onFileWrite: function(writeOpts) { writtenFiles.push(writeOpts); }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/story_development.json',
+                localTeammate: true
+            })
+        ]));
+
+        assert.equal(writtenFiles.length, 1, 'encoded config should be written once');
+        assert.ok(writtenFiles[0].path.indexOf('P-7') !== -1, 'temp file name includes the ticket key');
+        var cmd = sm.capturedCliCommands[0].command;
+        assert.ok(cmd.indexOf('--encoded-config-file') !== -1, 'passes the encoded config file path');
     });
 
 });
