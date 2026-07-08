@@ -106,21 +106,30 @@ _cache_gradle() {
   # Gradle wrapper distribution (~/.gradle/wrapper) and dependency cache (~/.gradle/caches).
   # Keys hash the files most likely to change the cache content:
   #   wrapper key  — gradle-wrapper.properties (changes when Gradle version bumps)
-  #   caches key   — libs.versions.toml + *.gradle.kts (changes when deps or build scripts change)
+  #   caches key   — libs.versions.toml + all *.gradle.kts (changes when deps or build scripts change)
   local workspace="${GITHUB_WORKSPACE:-${PWD}}"
-  local wrapper_hash=""
-  local caches_hash=""
 
-  if [ -f "${workspace}/gradle/wrapper/gradle-wrapper.properties" ]; then
-    wrapper_hash="$(md5sum "${workspace}/gradle/wrapper/gradle-wrapper.properties" 2>/dev/null | cut -d' ' -f1 || shasum "${workspace}/gradle/wrapper/gradle-wrapper.properties" | cut -d' ' -f1 || true)"
+  local wrapper_hash
+  wrapper_hash="$(hash_file "${workspace}/gradle/wrapper/gradle-wrapper.properties")"
+
+  # Aggregate hash over the version catalog + every Gradle Kotlin build script,
+  # sorted for stability across filesystems/find implementations.
+  local caches_hash="nokey"
+  if command -v find &>/dev/null; then
+    local build_files
+    build_files="$(find "${workspace}" \( -name "libs.versions.toml" -o -name "*.gradle.kts" \) -not -path "*/build/*" -not -path "*/.git/*" 2>/dev/null | sort)"
+    if [ -n "${build_files}" ]; then
+      # shellcheck disable=SC2086
+      caches_hash="$(hash_files ${build_files})"
+    fi
   fi
 
   export_var "GRADLE_WRAPPER_CACHE_PATH" "${HOME}/.gradle/wrapper"
-  export_var "GRADLE_WRAPPER_CACHE_KEY"  "gradle-wrapper-${wrapper_hash:-nokey}"
+  export_var "GRADLE_WRAPPER_CACHE_KEY"  "gradle-wrapper-${wrapper_hash}"
   export_var "GRADLE_WRAPPER_CACHE_RESTORE_KEY" "gradle-wrapper-"
 
   export_var "GRADLE_CACHES_CACHE_PATH" "${HOME}/.gradle/caches"
-  export_var "GRADLE_CACHES_CACHE_KEY"  "gradle-caches-${caches_hash:-nokey}"
+  export_var "GRADLE_CACHES_CACHE_KEY"  "gradle-caches-${caches_hash}"
   export_var "GRADLE_CACHES_CACHE_RESTORE_KEY" "gradle-caches-"
 }
 
@@ -128,14 +137,11 @@ _cache_konan() {
   # Kotlin/KMP native toolchain (~/.konan).
   # Key hashes libs.versions.toml because the Kotlin version bump triggers a new toolchain download.
   local workspace="${GITHUB_WORKSPACE:-${PWD}}"
-  local konan_hash=""
-
-  if [ -f "${workspace}/gradle/libs.versions.toml" ]; then
-    konan_hash="$(md5sum "${workspace}/gradle/libs.versions.toml" 2>/dev/null | cut -d' ' -f1 || shasum "${workspace}/gradle/libs.versions.toml" | cut -d' ' -f1 || true)"
-  fi
+  local konan_hash
+  konan_hash="$(hash_file "${workspace}/gradle/libs.versions.toml")"
 
   export_var "KONAN_CACHE_PATH" "${HOME}/.konan"
-  export_var "KONAN_CACHE_KEY"  "konan-${konan_hash:-nokey}"
+  export_var "KONAN_CACHE_KEY"  "konan-${konan_hash}"
   export_var "KONAN_CACHE_RESTORE_KEY" "konan-"
 }
 
@@ -144,9 +150,9 @@ _cache_android() {
   # Android SDK packages are large but stable — key on compileSdk version.
   local android_home="${ANDROID_HOME:-${HOME}/Android/Sdk}"
 
-  export_var "ANDROID_SDK_CACHE_PATH" "${android_home}/platforms/android-${compile_sdk} ${android_home}/build-tools ${android_home}/platform-tools"
-  export_var "ANDROID_SDK_CACHE_KEY"  "android-sdk-${compile_sdk}-${OS_TAG}"
-  export_var "ANDROID_SDK_CACHE_RESTORE_KEY" "android-sdk-${compile_sdk}-"
+  export_var "ANDROID_CACHE_PATH" "${android_home}/platforms/android-${compile_sdk} ${android_home}/build-tools ${android_home}/platform-tools"
+  export_var "ANDROID_CACHE_KEY"  "android-sdk-${compile_sdk}-${OS_TAG}"
+  export_var "ANDROID_CACHE_RESTORE_KEY" "android-sdk-${compile_sdk}-"
 }
 
 # ── Dispatch ──────────────────────────────────────────────────────────────────
@@ -267,6 +273,14 @@ for arg in ${TOOL_LIST}; do
   fi
 
   _dispatch_tool "${TOOL_NAME}" "${TOOL_VERSION}"
+
+  # gradle exports two independent cache namespaces (wrapper + caches) instead of
+  # a single {TOOL}_CACHE_* pair, so it needs its own print branch.
+  if [ "${TOOL_NAME}" = "gradle" ]; then
+    echo "📦 gradle: key=${GRADLE_WRAPPER_CACHE_KEY:-?}  path=${GRADLE_WRAPPER_CACHE_PATH:-?}"
+    echo "📦 gradle: key=${GRADLE_CACHES_CACHE_KEY:-?}  path=${GRADLE_CACHES_CACHE_PATH:-?}"
+    continue
+  fi
 
   VAR_PREFIX="$(echo "${TOOL_NAME}" | tr '[:lower:]-' '[:upper:]_')"
   PATH_VAR="${VAR_PREFIX}_CACHE_PATH"
