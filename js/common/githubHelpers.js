@@ -101,17 +101,16 @@ function getPRDetails(scmOrWorkspace, repositoryOrPrId, pullRequestIdOpt) {
     }
 }
 
-function checkoutPRBranch(branchName, workingDir) {
-    console.log('Checking out PR branch:', branchName);
-    var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
-
-    var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
+/**
+ * Switches the working tree onto `branchName` (creating a local tracking
+ * branch from origin when needed). Assumes the working tree is already clean —
+ * callers (checkoutPRBranch) are responsible for stashing local state first.
+ */
+function _switchToBranch(branchName, cmd) {
     var localBranchExists = function() {
         return cleanCommandOutput(cmd('git branch --list "' + branchName + '"') || '').trim() !== '';
     };
 
-    cmd('git config user.name "' + GIT_CONFIG.AUTHOR_NAME + '"');
-    cmd('git config user.email "' + GIT_CONFIG.AUTHOR_EMAIL + '"');
     // Update remote refs; blobless repos already have the commit graph
     cmd(prHelper.buildOriginFetchCommand('--prune'));
 
@@ -143,8 +142,83 @@ function checkoutPRBranch(branchName, workingDir) {
             throw new Error('Branch not found locally or remotely: ' + branchName);
         }
     }
+}
 
-    console.log('✅ Checked out branch:', branchName);
+/**
+ * Checks out `branchName`, self-healing around a dirty/untracked working tree
+ * instead of ever failing the whole setup step or leaving HEAD parked on
+ * `baseBranch` (the failure mode that causes WIP auto-save commits to land on
+ * develop/main instead of the ticket branch).
+ *
+ * Strategy ("stage, switch, reapply"):
+ *   1. Snapshot any local changes (tracked + untracked) via `git stash -u` so
+ *      the tree is guaranteed clean before switching branches.
+ *   2. Switch onto `branchName` (create local tracking branch from origin if
+ *      needed).
+ *   3. Reapply the snapshot on top of the new branch. If it doesn't apply
+ *      cleanly, we do NOT fail — the conflict markers are left in the working
+ *      tree for the CLI agent (or a human) to resolve as part of its task;
+ *      `hadConflict: true` is returned so callers can surface this.
+ *   4. Hard invariant: if, after all of this, HEAD still equals `baseBranch`,
+ *      recreate `branchName` from `origin/baseBranch` rather than ever
+ *      returning while sitting on the base branch.
+ *
+ * @param {string} branchName
+ * @param {string} [workingDir]
+ * @param {string} [baseBranch] - when provided, enforces the "never stay on
+ *        baseBranch" invariant (step 4). Omit only for call sites that don't
+ *        know the base branch; the stash-based self-healing (steps 1-3) still
+ *        applies either way.
+ * @returns {{ branch: string, hadConflict: boolean }}
+ */
+function checkoutPRBranch(branchName, workingDir, baseBranch) {
+    console.log('Checking out PR branch:', branchName);
+    var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
+    var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
+
+    cmd('git config user.name "' + GIT_CONFIG.AUTHOR_NAME + '"');
+    cmd('git config user.email "' + GIT_CONFIG.AUTHOR_EMAIL + '"');
+
+    // 1. Snapshot local state so a dirty tree can never block the switch below.
+    var dirty = cleanCommandOutput(cmd('git status --porcelain') || '').trim();
+    var stashed = false;
+    if (dirty) {
+        console.log('Working tree has local changes — stashing before branch switch');
+        cmd('git add -A');
+        try {
+            cmd('git stash push -u -m "preflight-checkout-' + branchName + '"');
+            stashed = true;
+        } catch (e) {
+            console.warn('git stash push failed, proceeding without a safety snapshot:', e);
+        }
+    }
+
+    // 2. Switch branches — tree is clean now, so this should never fail on
+    //    "untracked files would be overwritten" again.
+    _switchToBranch(branchName, cmd);
+
+    // 3. Reapply the snapshot on top of the target branch.
+    var hadConflict = false;
+    if (stashed) {
+        try {
+            cmd('git stash pop');
+        } catch (popErr) {
+            hadConflict = true;
+            console.warn('⚠️ Reapplying local snapshot onto ' + branchName + ' produced conflicts — leaving conflict markers in place:', popErr);
+        }
+    }
+
+    // 4. Hard invariant: never report success while parked on the base branch.
+    if (baseBranch) {
+        var current = cleanCommandOutput(cmd('git rev-parse --abbrev-ref HEAD') || '').trim();
+        if (current === baseBranch) {
+            console.warn('⚠️ Still on base branch "' + baseBranch + '" after checkout — recreating ' + branchName + ' from origin/' + baseBranch);
+            cmd('git checkout -B ' + branchName + ' origin/' + baseBranch);
+        }
+    }
+
+    console.log('✅ Checked out branch:', branchName, hadConflict ? '(with unresolved conflicts from local snapshot)' : '');
+    return { branch: branchName, hadConflict: hadConflict };
 }
 
 function getPRDiff(baseBranch, headBranch, workingDir) {

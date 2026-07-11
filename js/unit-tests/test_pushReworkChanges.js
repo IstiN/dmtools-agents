@@ -184,3 +184,126 @@ suite('pushReworkChanges — postThreadReplies field-name fallback', function() 
         assert.equal(loaded.addCommentCalls[0].text, 'Only fix.');
     });
 });
+
+// ── commitAndPush: base-branch safety invariant ──────────────────────────────
+// Never commit/push while HEAD sits on the repo's base branch instead of the
+// expected PR branch (the failure mode that let WIP auto-save commits land
+// on develop/main when branch setup silently failed).
+
+function loadPushReworkChangesForCommitAndPush(mocks) {
+    return loadModule(
+        'js/pushReworkChanges.js',
+        makeRequire({
+            './configLoader.js': configLoaderModule,
+            './config.js': configModule,
+            './common/scm.js': {},
+            './common/submodules.js': {
+                pushManagedSubmodules: function() { /* no-op */ }
+            },
+            './common/pullRequest.js': {
+                readStagedDiffStat: function() { return 'M file.txt\n'; },
+                syncBranchWithBase: function() { return { success: true, updated: false }; },
+                buildOriginFetchCommand: function(refSpec) {
+                    return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+                }
+            },
+            './common/feedbackLoop.js': {
+                runQualityGates: function() { return { success: true }; },
+                runPolicyGates: function() { return { success: true }; },
+                runPostPublishGates: function() { return { success: true }; },
+                resumeAgent: function() { return { attempted: false }; }
+            },
+            './common/autoStart.js': { triggerSmIfIdle: function() {} },
+            './common/outputFiles.js': { readOutputFile: function() { return null; } },
+            './cacheToReleases.js': {},
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        }),
+        Object.assign({
+            cli_execute_command: function() { return ''; },
+            file_read: function() { return null; },
+            jira_post_comment: function() {},
+            jira_move_to_status: function() {},
+            jira_remove_label: function() {}
+        }, mocks || {})
+    );
+}
+
+function baseConfig(overrides) {
+    return Object.assign({
+        workingDir: null,
+        git: { baseBranch: 'develop' },
+        formats: { commitMessage: { rework: '{ticketKey} rework' } }
+    }, overrides || {});
+}
+
+suite('pushReworkChanges.commitAndPush — base-branch safety invariant', function() {
+
+    test('refuses to commit/push when still on baseBranch after a failed forced checkout', function() {
+        var commands = [];
+        var mod = loadPushReworkChangesForCommitAndPush({
+            file_read: function(args) {
+                if (args.path.indexOf('pr_info.md') !== -1) {
+                    return '**Branch**: `bug/PROJ-123` → `develop`';
+                }
+                return null;
+            },
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git branch --show-current') return 'develop\n';
+                // Forced checkout to the expected branch fails — simulates the
+                // exact scenario that must never result in a push to develop.
+                if (args.command === 'git checkout bug/PROJ-123') {
+                    throw new Error('error: pathspec did not match any file(s)');
+                }
+                return '';
+            }
+        });
+
+        assert.throws(function() {
+            mod.commitAndPush('PROJ-123', baseConfig(), {});
+        }, 'must throw instead of pushing while parked on the base branch');
+
+        assert.equal(commands.filter(function(c) { return c.indexOf('git commit') !== -1; }).length, 0,
+            'must never commit while on baseBranch');
+        assert.equal(commands.filter(function(c) { return c.indexOf('git push') !== -1; }).length, 0,
+            'must never push while on baseBranch');
+    });
+
+    test('commits and pushes normally once on the expected PR branch', function() {
+        var commands = [];
+        var mod = loadPushReworkChangesForCommitAndPush({
+            file_read: function(args) {
+                if (args.path.indexOf('pr_info.md') !== -1) {
+                    return '**Branch**: `bug/PROJ-123` → `develop`';
+                }
+                return null;
+            },
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+                if (args.command.indexOf('git ls-remote --heads origin bug/PROJ-123') === 0) {
+                    return 'abc123\trefs/heads/bug/PROJ-123\n';
+                }
+                return '';
+            }
+        });
+
+        var result = mod.commitAndPush('PROJ-123', baseConfig(), {});
+
+        assert.equal(result.branch, 'bug/PROJ-123');
+        assert.ok(commands.filter(function(c) { return c.indexOf('git commit') !== -1; }).length >= 1,
+            'should commit when there are staged changes');
+        assert.ok(commands.filter(function(c) { return c.indexOf('git push -u origin bug/PROJ-123') !== -1; }).length >= 1,
+            'should push to the expected PR branch');
+    });
+
+    test('refuses outright when pr_info.md is missing (no PR to push to)', function() {
+        var mod = loadPushReworkChangesForCommitAndPush({
+            file_read: function() { throw new Error('File does not exist'); }
+        });
+
+        assert.throws(function() {
+            mod.commitAndPush('PROJ-123', baseConfig(), {});
+        }, 'must refuse to commit/push without a known expected branch');
+    });
+});

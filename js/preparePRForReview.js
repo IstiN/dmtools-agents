@@ -86,7 +86,7 @@ function action(params) {
         try {
             if (branchName) {
                 console.log('Checking out PR branch:', branchName, 'workingDir:', config.workingDir || '(default)');
-                gh.checkoutPRBranch(branchName, config.workingDir);
+                gh.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
                 console.log('Checkout completed for branch:', branchName);
             } else {
                 console.warn('PR details did not include a head branch; checkout skipped');

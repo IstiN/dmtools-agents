@@ -171,6 +171,14 @@ function commitAndPush(ticketKey, config, customParams) {
         }
     }
 
+    // Hard invariant: never commit/push while sitting on the base branch —
+    // if the forced checkout above didn't work and we're still parked on
+    // baseBranch, refuse rather than pushing WIP straight into the mainline.
+    if (branchName && branchName === baseBranch) {
+        throw new Error('Refusing to commit/push: current branch "' + branchName +
+            '" is the base branch (' + baseBranch + '), not the expected PR branch "' + expectedBranch + '".');
+    }
+
     submoduleHelper.pushManagedSubmodules({
         run: cmd,
         cleanOutput: cleanCommandOutput,
@@ -715,5 +723,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, resolveCustomParams, isInterruptedReworkResponse, postThreadReplies };
+    module.exports = { action, resolveCustomParams, isInterruptedReworkResponse, postThreadReplies, commitAndPush };
 }

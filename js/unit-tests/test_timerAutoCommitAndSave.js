@@ -122,6 +122,87 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
         assert.contains(cliCalls[3], 'PROJ-123');
         assert.contains(cliCalls[4], 'git push');
     });
+
+    test('refuses to commit/push when HEAD is on baseBranch', function() {
+        var cliCalls = [];
+        var m = loadTimer({
+            cli_execute_command: function(args) {
+                cliCalls.push(args.command);
+                if (args.command.indexOf('rev-parse --abbrev-ref HEAD') !== -1) return 'develop\n';
+                if (args.command.indexOf('git status') !== -1) return 'M file.txt\n';
+                return '';
+            }
+        });
+        m.action({
+            ticket: { key: 'PROJ-123' },
+            jobParams: {
+                customParams: {
+                    targetRepository: { workingDir: '/some/dir', baseBranch: 'develop' }
+                },
+                metadata: { contextId: 'pr_rework' }
+            },
+            currentCliOutput: ''
+        });
+
+        assert.equal(cliCalls.length, 1, 'must stop right after checking the current branch');
+        assert.contains(cliCalls[0], 'rev-parse --abbrev-ref HEAD');
+        assert.equal(cliCalls.filter(function(c) { return c.indexOf('git commit') !== -1; }).length, 0,
+            'must never commit while on baseBranch');
+        assert.equal(cliCalls.filter(function(c) { return c.indexOf('git push') !== -1; }).length, 0,
+            'must never push while on baseBranch');
+    });
+
+    test('proceeds normally when HEAD is on the ticket branch (not baseBranch)', function() {
+        var cliCalls = [];
+        var m = loadTimer({
+            cli_execute_command: function(args) {
+                cliCalls.push(args.command);
+                if (args.command.indexOf('rev-parse --abbrev-ref HEAD') !== -1) return 'bug/PROJ-123\n';
+                if (args.command.indexOf('git status') !== -1) return 'M file.txt\n';
+                return '';
+            }
+        });
+        m.action({
+            ticket: { key: 'PROJ-123' },
+            jobParams: {
+                customParams: {
+                    targetRepository: { workingDir: '/some/dir', baseBranch: 'develop' }
+                },
+                metadata: { contextId: 'pr_rework' }
+            },
+            currentCliOutput: ''
+        });
+
+        assert.ok(cliCalls.filter(function(c) { return c.indexOf('git commit') !== -1; }).length >= 1,
+            'should commit as normal when on the ticket branch');
+        assert.ok(cliCalls.filter(function(c) { return c.indexOf('git push') !== -1; }).length >= 1,
+            'should push as normal when on the ticket branch');
+    });
+
+    test('skips the branch check entirely when baseBranch is not configured (back-compat)', function() {
+        var cliCalls = [];
+        var m = loadTimer({
+            cli_execute_command: function(args) {
+                cliCalls.push(args.command);
+                if (args.command.indexOf('git status') !== -1) return 'M file.txt\n';
+                return '';
+            }
+        });
+        m.action({
+            ticket: { key: 'PROJ-123' },
+            jobParams: {
+                customParams: {
+                    targetRepository: { workingDir: '/some/dir' } // no baseBranch
+                },
+                metadata: { contextId: 'sf_story_development' }
+            },
+            currentCliOutput: ''
+        });
+
+        assert.equal(cliCalls.filter(function(c) { return c.indexOf('rev-parse --abbrev-ref HEAD') !== -1; }).length, 0,
+            'must not attempt the branch check when baseBranch is unknown');
+        assert.ok(cliCalls.filter(function(c) { return c.indexOf('git commit') !== -1; }).length >= 1);
+    });
 });
 
 // ── saveSessionArtefact ──────────────────────────────────────────────────────

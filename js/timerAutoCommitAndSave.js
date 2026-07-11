@@ -19,6 +19,16 @@
 var releaseArtefacts = require('./common/releaseArtefacts.js');
 var configLoader = require('./configLoader.js');
 
+function cleanCommandOutput(output) {
+    if (!output) return '';
+    return output.split('\n').filter(function(line) {
+        return line.indexOf('Script started') === -1 &&
+               line.indexOf('Script done') === -1 &&
+               line.indexOf('COMMAND=') === -1 &&
+               line.indexOf('COMMAND_EXIT_CODE=') === -1;
+    }).join('\n').trim();
+}
+
 function resolveCustomParams(params) {
     return (params.jobParams && params.jobParams.customParams) ||
            params.customParams ||
@@ -47,6 +57,29 @@ function autoCommitAndPush(customParams, ticketKey) {
     }
 
     var workingDir = targetRepo.workingDir;
+
+    // Safety net: never auto-commit/push while sitting on the base branch
+    // (develop/main/...). If setup failed to switch onto the ticket branch
+    // (e.g. checkout error, missing PR), HEAD stays on baseBranch — pushing
+    // WIP snapshots there would land straight in the mainline history instead
+    // of the intended ticket branch.
+    if (targetRepo.baseBranch) {
+        var currentBranch;
+        try {
+            currentBranch = cli_execute_command({
+                command: 'git rev-parse --abbrev-ref HEAD',
+                workingDirectory: workingDir
+            });
+        } catch (e) {
+            console.log('⏱️ timer: could not determine current branch, skipping:', e.toString().substring(0, 100));
+            return false;
+        }
+        if (currentBranch && cleanCommandOutput(currentBranch) === targetRepo.baseBranch) {
+            console.warn('⏱️ timer: HEAD is on base branch "' + targetRepo.baseBranch +
+                '" — refusing to auto-commit/push (branch setup likely failed)');
+            return false;
+        }
+    }
 
     // Check for changes using git status
     var statusOutput;

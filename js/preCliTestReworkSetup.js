@@ -87,7 +87,7 @@ function action(params) {
             // Branch exists — ALWAYS checkout first so CLI runs on correct branch
             // (critical: CLI always runs regardless of preCliJSAction return value)
             try {
-                gh.checkoutPRBranch(testBranchName);
+                gh.checkoutPRBranch(testBranchName, config.workingDir, config.git.baseBranch);
                 console.log('✅ Checked out branch:', testBranchName);
             } catch (e) {
                 console.warn('Could not checkout branch (will try fetch+checkout):', e);
@@ -151,7 +151,7 @@ function action(params) {
             return { success: false, error: 'Could not determine branch from PR details' };
         }
         try {
-            gh.checkoutPRBranch(branchName);
+            gh.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
         } catch (e) {
             return { success: false, error: 'Failed to checkout branch: ' + e.toString() };
         }

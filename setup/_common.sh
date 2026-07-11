@@ -121,6 +121,33 @@ _codegraph_restore_gitignore() {
   fi
 }
 
+# Makes sure the generated CodeGraph index is never version-controlled in the
+# target workspace:
+#  1. Adds a `.codegraph/` entry to the workspace-root .gitignore (idempotent).
+#  2. If the index was already committed by a previous (pre-fix) run, untracks
+#     it (git rm --cached) while leaving the files on disk.
+# This is what prevents `.codegraph/codegraph.db` from ever showing up as an
+# untracked/modified file that can block `git checkout <branch>` or get
+# swept into an unrelated auto-commit.
+_codegraph_ensure_ignored() {
+  local workspace="$1"
+  local gitignore="${workspace}/.gitignore"
+
+  if ! git -C "${workspace}" rev-parse --git-dir &>/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [ ! -f "${gitignore}" ] || ! grep -qxF ".codegraph/" "${gitignore}" 2>/dev/null; then
+    { [ -s "${gitignore}" ] && echo ""; echo "# CodeGraph generated index — regenerated per-run, must never be committed"; echo ".codegraph/"; } >> "${gitignore}"
+    echo "📝 Added .codegraph/ to workspace .gitignore"
+  fi
+
+  if git -C "${workspace}" ls-files --error-unmatch .codegraph >/dev/null 2>&1; then
+    echo "🧹 .codegraph/ was previously committed to this repo — untracking it (git rm --cached), keeping files on disk"
+    git -C "${workspace}" rm -r --cached .codegraph >/dev/null 2>&1 || true
+  fi
+}
+
 _codegraph_init_or_sync() {
   local workspace="${GITHUB_WORKSPACE:-${PWD}}"
 
@@ -144,6 +171,8 @@ _codegraph_init_or_sync() {
     _codegraph_restore_gitignore "${workspace}"
     echo "✅ CodeGraph index initialized"
   fi
+
+  _codegraph_ensure_ignored "${workspace}"
 }
 
 # ── Portable file hashing ─────────────────────────────────────────────────────

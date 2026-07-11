@@ -82,7 +82,7 @@ function action(params) {
             failSetup(ticketKey, inputFolder, 'Could not determine branch from PR details');
         }
         try {
-            gh.checkoutPRBranch(branchName, config.workingDir);
+            gh.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
         } catch (e) {
             failSetup(ticketKey, inputFolder, 'Failed to checkout branch: ' + e.toString());
         }

@@ -295,7 +295,7 @@ function action(params) {
         // Step 4: Checkout test branch
         try {
             if (branchName) {
-                gh.checkoutPRBranch(branchName);
+                gh.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
             }
         } catch (e) {
             console.warn('Could not checkout test branch:', e);
