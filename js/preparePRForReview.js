@@ -8,6 +8,7 @@
 
 var configLoader = require('./configLoader.js');
 const gh = require('./common/githubHelpers.js');
+const gitOps = require('./common/gitOps.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 
 function action(params) {
@@ -86,7 +87,7 @@ function action(params) {
         try {
             if (branchName) {
                 console.log('Checking out PR branch:', branchName, 'workingDir:', config.workingDir || '(default)');
-                gh.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
+                gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
                 console.log('Checkout completed for branch:', branchName);
             } else {
                 console.warn('PR details did not include a head branch; checkout skipped');
@@ -98,7 +99,7 @@ function action(params) {
         // Step 5: Diff + discussions (human-readable + raw with IDs)
         const baseBranch = prDetails.base ? prDetails.base.ref : config.git.baseBranch;
         console.log('Generating PR diff with base branch:', baseBranch, 'and head branch:', branchName || '(missing)');
-        const diff = gh.getPRDiff(baseBranch, branchName || (prDetails.head && prDetails.head.ref), config.workingDir);
+        const diff = gitOps.getPRDiff(baseBranch, branchName || (prDetails.head && prDetails.head.ref), config.workingDir);
         console.log('Loaded PR diff characters:', diff ? diff.length : 0);
 
         console.log('Fetching PR discussions...');
@@ -108,7 +109,7 @@ function action(params) {
 
         // Step 6: Write all context files
         console.log('Writing PR context files to:', inputFolder);
-        gh.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
+        gitOps.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
         console.log('PR context files written successfully');
 
         // Step 6.5: Detect failed CI checks

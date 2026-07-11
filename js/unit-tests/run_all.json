@@ -15,6 +15,7 @@
         "js/unit-tests/test_workingDir.js",
         "js/unit-tests/test_branchNaming.js",
         "js/unit-tests/test_githubHelpers.js",
+        "js/unit-tests/test_gitOps.js",
         "js/unit-tests/test_submodules.js",
         "js/unit-tests/test_pullRequestHelper.js",
         "js/unit-tests/test_developTicketAndCreatePR.js",

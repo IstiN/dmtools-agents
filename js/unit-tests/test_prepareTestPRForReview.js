@@ -37,11 +37,14 @@ function loadPrepareTestPRForReview(mocks) {
 
     var githubHelpers = Object.assign({
         getPRDetails: function() { return null; },
-        fetchDiscussionsAndRawData: function() { return { markdown: '', rawThreads: {} }; },
+        fetchDiscussionsAndRawData: function() { return { markdown: '', rawThreads: {} }; }
+    }, mocks && mocks.githubHelpers || {});
+
+    var gitOpsMock = Object.assign({
         writePRContext: function() {},
         checkoutPRBranch: function() {},
         getPRDiff: function() { return ''; }
-    }, mocks && mocks.githubHelpers || {});
+    }, mocks && mocks.gitOpsMock || {});
 
     return loadModule(
         'js/prepareTestPRForReview.js',
@@ -49,6 +52,7 @@ function loadPrepareTestPRForReview(mocks) {
             './config.js': configModule,
             './configLoader.js': freshConfigLoader,
             './common/githubHelpers.js': githubHelpers,
+            './common/gitOps.js': gitOpsMock,
             './common/scm.js': { createScm: function() { return scmMock; } },
             './common/pullRequest.js': prHelper
         }),
@@ -155,7 +159,9 @@ suite('prepareTestPRForReview', function() {
                         base: { ref: 'main' },
                         html_url: 'https://github.com/IstiN/trackstate/pull/56'
                     };
-                },
+                }
+            },
+            gitOpsMock: {
                 getPRDiff: function() { return 'diff --git a/testing/tests/TS-91/test.ts b/testing/tests/TS-91/test.ts\n+++ b/testing/tests/TS-91/test.ts\n@@ -1 +1 @@\n-old\n+new\n'; },
                 writePRContext: function() { contextWritten = true; }
             }

@@ -9,6 +9,7 @@
 
 var configLoader = require('./configLoader.js');
 const gh = require('./common/githubHelpers.js');
+const gitOps = require('./common/gitOps.js');
 var prHelper = require('./common/pullRequest.js');
 const { STATUSES, LABELS } = require('./config.js');
 
@@ -295,7 +296,7 @@ function action(params) {
         // Step 4: Checkout test branch
         try {
             if (branchName) {
-                gh.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
+                gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
             }
         } catch (e) {
             console.warn('Could not checkout test branch:', e);
@@ -303,13 +304,13 @@ function action(params) {
 
         // Step 5: Diff + discussions
         const baseBranch = prDetails.base ? prDetails.base.ref : config.git.baseBranch;
-        const diff = gh.getPRDiff(baseBranch, branchName || (prDetails.head && prDetails.head.ref));
+        const diff = gitOps.getPRDiff(baseBranch, branchName || (prDetails.head && prDetails.head.ref));
 
         console.log('Fetching PR discussions...');
         const discussionData = gh.fetchDiscussionsAndRawData(scm, pr.number);
 
         // Step 6: Write context files
-        gh.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
+        gitOps.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
 
         // Step 7: Jira comment
         try {

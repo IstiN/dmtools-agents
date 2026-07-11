@@ -34,7 +34,8 @@ function loadPostTestReviewComments(mocks, moduleMocks) {
         makeRequire({
             '../config.js': configModule,
             './pullRequest.js': {},
-            './scm.js': { createScm: function() { return {}; } }
+            './scm.js': { createScm: function() { return {}; } },
+            './gitOps.js': {}
         }),
         allMocks
     );

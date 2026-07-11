@@ -9,6 +9,7 @@
 
 var configLoader = require('./configLoader.js');
 const gh = require('./common/githubHelpers.js');
+const gitOps = require('./common/gitOps.js');
 const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 var restoreFromReleases = require('./restoreFromReleases.js');
@@ -82,7 +83,7 @@ function action(params) {
             failSetup(ticketKey, inputFolder, 'Could not determine branch from PR details');
         }
         try {
-            gh.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
+            gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
         } catch (e) {
             failSetup(ticketKey, inputFolder, 'Failed to checkout branch: ' + e.toString());
         }
@@ -101,19 +102,19 @@ function action(params) {
         // Step 4.5: Merge base branch and detect conflicts
         // Always merges origin/{baseBranch} so the branch stays up to date.
         // If conflicts exist, writes merge_conflicts.md to the input folder.
-        const conflictFiles = gh.detectMergeConflicts(baseBranch, inputFolder, config.workingDir);
+        const conflictFiles = gitOps.detectMergeConflicts(baseBranch, inputFolder, config.workingDir);
 
         // Step 4.6: Detect failed CI checks — writes ci_failures.md if any failed
         const headSha = prDetails.head ? prDetails.head.sha : null;
         const failedChecks = gh.detectFailedChecks(scm, headSha, inputFolder);
 
-        const diff = gh.getPRDiff(baseBranch, branchName, config.workingDir);
+        const diff = gitOps.getPRDiff(baseBranch, branchName, config.workingDir);
 
         console.log('Fetching PR discussions...');
         const discussionData = gh.fetchDiscussionsAndRawData(scm, pr.number);
 
         // Step 6: Write all context files
-        gh.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
+        gitOps.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
 
         // Step 7: Fetch question subtasks with answers
         try {

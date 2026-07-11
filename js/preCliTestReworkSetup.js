@@ -6,6 +6,7 @@
 
 var configLoader = require('./configLoader.js');
 const gh = require('./common/githubHelpers.js');
+const gitOps = require('./common/gitOps.js');
 const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchLinkedBugsToInput = require('./fetchLinkedBugsToInput.js');
 
@@ -87,7 +88,7 @@ function action(params) {
             // Branch exists — ALWAYS checkout first so CLI runs on correct branch
             // (critical: CLI always runs regardless of preCliJSAction return value)
             try {
-                gh.checkoutPRBranch(testBranchName, config.workingDir, config.git.baseBranch);
+                gitOps.checkoutPRBranch(testBranchName, config.workingDir, config.git.baseBranch);
                 console.log('✅ Checked out branch:', testBranchName);
             } catch (e) {
                 console.warn('Could not checkout branch (will try fetch+checkout):', e);
@@ -132,7 +133,7 @@ function action(params) {
                 try {
                     const ticket2 = jira_get_ticket({ key: ticketKey });
                     const summary2 = ticket2 && ticket2.fields ? (ticket2.fields.summary || '') : '';
-                    gh.writePRContext(inputFolder, { number: 0, title: ticketKey + ' ' + summary2, html_url: '' }, '', 'No PR exists yet — re-run tests from scratch on this branch.', []);
+                    gitOps.writePRContext(inputFolder, { number: 0, title: ticketKey + ' ' + summary2, html_url: '' }, '', 'No PR exists yet — re-run tests from scratch on this branch.', []);
                 } catch (e) { console.warn('Could not write fallback context:', e); }
 
                 return { success: true, branchName: testBranchName, prNumber: null, noPR: true };
@@ -151,7 +152,7 @@ function action(params) {
             return { success: false, error: 'Could not determine branch from PR details' };
         }
         try {
-            gh.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
+            gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
         } catch (e) {
             return { success: false, error: 'Failed to checkout branch: ' + e.toString() };
         }
@@ -160,15 +161,15 @@ function action(params) {
         const baseBranch = prDetails.base ? prDetails.base.ref : config.git.baseBranch;
 
         // Step 4.5: Merge base branch and detect conflicts
-        const conflictFiles = gh.detectMergeConflicts(baseBranch, inputFolder);
+        const conflictFiles = gitOps.detectMergeConflicts(baseBranch, inputFolder);
 
-        const diff = gh.getPRDiff(baseBranch, branchName);
+        const diff = gitOps.getPRDiff(baseBranch, branchName);
 
         console.log('Fetching PR discussions...');
         const discussionData = gh.fetchDiscussionsAndRawData(scm, pr.number);
 
         // Step 6: Write context files
-        gh.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
+        gitOps.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
 
         // Step 7: Fetch question subtasks with answers (extra context)
         try {
