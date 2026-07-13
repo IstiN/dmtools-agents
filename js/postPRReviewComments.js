@@ -137,6 +137,26 @@ function readMarkdownFile(filePath, ticketKey, workingDir) {
     return '';
 }
 
+/**
+ * Defense-in-depth guard: the agent is instructed (instructions/pr_review/output_rules.md,
+ * few_shots.md) to reference comment text via the `comment` field (a path to a
+ * .md file under outputs/pr_review_comments/), never inline in `body`. If a
+ * prompt/schema inconsistency ever causes the model to duplicate that path
+ * into `body` instead of the actual comment text (observed in production),
+ * posting it verbatim would silently publish a broken review comment
+ * containing just a file path. Detect that shape and resolve it to the real
+ * file content instead of trusting `body` blindly.
+ */
+function resolveCommentFileReference(value, ticketKey, workingDir) {
+    if (typeof value !== 'string') return null;
+    var trimmed = value.trim();
+    if (!/^(outputs\/)?pr_review_comments\/[\w.\-]+\.md$/.test(trimmed)) {
+        return null;
+    }
+    var content = readMarkdownFile(trimmed, ticketKey, workingDir);
+    return content || null;
+}
+
 function writeFile(path, content) {
     try {
         file_write({ path: path, content: content });
@@ -487,6 +507,15 @@ function postInlineComment(scm, pullRequestId, inlineComment, ticketKey, working
     //   agent output: { path, body: "inline text" }
     var filePath = inlineComment.path || inlineComment.file;
     var commentText = inlineComment.body || readMarkdownFile(inlineComment.comment, ticketKey, workingDir);
+
+    // Defense-in-depth: if body ended up holding a comment-file path instead
+    // of actual text (see resolveCommentFileReference doc comment), resolve
+    // it to the real file content rather than posting the raw path.
+    var resolvedFromBody = resolveCommentFileReference(commentText, ticketKey, workingDir);
+    if (resolvedFromBody) {
+        console.warn('inlineComment.body looked like a comment-file path (' + commentText + ') — reading its content instead of posting the path literally');
+        commentText = resolvedFromBody;
+    }
 
     try {
         if (!commentText) {
@@ -1074,6 +1103,7 @@ if (typeof module !== 'undefined' && module.exports) {
         isFileDeletedInDiff,
         isSubmodulePathInDiff,
         findSubmodulePathForFile,
-        submoduleHasNewPointer
+        submoduleHasNewPointer,
+        resolveCommentFileReference
     };
 }

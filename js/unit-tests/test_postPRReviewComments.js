@@ -2,9 +2,9 @@
  * Unit tests for js/postPRReviewComments.js.
  */
 
-function loadPostPRReviewComments() {
+function loadPostPRReviewComments(mocks) {
     var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({}), {
-        file_read: function() { return null; }
+        file_read: (mocks && mocks.file_read) || function() { return null; }
     });
     return loadModule(
         'js/postPRReviewComments.js',
@@ -17,7 +17,7 @@ function loadPostPRReviewComments() {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
         {
-            file_read: function() { return null; }
+            file_read: (mocks && mocks.file_read) || function() { return null; }
         }
     );
 }
@@ -182,4 +182,81 @@ suite('postPRReviewComments', function() {
         assert.equal(calls[0].line, 1);
         assert.ok(calls[0].text.indexOf('trackstate-setup/README.md:12') !== -1);
     });
+
+    // ── Regression guard: body held a comment-file path instead of text ──
+    // The agent is instructed to reference comment text via `comment` (a path
+    // to outputs/pr_review_comments/*.md), never inline in `body`. A prompt/
+    // schema mismatch once caused the model to duplicate that path into
+    // `body`, and since `body` takes priority, the raw path got posted as the
+    // GitHub comment (observed in production). resolveCommentFileReference +
+    // postInlineComment must detect and correct this instead of publishing
+    // the literal path.
+    suite('resolveCommentFileReference — comment-file-path-in-body regression guard', function() {
+        test('resolves a bare comment-file path into its real file content', function() {
+            var mod = loadPostPRReviewComments({
+                file_read: function(opts) {
+                    var p = opts && (opts.path || opts);
+                    if (p === 'outputs/pr_review_comments/comment1_analytics_confirm.md') {
+                        return 'Analytics event should fire on confirm, not on image select.';
+                    }
+                    return null;
+                }
+            });
+
+            var resolved = mod.resolveCommentFileReference(
+                'outputs/pr_review_comments/comment1_analytics_confirm.md', 'TS-1139', null
+            );
+
+            assert.equal(resolved, 'Analytics event should fire on confirm, not on image select.');
+        });
+
+        test('does not treat ordinary inline comment text as a file reference', function() {
+            var mod = loadPostPRReviewComments();
+
+            assert.equal(mod.resolveCommentFileReference('This is a real inline comment.', 'TS-1139', null), null);
+            assert.equal(mod.resolveCommentFileReference('outputs/pr_review_comments/ mentioned mid-sentence', 'TS-1139', null), null);
+            assert.equal(mod.resolveCommentFileReference(null, 'TS-1139', null), null);
+        });
+
+        test('postInlineComment posts the real file content, not the raw path, when body holds a comment-file reference', function() {
+            var mod = loadPostPRReviewComments({
+                file_read: function(opts) {
+                    var p = opts && (opts.path || opts);
+                    if (p === 'outputs/pr_review_comments/comment1_analytics_confirm.md') {
+                        return 'Analytics event should fire on confirm, not on image select.';
+                    }
+                    return null;
+                }
+            });
+            var diff =
+                'diff --git a/src/AiAutofillModal.tsx b/src/AiAutofillModal.tsx\n' +
+                'index 1111111..2222222 100644\n' +
+                '--- a/src/AiAutofillModal.tsx\n' +
+                '+++ b/src/AiAutofillModal.tsx\n' +
+                '@@ -166,3 +166,4 @@ function AiAutofillModal() {\n' +
+                ' context line\n' +
+                '+  onAddImage();\n' +
+                ' another context\n' +
+                ' more context\n';
+            var calls = [];
+            var scm = {
+                getPrDiff: function() { return diff; },
+                addInlineComment: function(prId, path, line, text, startLine, side) {
+                    calls.push({ prId: prId, path: path, line: line, text: text, startLine: startLine, side: side });
+                }
+            };
+
+            mod.postInlineComment(scm, 1139, {
+                path: 'src/AiAutofillModal.tsx',
+                line: 169,
+                comment: 'outputs/pr_review_comments/comment1_analytics_confirm.md',
+                body: 'outputs/pr_review_comments/comment1_analytics_confirm.md'
+            }, 'TS-1139', null);
+
+            assert.equal(calls.length, 1);
+            assert.equal(calls[0].text, 'Analytics event should fire on confirm, not on image select.');
+            assert.notEqual(calls[0].text, 'outputs/pr_review_comments/comment1_analytics_confirm.md');
+        });
+    });
 });
+

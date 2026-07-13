@@ -34,12 +34,13 @@
             "type": "array",
             "items": {
               "type": "object",
-              "required": ["path", "line", "body", "severity"],
+              "required": ["path", "line", "comment", "severity"],
               "properties": {
                 "path": { "type": "string" },
                 "line": { "type": "integer" },
                 "startLine": { "type": ["integer", "null"] },
                 "side": { "type": ["string", "null"], "enum": ["RIGHT", "LEFT", null] },
+                "comment": { "type": "string", "description": "Path to a markdown file under outputs/pr_review_comments/ containing the comment text — NOT the comment text itself. See instructions/pr_review/output_rules.md and few_shots.md." },
                 "body": { "type": "string" },
                 "severity": { "type": "string", "enum": ["BLOCKING", "IMPORTANT", "SUGGESTION"] }
               }
