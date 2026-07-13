@@ -156,7 +156,10 @@ case "$PROVIDER" in
     ;;
 esac
 
-rescue_misplaced_outputs "$RESCUE_MARKER"
+# Best-effort recovery only — must never itself change this script's exit
+# code (a hiccup here would otherwise mask the real CLI exit_code above,
+# under `set -e`), so it's explicitly guarded with `|| true`.
+rescue_misplaced_outputs "$RESCUE_MARKER" || true
 rm -f "$RESCUE_MARKER"
 
 exit $exit_code

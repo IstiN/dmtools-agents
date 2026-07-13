@@ -109,7 +109,10 @@ rescue_misplaced_outputs() {
         echo "⚠️  Found misplaced output '${misplaced_file}' but '${dest}' already exists at the job root — leaving both, not overwriting"
         continue
       fi
-      mkdir -p "$(dirname "$dest")"
+      mkdir -p "$(dirname "$dest")" 2>/dev/null || {
+        echo "⚠️  Could not create directory for rescued output '${dest}' — skipping this file (original left untouched at '${misplaced_file}')"
+        continue
+      }
       if cp -p "$misplaced_file" "$dest" 2>/dev/null; then
         echo "⚠️  Rescued misplaced output: '${misplaced_file}' -> '${dest}' (agent's shell working directory likely drifted into '${candidate_dir%/outputs}' before writing — check its final cd/pwd discipline)"
         rescued=$((rescued + 1))
