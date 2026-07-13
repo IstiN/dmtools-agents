@@ -126,6 +126,12 @@ fi
 export AI_AGENT_USAGE_NAME
 echo "AI Agent Usage Name: ${AI_AGENT_USAGE_NAME}"
 
+# Marker used by rescue_misplaced_outputs() (see providers/_common.sh) to
+# detect output files the agent wrote to the wrong directory — e.g. because
+# its persistent Bash shell `cd`'d into a dependency checkout while exploring
+# source and never returned before writing outputs/*.
+RESCUE_MARKER="$(start_output_rescue_marker)"
+
 exit_code=0
 case "$PROVIDER" in
   claude-code)
@@ -149,5 +155,8 @@ case "$PROVIDER" in
     exit 1
     ;;
 esac
+
+rescue_misplaced_outputs "$RESCUE_MARKER"
+rm -f "$RESCUE_MARKER"
 
 exit $exit_code
