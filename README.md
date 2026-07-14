@@ -816,9 +816,13 @@ warmup-session.sh --repo <git-url> --dir <target-dir> [--branch <name>] \
 
 It does **not** create or touch a `dmtools.env` file and does **not** run the agent
 pipeline — secrets are expected to already be exposed as real environment variables by
-the session template (`run-agent.sh`/`run-teammate-local.sh` read those directly). Pair
-it with a lightweight "startup" step (run on every session start/restart) that just syncs
-the repo:
+the session template (`run-agent.sh`/`run-teammate-local.sh` read those directly).
+
+See [`scripts/warmup-session.md`](scripts/warmup-session.md) for full worked examples —
+Bitrise-style Dev Environment templates (warmup/startup script fields + template
+variables), GitHub Codespaces `devcontainer.json` (`onCreateCommand`/`postStartCommand`),
+and plain CI/local-machine usage. Pair it with a lightweight "startup" step (run on every
+session start/restart) that just syncs the repo:
 
 ```bash
 cd <target-dir> && git fetch origin && git checkout <branch> && \
