@@ -793,6 +793,38 @@ fills in anything missing from `./dmtools.env` (same `KEY=VALUE` format
 `JIRA_API_TOKEN`, `JIRA_BASE_PATH`, `GH_TOKEN`/`PAT_TOKEN`, plus whatever the configured
 `AI_AGENT_PROVIDER` needs (e.g. `COPILOT_GITHUB_TOKEN`).
 
+### Bootstrapping a Local/Cloud Dev Session
+
+`scripts/warmup-session.sh` prepares a fresh machine (cloud dev-environment session,
+throwaway VM, container, ...) so that `localTeammate`/`localExecution` rules — or manual
+`dmtools run` calls — work out of the box. Meant to run once as the "warmup" step of a
+session template; safe to re-run (idempotent — syncs instead of re-cloning if the target
+directory already exists).
+
+```bash
+warmup-session.sh --repo <git-url> --dir <target-dir> [--branch <name>] \
+  [--exclude "tool1 tool2 ..."] [--install-args "extra args for install.sh"]
+```
+
+- `--repo` / `--dir` — the product repo to clone (with its `agents` submodule) and the
+  local directory to clone it into.
+- `--branch` — checkout/track this branch instead of the repo's default.
+- `--exclude` — space-separated tool names to skip (forwarded to `setup/install.sh all`
+  as `-tool1 -tool2 ...`; see `setup/install.sh` for the full tool list: `java maven node
+  dmtools maestro copilot codemie cursor codegraph playwright kimi gradle android konan`).
+- `--install-args` — extra raw arguments appended to the `install.sh` invocation.
+
+It does **not** create or touch a `dmtools.env` file and does **not** run the agent
+pipeline — secrets are expected to already be exposed as real environment variables by
+the session template (`run-agent.sh`/`run-teammate-local.sh` read those directly). Pair
+it with a lightweight "startup" step (run on every session start/restart) that just syncs
+the repo:
+
+```bash
+cd <target-dir> && git fetch origin && git checkout <branch> && \
+  git pull --ff-only origin <branch> && git submodule update --init --recursive
+```
+
 ### TestCasesGenerator Flow
 
 ```
