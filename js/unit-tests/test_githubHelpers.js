@@ -569,7 +569,6 @@ suite('scm GitHub provider getPrDiff fallback', function() {
         assert.ok(diff.indexOf('diff --git') === 0, 'should return raw diff, not JSON envelope');
     });
 });
-
 suite('scm GitLab provider getPrDiff fallback', function() {
 
     test('prefers gitlab_get_mr_diff_text when available', function() {
@@ -696,5 +695,116 @@ suite('scm GitLab provider getPrDiff fallback', function() {
         var diff = provider.getPrDiff('7860', './dependencies/gens-igt');
 
         assert.equal(diff, 'com.github.istin.dmtools.gitlab.GitLab$4@b2c4a8b', 'should fall back to raw value, not throw');
+    });
+});
+
+suite('githubHelpers.detectFailedChecks — Jenkins failed checks', function() {
+
+    function makeGh(mocks) {
+        return loadGithubHelpers(mocks || {});
+    }
+
+    test('fetches Jenkins console log for a failed check with Jenkins details_url', function() {
+        var written = null;
+        var jenkinsInfoCalls = [];
+        var jenkinsLogCalls = [];
+
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return {
+                    check_runs: [{
+                        name: 'Jenkins PR Build',
+                        conclusion: 'failure',
+                        details_url: 'https://jenkins.example.com/job/epam/job/dm.ai/job/PR-123/45/'
+                    }]
+                };
+            },
+            jenkins_get_job_info: function(args) {
+                jenkinsInfoCalls.push(args);
+                return { result: { number: 45, result: 'FAILURE' } };
+            },
+            jenkins_get_build_log: function(args) {
+                jenkinsLogCalls.push(args);
+                return 'line 1\nline 2\nfailure reason';
+            },
+            file_write: function(args) {
+                written = args;
+            }
+        });
+
+        var failed = gh.detectFailedChecks(
+            'epam', 'dm.ai', 'abc123def', '/tmp/input',
+            'https://jenkins.example.com/'
+        );
+
+        assert.equal(failed.length, 1, 'one failed check should be reported');
+        assert.equal(failed[0].name, 'Jenkins PR Build');
+        assert.equal(jenkinsInfoCalls.length, 1, 'jenkins_get_job_info should be called once');
+        assert.equal(jenkinsInfoCalls[0].jobPath, 'job/epam/job/dm.ai/job/PR-123');
+        assert.equal(jenkinsInfoCalls[0].buildNumber, 45);
+        assert.equal(jenkinsLogCalls.length, 1, 'jenkins_get_build_log should be called once');
+        assert.equal(jenkinsLogCalls[0].jobPath, 'job/epam/job/dm.ai/job/PR-123');
+        assert.equal(jenkinsLogCalls[0].buildNumber, 45);
+        assert.ok(written, 'ci_failures.md should be written');
+        assert.equal(written.path, '/tmp/input/ci_failures.md');
+        assert.contains(written.content, 'Jenkins PR Build');
+        assert.contains(written.content, 'Jenkins error log');
+        assert.contains(written.content, 'failure reason');
+    });
+
+    test('ignores Jenkins details_url when jenkinsBasePath is not configured', function() {
+        var written = null;
+        var jenkinsLogCalls = [];
+
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return {
+                    check_runs: [{
+                        name: 'Jenkins PR Build',
+                        conclusion: 'failure',
+                        details_url: 'https://jenkins.example.com/job/epam/job/dm.ai/job/PR-123/45/'
+                    }]
+                };
+            },
+            jenkins_get_build_log: function(args) {
+                jenkinsLogCalls.push(args);
+                return 'log';
+            },
+            file_write: function(args) {
+                written = args;
+            }
+        });
+
+        var failed = gh.detectFailedChecks('epam', 'dm.ai', 'abc123def', '/tmp/input');
+
+        assert.equal(failed.length, 1);
+        assert.equal(jenkinsLogCalls.length, 0, 'jenkins log should not be fetched without base path');
+        assert.ok(written, 'file should still be written for the failed check');
+        assert.notContains(written.content, 'Jenkins error log');
+    });
+
+    test('ignores failed checks whose details_url points to a different Jenkins host', function() {
+        var jenkinsLogCalls = [];
+
+        var gh = makeGh({
+            github_get_commit_check_runs: function() {
+                return {
+                    check_runs: [{
+                        name: 'Other Jenkins Build',
+                        conclusion: 'failure',
+                        details_url: 'https://other-jenkins.example.com/job/x/1/'
+                    }]
+                };
+            },
+            jenkins_get_build_log: function(args) {
+                jenkinsLogCalls.push(args);
+                return 'log';
+            },
+            file_write: function() {}
+        });
+
+        gh.detectFailedChecks('epam', 'dm.ai', 'abc123def', '/tmp/input', 'https://jenkins.example.com/');
+
+        assert.equal(jenkinsLogCalls.length, 0, 'different host should be ignored');
     });
 });

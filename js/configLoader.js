@@ -114,7 +114,8 @@ var DEFAULTS = {
     globalAdditionalInstructions: [],
 
     scm: {
-        provider: 'github'   // 'github' | 'gitlab' | 'ado' — source control provider for PR/MR operations
+        provider: 'github',  // 'github' | 'gitlab' | 'ado' — source control provider for PR/MR operations
+        jenkinsBasePath: ''  // Optional: base URL of Jenkins instance for fetching failed-check logs in pr_rework
     }
 };
 

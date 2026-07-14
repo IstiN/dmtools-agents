@@ -106,7 +106,7 @@ function action(params) {
 
         // Step 4.6: Detect failed CI checks — writes ci_failures.md if any failed
         const headSha = prDetails.head ? prDetails.head.sha : null;
-        const failedChecks = gh.detectFailedChecks(scm, headSha, inputFolder);
+        const failedChecks = gh.detectFailedChecks(scm, headSha, inputFolder, config.scm && config.scm.jenkinsBasePath);
 
         const diff = gitOps.getPRDiff(baseBranch, branchName, config.workingDir);
 

@@ -115,7 +115,7 @@ function action(params) {
         // Step 6.5: Detect failed CI checks
         var headSha = prDetails.head ? prDetails.head.sha : null;
         console.log('Detecting failed checks for head SHA:', headSha || '(missing)');
-        var failedChecks = gh.detectFailedChecks(scm, headSha, inputFolder);
+        var failedChecks = gh.detectFailedChecks(scm, headSha, inputFolder, config.scm && config.scm.jenkinsBasePath);
         console.log('Detected failed checks:', failedChecks.length);
 
         // Step 7: Jira comment

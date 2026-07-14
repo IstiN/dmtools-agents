@@ -298,20 +298,24 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
  * Writes ci_failures.md to the input folder when failures are found.
  *
  * Dual-mode: accepts either an SCM object or (owner, repo, headSha, inputFolder) strings.
+ * In SCM mode an optional jenkinsBasePath can be passed to fetch Jenkins console logs
+ * for failed checks whose details_url points at the configured Jenkins instance.
  */
-function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt) {
+function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inputFolderOpt, jenkinsBasePathOpt) {
     var scm = null;
-    var owner, repo, headSha, inputFolder;
+    var owner, repo, headSha, inputFolder, jenkinsBasePath;
 
     if (_isScm(scmOrOwner)) {
         scm = scmOrOwner;
         headSha = repoOrHeadSha;
         inputFolder = headShaOrInputFolder;
+        jenkinsBasePath = inputFolderOpt;
     } else {
         owner = scmOrOwner;
         repo = repoOrHeadSha;
         headSha = headShaOrInputFolder;
         inputFolder = inputFolderOpt;
+        jenkinsBasePath = jenkinsBasePathOpt;
     }
 
     try {
@@ -399,6 +403,42 @@ function detectFailedChecks(scmOrOwner, repoOrHeadSha, headShaOrInputFolder, inp
                     }
                 } catch (e) {
                     console.warn('Could not fetch logs for job', jobIdMatch[1], ':', e.message || e);
+                }
+            }
+
+            // Jenkins: failed check whose details_url points at the configured Jenkins instance
+            if (jenkinsBasePath && check.details_url && check.details_url.indexOf(jenkinsBasePath) === 0) {
+                try {
+                    var relativePath = check.details_url.substring(jenkinsBasePath.length).replace(/^[\/]+/, '');
+                    var pathParts = relativePath.split('/').filter(function(p) { return p.length > 0; });
+                    var jenkinsBuildNumber = null;
+                    var jenkinsJobPathParts = [];
+                    for (var i = 0; i < pathParts.length; i++) {
+                        if (/^\d+$/.test(pathParts[i])) {
+                            jenkinsBuildNumber = parseInt(pathParts[i], 10);
+                            break;
+                        }
+                        jenkinsJobPathParts.push(pathParts[i]);
+                    }
+                    if (jenkinsBuildNumber && jenkinsJobPathParts.length > 0) {
+                        var jenkinsJobPath = jenkinsJobPathParts.join('/');
+                        jenkins_get_job_info({ jobPath: jenkinsJobPath, buildNumber: jenkinsBuildNumber });
+                        var jenkinsRawLogs = jenkins_get_build_log({ jobPath: jenkinsJobPath, buildNumber: jenkinsBuildNumber });
+                        var jenkinsLogs = jenkinsRawLogs;
+                        if (typeof jenkinsRawLogs === 'string') {
+                            try {
+                                var jenkinsParsed = JSON.parse(jenkinsRawLogs);
+                                if (jenkinsParsed && jenkinsParsed.result) jenkinsLogs = jenkinsParsed.result;
+                            } catch (e) { /* use as-is */ }
+                        }
+                        if (jenkinsLogs) {
+                            var jenkinsLines = jenkinsLogs.split('\n');
+                            var jenkinsSnippet = jenkinsLines.slice(-150).join('\n');
+                            md += '**Jenkins error log (last 150 lines)**:\n\n```\n' + jenkinsSnippet + '\n```\n\n';
+                        }
+                    }
+                } catch (e) {
+                    console.warn('Could not fetch Jenkins logs for', check.details_url, ':', e.message || e);
                 }
             }
         });
