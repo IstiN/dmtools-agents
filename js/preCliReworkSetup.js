@@ -140,7 +140,7 @@ function action(params) {
                 jiraComment += '{panel:bgColor=#FFEBE6|borderColor=#DE350B}' +
                     '⚠️ *CI checks failing* — ' + failedChecks.length + ' check(s) must pass before merge:\n' +
                     failedChecks.map(function(c) { return '* {code}' + c.name + '{code}'; }).join('\n') +
-                    '\nError logs written to {code}ci_failures.md{code} — AI will fix the root cause.' +
+                    '\nError logs: {code}ci_failures.md{code} (summary) and {code}ci_failures_full.log{code} (full logs).' +
                     '{panel}\n\n';
             }
 

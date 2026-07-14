@@ -43,9 +43,9 @@ flowchart TD
     B -->|Yes| C[Write setup failure response and empty replies]
     B -->|No| D{merge_conflicts.md exists?}
     D -->|Yes| E[Resolve conflicts first]
-    D -->|No| F{ci_failures.md exists?}
+    D -->|No| F{ci_failures.md or ci_failures_full.log exists?}
     E --> F
-    F -->|Yes| G[Fix CI root cause]
+    F -->|Yes| G[Fix CI root cause — use ci_failures.md (last 500 lines) and ci_failures_full.log (full logs)]
     F -->|No| H{pr_discussions.md has open actionable items?}
     G --> H
     H -->|Yes| I[Fix every thread and write matching replies]

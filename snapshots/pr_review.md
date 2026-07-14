@@ -39,7 +39,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    START([PR ready for review]) --> READ["1. Read input context:<br/>instruction.md, ticket.md, pr_info.md,<br/>pr_diff.txt, pr_files.txt, ci_failures.md,<br/>pr_discussions.md, pr_discussions_raw.json"]
+    START([PR ready for review]) --> READ["1. Read input context:<br/>instruction.md, ticket.md, pr_info.md,<br/>pr_diff.txt, pr_files.txt, ci_failures.md,<br/>ci_failures_full.log, pr_discussions.md,<br/>pr_discussions_raw.json"]
     READ --> DIFF["2. Run diff checklist on pr_diff.txt"]
     DIFF --> FILES["3. Read full content of every changed file"]
     FILES --> CODEGRAPH["4. Use CodeGraph:<br/>callers/callees of changed symbols,<br/>search for sensitive patterns,<br/>impact analysis"]
@@ -59,9 +59,10 @@ flowchart TD
         P2["2️⃣ input/TICKET/pr_info.md — PR title, author, branch, description"]
         P3["3️⃣ input/TICKET/pr_diff.txt — the diff to review"]
         P4["4️⃣ input/TICKET/pr_files.txt — list of changed files"]
-        P5["5️⃣ input/TICKET/ci_failures.md — CI failures = BLOCKING"]
+        P5["5️⃣ input/TICKET/ci_failures.md — CI failures = BLOCKING (last 500 lines)"]
+        P5_FULL["5️⃣ input/TICKET/ci_failures_full.log — full CI logs"]
         P6["6️⃣ input/TICKET/pr_discussions.md + pr_discussions_raw.json — existing comments"]
-        P1 --> P2 --> P3 --> P4 --> P5 --> P6
+        P1 --> P2 --> P3 --> P4 --> P5 --> P5_FULL --> P6
     end
 
     subgraph TICKET_CONTEXT["Ticket context (for understanding PR purpose)"]
@@ -195,7 +196,7 @@ flowchart TD
     F4["Each inline comment: path, line, startLine, side, comment, severity (BLOCKING|IMPORTANT|SUGGESTION)"]
     F5["comment must be a path to a file under outputs/pr_review_comments/<name>.md"]
     F6["outputs/pr_review_general.md — max 1-2 paragraphs, factual, no essays"]
-    F7["If ci_failures.md present → include each failure as 🚨 BLOCKING"]
+    F7["If ci_failures.md present → include each failure as 🚨 BLOCKING (full logs in ci_failures_full.log)"]
     F8["Keep summary under 2 sentences — put details in inline comment files, not in general text"]
     F9["Severity classification follows general_guidelines.md:<br/>BLOCKING = must fix · IMPORTANT = should fix · SUGGESTION = optional"]
     F10["Ticket context: verify PR changes satisfy ticket ACs — note gaps in review"]
