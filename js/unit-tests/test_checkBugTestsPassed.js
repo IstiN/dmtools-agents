@@ -22,7 +22,12 @@ function loadCheckBugTestsPassed(mocks) {
         makeRequire({
             './config.js': configModule,
             './configLoader.js': configLoaderMock,
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/scm.js': {
+                createScm: function() {
+                    return { listPrs: function() { return []; } };
+                }
+            }
         }),
         mocks
     );
@@ -69,7 +74,7 @@ suite('checkBugTestsPassed', function() {
         assert.equal(result.action, 'moved_to_done');
         assert.deepEqual(moved, [{ key: 'TS-10', statusName: 'Done' }]);
         assert.contains(comments[0].comment, 'Bug Complete');
-        assert.equal(removedLabels.length, 0, 'lock should not be released after Done');
+        assert.ok(removedLabels.some(function(l) { return l.key === 'TS-10' && l.label === 'sm_bug_done_check_triggered'; }), 'lock should be released after Done');
         assert.equal(searchedJqls.length, 0, 'should not need broad JQL when direct links exist');
     });
 
@@ -111,7 +116,7 @@ suite('checkBugTestsPassed', function() {
         assert.equal(result.success, true);
         assert.equal(result.action, 'moved_to_done');
         assert.deepEqual(moved, [{ key: 'TS-10', statusName: 'Done' }]);
-        assert.equal(removedLabels.length, 0);
+        assert.ok(removedLabels.some(function(l) { return l.key === 'TS-10' && l.label === 'sm_bug_done_check_triggered'; }));
     });
 
     test('waits when a direct linked TC is not Passed', function() {
@@ -280,7 +285,7 @@ suite('checkBugTestsPassed', function() {
         assert.equal(result.action, 'moved_to_done');
         assert.deepEqual(moved, [{ key: 'TS-60', statusName: 'Done' }]);
         assert.contains(comments[0].comment, 'Bug Complete');
-        assert.equal(removedLabels.length, 0);
+        assert.ok(removedLabels.some(function(l) { return l.key === 'TS-60' && l.label === 'sm_bug_done_check_triggered'; }));
     });
 
     test('waits when Bug To Fix TC is only tracked by the current Bug', function() {

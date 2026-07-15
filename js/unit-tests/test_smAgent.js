@@ -201,7 +201,7 @@ suite('sm.json rule ordering', function() {
         });
 
         var failedTcBulk = indexByDescription['Failed Test Cases → create or link bugs in batch'];
-        var bugDevelopment = indexByDescription['Backlog / To Do / Ready For Development / In Development Bugs → trigger bug_development'];
+        var bugDevelopment = indexByDescription['Backlog / To Do / Ready For Development / In Development / In Rework Bugs → trigger bug_development'];
 
         assert.ok(failedTcBulk >= 0, 'failed TC bulk creation rule exists');
         assert.ok(bugDevelopment >= 0, 'bug development rule exists');
@@ -217,7 +217,7 @@ suite('sm.json rule ordering', function() {
         var bugDevelopment = null;
 
         rules.forEach(function(rule) {
-            if (rule.description === 'Backlog / To Do / Ready For Development / In Development Bugs → trigger bug_development') {
+            if (rule.description === 'Backlog / To Do / Ready For Development / In Development / In Rework Bugs → trigger bug_development') {
                 bugDevelopment = rule;
             }
         });
