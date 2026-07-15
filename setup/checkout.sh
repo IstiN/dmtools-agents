@@ -3,7 +3,12 @@
 # No project-specific content — all settings come from the JSON config file.
 #
 # Usage:
-#   checkout.sh <project-key> [options]
+#   checkout.sh [project-key] [options]
+#
+# project-key is optional: if the config's .repositories has exactly one key, it is
+# auto-detected. If the config file is missing entirely, or has zero repositories,
+# this is a safe no-op (exit 0) — most projects never define repositories.json at all,
+# so this script is safe to call unconditionally from generic setup/CI steps.
 #
 # Options:
 #   --config        PATH  repositories.json path (default: .dmtools/repositories.json)
@@ -14,6 +19,9 @@
 #   --host             HOST  GitHub host            (default: github.com)
 #   --gitlab-host      HOST  GitLab host            (default: from GITLAB_BASE_PATH or gitlab.com)
 #   --filter        STR   git clone filter       (default: blob:none  — blobless)
+#   --depth         N     git clone depth (shallow clone, default: 1). Set to "" or 0
+#                         for a full clone with history. Per-entry "depth" field
+#                         in the JSON config overrides this for a single repo.
 #
 # Provider detection (per repository entry):
 #   If an entry has "adoOrg" field → uses Azure DevOps clone URL
@@ -62,7 +70,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
-PROJECT_KEY="${1:-}"
+# project-key is an optional leading positional arg — only consumed when present
+# and not itself an option flag (so `checkout.sh --dest .` works with auto-detect).
+PROJECT_KEY=""
+if [ $# -gt 0 ] && [[ "$1" != -* ]]; then
+  PROJECT_KEY="$1"
+  shift
+fi
 CONFIG_FILE=".dmtools/repositories.json"
 DEST_ROOT="./dependencies"
 TOKEN_VAR="GH_TOKEN"
@@ -70,6 +84,7 @@ ADO_TOKEN_VAR="ADO_GIT_TOKEN"
 GITLAB_TOKEN_VAR="GITLAB_TOKEN"
 GH_HOST="github.com"
 GIT_FILTER="blob:none"
+DEPTH="1"
 GITLAB_HOST="${GITLAB_BASE_PATH:-gitlab.com}"
 GITLAB_HOST="${GITLAB_HOST#https://}"
 GITLAB_HOST="${GITLAB_HOST#http://}"
@@ -78,7 +93,6 @@ if [ -z "${GITLAB_HOST}" ]; then
   GITLAB_HOST="gitlab.com"
 fi
 
-shift 2>/dev/null || true
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config)        CONFIG_FILE="$2";    shift 2 ;;
@@ -89,6 +103,7 @@ while [[ $# -gt 0 ]]; do
     --host)             GH_HOST="$2";           shift 2 ;;
     --gitlab-host)      GITLAB_HOST="$2";       shift 2 ;;
     --filter)           GIT_FILTER="$2";        shift 2 ;;
+    --depth)             DEPTH="$2";             shift 2 ;;
     -h|--help)
       sed -n '2,/^set -/p' "$0" | grep '^#' | sed 's/^# \{0,1\}//'
       exit 0 ;;
@@ -96,18 +111,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [ -z "${PROJECT_KEY}" ]; then
-  echo "Usage: checkout.sh <project-key> [--config PATH] [--dest DIR] [--token VAR] [--ado-token-var VAR] [--gitlab-token-var VAR] [--host HOST] [--gitlab-host HOST]" >&2
-  exit 1
-fi
-
-# ── Validate config file ──────────────────────────────────────────────────────
+# ── No config file → safe no-op (most projects never call this script) ────────
 if [ ! -f "${CONFIG_FILE}" ]; then
-  echo "❌ Config not found: ${CONFIG_FILE}" >&2
-  exit 1
+  echo "ℹ️  No ${CONFIG_FILE} found — skipping dependency checkout (nothing to do)."
+  exit 0
 fi
 
-# ── Ensure jq is available ────────────────────────────────────────────────────
+# ── Ensure jq is available (needed for both auto-detection and the main loop) ──
 if ! is_installed jq; then
   echo "📥 Installing jq..."
   case "$(detect_os)" in
@@ -117,9 +127,21 @@ if ! is_installed jq; then
   esac
 fi
 
-# ── Read git identity from config ─────────────────────────────────────────────
-GIT_USER_NAME="$(jq -r '.git.userName  // "AI Agent"'       "${CONFIG_FILE}")"
-GIT_USER_EMAIL="$(jq -r '.git.userEmail // "ai@localhost"'  "${CONFIG_FILE}")"
+# ── Auto-detect project key when omitted ──────────────────────────────────────
+if [ -z "${PROJECT_KEY}" ]; then
+  KEY_COUNT="$(jq -r '.repositories | keys | length // 0' "${CONFIG_FILE}")"
+  if [ "${KEY_COUNT}" -eq 0 ]; then
+    echo "ℹ️  ${CONFIG_FILE} has no repositories configured — skipping dependency checkout."
+    exit 0
+  elif [ "${KEY_COUNT}" -eq 1 ]; then
+    PROJECT_KEY="$(jq -r '.repositories | keys[0]' "${CONFIG_FILE}")"
+    echo "ℹ️  No project-key given — auto-detected '${PROJECT_KEY}' (only key in ${CONFIG_FILE})"
+  else
+    echo "❌ ${CONFIG_FILE} has multiple project keys — pass one explicitly: checkout.sh <project-key>" >&2
+    jq -r '.repositories | keys[]' "${CONFIG_FILE}" | sed 's/^/   - /' >&2
+    exit 1
+  fi
+fi
 
 # ── Validate project key exists in config ─────────────────────────────────────
 REPO_COUNT="$(jq --arg key "${PROJECT_KEY}" '.repositories[$key] | length // 0' "${CONFIG_FILE}")"
@@ -127,6 +149,10 @@ if [ "${REPO_COUNT}" -eq 0 ]; then
   echo "⚠️  No repositories configured for key '${PROJECT_KEY}' in ${CONFIG_FILE}"
   exit 0
 fi
+
+# ── Read git identity from config ─────────────────────────────────────────────
+GIT_USER_NAME="$(jq -r '.git.userName  // "AI Agent"'       "${CONFIG_FILE}")"
+GIT_USER_EMAIL="$(jq -r '.git.userEmail // "ai@localhost"'  "${CONFIG_FILE}")"
 
 # ── Resolve tokens (lazy — only fail if needed during clone) ─────────────────
 GH_TOKEN="${!TOKEN_VAR:-}"
@@ -156,9 +182,18 @@ while IFS= read -r entry; do
   PROVIDER="$(echo "${entry}" | jq -r '.provider   // ""')"
   GITLAB_GROUP="$(echo "${entry}" | jq -r '.gitlabGroup // .gitlabNamespace // ""')"
   ENTRY_GITLAB_HOST="$(echo "${entry}" | jq -r '.gitlabHost // ""')"
+  ENTRY_DEPTH="$(echo "${entry}" | jq -r '.depth // ""')"
 
   NAME="${REPO##*/}"    # last path component (works for both "org/repo" and plain "repo")
   DEST="${DEST_ROOT}/${NAME}"
+
+  # Effective clone depth: per-entry override wins, else the global --depth default.
+  # Empty or "0" means a full (non-shallow) clone.
+  EFFECTIVE_DEPTH="${ENTRY_DEPTH:-${DEPTH}}"
+  DEPTH_ARGS=()
+  if [ -n "${EFFECTIVE_DEPTH}" ] && [ "${EFFECTIVE_DEPTH}" != "0" ]; then
+    DEPTH_ARGS=(--depth "${EFFECTIVE_DEPTH}")
+  fi
 
   echo ""
 
@@ -179,7 +214,7 @@ while IFS= read -r entry; do
       git -C "${DEST}" pull origin "${BRANCH}" --ff-only 2>/dev/null || true
       echo "  ↻ updated"
     else
-      git clone --branch "${BRANCH}" "${CLONE_URL}" "${DEST}"
+      git clone "${DEPTH_ARGS[@]+"${DEPTH_ARGS[@]}"}" --branch "${BRANCH}" "${CLONE_URL}" "${DEST}"
       echo "  ✅ cloned"
     fi
 
@@ -215,6 +250,7 @@ while IFS= read -r entry; do
       echo "  ↻ updated"
     else
       git clone \
+        "${DEPTH_ARGS[@]+"${DEPTH_ARGS[@]}"}" \
         --filter="${GIT_FILTER}" \
         --branch "${BRANCH}" \
         "${CLONE_URL}" \
@@ -241,6 +277,7 @@ while IFS= read -r entry; do
       echo "  ↻ updated"
     else
       git clone \
+        "${DEPTH_ARGS[@]+"${DEPTH_ARGS[@]}"}" \
         --filter="${GIT_FILTER}" \
         --branch "${BRANCH}" \
         "https://x-access-token:${GH_TOKEN}@${GH_HOST}/${REPO}.git" \
