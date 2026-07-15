@@ -328,6 +328,7 @@ suite('checkBugTestsPassed', function() {
     test('moves finalized Bug to In Rework when any linked TC is still blocking', function() {
         var moved = [];
         var comments = [];
+        var addedLabels = [];
         var removedLabels = [];
 
         var module = loadCheckBugTestsPassed({
@@ -345,6 +346,7 @@ suite('checkBugTestsPassed', function() {
             jira_search_by_jql: function() { return []; },
             jira_move_to_status: function(args) { moved.push(args); },
             jira_post_comment: function(args) { comments.push(args); },
+            jira_add_label: function(args) { addedLabels.push(args); },
             jira_remove_label: function(args) { removedLabels.push(args); }
         });
 
@@ -357,12 +359,14 @@ suite('checkBugTestsPassed', function() {
         assert.equal(result.action, 'moved_to_rework');
         assert.deepEqual(moved, [{ key: 'TS-90', statusName: 'In Rework' }]);
         assert.contains(comments[0].comment, 'Test PR Merged But Acceptance Tests Still Blocking');
+        assert.deepEqual(addedLabels, [{ key: 'TS-90', label: 'sm_bug_rework_attempted' }]);
         assert.deepEqual(removedLabels, [{ key: 'TS-90', label: 'sm_bug_done_check_triggered' }]);
     });
 
     test('does not treat a Done linked Bug as handling an active Bug To Fix TC', function() {
         var moved = [];
         var comments = [];
+        var addedLabels = [];
         var removedLabels = [];
 
         var module = loadCheckBugTestsPassed({
@@ -388,6 +392,7 @@ suite('checkBugTestsPassed', function() {
             },
             jira_move_to_status: function(args) { moved.push(args); },
             jira_post_comment: function(args) { comments.push(args); },
+            jira_add_label: function(args) { addedLabels.push(args); },
             jira_remove_label: function(args) { removedLabels.push(args); }
         });
 
@@ -400,6 +405,7 @@ suite('checkBugTestsPassed', function() {
         assert.equal(result.action, 'moved_to_rework');
         assert.deepEqual(moved, [{ key: 'TS-90', statusName: 'In Rework' }]);
         assert.contains(comments[0].comment, 'Test PR Merged But Acceptance Tests Still Blocking');
+        assert.deepEqual(addedLabels, [{ key: 'TS-90', label: 'sm_bug_rework_attempted' }]);
         assert.deepEqual(removedLabels, [{ key: 'TS-90', label: 'sm_bug_done_check_triggered' }]);
     });
 
