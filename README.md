@@ -793,6 +793,22 @@ fills in anything missing from `./dmtools.env` (same `KEY=VALUE` format
 `JIRA_API_TOKEN`, `JIRA_BASE_PATH`, `GH_TOKEN`/`PAT_TOKEN`, plus whatever the configured
 `AI_AGENT_PROVIDER` needs (e.g. `COPILOT_GITHUB_TOKEN`).
 
+**Switching an entire SM run to local without editing any rule:** rather than adding
+`localTeammate: true` to every rule in `sm.json`/`.dmtools/config.js`, pass a CLI JSON
+override (dmtools deep-merges this into `jobParams`) when invoking the SM job:
+
+```bash
+dmtools run agents/sm.json '{"jobParams":{"forceLocalTeammate":true}}'
+```
+
+With `forceLocalTeammate: true`, every default-dispatch rule for that run behaves as if
+it had `localTeammate: true` — no GitHub Actions dispatch, everything runs through
+`scripts/run-teammate-local.sh` sequentially. Rules already using `localExecution: true`
+are untouched (they never dispatched in the first place), and any rule can still opt out
+of the override with an explicit `localTeammate: false`. Without the override, the SM job
+runs exactly as before — default dispatch to `ai-teammate.yml` — so this is purely an
+opt-in, per-invocation switch; nothing in `sm.json` or `.dmtools/config.js` needs to change.
+
 ### Bootstrapping a Local/Cloud Dev Session
 
 `scripts/warmup-session.sh` prepares a fresh machine (cloud dev-environment session,

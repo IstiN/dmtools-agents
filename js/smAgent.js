@@ -21,6 +21,11 @@
  *   jobParams.maxTriggeredWorkflows (or maxWorkflowsPerRun) limits total active plus newly
  *   dispatched workflows across all non-local rules.
  *   Override priority: config.smMaxWorkflows (from .dmtools/config.js) > sm.json value.
+ *   jobParams.forceLocalTeammate — set via a CLI JSON override (e.g.
+ *   `dmtools run agents/sm.json '{"jobParams":{"forceLocalTeammate":true}}'`) to switch
+ *   EVERY default-dispatch rule to the local teammate pipeline for that run, without
+ *   editing sm.json/.dmtools/config.js. Rules with localExecution:true are unaffected;
+ *   a rule can still opt out with an explicit `localTeammate: false`.
  *
  * Rule fields:
  *   jql            (required) — JQL to find tickets (supports {jiraProject}, {parentTicket})
@@ -749,6 +754,30 @@ function action(params) {
             console.log('SM Agent: Patched rule "' + (rule.description || rule.configFile) + '" with override:', JSON.stringify(patch));
             return patched;
         });
+    }
+
+    // Global "run everything locally" override — set via a CLI JSON override, e.g.:
+    //   dmtools run agents/sm.json '{"jobParams":{"forceLocalTeammate":true}}'
+    // Forces every default-dispatch rule to run through the local teammate pipeline
+    // (as if it had localTeammate:true) instead of a GitHub Actions workflow_dispatch —
+    // no env var needed; dmtools' own CLI JSON-override mechanism (deep-merged into
+    // jobParams) is the switch. Rules already using localExecution:true (pure-JS, no
+    // checkout/AI CLI) are left untouched. A rule can opt out even while the override is
+    // active by setting `localTeammate: false` explicitly.
+    if (p.forceLocalTeammate && rules) {
+        var forcedCount = 0;
+        rules = rules.map(function(rule) {
+            if (rule.localExecution || rule.localTeammate === false || rule.localTeammate) {
+                return rule;
+            }
+            forcedCount++;
+            var forced = {};
+            Object.keys(rule).forEach(function(k) { forced[k] = rule[k]; });
+            forced.localTeammate = true;
+            return forced;
+        });
+        console.log('SM Agent: forceLocalTeammate override active — ' + forcedCount +
+            ' rule(s) switched from dispatch to local execution');
     }
 
     // Targeted mode: bypass all JQL rules and dispatch a single agent to a single ticket.
