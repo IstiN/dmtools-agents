@@ -804,6 +804,86 @@ suite('smAgent: localTeammate execution mode', function() {
 
 });
 
+suite('smAgent: forceLocalTeammate CLI override', function() {
+
+    test('switches a default-dispatch rule to local execution', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'", {
+                configFile: 'agents/story_development.json'
+            })
+        ]);
+        params.jobParams.forceLocalTeammate = true;
+
+        sm.action(params);
+
+        assert.equal(sm.capturedTriggers.length, 0, 'no GitHub Actions workflow should be dispatched');
+        assert.equal(localRunCommands(sm).length, 1, 'rule runs locally instead of dispatching');
+    });
+
+    test('leaves localExecution:true rules untouched', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };',
+                'agents/test.json': MINIMAL_AGENT_CONFIG
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", { localExecution: true })
+        ]);
+        params.jobParams.forceLocalTeammate = true;
+
+        sm.action(params);
+
+        assert.equal(localRunCommands(sm).length, 0, 'localExecution rules do not go through run-teammate-local.sh');
+        assert.equal(sm.capturedTriggers.length, 0, 'localExecution rules never dispatch either');
+    });
+
+    test('respects an explicit localTeammate:false opt-out', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/story_development.json',
+                localTeammate: false
+            })
+        ]);
+        params.jobParams.forceLocalTeammate = true;
+
+        sm.action(params);
+
+        assert.equal(localRunCommands(sm).length, 0, 'opted-out rule must not run locally');
+        assert.equal(sm.capturedTriggers.length, 1, 'opted-out rule dispatches as normal');
+    });
+
+    test('is a no-op when not set (default remote dispatch)', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", { configFile: 'agents/story_development.json' })
+        ]);
+        // forceLocalTeammate intentionally omitted
+
+        sm.action(params);
+
+        assert.equal(sm.capturedTriggers.length, 1, 'default behavior still dispatches to GitHub Actions');
+        assert.equal(localRunCommands(sm).length, 0);
+    });
+
+});
+
 // ── localExecution module loading ─────────────────────────────────────────────
 
 suite('smAgent: localExecution module loading', function() {
