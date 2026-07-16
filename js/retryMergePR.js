@@ -10,7 +10,7 @@
  *  - Conflict / CI failing    → remove pr_approved label, move ticket to In Rework, post comment
  */
 
-const { STATUSES, LABELS } = require('./config.js');
+const { LABELS } = require('./config.js');
 var scmModule = require('./common/scm.js');
 var configLoader = require('./configLoader.js');
 var autoStart = require('./common/autoStart.js');
@@ -122,6 +122,7 @@ function action(params) {
     }
 
     var config = configLoader.loadProjectConfig(params.jobParams || params);
+    var jiraConfig = config.jira;
     var scm = scmModule.createScm(config);
     var customParams = resolveCustomParams(params, config);
 
@@ -197,7 +198,7 @@ function action(params) {
             key: ticketKey,
             comment: '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *MERGE CONFLICT* — PR #' + prNumber + ' has a merge conflict with main. Please resolve conflicts and re-push.\n\n[View PR|' + prUrl + ']{panel}'
         });
-        jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REWORK });
+        jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.IN_REWORK });
         console.log('✅ Ticket moved to In Rework (merge conflict)');
         triggerAutoStartRework(ticketKey, customParams, config, scm);
         return true;
@@ -226,11 +227,11 @@ function action(params) {
         if (isTestCase) {
             var ticketDetail = jira_get_ticket({ key: ticketKey });
             var currentStatus = ticketDetail && ticketDetail.fields && ticketDetail.fields.status && ticketDetail.fields.status.name;
-            var finalStatus = (currentStatus === STATUSES.IN_REVIEW_PASSED) ? STATUSES.PASSED : STATUSES.FAILED;
+            var finalStatus = (currentStatus === jiraConfig.statuses.IN_REVIEW_PASSED) ? jiraConfig.statuses.PASSED : jiraConfig.statuses.FAILED;
             jira_move_to_status({ key: ticketKey, statusName: finalStatus });
             console.log('✅ Ticket moved to ' + finalStatus);
         } else {
-            jira_move_to_status({ key: ticketKey, statusName: STATUSES.MERGED });
+            jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.MERGED });
             console.log('✅ Ticket moved to Merged');
         }
 
@@ -261,7 +262,7 @@ function action(params) {
             key: ticketKey,
             comment: '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *MERGE FAILED* — Could not merge PR #' + prNumber + ': ' + reason + '. Please check and re-push.\n\n[View PR|' + prUrl + ']{panel}'
         });
-        jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REWORK });
+        jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.IN_REWORK });
         console.log('✅ Ticket moved to In Rework (' + reason + ')');
         triggerAutoStartRework(ticketKey, customParams, config, scm);
 

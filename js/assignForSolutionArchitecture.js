@@ -5,7 +5,7 @@
  */
 
 const { extractTicketKey } = require('./common/jiraHelpers.js');
-const { LABELS, STATUSES } = require('./config.js');
+const { LABELS } = require('./config.js');
 const configLoader = require('./configLoader.js');
 const scmModule = require('./common/scm.js');
 const autoStart = require('./common/autoStart.js');
@@ -24,6 +24,7 @@ function action(params) {
             ? params.metadata.contextId + '_wip'
             : null;
         var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+        var jiraConfig = projectConfig.jira;
         var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
 
         // Assign to initiator (skip if accountId is not available)
@@ -38,11 +39,16 @@ function action(params) {
             }
         }
 
-        // Move to Solution Architecture
-        jira_move_to_status({
-            key: ticketKey,
-            statusName: STATUSES.SOLUTION_ARCHITECTURE
-        });
+        // Move to Solution Architecture — trigger labels are only removed on success
+        try {
+            jira_move_to_status({
+                key: ticketKey,
+                statusName: jiraConfig.statuses.SOLUTION_ARCHITECTURE
+            });
+        } catch (statusError) {
+            console.error('Failed to move ' + ticketKey + ' to Solution Architecture — trigger labels NOT removed:', statusError);
+            throw statusError;
+        }
         console.log('Moved ' + ticketKey + ' to Solution Architecture');
 
         // Add ai_generated label
