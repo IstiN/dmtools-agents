@@ -13,7 +13,7 @@
 var configLoader = require('./configLoader.js');
 var prHelper = require('./common/pullRequest.js');
 var autoStart = require('./common/autoStart.js');
-const { GIT_CONFIG, STATUSES, LABELS, JIRA_FIELDS, resolveStatuses } = require('./config.js');
+const { GIT_CONFIG, LABELS, JIRA_FIELDS } = require('./config.js');
 var outputFiles = require('./common/outputFiles.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
@@ -433,7 +433,7 @@ function updateFailedReasonField(tcKey, attachmentName, failureSummary, fieldNam
 
 function updateTestCaseStatus(tcKey, status, workingDir, storyKey, config) {
     try {
-        var targetStatus = status === 'passed' ? STATUSES.IN_REVIEW_PASSED : STATUSES.IN_REVIEW_FAILED;
+        var targetStatus = status === 'passed' ? config.jira.statuses.IN_REVIEW_PASSED : config.jira.statuses.IN_REVIEW_FAILED;
         jira_move_to_status({ key: tcKey, statusName: targetStatus });
         console.log('✅ Moved', tcKey, 'to', targetStatus);
 
@@ -454,9 +454,9 @@ function updateTestCaseStatus(tcKey, status, workingDir, storyKey, config) {
     }
 }
 
-function finalizeTestCaseStatus(tcKey, status) {
+function finalizeTestCaseStatus(tcKey, status, jiraConfig) {
     try {
-        var targetStatus = status === 'passed' ? STATUSES.PASSED : STATUSES.FAILED;
+        var targetStatus = status === 'passed' ? jiraConfig.statuses.PASSED : jiraConfig.statuses.FAILED;
         jira_move_to_status({ key: tcKey, statusName: targetStatus });
         console.log('✅ Finalized', tcKey, 'to', targetStatus, '(no code changes)');
     } catch (e) {
@@ -552,8 +552,8 @@ function action(params) {
         const storyKey = params.ticket.key;
         const storySummary = params.ticket.fields ? params.ticket.fields.summary : storyKey;
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var jiraConfig = config.jira;
         var customParams = (params.jobParams || params).customParams || {};
-        var statuses = resolveStatuses(customParams);
         var scm = configLoader.createScm(config);
         var workingDir = config.workingDir || null;
         var testFilesPath = customParams.testFilesGlob || 'testing/';
@@ -562,8 +562,7 @@ function action(params) {
         console.log('=== Processing story test automation results for', storyKey, '===');
 
         // Step 1: Read structured result and ensure all linked Test Cases were checked
-        var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-        var testCaseType = (projectConfig.jira && projectConfig.jira.issueTypes && projectConfig.jira.issueTypes.TEST_CASE) || 'Test Case';
+        var testCaseType = (jiraConfig.issueTypes && jiraConfig.issueTypes.TEST_CASE) || 'Test Case';
         var linkedTestCases = readLinkedTestCases(storyKey, testCaseType);
 
         var result = readResultJson(workingDir, storyKey);
@@ -607,14 +606,14 @@ function action(params) {
 
         // For a Bug, a product failure means the fix did not work. Send the Bug
         // straight back to development and finalize the failing Test Cases as Failed.
-        if (issueType === 'Bug' && hasProductFailure) {
+        if (issueType === jiraConfig.issueTypes.BUG && hasProductFailure) {
             console.log('Bug', storyKey, 'has', failedResults.length, 'product failure(s) — returning to development');
             failedResults.forEach(function(item) {
                 updateTestCaseStatus(item.testCaseKey, 'failed', workingDir, storyKey, config);
-                finalizeTestCaseStatus(item.testCaseKey, 'failed');
+                finalizeTestCaseStatus(item.testCaseKey, 'failed', jiraConfig);
             });
 
-            var bugReturnStatus = statuses.READY_FOR_DEVELOPMENT || STATUSES.READY_FOR_DEVELOPMENT;
+            var bugReturnStatus = jiraConfig.statuses.READY_FOR_DEVELOPMENT;
             try {
                 jira_move_to_status({ key: storyKey, statusName: bugReturnStatus });
                 console.log('✅ Moved Bug', storyKey, 'back to', bugReturnStatus);
@@ -706,8 +705,8 @@ function action(params) {
                 'Once setup is complete, move this Story back to *Ready For Testing* to trigger re-run.';
             try {
                 jira_post_comment({ key: storyKey, comment: blockedComment });
-                jira_move_to_status({ key: storyKey, statusName: STATUSES.BLOCKED });
-                console.log('✅ Blocked — moved', storyKey, 'to', STATUSES.BLOCKED);
+                jira_move_to_status({ key: storyKey, statusName: jiraConfig.statuses.BLOCKED });
+                console.log('✅ Blocked — moved', storyKey, 'to', jiraConfig.statuses.BLOCKED);
             } catch (e) {
                 console.warn('Failed to handle blocked story:', e);
             }
@@ -723,14 +722,14 @@ function action(params) {
                     // When there are no test code changes we skip the PR/review/merge flow,
                     // so we must finalize TC statuses immediately so story_done_check can act.
                     if (noCodeChanges) {
-                        finalizeTestCaseStatus(item.testCaseKey, item.status);
+                        finalizeTestCaseStatus(item.testCaseKey, item.status, jiraConfig);
                     }
                 } else if (item.status === 'skipped') {
                     // Skipped tests are final — no PR/review needed.
-                    moveSkippedTcToStatus(item.testCaseKey, statuses.SKIPPED || 'Skipped');
+                    moveSkippedTcToStatus(item.testCaseKey, jiraConfig.statuses.SKIPPED);
                 } else if (item.status === 'irrelevant') {
                     // Legacy/no-longer-applicable tests are final; delete their test code.
-                    moveIrrelevantTcToStatus(item.testCaseKey, statuses.IRRELEVANT || 'Irrelevant', testFilesPath, workingDir);
+                    moveIrrelevantTcToStatus(item.testCaseKey, jiraConfig.statuses.IRRELEVANT, testFilesPath, workingDir);
                 } else {
                     console.log('Skipping status update for', item.testCaseKey, '— status:', item.status);
                 }
@@ -739,8 +738,8 @@ function action(params) {
 
         // Step 8: Move Story to In Testing
         try {
-            jira_move_to_status({ key: storyKey, statusName: STATUSES.IN_TESTING });
-            console.log('✅ Moved Story', storyKey, 'to', STATUSES.IN_TESTING);
+            jira_move_to_status({ key: storyKey, statusName: jiraConfig.statuses.IN_TESTING });
+            console.log('✅ Moved Story', storyKey, 'to', jiraConfig.statuses.IN_TESTING);
         } catch (e) {
             console.warn('Failed to move Story to In Testing:', e);
         }

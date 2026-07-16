@@ -29,7 +29,7 @@
  */
 
 var configLoader = require('./configLoader.js');
-const { STATUSES, LABELS } = require('./config.js');
+const { LABELS } = require('./config.js');
 var prHelper = require('./common/pullRequest.js');
 var outputFiles = require('./common/outputFiles.js');
 
@@ -516,6 +516,7 @@ function action(params) {
         var ticketSummary = params.ticket.fields ? params.ticket.fields.summary : ticketKey;
         var jiraComment = params.response || '';
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var jiraConfig = config.jira;
         var automationScm = createScmCompat(config, config.repository && config.repository.owner, config.repository && config.repository.repo);
         var workingDir = config.workingDir;
 
@@ -656,7 +657,7 @@ function action(params) {
             }
             blockedComment += '\nOnce setup is complete, move this ticket back to *Backlog* to trigger re-run.';
             try { jira_post_comment({ key: ticketKey, comment: blockedComment }); } catch (e) {}
-            try { jira_move_to_status({ key: ticketKey, statusName: STATUSES.BLOCKED }); } catch (e) {}
+            try { jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BLOCKED }); } catch (e) {}
 
             removeWipLabel(params, ticketKey);
             removeSMTriggerLabel(params, ticketKey);
@@ -665,7 +666,7 @@ function action(params) {
 
         // Step 8: Move ticket status
         try {
-            var targetStatus = passed ? STATUSES.PASSED : STATUSES.FAILED;
+            var targetStatus = passed ? jiraConfig.statuses.PASSED : jiraConfig.statuses.FAILED;
             jira_move_to_status({ key: ticketKey, statusName: targetStatus });
             console.log('✅ Moved', ticketKey, 'to', targetStatus);
         } catch (e) {

@@ -15,7 +15,7 @@
  * - Otherwise → releases the SM idempotency label so the check re-runs next cycle.
  */
 
-const { STATUSES } = require('./config.js');
+const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 
 function action(params) {
@@ -24,6 +24,8 @@ function action(params) {
     const issueType = (ticketFields && ticketFields.issuetype && ticketFields.issuetype.name) || 'Test Case';
     const customParams = params.jobParams && params.jobParams.customParams;
     const removeLabel = customParams && customParams.removeLabel;
+    const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+    const jiraConfig = projectConfig.jira;
 
     /**
      * DMTools returns issue search results as host objects. In some runtime
@@ -59,7 +61,7 @@ function action(params) {
     function findNotDoneBugs(entityKey) {
         var key = entityKey || ticketKey;
         return toPlain(jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + key + '") AND issuetype = Bug AND status != "Done"',
+            jql: 'issue in linkedIssues("' + key + '") AND issuetype = Bug AND status != "' + jiraConfig.statuses.DONE + '"',
             maxResults: 50
         })) || [];
     }
@@ -114,7 +116,7 @@ function action(params) {
             return { success: true, action: 'waiting', issueType, total: totalBugs, notDone: notDoneCount, ticketKey };
         }
 
-        if (issueType === 'Story') {
+        if (issueType === jiraConfig.issueTypes.STORY) {
             // Also check bugs linked to linked Test Cases before allowing the Story to re-test.
             const pendingTcBugs = findPendingBugsInLinkedTestCases();
             if (pendingTcBugs.length > 0) {
@@ -132,7 +134,7 @@ function action(params) {
 
             jira_move_to_status({
                 key: ticketKey,
-                statusName: STATUSES.READY_FOR_TESTING
+                statusName: jiraConfig.statuses.READY_FOR_TESTING
             });
 
             // Remove the story_done_check lock so it can re-run after the Story returns to In Testing
@@ -159,7 +161,7 @@ function action(params) {
 
             jira_move_to_status({
                 key: ticketKey,
-                statusName: STATUSES.BACKLOG
+                statusName: jiraConfig.statuses.BACKLOG
             });
 
             // Remove test automation label so SM can re-trigger automation
@@ -188,7 +190,7 @@ function action(params) {
             console.warn('Failed to post token usage comments:', e);
         }
 
-        return { success: true, action: issueType === 'Story' ? 'moved_to_ready_for_testing' : 'moved_to_backlog', totalBugs: totalBugs, ticketKey };
+        return { success: true, action: issueType === jiraConfig.issueTypes.STORY ? 'moved_to_ready_for_testing' : 'moved_to_backlog', totalBugs: totalBugs, ticketKey };
 
     } catch (error) {
         console.error('❌ Error in checkBugToFixReady:', error);

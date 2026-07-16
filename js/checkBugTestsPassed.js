@@ -16,7 +16,7 @@
  *   this check on the next cycle.
  */
 
-const { STATUSES, LABELS } = require('./config.js');
+const { LABELS } = require('./config.js');
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 const scmModule = require('./common/scm.js');
@@ -28,8 +28,9 @@ function action(params) {
 
     // Load project config to get issue types (default: "Test Case" / "Bug")
     const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-    const testCaseType = projectConfig.jira.issueTypes.TEST_CASE || 'Test Case';
-    const bugType = projectConfig.jira.issueTypes.BUG || 'Bug';
+    const jiraConfig = projectConfig.jira;
+    const testCaseType = jiraConfig.issueTypes.TEST_CASE || 'Test Case';
+    const bugType = jiraConfig.issueTypes.BUG || 'Bug';
 
     // Helper: remove SM label so the check re-runs on the next SM cycle
     function releaseLock() {
@@ -101,7 +102,7 @@ function action(params) {
         var status = tc.fields && tc.fields.status && tc.fields.status.name;
 
         // Passed / intentionally skipped / no longer applicable are always non-blocking.
-        if (status === STATUSES.PASSED || status === STATUSES.SKIPPED || status === STATUSES.IRRELEVANT) {
+        if (status === jiraConfig.statuses.PASSED || status === jiraConfig.statuses.SKIPPED || status === jiraConfig.statuses.IRRELEVANT) {
             return false;
         }
 
@@ -112,7 +113,7 @@ function action(params) {
         // regression TCs TS-501/TS-252 were Bug To Fix). We count *any* other
         // linked Bug (even Done) so stale TCs that were already addressed do not
         // hold the current Bug hostage.
-        if (status === STATUSES.BUG_TO_FIX) {
+        if (status === jiraConfig.statuses.BUG_TO_FIX) {
             var linkedBugs = findLinkedBugs(tc.key);
             var hasOtherBug = linkedBugs.some(function(bug) {
                 var bugStatus = bug.fields && bug.fields.status && bug.fields.status.name;
@@ -173,7 +174,7 @@ function action(params) {
                 var reworkAttempted = labels.indexOf('sm_bug_rework_attempted') !== -1;
                 if (reworkAttempted) {
                     console.log('Test PR finalized and one rework already attempted — moving', ticketKey, 'to Blocked for triage');
-                    jira_move_to_status({ key: ticketKey, statusName: STATUSES.BLOCKED });
+                    jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BLOCKED });
                     jira_post_comment({
                         key: ticketKey,
                         comment: 'h3. 🚫 Test PR Finalized But Acceptance Tests Still Blocking After Rework\n\n' +
@@ -186,7 +187,7 @@ function action(params) {
                 }
 
                 console.log('Test PR finalized but', blockingCount, 'linked Test Case(s) still block — moving', ticketKey, 'to In Rework (one attempt)');
-                jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REWORK });
+                jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.IN_REWORK });
                 jira_add_label({ key: ticketKey, label: 'sm_bug_rework_attempted' });
                 jira_post_comment({
                     key: ticketKey,
@@ -244,7 +245,7 @@ function action(params) {
 
         jira_move_to_status({
             key: ticketKey,
-            statusName: STATUSES.DONE
+            statusName: jiraConfig.statuses.DONE
         });
 
         // Clean up anti-cycle label on successful completion.

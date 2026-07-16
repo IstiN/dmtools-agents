@@ -4,7 +4,7 @@
  * If tests fail later, AI creates a new bug instead of re-opening this one.
  */
 
-const { STATUSES } = require('./config.js');
+const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 
 function action(params) {
@@ -13,12 +13,14 @@ function action(params) {
         if (!ticketKey) {
             return { success: false, error: 'No ticket key found in params' };
         }
+        const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+        const jiraConfig = projectConfig.jira;
 
-        console.log('Moving ' + ticketKey + ' to ' + STATUSES.DONE + ' (bug with test cases generated)');
+        console.log('Moving ' + ticketKey + ' to ' + jiraConfig.statuses.DONE + ' (bug with test cases generated)');
 
         jira_move_to_status({
             key: ticketKey,
-            statusName: STATUSES.DONE
+            statusName: jiraConfig.statuses.DONE
         });
 
         try {
@@ -32,7 +34,7 @@ function action(params) {
             comment: 'Test cases generated. Bug marked as Done. If regression is detected, a new bug will be created automatically.'
         });
 
-        console.log('✅ ' + ticketKey + ' moved to ' + STATUSES.DONE);
+        console.log('✅ ' + ticketKey + ' moved to ' + jiraConfig.statuses.DONE);
 
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
@@ -44,7 +46,7 @@ function action(params) {
 
         return {
             success: true,
-            message: ticketKey + ' moved to ' + STATUSES.DONE
+            message: ticketKey + ' moved to ' + jiraConfig.statuses.DONE
         };
 
     } catch (error) {

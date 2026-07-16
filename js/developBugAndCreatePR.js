@@ -19,7 +19,7 @@
  */
 
 var configLoader = require('./configLoader.js');
-const { STATUSES, LABELS, resolveStatuses } = require('./config.js');
+const { LABELS, resolveStatuses } = require('./config.js');
 const developTicket = require('./developTicketAndCreatePR.js');
 const outputFiles = require('./common/outputFiles.js');
 
@@ -73,6 +73,7 @@ function action(params) {
         const actualParams = params.ticket ? params : (params.jobParams || params);
         const ticketKey = actualParams.ticket.key;
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var jiraConfig = config.jira;
         var scm = configLoader.createScm(config);
         const _customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
         const statuses = resolveStatuses(_customParams);
@@ -150,7 +151,7 @@ function action(params) {
             try { jira_post_comment({ key: ticketKey, comment: comment }); } catch (e) {}
 
             try {
-                jira_move_to_status({ key: ticketKey, statusName: STATUSES.BLOCKED });
+                jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BLOCKED });
                 console.log('✅ Moved', ticketKey, 'to Blocked');
             } catch (e) {
                 console.warn('Failed to move to Blocked:', e);
@@ -185,7 +186,7 @@ function action(params) {
             try { jira_post_comment({ key: ticketKey, comment: comment }); } catch (e) {}
 
             try {
-                jira_move_to_status({ key: ticketKey, statusName: STATUSES.DONE });
+                jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.DONE });
                 console.log('✅ Moved', ticketKey, 'to Done');
             } catch (e) {
                 console.warn('Failed to move to Done:', e);

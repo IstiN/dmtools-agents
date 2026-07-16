@@ -11,7 +11,7 @@
  *   - Moves to In Rework
  */
 
-const { STATUSES, LABELS } = require('./config.js');
+const { LABELS } = require('./config.js');
 const gh = require('./common/githubHelpers.js');
 const autoStart = require('./common/autoStart.js');
 const configLoader = require('./configLoader.js');
@@ -282,6 +282,7 @@ function action(params) {
         const ticketKey = params.ticket.key;
         const jiraComment = params.response || '';
         const config = configLoader.loadProjectConfig(params.jobParams || params);
+        const jiraConfig = config.jira;
         const customParams = resolveCustomParams(params, config);
         const workingDir = config.workingDir || null;
 
@@ -406,7 +407,7 @@ function action(params) {
             autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
         } else {
             try {
-                jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REWORK });
+                jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.IN_REWORK });
                 console.log('✅ Changes requested — moved', ticketKey, 'to In Rework');
                 if (!triggerReworkIfConfigured(ticketKey, config, customParams)) {
                     markForSmTestRework(ticketKey);
@@ -436,11 +437,11 @@ function action(params) {
 
         var finalStatus;
         if (isApproved && !mergeSucceeded) {
-            finalStatus = STATUSES.IN_REWORK;
+            finalStatus = jiraConfig.statuses.IN_REWORK;
         } else if (isApproved) {
-            finalStatus = (currentStatus === STATUSES.IN_REVIEW_PASSED) ? STATUSES.PASSED : STATUSES.FAILED;
+            finalStatus = (currentStatus === jiraConfig.statuses.IN_REVIEW_PASSED) ? jiraConfig.statuses.PASSED : jiraConfig.statuses.FAILED;
         } else {
-            finalStatus = STATUSES.IN_REWORK;
+            finalStatus = jiraConfig.statuses.IN_REWORK;
         }
         console.log('✅ Test review workflow complete:', isApproved ? (mergeSucceeded ? 'APPROVED' : 'MERGE CONFLICT') : 'CHANGES REQUESTED');
 

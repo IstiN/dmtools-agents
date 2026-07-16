@@ -19,7 +19,7 @@
 
 var scmModule = require('./common/scm.js');
 var configLoader = require('./configLoader.js');
-const { STATUSES, LABELS } = require('./config.js');
+const { LABELS } = require('./config.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
 function findPRForTicket(scm, ticketKey) {
@@ -40,6 +40,7 @@ function findPRForTicket(scm, ticketKey) {
 function action(params) {
     var ticketKey = params.ticket && params.ticket.key;
     var config = configLoader.loadProjectConfig(params.jobParams || params || {});
+    var jiraConfig = config.jira;
 
     if (!ticketKey) {
         console.error('No ticket key found');
@@ -54,7 +55,7 @@ function action(params) {
     if (!pr) {
         console.log('No open PR found for', ticketKey, '— moving back to Backlog');
         try {
-            jira_move_to_status({ key: ticketKey, statusName: STATUSES.BACKLOG });
+            jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BACKLOG });
             console.log('✅ Moved', ticketKey, 'to Backlog');
         } catch (e) {
             console.error('Failed to move to Backlog:', e);
@@ -86,7 +87,7 @@ function action(params) {
     if (mergeableState === 'dirty' || mergeableState === 'conflicting' || mergeable === false) {
         console.log('PR has conflicts — moving ticket to In Rework');
         try {
-            jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REWORK });
+            jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.IN_REWORK });
             console.log('✅ Moved', ticketKey, 'to In Rework');
         } catch (e) {
             console.error('Failed to move to In Rework:', e);
@@ -104,7 +105,7 @@ function action(params) {
     // PR is clean/mergeable — move to In Review - Passed for review
     console.log('PR looks clean — moving ticket to In Review - Passed');
     try {
-        jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REVIEW_PASSED });
+        jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.IN_REVIEW_PASSED });
         console.log('✅ Moved', ticketKey, 'to In Review - Passed');
     } catch (e) {
         console.error('Failed to move to In Review - Passed:', e);
