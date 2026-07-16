@@ -115,10 +115,11 @@ function action(params) {
         if (status === STATUSES.BUG_TO_FIX) {
             var linkedBugs = findLinkedBugs(tc.key);
             var hasOtherBug = linkedBugs.some(function(bug) {
-                return bug.key !== ticketKey;
+                var bugStatus = bug.fields && bug.fields.status && bug.fields.status.name;
+                return bug.key !== ticketKey && bugStatus !== STATUSES.DONE;
             });
             if (hasOtherBug) {
-                console.log('TC', tc.key, 'is Bug To Fix but already tracked by another Bug — treating as non-blocking');
+                console.log('TC', tc.key, 'is Bug To Fix but already tracked by another active Bug — treating as non-blocking');
                 return false;
             }
         }
@@ -271,6 +272,7 @@ function action(params) {
             console.warn('Failed to post token usage comments:', e);
         }
 
+        releaseLock();
         return { success: true, action: 'moved_to_done', totalTCs, ticketKey };
 
     } catch (error) {

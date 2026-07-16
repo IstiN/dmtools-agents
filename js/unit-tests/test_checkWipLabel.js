@@ -57,7 +57,7 @@ suite('checkWipLabel', function() {
         });
 
         assert.equal(result, false);
-        assert.ok(comments.some(function(c) { return c.comment.indexOf('WIP label') !== -1; }));
+        assert.ok(comments.some(function(c) { return c.comment.indexOf('work is in progress') !== -1; }));
     });
 
     test('stops when checkOpenPR is set and no open PR exists', function() {

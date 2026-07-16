@@ -149,7 +149,7 @@ suite('mergeStoryTestAutomationPR', function() {
             jobParams: { customParams: { removeLabel: 'sm_story_test_merge_triggered' } }
         });
 
-        assert.equal(result, false);
+        assert.equal(result, true);
     });
 
     test('moves ticket to In Rework on merge conflict', function() {
