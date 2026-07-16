@@ -4,18 +4,14 @@
 
 function loadCheckStoryTestsPassed(mocks) {
     mocks = mocks || {};
-    var configLoaderMock = {
-        loadProjectConfig: function() {
-            return {
-                jira: {
-                    issueTypes: {
-                        TEST_CASE: 'Test Case',
-                        BUG: 'Bug'
-                    }
-                }
-            };
+    var configLoaderMock = makeDefaultConfigLoaderMock({
+        jira: {
+            issueTypes: {
+                TEST_CASE: 'Test Case',
+                BUG: 'Bug'
+            }
         }
-    };
+    });
 
     return loadModule(
         'js/checkStoryTestsPassed.js',

@@ -67,7 +67,7 @@ function action(params) {
         var bugs = findLinkedBugs(tcKey);
         for (var i = 0; i < bugs.length; i++) {
             var status = bugs[i].fields && bugs[i].fields.status && bugs[i].fields.status.name;
-            if (status !== jiraConfig.jiraConfig.statuses.DONE) {
+            if (status !== jiraConfig.statuses.DONE) {
                 return bugs[i].key;
             }
         }

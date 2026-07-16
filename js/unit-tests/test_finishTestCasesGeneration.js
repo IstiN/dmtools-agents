@@ -8,6 +8,7 @@ function loadFinishTestCasesGeneration(mocks) {
         'js/finishTestCasesGeneration.js',
         makeRequire({
             './config.js': configModule,
+            './configLoader.js': makeDefaultConfigLoaderMock(),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
         mocks

@@ -117,7 +117,7 @@ function action(params) {
             var linkedBugs = findLinkedBugs(tc.key);
             var hasOtherBug = linkedBugs.some(function(bug) {
                 var bugStatus = bug.fields && bug.fields.status && bug.fields.status.name;
-                return bug.key !== ticketKey && bugStatus !== STATUSES.DONE;
+                return bug.key !== ticketKey && bugStatus !== jiraConfig.statuses.DONE;
             });
             if (hasOtherBug) {
                 console.log('TC', tc.key, 'is Bug To Fix but already tracked by another active Bug — treating as non-blocking');

@@ -456,7 +456,7 @@ function action(params) {
             console.log('  Linking', tcKey, '→', bugKey);
             try {
                 linkBugToTC(tcKey, bugKey);
-                moveToBugToFix(tcKey);
+                moveToBugToFix(tcKey, jiraConfig);
                 removeProcessingLabels(tcKey, [triggerLabel, smTriggerLabel]);
                 postComment(tcKey,
                     'h3. 🔗 Existing Bug Linked (Batch)\n\n' +
@@ -503,7 +503,7 @@ function action(params) {
             console.warn('  ⚠️ Processed TC has no successful bulk outcome:', tcKey);
             var linkedBugKey = findLinkedNonDoneBug(tcKey);
             if (linkedBugKey) {
-                moveToBugToFix(tcKey);
+                moveToBugToFix(tcKey, jiraConfig);
                 removeProcessingLabels(tcKey, [triggerLabel, smTriggerLabel]);
                 postComment(tcKey,
                     'h3. 🔗 Existing Bug Found After Batch\n\n' +
