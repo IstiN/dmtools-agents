@@ -12,6 +12,7 @@ const gh = require('./common/githubHelpers.js');
 const gitOps = require('./common/gitOps.js');
 var prHelper = require('./common/pullRequest.js');
 const { LABELS } = require('./config.js');
+var trackerHelper = require('./common/tracker.js');
 
 function getTicketKey(params) {
     if (params.ticket && params.ticket.key) {
@@ -112,37 +113,37 @@ function isWip(pr, ticket) {
     return false;
 }
 
-function resolveFinalStatus(currentStatus, issueType, jiraConfig) {
+function resolveFinalStatus(currentStatus, issueType, trackerConfig) {
     // Test Cases finish in Passed/Failed; Stories and Bugs stay in In Testing
     // so the done-check agents (checkStoryTestsPassed / checkBugTestsPassed)
     // can evaluate all linked Test Cases and move to Done / Bug To Fix / Ready For Testing.
-    if (issueType === jiraConfig.issueTypes.TEST_CASE) {
-        return currentStatus === jiraConfig.statuses.IN_REVIEW_FAILED
-            ? jiraConfig.statuses.FAILED
-            : jiraConfig.statuses.PASSED;
+    if (issueType === trackerConfig.issueTypes.TEST_CASE) {
+        return currentStatus === trackerConfig.statuses.IN_REVIEW_FAILED
+            ? trackerConfig.statuses.FAILED
+            : trackerConfig.statuses.PASSED;
     }
-    return jiraConfig.statuses.IN_TESTING;
+    return trackerConfig.statuses.IN_TESTING;
 }
 
 function markTestPrMerged(ticketKey) {
     try {
-        jira_add_label({ key: ticketKey, label: LABELS.TEST_PR_MERGED });
+        trackerHelper.addLabel(ticketKey, LABELS.TEST_PR_MERGED);
         console.log('Added label', LABELS.TEST_PR_MERGED, 'to', ticketKey);
     } catch (e) {
         console.warn('Could not add test_pr_merged label:', e);
     }
 }
 
-function finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType, jiraConfig) {
+function finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType, trackerConfig) {
     try {
         markTestPrMerged(ticketKey);
-        const ticket = jira_get_ticket({ key: ticketKey });
+        const ticket = tracker_get_ticket({ key: ticketKey });
         const currentStatus = ticket && ticket.fields && ticket.fields.status
             ? ticket.fields.status.name
             : '';
-        const finalStatus = resolveFinalStatus(currentStatus, issueType, jiraConfig);
-        jira_move_to_status({ key: ticketKey, statusName: finalStatus });
-        jira_post_comment({
+        const finalStatus = resolveFinalStatus(currentStatus, issueType, trackerConfig);
+        tracker_move_to_status({ key: ticketKey, statusName: finalStatus });
+        tracker_post_comment({
             key: ticketKey,
             comment: 'h3. ✅ Test Code Already Merged\n\n' +
                 'Branch {code}' + branchName + '{code} has no commits ahead of main, so the test code is already in main.\n\n' +
@@ -166,7 +167,7 @@ function action(params) {
         const inputFolder = getInputFolder(params, ticketKey);
         const issueType = getIssueType(params);
         var config = configLoader.loadProjectConfig(params.jobParams || params);
-        var jiraConfig = config.jira;
+        var trackerConfig = config.tracker;
         var scm = configLoader.createScm(config);
 
         console.log('=== Preparing test PR for review:', ticketKey, '===');
@@ -178,7 +179,7 @@ function action(params) {
         var repoInfo = scm.getRemoteRepoInfo();
         if (!repoInfo) {
             const err = 'Could not determine repository from git remote';
-            try { jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Test PR Review Setup Failed\n\n' + err + '\n\n_Review cancelled._' }); } catch (e) {}
+            try { tracker_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Test PR Review Setup Failed\n\n' + err + '\n\n_Review cancelled._' }); } catch (e) {}
             return false;
         }
 
@@ -200,8 +201,8 @@ function action(params) {
                 // No branch at all — needs re-automation from scratch
                 const err = 'No test PR and no remote branch found for test/' + ticketKey + '. Ticket needs re-automation.';
                 try {
-                    jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Test PR Review Setup Failed\n\n' + err + '\n\n_Moving to In Rework so it can be re-automated._' });
-                    jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.IN_REWORK });
+                    tracker_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Test PR Review Setup Failed\n\n' + err + '\n\n_Moving to In Rework so it can be re-automated._' });
+                    tracker_move_to_status({ key: ticketKey, statusName: trackerConfig.statuses.IN_REWORK });
                 } catch (e) {}
                 return false;
             }
@@ -209,7 +210,7 @@ function action(params) {
             // Branch exists — create a new PR/MR so review can proceed
             console.log('Branch exists but no PR — creating PR for review...');
             try {
-                const ticket = jira_get_ticket({ key: ticketKey });
+                const ticket = tracker_get_ticket({ key: ticketKey });
                 const summary = ticket && ticket.fields ? (ticket.fields.summary || ticketKey) : ticketKey;
                 const prTitle = configLoader.formatTemplate(config.formats.prTitle.testAutomation, {ticketKey: ticketKey, ticketSummary: summary});
 
@@ -233,11 +234,11 @@ function action(params) {
             } catch (createErr) {
                 if (isNoCommitsError(createErr)) {
                     console.log('Branch test/' + ticketKey + ' has no commits ahead of main — test code is already merged.');
-                    finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType, jiraConfig);
+                    finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType, trackerConfig);
                     return false;
                 }
                 const err = 'Branch test/' + ticketKey + ' exists but could not create PR: ' + createErr.toString();
-                try { jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Test PR Review Setup Failed\n\n' + err + '\n\n_Review cancelled._' }); } catch (e) {}
+                try { tracker_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Test PR Review Setup Failed\n\n' + err + '\n\n_Review cancelled._' }); } catch (e) {}
                 return false;
             }
         }
@@ -247,12 +248,12 @@ function action(params) {
             const pr = found.pr;
             markTestPrMerged(ticketKey);
             try {
-                const ticket = jira_get_ticket({ key: ticketKey });
+                const ticket = tracker_get_ticket({ key: ticketKey });
                 const currentStatus = ticket && ticket.fields && ticket.fields.status
                     ? ticket.fields.status.name : '';
-                const finalStatus = resolveFinalStatus(currentStatus, issueType, jiraConfig);
-                jira_move_to_status({ key: ticketKey, statusName: finalStatus });
-                jira_post_comment({
+                const finalStatus = resolveFinalStatus(currentStatus, issueType, trackerConfig);
+                tracker_move_to_status({ key: ticketKey, statusName: finalStatus });
+                tracker_post_comment({
                     key: ticketKey,
                     comment: 'h3. ✅ Test PR Already Merged\n\n' +
                         'PR [#' + pr.number + '|' + pr.html_url + '] for branch {code}test/' + ticketKey + '{code} was already merged.\n\n' +
@@ -271,7 +272,7 @@ function action(params) {
         if (isWip(pr, params.ticket)) {
             console.log('PR #' + pr.number + ' is WIP/draft — skipping review for', ticketKey);
             try {
-                jira_post_comment({
+                tracker_post_comment({
                     key: ticketKey,
                     comment: 'h3. ⏸️ Test PR Review Skipped\n\nPR [#' + pr.number + '|' + (pr.html_url || '') + '] is WIP/draft. Review will run once it is ready.'
                 });
@@ -282,7 +283,7 @@ function action(params) {
         // Step 3: PR details
         const prDetails = gh.getPRDetails(scm, pr.number);
         if (!prDetails) {
-            try { jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Test PR Review Setup Failed\n\nCould not fetch details for PR #' + pr.number + '.\n\n_Review cancelled._' }); } catch (e) {}
+            try { tracker_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Test PR Review Setup Failed\n\nCould not fetch details for PR #' + pr.number + '.\n\n_Review cancelled._' }); } catch (e) {}
             return false;
         }
 
@@ -292,7 +293,7 @@ function action(params) {
         var changedFiles = prDetails.changed_files;
         if (typeof changedFiles === 'number' && changedFiles === 0) {
             console.log('PR #' + pr.number + ' has 0 changed files — test code is already in main');
-            finalizeAlreadyMergedTestCase(ticketKey, branchName || ('test/' + ticketKey), issueType, jiraConfig);
+            finalizeAlreadyMergedTestCase(ticketKey, branchName || ('test/' + ticketKey), issueType, trackerConfig);
             return false;
         }
 
@@ -317,7 +318,7 @@ function action(params) {
 
         // Step 7: Jira comment
         try {
-            jira_post_comment({
+            tracker_post_comment({
                 key: ticketKey,
                 comment: 'h3. 🧪 Automated Test PR Review Started\n\n' +
                     '*Pull Request*: [PR #' + prDetails.number + '|' + prDetails.html_url + ']\n' +
@@ -344,7 +345,7 @@ function action(params) {
         console.error('❌ Error in prepareTestPRForReview:', error);
         try {
             const ticketKey = getTicketKey(params);
-            jira_post_comment({
+            tracker_post_comment({
                 key: ticketKey,
                 comment: 'h3. ❌ Test PR Review Setup Error\n\n{code}' + error.toString() + '{code}'
             });

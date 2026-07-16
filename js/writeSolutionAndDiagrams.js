@@ -20,6 +20,7 @@ const scmModule = require('./common/scm.js');
 const autoStart = require('./common/autoStart.js');
 const outputFiles = require('./common/outputFiles.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+var trackerHelper = require('./common/tracker.js');
 
 function action(params) {
     try {
@@ -32,7 +33,7 @@ function action(params) {
         // Resolve field names from customParams if provided
         var customParams = (params.customParams) || (params.jobParams && params.jobParams.customParams) || {};
         var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-        var jiraConfig = projectConfig.jira;
+        var trackerConfig = projectConfig.tracker;
         var solutionField = customParams.solutionField || JIRA_FIELDS.SOLUTION;
         var diagramField  = (customParams.diagramField !== undefined) ? customParams.diagramField : JIRA_FIELDS.DIAGRAMS;
         var outputType    = customParams.outputType || 'replace'; // 'replace' | 'append'
@@ -78,7 +79,7 @@ function action(params) {
             if (outputType === 'append') {
                 var existing = '';
                 try {
-                    var freshTicket = jira_get_ticket({ key: ticketKey, fields: [solutionField] });
+                    var freshTicket = tracker_get_ticket({ key: ticketKey, fields: [solutionField] });
                     var freshFields = (freshTicket && freshTicket.fields) ? freshTicket.fields : freshTicket;
                     var rawValue = freshFields ? freshFields[solutionField] : null;
                     if (rawValue && typeof rawValue === 'object') {
@@ -96,7 +97,7 @@ function action(params) {
                     : solution;
                 console.log('Appending to "' + solutionField + '" (' + (existing ? existing.length : 0) + ' existing chars)');
             }
-            jira_update_field({ key: ticketKey, field: solutionField, value: valueToWrite });
+            trackerHelper.updateField(ticketKey, solutionField, valueToWrite);
             console.log('Updated "' + solutionField + '" field for ' + ticketKey + ' (mode: ' + outputType + ')');
         } catch (e) {
             console.error('Failed to update solution field "' + solutionField + '":', e);
@@ -106,7 +107,7 @@ function action(params) {
         // 5. Write to diagram field if configured and diagram exists
         if (diagram && diagramField) {
             try {
-                jira_update_field({ key: ticketKey, field: diagramField, value: diagram });
+                trackerHelper.updateField(ticketKey, diagramField, diagram);
                 console.log('Updated "' + diagramField + '" field for ' + ticketKey);
             } catch (e) {
                 console.warn('Failed to update diagram field "' + diagramField + '":', e);
@@ -115,7 +116,7 @@ function action(params) {
 
         // 6. Assign to initiator
         try {
-            jira_assign_ticket_to({ key: ticketKey, accountId: initiatorId });
+            tracker_assign_ticket({ key: ticketKey, accountId: initiatorId });
             console.log('Assigned ' + ticketKey + ' to initiator');
         } catch (e) {
             console.warn('Failed to assign ticket:', e);
@@ -123,7 +124,7 @@ function action(params) {
 
         // 7. Move to Ready For Development
         try {
-            jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.READY_FOR_DEVELOPMENT });
+            tracker_move_to_status({ key: ticketKey, statusName: trackerConfig.statuses.READY_FOR_DEVELOPMENT });
             console.log('Moved ' + ticketKey + ' to Ready For Development');
         } catch (e) {
             console.warn('Failed to move to Ready For Development:', e);
@@ -131,7 +132,7 @@ function action(params) {
 
         // 8. Add ai_generated label
         try {
-            jira_add_label({ key: ticketKey, label: LABELS.AI_GENERATED });
+            trackerHelper.addLabel(ticketKey, LABELS.AI_GENERATED);
         } catch (e) {
             console.warn('Failed to add ai_generated label:', e);
         }
@@ -139,7 +140,7 @@ function action(params) {
         // 9. Remove WIP label if present
         if (wipLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: wipLabel });
+                trackerHelper.removeLabel(ticketKey, wipLabel);
                 console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
             } catch (e) {
                 console.warn('Failed to remove WIP label:', e);

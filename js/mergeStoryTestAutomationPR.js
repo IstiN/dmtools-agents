@@ -8,6 +8,7 @@ const { LABELS } = require('./config.js');
 var scmModule = require('./common/scm.js');
 var configLoader = require('./configLoader.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
+var trackerHelper = require('./common/tracker.js');
 
 function findPRForStory(scm, storyKey) {
     try {
@@ -34,7 +35,7 @@ function findPRForStory(scm, storyKey) {
 function releaseLock(storyKey, customParams) {
     const removeLabel = customParams && customParams.removeLabel;
     if (removeLabel && storyKey) {
-        try { jira_remove_label({ key: storyKey, label: removeLabel }); } catch (e) {}
+        try { trackerHelper.removeLabel(storyKey, removeLabel); } catch (e) {}
     }
 }
 
@@ -71,33 +72,33 @@ function checkCiStatus(scm, headSha) {
 function fetchLinkedTestCases(storyKey, testCaseType) {
     var jql = 'issue in linkedIssues("' + storyKey + '") AND issuetype = "' + testCaseType + '"';
     try {
-        return jira_search_by_jql({ jql: jql, maxResults: 100, fields: ['key', 'status'] }) || [];
+        return tracker_search({ jql: jql, maxResults: 100, fields: ['key', 'status'] }) || [];
     } catch (e) {
         console.warn('Failed to fetch linked Test Cases for merge:', e);
         return [];
     }
 }
 
-function resolveFinalStatus(currentStatus, jiraConfig) {
-    if (currentStatus === jiraConfig.statuses.IN_REVIEW_PASSED) return jiraConfig.statuses.PASSED;
-    if (currentStatus === jiraConfig.statuses.IN_REVIEW_FAILED) return jiraConfig.statuses.FAILED;
+function resolveFinalStatus(currentStatus, trackerConfig) {
+    if (currentStatus === trackerConfig.statuses.IN_REVIEW_PASSED) return trackerConfig.statuses.PASSED;
+    if (currentStatus === trackerConfig.statuses.IN_REVIEW_FAILED) return trackerConfig.statuses.FAILED;
     return null;
 }
 
-function moveLinkedTestCases(storyKey, testCaseType, jiraConfig) {
+function moveLinkedTestCases(storyKey, testCaseType, trackerConfig) {
     var testCases = fetchLinkedTestCases(storyKey, testCaseType);
     var moved = 0;
     var skipped = 0;
     testCases.forEach(function(tc) {
         var currentStatus = tc.fields && tc.fields.status ? tc.fields.status.name : '';
-        var finalStatus = resolveFinalStatus(currentStatus, jiraConfig);
+        var finalStatus = resolveFinalStatus(currentStatus, trackerConfig);
         if (!finalStatus) {
             console.log('Skipping linked TC', tc.key, '— current status', currentStatus);
             skipped++;
             return;
         }
         try {
-            jira_move_to_status({ key: tc.key, statusName: finalStatus });
+            tracker_move_to_status({ key: tc.key, statusName: finalStatus });
             console.log('✅ Moved', tc.key, 'to', finalStatus);
             moved++;
         } catch (e) {
@@ -108,7 +109,7 @@ function moveLinkedTestCases(storyKey, testCaseType, jiraConfig) {
     return { moved: moved, skipped: skipped, total: testCases.length };
 }
 
-function finalizeAlreadyMergedPR(params, scm, storyKey, pr, testCaseType, customParams, jiraConfig) {
+function finalizeAlreadyMergedPR(params, scm, storyKey, pr, testCaseType, customParams, trackerConfig) {
     const prNumber = pr.number;
     const prUrl = pr.html_url;
     console.log('PR #' + prNumber + ' already merged for story ' + storyKey + ' — finalizing');
@@ -116,31 +117,31 @@ function finalizeAlreadyMergedPR(params, scm, storyKey, pr, testCaseType, custom
     var issueType = params.ticket && params.ticket.fields &&
         params.ticket.fields.issuetype && params.ticket.fields.issuetype.name;
 
-    var tcResult = moveLinkedTestCases(storyKey, testCaseType, jiraConfig);
+    var tcResult = moveLinkedTestCases(storyKey, testCaseType, trackerConfig);
 
     // Bug stays In Testing; bug_done_check will move it to Done only when all
     // directly linked Test Cases are Passed. Moving it here allowed bugs to be
     // closed while their acceptance tests were still failing.
 
     try {
-        jira_remove_label({ key: storyKey, label: LABELS.PR_APPROVED });
+        trackerHelper.removeLabel(storyKey, LABELS.PR_APPROVED);
     } catch (e) {
         console.warn('Could not remove pr_approved label:', e);
     }
     try {
-        jira_remove_label({ key: storyKey, label: LABELS.TEST_PR_MERGED });
+        trackerHelper.removeLabel(storyKey, LABELS.TEST_PR_MERGED);
     } catch (e) {
         console.warn('Could not remove test_pr_merged label:', e);
     }
     try {
-        jira_add_label({ key: storyKey, label: LABELS.TEST_PR_FINALIZED });
+        trackerHelper.addLabel(storyKey, LABELS.TEST_PR_FINALIZED);
         console.log('Added test_pr_finalized label to', storyKey);
     } catch (e) {
         console.warn('Could not add test_pr_finalized label:', e);
     }
 
     var ticketLabel = issueType || 'Story';
-    jira_post_comment({
+    tracker_post_comment({
         key: storyKey,
         comment: 'h3. ✅ ' + ticketLabel + ' Test PR Already Merged\n\n' +
             'PR [#' + prNumber + '|' + prUrl + '] for branch {code}test/' + storyKey + '{code} was already merged.\n\n' +
@@ -177,10 +178,10 @@ function attemptMerge(params) {
     }
 
     var config = configLoader.loadProjectConfig(params.jobParams || params);
-    var jiraConfig = config.jira;
+    var trackerConfig = config.tracker;
     var scm = scmModule.createScm(config);
     var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
-    var testCaseType = jiraConfig.issueTypes.TEST_CASE || 'Test Case';
+    var testCaseType = trackerConfig.issueTypes.TEST_CASE || 'Test Case';
     var issueType = params.ticket && params.ticket.fields &&
         params.ticket.fields.issuetype && params.ticket.fields.issuetype.name;
 
@@ -197,7 +198,7 @@ function attemptMerge(params) {
     }
 
     if (found.merged) {
-        finalizeAlreadyMergedPR(params, scm, storyKey, found.pr, testCaseType, customParams, jiraConfig);
+        finalizeAlreadyMergedPR(params, scm, storyKey, found.pr, testCaseType, customParams, trackerConfig);
         return {
             success: true,
             alreadyMerged: true,
@@ -274,28 +275,28 @@ function attemptMerge(params) {
 
         try { scm.removeLabel(prNumber, LABELS.PR_APPROVED); } catch (e) {}
 
-        var tcResult = moveLinkedTestCases(storyKey, testCaseType, jiraConfig);
+        var tcResult = moveLinkedTestCases(storyKey, testCaseType, trackerConfig);
 
         try {
-            jira_remove_label({ key: storyKey, label: LABELS.PR_APPROVED });
+            trackerHelper.removeLabel(storyKey, LABELS.PR_APPROVED);
             console.log('Removed pr_approved label from Jira ticket');
         } catch (e) {
             console.warn('Could not remove pr_approved from Jira ticket:', e);
         }
         try {
-            jira_remove_label({ key: storyKey, label: LABELS.TEST_PR_MERGED });
+            trackerHelper.removeLabel(storyKey, LABELS.TEST_PR_MERGED);
         } catch (e) {
             console.warn('Could not remove test_pr_merged label:', e);
         }
         try {
-            jira_add_label({ key: storyKey, label: LABELS.TEST_PR_FINALIZED });
+            trackerHelper.addLabel(storyKey, LABELS.TEST_PR_FINALIZED);
             console.log('Added test_pr_finalized label to', storyKey);
         } catch (e) {
             console.warn('Could not add test_pr_finalized label:', e);
         }
 
         var ticketLabel = issueType || 'Story';
-        jira_post_comment({
+        tracker_post_comment({
             key: storyKey,
             comment: 'h3. ✅ ' + ticketLabel + ' Test PR Merged\n\n' +
                 'PR [#' + prNumber + '|' + prUrl + '] for branch {code}test/' + storyKey + '{code} was merged.\n\n' +
@@ -352,7 +353,7 @@ function action(params) {
         params.ticket.fields.issuetype && params.ticket.fields.issuetype.name;
 
     var config = configLoader.loadProjectConfig(params.jobParams || params);
-    var jiraConfig = config.jira;
+    var trackerConfig = config.tracker;
     var scm = scmModule.createScm(config);
 
     const mergeResult = attemptMerge(params);
@@ -381,10 +382,10 @@ function action(params) {
     if (prNumber) {
         try { scm.removeLabel(prNumber, LABELS.PR_APPROVED); } catch (e) {}
     }
-    try { jira_remove_label({ key: storyKey, label: LABELS.PR_APPROVED }); } catch (e) {}
-    try { jira_add_label({ key: storyKey, label: LABELS.TEST_PR_REWORK_NEEDED }); } catch (e) {}
-    var reworkSkipLabel = issueType === jiraConfig.issueTypes.BUG ? 'sm_bug_test_rework_triggered' : 'sm_story_test_rework_triggered';
-    try { jira_remove_label({ key: storyKey, label: reworkSkipLabel }); } catch (e) {}
+    try { trackerHelper.removeLabel(storyKey, LABELS.PR_APPROVED); } catch (e) {}
+    try { trackerHelper.addLabel(storyKey, LABELS.TEST_PR_REWORK_NEEDED); } catch (e) {}
+    var reworkSkipLabel = issueType === trackerConfig.issueTypes.BUG ? 'sm_bug_test_rework_triggered' : 'sm_story_test_rework_triggered';
+    try { trackerHelper.removeLabel(storyKey, reworkSkipLabel); } catch (e) {}
 
     releaseLock(storyKey, customParams);
 
@@ -395,11 +396,11 @@ function action(params) {
     if (mergeResult.reason === 'ci_failed' && mergeResult.failedNames) {
         reasonText = 'required checks failed: ' + checksList;
     }
-    jira_post_comment({
+    tracker_post_comment({
         key: storyKey,
         comment: '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *' + panelTitle + '* — Could not merge PR #' + (prNumber || 'unknown') + ': ' + reasonText + '.\n\n' + (prUrl ? '[View PR|' + prUrl + ']' : '') + '{panel}'
     });
-    jira_move_to_status({ key: storyKey, statusName: jiraConfig.statuses.IN_REWORK });
+    tracker_move_to_status({ key: storyKey, statusName: trackerConfig.statuses.IN_REWORK });
     return true;
 }
 

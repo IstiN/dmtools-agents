@@ -20,6 +20,7 @@ const { LABELS } = require('./config.js');
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 const scmModule = require('./common/scm.js');
+var trackerHelper = require('./common/tracker.js');
 
 function action(params) {
     const ticketKey = params.ticket && params.ticket.key;
@@ -28,15 +29,15 @@ function action(params) {
 
     // Load project config to get issue types (default: "Test Case" / "Bug")
     const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-    const jiraConfig = projectConfig.jira;
-    const testCaseType = jiraConfig.issueTypes.TEST_CASE || 'Test Case';
-    const bugType = jiraConfig.issueTypes.BUG || 'Bug';
+    const trackerConfig = projectConfig.tracker;
+    const testCaseType = trackerConfig.issueTypes.TEST_CASE || 'Test Case';
+    const bugType = trackerConfig.issueTypes.BUG || 'Bug';
 
     // Helper: remove SM label so the check re-runs on the next SM cycle
     function releaseLock() {
         if (ticketKey && removeLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: removeLabel });
+                trackerHelper.removeLabel(ticketKey, removeLabel);
                 console.log('Released SM label — will re-check next cycle');
             } catch (e) {
                 console.warn('Failed to remove SM label:', e);
@@ -46,7 +47,7 @@ function action(params) {
 
     function getTicket() {
         try {
-            return jira_get_ticket({ key: ticketKey }) || {};
+            return tracker_get_ticket({ key: ticketKey }) || {};
         } catch (e) {
             console.warn('Failed to read ticket', ticketKey, ':', e);
             return {};
@@ -76,7 +77,7 @@ function action(params) {
 
     function findAllLinkedTCs() {
         try {
-            return jira_search_by_jql({
+            return tracker_search({
                 jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "' + testCaseType + '"',
                 maxResults: 100
             }) || [];
@@ -88,7 +89,7 @@ function action(params) {
 
     function findLinkedBugs(tcKey) {
         try {
-            return jira_search_by_jql({
+            return tracker_search({
                 jql: 'issue in linkedIssues("' + tcKey + '") AND issuetype = "' + bugType + '"',
                 maxResults: 50
             }) || [];
@@ -102,7 +103,7 @@ function action(params) {
         var status = tc.fields && tc.fields.status && tc.fields.status.name;
 
         // Passed / intentionally skipped / no longer applicable are always non-blocking.
-        if (status === jiraConfig.statuses.PASSED || status === jiraConfig.statuses.SKIPPED || status === jiraConfig.statuses.IRRELEVANT) {
+        if (status === trackerConfig.statuses.PASSED || status === trackerConfig.statuses.SKIPPED || status === trackerConfig.statuses.IRRELEVANT) {
             return false;
         }
 
@@ -113,7 +114,7 @@ function action(params) {
         // regression TCs TS-501/TS-252 were Bug To Fix). We count *any* other
         // linked Bug (even Done) so stale TCs that were already addressed do not
         // hold the current Bug hostage.
-        if (status === jiraConfig.statuses.BUG_TO_FIX) {
+        if (status === trackerConfig.statuses.BUG_TO_FIX) {
             var linkedBugs = findLinkedBugs(tc.key);
             var hasOtherBug = linkedBugs.some(function(bug) {
                 var bugStatus = bug.fields && bug.fields.status && bug.fields.status.name;
@@ -174,8 +175,8 @@ function action(params) {
                 var reworkAttempted = labels.indexOf('sm_bug_rework_attempted') !== -1;
                 if (reworkAttempted) {
                     console.log('Test PR finalized and one rework already attempted — moving', ticketKey, 'to Blocked for triage');
-                    jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BLOCKED });
-                    jira_post_comment({
+                    tracker_move_to_status({ key: ticketKey, statusName: trackerConfig.statuses.BLOCKED });
+                    tracker_post_comment({
                         key: ticketKey,
                         comment: 'h3. 🚫 Test PR Finalized But Acceptance Tests Still Blocking After Rework\n\n' +
                             'The test-automation PR was merged and finalized, and one rework was already attempted, but the following linked Test Case(s) are still not *Passed*:\n' +
@@ -187,9 +188,9 @@ function action(params) {
                 }
 
                 console.log('Test PR finalized but', blockingCount, 'linked Test Case(s) still block — moving', ticketKey, 'to In Rework (one attempt)');
-                jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.IN_REWORK });
-                jira_add_label({ key: ticketKey, label: 'sm_bug_rework_attempted' });
-                jira_post_comment({
+                tracker_move_to_status({ key: ticketKey, statusName: trackerConfig.statuses.IN_REWORK });
+                trackerHelper.addLabel(ticketKey, 'sm_bug_rework_attempted');
+                tracker_post_comment({
                     key: ticketKey,
                     comment: 'h3. 🔄 Test PR Merged But Acceptance Tests Still Blocking\n\n' +
                         'The test-automation PR was merged and finalized, but the following linked Test Case(s) are still not *Passed*:\n' +
@@ -243,19 +244,19 @@ function action(params) {
         // Step 4: Move Bug to Done
         console.log('Moving', ticketKey, 'to Done');
 
-        jira_move_to_status({
+        tracker_move_to_status({
             key: ticketKey,
-            statusName: jiraConfig.statuses.DONE
+            statusName: trackerConfig.statuses.DONE
         });
 
         // Clean up anti-cycle label on successful completion.
         try {
-            jira_remove_label({ key: ticketKey, label: 'sm_bug_rework_attempted' });
+            trackerHelper.removeLabel(ticketKey, 'sm_bug_rework_attempted');
         } catch (e) {
             console.warn('Could not remove sm_bug_rework_attempted label:', e);
         }
 
-        jira_post_comment({
+        tracker_post_comment({
             key: ticketKey,
             comment: 'h3. ✅ Bug Complete — All Linked Test Cases Resolved\n\n' +
                 'All *' + totalTCs + '* linked Test Case(s) are either *Passed*, *Skipped*, *Irrelevant*, ' +

@@ -22,6 +22,7 @@ var configLoader = require('./configLoader.js');
 const { LABELS, resolveStatuses } = require('./config.js');
 const developTicket = require('./developTicketAndCreatePR.js');
 const outputFiles = require('./common/outputFiles.js');
+var trackerHelper = require('./common/tracker.js');
 
 function cleanCliOutput(output) {
     return (output || '').split('\n').filter(function(l) {
@@ -55,14 +56,14 @@ function removeLabels(ticketKey, params) {
     const wipLabel = params.metadata && params.metadata.contextId
         ? params.metadata.contextId + '_wip' : null;
     if (wipLabel) {
-        try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
+        try { trackerHelper.removeLabel(ticketKey, wipLabel); } catch (e) {}
     }
 
     const customParams = params.jobParams && params.jobParams.customParams;
     const removeLabel = customParams && customParams.removeLabel;
     if (removeLabel) {
         try {
-            jira_remove_label({ key: ticketKey, label: removeLabel });
+            trackerHelper.removeLabel(ticketKey, removeLabel);
             console.log('✅ Removed SM label:', removeLabel);
         } catch (e) {}
     }
@@ -73,7 +74,7 @@ function action(params) {
         const actualParams = params.ticket ? params : (params.jobParams || params);
         const ticketKey = actualParams.ticket.key;
         var config = configLoader.loadProjectConfig(params.jobParams || params);
-        var jiraConfig = config.jira;
+        var trackerConfig = config.tracker;
         var scm = configLoader.createScm(config);
         const _customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
         const statuses = resolveStatuses(_customParams);
@@ -93,7 +94,7 @@ function action(params) {
                     var existingUrl = existingPr.html_url || existingPr.url || ('#' + existingPr.number);
                     console.log('⚠️  PR already open for', ticketKey, ':', existingUrl, '— skipping re-development');
                     try {
-                        jira_post_comment({
+                        tracker_post_comment({
                             key: ticketKey,
                             comment: 'h3. ℹ️ PR Already Open\n\n' +
                                 'A pull/merge request already exists for this ticket: ' + existingUrl + '\n\n' +
@@ -101,7 +102,7 @@ function action(params) {
                         });
                     } catch (e) {}
                     try {
-                        jira_move_to_status({ key: ticketKey, statusName: statuses.IN_REVIEW });
+                        tracker_move_to_status({ key: ticketKey, statusName: statuses.IN_REVIEW });
                         console.log('✅ Moved', ticketKey, 'to In Review');
                     } catch (e) { console.warn('Failed to move to In Review:', e); }
                     removeLabels(ticketKey, params);
@@ -119,7 +120,7 @@ function action(params) {
             if (!hasCodeGraphUsage()) {
                 console.warn('outputs/blocked.json rejected — no CodeGraph usage was recorded');
                 try {
-                    jira_post_comment({
+                    tracker_post_comment({
                         key: ticketKey,
                         comment: 'h3. ⚠️ Blocked Claim Needs CodeGraph Verification\n\n' +
                             'The agent wrote `outputs/blocked.json`, but no CodeGraph usage was recorded. ' +
@@ -128,7 +129,7 @@ function action(params) {
                     });
                 } catch (e) {}
                 try {
-                    jira_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
+                    tracker_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
                     console.log('✅ Moved', ticketKey, 'to Ready For Development for CodeGraph retry');
                 } catch (e) {
                     console.warn('Failed to move ticket to Ready For Development:', e);
@@ -148,10 +149,10 @@ function action(params) {
                 comment += '*Needs from human*: ' + blocked.needs + '\n';
             }
 
-            try { jira_post_comment({ key: ticketKey, comment: comment }); } catch (e) {}
+            try { tracker_post_comment({ key: ticketKey, comment: comment }); } catch (e) {}
 
             try {
-                jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BLOCKED });
+                tracker_move_to_status({ key: ticketKey, statusName: trackerConfig.statuses.BLOCKED });
                 console.log('✅ Moved', ticketKey, 'to Blocked');
             } catch (e) {
                 console.warn('Failed to move to Blocked:', e);
@@ -183,16 +184,16 @@ function action(params) {
                 comment += 'No new PR required — fix is already in the codebase. Moved to *Done*.';
             }
 
-            try { jira_post_comment({ key: ticketKey, comment: comment }); } catch (e) {}
+            try { tracker_post_comment({ key: ticketKey, comment: comment }); } catch (e) {}
 
             try {
-                jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.DONE });
+                tracker_move_to_status({ key: ticketKey, statusName: trackerConfig.statuses.DONE });
                 console.log('✅ Moved', ticketKey, 'to Done');
             } catch (e) {
                 console.warn('Failed to move to Done:', e);
             }
 
-            try { jira_add_label({ key: ticketKey, label: LABELS.AI_DEVELOPED }); } catch (e) {}
+            try { trackerHelper.addLabel(ticketKey, LABELS.AI_DEVELOPED); } catch (e) {}
 
             removeLabels(ticketKey, params);
             return { success: true, path: 'already_fixed', ticketKey };
@@ -274,7 +275,7 @@ function action(params) {
 
             // Post informational comment
             try {
-                jira_post_comment({
+                tracker_post_comment({
                     key: ticketKeyForCheck,
                     comment: 'h3. ⏸️ Development Interrupted\n\nThe AI agent was interrupted (likely hit a rate limit) before completing the implementation. The ticket has been reset to *Ready For Development* and will be automatically retried.\n\n' +
                         (hasGitChanges ? 'Partial analysis work was saved to the branch.' : 'No partial work was produced.')
@@ -283,7 +284,7 @@ function action(params) {
 
             // Move ticket back to Ready For Development for retry
             try {
-                jira_move_to_status({ key: ticketKeyForCheck, statusName: statuses.READY_FOR_DEVELOPMENT });
+                tracker_move_to_status({ key: ticketKeyForCheck, statusName: statuses.READY_FOR_DEVELOPMENT });
                 console.log('✅ Moved', ticketKeyForCheck, 'to Ready For Development for retry');
             } catch (e) {
                 console.warn('Failed to move ticket to Ready For Development:', e);
@@ -306,7 +307,7 @@ function action(params) {
         try {
             const key = (params.ticket || (params.jobParams && params.jobParams.ticket) || {}).key;
             if (key) {
-                jira_post_comment({
+                tracker_post_comment({
                     key: key,
                     comment: 'h3. ❌ Bug Development Error\n\n{code}' + error.toString() + '{code}'
                 });

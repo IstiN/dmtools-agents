@@ -1,49 +1,41 @@
 /**
- * Common Jira Helper Functions
- * Shared utilities for Jira ticket operations
+ * Common Tracker Helper Functions
+ * Shared utilities for ticket operations (Jira, ADO, Rally).
  */
 
 const { STATUSES, LABELS } = require('../config.js');
+const trackerHelper = require('./tracker.js');
 
 /**
- * Assign ticket to initiator and move to "In Review" status with AI-generated label
- * This is the common post-processing logic used by multiple agents
- * 
- * @param {string} ticketKey - The Jira ticket key
+ * Assign ticket to initiator and move to "In Review" status with AI-generated label.
+ *
+ * @param {string} ticketKey   - The ticket key
  * @param {string} initiatorId - Account ID of the person to assign the ticket to
- * @param {string} wipLabel - Optional WIP label to remove after processing
+ * @param {string} wipLabel    - Optional WIP label to remove after processing
+ * @param {string} targetStatus
+ * @param {Object} [config]    - Optional project config (for tracker type detection)
  * @returns {Object} Result object with success status and message
  */
-function assignForReview(ticketKey, initiatorId, wipLabel, targetStatus) {
+function assignForReview(ticketKey, initiatorId, wipLabel, targetStatus, config) {
     const statusName = targetStatus || STATUSES.IN_REVIEW;
     try {
         console.log("Processing ticket:", ticketKey);
 
-        // Assign to initiator
-        jira_assign_ticket_to({
+        tracker_assign_ticket({
             key: ticketKey,
             accountId: initiatorId
         });
 
-        // Move to target status
-        jira_move_to_status({
+        tracker_move_to_status({
             key: ticketKey,
             statusName: statusName
         });
 
-        // Add AI-generated label
-        jira_add_label({
-            key: ticketKey,
-            label: LABELS.AI_GENERATED
-        });
+        trackerHelper.addLabel(ticketKey, LABELS.AI_GENERATED, config);
 
-        // Remove WIP label if provided
         if (wipLabel) {
             try {
-                jira_remove_label({
-                    key: ticketKey,
-                    label: wipLabel
-                });
+                trackerHelper.removeLabel(ticketKey, wipLabel, config);
                 console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
             } catch (labelError) {
                 console.warn('Failed to remove WIP label "' + wipLabel + '":', labelError);
@@ -67,9 +59,9 @@ function assignForReview(ticketKey, initiatorId, wipLabel, targetStatus) {
 }
 
 /**
- * Extract ticket key from Jira API response
- * 
- * @param {string|Object} result - Jira API response
+ * Extract ticket key from tracker API response.
+ *
+ * @param {string|Object} result - API response
  * @returns {string|null} Extracted ticket key or null if not found
  */
 function extractTicketKey(result) {
@@ -91,22 +83,20 @@ function extractTicketKey(result) {
 }
 
 /**
- * Set priority on a Jira ticket using the appropriate API
- * 
- * @param {string} ticketKey - The Jira ticket key
- * @param {string} priority - Priority name (e.g., 'Low', 'Medium', 'High')
+ * Set priority on a ticket.
+ *
+ * @param {string} ticketKey - The ticket key
+ * @param {string} priority  - Priority name (e.g., 'Low', 'Medium', 'High')
+ * @param {Object} [config]  - Optional project config (for tracker type detection)
  * @returns {boolean} True if successful, false otherwise
  */
-function setTicketPriority(ticketKey, priority) {
+function setTicketPriority(ticketKey, priority, config) {
     if (!ticketKey || !priority) {
         return false;
     }
-    
+
     try {
-        jira_set_priority({
-            key: ticketKey,
-            priority: priority
-        });
+        trackerHelper.setPriority(ticketKey, priority, config);
         console.log('Set priority ' + priority + ' on ticket ' + ticketKey);
         return true;
     } catch (priorityError) {
@@ -115,10 +105,8 @@ function setTicketPriority(ticketKey, priority) {
     }
 }
 
-// Export functions for use by other modules
 module.exports = {
     assignForReview,
     extractTicketKey,
     setTicketPriority
 };
-

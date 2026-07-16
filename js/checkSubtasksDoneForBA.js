@@ -15,6 +15,7 @@
 
 var configLoader = require('./configLoader.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
+var trackerHelper = require('./common/tracker.js');
 
 function action(params) {
     const ticketKey = params.ticket && params.ticket.key;
@@ -22,13 +23,13 @@ function action(params) {
     const removeLabel = customParams && customParams.removeLabel;
 
     const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-    const questionsJql = projectConfig.jira.questions.fetchJql;
-    const baAnalysisStatus = projectConfig.jira.statuses.BA_ANALYSIS;
+    const questionsJql = projectConfig.tracker.questions.fetchJql;
+    const baAnalysisStatus = projectConfig.tracker.statuses.BA_ANALYSIS;
 
     function releaseLock() {
         if (ticketKey && removeLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: removeLabel });
+                trackerHelper.removeLabel(ticketKey, removeLabel);
                 console.log('Released SM label — will re-check next cycle');
             } catch (e) {
                 console.warn('Failed to remove SM label:', e);
@@ -42,7 +43,7 @@ function action(params) {
 
         // Step 1: Fetch subtasks via JQL — jira_search_by_jql returns a plain array
         const allJql = questionsJql.replace('{ticketKey}', ticketKey);
-        const subtasks = jira_search_by_jql({
+        const subtasks = tracker_search({
             jql: allJql,
             maxResults: 100
         }) || [];
@@ -52,12 +53,12 @@ function action(params) {
         if (totalSubtasks === 0) {
             console.log('No subtasks found — no PO clarifications are required, moving', ticketKey, 'to', baAnalysisStatus);
 
-            jira_move_to_status({
+            tracker_move_to_status({
                 key: ticketKey,
                 statusName: baAnalysisStatus
             });
 
-            jira_post_comment({
+            tracker_post_comment({
                 key: ticketKey,
                 comment: 'h3. ✅ PO Review Complete — Moving to ' + baAnalysisStatus + '\n\n' +
                     'No clarification subtasks were created for this story, so there is nothing waiting for PO answers.\n\n' +
@@ -69,8 +70,8 @@ function action(params) {
         }
 
         // Step 2: Find subtasks NOT yet Done via JQL (more reliable than client-side field check)
-        const notDoneSubtasks = jira_search_by_jql({
-            jql: allJql.replace('ORDER BY created ASC', '') + ' AND status != "' + projectConfig.jira.statuses.DONE + '"',
+        const notDoneSubtasks = tracker_search({
+            jql: allJql.replace('ORDER BY created ASC', '') + ' AND status != "' + projectConfig.tracker.statuses.DONE + '"',
             maxResults: 1
         }) || [];
         const notDoneCount = notDoneSubtasks.length;
@@ -85,12 +86,12 @@ function action(params) {
         // All subtasks Done → move to BA Analysis
         console.log('All', totalSubtasks, 'subtask(s) done — moving', ticketKey, 'to', baAnalysisStatus);
 
-        jira_move_to_status({
+        tracker_move_to_status({
             key: ticketKey,
             statusName: baAnalysisStatus
         });
 
-        jira_post_comment({
+        tracker_post_comment({
             key: ticketKey,
             comment: 'h3. ✅ PO Review Complete — Moving to ' + baAnalysisStatus + '\n\n' +
                 'All *' + totalSubtasks + '* subtask(s) are *Done*.\n\n' +

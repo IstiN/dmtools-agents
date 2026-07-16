@@ -16,20 +16,21 @@
 
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+var trackerHelper = require('./common/tracker.js');
 
 function action(params) {
     const ticketKey = params.ticket && params.ticket.key;
     const customParams = params.jobParams && params.jobParams.customParams;
     const removeLabel = customParams && customParams.removeLabel;
     const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-    const jiraConfig = projectConfig.jira;
-    const testCaseType = jiraConfig.issueTypes.TEST_CASE || 'Test Case';
-    const bugType = jiraConfig.issueTypes.BUG || 'Bug';
+    const trackerConfig = projectConfig.tracker;
+    const testCaseType = trackerConfig.issueTypes.TEST_CASE || 'Test Case';
+    const bugType = trackerConfig.issueTypes.BUG || 'Bug';
 
     function releaseLock() {
         if (ticketKey && removeLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: removeLabel });
+                trackerHelper.removeLabel(ticketKey, removeLabel);
                 console.log('Released SM label — will re-check next cycle');
             } catch (e) {
                 console.warn('Failed to remove SM label:', e);
@@ -39,7 +40,7 @@ function action(params) {
 
     function findLinkedTCs() {
         try {
-            return jira_search_by_jql({
+            return tracker_search({
                 jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "' + testCaseType + '"',
                 fields: ['key', 'status'],
                 maxResults: 100
@@ -52,7 +53,7 @@ function action(params) {
 
     function findLinkedBugs(tcKey) {
         try {
-            return jira_search_by_jql({
+            return tracker_search({
                 jql: 'issue in linkedIssues("' + tcKey + '") AND issuetype = "' + bugType + '"',
                 fields: ['key', 'status'],
                 maxResults: 50
@@ -67,7 +68,7 @@ function action(params) {
         var bugs = findLinkedBugs(tcKey);
         for (var i = 0; i < bugs.length; i++) {
             var status = bugs[i].fields && bugs[i].fields.status && bugs[i].fields.status.name;
-            if (status !== jiraConfig.jiraConfig.statuses.DONE) {
+            if (status !== trackerConfig.statuses.DONE) {
                 return bugs[i].key;
             }
         }
@@ -75,10 +76,10 @@ function action(params) {
     }
 
     function isInFlightStatus(status) {
-        return status === jiraConfig.statuses.IN_REVIEW_PASSED ||
-            status === jiraConfig.statuses.IN_REVIEW_FAILED ||
-            status === jiraConfig.statuses.IN_DEVELOPMENT ||
-            status === jiraConfig.statuses.READY_FOR_DEVELOPMENT;
+        return status === trackerConfig.statuses.IN_REVIEW_PASSED ||
+            status === trackerConfig.statuses.IN_REVIEW_FAILED ||
+            status === trackerConfig.statuses.IN_DEVELOPMENT ||
+            status === trackerConfig.statuses.READY_FOR_DEVELOPMENT;
     }
 
     try {
@@ -103,7 +104,7 @@ function action(params) {
         allTCs.forEach(function(tc) {
             var status = tc.fields && tc.fields.status && tc.fields.status.name;
 
-            if (status === jiraConfig.statuses.PASSED || status === jiraConfig.statuses.SKIPPED || status === jiraConfig.statuses.IRRELEVANT) {
+            if (status === trackerConfig.statuses.PASSED || status === trackerConfig.statuses.SKIPPED || status === trackerConfig.statuses.IRRELEVANT) {
                 return;
             }
 
@@ -118,7 +119,7 @@ function action(params) {
                 return;
             }
 
-            if (status === jiraConfig.statuses.FAILED) {
+            if (status === trackerConfig.statuses.FAILED) {
                 waitingForBugsTCs.push(tc.key);
             } else {
                 readyForRetestTCs.push(tc.key);
@@ -129,12 +130,12 @@ function action(params) {
         if (inFlightTCs.length === 0 && pendingBugTCs.length === 0 && waitingForBugsTCs.length === 0 && readyForRetestTCs.length === 0) {
             console.log('All', totalTCs, 'Test Case(s) passed — moving', ticketKey, 'to Done');
 
-            jira_move_to_status({
+            tracker_move_to_status({
                 key: ticketKey,
-                statusName: jiraConfig.statuses.DONE
+                statusName: trackerConfig.statuses.DONE
             });
 
-            jira_post_comment({
+            tracker_post_comment({
                 key: ticketKey,
                 comment: 'h3. ✅ Story Complete — All Test Cases Passed\n\n' +
                     'All *' + totalTCs + '* linked Test Case(s) are in *Passed* status.\n\n' +
@@ -167,12 +168,12 @@ function action(params) {
 
             console.log('Found', pendingBugTCs.length, 'TC(s) with pending bugs — moving Story to Bug To Fix');
 
-            jira_move_to_status({
+            tracker_move_to_status({
                 key: ticketKey,
-                statusName: jiraConfig.statuses.BUG_TO_FIX
+                statusName: trackerConfig.statuses.BUG_TO_FIX
             });
 
-            jira_post_comment({
+            tracker_post_comment({
                 key: ticketKey,
                 comment: 'h3. 🐛 Story Moved to Bug To Fix\n\n' +
                     'The following linked Test Cases have open bugs:\n\n' + bugList + '\n\n' +
@@ -201,12 +202,12 @@ function action(params) {
         // Step 5: All remaining non-passed TCs are ready for re-test → back to Ready For Testing
         console.log('All non-passed TCs are ready for re-test — moving Story to Ready For Testing');
 
-        jira_move_to_status({
+        tracker_move_to_status({
             key: ticketKey,
-            statusName: jiraConfig.statuses.READY_FOR_TESTING
+            statusName: trackerConfig.statuses.READY_FOR_TESTING
         });
 
-        jira_post_comment({
+        tracker_post_comment({
             key: ticketKey,
             comment: 'h3. 🔄 Story Ready for Re-test\n\n' +
                 'All linked bugs are resolved. The Story has been moved back to *Ready For Testing* to re-run the linked Test Cases.'

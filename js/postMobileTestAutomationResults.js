@@ -32,6 +32,7 @@ var configLoader = require('./configLoader.js');
 const { LABELS } = require('./config.js');
 var prHelper = require('./common/pullRequest.js');
 var outputFiles = require('./common/outputFiles.js');
+var trackerHelper = require('./common/tracker.js');
 
 /** Marker file path to prevent infinite resume loops. */
 var RESUME_MARKER = 'outputs/.missing-output-resume-attempted';
@@ -495,7 +496,7 @@ function removeWipLabel(params, ticketKey) {
     var wipLabel = params.metadata && params.metadata.contextId
         ? params.metadata.contextId + '_wip'
         : 'mobile_test_automation_wip';
-    try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
+    try { trackerHelper.removeLabel(ticketKey, wipLabel); } catch (e) {}
 }
 
 function removeSMTriggerLabel(params, ticketKey) {
@@ -504,7 +505,7 @@ function removeSMTriggerLabel(params, ticketKey) {
     var smTriggerLabel = customParams.removeLabel;
     if (smTriggerLabel) {
         try {
-            jira_remove_label({ key: ticketKey, label: smTriggerLabel });
+            trackerHelper.removeLabel(ticketKey, smTriggerLabel);
             console.log('✅ Removed SM trigger label:', smTriggerLabel);
         } catch (e) {}
     }
@@ -516,7 +517,7 @@ function action(params) {
         var ticketSummary = params.ticket.fields ? params.ticket.fields.summary : ticketKey;
         var jiraComment = params.response || '';
         var config = configLoader.loadProjectConfig(params.jobParams || params);
-        var jiraConfig = config.jira;
+        var trackerConfig = config.tracker;
         var automationScm = createScmCompat(config, config.repository && config.repository.owner, config.repository && config.repository.repo);
         var workingDir = config.workingDir;
 
@@ -582,7 +583,7 @@ function action(params) {
                 var errMsg = 'h3. ⚠️ Test Automation Error\n\nFlows may have been written but output JSON is missing. Check workflow logs.' +
                     (resumed ? '\n\n_Resume was attempted but also did not produce output files._' : '');
                 if (automationPrUrl) errMsg += '\n\n*Automation PR*: ' + automationPrUrl;
-                jira_post_comment({ key: ticketKey, comment: errMsg });
+                tracker_post_comment({ key: ticketKey, comment: errMsg });
             } catch (e) { console.warn('Failed to post error Jira comment:', e); }
             return { success: false, error: 'No test result JSON found', automationPrUrl: automationPrUrl };
         }
@@ -637,7 +638,7 @@ function action(params) {
             if (automationPrUrl && comment.indexOf(automationPrUrl) === -1) {
                 comment += '\n\n*Automation PR*: ' + automationPrUrl;
             }
-            jira_post_comment({ key: ticketKey, comment: comment });
+            tracker_post_comment({ key: ticketKey, comment: comment });
             console.log('✅ Posted Jira comment');
         } catch (e) {
             console.warn('Failed to post Jira comment:', e);
@@ -656,8 +657,8 @@ function action(params) {
                 });
             }
             blockedComment += '\nOnce setup is complete, move this ticket back to *Backlog* to trigger re-run.';
-            try { jira_post_comment({ key: ticketKey, comment: blockedComment }); } catch (e) {}
-            try { jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BLOCKED }); } catch (e) {}
+            try { tracker_post_comment({ key: ticketKey, comment: blockedComment }); } catch (e) {}
+            try { tracker_move_to_status({ key: ticketKey, statusName: trackerConfig.statuses.BLOCKED }); } catch (e) {}
 
             removeWipLabel(params, ticketKey);
             removeSMTriggerLabel(params, ticketKey);
@@ -666,8 +667,8 @@ function action(params) {
 
         // Step 8: Move ticket status
         try {
-            var targetStatus = passed ? jiraConfig.statuses.PASSED : jiraConfig.statuses.FAILED;
-            jira_move_to_status({ key: ticketKey, statusName: targetStatus });
+            var targetStatus = passed ? trackerConfig.statuses.PASSED : trackerConfig.statuses.FAILED;
+            tracker_move_to_status({ key: ticketKey, statusName: targetStatus });
             console.log('✅ Moved', ticketKey, 'to', targetStatus);
         } catch (e) {
             console.warn('Failed to move ticket status:', e);
@@ -675,7 +676,7 @@ function action(params) {
 
         // Step 9: Add AI label
         try {
-            jira_add_label({ key: ticketKey, label: LABELS.AI_TEST_AUTOMATION });
+            trackerHelper.addLabel(ticketKey, LABELS.AI_TEST_AUTOMATION);
         } catch (e) {
             console.warn('Failed to add AI label:', e);
         }
@@ -695,7 +696,7 @@ function action(params) {
     } catch (error) {
         console.error('❌ Error in postMobileTestAutomationResults:', error);
         try {
-            jira_post_comment({
+            tracker_post_comment({
                 key: params.ticket.key,
                 comment: 'h3. ❌ Test Automation Error\n\n{code}' + error.toString() + '{code}'
             });

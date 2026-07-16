@@ -7,6 +7,7 @@ const { LABELS } = require('./config.js');
 var scmModule = require('./common/scm.js');
 var configLoader = require('./configLoader.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
+var trackerHelper = require('./common/tracker.js');
 
 function prMatchesTicket(pr, ticketKey) {
     if (!pr || !ticketKey) return false;
@@ -55,7 +56,7 @@ function findMergedPRForTicket(scm, ticketKey) {
 function removeLabel(ticketKey, label) {
     if (!ticketKey || !label) return;
     try {
-        jira_remove_label({ key: ticketKey, label: label });
+        trackerHelper.removeLabel(ticketKey, label);
         console.log('Removed label from Jira:', label);
     } catch (e) {}
 }
@@ -68,7 +69,7 @@ function action(params) {
     }
 
     var config = configLoader.loadProjectConfig(params.jobParams || params);
-    var jiraConfig = config.jira;
+    var trackerConfig = config.tracker;
     var scm = scmModule.createScm(config);
     var pr = findMergedPRForTicket(scm, ticketKey);
 
@@ -82,8 +83,8 @@ function action(params) {
     console.log('Recovered merged PR #' + prNumber + ' for ' + ticketKey);
 
     try {
-        jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.MERGED });
-        console.log('Moved', ticketKey, 'to', jiraConfig.statuses.MERGED);
+        tracker_move_to_status({ key: ticketKey, statusName: trackerConfig.statuses.MERGED });
+        console.log('Moved', ticketKey, 'to', trackerConfig.statuses.MERGED);
     } catch (e) {
         console.warn('Could not move ticket to Merged:', e.message || e);
     }
@@ -94,11 +95,11 @@ function action(params) {
     removeLabel(ticketKey, 'sm_story_rework_triggered');
 
     try {
-        jira_post_comment({
+        tracker_post_comment({
             key: ticketKey,
             comment: 'h3. ✅ Merged PR Recovered\n\n' +
                 'Found already merged PR #' + prNumber + (prUrl ? ' — [View PR|' + prUrl + ']' : '') +
-                '. Ticket moved to *' + jiraConfig.statuses.MERGED + '* so the normal post-merge pipeline can continue.'
+                '. Ticket moved to *' + trackerConfig.statuses.MERGED + '* so the normal post-merge pipeline can continue.'
         });
     } catch (e) {}
 

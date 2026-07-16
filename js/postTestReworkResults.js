@@ -16,6 +16,7 @@ var feedbackLoop = require('./common/feedbackLoop.js');
 var prHelper = require('./common/pullRequest.js');
 const { GIT_CONFIG, LABELS } = require('./config.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
+var trackerHelper = require('./common/tracker.js');
 
 function cleanCommandOutput(output) {
     if (!output) return '';
@@ -275,7 +276,7 @@ function createPRIfMissing(scm, branchName, ticketKey, config) {
 
         console.log('No open PR/MR found — creating one...');
         var ticket;
-        try { ticket = jira_get_ticket({ key: ticketKey }); } catch (e) { ticket = null; }
+        try { ticket = tracker_get_ticket({ key: ticketKey }); } catch (e) { ticket = null; }
         const summary = ticket && ticket.fields ? (ticket.fields.summary || ticketKey) : ticketKey;
         const prTitle = ticketKey + ' ' + summary;
 
@@ -387,7 +388,7 @@ function action(params) {
     const actualParams = params.ticket ? params : (params.jobParams || params);
     const ticketKey = actualParams.ticket.key;
     var config = configLoader.loadProjectConfig(params.jobParams || params);
-    var jiraConfig = config.jira;
+    var trackerConfig = config.tracker;
     var scm = configLoader.createScm(config);
     const customParams = resolveCustomParams(params, actualParams, config);
     const removeLabel = customParams && customParams.removeLabel;
@@ -396,10 +397,10 @@ function action(params) {
         : 'pr_test_automation_rework_wip';
 
     function releaseLock() {
-        try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
+        try { trackerHelper.removeLabel(ticketKey, wipLabel); } catch (e) {}
         if (removeLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: removeLabel });
+                trackerHelper.removeLabel(ticketKey, removeLabel);
                 console.log('✅ Removed SM label:', removeLabel);
             } catch (e) {}
         }
@@ -417,7 +418,7 @@ function action(params) {
                 : 'outputs/test_automation_result.json is missing required "status" field (got: ' + JSON.stringify(result) + '). The agent must write { "status": "passed" | "failed", ... }.';
             console.error(errMsg);
             try {
-                jira_post_comment({
+                tracker_post_comment({
                     key: ticketKey,
                     comment: 'h3. ⚠️ Rework Error\n\n' + errMsg + '\n\nCheck CI logs for the agent output.'
                 });
@@ -481,7 +482,7 @@ function action(params) {
             if (resume.attempted) {
                 return action(params);
             }
-            jira_post_comment({
+            tracker_post_comment({
                 key: ticketKey,
                 comment: 'h3. ❌ Rework Push Failed\n\n{code}' + e.toString() + '{code}'
             });
@@ -516,9 +517,9 @@ function action(params) {
 
         // Step 4: Move ticket to In Review - Passed or In Review - Failed
         // Bug creation/linking is handled by the bug_creation agent when TC reaches Failed status
-        const targetStatus = passed ? jiraConfig.statuses.IN_REVIEW_PASSED : jiraConfig.statuses.IN_REVIEW_FAILED;
+        const targetStatus = passed ? trackerConfig.statuses.IN_REVIEW_PASSED : trackerConfig.statuses.IN_REVIEW_FAILED;
         try {
-            jira_move_to_status({ key: ticketKey, statusName: targetStatus });
+            tracker_move_to_status({ key: ticketKey, statusName: targetStatus });
             console.log('✅ Moved', ticketKey, 'to', targetStatus);
         } catch (e) {
             console.warn('Failed to move ticket status:', e);
@@ -532,7 +533,7 @@ function action(params) {
             comment += '*Branch*: {code}' + branchName + '{code}\n';
             if (pr) comment += '*Pull Request*: ' + pr.html_url + '\n';
             comment += '\n' + fixSummary;
-            jira_post_comment({ key: ticketKey, comment: comment });
+            tracker_post_comment({ key: ticketKey, comment: comment });
         } catch (e) {
             console.warn('Failed to post Jira comment:', e);
         }
@@ -595,7 +596,7 @@ function action(params) {
                 if (resume.attempted) {
                     return action(params);
                 }
-                jira_post_comment({
+                tracker_post_comment({
                     key: key,
                     comment: 'h3. ❌ Test Rework Error\n\n{code}' + error.toString() + '{code}'
                 });

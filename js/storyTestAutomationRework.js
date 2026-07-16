@@ -8,6 +8,7 @@ var autoStart = require('./common/autoStart.js');
 var prHelper = require('./common/pullRequest.js');
 const { LABELS } = require('./config.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
+var trackerHelper = require('./common/tracker.js');
 
 function smLabelForContext(contextId) {
     if (!contextId) return null;
@@ -204,7 +205,7 @@ function action(params) {
     const actualParams = params.ticket ? params : (params.jobParams || params);
     const storyKey = actualParams.ticket.key;
     const config = configLoader.loadProjectConfig(params.jobParams || params);
-    const jiraConfig = config.jira;
+    const trackerConfig = config.tracker;
     const scm = configLoader.createScm(config);
     const customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
     const contextId = actualParams.metadata && actualParams.metadata.contextId;
@@ -213,15 +214,15 @@ function action(params) {
 
     function releaseWipLock() {
         if (wipLabel) {
-            try { jira_remove_label({ key: storyKey, label: wipLabel }); } catch (e) {}
+            try { trackerHelper.removeLabel(storyKey, wipLabel); } catch (e) {}
         } else {
             // If contextId is missing, clean up both known WIP labels defensively.
-            try { jira_remove_label({ key: storyKey, label: 'story_test_automation_rework_wip' }); } catch (e) {}
-            try { jira_remove_label({ key: storyKey, label: 'bug_test_automation_rework_wip' }); } catch (e) {}
+            try { trackerHelper.removeLabel(storyKey, 'story_test_automation_rework_wip'); } catch (e) {}
+            try { trackerHelper.removeLabel(storyKey, 'bug_test_automation_rework_wip'); } catch (e) {}
         }
         if (removeLabel) {
             try {
-                jira_remove_label({ key: storyKey, label: removeLabel });
+                trackerHelper.removeLabel(storyKey, removeLabel);
                 console.log('✅ Removed SM label:', removeLabel);
             } catch (e) {}
         }
@@ -230,7 +231,7 @@ function action(params) {
     function releaseLock() {
         releaseWipLock();
         try {
-            jira_remove_label({ key: storyKey, label: LABELS.TEST_PR_REWORK_NEEDED });
+            trackerHelper.removeLabel(storyKey, LABELS.TEST_PR_REWORK_NEEDED);
             console.log('✅ Removed test_pr_rework_needed label');
         } catch (e) {}
 
@@ -254,7 +255,7 @@ function action(params) {
             branchName = commitAndPush(storyKey, config);
         } catch (e) {
             console.error('Git operations failed:', e);
-            jira_post_comment({
+            tracker_post_comment({
                 key: storyKey,
                 comment: 'h3. ❌ Story Test Rework Push Failed\n\n{code}' + e.toString() + '{code}'
             });
@@ -275,8 +276,8 @@ function action(params) {
 
         // Step 3: Move Story back to In Testing
         try {
-            jira_move_to_status({ key: storyKey, statusName: jiraConfig.statuses.IN_TESTING });
-            console.log('✅ Moved Story', storyKey, 'to', jiraConfig.statuses.IN_TESTING);
+            tracker_move_to_status({ key: storyKey, statusName: trackerConfig.statuses.IN_TESTING });
+            console.log('✅ Moved Story', storyKey, 'to', trackerConfig.statuses.IN_TESTING);
         } catch (e) {
             console.warn('Failed to move Story to In Testing:', e);
         }
@@ -287,7 +288,7 @@ function action(params) {
             comment += '*Branch*: {code}' + branchName + '{code}\n';
             if (pr) comment += '*Pull Request*: ' + pr.html_url + '\n';
             comment += '\n' + fixSummary;
-            jira_post_comment({ key: storyKey, comment: comment });
+            tracker_post_comment({ key: storyKey, comment: comment });
         } catch (e) {
             console.warn('Failed to post Jira comment:', e);
         }
@@ -328,7 +329,7 @@ function action(params) {
     } catch (error) {
         console.error('❌ Error in storyTestAutomationRework:', error);
         try {
-            jira_post_comment({
+            tracker_post_comment({
                 key: storyKey,
                 comment: 'h3. ❌ Story Test Rework Error\n\n{code}' + error.toString() + '{code}'
             });

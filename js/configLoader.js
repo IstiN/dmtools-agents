@@ -33,6 +33,27 @@ var DEFAULTS = {
         repo: ''
     },
 
+    // Canonical tracker config — use config.tracker in new code.
+    // config.jira is kept as a backward-compat alias (see loadProjectConfig bridge below).
+    tracker: {
+        project: '',
+        parentTicket: '',
+        statuses: DEFAULT_CONFIG.STATUSES,
+        issueTypes: DEFAULT_CONFIG.ISSUE_TYPES,
+        questions: {
+            // JQL/WIQL to fetch question subtasks. {ticketKey} is replaced at runtime.
+            fetchJql: 'parent = {ticketKey} AND issuetype = Subtask ORDER BY created ASC',
+            answerField: 'Answer'
+        },
+        parentContextFetch: {
+            enabled: false
+        },
+        // Field names — override per project in .dmtools/config.js under tracker.fields
+        fields: {
+            acceptanceCriteria: 'Acceptance Criteria'
+        }
+    },
+
     jira: {
         project: '',
         parentTicket: '',
@@ -183,6 +204,17 @@ function mergeProjectConfig(defaults, overrides) {
             result.jira.questions = overrides.jira.questions;
         }
     }
+    if (overrides.tracker) {
+        if (overrides.tracker.statuses) {
+            result.tracker.statuses = overrides.tracker.statuses;
+        }
+        if (overrides.tracker.issueTypes) {
+            result.tracker.issueTypes = overrides.tracker.issueTypes;
+        }
+        if (overrides.tracker.questions) {
+            result.tracker.questions = overrides.tracker.questions;
+        }
+    }
     if (overrides.labels) {
         result.labels = overrides.labels;
     }
@@ -329,6 +361,16 @@ function loadProjectConfig(params) {
 
     // Store resolved config path so callers can propagate it downstream
     if (resolvedPath) config._configPath = resolvedPath;
+
+    // Backward-compat bridge:
+    //   Project configs that only define  jira: {}  get config.tracker pointing at it.
+    //   Project configs that only define  tracker: {}  get config.jira pointing at it.
+    //   This keeps existing .dmtools/config.js files working while new code reads config.tracker.
+    if (!loaded || (!loaded.tracker && loaded.jira)) {
+        config.tracker = config.jira;
+    } else if (!loaded || (!loaded.jira && loaded.tracker)) {
+        config.jira = config.tracker;
+    }
 
     // Apply targetRepository override from customParams
     if (customParams.targetRepository) {
