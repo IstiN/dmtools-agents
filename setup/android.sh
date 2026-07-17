@@ -46,19 +46,48 @@ register_path "${ANDROID_HOME}/platform-tools"
 
 OS="$(detect_os)"
 
-# ── Install sdkmanager if missing ─────────────────────────────────────────────
+# ── Install sdkmanager if missing OR outdated ─────────────────────────────────
+# Google's repository has no stable "latest" URL alias — build numbers are
+# baked into the filename and go stale. This was pinned at build 11076708
+# (cmdline-tools revision 11.0, ~Aug 2024) for a long time, which is old
+# enough that avdmanager silently fails to recognize newer system images:
+# confirmed live — sdkmanager installed system-images;android-35;google_apis;
+# arm64-v8a correctly (verified complete on disk, and via
+# `sdkmanager --list_installed`), yet avdmanager still failed with
+# "Package path is not valid. Valid system image paths are: null" on
+# every attempt, while the SAME package installed under a locally-tested
+# newer cmdline-tools revision (12.0+) created the AVD without issue.
+#
+# Bitrise "Dev Environments" sessions run on a persistent disk, so an old
+# cmdline-tools installation from a PREVIOUS session can survive even after
+# the VM itself is recreated — a plain `is_installed sdkmanager` check alone
+# is not enough, since it only checks *presence*, not *version*, and would
+# silently skip reinstalling a stale-but-present sdkmanager forever. So we
+# also read the installed revision from source.properties and force a
+# reinstall whenever it is older than the minimum required version.
+REQUIRED_CMDLINE_TOOLS_MAJOR=22
+CURRENT_CMDLINE_TOOLS_REVISION=""
+if [ -f "${ANDROID_HOME}/cmdline-tools/latest/source.properties" ]; then
+  CURRENT_CMDLINE_TOOLS_REVISION="$(grep '^Pkg.Revision=' "${ANDROID_HOME}/cmdline-tools/latest/source.properties" 2>/dev/null | cut -d= -f2)"
+fi
+CURRENT_CMDLINE_TOOLS_MAJOR="${CURRENT_CMDLINE_TOOLS_REVISION%%.*}"
+
+NEED_CMDLINE_TOOLS_INSTALL=0
 if ! is_installed sdkmanager; then
-  echo "📥 Installing Android cmdline-tools..."
-  # Google's repository has no stable "latest" URL alias — build numbers are
-  # baked into the filename and go stale. This was pinned at build 11076708
-  # (cmdline-tools revision 11.0, ~Aug 2024) for a long time, which is old
-  # enough that avdmanager silently fails to recognize newer system images:
-  # confirmed live — sdkmanager installed system-images;android-35;google_apis;
-  # arm64-v8a correctly (verified complete on disk, and via
-  # `sdkmanager --list_installed`), yet avdmanager still failed with
-  # "Package path is not valid. Valid system image paths are: null" on
-  # every attempt, while the SAME package installed under a locally-tested
-  # newer cmdline-tools revision (12.0+) created the AVD without issue.
+  NEED_CMDLINE_TOOLS_INSTALL=1
+elif [ -z "${CURRENT_CMDLINE_TOOLS_MAJOR}" ]; then
+  # sdkmanager is on PATH but we can't determine its revision — reinstall to be safe.
+  NEED_CMDLINE_TOOLS_INSTALL=1
+elif ! [ "${CURRENT_CMDLINE_TOOLS_MAJOR}" -ge "${REQUIRED_CMDLINE_TOOLS_MAJOR}" ] 2>/dev/null; then
+  NEED_CMDLINE_TOOLS_INSTALL=1
+fi
+
+if [ "${NEED_CMDLINE_TOOLS_INSTALL}" = "1" ]; then
+  if [ -n "${CURRENT_CMDLINE_TOOLS_REVISION}" ]; then
+    echo "📥 Installed cmdline-tools revision ${CURRENT_CMDLINE_TOOLS_REVISION} is older than required ${REQUIRED_CMDLINE_TOOLS_MAJOR}.0 — reinstalling..."
+  else
+    echo "📥 Installing Android cmdline-tools..."
+  fi
   # Bumped to build 15859902 (revision 22.0, current as of this fix) — and,
   # for Apple Silicon specifically, to the native mac_arm64 variant instead
   # of the x86_64 build (avoids running the SDK tools under Rosetta).
@@ -73,6 +102,7 @@ if ! is_installed sdkmanager; then
 
   TMP_ZIP="/tmp/cmdline-tools.zip"
   curl -fsSL "${CMDLINE_TOOLS_URL}" -o "${TMP_ZIP}"
+  rm -rf "${ANDROID_HOME}/cmdline-tools/latest"
   mkdir -p "${ANDROID_HOME}/cmdline-tools"
   unzip -q "${TMP_ZIP}" -d "${ANDROID_HOME}/cmdline-tools/"
   mv "${ANDROID_HOME}/cmdline-tools/cmdline-tools" "${ANDROID_HOME}/cmdline-tools/latest" 2>/dev/null || true
