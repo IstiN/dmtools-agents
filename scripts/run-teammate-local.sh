@@ -101,12 +101,33 @@ echo "   ticket:  ${TICKET_KEY}"
 echo "   project: ${PROJECT_KEY:-<default>}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+# ── Self-ignore this script's own scratch files — no per-project .gitignore
+# edits required. Written to .git/info/exclude (local-only, per-clone, never
+# committed) rather than the tracked .gitignore, so any consumer repo just
+# works out of the box. Idempotent — only appended once.
+GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || echo .git)"
+EXCLUDE_FILE="${GIT_DIR}/info/exclude"
+SCRATCH_PATTERN=".dmtools/local-run-*"
+mkdir -p "$(dirname "${EXCLUDE_FILE}")"
+touch "${EXCLUDE_FILE}"
+if ! grep -qxF "${SCRATCH_PATTERN}" "${EXCLUDE_FILE}" 2>/dev/null; then
+  {
+    echo ""
+    echo "# Auto-added by run-teammate-local.sh — SM local-run scratch files"
+    echo "# (encoded-config blobs + run logs), never meant to be committed."
+    echo "${SCRATCH_PATTERN}"
+  } >> "${EXCLUDE_FILE}"
+fi
+
 # ── Guard: refuse to run on a dirty working tree ─────────────────────────────
 # See the module docstring above — protects uncommitted work (this run's own repo
-# is reused across tickets, unlike an ephemeral GitHub Actions checkout).
-if [ -n "$(git status --porcelain)" ]; then
+# is reused across tickets, unlike an ephemeral GitHub Actions checkout). Excludes
+# this script's own scratch pattern via pathspec too, as defense-in-depth in case
+# the .git/info/exclude write above didn't take effect (e.g. read-only .git dir).
+DIRTY_PATHSPEC=(-- . ":(exclude)${SCRATCH_PATTERN}")
+if [ -n "$(git status --porcelain "${DIRTY_PATHSPEC[@]}")" ]; then
   echo "❌ Working tree is dirty — refusing to run (commit/stash your changes first)." >&2
-  git status --short >&2
+  git status --short "${DIRTY_PATHSPEC[@]}" >&2
   exit 1
 fi
 
@@ -150,9 +171,12 @@ if [ -n "${LAST_JS_RESULT}" ] && echo "${LAST_JS_RESULT}" | grep -q '"success":f
 fi
 
 # ── Post-guard: the agent is expected to leave a clean tree (committed + pushed) ─
-if [ -n "$(git status --porcelain)" ]; then
+# Same scratch-pattern exclusion as the pre-guard — LOG_FILE (this run's own
+# ".dmtools/local-run-*.log") would otherwise always show up as untracked and
+# falsely fail this check on every single successful run.
+if [ -n "$(git status --porcelain "${DIRTY_PATHSPEC[@]}")" ]; then
   echo "⚠️  Working tree is dirty after the run — ${CONFIG_FILE} may not have committed/pushed everything." >&2
-  git status --short >&2
+  git status --short "${DIRTY_PATHSPEC[@]}" >&2
   echo "   Log: ${LOG_FILE}" >&2
   exit 1
 fi
