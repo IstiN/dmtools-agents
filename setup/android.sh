@@ -49,9 +49,26 @@ OS="$(detect_os)"
 # ── Install sdkmanager if missing ─────────────────────────────────────────────
 if ! is_installed sdkmanager; then
   echo "📥 Installing Android cmdline-tools..."
-  CMDLINE_TOOLS_URL="https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+  # Google's repository has no stable "latest" URL alias — build numbers are
+  # baked into the filename and go stale. This was pinned at build 11076708
+  # (cmdline-tools revision 11.0, ~Aug 2024) for a long time, which is old
+  # enough that avdmanager silently fails to recognize newer system images:
+  # confirmed live — sdkmanager installed system-images;android-35;google_apis;
+  # arm64-v8a correctly (verified complete on disk, and via
+  # `sdkmanager --list_installed`), yet avdmanager still failed with
+  # "Package path is not valid. Valid system image paths are: null" on
+  # every attempt, while the SAME package installed under a locally-tested
+  # newer cmdline-tools revision (12.0+) created the AVD without issue.
+  # Bumped to build 15859902 (revision 22.0, current as of this fix) — and,
+  # for Apple Silicon specifically, to the native mac_arm64 variant instead
+  # of the x86_64 build (avoids running the SDK tools under Rosetta).
+  CMDLINE_TOOLS_URL="https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip"
   if [ "${OS}" = "macos" ]; then
-    CMDLINE_TOOLS_URL="https://dl.google.com/android/repository/commandlinetools-mac-11076708_latest.zip"
+    if [ "$(uname -m)" = "arm64" ]; then
+      CMDLINE_TOOLS_URL="https://dl.google.com/android/repository/commandlinetools-mac_arm64-15859902_latest.zip"
+    else
+      CMDLINE_TOOLS_URL="https://dl.google.com/android/repository/commandlinetools-mac_x86_64-15859902_latest.zip"
+    fi
   fi
 
   TMP_ZIP="/tmp/cmdline-tools.zip"
