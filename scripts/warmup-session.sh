@@ -106,7 +106,14 @@ for tool in ${EXCLUDE_TOOLS}; do
 done
 
 echo "── Installing/pre-warming toolchain ───────────────────────────────────"
+# Run install.sh with the product repo as CWD — several tools resolve
+# relative to the current working directory (gradle.sh looks for ./gradlew
+# to pre-warm; CodeGraph's auto-init checks whether CWD is a git repo before
+# indexing it). Without this, both silently no-op when warmup-session.sh
+# itself was invoked from outside the target repo (the common case: the
+# Bitrise "warmup" script field clones into --dir first, then calls this
+# script from the session's home directory, not from inside --dir).
 # shellcheck disable=SC2086
-bash "${AGENTS_DIR}/setup/install.sh" all "${EXCLUDE_FLAGS[@]}" ${INSTALL_ARGS}
+( cd "${TARGET_DIR}" && bash "${AGENTS_DIR}/setup/install.sh" all "${EXCLUDE_FLAGS[@]}" ${INSTALL_ARGS} )
 
 echo "✅ Session warmed up. Repo is at ${TARGET_DIR} (branch: $(git -C "${TARGET_DIR}" rev-parse --abbrev-ref HEAD))."
