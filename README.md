@@ -940,7 +940,11 @@ module.exports = {
         parentTicket: 'PROJ-1'
     },
     git: {
-        baseBranch: 'master'  // default is 'main'
+        baseBranch: 'master'  // default is 'main' — also passed as --base-branch to
+                               // scripts/run-teammate-local.sh for localTeammate/
+                               // forceLocalTeammate runs, so this must match the
+                               // repo's actual default branch or local runs fail with
+                               // "fatal: couldn't find remote ref main"
     }
 };
 ```

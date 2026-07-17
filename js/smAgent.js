@@ -354,11 +354,19 @@ function runTeammateLocally(ticketKey, rule, effectiveConfig) {
         }
     }
 
+    // config.git.baseBranch (project override) takes precedence over rule.baseBranch;
+    // run-teammate-local.sh itself defaults to "main" when --base-branch is omitted,
+    // which silently breaks on any project whose default branch is named differently
+    // (e.g. "master") — always pass it explicitly when we know it.
+    var baseBranch = (effectiveConfig && effectiveConfig.git && effectiveConfig.git.baseBranch)
+        || rule.baseBranch || '';
+
     var cmd = 'bash ' + scriptPath +
         ' --config-file ' + resolvedCf +
         ' --ticket ' + ticketKey +
         (encodedConfigFile ? ' --encoded-config-file ' + encodedConfigFile : '') +
-        (projectKey ? ' --project-key ' + projectKey : '');
+        (projectKey ? ' --project-key ' + projectKey : '') +
+        (baseBranch ? ' --base-branch ' + baseBranch : '');
 
     console.log('  🖥️  [local] ' + cmd);
 
