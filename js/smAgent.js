@@ -21,11 +21,14 @@
  *   jobParams.maxTriggeredWorkflows (or maxWorkflowsPerRun) limits total active plus newly
  *   dispatched workflows across all non-local rules.
  *   Override priority: config.smMaxWorkflows (from .dmtools/config.js) > sm.json value.
- *   jobParams.forceLocalTeammate — set via a CLI JSON override (e.g.
- *   `dmtools run agents/sm.json '{"jobParams":{"forceLocalTeammate":true}}'`) to switch
- *   EVERY default-dispatch rule to the local teammate pipeline for that run, without
- *   editing sm.json/.dmtools/config.js. Rules with localExecution:true are unaffected;
- *   a rule can still opt out with an explicit `localTeammate: false`.
+ *   jobParams.forceLocalTeammate — set via a CLI JSON override (note the outer `params`
+ *   wrapper — `dmtools run <file> <override>` deep-merges into the whole {name, params}
+ *   job config, not directly into params.jobParams; a bare {"jobParams":{...}} override
+ *   is silently ignored):
+ *   `dmtools run agents/sm.json '{"params":{"jobParams":{"forceLocalTeammate":true}}}'`
+ *   to switch EVERY default-dispatch rule to the local teammate pipeline for that run,
+ *   without editing sm.json/.dmtools/config.js. Rules with localExecution:true are
+ *   unaffected; a rule can still opt out with an explicit `localTeammate: false`.
  *
  * Rule fields:
  *   jql            (required) — JQL to find tickets (supports {jiraProject}, {parentTicket})
@@ -757,12 +760,16 @@ function action(params) {
     }
 
     // Global "run everything locally" override — set via a CLI JSON override, e.g.:
-    //   dmtools run agents/sm.json '{"jobParams":{"forceLocalTeammate":true}}'
+    //   dmtools run agents/sm.json '{"params":{"jobParams":{"forceLocalTeammate":true}}}'
+    // NOTE the outer "params" wrapper: `dmtools run <file> <override>` deep-merges the
+    // override into the whole {name, params} job config object, not directly into
+    // params.jobParams — a bare {"jobParams":{...}} override (missing the "params"
+    // wrapper) is silently ignored, no error, jobParams just stays at sm.json's defaults.
     // Forces every default-dispatch rule to run through the local teammate pipeline
     // (as if it had localTeammate:true) instead of a GitHub Actions workflow_dispatch —
-    // no env var needed; dmtools' own CLI JSON-override mechanism (deep-merged into
-    // jobParams) is the switch. Rules already using localExecution:true (pure-JS, no
-    // checkout/AI CLI) are left untouched. A rule can opt out even while the override is
+    // no env var needed; dmtools' own CLI JSON-override mechanism is the switch. Rules
+    // already using localExecution:true (pure-JS, no checkout/AI CLI) are left untouched.
+    // A rule can opt out even while the override is
     // active by setting `localTeammate: false` explicitly.
     if (p.forceLocalTeammate && rules) {
         var forcedCount = 0;

@@ -795,11 +795,19 @@ fills in anything missing from `./dmtools.env` (same `KEY=VALUE` format
 
 **Switching an entire SM run to local without editing any rule:** rather than adding
 `localTeammate: true` to every rule in `sm.json`/`.dmtools/config.js`, pass a CLI JSON
-override (dmtools deep-merges this into `jobParams`) when invoking the SM job:
+override when invoking the SM job. `dmtools run <config_file> <override>` deep-merges
+`<override>` into the *whole* job config object (`{name, params}`), not just into
+`params.jobParams` directly — so the override must be wrapped in `params` too, mirroring
+the same shape as the job config file itself:
 
 ```bash
-dmtools run agents/sm.json '{"jobParams":{"forceLocalTeammate":true}}'
+dmtools run agents/sm.json '{"params":{"jobParams":{"forceLocalTeammate":true}}}'
 ```
+
+A bare `{"jobParams":{"forceLocalTeammate":true}}` (without the outer `params` wrapper)
+is silently ignored — it doesn't raise an error, the SM job just runs with the
+unmodified default `jobParams` from `sm.json`, so every rule falls through to its
+normal dispatch behavior as if the override had never been passed.
 
 With `forceLocalTeammate: true`, every default-dispatch rule for that run behaves as if
 it had `localTeammate: true` — no GitHub Actions dispatch, everything runs through
