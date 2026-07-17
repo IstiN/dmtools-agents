@@ -53,6 +53,24 @@ done
 [ -n "${REPO_URL}" ] || { echo "❌ --repo is required" >&2; usage; }
 [ -n "${TARGET_DIR}" ] || { echo "❌ --dir is required" >&2; usage; }
 
+# ── Auto-configure GitHub HTTPS auth for private repos ───────────────────────
+# A fresh cloud session (Bitrise Dev Environments, throwaway VM/container, ...)
+# has no git credential helper and no TTY, so a plain `git clone
+# https://github.com/...` against a private repo fails hard with:
+#   fatal: could not read Username for 'https://github.com': Device not configured
+# If GH_TOKEN or PAT_TOKEN is already exported (as it should be — see the
+# "Secrets" note above), rewrite all https://github.com/ URLs to embed it, so
+# every clone/fetch/pull/submodule-update below (and anything a later
+# `run-agent.sh`/`run-teammate-local.sh` does) authenticates transparently —
+# including submodules hosted under a different GitHub org (e.g. this
+# `agents` submodule). No-op if neither var is set (public repo, or the
+# session template already configured its own credential helper/SSH key).
+GH_AUTH_TOKEN="${GH_TOKEN:-${PAT_TOKEN:-}}"
+if [ -n "${GH_AUTH_TOKEN}" ]; then
+  git config --global "url.https://x-access-token:${GH_AUTH_TOKEN}@github.com/.insteadOf" "https://github.com/"
+  echo "🔑 Configured git to authenticate github.com HTTPS clones with GH_TOKEN/PAT_TOKEN"
+fi
+
 echo "── Bootstrapping session ──────────────────────────────────────────────"
 echo "Repo:    ${REPO_URL}"
 echo "Dir:     ${TARGET_DIR}"

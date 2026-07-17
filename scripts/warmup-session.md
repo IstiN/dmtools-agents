@@ -48,6 +48,14 @@ this fast, just a repo sync).
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Private repo: a fresh session has no credential helper and no TTY, so a
+# plain `git clone https://github.com/...` fails with "could not read
+# Username ... Device not configured". Authenticate before the FIRST clone
+# (warmup-session.sh itself repeats this line internally for everything it
+# clones/fetches afterwards, but that's too late for this bootstrap clone).
+# Skip this line entirely if your-org/your-product-repo is public.
+git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+
 git clone --recurse-submodules https://github.com/your-org/your-product-repo.git repo
 bash repo/agents/scripts/warmup-session.sh \
   --repo https://github.com/your-org/your-product-repo.git \
@@ -65,6 +73,13 @@ twice on a truly fresh session.)
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
+
+# Needed again here for private repos: the `git config --global` from the
+# warmup script only persists if the session's home directory is on a
+# persistent disk carried over between starts. Setting it unconditionally in
+# both scripts is cheap and avoids depending on that persistence guarantee.
+git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+
 cd repo
 git fetch origin
 git checkout main
