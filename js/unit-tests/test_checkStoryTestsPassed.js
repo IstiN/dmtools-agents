@@ -241,4 +241,32 @@ suite('checkStoryTestsPassed', function() {
         assert.deepEqual(removedLabels, [{ key: 'TS-60', label: 'sm_story_done_check_triggered' }]);
     });
 
+    test('honors customParams.customStatuses override over config statuses', function() {
+        var moved = [];
+
+        var module = loadCheckStoryTestsPassed({
+            jira_search_by_jql: function(args) {
+                if (args.jql.indexOf('issuetype = "Test Case"') !== -1) {
+                    return [makeTc('TS-81', 'Bug To Fix')];
+                }
+                if (args.jql.indexOf('issuetype = "Bug"') !== -1) {
+                    return [{ key: 'TS-90', fields: { status: { name: 'Done' } } }];
+                }
+                return [];
+            },
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_post_comment: function() {},
+            jira_remove_label: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-80' },
+            jobParams: { customParams: { customStatuses: { READY_FOR_TESTING: 'Retest Needed' } } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'moved_to_ready_for_testing');
+        assert.deepEqual(moved, [{ key: 'TS-80', statusName: 'Retest Needed' }]);
+    });
+
 });

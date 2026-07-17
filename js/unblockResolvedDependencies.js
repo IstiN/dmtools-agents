@@ -34,7 +34,9 @@ function action(params) {
         jiraConfig.statuses.DONE,
         jiraConfig.statuses.MERGED,
         jiraConfig.statuses.PASSED,
-        jiraConfig.statuses.IRRELEVANT
+        jiraConfig.statuses.IRRELEVANT,
+        // Not part of STATUSES/config — kept as a literal for backward compatibility
+        'Closed'
     ].filter(Boolean);
 
     console.log('=== Unblock resolved dependencies check for', ticketKey, '===');

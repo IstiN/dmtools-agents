@@ -23,6 +23,8 @@ function action(params) {
     const removeLabel = customParams && customParams.removeLabel;
     const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
     const jiraConfig = projectConfig.jira;
+    // Legacy override channel: customParams.customStatuses still wins over .dmtools/config.js statuses
+    const statuses = Object.assign({}, jiraConfig.statuses, (customParams && customParams.customStatuses) || {});
     const testCaseType = jiraConfig.issueTypes.TEST_CASE || 'Test Case';
     const bugType = jiraConfig.issueTypes.BUG || 'Bug';
 
@@ -67,7 +69,7 @@ function action(params) {
         var bugs = findLinkedBugs(tcKey);
         for (var i = 0; i < bugs.length; i++) {
             var status = bugs[i].fields && bugs[i].fields.status && bugs[i].fields.status.name;
-            if (status !== jiraConfig.statuses.DONE) {
+            if (status !== statuses.DONE) {
                 return bugs[i].key;
             }
         }
@@ -75,10 +77,10 @@ function action(params) {
     }
 
     function isInFlightStatus(status) {
-        return status === jiraConfig.statuses.IN_REVIEW_PASSED ||
-            status === jiraConfig.statuses.IN_REVIEW_FAILED ||
-            status === jiraConfig.statuses.IN_DEVELOPMENT ||
-            status === jiraConfig.statuses.READY_FOR_DEVELOPMENT;
+        return status === statuses.IN_REVIEW_PASSED ||
+            status === statuses.IN_REVIEW_FAILED ||
+            status === statuses.IN_DEVELOPMENT ||
+            status === statuses.READY_FOR_DEVELOPMENT;
     }
 
     try {
@@ -103,7 +105,7 @@ function action(params) {
         allTCs.forEach(function(tc) {
             var status = tc.fields && tc.fields.status && tc.fields.status.name;
 
-            if (status === jiraConfig.statuses.PASSED || status === jiraConfig.statuses.SKIPPED || status === jiraConfig.statuses.IRRELEVANT) {
+            if (status === statuses.PASSED || status === statuses.SKIPPED || status === statuses.IRRELEVANT) {
                 return;
             }
 
@@ -118,7 +120,7 @@ function action(params) {
                 return;
             }
 
-            if (status === jiraConfig.statuses.FAILED) {
+            if (status === statuses.FAILED) {
                 waitingForBugsTCs.push(tc.key);
             } else {
                 readyForRetestTCs.push(tc.key);
@@ -131,7 +133,7 @@ function action(params) {
 
             jira_move_to_status({
                 key: ticketKey,
-                statusName: jiraConfig.statuses.DONE
+                statusName: statuses.DONE
             });
 
             jira_post_comment({
@@ -169,7 +171,7 @@ function action(params) {
 
             jira_move_to_status({
                 key: ticketKey,
-                statusName: jiraConfig.statuses.BUG_TO_FIX
+                statusName: statuses.BUG_TO_FIX
             });
 
             jira_post_comment({
@@ -203,7 +205,7 @@ function action(params) {
 
         jira_move_to_status({
             key: ticketKey,
-            statusName: jiraConfig.statuses.READY_FOR_TESTING
+            statusName: statuses.READY_FOR_TESTING
         });
 
         jira_post_comment({

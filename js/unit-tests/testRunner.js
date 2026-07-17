@@ -194,11 +194,12 @@ function makeRequire(moduleMap) {
 
 /**
  * Default jira section for configLoader mocks — mirrors config.js STATUSES/ISSUE_TYPES.
+ * Returns shallow copies so per-test overrides never mutate the shared config module.
  */
 function makeDefaultJiraConfig() {
     return {
-        issueTypes: configModule.ISSUE_TYPES,
-        statuses: configModule.STATUSES
+        issueTypes: Object.assign({}, configModule.ISSUE_TYPES),
+        statuses: Object.assign({}, configModule.STATUSES)
     };
 }
 

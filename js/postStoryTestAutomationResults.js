@@ -554,6 +554,8 @@ function action(params) {
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var jiraConfig = config.jira;
         var customParams = (params.jobParams || params).customParams || {};
+        // Legacy override channel: customParams.customStatuses still wins over .dmtools/config.js statuses
+        var statuses = Object.assign({}, jiraConfig.statuses, customParams.customStatuses || {});
         var scm = configLoader.createScm(config);
         var workingDir = config.workingDir || null;
         var testFilesPath = customParams.testFilesGlob || 'testing/';
@@ -613,7 +615,7 @@ function action(params) {
                 finalizeTestCaseStatus(item.testCaseKey, 'failed', jiraConfig);
             });
 
-            var bugReturnStatus = jiraConfig.statuses.READY_FOR_DEVELOPMENT;
+            var bugReturnStatus = statuses.READY_FOR_DEVELOPMENT;
             try {
                 jira_move_to_status({ key: storyKey, statusName: bugReturnStatus });
                 console.log('✅ Moved Bug', storyKey, 'back to', bugReturnStatus);
@@ -726,10 +728,10 @@ function action(params) {
                     }
                 } else if (item.status === 'skipped') {
                     // Skipped tests are final — no PR/review needed.
-                    moveSkippedTcToStatus(item.testCaseKey, jiraConfig.statuses.SKIPPED);
+                    moveSkippedTcToStatus(item.testCaseKey, statuses.SKIPPED);
                 } else if (item.status === 'irrelevant') {
                     // Legacy/no-longer-applicable tests are final; delete their test code.
-                    moveIrrelevantTcToStatus(item.testCaseKey, jiraConfig.statuses.IRRELEVANT, testFilesPath, workingDir);
+                    moveIrrelevantTcToStatus(item.testCaseKey, statuses.IRRELEVANT, testFilesPath, workingDir);
                 } else {
                     console.log('Skipping status update for', item.testCaseKey, '— status:', item.status);
                 }

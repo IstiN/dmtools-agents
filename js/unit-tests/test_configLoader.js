@@ -116,13 +116,31 @@ suite('configLoader.mergeProjectConfig', function() {
         assert.equal(result.git.authorName, defaults.git.authorName, 'other git fields preserved');
     });
 
-    test('fully replaces jira.statuses when provided', function() {
+    test('merges jira.statuses over defaults when provided', function() {
         var customStatuses = { DONE: 'Closed', IN_REVIEW: 'Under Review' };
         var result = configLoaderModule.mergeProjectConfig(defaults, {
             jira: { statuses: customStatuses }
         });
-        assert.deepEqual(result.jira.statuses, customStatuses);
-        assert.notOk(result.jira.statuses.BACKLOG, 'old statuses removed');
+        assert.equal(result.jira.statuses.DONE, 'Closed', 'override applied');
+        assert.equal(result.jira.statuses.IN_REVIEW, 'Under Review', 'override applied');
+        assert.equal(result.jira.statuses.BACKLOG, 'Backlog', 'unspecified keys keep defaults');
+    });
+
+    test('merges jira.issueTypes over defaults when provided', function() {
+        var result = configLoaderModule.mergeProjectConfig(defaults, {
+            jira: { issueTypes: { TEST_CASE: 'XRay Test' } }
+        });
+        assert.equal(result.jira.issueTypes.TEST_CASE, 'XRay Test', 'override applied');
+        assert.equal(result.jira.issueTypes.BUG, 'Bug', 'unspecified keys keep defaults');
+        assert.equal(result.jira.issueTypes.STORY, 'Story', 'unspecified keys keep defaults');
+    });
+
+    test('explicit null jira.statuses/issueTypes falls back to defaults', function() {
+        var result = configLoaderModule.mergeProjectConfig(defaults, {
+            jira: { statuses: null, issueTypes: null }
+        });
+        assert.equal(result.jira.statuses.DONE, 'Done', 'default statuses restored');
+        assert.equal(result.jira.issueTypes.BUG, 'Bug', 'default issueTypes restored');
     });
 
     test('preserves default statuses when not overridden', function() {
@@ -672,7 +690,7 @@ suite('configLoader: testCaseIssueType', function() {
         assert.equal(configModule.ISSUE_TYPES.TEST_CASE, 'Test Case');
     });
 
-    test('custom testCaseIssueType survives mergeProjectConfig as full replacement', function() {
+    test('custom testCaseIssueType survives mergeProjectConfig merge', function() {
         var config = configLoaderModule.mergeProjectConfig(configLoaderModule.DEFAULTS, {
             jira: {
                 issueTypes: {
