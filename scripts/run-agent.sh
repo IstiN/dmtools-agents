@@ -66,13 +66,22 @@ for arg in "$@"; do
 done
 
 # Load dmtools.env if exists (for local runs)
-# Uses grep to filter only valid KEY=VALUE lines — avoids bash executing bare values
-# (e.g. a multi-line API key where the continuation line has no KEY= prefix)
+# `while IFS='=' read -r k v; ... export "${k}=${v}"` (matching
+# run-teammate-local.sh's loader) instead of `source <(grep ...)`: `source`
+# executes each line as a shell command, so any UNQUOTED value containing
+# spaces (e.g. `JIRA_EXTRA_FIELDS=Acceptance criteria,Solution,...`) is
+# parsed as `KEY=firstword secondword...` — a command invocation, not an
+# assignment — which either errors ("command not found") or, worse, silently
+# leaves that var (and, depending on shell/error-handling quirks, everything
+# defined further down the file) unset. Splitting on the first '=' via `read`
+# preserves the rest of the line — spaces included — as one literal value,
+# with no shell re-evaluation.
 if [ -f "dmtools.env" ]; then
   echo "Loading environment from dmtools.env"
-  set -a
-  source <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' dmtools.env)
-  set +a
+  while IFS='=' read -r k v; do
+    [[ "${k}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    export "${k}=${v}"
+  done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' dmtools.env)
 fi
 
 # Extract prompt (last argument).
