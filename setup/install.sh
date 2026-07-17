@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"
 
 # Canonical order for "all" (node before copilot, java before dmtools)
-ALL_TOOLS="java maven node dmtools maestro copilot codemie cursor codegraph playwright kimi gradle android konan"
+ALL_TOOLS="java maven node dmtools maestro copilot codemie cursor codegraph playwright kimi gradle android emulator konan"
 
 if [ $# -eq 0 ]; then
   echo "Usage: install.sh tool1[:version] tool2[:version] ..."
@@ -38,6 +38,7 @@ if [ $# -eq 0 ]; then
   echo "  kimi      — Kimi Code CLI.           Default version: latest"
   echo "  gradle    — Gradle wrapper pre-warm. Default version: (wrapper version)"
   echo "  android   — Android SDK cmdline.     Default compileSdk: 36"
+  echo "  emulator  — Android AVD create+boot. Default: agent_avd, API 35, arch-matched ABI (needs android)"
   echo "  konan     — Kotlin/KMP native toolchain pre-warm"
   echo ""
   echo "Examples:"
@@ -185,6 +186,7 @@ for tool in ${TOOL_LIST}; do
     kimi)    BIN="kimi" ;;
     gradle)  BIN="gradlew" ;;
     android) BIN="sdkmanager" ;;
+    emulator) BIN="emulator" ;;
     konan)   continue ;;  # no standalone binary — toolchain lives in ~/.konan
     *)       continue ;;
   esac
