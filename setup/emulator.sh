@@ -89,13 +89,23 @@ install_image() {
   yes | sdkmanager "emulator" "${IMAGE}" --sdk_root="${ANDROID_HOME}" > "${SDK_INSTALL_LOG}" 2>&1
 }
 
+# A merely-existing IMAGE_DIR is NOT proof of a complete install: sdkmanager
+# creates the directory up front and can still leave it truncated (e.g. a
+# dropped download mid-transfer) while still exiting 0 and even reaching this
+# far. The one file every complete SDK package always has — and the same
+# manifest avdmanager itself reads to build its "valid system image paths"
+# list — is package.xml directly under the package directory. Checking for
+# it (instead of just `-d`) is what actually predicts whether avdmanager
+# will recognize the image, rather than just whether *some* files landed.
+image_installed() { [ -f "${IMAGE_DIR}/package.xml" ]; }
+
 install_image || true
-if [ ! -d "${IMAGE_DIR}" ]; then
-  echo "⚠️  ${IMAGE_DIR} missing after first attempt — retrying once..."
+if ! image_installed; then
+  echo "⚠️  ${IMAGE_DIR}/package.xml missing after first attempt — retrying once..."
   install_image || true
 fi
-if [ ! -d "${IMAGE_DIR}" ]; then
-  echo "❌ System image did not install: ${IMAGE_DIR} not found after 2 attempts." >&2
+if ! image_installed; then
+  echo "❌ System image did not install completely: ${IMAGE_DIR}/package.xml not found after 2 attempts." >&2
   echo "── sdkmanager output (${SDK_INSTALL_LOG}) ──────────────────────────" >&2
   tail -n 40 "${SDK_INSTALL_LOG}" >&2 || true
   exit 1
