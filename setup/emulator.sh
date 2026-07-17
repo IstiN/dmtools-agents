@@ -124,9 +124,31 @@ if ! image_installed; then
   exit 1
 fi
 echo "✅ ${IMAGE} present on disk"
+# Visibility for the log — cheap to print, and confirms exactly what
+# sdkmanager (and by extension avdmanager) thinks is installed at this
+# point, without needing a separate diagnostic round-trip if something
+# downstream still doesn't add up.
+echo "── sdkmanager --list_installed ──────────────────────────────────────"
+sdkmanager --list_installed --sdk_root="${ANDROID_HOME}" 2>/dev/null || true
 
 # ── Create the AVD if it doesn't already exist (idempotent) ──────────────────
-if avdmanager list avd | grep -qx "Name: ${AVD_NAME}"; then
+AVD_CREATE_LOG="/tmp/avdmanager-create-${AVD_NAME}.log"
+dump_avd_diagnostics() {
+  echo "── avdmanager create avd output (${AVD_CREATE_LOG}) ────────────────" >&2
+  cat "${AVD_CREATE_LOG}" >&2 2>/dev/null || true
+  echo "── avdmanager list target ───────────────────────────────────────────" >&2
+  avdmanager list target >&2 2>&1 || true
+  echo "── ls -la ${IMAGE_DIR} ──────────────────────────────────────────────" >&2
+  ls -la "${IMAGE_DIR}" >&2 2>&1 || true
+  echo "── ANDROID_HOME=${ANDROID_HOME} / ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-<unset>}" >&2
+}
+
+# `-x` requires an exact whole-line match, but avdmanager indents its
+# "Name: ..." lines (e.g. "    Name: agent_avd") — so this NEVER matched,
+# and the AVD was silently recreated (via --force) on every single run
+# instead of being skipped. Anchoring with a leading `[[:space:]]*` instead
+# of requiring the whole line tolerates that indentation.
+if avdmanager list avd | grep -qE "^[[:space:]]*Name: ${AVD_NAME}\$"; then
   echo "✅ AVD '${AVD_NAME}' already exists — skipping creation"
 else
   echo "🛠  Creating AVD '${AVD_NAME}'..."
@@ -134,11 +156,20 @@ else
   # profile [no]" prompt. Falls back to no --device if the requested profile
   # isn't in this SDK's device list (fresh cmdline-tools installs always have
   # pixel_6, but don't hard-fail on older/newer tools that don't).
+  # Output is captured to a log file (instead of going straight to the
+  # terminal) so a failure here can be diagnosed from a single dump instead
+  # of another round-trip: what avdmanager itself printed, what
+  # `avdmanager list target` currently sees, and what's actually on disk.
   if avdmanager list device | grep -qi "id: .*or \"${PROFILE}\"" || avdmanager list device | grep -qi "\"${PROFILE}\""; then
-    echo no | avdmanager create avd -n "${AVD_NAME}" -k "${IMAGE}" --device "${PROFILE}" --force
+    CREATE_CMD=(avdmanager create avd -n "${AVD_NAME}" -k "${IMAGE}" --device "${PROFILE}" --force)
   else
     echo "⚠️  Device profile '${PROFILE}' not found — creating AVD without a device profile"
-    echo no | avdmanager create avd -n "${AVD_NAME}" -k "${IMAGE}" --force
+    CREATE_CMD=(avdmanager create avd -n "${AVD_NAME}" -k "${IMAGE}" --force)
+  fi
+  if ! (echo no | "${CREATE_CMD[@]}") > "${AVD_CREATE_LOG}" 2>&1; then
+    echo "❌ avdmanager create avd failed for '${AVD_NAME}'" >&2
+    dump_avd_diagnostics
+    exit 1
   fi
   echo "✅ AVD '${AVD_NAME}' created"
 fi
