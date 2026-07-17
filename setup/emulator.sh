@@ -101,7 +101,13 @@ image_installed() { [ -f "${IMAGE_DIR}/package.xml" ]; }
 
 install_image || true
 if ! image_installed; then
-  echo "⚠️  ${IMAGE_DIR}/package.xml missing after first attempt — retrying once..."
+  # Bitrise Dev Environments sessions run on a persistent disk (survives
+  # session restarts), so a half-downloaded package directory from a prior
+  # failed attempt can still be sitting there. Remove it before retrying —
+  # letting sdkmanager "resume into" a directory that already has some
+  # (possibly corrupt) files is far less predictable than a clean re-fetch.
+  echo "⚠️  ${IMAGE_DIR}/package.xml missing after first attempt — cleaning up and retrying once..."
+  rm -rf "${IMAGE_DIR}"
   install_image || true
 fi
 if ! image_installed; then
