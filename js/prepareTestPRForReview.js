@@ -11,7 +11,7 @@ var configLoader = require('./configLoader.js');
 const gh = require('./common/githubHelpers.js');
 const gitOps = require('./common/gitOps.js');
 var prHelper = require('./common/pullRequest.js');
-const { STATUSES, LABELS } = require('./config.js');
+const { LABELS } = require('./config.js');
 
 function getTicketKey(params) {
     if (params.ticket && params.ticket.key) {
@@ -112,14 +112,16 @@ function isWip(pr, ticket) {
     return false;
 }
 
-function resolveFinalStatus(currentStatus, issueType) {
+function resolveFinalStatus(currentStatus, issueType, jiraConfig) {
     // Test Cases finish in Passed/Failed; Stories and Bugs stay in In Testing
     // so the done-check agents (checkStoryTestsPassed / checkBugTestsPassed)
     // can evaluate all linked Test Cases and move to Done / Bug To Fix / Ready For Testing.
-    if (issueType === 'Test Case') {
-        return currentStatus === 'In Review - Failed' ? 'Failed' : 'Passed';
+    if (issueType === jiraConfig.issueTypes.TEST_CASE) {
+        return currentStatus === jiraConfig.statuses.IN_REVIEW_FAILED
+            ? jiraConfig.statuses.FAILED
+            : jiraConfig.statuses.PASSED;
     }
-    return STATUSES.IN_TESTING;
+    return jiraConfig.statuses.IN_TESTING;
 }
 
 function markTestPrMerged(ticketKey) {
@@ -131,14 +133,14 @@ function markTestPrMerged(ticketKey) {
     }
 }
 
-function finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType) {
+function finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType, jiraConfig) {
     try {
         markTestPrMerged(ticketKey);
         const ticket = jira_get_ticket({ key: ticketKey });
         const currentStatus = ticket && ticket.fields && ticket.fields.status
             ? ticket.fields.status.name
             : '';
-        const finalStatus = resolveFinalStatus(currentStatus, issueType);
+        const finalStatus = resolveFinalStatus(currentStatus, issueType, jiraConfig);
         jira_move_to_status({ key: ticketKey, statusName: finalStatus });
         jira_post_comment({
             key: ticketKey,
@@ -164,6 +166,7 @@ function action(params) {
         const inputFolder = getInputFolder(params, ticketKey);
         const issueType = getIssueType(params);
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var jiraConfig = config.jira;
         var scm = configLoader.createScm(config);
 
         console.log('=== Preparing test PR for review:', ticketKey, '===');
@@ -198,7 +201,7 @@ function action(params) {
                 const err = 'No test PR and no remote branch found for test/' + ticketKey + '. Ticket needs re-automation.';
                 try {
                     jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Test PR Review Setup Failed\n\n' + err + '\n\n_Moving to In Rework so it can be re-automated._' });
-                    jira_move_to_status({ key: ticketKey, statusName: 'In Rework' });
+                    jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.IN_REWORK });
                 } catch (e) {}
                 return false;
             }
@@ -230,7 +233,7 @@ function action(params) {
             } catch (createErr) {
                 if (isNoCommitsError(createErr)) {
                     console.log('Branch test/' + ticketKey + ' has no commits ahead of main — test code is already merged.');
-                    finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType);
+                    finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType, jiraConfig);
                     return false;
                 }
                 const err = 'Branch test/' + ticketKey + ' exists but could not create PR: ' + createErr.toString();
@@ -247,7 +250,7 @@ function action(params) {
                 const ticket = jira_get_ticket({ key: ticketKey });
                 const currentStatus = ticket && ticket.fields && ticket.fields.status
                     ? ticket.fields.status.name : '';
-                const finalStatus = resolveFinalStatus(currentStatus, issueType);
+                const finalStatus = resolveFinalStatus(currentStatus, issueType, jiraConfig);
                 jira_move_to_status({ key: ticketKey, statusName: finalStatus });
                 jira_post_comment({
                     key: ticketKey,
@@ -289,7 +292,7 @@ function action(params) {
         var changedFiles = prDetails.changed_files;
         if (typeof changedFiles === 'number' && changedFiles === 0) {
             console.log('PR #' + pr.number + ' has 0 changed files — test code is already in main');
-            finalizeAlreadyMergedTestCase(ticketKey, branchName || ('test/' + ticketKey), issueType);
+            finalizeAlreadyMergedTestCase(ticketKey, branchName || ('test/' + ticketKey), issueType, jiraConfig);
             return false;
         }
 

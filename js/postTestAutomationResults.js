@@ -13,7 +13,7 @@
 var configLoader = require('./configLoader.js');
 var prHelper = require('./common/pullRequest.js');
 var autoStart = require('./common/autoStart.js');
-const { GIT_CONFIG, STATUSES, LABELS } = require('./config.js');
+const { GIT_CONFIG, LABELS } = require('./config.js');
 var outputFiles = require('./common/outputFiles.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
@@ -340,6 +340,7 @@ function action(params) {
         const ticketSummary = params.ticket.fields ? params.ticket.fields.summary : ticketKey;
         const projectKey = ticketKey.split('-')[0];
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var jiraConfig = config.jira;
         var customParams = (params.jobParams || params).customParams || {};
         var scm = configLoader.createScm(config);
         var workingDir = config.workingDir || null;
@@ -381,8 +382,8 @@ function action(params) {
 
             jira_post_comment({ key: ticketKey, comment: commentMsg });
             try {
-                jira_move_to_status({ key: ticketKey, statusName: STATUSES.BACKLOG });
-                console.log('✅ Missing result — moved', ticketKey, 'to', STATUSES.BACKLOG);
+                jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BACKLOG });
+                console.log('✅ Missing result — moved', ticketKey, 'to', jiraConfig.statuses.BACKLOG);
             } catch (e) {
                 console.warn('Failed to move missing-result ticket to Backlog:', e);
             }
@@ -443,7 +444,7 @@ function action(params) {
                     console.error('PR creation failed — resetting ticket to Backlog for retry');
                     try {
                         jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ PR Creation Failed\n\nTest code was pushed to branch {code}' + branchName + '{code} but the Pull Request could not be created.\n\nTicket moved back to *Backlog* — will be re-processed automatically. The next run will detect the existing branch and create the PR.\n\nError: ' + (prResult.error || 'unknown') });
-                        jira_move_to_status({ key: ticketKey, statusName: 'Backlog' });
+                        jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BACKLOG });
                     } catch (e) { console.warn('Could not reset to Backlog:', e); }
                     try {
                         const smTriggerLabel = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.removeLabel;
@@ -467,8 +468,8 @@ function action(params) {
                             'Ticket moved to *Blocked* for human conflict resolution.';
                         try { jira_post_comment({ key: ticketKey, comment: conflictComment }); } catch (e) {}
                         try {
-                            jira_move_to_status({ key: ticketKey, statusName: STATUSES.BLOCKED });
-                            console.log('✅ Conflicting PR — moved', ticketKey, 'to', STATUSES.BLOCKED);
+                            jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BLOCKED });
+                            console.log('✅ Conflicting PR — moved', ticketKey, 'to', jiraConfig.statuses.BLOCKED);
                         } catch (e) {
                             console.warn('Failed to move conflicting PR ticket to Blocked:', e);
                         }
@@ -490,7 +491,7 @@ function action(params) {
                 console.warn('Git operations failed:', gitResult.error);
                 try {
                     jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Git Operations Failed\n\nFailed to commit/push test code: ' + gitResult.error + '\n\nTicket moved back to *Backlog* — will be re-processed automatically.' });
-                    jira_move_to_status({ key: ticketKey, statusName: STATUSES.BACKLOG });
+                    jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BACKLOG });
                 } catch (e) { console.warn('Could not reset to Backlog:', e); }
                 try {
                     jira_remove_label({ key: ticketKey, label: 'sm_test_automation_triggered' });
@@ -549,8 +550,8 @@ function action(params) {
             }
 
             try {
-                jira_move_to_status({ key: ticketKey, statusName: STATUSES.BLOCKED });
-                console.log('✅ Blocked — moved', ticketKey, 'to', STATUSES.BLOCKED);
+                jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BLOCKED });
+                console.log('✅ Blocked — moved', ticketKey, 'to', jiraConfig.statuses.BLOCKED);
             } catch (e) {
                 console.warn('Failed to move to Blocked:', e);
             }
@@ -576,7 +577,7 @@ function action(params) {
 
         if (passed) {
             try {
-                var passedStatus = noCodeChanges ? STATUSES.PASSED : STATUSES.IN_REVIEW_PASSED;
+                var passedStatus = noCodeChanges ? jiraConfig.statuses.PASSED : jiraConfig.statuses.IN_REVIEW_PASSED;
                 jira_move_to_status({ key: ticketKey, statusName: passedStatus });
                 console.log('✅ Passed — moved', ticketKey, 'to', passedStatus);
             } catch (e) {
@@ -585,7 +586,7 @@ function action(params) {
         } else {
             // Bug creation is handled by the bug_creation agent when TC reaches Failed status
             try {
-                var failedStatus = noCodeChanges ? STATUSES.FAILED : STATUSES.IN_REVIEW_FAILED;
+                var failedStatus = noCodeChanges ? jiraConfig.statuses.FAILED : jiraConfig.statuses.IN_REVIEW_FAILED;
                 jira_move_to_status({ key: ticketKey, statusName: failedStatus });
                 console.log('✅ Failed — moved', ticketKey, 'to', failedStatus);
             } catch (e) {

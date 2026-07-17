@@ -8,25 +8,17 @@
  * - Otherwise leaves the ticket in Blocked.
  */
 
-const { STATUSES } = require('./config.js');
+const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 
-const TERMINAL_STATUSES = [
-    STATUSES.DONE,
-    STATUSES.MERGED,
-    STATUSES.PASSED,
-    'Closed',
-    'Irrelevant'
-];
-
-function isResolved(blocker) {
+function isResolved(blocker, terminalStatuses) {
     // Deleted ticket — no inwardIssue object at all
     if (!blocker) return true;
 
     var statusName = blocker.fields && blocker.fields.status && blocker.fields.status.name;
     if (!statusName) return false;
 
-    return TERMINAL_STATUSES.indexOf(statusName) !== -1;
+    return terminalStatuses.indexOf(statusName) !== -1;
 }
 
 function action(params) {
@@ -35,6 +27,17 @@ function action(params) {
         console.error('No ticket key provided');
         return { success: false, action: 'missing_ticket' };
     }
+
+    var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+    var jiraConfig = projectConfig.jira;
+    var terminalStatuses = [
+        jiraConfig.statuses.DONE,
+        jiraConfig.statuses.MERGED,
+        jiraConfig.statuses.PASSED,
+        jiraConfig.statuses.IRRELEVANT,
+        // Not part of STATUSES/config — kept as a literal for backward compatibility
+        'Closed'
+    ].filter(Boolean);
 
     console.log('=== Unblock resolved dependencies check for', ticketKey, '===');
 
@@ -64,7 +67,7 @@ function action(params) {
     if (blockers.length === 0) {
         console.log('No active blockers found — moving', ticketKey, 'to Backlog');
         try {
-            jira_move_to_status({ key: ticketKey, statusName: STATUSES.BACKLOG });
+            jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BACKLOG });
             jira_post_comment({
                 key: ticketKey,
                 comment: 'h3. ✅ Auto-unblocked — No Active Blockers\n\n' +
@@ -85,7 +88,7 @@ function action(params) {
         var b = blockers[j];
         var bKey = b.key || '?';
         var bStatus = b.fields && b.fields.status && b.fields.status.name || 'Unknown';
-        if (isResolved(b)) {
+        if (isResolved(b, terminalStatuses)) {
             console.log('  Blocker', bKey, 'is resolved (', bStatus, ')');
         } else {
             console.log('  Blocker', bKey, 'is NOT resolved (', bStatus, ')');
@@ -101,7 +104,7 @@ function action(params) {
     // All blockers resolved → move to Backlog
     console.log('All', blockers.length, 'blocker(s) resolved — moving', ticketKey, 'to Backlog');
     try {
-        jira_move_to_status({ key: ticketKey, statusName: STATUSES.BACKLOG });
+        jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BACKLOG });
     } catch (e) {
         console.warn('Failed to move ticket to Backlog:', e.message || e);
         return { success: false, action: 'move_failed', error: e.toString() };

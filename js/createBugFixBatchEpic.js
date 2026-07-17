@@ -22,18 +22,21 @@
  * individual bug_development rule, so the batch agent owns them.
  */
 
-const { STATUSES, ISSUE_TYPES, LABELS } = require('./config.js');
+const { LABELS } = require('./config.js');
 const { extractTicketKey } = require('./common/jiraHelpers.js');
+const configLoader = require('./configLoader.js');
 
 var BUG_FIX_BATCH_LABEL = LABELS.BUG_FIX_BATCH || 'bug_fix_batch';
-var BATCH_STATUS = STATUSES.READY_FOR_DEVELOPMENT || 'Ready For Development';
-var DONE_STATUS = STATUSES.DONE || 'Done';
 
 function action(params) {
     var ticketKey = params.ticket && params.ticket.key;
     var customParams = (params.jobParams && params.jobParams.customParams) || {};
     var removeLabel = customParams.removeLabel;
     var batchSize = customParams.batchSize || 5;
+    var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+    var jiraConfig = projectConfig.jira;
+    var BATCH_STATUS = jiraConfig.statuses.READY_FOR_DEVELOPMENT;
+    var DONE_STATUS = jiraConfig.statuses.DONE;
 
     function releaseLock() {
         if (ticketKey && removeLabel) {
@@ -84,7 +87,7 @@ function action(params) {
         // Only group bugs that have not been individually picked up yet.
         // In Development / In Progress bugs are left for the single-bug pipeline.
         var jql = 'issue in linkedIssues("' + storyKey + '") AND issuetype = Bug ' +
-            'AND status in ("' + (STATUSES.BACKLOG || 'Backlog') + '", "' + (STATUSES.TODO || 'To Do') + '", "' + (STATUSES.READY_FOR_DEVELOPMENT || 'Ready For Development') + '") ' +
+            'AND status in ("' + jiraConfig.statuses.BACKLOG + '", "' + jiraConfig.statuses.TODO + '", "' + jiraConfig.statuses.READY_FOR_DEVELOPMENT + '") ' +
             'AND (labels is EMPTY OR labels NOT IN ("' + BUG_FIX_BATCH_LABEL + '")) ' +
             'ORDER BY created ASC';
         return searchIssues(jql, ['key', 'status', 'summary', 'labels']);
@@ -101,7 +104,7 @@ function action(params) {
 
     function bugStillRelevant(bugKey) {
         var jql = 'issue in linkedIssues("' + bugKey + '") AND issuetype = "Test Case" ' +
-            'AND status in ("' + (STATUSES.FAILED || 'Failed') + '", "' + (STATUSES.BUG_TO_FIX || 'Bug To Fix') + '")';
+            'AND status in ("' + jiraConfig.statuses.FAILED + '", "' + jiraConfig.statuses.BUG_TO_FIX + '")';
         var tcs = searchIssues(jql, ['key', 'status'], 1);
         return tcs.length > 0;
     }
@@ -118,7 +121,7 @@ function action(params) {
         var fieldsJson = {
             summary: summary,
             description: description,
-            issuetype: { name: ISSUE_TYPES.EPIC || 'Epic' },
+            issuetype: { name: jiraConfig.issueTypes.EPIC || 'Epic' },
             labels: [BUG_FIX_BATCH_LABEL]
         };
 

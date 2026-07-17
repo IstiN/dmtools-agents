@@ -192,6 +192,54 @@ function makeRequire(moduleMap) {
     };
 }
 
+/**
+ * Default jira section for configLoader mocks — mirrors config.js STATUSES/ISSUE_TYPES.
+ * Returns shallow copies so per-test overrides never mutate the shared config module.
+ */
+function makeDefaultJiraConfig() {
+    return {
+        issueTypes: Object.assign({}, configModule.ISSUE_TYPES),
+        statuses: Object.assign({}, configModule.STATUSES)
+    };
+}
+
+/**
+ * configLoader mock that returns default jira statuses/issue types plus optional overrides.
+ */
+function makeDefaultConfigLoaderMock(extraConfig) {
+    return {
+        loadProjectConfig: function(params) {
+            var cfg = extraConfig || {};
+            var result = {
+                jira: makeDefaultJiraConfig()
+            };
+            if (cfg.repository) {
+                result.repository = cfg.repository;
+            }
+            if (cfg.jobParamPatches) {
+                result.jobParamPatches = cfg.jobParamPatches;
+            }
+            if (cfg.jira) {
+                if (cfg.jira.issueTypes) {
+                    for (var it in cfg.jira.issueTypes) {
+                        if (cfg.jira.issueTypes.hasOwnProperty(it)) {
+                            result.jira.issueTypes[it] = cfg.jira.issueTypes[it];
+                        }
+                    }
+                }
+                if (cfg.jira.statuses) {
+                    for (var st in cfg.jira.statuses) {
+                        if (cfg.jira.statuses.hasOwnProperty(st)) {
+                            result.jira.statuses[st] = cfg.jira.statuses[st];
+                        }
+                    }
+                }
+            }
+            return result;
+        }
+    };
+}
+
 // ── Main action ───────────────────────────────────────────────────────────────
 
 function action(params) {

@@ -24,7 +24,7 @@
  * For skipped:  move TC to Backlog so test automation can be re-automated/reworked
  */
 
-const { STATUSES, LABELS } = require('./config.js');
+const { LABELS } = require('./config.js');
 var feedbackLoop = require('./common/feedbackLoop.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 var configLoader = require('./configLoader.js');
@@ -154,9 +154,9 @@ function findAnyLinkedNonDoneBug(tcKeys) {
     return null;
 }
 
-function moveToBugToFix(tcKey) {
+function moveToBugToFix(tcKey, jiraConfig) {
     try {
-        jira_move_to_status({ key: tcKey, statusName: STATUSES.BUG_TO_FIX || 'Bug To Fix' });
+        jira_move_to_status({ key: tcKey, statusName: jiraConfig.statuses.BUG_TO_FIX });
         console.log('  📋 Moved to Bug To Fix:', tcKey);
     } catch (e) {
         console.warn('  ⚠️ Could not move to Bug To Fix:', tcKey, e);
@@ -248,9 +248,9 @@ function markResolved(resolvedSet, tcKey) {
     if (tcKey) resolvedSet[tcKey] = true;
 }
 
-function moveSkippedTcToBacklog(tcKey) {
-    jira_move_to_status({ key: tcKey, statusName: STATUSES.BACKLOG || 'Backlog' });
-    console.log('  🔧 Moved to ' + (STATUSES.BACKLOG || 'Backlog') + ':', tcKey);
+function moveSkippedTcToBacklog(tcKey, jiraConfig) {
+    jira_move_to_status({ key: tcKey, statusName: jiraConfig.statuses.BACKLOG });
+    console.log('  🔧 Moved to ' + jiraConfig.statuses.BACKLOG + ':', tcKey);
     try {
         jira_remove_label({ key: tcKey, label: 'sm_test_automation_triggered' });
     } catch (e) {}
@@ -263,6 +263,7 @@ function action(params) {
         var triggerLabel = customParams.removeLabel || 'sm_bug_creation_triggered';
         var smTriggerLabel = customParams.smTriggerLabel || 'sm_bulk_bugs_creation_triggered';
         var projectConfig = configLoader.loadProjectConfig(actualParams);
+        var jiraConfig = projectConfig.jira;
         var failedReasonFieldName = getFailedReasonFieldName(projectConfig, customParams);
 
         console.log('=== Processing bulk bug creation decisions ===');
@@ -367,7 +368,7 @@ function action(params) {
                     }
                     try {
                         linkBugToTC(tcKey, existingBugKey);
-                        moveToBugToFix(tcKey);
+                        moveToBugToFix(tcKey, jiraConfig);
                         removeProcessingLabels(tcKey, [triggerLabel, smTriggerLabel]);
                         postComment(tcKey,
                             'h3. 🔗 Existing Bug Linked (Batch Live Re-check)\n\n' +
@@ -419,7 +420,7 @@ function action(params) {
                 }
                 try {
                     linkBugToTC(tcKey, bugKey);
-                    moveToBugToFix(tcKey);
+                    moveToBugToFix(tcKey, jiraConfig);
                     removeProcessingLabels(tcKey, [triggerLabel, smTriggerLabel]);
                     postComment(tcKey,
                         'h3. 🐛 New Bug Created (Batch)\n\n' +
@@ -455,7 +456,7 @@ function action(params) {
             console.log('  Linking', tcKey, '→', bugKey);
             try {
                 linkBugToTC(tcKey, bugKey);
-                moveToBugToFix(tcKey);
+                moveToBugToFix(tcKey, jiraConfig);
                 removeProcessingLabels(tcKey, [triggerLabel, smTriggerLabel]);
                 postComment(tcKey,
                     'h3. 🔗 Existing Bug Linked (Batch)\n\n' +
@@ -481,7 +482,7 @@ function action(params) {
                 return;
             }
             console.log('  Skipping', tcKey, '—', skipDef.reason || 'no reason given');
-            moveSkippedTcToBacklog(tcKey);
+            moveSkippedTcToBacklog(tcKey, jiraConfig);
             try {
                 removeProcessingLabels(tcKey, [triggerLabel, smTriggerLabel]);
                 console.log('  🏷️ Removed trigger labels from', tcKey, '— eligible for re-automation');
@@ -502,7 +503,7 @@ function action(params) {
             console.warn('  ⚠️ Processed TC has no successful bulk outcome:', tcKey);
             var linkedBugKey = findLinkedNonDoneBug(tcKey);
             if (linkedBugKey) {
-                moveToBugToFix(tcKey);
+                moveToBugToFix(tcKey, jiraConfig);
                 removeProcessingLabels(tcKey, [triggerLabel, smTriggerLabel]);
                 postComment(tcKey,
                     'h3. 🔗 Existing Bug Found After Batch\n\n' +

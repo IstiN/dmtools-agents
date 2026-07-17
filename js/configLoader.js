@@ -11,7 +11,9 @@
  *   4. Built-in defaults       (backward compatible)
  *
  * Merge strategy:
- *   - jira.statuses, jira.issueTypes, jira.questions, labels: FULL REPLACEMENT when provided
+ *   - jira.statuses, jira.issueTypes: DEEP MERGE over built-in defaults — a project may
+ *     override only the keys it renames; unspecified keys keep the defaults from config.js
+ *   - jira.questions, labels: FULL REPLACEMENT when provided
  *   - smRules, smMergeRules: FULL REPLACEMENT when provided
  *   - repository, git, formats, confluence, jira.fields: DEEP MERGE
  *   - additionalInstructions, instructionOverrides, cliPrompts, cliPromptOverrides, agentParamPatches, jobParamPatches:
@@ -163,7 +165,9 @@ function deepMerge(target, source) {
 
 /**
  * Merge project config with defaults using section-level strategy:
- * - statuses, issueTypes, labels, smRules, smMergeRules: full replacement
+ * - jira.statuses, jira.issueTypes: deep merge over defaults, so partial
+ *   overrides keep unspecified default keys (backward compatible)
+ * - jira.questions, labels, smRules, smMergeRules: full replacement
  * - everything else: deep merge
  */
 function mergeProjectConfig(defaults, overrides) {
@@ -173,12 +177,10 @@ function mergeProjectConfig(defaults, overrides) {
 
     // Full replacement sections: if override provides these, use them entirely
     if (overrides.jira) {
-        if (overrides.jira.statuses) {
-            result.jira.statuses = overrides.jira.statuses;
-        }
-        if (overrides.jira.issueTypes) {
-            result.jira.issueTypes = overrides.jira.issueTypes;
-        }
+        // statuses/issueTypes merge over defaults via deepMerge above — restore them
+        // if an explicit null in overrides wiped the section
+        if (!result.jira.statuses) result.jira.statuses = defaults.jira.statuses;
+        if (!result.jira.issueTypes) result.jira.issueTypes = defaults.jira.issueTypes;
         if (overrides.jira.questions) {
             result.jira.questions = overrides.jira.questions;
         }
