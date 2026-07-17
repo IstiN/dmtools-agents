@@ -89,15 +89,22 @@ install_image() {
   yes | sdkmanager "emulator" "${IMAGE}" --sdk_root="${ANDROID_HOME}" > "${SDK_INSTALL_LOG}" 2>&1
 }
 
-# A merely-existing IMAGE_DIR is NOT proof of a complete install: sdkmanager
-# creates the directory up front and can still leave it truncated (e.g. a
-# dropped download mid-transfer) while still exiting 0 and even reaching this
-# far. The one file every complete SDK package always has — and the same
-# manifest avdmanager itself reads to build its "valid system image paths"
-# list — is package.xml directly under the package directory. Checking for
-# it (instead of just `-d`) is what actually predicts whether avdmanager
-# will recognize the image, rather than just whether *some* files landed.
-image_installed() { [ -f "${IMAGE_DIR}/package.xml" ]; }
+# A merely-existing IMAGE_DIR (or even a package.xml inside it) is NOT
+# reliable proof that avdmanager will recognize the package: confirmed live
+# on a re-run Bitrise session where the script printed "present on disk"
+# (package.xml existed) yet avdmanager still failed with "Package path is
+# not valid. Valid system image paths are: null" — meaning avdmanager's own
+# repository scan came up empty despite package.xml being there (e.g. a
+# malformed/truncated XML, or a source.properties inconsistency, can each
+# independently break avdmanager's parser without affecting a bare file
+# existence check). `sdkmanager --list_installed` walks the SAME underlying
+# repository-parsing code (com.android.sdklib) that avdmanager itself
+# consults to build its system-image list — so if this doesn't list the
+# package, avdmanager won't see it either, and vice versa. That makes it a
+# much stronger signal than checking for any specific file on disk.
+image_installed() {
+  sdkmanager --list_installed --sdk_root="${ANDROID_HOME}" 2>/dev/null | grep -qF "${IMAGE}"
+}
 
 install_image || true
 if ! image_installed; then
@@ -106,12 +113,12 @@ if ! image_installed; then
   # failed attempt can still be sitting there. Remove it before retrying —
   # letting sdkmanager "resume into" a directory that already has some
   # (possibly corrupt) files is far less predictable than a clean re-fetch.
-  echo "⚠️  ${IMAGE_DIR}/package.xml missing after first attempt — cleaning up and retrying once..."
+  echo "⚠️  sdkmanager does not (yet) list ${IMAGE} as installed after first attempt — cleaning up and retrying once..."
   rm -rf "${IMAGE_DIR}"
   install_image || true
 fi
 if ! image_installed; then
-  echo "❌ System image did not install completely: ${IMAGE_DIR}/package.xml not found after 2 attempts." >&2
+  echo "❌ System image did not install completely: sdkmanager does not list ${IMAGE} as installed after 2 attempts." >&2
   echo "── sdkmanager output (${SDK_INSTALL_LOG}) ──────────────────────────" >&2
   tail -n 40 "${SDK_INSTALL_LOG}" >&2 || true
   exit 1
