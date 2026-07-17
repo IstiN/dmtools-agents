@@ -67,12 +67,40 @@ case "${ARCH}" in
 esac
 
 IMAGE="system-images;android-${API};${TAG};${ABI}"
+IMAGE_DIR="${ANDROID_HOME}/system-images/android-${API}/${TAG}/${ABI}"
 echo "🤖 Android emulator [avd=${AVD_NAME} image=${IMAGE} profile=${PROFILE} arch=${ARCH}]"
 
 # ── Install the system image + emulator binary (idempotent) ──────────────────
+# `sdkmanager` can exit 0 without actually laying the package down on disk if
+# an unexpected license prompt eats stdin mid-install (only --licenses' own
+# prompts are pre-answered by the `yes` below, not ones triggered later by
+# this specific package) or a transient network blip drops the download —
+# and it prints nothing distinctive when that happens. Rather than trust the
+# exit code, verify the package actually landed under IMAGE_DIR afterwards,
+# retry once, and only then fail loudly with the captured log tail — this
+# turns what was previously a silent no-op into either a working emulator or
+# an actionable error (instead of avdmanager's cryptic downstream
+# "Package path is not valid ... null").
 echo "📥 Ensuring ${IMAGE} + emulator package are installed..."
 yes | sdkmanager --licenses > /dev/null 2>&1 || true
-sdkmanager "emulator" "${IMAGE}" --sdk_root="${ANDROID_HOME}" > /dev/null
+
+SDK_INSTALL_LOG="/tmp/sdkmanager-install-${AVD_NAME}.log"
+install_image() {
+  yes | sdkmanager "emulator" "${IMAGE}" --sdk_root="${ANDROID_HOME}" > "${SDK_INSTALL_LOG}" 2>&1
+}
+
+install_image || true
+if [ ! -d "${IMAGE_DIR}" ]; then
+  echo "⚠️  ${IMAGE_DIR} missing after first attempt — retrying once..."
+  install_image || true
+fi
+if [ ! -d "${IMAGE_DIR}" ]; then
+  echo "❌ System image did not install: ${IMAGE_DIR} not found after 2 attempts." >&2
+  echo "── sdkmanager output (${SDK_INSTALL_LOG}) ──────────────────────────" >&2
+  tail -n 40 "${SDK_INSTALL_LOG}" >&2 || true
+  exit 1
+fi
+echo "✅ ${IMAGE} present on disk"
 
 # ── Create the AVD if it doesn't already exist (idempotent) ──────────────────
 if avdmanager list avd | grep -qx "Name: ${AVD_NAME}"; then
