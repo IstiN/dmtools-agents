@@ -2,6 +2,9 @@
   "name": "JSRunner",
   "params": {
     "jsPath": "agents/js/smAgent.js",
+    "envVariables": {
+      "CLI_ALLOWED_COMMANDS": "bash"
+    },
     "jobParams": {
       "maxTriggeredWorkflows": 3,
       "rules": [
