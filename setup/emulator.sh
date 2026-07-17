@@ -70,6 +70,46 @@ IMAGE="system-images;android-${API};${TAG};${ABI}"
 IMAGE_DIR="${ANDROID_HOME}/system-images/android-${API}/${TAG}/${ABI}"
 echo "🤖 Android emulator [avd=${AVD_NAME} image=${IMAGE} profile=${PROFILE} arch=${ARCH}]"
 
+# ── Linux headless prerequisites (confirmed live on a Bitrise Linux Dev
+# Environment; both of these silently kill the emulator with no snapshot/
+# crash-log trail, so fix them proactively rather than let every run hit the
+# same wall) ───────────────────────────────────────────────────────────────
+KVM_SG_WRAP=()
+if [ "$(detect_os)" = "linux" ]; then
+  # 1) KVM group membership. The emulator hard-requires read/write access to
+  #    /dev/kvm to run x86_64 images with acceleration ("x86_64 emulation
+  #    currently requires hardware acceleration!") — Bitrise Linux Dev
+  #    Environments DO expose /dev/kvm and CPU virtualization extensions
+  #    (vmx/svm), but the default user isn't a member of the `kvm` group
+  #    that owns the device node, so every boot failed until this was fixed.
+  if [ -e /dev/kvm ]; then
+    if ! id -nG "$(id -un)" | tr ' ' '\n' | grep -qx kvm; then
+      echo "🔐 Adding $(id -un) to the 'kvm' group for hardware-accelerated emulation..."
+      $(sudo_cmd) gpasswd -a "$(id -un)" kvm > /dev/null 2>&1 || true
+    fi
+    # A group added just now (or even in a prior run, on a fresh login shell
+    # that hasn't re-authenticated yet) doesn't take effect for the CURRENT
+    # process tree until re-login — `sg kvm -c '...'` runs a command with
+    # kvm as an active supplementary group immediately, without needing to
+    # log out/in. Confirmed necessary live: `id` in the current shell still
+    # showed the old group list right after `gpasswd -a`.
+    is_installed sg && KVM_SG_WRAP=(sg kvm -c)
+  else
+    echo "⚠️  /dev/kvm not found — emulator will run unaccelerated (or fail) on this host" >&2
+  fi
+
+  # 2) Headless X11 libs. The emulator's gfxstream/Vulkan renderer dlopens
+  #    libX11-xcb even with -no-window, and a minimal Ubuntu image doesn't
+  #    ship it — the process dies right after printing "Could not open
+  #    libX11-xcb.so.1, give up" with no separate crash report (it's just
+  #    backgrounded via nohup, so the death is silent unless you tail the
+  #    log). Installing these small libs upfront avoids that.
+  if is_installed apt-get && ! ldconfig -p 2>/dev/null | grep -q 'libX11-xcb\.so\.1'; then
+    echo "📥 Installing headless X11 libraries required by the emulator's renderer..."
+    $(sudo_cmd) apt-get install -y libx11-xcb1 libxcb-dri3-0 libxcb-xkb1 libxkbcommon-x11-0 -qq 2>/dev/null || true
+  fi
+fi
+
 # ── Install the system image + emulator binary (idempotent) ──────────────────
 # `sdkmanager` can exit 0 without actually laying the package down on disk if
 # an unexpected license prompt eats stdin mid-install (only --licenses' own
@@ -190,10 +230,27 @@ else
   EMU_FLAGS="-no-snapshot-save -no-boot-anim -no-audio"
   [ "${HEADLESS}" = "true" ] && EMU_FLAGS="${EMU_FLAGS} -no-window"
   echo "🚀 Booting AVD '${AVD_NAME}' (${EMU_FLAGS})..."
-  # shellcheck disable=SC2086
-  nohup "${ANDROID_HOME}/emulator/emulator" -avd "${AVD_NAME}" ${EMU_FLAGS} \
-    > /tmp/emulator-"${AVD_NAME}".log 2>&1 &
-  disown || true
+  if [ "${#KVM_SG_WRAP[@]}" -gt 0 ]; then
+    # `sg kvm -c "cmd &"` backgrounds *inside* the subshell sg spawns — a
+    # bare inline `sg kvm -c "... &" ; disown` does NOT reliably detach it
+    # (confirmed live: the emulator process vanished within seconds), so
+    # the backgrounding + disown must happen INSIDE the script sg runs.
+    EMU_LAUNCH_SCRIPT="$(mktemp)"
+    cat > "${EMU_LAUNCH_SCRIPT}" <<EOF
+#!/usr/bin/env bash
+nohup "${ANDROID_HOME}/emulator/emulator" -avd "${AVD_NAME}" ${EMU_FLAGS} \
+  > /tmp/emulator-${AVD_NAME}.log 2>&1 &
+disown
+EOF
+    chmod +x "${EMU_LAUNCH_SCRIPT}"
+    "${KVM_SG_WRAP[@]}" "${EMU_LAUNCH_SCRIPT}"
+    rm -f "${EMU_LAUNCH_SCRIPT}"
+  else
+    # shellcheck disable=SC2086
+    nohup "${ANDROID_HOME}/emulator/emulator" -avd "${AVD_NAME}" ${EMU_FLAGS} \
+      > /tmp/emulator-"${AVD_NAME}".log 2>&1 &
+    disown || true
+  fi
 
   for _ in $(seq 1 "${BOOT_TIMEOUT}"); do
     SERIAL="$(adb devices | awk '$2=="device"{print $1; exit}')"
