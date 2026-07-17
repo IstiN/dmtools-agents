@@ -817,6 +817,17 @@ of the override with an explicit `localTeammate: false`. Without the override, t
 runs exactly as before — default dispatch to `ai-teammate.yml` — so this is purely an
 opt-in, per-invocation switch; nothing in `sm.json` or `.dmtools/config.js` needs to change.
 
+**Required whitelist entry:** `runTeammateLocally()` (and `localTeammate`/
+`forceLocalTeammate` in general) invokes `scripts/run-teammate-local.sh` via
+`bash agents/scripts/run-teammate-local.sh ...` through the `cli_execute_command` MCP
+tool. That tool only allows a fixed base whitelist of commands
+(`git, gh, dmtools, npm, yarn, docker, kubectl, terraform, ansible, aws, gcloud, az`) —
+`bash` is **not** in it by default, so the very first local run fails with
+`Command not allowed. Whitelisted commands: ...`. `sm.json`'s top-level `params`
+therefore sets `"envVariables": {"CLI_ALLOWED_COMMANDS": "bash"}`, which is applied as a
+thread-local override for the whole SM job run (see `CliCommandExecutor`/`PropertyReader`
+in `dmtools-core`) and needs no VM-side `dmtools.env` changes — it travels with the repo.
+
 ### Bootstrapping a Local/Cloud Dev Session
 
 `scripts/warmup-session.sh` prepares a fresh machine (cloud dev-environment session,
