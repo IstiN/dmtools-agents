@@ -98,6 +98,12 @@ if [ ! -f "${AGENTS_DIR}/setup/install.sh" ]; then
   echo "❌ ${AGENTS_DIR}/setup/install.sh not found — is the 'agents' submodule checked out?" >&2
   exit 1
 fi
+# Resolve to an absolute path NOW, before the `cd "${TARGET_DIR}"` below —
+# TARGET_DIR is typically a relative path (e.g. "repo"), so a relative
+# AGENTS_DIR would otherwise be re-resolved against the new CWD after cd'ing
+# INTO that same directory (producing "repo/repo/agents/..." — "No such
+# file or directory").
+AGENTS_DIR="$(cd "${AGENTS_DIR}" && pwd)"
 
 # Build the exclusion flags for install.sh ("all -tool1 -tool2 ...")
 EXCLUDE_FLAGS=()
