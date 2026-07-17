@@ -204,12 +204,28 @@ for tool in ${TOOL_LIST}; do
     codegraph) BIN="codegraph" ;;
     playwright) BIN="playwright" ;;
     kimi)    BIN="kimi" ;;
-    gradle)  BIN="gradlew" ;;
+    gradle)  BIN="./gradlew" ;;  # project-local wrapper, never on PATH — see below
     android) BIN="sdkmanager" ;;
     emulator) BIN="emulator" ;;
     konan)   continue ;;  # no standalone binary — toolchain lives in ~/.konan
     *)       continue ;;
   esac
+
+  # `gradlew` is a committed wrapper script in the repo working directory,
+  # never a PATH binary — `command -v gradlew` is a structural false
+  # negative (confirmed live: gradle.sh itself printed "✅ gradlew is
+  # executable" moments earlier in the same run, then this check failed the
+  # whole install with "NOT FOUND on PATH"). Check executability in place
+  # instead of resolving it as a command.
+  if [ "${tool}" = "gradle" ]; then
+    if [ -x "${BIN}" ]; then
+      echo "  ✓ ${BIN} → $(cd "$(dirname "${BIN}")" && pwd)/$(basename "${BIN}")"
+    else
+      echo "  ✗ ${BIN} — not found or not executable in $(pwd)" >&2
+      VERIFY_FAIL=1
+    fi
+    continue
+  fi
 
   if command -v "${BIN}" &>/dev/null; then
     LOC="$(command -v "${BIN}")"
