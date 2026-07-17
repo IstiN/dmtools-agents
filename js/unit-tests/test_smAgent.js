@@ -702,6 +702,27 @@ suite('smAgent: localTeammate execution mode', function() {
         assert.ok(cmd.indexOf('--ticket P-1') !== -1, 'passes ticket key');
     });
 
+    test('passes --base-branch from config.git.baseBranch (e.g. repos defaulting to master)', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" }, git: { baseBranch: "master" } };'
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'", {
+                configFile: 'agents/story_development.json',
+                localTeammate: true
+            })
+        ]));
+
+        var runs = localRunCommands(sm);
+        assert.equal(runs.length, 1, 'exactly one local run invoked');
+        assert.ok(runs[0].command.indexOf('--base-branch master') !== -1,
+            'passes the project-configured base branch instead of silently defaulting to "main"');
+    });
+
     test('adds rule labels after a successful local run', function() {
         var sm = makeSmAgent({
             fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
