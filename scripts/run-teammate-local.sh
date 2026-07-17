@@ -101,30 +101,41 @@ echo "   ticket:  ${TICKET_KEY}"
 echo "   project: ${PROJECT_KEY:-<default>}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# ── Self-ignore this script's own scratch files — no per-project .gitignore
-# edits required. Written to .git/info/exclude (local-only, per-clone, never
-# committed) rather than the tracked .gitignore, so any consumer repo just
-# works out of the box. Idempotent — only appended once.
+# ── Self-ignore this script's own scratch files/dirs — no per-project
+# .gitignore edits required. Written to .git/info/exclude (local-only,
+# per-clone, never committed) rather than the tracked .gitignore, so any
+# consumer repo just works out of the box. Idempotent — only appended once.
+# Covers: this script's own encoded-config blobs + run logs (.dmtools/local-run-*),
+# plus the input/ and outputs/ scratch dirs that every CLI-agent run
+# (run-agent.sh and the js/*.js agents themselves, e.g. developTicketAndCreatePR.js,
+# postPRReviewComments.js, intakePreAction.js) creates in the repo root for
+# prompt/response file exchange with the AI CLI — untracked by construction,
+# same self-tripping-dirty-tree-guard problem as the .dmtools/ scratch files.
 GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || echo .git)"
 EXCLUDE_FILE="${GIT_DIR}/info/exclude"
-SCRATCH_PATTERN=".dmtools/local-run-*"
+SCRATCH_PATTERNS=(".dmtools/local-run-*" "input/" "outputs/")
 mkdir -p "$(dirname "${EXCLUDE_FILE}")"
 touch "${EXCLUDE_FILE}"
-if ! grep -qxF "${SCRATCH_PATTERN}" "${EXCLUDE_FILE}" 2>/dev/null; then
-  {
-    echo ""
-    echo "# Auto-added by run-teammate-local.sh — SM local-run scratch files"
-    echo "# (encoded-config blobs + run logs), never meant to be committed."
-    echo "${SCRATCH_PATTERN}"
-  } >> "${EXCLUDE_FILE}"
-fi
+for pattern in "${SCRATCH_PATTERNS[@]}"; do
+  if ! grep -qxF "${pattern}" "${EXCLUDE_FILE}" 2>/dev/null; then
+    {
+      echo ""
+      echo "# Auto-added by run-teammate-local.sh — SM local-run scratch files/dirs,"
+      echo "# never meant to be committed."
+      echo "${pattern}"
+    } >> "${EXCLUDE_FILE}"
+  fi
+done
 
 # ── Guard: refuse to run on a dirty working tree ─────────────────────────────
 # See the module docstring above — protects uncommitted work (this run's own repo
 # is reused across tickets, unlike an ephemeral GitHub Actions checkout). Excludes
-# this script's own scratch pattern via pathspec too, as defense-in-depth in case
+# this script's own scratch patterns via pathspec too, as defense-in-depth in case
 # the .git/info/exclude write above didn't take effect (e.g. read-only .git dir).
-DIRTY_PATHSPEC=(-- . ":(exclude)${SCRATCH_PATTERN}")
+DIRTY_PATHSPEC=(-- .)
+for pattern in "${SCRATCH_PATTERNS[@]}"; do
+  DIRTY_PATHSPEC+=(":(exclude)${pattern}")
+done
 if [ -n "$(git status --porcelain "${DIRTY_PATHSPEC[@]}")" ]; then
   echo "❌ Working tree is dirty — refusing to run (commit/stash your changes first)." >&2
   git status --short "${DIRTY_PATHSPEC[@]}" >&2
