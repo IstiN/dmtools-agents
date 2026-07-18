@@ -23,7 +23,9 @@ flowchart TD
         S2 -->|yes| S3["dmtools jira_get_ticket KEY"]
         S2 -->|no| S4["Build mental map of pages/flows/features & entry points"]
         S3 --> S4
-        S4 --> S5["Only then identify gaps & create new tickets"]
+        S4 --> S5["For EACH existing feature found: verify it actually works end-to-end (real flow, not just 'file exists') AND has full test coverage — code presence alone is not completion"]
+        S5 --> S6["Any existing feature failing that verification → its own Bug/Story (broken flow and/or missing tests), not assumed done"]
+        S6 --> S7["Only then identify NEW gaps & create new tickets"]
     end
 
     subgraph OUTPUT["Decompose & write"]
@@ -41,6 +43,7 @@ flowchart TD
 
     CR1["CRITICAL: Tech prerequisites → separate epics/stories | Max 5SP per story | No duplicate content | No water in descriptions | MVP thinking always | Follow all input instructions exactly"]
     CR2["CRITICAL: Stories MUST be Testable. If a story cannot realistically be covered by an autotest/integration test: either don't create it as a separate story, OR explicitly state in its description 'No integration testing required — must be skipped, no test cases required, this story is a prerequisite'. Unit tests are still required regardless."]
+    CR3["CRITICAL: For existing/already-implemented Android features, verify they work correctly end-to-end AND are fully covered by tests — do not assume completion just because the code/module exists. Gaps found (broken flow, missing tests) become their own Bug/Story."]
 
     INPUT --> STUDY
     INPUT --> ATTACH
@@ -50,4 +53,5 @@ flowchart TD
     F1 -.-> OUTPUT
     CR1 -.-> OUTPUT
     CR2 -.-> OUTPUT
+    CR3 -.-> OUTPUT
 ```

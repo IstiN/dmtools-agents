@@ -35,6 +35,7 @@ flowchart TD
         R5["Stories: 1-2 sprints worth, split if needed"]
         R6["NO code, only analysis & structured content"]
         R7["Stories MUST be Testable: if autotest/integration coverage isn't realistic, don't create a separate story OR explicitly state 'no integration testing required — must be skipped, no test cases required, prerequisite story' (unit tests still required)"]
+        R8["For existing/already-implemented features: verify they work correctly end-to-end AND are fully test-covered — code presence alone is not completion; gaps become their own Bug/Story"]
     end
 
     INPUTS --> TASK
