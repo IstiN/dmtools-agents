@@ -54,6 +54,7 @@ flowchart TD
     end
 
     CR1["CRITICAL: Tech prerequisites → separate epics/stories | Max 5SP per story | No duplicate content | No water in descriptions | MVP thinking always | Follow all input instructions exactly"]
+    CR2["CRITICAL: Stories MUST be Testable. If a story cannot realistically be covered by an autotest/integration test: either don't create it as a separate story, OR explicitly state in its description 'No integration testing required — must be skipped, no test cases required, this story is a prerequisite'. Unit tests are still required regardless."]
 
     INPUT --> STUDY
     INPUT --> ATTACH
@@ -63,4 +64,5 @@ flowchart TD
     OUTPUT --> E2E
     E2E --> VALIDATE
     CR1 -.-> OUTPUT
+    CR2 -.-> OUTPUT
 ```

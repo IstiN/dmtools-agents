@@ -114,6 +114,22 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || echo .git)"
 EXCLUDE_FILE="${GIT_DIR}/info/exclude"
 SCRATCH_PATTERNS=(".dmtools/local-run-*" "input/" "outputs/")
+
+# Also self-ignore project dependency checkouts (e.g. an iOS reference repo)
+# declared in .dmtools/repositories.json — see setup/checkout.sh below. These
+# are checked out at the repo root (same convention as ai-teammate.yml's
+# "Checkout project dependencies" step), so they are untracked by construction
+# just like the other scratch paths above and would otherwise falsely trip the
+# dirty-tree guard on every run. Gathered from ALL project keys in the config
+# (not just the auto-detected one) so the exclusion is a safe superset.
+DEPS_REPO_CONFIG=".dmtools/repositories.json"
+if [ -f "${DEPS_REPO_CONFIG}" ] && is_installed jq; then
+  while IFS= read -r repo_name; do
+    [ -n "${repo_name}" ] || continue
+    SCRATCH_PATTERNS+=("${repo_name}/")
+  done < <(jq -r '.repositories // {} | to_entries[].value[]?.repo | split("/") | last' "${DEPS_REPO_CONFIG}" 2>/dev/null || true)
+fi
+
 mkdir -p "$(dirname "${EXCLUDE_FILE}")"
 touch "${EXCLUDE_FILE}"
 for pattern in "${SCRATCH_PATTERNS[@]}"; do
@@ -147,6 +163,19 @@ echo "🔄 Syncing ${BASE_BRANCH}..."
 git fetch origin "${BASE_BRANCH}"
 git checkout "${BASE_BRANCH}"
 git pull --ff-only origin "${BASE_BRANCH}"
+
+# ── Checkout project dependencies (e.g. an iOS reference repo) if configured ──
+# Mirrors the "Checkout project dependencies" step in ai-teammate.yml — without
+# this, agents running via localTeammate/forceLocalTeammate never see the same
+# reference repos a GitHub Actions run would have checked out, silently degrading
+# their context. Safe no-op if .dmtools/repositories.json doesn't exist or has no
+# repositories (most projects never define it) — see setup/checkout.sh for the
+# config format. Uses --dest . to match ai-teammate.yml's convention (checked out
+# at the repo root, e.g. ./soho-mobile-android/), not the script's ./dependencies
+# default.
+if [ -f "${SCRIPT_DIR}/../setup/checkout.sh" ]; then
+  bash "${SCRIPT_DIR}/../setup/checkout.sh" --dest .
+fi
 
 # ── Optional tool install (idempotent — reuses whatever setup/cache.sh cached) ─
 if [ -n "${INSTALL_TOOLS}" ]; then

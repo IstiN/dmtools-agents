@@ -34,6 +34,7 @@ flowchart TD
         R4["Summaries: concise, actionable, imperative"]
         R5["Stories: 1-2 sprints worth, split if needed"]
         R6["NO code, only analysis & structured content"]
+        R7["Stories MUST be Testable: if autotest/integration coverage isn't realistic, don't create a separate story OR explicitly state 'no integration testing required — must be skipped, no test cases required, prerequisite story' (unit tests still required)"]
     end
 
     INPUTS --> TASK
