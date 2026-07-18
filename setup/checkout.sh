@@ -274,6 +274,14 @@ while IFS= read -r entry; do
         "https://x-access-token:${GH_TOKEN}@${GH_HOST}/${REPO}.git"
       git -C "${DEST}" fetch --filter="${GIT_FILTER}" origin "${BRANCH}"
       git -C "${DEST}" checkout "${BRANCH}"
+      # `checkout` alone only switches to the local branch ref — it does NOT
+      # fast-forward it to the freshly fetched origin/${BRANCH}, so a repeated
+      # call (e.g. every local-teammate run reusing the same on-disk clone)
+      # would silently keep serving a stale snapshot forever even as the
+      # reference repo moves forward. Matches the explicit `pull --ff-only`
+      # already done for the ADO/GitLab entries above — bring this path in
+      # line with them.
+      git -C "${DEST}" pull origin "${BRANCH}" --ff-only 2>/dev/null || true
       echo "  ↻ updated"
     else
       git clone \
