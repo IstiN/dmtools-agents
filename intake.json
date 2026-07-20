@@ -29,9 +29,11 @@
     ],
     "cliPromptsByTracker": {
       "jira": [
+        "./agents/instructions/tracker/jira_markup_transform.md",
         "./agents/instructions/tracker/jira_comment_format.md"
       ],
       "ado": [
+        "./agents/instructions/tracker/ado_markup_transform.md",
         "./agents/instructions/tracker/ado_comment_format.md"
       ]
     }
