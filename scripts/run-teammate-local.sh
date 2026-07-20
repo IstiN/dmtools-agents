@@ -7,7 +7,7 @@
 # dispatching a workflow_dispatch. Can also be run standalone for manual/ad-hoc runs.
 #
 # Usage:
-#   run-teammate-local.sh --config-file agents/story_development.json --ticket SOHO-123 \
+#   run-teammate-local.sh --config-file agents/story_development.json --ticket PROJ-123 \
 #     [--encoded-config-file PATH] [--project-key myproject] [--base-branch main] \
 #     [--install-tools "java:17 node:20 dmtools:v1.7.215"] [--dmtools-bin PATH]
 #
@@ -48,7 +48,7 @@ Usage: $(basename "$0") --config-file PATH --ticket KEY [options]
 
 Options:
   --config-file          PATH   agents/*.json config to run (required)
-  --ticket               KEY    Jira ticket key, e.g. SOHO-123 (required)
+  --ticket               KEY    Jira ticket key, e.g. PROJ-123 (required)
   --encoded-config-file  PATH   file containing a pre-built encoded_config JSON blob (optional)
   --project-key          KEY    project_key value for multi-project dependency setup (optional)
   --base-branch          NAME   branch to sync before every run (default: main)
@@ -171,7 +171,7 @@ git pull --ff-only origin "${BASE_BRANCH}"
 # their context. Safe no-op if .dmtools/repositories.json doesn't exist or has no
 # repositories (most projects never define it) — see setup/checkout.sh for the
 # config format. Uses --dest . to match ai-teammate.yml's convention (checked out
-# at the repo root, e.g. ./soho-mobile-android/), not the script's ./dependencies
+# at the repo root, e.g. ./ios-reference/), not the script's ./dependencies
 # default.
 if [ -f "${SCRIPT_DIR}/../setup/checkout.sh" ]; then
   bash "${SCRIPT_DIR}/../setup/checkout.sh" --dest .
