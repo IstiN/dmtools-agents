@@ -58,6 +58,7 @@ flowchart TD
     CR1["CRITICAL: Tech prerequisites → separate epics/stories | Max 5SP per story | No duplicate content | No water in descriptions | MVP thinking always | Follow all input instructions exactly"]
     CR2["CRITICAL: Stories MUST be Testable. If a story cannot realistically be covered by an autotest/integration test: either don't create it as a separate story, OR explicitly state in its description 'No integration testing required — must be skipped, no test cases required, this story is a prerequisite'. Unit tests are still required regardless."]
     CR3["CRITICAL: For existing/already-implemented Android features, verify they work correctly end-to-end AND are fully covered by tests — do not assume completion just because the code/module exists. Gaps found (broken flow, missing tests) become their own Bug/Story."]
+    CR4["CRITICAL: The iOS reference codebase is the sole source of truth for scope. Decompose from iOS features, not from what Android already has. Android code that looks similar to an iOS feature is NEVER evidence that feature is done — always create/keep the story for that iOS feature so a downstream dev/verification agent can independently confirm real completeness. If the project has BMAD tracking artifacts (e.g. sprint-status.yaml, deferred-work.md, per-story files), treat their recorded status (backlog/in-progress/review/done, deferred items) as ground truth and cross-check every claim of 'already implemented' against them before ever asserting a feature works — a self-run shallow code read is never sufficient grounds to skip or omit a story."]
 
     INPUT --> STUDY
     INPUT --> ATTACH
@@ -69,4 +70,5 @@ flowchart TD
     CR1 -.-> OUTPUT
     CR2 -.-> OUTPUT
     CR3 -.-> OUTPUT
+    CR4 -.-> OUTPUT
 ```

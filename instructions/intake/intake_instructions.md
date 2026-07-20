@@ -36,6 +36,7 @@ flowchart TD
         R6["NO code, only analysis & structured content"]
         R7["Stories MUST be Testable: if autotest/integration coverage isn't realistic, don't create a separate story OR explicitly state 'no integration testing required — must be skipped, no test cases required, prerequisite story' (unit tests still required)"]
         R8["For existing/already-implemented features: verify they work correctly end-to-end AND are fully test-covered — code presence alone is not completion; gaps become their own Bug/Story"]
+        R9["iOS reference codebase is the sole source of truth for scope. Decompose from iOS features, not from what Android already has. Similar-looking Android code is NEVER evidence an iOS feature is done — always create/keep the story for that iOS feature so a downstream dev/verification agent independently confirms real completeness. If the project has BMAD tracking artifacts (sprint-status.yaml, deferred-work.md, per-story files), treat their recorded status as ground truth and cross-check every 'already implemented' claim against them before asserting a feature works"]
     end
 
     INPUTS --> TASK
