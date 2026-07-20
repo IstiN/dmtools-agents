@@ -23,6 +23,8 @@ flowchart TD
         S2 -->|yes| S3["dmtools jira_get_ticket KEY"]
         S2 -->|no| S4["Build mental map of pages/flows/features & entry points"]
         S3 --> S4
+        S0["⚠️ existing_epics.json / existing_stories.json are the SOLE authoritative record of tickets that currently exist in the tracker — freshly fetched live from the tracker THIS run, always more trustworthy than any memory of a prior run"]
+        S0 --> S1
         S4 --> S5["For EACH existing feature found: verify it actually works end-to-end (real flow, not just 'file exists') AND has full test coverage — code presence alone is not completion"]
         S5 --> S6["Any existing feature failing that verification → its own Bug/Story (broken flow and/or missing tests), not assumed done"]
         S6 --> S7["Only then identify NEW gaps & create new tickets"]
@@ -61,6 +63,7 @@ flowchart TD
     CR4["CRITICAL: If the project defines an authoritative reference/target specification for scope (e.g. a reference platform codebase to reach parity with, a design spec, or a PRD) that is more authoritative than the current implementation, that reference — not what the current codebase already appears to have — is the sole source of truth for decomposition. Existing code that merely looks similar to a reference feature is NEVER by itself evidence that feature is complete — always create/keep the story for that feature so a downstream dev/verification agent can independently confirm real completeness. If the project has its own planning/tracking artifacts recording per-story/per-epic implementation status and deferred/stubbed work (e.g. a sprint-status file, a deferred-work log, per-story files), treat their recorded status as ground truth and cross-check every claim of 'already implemented' against them before ever asserting a feature works — a self-run shallow code read is never sufficient grounds to skip or omit a story."]
     CR5["CRITICAL: NEVER create an Epic with zero child Stories in the same run — an Epic without Stories is not a valid output. Every new Epic must be created together with at least its first actionable Stories in this same run. If the Epic's full scope is too large to fully decompose in one pass, still create as many Stories as are known/actionable now, and explicitly list the remaining not-yet-decomposed slices in the Epic's own description Notes section."]
     CR6["CRITICAL: Description files (epic-N.md, story-N.md, bug-N.md) must NEVER contain literal placeholder tags or raw Markdown (### heading, **bold**, - item). Always transform generic structure placeholders into the current tracker's markup using the tracker-specific transform table (e.g. agents/instructions/tracker/jira_markup_transform.md for Jira) — the same rule used by the story_questions agent — before writing the final file."]
+    CR7["CRITICAL: existing_epics.json / existing_stories.json are freshly fetched from the live tracker THIS run and are the SOLE authoritative record of which tickets currently exist. NEVER treat a ticket key mentioned only in comments.md / a prior run's summary / your own memory as still existing if it is absent from existing_epics.json / existing_stories.json — it may have been deleted or never actually created. If these files appear inconsistent with what a prior comment claims, the freshly fetched files are correct and the prior comment is stale — do not rationalize the mismatch as an 'environment quirk' and fall back to trusting the stale text. Before using ANY key as a `parent`, `blockedBy`, or `integrates` reference, confirm that exact key is present in the freshly fetched existing_epics.json/existing_stories.json for this run."]
 
     INPUT --> STUDY
     INPUT --> ATTACH
@@ -75,4 +78,5 @@ flowchart TD
     CR4 -.-> OUTPUT
     CR5 -.-> OUTPUT
     CR6 -.-> OUTPUT
+    CR7 -.-> OUTPUT
 ```
