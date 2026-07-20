@@ -22,6 +22,7 @@
       "./agents/instructions/common/agent_task_preamble.md",
       "./agents/instructions/intake/workflow.md",
       "./agents/instructions/intake/formatting_rules.md",
+      "./agents/instructions/intake/description_template.md",
       "./agents/instructions/intake/json_validation.md",
       "./agents/instructions/common/no_development.md",
       "./agents/instructions/common/error_handling.md",
