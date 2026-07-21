@@ -13,7 +13,7 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"
 
-DMTOOLS_VERSION="${1:-${DMTOOLS_VERSION:-v1.7.229}}"
+DMTOOLS_VERSION="${1:-${DMTOOLS_VERSION:-v1.7.230}}"
 DMTOOLS_HOME="${HOME}/.dmtools"
 DMTOOLS_BIN="${DMTOOLS_HOME}/bin"
 
