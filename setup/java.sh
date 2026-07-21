@@ -69,20 +69,12 @@ elif [ "${OS}" = "linux" ]; then
     SHADOWING_JAVA_BIN_DIR="$(dirname "$(readlink -f "$(command -v java)")" 2>/dev/null || true)"
   fi
 
-  if ! ${SUDO} apt-get install -y "openjdk-${JAVA_MIN_VERSION}-jdk" -qq 2>/dev/null; then
-    echo "apt fallback: adding Adoptium Temurin repo..."
-    ${SUDO} apt-get install -y wget apt-transport-https gnupg -qq
-    wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public \
-      | ${SUDO} tee /etc/apt/trusted.gpg.d/adoptium.asc >/dev/null
-    echo "deb https://packages.adoptium.net/artifactory/deb $(lsb_release -cs) main" \
-      | ${SUDO} tee /etc/apt/sources.list.d/adoptium.list
-    ${SUDO} apt-get update -qq
-    ${SUDO} apt-get install -y "temurin-${JAVA_MIN_VERSION}-jdk" -qq
-  fi
-
-  # Locate the freshly installed JDK's home directory by glob — NOT via
-  # `which java`/`command -v java`, which (per the shadowing issue above) may
-  # still report the OLD baked-in JDK's path even after a successful install.
+  # ── Fast path: a matching JDK already sits under /usr/lib/jvm, e.g.
+  #    restored by the CI cache from a previous job (see .gitlab/*.yml cache
+  #    paths). apt/Adoptium install is expensive (apt update + package
+  #    download + optional repo/gpg-key setup); skip it entirely when the
+  #    binaries are already there and just re-apply the PATH-shadowing fix
+  #    below, since that fix itself never persists across fresh containers.
   JAVA_HOME_RESOLVED=""
   for candidate in /usr/lib/jvm/*"${JAVA_MIN_VERSION}"*openjdk* /usr/lib/jvm/*"${JAVA_MIN_VERSION}"*temurin* /usr/lib/jvm/temurin-"${JAVA_MIN_VERSION}"*; do
     if [ -x "${candidate}/bin/java" ]; then
@@ -90,6 +82,31 @@ elif [ "${OS}" = "linux" ]; then
       break
     fi
   done
+
+  if [ -n "${JAVA_HOME_RESOLVED}" ]; then
+    echo "✅ Java ${JAVA_MIN_VERSION} found at ${JAVA_HOME_RESOLVED} (cache hit) — skipping apt/Adoptium install"
+  else
+    if ! ${SUDO} apt-get install -y "openjdk-${JAVA_MIN_VERSION}-jdk" -qq 2>/dev/null; then
+      echo "apt fallback: adding Adoptium Temurin repo..."
+      ${SUDO} apt-get install -y wget apt-transport-https gnupg -qq
+      wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public \
+        | ${SUDO} tee /etc/apt/trusted.gpg.d/adoptium.asc >/dev/null
+      echo "deb https://packages.adoptium.net/artifactory/deb $(lsb_release -cs) main" \
+        | ${SUDO} tee /etc/apt/sources.list.d/adoptium.list
+      ${SUDO} apt-get update -qq
+      ${SUDO} apt-get install -y "temurin-${JAVA_MIN_VERSION}-jdk" -qq
+    fi
+
+    # Locate the freshly installed JDK's home directory by glob — NOT via
+    # `which java`/`command -v java`, which (per the shadowing issue above) may
+    # still report the OLD baked-in JDK's path even after a successful install.
+    for candidate in /usr/lib/jvm/*"${JAVA_MIN_VERSION}"*openjdk* /usr/lib/jvm/*"${JAVA_MIN_VERSION}"*temurin* /usr/lib/jvm/temurin-"${JAVA_MIN_VERSION}"*; do
+      if [ -x "${candidate}/bin/java" ]; then
+        JAVA_HOME_RESOLVED="${candidate}"
+        break
+      fi
+    done
+  fi
 
   # If a pre-existing JDK earlier on PATH shadows the one we just installed,
   # force every binary in that shadowing directory to point at the new JDK.
