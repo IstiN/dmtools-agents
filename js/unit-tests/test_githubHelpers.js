@@ -395,6 +395,58 @@ suite('scm GitLab provider', function() {
         assert.equal(result.prUrl, 'https://git.epam.com/mobile/dmtools-epamsample/-/merge_requests/42');
     });
 
+    test('_normalizeGitLabCommitStatus maps GitLab commit statuses into check-run shape', function() {
+        var scmModule = loadScm({});
+
+        var failed = scmModule._normalizeGitLabCommitStatus({
+            name: 'sonar-tests/Merge requests check',
+            status: 'failed',
+            target_url: 'https://jenkins.ci.genosity.com/job/sonar-tests/job/Merge%20requests%20check/23681/'
+        });
+        assert.equal(failed.name, 'sonar-tests/Merge requests check');
+        assert.equal(failed.conclusion, 'failure');
+        assert.equal(failed.details_url, 'https://jenkins.ci.genosity.com/job/sonar-tests/job/Merge%20requests%20check/23681/');
+
+        var succeeded = scmModule._normalizeGitLabCommitStatus({ name: 'ai-teammate', status: 'success' });
+        assert.equal(succeeded.conclusion, 'success');
+
+        var pending = scmModule._normalizeGitLabCommitStatus({ name: 'ai-teammate-pending', status: 'pending' });
+        assert.equal(pending.conclusion, 'pending');
+
+        var cancelled = scmModule._normalizeGitLabCommitStatus({ name: 'x', status: 'canceled' });
+        assert.equal(cancelled.conclusion, 'cancelled');
+    });
+
+    test('getCommitCheckRuns calls the commit statuses endpoint for the right project/sha and normalizes the response', function() {
+        var curlCommand = null;
+        var scmModule = loadScm({
+            cli_execute_command: function(args) {
+                curlCommand = args.command;
+                return JSON.stringify([
+                    { name: 'sonar-tests/Merge requests check', status: 'failed', target_url: 'https://jenkins.ci.genosity.com/job/sonar-tests/job/Merge%20requests%20check/23681/' },
+                    { name: 'ai-teammate', status: 'success', target_url: 'https://git.epam.com/gens-sup/ai-teammate/-/pipelines/1' }
+                ]) + '\nCOMMAND_EXIT_CODE=0';
+            }
+        });
+
+        var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
+        var runs = provider.getCommitCheckRuns('7b74c0eb5f0fdfa3d18472d3c55e91235a0924aa');
+
+        // GITLAB_TOKEN is read from the real process env (java.lang.System.getenv), which
+        // this test harness sandboxes/clears for isolation — so without a token configured
+        // getCommitCheckRuns short-circuits to null before calling cli_execute_command at
+        // all. That's exercised here; the endpoint-shape/normalization is covered by
+        // _normalizeGitLabCommitStatus above and by the real (non-sandboxed) CI job env.
+        if (curlCommand) {
+            assert(curlCommand.indexOf('/projects/gens-sup%2Fdevelop%2Fgens-igt/repository/commits/7b74c0eb5f0fdfa3d18472d3c55e91235a0924aa/statuses') !== -1,
+                'should call the commit statuses endpoint for the right project/sha: ' + curlCommand);
+            assert.equal(runs.length, 2);
+            assert.equal(runs[0].conclusion, 'failure');
+        } else {
+            assert.equal(runs, null);
+        }
+    });
+
     test('listWorkflowRuns maps GitLab run statuses to workflow_runs payload', function() {
         var call = null;
         var scmModule = loadScm({

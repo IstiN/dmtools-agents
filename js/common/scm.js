@@ -408,6 +408,44 @@ function _normalizeGitLabMr(mr) {
     });
 }
 
+/**
+ * Minimal authenticated GitLab REST GET, used only for endpoints not covered by a
+ * dedicated dmtools MCP tool (e.g. commit statuses — external CI like Jenkins reports
+ * build results there via the "gitlabBuilds" plugin, and GitLab has no equivalent of
+ * GitHub's "check runs" tool). Reuses the same GITLAB_TOKEN/GITLAB_BASE_PATH env vars
+ * dmtools' own GitLab integration already relies on — no new credential needed.
+ */
+function _gitlabApiGet(path) {
+    var token = java.lang.System.getenv('GITLAB_TOKEN') || '';
+    var basePath = (java.lang.System.getenv('GITLAB_BASE_PATH') || 'https://gitlab.com').replace(/\/+$/, '');
+    if (!token) {
+        console.warn('SCM GitLab: GITLAB_TOKEN not set, cannot call ' + path);
+        return null;
+    }
+    var url = basePath + '/api/v4' + path;
+    var raw = cli_execute_command({
+        command: 'curl -sS -f -H "PRIVATE-TOKEN: ' + token + '" "' + url + '"'
+    });
+    return _parseJson(_cleanCommandOutput(raw));
+}
+
+/**
+ * Normalize a GitLab commit status entry into the same shape detectFailedChecks()
+ * expects from GitHub check runs: { name, conclusion, details_url }.
+ */
+function _normalizeGitLabCommitStatus(status) {
+    var s = String(status.status || '').toLowerCase();
+    var conclusion = (s === 'failed') ? 'failure'
+        : (s === 'canceled') ? 'cancelled'
+        : (s === 'success') ? 'success'
+        : s; // pending/running/created/skipped pass through and are filtered out by detectFailedChecks
+    return {
+        name: status.name || 'unknown',
+        conclusion: conclusion,
+        details_url: status.target_url || null
+    };
+}
+
 function _createGitLabProvider(workspace, repository) {
     return {
         listPrs: function(state) {
@@ -527,8 +565,17 @@ function _createGitLabProvider(workspace, repository) {
             return raw || '';
         },
         getCommitCheckRuns: function(sha) {
-            console.warn('SCM GitLab: commit check runs are represented as pipelines/jobs — returning null');
-            return null;
+            if (!sha) return null;
+            try {
+                var projectPath = encodeURIComponent(workspace + '/' + repository);
+                var raw = _gitlabApiGet('/projects/' + projectPath + '/repository/commits/' + sha + '/statuses');
+                var statuses = _toArray(raw);
+                if (!statuses.length) return null;
+                return statuses.map(_normalizeGitLabCommitStatus);
+            } catch (e) {
+                console.warn('SCM GitLab: failed to fetch commit statuses for', sha, ':', e.message || e);
+                return null;
+            }
         },
         getJobLogs: function(jobId) {
             return gitlab_get_job_logs({ workspace: workspace, repository: repository, jobId: String(jobId) });
@@ -920,5 +967,6 @@ module.exports = {
     createScm: createScm,
     _createGithubProvider: _createGithubProvider,
     _createGitLabProvider: _createGitLabProvider,
-    _createAdoProvider: _createAdoProvider
+    _createAdoProvider: _createAdoProvider,
+    _normalizeGitLabCommitStatus: _normalizeGitLabCommitStatus
 };
