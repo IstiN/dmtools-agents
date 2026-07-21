@@ -417,34 +417,43 @@ suite('scm GitLab provider', function() {
         assert.equal(cancelled.conclusion, 'cancelled');
     });
 
-    test('getCommitCheckRuns calls the commit statuses endpoint for the right project/sha and normalizes the response', function() {
-        var curlCommand = null;
+    test('getCommitCheckRuns calls gitlab_get_commit_statuses for the right project/sha and normalizes the response', function() {
+        var calledArgs = null;
         var scmModule = loadScm({
-            cli_execute_command: function(args) {
-                curlCommand = args.command;
+            gitlab_get_commit_statuses: function(args) {
+                calledArgs = args;
                 return JSON.stringify([
                     { name: 'sonar-tests/Merge requests check', status: 'failed', target_url: 'https://jenkins.ci.genosity.com/job/sonar-tests/job/Merge%20requests%20check/23681/' },
                     { name: 'ai-teammate', status: 'success', target_url: 'https://git.epam.com/gens-sup/ai-teammate/-/pipelines/1' }
-                ]) + '\nCOMMAND_EXIT_CODE=0';
+                ]);
             }
         });
 
         var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
         var runs = provider.getCommitCheckRuns('7b74c0eb5f0fdfa3d18472d3c55e91235a0924aa');
 
-        // GITLAB_TOKEN is read from the real process env (java.lang.System.getenv), which
-        // this test harness sandboxes/clears for isolation — so without a token configured
-        // getCommitCheckRuns short-circuits to null before calling cli_execute_command at
-        // all. That's exercised here; the endpoint-shape/normalization is covered by
-        // _normalizeGitLabCommitStatus above and by the real (non-sandboxed) CI job env.
-        if (curlCommand) {
-            assert(curlCommand.indexOf('/projects/gens-sup%2Fdevelop%2Fgens-igt/repository/commits/7b74c0eb5f0fdfa3d18472d3c55e91235a0924aa/statuses') !== -1,
-                'should call the commit statuses endpoint for the right project/sha: ' + curlCommand);
-            assert.equal(runs.length, 2);
-            assert.equal(runs[0].conclusion, 'failure');
-        } else {
-            assert.equal(runs, null);
-        }
+        assert.equal(calledArgs.workspace, 'gens-sup/develop');
+        assert.equal(calledArgs.repository, 'gens-igt');
+        assert.equal(calledArgs.commitSha, '7b74c0eb5f0fdfa3d18472d3c55e91235a0924aa');
+        assert.equal(runs.length, 2);
+        assert.equal(runs[0].conclusion, 'failure');
+        assert.equal(runs[1].conclusion, 'success');
+    });
+
+    test('getCommitCheckRuns returns null when there are no statuses for the commit', function() {
+        var scmModule = loadScm({
+            gitlab_get_commit_statuses: function() { return '[]'; }
+        });
+        var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
+        assert.equal(provider.getCommitCheckRuns('deadbeef'), null);
+    });
+
+    test('getCommitCheckRuns returns null and does not throw when the tool call fails', function() {
+        var scmModule = loadScm({
+            gitlab_get_commit_statuses: function() { throw new Error('boom'); }
+        });
+        var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
+        assert.equal(provider.getCommitCheckRuns('deadbeef'), null);
     });
 
     test('listWorkflowRuns maps GitLab run statuses to workflow_runs payload', function() {

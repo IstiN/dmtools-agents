@@ -24,7 +24,7 @@ OS_TAG="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
 # ── Per-tool cache definitions ────────────────────────────────────────────────
 
 _cache_dmtools() {
-  local version="${1:-${DMTOOLS_VERSION:-v1.7.228}}"
+  local version="${1:-${DMTOOLS_VERSION:-v1.7.229}}"
   export_var "DMTOOLS_CACHE_PATH" "${HOME}/.dmtools"
   export_var "DMTOOLS_CACHE_KEY"  "dmtools-${version}-${OS_TAG}"
   # Restore key uses only the minor version prefix (e.g. v1.7.) so cache
@@ -184,7 +184,7 @@ _print_info() {
   echo "┌─────────────┬──────────────────────────────────┬────────────────────────────────────────────────┐"
   printf "│ %-11s │ %-32s │ %-46s │\n" "Tool" "Cache Path" "Cache Key (example)"
   echo "├─────────────┼──────────────────────────────────┼────────────────────────────────────────────────┤"
-  printf "│ %-11s │ %-32s │ %-46s │\n" "dmtools"  "~/.dmtools"     "dmtools-v1.7.228-darwin-arm64"
+  printf "│ %-11s │ %-32s │ %-46s │\n" "dmtools"  "~/.dmtools"     "dmtools-v1.7.229-darwin-arm64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "java"     "~/.sdkman/... " "java-17-darwin-arm64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "node"     "~/.nvm"         "nvm-node20-darwin-arm64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "maestro"  "~/.maestro"     "maestro-latest-darwin-arm64"

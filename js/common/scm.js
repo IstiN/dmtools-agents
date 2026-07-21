@@ -409,27 +409,6 @@ function _normalizeGitLabMr(mr) {
 }
 
 /**
- * Minimal authenticated GitLab REST GET, used only for endpoints not covered by a
- * dedicated dmtools MCP tool (e.g. commit statuses — external CI like Jenkins reports
- * build results there via the "gitlabBuilds" plugin, and GitLab has no equivalent of
- * GitHub's "check runs" tool). Reuses the same GITLAB_TOKEN/GITLAB_BASE_PATH env vars
- * dmtools' own GitLab integration already relies on — no new credential needed.
- */
-function _gitlabApiGet(path) {
-    var token = java.lang.System.getenv('GITLAB_TOKEN') || '';
-    var basePath = (java.lang.System.getenv('GITLAB_BASE_PATH') || 'https://gitlab.com').replace(/\/+$/, '');
-    if (!token) {
-        console.warn('SCM GitLab: GITLAB_TOKEN not set, cannot call ' + path);
-        return null;
-    }
-    var url = basePath + '/api/v4' + path;
-    var raw = cli_execute_command({
-        command: 'curl -sS -f -H "PRIVATE-TOKEN: ' + token + '" "' + url + '"'
-    });
-    return _parseJson(_cleanCommandOutput(raw));
-}
-
-/**
  * Normalize a GitLab commit status entry into the same shape detectFailedChecks()
  * expects from GitHub check runs: { name, conclusion, details_url }.
  */
@@ -567,8 +546,7 @@ function _createGitLabProvider(workspace, repository) {
         getCommitCheckRuns: function(sha) {
             if (!sha) return null;
             try {
-                var projectPath = encodeURIComponent(workspace + '/' + repository);
-                var raw = _gitlabApiGet('/projects/' + projectPath + '/repository/commits/' + sha + '/statuses');
+                var raw = gitlab_get_commit_statuses({ workspace: workspace, repository: repository, commitSha: sha });
                 var statuses = _toArray(raw);
                 if (!statuses.length) return null;
                 return statuses.map(_normalizeGitLabCommitStatus);
