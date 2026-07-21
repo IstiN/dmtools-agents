@@ -28,7 +28,7 @@ if [ $# -eq 0 ]; then
   echo "  java      — Java (Temurin/OpenJDK). Default version: 17"
   echo "  maven     — Apache Maven.            Default version: 3.9.9"
   echo "  node      — Node.js via nvm.         Default version: 20"
-  echo "  dmtools   — DMtools CLI.             Default version: v1.7.227"
+  echo "  dmtools   — DMtools CLI.             Default version: v1.7.228"
   echo "  maestro   — Maestro mobile testing.  Default version: latest"
   echo "  copilot   — @github/copilot npm CLI. Default version: latest  (needs node)"
   echo "  codemie   — codemie-claude CLI.      Default version: latest"
