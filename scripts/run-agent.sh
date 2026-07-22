@@ -3,6 +3,30 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# ── Ensure Node/npm/npx are on PATH even in non-interactive shells ───────────
+# Several providers below shell out to `npx @github/copilot@...`/`npx
+# @anthropic-ai/claude-code` etc. when the CLI binary itself isn't globally
+# installed. Node is typically managed by nvm, and nvm only auto-loads via
+# ~/.bashrc — but ~/.bashrc's very first lines ("If not running
+# interactively, don't do anything") make it a no-op for any NON-interactive
+# shell, including `bash -lc "..."` (which is exactly how dmtools/Java spawns
+# this script via ProcessBuilder, and how run-teammate-local.sh/CI invoke it
+# too). Without this, every `npx ...` call fails outright with
+# "npx: command not found" (exit 127) — but the surrounding Teammate job
+# still reports success and its postJSAction still advances the ticket
+# (labels + status change), producing a "completed" run that silently wrote
+# NO content at all (see e.g. agents/js/assignForSolutionArchitecture.js).
+# Guarded on `command -v npx` so this is a fast no-op once Node is already
+# resolvable (global install, PATH already exporting nvm's bin dir, etc).
+if ! command -v npx >/dev/null 2>&1; then
+  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  if [ -s "${NVM_DIR}/nvm.sh" ]; then
+    # shellcheck source=/dev/null
+    \. "${NVM_DIR}/nvm.sh" --no-use
+    nvm use default >/dev/null 2>&1 || nvm use node >/dev/null 2>&1 || true
+  fi
+fi
+
 # Load shared helpers and provider implementations.
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/providers/_common.sh"
