@@ -94,6 +94,17 @@ if [ -n "${PROJECT_KEY}" ]; then
   export AI_TEAMMATE_PROJECT_KEY="${PROJECT_KEY}"
 fi
 
+# Export these so downstream child processes (dmtools' cliCommands ->
+# run-agent.sh -> setup/copilot-session.sh) can see which config/ticket is
+# running. Without this, copilot-session.sh's config/key resolution falls
+# back to "unknown"/the current git branch, so every ticket and every agent
+# type run locally on the same branch collides onto the exact same Copilot
+# session name/cache dir and --resume's the same conversation — the same
+# env vars ai-teammate.yml sets as GitHub Actions job inputs, just wired
+# here for the local-execution path instead.
+export AI_TEAMMATE_CONFIG_FILE="${CONFIG_FILE}"
+export AI_TEAMMATE_DISPLAY_KEY="${TICKET_KEY}"
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🖥️  Local Teammate run"
 echo "   config:  ${CONFIG_FILE}"
