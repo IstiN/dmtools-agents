@@ -124,7 +124,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 # same self-tripping-dirty-tree-guard problem as the .dmtools/ scratch files.
 GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || echo .git)"
 EXCLUDE_FILE="${GIT_DIR}/info/exclude"
-SCRATCH_PATTERNS=(".dmtools/local-run-*" "input/" "outputs/")
+SCRATCH_PATTERNS=(".dmtools/local-run-*" ".dmtools/codegraph-usage.log" "input/" "outputs/")
 
 # Also self-ignore project dependency checkouts (e.g. an iOS reference repo)
 # declared in .dmtools/repositories.json — see setup/checkout.sh below. These
