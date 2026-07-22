@@ -10,9 +10,13 @@
 #
 # Secrets (JIRA_*, GH_TOKEN/PAT_TOKEN, COPILOT_GITHUB_TOKEN, ...) are expected
 # to already be exposed as real environment variables by the session
-# template (dmtools/run-teammate-local.sh reads them directly) — this script
-# does NOT create or touch any dmtools.env file and does NOT run the agent
-# pipeline itself.
+# template (dmtools/run-teammate-local.sh reads them directly). This script
+# does NOT run the agent pipeline itself, but it DOES snapshot whichever of
+# those secrets are currently exported into <TARGET_DIR>/dmtools.env the
+# first time it creates that directory (never overwritten afterwards) — so
+# a later ad-hoc shell/SSH session on the same disk (e.g. after a manual VM
+# restart, days after the original template bootstrap) still has working
+# credentials instead of `dmtools doctor` reporting everything missing.
 #
 # Usage:
 #   warmup-session.sh --repo <git-url> --dir <target-dir> [--branch <name>] \
@@ -91,6 +95,43 @@ else
   CLONE_ARGS=(--recurse-submodules)
   [ -n "${TARGET_BRANCH}" ] && CLONE_ARGS+=(--branch "${TARGET_BRANCH}")
   git clone "${CLONE_ARGS[@]}" "${REPO_URL}" "${TARGET_DIR}"
+fi
+
+# ── Snapshot session-template secrets into dmtools.env ───────────────────────
+# The "Secrets" note above (top of this file) assumes every future
+# run-agent.sh/run-teammate-local.sh invocation happens inside the SAME
+# session template that originally exported JIRA_*/GEMINI_API_KEY/etc as real
+# env vars. In practice a cloud VM/container gets reconnected to or manually
+# restarted long after the template's bootstrap ran (its env vars die with
+# that shell/process), while the checked-out repo + installed toolchain on
+# disk survive untouched. Any later ad-hoc SSH session then sees a fully
+# working `dmtools`/`gradlew` but `dmtools doctor` reports every integration
+# missing, and `dmtools run agents/sm.json ...` fails immediately with
+# "Failed to create TrackerClient instance" — the run never even starts.
+# Snapshot whichever known secret vars ARE currently exported into
+# TARGET_DIR/dmtools.env (already .gitignore'd, and already the exact format
+# run-agent.sh/run-teammate-local.sh parse via `while IFS='=' read ...`), so
+# any later shell on this same disk keeps working. Only runs once — never
+# overwrites an existing dmtools.env (e.g. one placed there deliberately, or
+# a previous warmup's snapshot with hand-added extra keys).
+ENV_SNAPSHOT_FILE="${TARGET_DIR}/dmtools.env"
+if [ ! -f "${ENV_SNAPSHOT_FILE}" ]; then
+  SECRET_VAR_PATTERN='^(JIRA_|CONFLUENCE_|FIGMA_|GH_TOKEN$|PAT_TOKEN$|SOURCE_GITHUB_TOKEN$|GITHUB_TOKEN$|COPILOT_GITHUB_TOKEN$|GITLAB_|BITBUCKET_|ADO_|RALLY_|TESTRAIL_|BITRISE_TOKEN$|XRAY_|GEMINI_|OPENAI_|ANTHROPIC_|BEDROCK_|DIAL_|OLLAMA_|DEFAULT_TRACKER$|DEFAULT_LLM$)'
+  SNAPSHOT_VARS="$(env | grep -E "${SECRET_VAR_PATTERN}" || true)"
+  if [ -n "${SNAPSHOT_VARS}" ]; then
+    {
+      echo "# Auto-snapshotted by warmup-session.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      echo "# from this session template's env vars, so a later ad-hoc shell on the"
+      echo "# same VM/container (e.g. after a manual restart, days later) still has"
+      echo "# working credentials. NEVER commit this file."
+      echo "${SNAPSHOT_VARS}"
+    } > "${ENV_SNAPSHOT_FILE}"
+    echo "💾 Snapshotted $(echo "${SNAPSHOT_VARS}" | wc -l | tr -d ' ') secret var(s) into ${ENV_SNAPSHOT_FILE}"
+  else
+    echo "⚠️  No known secret env vars found to snapshot — ${ENV_SNAPSHOT_FILE} was NOT created. If this session's secrets use different variable names, a manual restart will lose them until dmtools.env is created by hand."
+  fi
+else
+  echo "ℹ️  ${ENV_SNAPSHOT_FILE} already exists — leaving it untouched (not re-snapshotting)."
 fi
 
 AGENTS_DIR="${TARGET_DIR}/agents"

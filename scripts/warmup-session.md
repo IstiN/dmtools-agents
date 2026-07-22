@@ -5,11 +5,28 @@ so that this repo's `agents` submodule works out of the box — clones the produ
 (with the `agents` submodule) and pre-installs/pre-warms the toolchain used by
 `setup/install.sh` (java, node, dmtools, copilot, gradle, android, konan, ...).
 
-It does **not** create/touch a `dmtools.env` file and does **not** run the agent
-pipeline. Secrets (`JIRA_EMAIL`, `JIRA_API_TOKEN`, `GH_TOKEN`/`PAT_TOKEN`,
-`COPILOT_GITHUB_TOKEN`, ...) must already be exposed as real environment variables by
-whatever platform starts the session — `run-agent.sh` / `run-teammate-local.sh` read
-those directly.
+It does **not** run the agent pipeline itself. Secrets (`JIRA_EMAIL`, `JIRA_API_TOKEN`,
+`GH_TOKEN`/`PAT_TOKEN`, `COPILOT_GITHUB_TOKEN`, ...) must already be exposed as real
+environment variables by whatever platform starts the session — `run-agent.sh` /
+`run-teammate-local.sh` read those directly.
+
+**Secret snapshot into `dmtools.env`**: the first time this script clones `--dir`
+(not on later re-syncs of an already-cloned dir), it also snapshots whichever known
+secret env vars are currently exported into `<dir>/dmtools.env` — the exact file
+`run-agent.sh`/`run-teammate-local.sh` already load from. This exists because a
+session template's env vars only live as long as the process/shell that started the
+session; a cloud VM/container that later gets reconnected to or manually restarted
+keeps its disk (repo + installed toolchain) but loses those env vars, so a fresh
+ad-hoc shell would otherwise see `dmtools doctor` report every integration missing
+and any `dmtools run ...`/SM invocation fail immediately with "Failed to create
+TrackerClient instance" before the run even starts. The snapshot fixes that for any
+later shell on the same disk. It never overwrites an existing `dmtools.env` (e.g. one
+placed there by hand) and only writes vars matching a known secret-prefix pattern
+(`JIRA_*`, `CONFLUENCE_*`, `FIGMA_*`, `GH_TOKEN`/`PAT_TOKEN`/`*GITHUB_TOKEN*`,
+`GITLAB_*`, `BITBUCKET_*`, `ADO_*`, `RALLY_*`, `TESTRAIL_*`, `BITRISE_TOKEN`, `XRAY_*`,
+`GEMINI_*`/`OPENAI_*`/`ANTHROPIC_*`/`BEDROCK_*`/`DIAL_*`/`OLLAMA_*`, `DEFAULT_TRACKER`,
+`DEFAULT_LLM`) — if the session template exposes secrets under different names, add
+them to `SECRET_VAR_PATTERN` in the script, or place a `dmtools.env` manually.
 
 All examples below use a placeholder repo `your-org/your-product-repo` on branch `main`,
 with the toolchain installed except `cursor`/`codemie`/`kimi`/`maestro`/`playwright`
