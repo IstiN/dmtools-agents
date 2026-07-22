@@ -164,6 +164,15 @@ module.exports = {
 - `targetStatus`, `limit`, `localExecution`
 - `configPath` (per-rule project config override for multi-project orchestration)
 
+### Figma design lookup
+Any agent that writes or reviews requirements-facing content (questions, descriptions, acceptance criteria, solution/design analysis, dev/test scoping) must treat the linked Figma design as a primary source, not an optional nice-to-have — a story/question/AC that ignores an available design is incomplete, the same way ignoring the code would be.
+
+- **If a ticket/story already links a specific Figma file or node** (a `/file/` or `/design/` URL, optionally with `node-id`): open it directly with `figma_get_file_structure` / `figma_get_layers` / `figma_download_image_of_file` (see `instructions/common/media_handling.md`) before writing output.
+- **If only a team- or project-level Figma URL is known** (e.g. a `.../team/<teamId>/...` "files" listing link, typically stored as project config rather than on the ticket itself): resolve it top-down with `figma_list_team_projects` → `figma_list_project_files` to find the file matching the current feature/epic, then drill into it as above. Match by file name against the feature/epic name; if no file name matches, say so explicitly rather than silently skipping the design check.
+- **If the design is genuinely unavailable** (no link resolves, access error, no matching file after searching): say so explicitly in the output instead of proceeding as if no design existed — this is the same "unavailable artifact" handling already required by `instructions/common/acceptance_criteria_quality.md`.
+- Never fabricate UI/UX details (copy, layout, states) that should come from Figma — pull them from the design or ask a question, don't guess.
+- This is process guidance, not a project config — the actual team/project URLs and file-naming convention for a given product live in that product's `.dmtools/instructions/goal/goal.md` or `.dmtools/config.js`, never here.
+
 ### Output JSON discipline
 When agents produce JSON output files, keep them compact (status, IDs, paths, short summaries). Put large text in separate `.md` files and reference them by path.
 
