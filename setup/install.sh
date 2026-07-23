@@ -32,7 +32,7 @@ if [ $# -eq 0 ]; then
   echo "  maestro   — Maestro mobile testing.  Default version: latest"
   echo "  copilot   — @github/copilot npm CLI. Default version: latest  (needs node)"
   echo "  codemie   — codemie-claude CLI.      Default version: latest"
-  echo "  cursor    — cursor-agent (check only; cannot be auto-installed)"
+  echo "  cursor    — Cursor Agent CLI (via https://cursor.com/install)"
   echo "  codegraph — CodeGraph CLI (npm).     Default version: latest"
   echo "  playwright — Playwright + Chromium.  Default version: latest"
   echo "  kimi      — Kimi Code CLI.           Default version: latest"

@@ -97,6 +97,11 @@ _cache_kimi() {
   export_var "KIMI_CACHE_KEY"  "kimi-${version}-${OS_TAG}"
 }
 
+_cache_cursor() {
+  export_var "CURSOR_CACHE_PATH" "${HOME}/.cursor"
+  export_var "CURSOR_CACHE_KEY"  "cursor-${OS_TAG}"
+}
+
 _cache_kimi_session() {
   # shellcheck source=/dev/null
   source "${SCRIPT_DIR}/kimi-session.sh" env
@@ -171,7 +176,7 @@ _dispatch_tool() {
     playwright) _cache_playwright "${version}" ;;
     codemie)  _cache_codemie  "${version}" ;;
     kimi)     _cache_kimi     "${version}" ;;
-    cursor)   echo "ℹ️  cursor-agent is not cacheable (part of Cursor IDE)" ;;
+    cursor)   _cache_cursor ;;
     gradle)   _cache_gradle ;;
     konan)    _cache_konan ;;
     android)  _cache_android  "${version}" ;;
@@ -190,7 +195,7 @@ _print_info() {
   printf "│ %-11s │ %-32s │ %-46s │\n" "maestro"  "~/.maestro"     "maestro-latest-darwin-arm64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "copilot"  "~/.npm-global"  "npm-global-copilot-latest-darwin-arm64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "codemie"  "~/.local/bin"   "codemie-latest-linux-x86_64"
-  printf "│ %-11s │ %-32s │ %-46s │\n" "cursor"   "(not cacheable)" "-"
+  printf "│ %-11s │ %-32s │ %-46s │\n" "cursor"   "~/.cursor"        "cursor-linux-x86_64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "codegraph" "~/.npm-global + .codegraph/" "npm-global-codegraph-latest-linux-x86_64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "playwright" "~/.cache/ms-playwright" "playwright-browsers-latest-linux-x86_64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "gradle"    "~/.gradle/wrapper + caches" "gradle-wrapper-<hash> / gradle-caches-<hash>"
@@ -213,7 +218,7 @@ _print_info() {
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-ALL_TOOLS="java node dmtools maestro copilot copilot-session kimi-session codemie codegraph playwright kimi"  # cursor has no cache
+ALL_TOOLS="java node dmtools maestro copilot copilot-session kimi-session codemie cursor codegraph playwright kimi"
 
 MODE="${1:-info}"
 shift || true
