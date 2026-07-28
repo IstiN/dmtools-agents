@@ -307,3 +307,75 @@ suite('pushReworkChanges.commitAndPush — base-branch safety invariant', functi
         }, 'must refuse to commit/push without a known expected branch');
     });
 });
+
+// ── action(): resumeAgent exception safety ───────────────────────────────────
+// feedbackLoop.resumeAgent() shells out (mkdir/bash/run-agent.sh --continue --resume) and
+// can itself throw (e.g. blocked by a misconfigured CLI_ALLOWED_COMMANDS whitelist). Every
+// call site wraps it via tryResumeAgent() so that failure is treated the same as
+// { attempted: false } instead of propagating and skipping the honest error-comment fallback.
+
+function loadPushReworkChangesForAction(mocks, feedbackLoopOverrides) {
+    return loadModule(
+        'js/pushReworkChanges.js',
+        makeRequire({
+            './configLoader.js': configLoaderModule,
+            './common/scm.js': { createScm: function() { return {}; } },
+            './common/submodules.js': { pushManagedSubmodules: function() {} },
+            './common/pullRequest.js': {},
+            './common/feedbackLoop.js': Object.assign({
+                runQualityGates: function() { return { success: true }; },
+                runPolicyGates: function() { return { success: true }; },
+                runPostPublishGates: function() { return { success: true }; },
+                resumeAgent: function() { return { attempted: false }; }
+            }, feedbackLoopOverrides || {}),
+            './common/autoStart.js': { triggerSmIfIdle: function() {}, triggerConfiguredWorkflowForTicket: function() {} },
+            './common/outputFiles.js': { readOutputFile: function() { return null; } },
+            './config.js': configModule,
+            './cacheToReleases.js': { action: function() {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        }),
+        Object.assign({
+            cli_execute_command: function() { return ''; },
+            file_read: function() { return null; },
+            jira_post_comment: function() {},
+            jira_move_to_status: function() {},
+            jira_remove_label: function() {},
+            jira_assign_ticket_to: function() {}
+        }, mocks || {})
+    );
+}
+
+suite('pushReworkChanges.action — resumeAgent exception safety', function() {
+
+    test('still posts an honest error comment when feedbackLoop.resumeAgent itself throws (e.g. blocked by CLI_ALLOWED_COMMANDS)', function() {
+        var comments = [];
+        var mod = loadPushReworkChangesForAction(
+            {
+                jira_post_comment: function(args) { comments.push(args); }
+            },
+            {
+                // Simulates an unrelated, unexpected failure reaching the outer catch.
+                runQualityGates: function() { throw new Error('simulated unexpected pre-push failure'); },
+                // Simulates the real-world bug: the feedback loop's own self-invocation gets
+                // blocked by a misconfigured CLI_ALLOWED_COMMANDS whitelist and throws instead
+                // of returning { attempted: false }.
+                resumeAgent: function() { throw new Error('Security violation: Command not whitelisted: bash'); }
+            }
+        );
+
+        var result = mod.action({
+            ticket: { key: 'TS-3', fields: { summary: 'Rework fix', description: '', labels: [] } },
+            metadata: { contextId: 'pr_rework' },
+            response: 'Some fix summary text that is long enough to be a meaningful rework summary.',
+            customParams: {}
+        });
+
+        // The bug this guards against: an uncaught throw from resumeAgent used to be swallowed
+        // by the outer try/catch around the reset logic itself, skipping jira_post_comment
+        // entirely — the job would return { success: false } but the ticket would show no
+        // comment at all, leaving it silently stuck with no explanation.
+        assert.equal(result.success, false);
+        assert.equal(comments.length, 1, 'an honest error comment must still be posted even though resumeAgent threw');
+        assert.contains(comments[0].comment, 'Rework Workflow Error');
+    });
+});
