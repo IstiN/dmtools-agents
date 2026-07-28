@@ -33,6 +33,25 @@ with the toolchain installed except `cursor`/`codemie`/`kimi`/`maestro`/`playwri
 (swap in whichever tools your project doesn't need — see `setup/install.sh` for the full
 list). Replace with your actual repo, branch, and tool list.
 
+## Running SM afterwards — keep run logs outside the repo
+
+Once the session is warmed up, use `run-sm-local.sh` to start the SM agent
+(`sm.json`, `forceLocalTeammate:true`) instead of invoking `dmtools run` by hand:
+
+```bash
+<target-dir>/agents/scripts/run-sm-local.sh
+```
+
+This always resolves the run log to a sibling directory next to the repo (e.g.
+`<parent-of-target-dir>/dmtools-run-logs/sm_run_<timestamp>.log`), never inside
+`<target-dir>` itself, and refuses to start if the repo's working tree is
+already dirty. Redirecting `dmtools run`'s own stdout/stderr *into* the repo
+directory by hand (e.g. `cd <target-dir> && dmtools run ... > sm_run.log`) is
+exactly what breaks `run-teammate-local.sh`'s dirty-tree guard for every
+ticket in that batch — an untracked log file inside the repo is enough to
+trip it. Use the wrapper (or otherwise keep run logs outside the repo) to
+avoid this class of failure.
+
 ## Usage
 
 ```bash
