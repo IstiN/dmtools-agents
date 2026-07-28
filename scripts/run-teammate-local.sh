@@ -28,6 +28,11 @@
 #   successful run the tree must be clean again; if it isn't, this script fails
 #   loudly instead of silently discarding or carrying over uncommitted changes into
 #   the next ticket.
+#
+# Concurrency: an exclusive flock on <repo>/.git/dmtools-local-run.lock serializes
+# any two invocations against the same repo dir (e.g. two overlapping SM runs each
+# dispatching localTeammate tickets) — the second one blocks and waits its turn
+# instead of racing the first on git fetch/checkout/pull.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -77,6 +82,31 @@ if [ -z "${CONFIG_FILE}" ] || [ -z "${TICKET_KEY}" ]; then
   echo "❌ --config-file and --ticket are required" >&2
   usage
   exit 1
+fi
+
+# ── Serialize concurrent runs against the same working tree ─────────────────
+# This script reuses a single shared checkout across tickets (see the module
+# docstring above) and is NOT safe to run concurrently with another instance
+# against the same repo dir — e.g. two overlapping `dmtools run agents/sm.json
+# ... forceLocalTeammate:true` invocations (or one of those racing a manual
+# standalone call) would both `git fetch`/`checkout`/`pull` and evaluate the
+# dirty-tree guard against the same files at the same time, corrupting each
+# other's in-flight work. Take an exclusive advisory lock scoped to this repo's
+# .git dir for the remainder of the script — held until the process exits
+# (including on crash; flock releases automatically, unlike a stale mkdir/pid
+# lock file). A second invocation started while the first is still running
+# just waits its turn instead of racing.
+GIT_DIR_FOR_LOCK="$(git rev-parse --git-dir 2>/dev/null || echo .git)"
+LOCK_FILE="${GIT_DIR_FOR_LOCK}/dmtools-local-run.lock"
+if is_installed flock; then
+  exec {LOCAL_RUN_LOCK_FD}>"${LOCK_FILE}"
+  echo "🔒 Waiting for exclusive lock on ${LOCK_FILE} (skips instantly if free)..."
+  if ! flock -w 1800 "${LOCAL_RUN_LOCK_FD}"; then
+    echo "❌ Timed out after 30m waiting for another local-teammate run to finish (lock: ${LOCK_FILE})." >&2
+    exit 1
+  fi
+else
+  echo "⚠️  'flock' not found — skipping concurrency lock. Do not run two local-teammate invocations against the same repo dir at the same time." >&2
 fi
 
 # ── Load secrets: real env vars win; dmtools.env only fills gaps ─────────────
