@@ -74,9 +74,26 @@ if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
   exit 1
 fi
 
-nohup "${DMTOOLS_BIN}" run agents/sm.json "{\"params\":{\"jobParams\":{\"forceLocalTeammate\":true}}}" "${EXTRA_ARGS[@]}" \
+# Note: EXTRA_ARGS uses the "${arr[@]+"${arr[@]}"}" idiom (not plain
+# "${EXTRA_ARGS[@]}") because macOS's stock bash is 3.2, which treats
+# expanding an empty array under `set -u` as an unbound-variable error
+# (fixed only in bash 4.4+). Without this guard, this line fails silently
+# under `set -e` on any bash-3.2 host whenever no extra args are passed,
+# while $! from the previous background job (if any) can still make the
+# "Started SM" message below print misleadingly.
+nohup "${DMTOOLS_BIN}" run agents/sm.json "{\"params\":{\"jobParams\":{\"forceLocalTeammate\":true}}}" "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}" \
   > "${LOG_FILE}" 2>&1 &
 SM_PID=$!
+
+# Verify the process actually started and the log file exists before
+# reporting success — guards against exactly the kind of silent
+# false-success this script suffered from before this fix.
+sleep 1
+if ! kill -0 "${SM_PID}" 2>/dev/null; then
+  echo "ERROR: SM process (PID ${SM_PID}) is not running — it exited immediately." >&2
+  echo "Check ${LOG_FILE} for details (may not exist if it failed before redirection)." >&2
+  exit 1
+fi
 
 echo "Started SM (PID ${SM_PID}). Tail it with:"
 echo "  tail -f ${LOG_FILE}"
