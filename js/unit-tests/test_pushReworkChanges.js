@@ -307,3 +307,159 @@ suite('pushReworkChanges.commitAndPush — base-branch safety invariant', functi
         }, 'must refuse to commit/push without a known expected branch');
     });
 });
+
+// ── action(): rework_setup_failed.md guard (issue #310) ──────────────────────
+// preCliReworkSetup.js writes input/<ticketKey>/rework_setup_failed.md (via
+// failSetup()) when it could not find/checkout a PR for the ticket, e.g. "no PR
+// found for ticket". pushReworkChanges must detect that marker BEFORE calling
+// commitAndPush()/resumeAgent() — retrying the CLI cannot fix a missing PR, and
+// in the observed incident retrying instead led the CLI agent to fabricate a
+// fake pr_info.md just to slip past the "refuse to commit on base branch" guard.
+
+function loadPushReworkChangesForAction(mocks) {
+    var jiraPostCommentCalls = [];
+    var jiraMoveToStatusCalls = [];
+    var resumeAgentCalls = [];
+    var cliCommands = [];
+
+    var scm = {
+        listPrs: function() { return []; },
+        getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; }
+    };
+
+    var defaultMocks = {
+        cli_execute_command: function(args) {
+            cliCommands.push(args.command);
+            if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+            if (args.command.indexOf('git ls-remote --heads origin') === 0) {
+                return 'abc123\trefs/heads/bug/PROJ-123\n';
+            }
+            return '';
+        },
+        file_read: function(args) {
+            var p = args && (args.path || args);
+            if (p && p.indexOf('rework_setup_failed.md') !== -1) {
+                throw new Error('File does not exist');
+            }
+            if (p && p.indexOf('pr_info.md') !== -1) {
+                return '**Branch**: `bug/PROJ-123` → `develop`';
+            }
+            return null;
+        },
+        jira_post_comment: function(args) { jiraPostCommentCalls.push(args); },
+        jira_move_to_status: function(args) { jiraMoveToStatusCalls.push(args); },
+        jira_remove_label: function() {},
+        jira_assign_ticket_to: function() {}
+    };
+
+    var mod = loadModule(
+        'js/pushReworkChanges.js',
+        makeRequire({
+            './configLoader.js': {
+                loadProjectConfig: function() { return baseConfig(); },
+                resolveInstructions: function() { return { jobParamPatch: {} }; },
+                formatTemplate: function(template, vars) {
+                    return template.replace(/\{(\w+)\}/g, function(m, key) {
+                        return (vars && vars[key] !== undefined) ? vars[key] : m;
+                    });
+                }
+            },
+            './common/scm.js': { createScm: function() { return scm; } },
+            './common/submodules.js': { pushManagedSubmodules: function() {} },
+            './common/pullRequest.js': {
+                readStagedDiffStat: function() { return 'M file.txt\n'; },
+                syncBranchWithBase: function() { return { success: true, updated: false }; }
+            },
+            './common/feedbackLoop.js': {
+                runQualityGates: function() { return { success: true }; },
+                runPolicyGates: function() { return { success: true }; },
+                runPostPublishGates: function() { return { success: true }; },
+                resumeAgent: function(args) { resumeAgentCalls.push(args); return { attempted: false }; }
+            },
+            './common/autoStart.js': {
+                triggerSmIfIdle: function() {},
+                triggerConfiguredWorkflowForTicket: function() { return false; }
+            },
+            './common/outputFiles.js': { readOutputFile: function() { return null; } },
+            './config.js': configModule,
+            './cacheToReleases.js': { action: function() {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        }),
+        Object.assign({}, defaultMocks, mocks || {})
+    );
+
+    return {
+        mod: mod,
+        jiraPostCommentCalls: jiraPostCommentCalls,
+        jiraMoveToStatusCalls: jiraMoveToStatusCalls,
+        resumeAgentCalls: resumeAgentCalls,
+        cliCommands: cliCommands
+    };
+}
+
+suite('pushReworkChanges.action — rework_setup_failed.md guard (#310)', function() {
+
+    test('skips commitAndPush and resumeAgent, posts a Jira comment, when rework_setup_failed.md exists', function() {
+        var loaded = loadPushReworkChangesForAction({
+            file_read: function(args) {
+                var p = args && (args.path || args);
+                if (p && p.indexOf('rework_setup_failed.md') !== -1) {
+                    return '# Rework Setup Failed\n\nNo Pull Request found for ticket PROJ-123. Cannot start rework without an existing PR.\n';
+                }
+                return null;
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'Some fix summary that would have been pushed.'
+        });
+
+        assert.equal(result.success, true, 'should be a handled outcome, not a hard failure');
+        assert.equal(result.path, 'rework-setup-already-failed');
+
+        assert.equal(
+            loaded.cliCommands.filter(function(c) { return c.indexOf('git commit') !== -1; }).length, 0,
+            'must never commit when rework setup already failed'
+        );
+        assert.equal(
+            loaded.cliCommands.filter(function(c) { return c.indexOf('git push') !== -1; }).length, 0,
+            'must never push when rework setup already failed'
+        );
+        assert.equal(loaded.resumeAgentCalls.length, 0, 'must NOT trigger a CLI retry — a missing PR cannot be fixed by retrying');
+
+        assert.equal(loaded.jiraPostCommentCalls.length, 1, 'exactly one Jira comment explaining the skip');
+        assert.contains(loaded.jiraPostCommentCalls[0].comment, 'Rework Push Skipped');
+        assert.contains(loaded.jiraPostCommentCalls[0].comment, 'No Pull Request found for ticket PROJ-123');
+
+        assert.equal(loaded.jiraMoveToStatusCalls.length, 0, 'must not reach the normal "move to In Review" step');
+    });
+
+    test('regression: normal commit/push flow is unchanged when rework_setup_failed.md does NOT exist', function() {
+        var loaded = loadPushReworkChangesForAction({});
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'Some fix summary that should be pushed normally.'
+        });
+
+        assert.equal(result.success, true);
+        assert.notEqual(result.path, 'rework-setup-already-failed');
+        assert.equal(result.branchName, 'bug/PROJ-123');
+
+        assert.ok(
+            loaded.cliCommands.filter(function(c) { return c.indexOf('git commit') !== -1; }).length >= 1,
+            'should still commit staged changes'
+        );
+        assert.ok(
+            loaded.cliCommands.filter(function(c) { return c.indexOf('git push -u origin bug/PROJ-123') !== -1; }).length >= 1,
+            'should still push to the PR branch'
+        );
+        assert.equal(loaded.resumeAgentCalls.length, 0);
+
+        assert.ok(
+            loaded.jiraMoveToStatusCalls.some(function(c) { return c.statusName === 'In Review'; }),
+            'should still move the ticket to In Review as before'
+        );
+    });
+});

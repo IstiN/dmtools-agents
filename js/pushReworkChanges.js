@@ -422,6 +422,55 @@ function isInterruptedReworkResponse(response) {
         text.indexOf('"path": "interrupted"') !== -1;
 }
 
+/**
+ * Reads input/<ticketKey>/rework_setup_failed.md, written by preCliReworkSetup's
+ * failSetup() when it could not find/checkout a PR for the ticket (e.g. "no PR
+ * found for ticket"). Returns the file content, or null if the file does not
+ * exist (the normal, working-PR path).
+ */
+function readReworkSetupFailure(ticketKey) {
+    try {
+        var content = file_read({ path: 'input/' + ticketKey + '/rework_setup_failed.md' });
+        return (content && content.trim()) ? content : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * Rework setup already failed (most commonly: no PR found for the ticket) before
+ * the CLI agent even ran. There is no branch/PR to push changes to, and retrying
+ * the CLI cannot conjure one up — in the observed incident, retrying instead led
+ * the CLI agent to fabricate a fake pr_info.md just to satisfy the "refuse to
+ * commit on base branch" guard. Skip commitAndPush() and the resumeAgent retry
+ * entirely, and just make sure Jira reflects what happened.
+ */
+function handleReworkSetupAlreadyFailed(ticketKey, customParams, failureContent) {
+    console.warn('⚠️ Rework setup already failed (no PR found) for', ticketKey, '— skipping commit/push and CLI retry.');
+    try {
+        var comment = 'h3. ❌ Rework Push Skipped — Setup Already Failed\n\n' +
+            'Rework setup did not find (or could not check out) a Pull Request for this ticket, ' +
+            'so there is no branch to push changes to. Retrying the CLI agent cannot fix a missing PR, ' +
+            'so the push step was skipped rather than retried.\n\n';
+        if (failureContent) {
+            comment += '{code}' + failureContent.trim() + '{code}';
+        } else {
+            comment += 'See {code}input/' + ticketKey + '/rework_setup_failed.md{code} for details.';
+        }
+        jira_post_comment({ key: ticketKey, comment: comment });
+        console.log('✅ Posted rework-setup-already-failed comment to Jira:', ticketKey);
+    } catch (e) {
+        console.warn('Failed to post rework-setup-already-failed Jira comment:', e.message || e);
+    }
+    removeConfiguredLabels(ticketKey, customParams || {});
+    return {
+        success: true,
+        path: 'rework-setup-already-failed',
+        ticketKey: ticketKey,
+        error: 'Rework setup already failed (no PR found for ticket); push step skipped.'
+    };
+}
+
 function handleInterruptedRework(ticketKey, branchName, customParams, statuses) {
     console.warn('Rework CLI was interrupted before writing required outputs; leaving PR conversations open and resetting ticket for retry.');
     try {
@@ -495,6 +544,14 @@ function action(params) {
             console.warn('⚠️ Non-blocking gate failures (push/replies continue):\n' + warningLines.join('\n'));
         }
         const fixSummaryWithWarnings = fixSummary + nonBlockingGateWarningBlock;
+
+        // If rework setup already failed (e.g. no PR found for this ticket), there is
+        // nothing to commit/push to and no amount of CLI retrying can fix a missing PR.
+        // Bail out here, before touching git at all.
+        var reworkSetupFailure = readReworkSetupFailure(ticketKey);
+        if (reworkSetupFailure !== null) {
+            return handleReworkSetupAlreadyFailed(ticketKey, _customParams, reworkSetupFailure);
+        }
 
         // Commit and push
         let branchName;
@@ -723,5 +780,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, resolveCustomParams, isInterruptedReworkResponse, postThreadReplies, commitAndPush };
+    module.exports = { action, resolveCustomParams, isInterruptedReworkResponse, postThreadReplies, commitAndPush, readReworkSetupFailure };
 }

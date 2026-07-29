@@ -258,5 +258,161 @@ suite('postPRReviewComments', function() {
             assert.notEqual(calls[0].text, 'outputs/pr_review_comments/comment1_analytics_confirm.md');
         });
     });
+
+    // ── action(): !isApproved + no-PR guard (issue #311) ──────────────────────
+    // postPRReviewComments must not move the Jira ticket to In Rework, nor
+    // auto-trigger a pr_rework cycle (markForSmStoryRework/triggerSmIfIdle), when
+    // the review recommendation isn't a clean approval but no open PR could ever
+    // be matched to the ticket. Only the GitHub-comment-posting step (Step 4) was
+    // previously guarded with `if (prNumber && repoInfo)`; the Jira status
+    // transition (Step 7) and the SM/rework auto-trigger (Step 12) were not.
+    suite('action — !isApproved + no-PR guard (#311)', function() {
+
+        function loadPostPRReviewCommentsForAction(opts) {
+            opts = opts || {};
+            var jiraAddLabelCalls = [];
+            var jiraMoveToStatusCalls = [];
+            var jiraPostCommentCalls = [];
+            var triggerSmIfIdleCalls = [];
+
+            var scm = {
+                listPrs: function() { return opts.openPrs || []; },
+                getRemoteRepoInfo: function() { return opts.repoInfo !== undefined ? opts.repoInfo : null; },
+                addLabel: function() {},
+                fetchDiscussions: function() { return { rawThreads: { threads: [] } }; }
+            };
+
+            var outputFiles = {
+                readOutputFileDetailed: function() {
+                    return { content: JSON.stringify(opts.reviewData), path: 'outputs/pr_review.json' };
+                },
+                readOutputFile: function() { return null; }
+            };
+
+            var defaultMocks = {
+                file_read: function(args) {
+                    var p = args && (args.path || args);
+                    if (p && p.indexOf('pr_info.md') !== -1) {
+                        return opts.prInfoContent || null;
+                    }
+                    return null;
+                },
+                jira_add_label: function(args) { jiraAddLabelCalls.push(args); },
+                jira_move_to_status: function(args) { jiraMoveToStatusCalls.push(args); },
+                jira_post_comment: function(args) { jiraPostCommentCalls.push(args); },
+                jira_remove_label: function() {},
+                jira_assign_ticket_to: function() {}
+            };
+
+            var mod = loadModule(
+                'js/postPRReviewComments.js',
+                makeRequire({
+                    './config.js': configModule,
+                    './common/scm.js': { createScm: function() { return scm; } },
+                    './common/autoStart.js': {
+                        triggerConfiguredWorkflowForTicket: function() { return false; },
+                        triggerSmIfIdle: function(args) { triggerSmIfIdleCalls.push(args); }
+                    },
+                    './configLoader.js': {
+                        loadProjectConfig: function() { return opts.config || {}; },
+                        resolveInstructions: function() { return { jobParamPatch: {} }; }
+                    },
+                    './common/outputFiles.js': outputFiles,
+                    './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+                }),
+                defaultMocks
+            );
+
+            return {
+                mod: mod,
+                jiraAddLabelCalls: jiraAddLabelCalls,
+                jiraMoveToStatusCalls: jiraMoveToStatusCalls,
+                jiraPostCommentCalls: jiraPostCommentCalls,
+                triggerSmIfIdleCalls: triggerSmIfIdleCalls
+            };
+        }
+
+        test('no PR found: does NOT move to In Rework, does NOT mark/trigger SM rework, posts "could not attach" comment instead', function() {
+            var loaded = loadPostPRReviewCommentsForAction({
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                },
+                repoInfo: null,
+                openPrs: []
+            });
+
+            var result = loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1'
+            });
+
+            assert.equal(result.success, true);
+            assert.equal(result.githubCommentsPosted, false);
+
+            assert.equal(
+                loaded.jiraMoveToStatusCalls.length, 0,
+                'must NOT move the ticket to In Rework when no PR was found'
+            );
+            assert.equal(
+                loaded.jiraAddLabelCalls.filter(function(c) { return c.label === 'sm_story_rework_triggered'; }).length, 0,
+                'must NOT mark for SM story rework when no PR was found'
+            );
+            assert.equal(
+                loaded.triggerSmIfIdleCalls.length, 0,
+                'must NOT trigger SM when no PR was found (nothing to rework)'
+            );
+
+            assert.ok(
+                loaded.jiraPostCommentCalls.some(function(c) {
+                    return c.comment.indexOf('PR Review Could Not Be Attached') !== -1;
+                }),
+                'should post the new "could not attach" comment explaining the ticket was left unchanged'
+            );
+        });
+
+        test('regression: !isApproved WITH a PR found still moves to In Rework and triggers SM rework as before', function() {
+            var loaded = loadPostPRReviewCommentsForAction({
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                },
+                repoInfo: { owner: 'IstiN', repo: 'dmtools-agents' },
+                prInfoContent: '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n'
+            });
+
+            var result = loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1'
+            });
+
+            assert.equal(result.success, true);
+            assert.equal(result.githubCommentsPosted, true);
+
+            assert.ok(
+                loaded.jiraMoveToStatusCalls.some(function(c) { return c.statusName === 'In Rework'; }),
+                'should still move the ticket to In Rework when a PR was found'
+            );
+            assert.equal(
+                loaded.jiraAddLabelCalls.filter(function(c) { return c.label === 'sm_story_rework_triggered'; }).length, 1,
+                'should still mark for SM story rework when a PR was found'
+            );
+            assert.equal(
+                loaded.triggerSmIfIdleCalls.length, 1,
+                'should still trigger SM when a PR was found'
+            );
+            assert.equal(
+                loaded.jiraPostCommentCalls.some(function(c) {
+                    return c.comment.indexOf('PR Review Could Not Be Attached') !== -1;
+                }),
+                false,
+                'must not post the "could not attach" comment when a PR was found'
+            );
+        });
+    });
 });
 
