@@ -3,7 +3,7 @@
  * Moves the ticket to "Ready For Testing" status after test cases are generated.
  */
 
-const { STATUSES } = require('./config.js');
+const configLoader = require('./configLoader.js');
 
 function action(params) {
     try {
@@ -11,19 +11,21 @@ function action(params) {
         if (!ticketKey) {
             return { success: false, error: 'No ticket key found in params' };
         }
+        const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+        const jiraConfig = projectConfig.jira;
 
-        console.log('Moving ' + ticketKey + ' to ' + STATUSES.READY_FOR_TESTING);
+        console.log('Moving ' + ticketKey + ' to ' + jiraConfig.statuses.READY_FOR_TESTING);
 
         jira_move_to_status({
             key: ticketKey,
-            statusName: STATUSES.READY_FOR_TESTING
+            statusName: jiraConfig.statuses.READY_FOR_TESTING
         });
 
-        console.log('✅ ' + ticketKey + ' moved to ' + STATUSES.READY_FOR_TESTING);
+        console.log('✅ ' + ticketKey + ' moved to ' + jiraConfig.statuses.READY_FOR_TESTING);
 
         return {
             success: true,
-            message: ticketKey + ' moved to ' + STATUSES.READY_FOR_TESTING
+            message: ticketKey + ' moved to ' + jiraConfig.statuses.READY_FOR_TESTING
         };
 
     } catch (error) {

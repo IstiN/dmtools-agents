@@ -3,7 +3,7 @@
  * a review/rework status.
  */
 
-const { STATUSES, LABELS } = require('./config.js');
+const { LABELS } = require('./config.js');
 var scmModule = require('./common/scm.js');
 var configLoader = require('./configLoader.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
@@ -68,6 +68,7 @@ function action(params) {
     }
 
     var config = configLoader.loadProjectConfig(params.jobParams || params);
+    var jiraConfig = config.jira;
     var scm = scmModule.createScm(config);
     var pr = findMergedPRForTicket(scm, ticketKey);
 
@@ -81,8 +82,8 @@ function action(params) {
     console.log('Recovered merged PR #' + prNumber + ' for ' + ticketKey);
 
     try {
-        jira_move_to_status({ key: ticketKey, statusName: STATUSES.MERGED });
-        console.log('Moved', ticketKey, 'to', STATUSES.MERGED);
+        jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.MERGED });
+        console.log('Moved', ticketKey, 'to', jiraConfig.statuses.MERGED);
     } catch (e) {
         console.warn('Could not move ticket to Merged:', e.message || e);
     }
@@ -97,7 +98,7 @@ function action(params) {
             key: ticketKey,
             comment: 'h3. ✅ Merged PR Recovered\n\n' +
                 'Found already merged PR #' + prNumber + (prUrl ? ' — [View PR|' + prUrl + ']' : '') +
-                '. Ticket moved to *' + STATUSES.MERGED + '* so the normal post-merge pipeline can continue.'
+                '. Ticket moved to *' + jiraConfig.statuses.MERGED + '* so the normal post-merge pipeline can continue.'
         });
     } catch (e) {}
 

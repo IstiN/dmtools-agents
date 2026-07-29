@@ -14,7 +14,7 @@ var configLoader = require('./configLoader.js');
 var autoStart = require('./common/autoStart.js');
 var feedbackLoop = require('./common/feedbackLoop.js');
 var prHelper = require('./common/pullRequest.js');
-const { GIT_CONFIG, STATUSES, LABELS } = require('./config.js');
+const { GIT_CONFIG, LABELS } = require('./config.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
 function cleanCommandOutput(output) {
@@ -387,6 +387,7 @@ function action(params) {
     const actualParams = params.ticket ? params : (params.jobParams || params);
     const ticketKey = actualParams.ticket.key;
     var config = configLoader.loadProjectConfig(params.jobParams || params);
+    var jiraConfig = config.jira;
     var scm = configLoader.createScm(config);
     const customParams = resolveCustomParams(params, actualParams, config);
     const removeLabel = customParams && customParams.removeLabel;
@@ -515,7 +516,7 @@ function action(params) {
 
         // Step 4: Move ticket to In Review - Passed or In Review - Failed
         // Bug creation/linking is handled by the bug_creation agent when TC reaches Failed status
-        const targetStatus = passed ? STATUSES.IN_REVIEW_PASSED : STATUSES.IN_REVIEW_FAILED;
+        const targetStatus = passed ? jiraConfig.statuses.IN_REVIEW_PASSED : jiraConfig.statuses.IN_REVIEW_FAILED;
         try {
             jira_move_to_status({ key: ticketKey, statusName: targetStatus });
             console.log('✅ Moved', ticketKey, 'to', targetStatus);

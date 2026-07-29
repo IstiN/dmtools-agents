@@ -24,6 +24,7 @@ function loadRecoverFailedTCBugStatus(mocks) {
         'js/recoverFailedTCBugStatus.js',
         makeRequire({
             './config.js': configModule,
+            './configLoader.js': makeDefaultConfigLoaderMock(),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
         Object.assign({}, defaults, mocks || {})
@@ -38,7 +39,7 @@ suite('recoverFailedTCBugStatus', function() {
         var loaded = loadRecoverFailedTCBugStatus({
             jira_search_by_jql: function(args) {
                 loaded.calls.searches.push(args);
-                if (args.jql.indexOf('status not in (Done)') !== -1) {
+                if (args.jql.indexOf('status not in ("Done")') !== -1) {
                     return [{ key: 'TS-1289' }];
                 }
                 return [];
@@ -63,7 +64,7 @@ suite('recoverFailedTCBugStatus', function() {
         var loaded = loadRecoverFailedTCBugStatus({
             jira_search_by_jql: function(args) {
                 loaded.calls.searches.push(args);
-                if (args.jql.indexOf('status not in (Done)') !== -1) {
+                if (args.jql.indexOf('status not in ("Done")') !== -1) {
                     return [];
                 }
                 return [];

@@ -115,7 +115,7 @@ function action(params) {
         // Step 6.5: Detect failed CI checks
         var headSha = prDetails.head ? prDetails.head.sha : null;
         console.log('Detecting failed checks for head SHA:', headSha || '(missing)');
-        var failedChecks = gh.detectFailedChecks(scm, headSha, inputFolder);
+        var failedChecks = gh.detectFailedChecks(scm, headSha, inputFolder, config.scm && config.scm.jenkinsBasePath);
         console.log('Detected failed checks:', failedChecks.length);
 
         // Step 7: Jira comment
@@ -129,7 +129,7 @@ function action(params) {
                 jiraComment += '{panel:bgColor=#FFEBE6|borderColor=#DE350B}' +
                     '⚠️ *CI checks failing* — ' + failedChecks.length + ' check(s) did not pass:\n' +
                     failedChecks.map(function(c) { return '* {code}' + c.name + '{code}'; }).join('\n') +
-                    '\nError logs are in {code}ci_failures.md{code} — reviewer will flag these as blocking issues.' +
+                    '\nError logs: {code}ci_failures.md{code} (summary) and {code}ci_failures_full.log{code} (full logs).' +
                     '{panel}\n\n';
             }
 

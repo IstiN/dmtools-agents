@@ -793,6 +793,77 @@ fills in anything missing from `./dmtools.env` (same `KEY=VALUE` format
 `JIRA_API_TOKEN`, `JIRA_BASE_PATH`, `GH_TOKEN`/`PAT_TOKEN`, plus whatever the configured
 `AI_AGENT_PROVIDER` needs (e.g. `COPILOT_GITHUB_TOKEN`).
 
+**Switching an entire SM run to local without editing any rule:** rather than adding
+`localTeammate: true` to every rule in `sm.json`/`.dmtools/config.js`, pass a CLI JSON
+override when invoking the SM job. `dmtools run <config_file> <override>` deep-merges
+`<override>` into the *whole* job config object (`{name, params}`), not just into
+`params.jobParams` directly — so the override must be wrapped in `params` too, mirroring
+the same shape as the job config file itself:
+
+```bash
+dmtools run agents/sm.json '{"params":{"jobParams":{"forceLocalTeammate":true}}}'
+```
+
+A bare `{"jobParams":{"forceLocalTeammate":true}}` (without the outer `params` wrapper)
+is silently ignored — it doesn't raise an error, the SM job just runs with the
+unmodified default `jobParams` from `sm.json`, so every rule falls through to its
+normal dispatch behavior as if the override had never been passed.
+
+With `forceLocalTeammate: true`, every default-dispatch rule for that run behaves as if
+it had `localTeammate: true` — no GitHub Actions dispatch, everything runs through
+`scripts/run-teammate-local.sh` sequentially. Rules already using `localExecution: true`
+are untouched (they never dispatched in the first place), and any rule can still opt out
+of the override with an explicit `localTeammate: false`. Without the override, the SM job
+runs exactly as before — default dispatch to `ai-teammate.yml` — so this is purely an
+opt-in, per-invocation switch; nothing in `sm.json` or `.dmtools/config.js` needs to change.
+
+**Required whitelist entry:** `runTeammateLocally()` (and `localTeammate`/
+`forceLocalTeammate` in general) invokes `scripts/run-teammate-local.sh` via
+`bash agents/scripts/run-teammate-local.sh ...` through the `cli_execute_command` MCP
+tool. That tool only allows a fixed base whitelist of commands
+(`git, gh, dmtools, npm, yarn, docker, kubectl, terraform, ansible, aws, gcloud, az`) —
+`bash` is **not** in it by default, so the very first local run fails with
+`Command not allowed. Whitelisted commands: ...`. `sm.json`'s top-level `params`
+therefore sets `"envVariables": {"CLI_ALLOWED_COMMANDS": "bash"}`, which is applied as a
+thread-local override for the whole SM job run (see `CliCommandExecutor`/`PropertyReader`
+in `dmtools-core`) and needs no VM-side `dmtools.env` changes — it travels with the repo.
+
+### Bootstrapping a Local/Cloud Dev Session
+
+`scripts/warmup-session.sh` prepares a fresh machine (cloud dev-environment session,
+throwaway VM, container, ...) so that `localTeammate`/`localExecution` rules — or manual
+`dmtools run` calls — work out of the box. Meant to run once as the "warmup" step of a
+session template; safe to re-run (idempotent — syncs instead of re-cloning if the target
+directory already exists).
+
+```bash
+warmup-session.sh --repo <git-url> --dir <target-dir> [--branch <name>] \
+  [--exclude "tool1 tool2 ..."] [--install-args "extra args for install.sh"]
+```
+
+- `--repo` / `--dir` — the product repo to clone (with its `agents` submodule) and the
+  local directory to clone it into.
+- `--branch` — checkout/track this branch instead of the repo's default.
+- `--exclude` — space-separated tool names to skip (forwarded to `setup/install.sh all`
+  as `-tool1 -tool2 ...`; see `setup/install.sh` for the full tool list: `java maven node
+  dmtools maestro copilot codemie cursor codegraph playwright kimi gradle android konan`).
+- `--install-args` — extra raw arguments appended to the `install.sh` invocation.
+
+It does **not** create or touch a `dmtools.env` file and does **not** run the agent
+pipeline — secrets are expected to already be exposed as real environment variables by
+the session template (`run-agent.sh`/`run-teammate-local.sh` read those directly).
+
+See [`scripts/warmup-session.md`](scripts/warmup-session.md) for full worked examples —
+Bitrise-style Dev Environment templates (warmup/startup script fields + template
+variables), GitHub Codespaces `devcontainer.json` (`onCreateCommand`/`postStartCommand`),
+and plain CI/local-machine usage. Pair it with a lightweight "startup" step (run on every
+session start/restart) that just syncs the repo:
+
+```bash
+cd <target-dir> && git fetch origin && git checkout <branch> && \
+  git pull --ff-only origin <branch> && git submodule update --init --recursive
+```
+
 ### TestCasesGenerator Flow
 
 ```
@@ -869,7 +940,11 @@ module.exports = {
         parentTicket: 'PROJ-1'
     },
     git: {
-        baseBranch: 'master'  // default is 'main'
+        baseBranch: 'master'  // default is 'main' — also passed as --base-branch to
+                               // scripts/run-teammate-local.sh for localTeammate/
+                               // forceLocalTeammate runs, so this must match the
+                               // repo's actual default branch or local runs fail with
+                               // "fatal: couldn't find remote ref main"
     }
 };
 ```

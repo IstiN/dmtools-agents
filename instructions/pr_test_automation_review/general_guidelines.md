@@ -2,7 +2,7 @@
 flowchart TD
     START([Test automation PR ready for review]) --> PROJ["Read instruction.md from repo root if it exists"]
     PROJ --> INPUT["Read PR context from input folder"]
-    INPUT --> INPUTS["ticket.md, pr_info.md, pr_diff.txt, pr_files.txt, ci_failures.md, pr_discussions.md, pr_discussions_raw.json"]
+    INPUT --> INPUTS["ticket.md, pr_info.md, pr_diff.txt, pr_files.txt, ci_failures.md, ci_failures_full.log, pr_discussions.md, pr_discussions_raw.json"]
     INPUTS --> EXPLORE["Explore codebase structure in testing/ folder"]
     EXPLORE --> SCOPE["Confirm scope: review test code only inside testing/"]
     SCOPE --> CORRECT["Compare test steps against Test Case: objective, preconditions, steps, expected result"]

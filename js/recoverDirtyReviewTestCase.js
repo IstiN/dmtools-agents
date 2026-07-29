@@ -14,7 +14,6 @@
 
 var scmModule = require('./common/scm.js');
 var configLoader = require('./configLoader.js');
-var { STATUSES } = require('./config.js');
 
 var PR_CACHE_FILE = 'outputs/.recover_dirty_prs_cache.json';
 var PR_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -102,6 +101,7 @@ function findOpenPRForTicket(scm, config, ticketKey) {
 function action(params) {
     var ticketKey = params.ticket && params.ticket.key;
     var config = configLoader.loadProjectConfig(params.jobParams || params || {});
+    var jiraConfig = config.jira;
 
     if (!ticketKey) {
         console.error('No ticket key found');
@@ -145,7 +145,7 @@ function action(params) {
 
     console.log('PR #' + pr.number + ' is dirty — moving ticket to In Rework for conflict resolution');
     try {
-        jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REWORK });
+        jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.IN_REWORK });
         console.log('Moved', ticketKey, 'to In Rework');
     } catch (e) {
         console.error('Failed to move to In Rework:', e);

@@ -69,27 +69,80 @@ elif [ "${OS}" = "linux" ]; then
     SHADOWING_JAVA_BIN_DIR="$(dirname "$(readlink -f "$(command -v java)")" 2>/dev/null || true)"
   fi
 
-  if ! ${SUDO} apt-get install -y "openjdk-${JAVA_MIN_VERSION}-jdk" -qq 2>/dev/null; then
-    echo "apt fallback: adding Adoptium Temurin repo..."
-    ${SUDO} apt-get install -y wget apt-transport-https gnupg -qq
-    wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public \
-      | ${SUDO} tee /etc/apt/trusted.gpg.d/adoptium.asc >/dev/null
-    echo "deb https://packages.adoptium.net/artifactory/deb $(lsb_release -cs) main" \
-      | ${SUDO} tee /etc/apt/sources.list.d/adoptium.list
-    ${SUDO} apt-get update -qq
-    ${SUDO} apt-get install -y "temurin-${JAVA_MIN_VERSION}-jdk" -qq
+  # JAVA_INSTALL_DIR (optional): when set, install into this directory via a
+  # downloaded Adoptium tarball instead of apt/system /usr/lib/jvm. This
+  # exists so CI callers can point it at a project-relative directory (e.g.
+  # "$(pwd)/.jvm-cache") that a CI cache action is actually able to persist —
+  # /usr/lib/jvm is OUTSIDE the job's working directory, and e.g. GitLab's
+  # kubernetes-executor cache uploader silently REFUSES to archive any path
+  # that isn't a subpath of the project directory (logged as "processPath:
+  # artifact path is not a subpath of project directory"), so a plain apt
+  # install there is re-downloaded from scratch on every single job even
+  # though a cache entry is configured for it.
+  JAVA_HOME_RESOLVED=""
+  if [ -n "${JAVA_INSTALL_DIR:-}" ]; then
+    if [ -x "${JAVA_INSTALL_DIR}/bin/java" ]; then
+      JAVA_HOME_RESOLVED="${JAVA_INSTALL_DIR}"
+      echo "✅ Java ${JAVA_MIN_VERSION} found at ${JAVA_HOME_RESOLVED} (cache hit) — skipping download"
+    else
+      echo "📥 Downloading Adoptium Temurin ${JAVA_MIN_VERSION} JDK to ${JAVA_INSTALL_DIR}..."
+      mkdir -p "${JAVA_INSTALL_DIR}"
+      ARCH="$(uname -m)"
+      case "${ARCH}" in
+        x86_64) ADOPTIUM_ARCH="x64" ;;
+        aarch64|arm64) ADOPTIUM_ARCH="aarch64" ;;
+        *) ADOPTIUM_ARCH="${ARCH}" ;;
+      esac
+      ADOPTIUM_URL="https://api.adoptium.net/v3/binary/latest/${JAVA_MIN_VERSION}/ga/linux/${ADOPTIUM_ARCH}/jdk/hotspot/normal/eclipse"
+      if curl -fsSL "${ADOPTIUM_URL}" -o "/tmp/temurin-${JAVA_MIN_VERSION}.tar.gz"; then
+        tar -xzf "/tmp/temurin-${JAVA_MIN_VERSION}.tar.gz" -C "${JAVA_INSTALL_DIR}" --strip-components=1
+        rm -f "/tmp/temurin-${JAVA_MIN_VERSION}.tar.gz"
+        JAVA_HOME_RESOLVED="${JAVA_INSTALL_DIR}"
+      else
+        echo "⚠️  Adoptium tarball download failed — falling back to apt/system install (won't be cached)" >&2
+      fi
+    fi
   fi
 
-  # Locate the freshly installed JDK's home directory by glob — NOT via
-  # `which java`/`command -v java`, which (per the shadowing issue above) may
-  # still report the OLD baked-in JDK's path even after a successful install.
-  JAVA_HOME_RESOLVED=""
-  for candidate in /usr/lib/jvm/*"${JAVA_MIN_VERSION}"*openjdk* /usr/lib/jvm/*"${JAVA_MIN_VERSION}"*temurin* /usr/lib/jvm/temurin-"${JAVA_MIN_VERSION}"*; do
-    if [ -x "${candidate}/bin/java" ]; then
-      JAVA_HOME_RESOLVED="${candidate}"
-      break
+  # ── Fast path: a matching JDK already sits under /usr/lib/jvm, e.g.
+  #    restored by the CI cache from a previous job (see .gitlab/*.yml cache
+  #    paths). apt/Adoptium install is expensive (apt update + package
+  #    download + optional repo/gpg-key setup); skip it entirely when the
+  #    binaries are already there and just re-apply the PATH-shadowing fix
+  #    below, since that fix itself never persists across fresh containers.
+  if [ -z "${JAVA_HOME_RESOLVED}" ]; then
+    for candidate in /usr/lib/jvm/*"${JAVA_MIN_VERSION}"*openjdk* /usr/lib/jvm/*"${JAVA_MIN_VERSION}"*temurin* /usr/lib/jvm/temurin-"${JAVA_MIN_VERSION}"*; do
+      if [ -x "${candidate}/bin/java" ]; then
+        JAVA_HOME_RESOLVED="${candidate}"
+        break
+      fi
+    done
+  fi
+
+  if [ -n "${JAVA_HOME_RESOLVED}" ]; then
+    echo "✅ Java ${JAVA_MIN_VERSION} found at ${JAVA_HOME_RESOLVED} (cache hit) — skipping apt/Adoptium install"
+  else
+    if ! ${SUDO} apt-get install -y "openjdk-${JAVA_MIN_VERSION}-jdk" -qq 2>/dev/null; then
+      echo "apt fallback: adding Adoptium Temurin repo..."
+      ${SUDO} apt-get install -y wget apt-transport-https gnupg -qq
+      wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public \
+        | ${SUDO} tee /etc/apt/trusted.gpg.d/adoptium.asc >/dev/null
+      echo "deb https://packages.adoptium.net/artifactory/deb $(lsb_release -cs) main" \
+        | ${SUDO} tee /etc/apt/sources.list.d/adoptium.list
+      ${SUDO} apt-get update -qq
+      ${SUDO} apt-get install -y "temurin-${JAVA_MIN_VERSION}-jdk" -qq
     fi
-  done
+
+    # Locate the freshly installed JDK's home directory by glob — NOT via
+    # `which java`/`command -v java`, which (per the shadowing issue above) may
+    # still report the OLD baked-in JDK's path even after a successful install.
+    for candidate in /usr/lib/jvm/*"${JAVA_MIN_VERSION}"*openjdk* /usr/lib/jvm/*"${JAVA_MIN_VERSION}"*temurin* /usr/lib/jvm/temurin-"${JAVA_MIN_VERSION}"*; do
+      if [ -x "${candidate}/bin/java" ]; then
+        JAVA_HOME_RESOLVED="${candidate}"
+        break
+      fi
+    done
+  fi
 
   # If a pre-existing JDK earlier on PATH shadows the one we just installed,
   # force every binary in that shadowing directory to point at the new JDK.

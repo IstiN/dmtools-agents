@@ -55,7 +55,11 @@
 var configLoader = null;
 try { configLoader = require('./configLoader.js'); } catch (e) { /* optional in unit tests */ }
 
-var DEFAULT_JQL = 'parent = {parentKey} AND (summary ~ "\\[BA\\]" OR summary ~ "\\[SA\\]" OR summary ~ "\\[VD\\]") ORDER BY created ASC';
+// Note: "[" / "]" are Lucene range-query metacharacters, so inside a JQL quoted
+// string they must be escaped with a literal backslash (\\[ / \\]) to be treated
+// as plain text — a single backslash (\[) is rejected outright as an illegal JQL
+// string escape sequence (only \\, \", \', \t, \n, \r, \<space>, \uXXXX are valid).
+var DEFAULT_JQL = 'parent = {parentKey} AND (summary ~ "\\\\[BA\\\\]" OR summary ~ "\\\\[SA\\\\]" OR summary ~ "\\\\[VD\\\\]") ORDER BY created ASC';
 
 var DEFAULT_FIELDS = ['key', 'summary', 'description', 'status', 'comment'];
 

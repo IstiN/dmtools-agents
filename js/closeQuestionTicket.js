@@ -4,12 +4,15 @@
  * after the Answer field has been written by the outputType:field handler.
  */
 
-const { LABELS, STATUSES } = require('./config.js');
+const { LABELS } = require('./config.js');
+const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 
 function action(params) {
     try {
         var ticketKey = params.ticket.key;
+        var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+        var jiraConfig = projectConfig.jira;
         var wipLabel = params.metadata && params.metadata.contextId
             ? params.metadata.contextId + '_wip'
             : null;
@@ -31,7 +34,7 @@ function action(params) {
         }
 
         // Move to Done
-        jira_move_to_status({ key: ticketKey, statusName: STATUSES.DONE });
+        jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.DONE });
         console.log('Moved ' + ticketKey + ' to Done');
 
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider

@@ -9,7 +9,7 @@ The input folder contains a ticket subfolder (e.g. `input/PROJ-123/`). List `inp
 - `parent_context_vd.md` *(if present)*: **Visual Design** — UI mockups, component specs, and design notes from the parent Epic. Use to verify the UI matches the expected look and feel.
 - `pr_info.md`: Pull Request metadata
 - `pr_diff.txt`: Complete diff of all code changes
-- `ci_failures.md` *(if present)*: **CI checks currently failing on this PR** — treat as 🚨 BLOCKING issues
+- `ci_failures.md` *(if present)*: **CI checks currently failing on this PR** — treat as 🚨 BLOCKING issues. Contains the last 500 lines of each failed check log; full logs are in `ci_failures_full.log`.
 - `pr_discussions.md` *(if present)*: Previous review comments — indicates this is a repeated review
 - `pr_discussions_raw.json` *(if present)*: Structured thread data with IDs — for each thread fully fixed in this diff, add its `threadId` to `resolvedThreadIds` in `pr_review.json`
 

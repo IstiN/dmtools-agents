@@ -16,6 +16,7 @@ function loadPostBugCreation(mocks) {
         'js/postBugCreation.js',
         makeRequire({
             './config.js': configModule,
+            './configLoader.js': makeDefaultConfigLoaderMock(),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
         Object.assign({}, defaults, mocks)

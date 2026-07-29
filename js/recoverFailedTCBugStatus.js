@@ -7,7 +7,7 @@
  * new bug creation.
  */
 
-const { STATUSES } = require('./config.js');
+const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 
 function removeLabel(ticketKey, label) {
@@ -23,11 +23,13 @@ function action(params) {
     if (!ticketKey) {
         throw new Error('params.ticket.key is missing');
     }
+    var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+    var jiraConfig = projectConfig.jira;
 
     console.log('=== Failed TC bug status recovery for', ticketKey, '===');
 
     var linkedBugs = jira_search_by_jql({
-        jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug AND status not in (Done)',
+        jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug AND status not in ("' + jiraConfig.statuses.DONE + '")',
         maxResults: 50
     }) || [];
 
@@ -41,8 +43,8 @@ function action(params) {
         return { success: true, action: 'released_for_bulk_bug_creation', ticketKey: ticketKey };
     }
 
-    jira_move_to_status({ key: ticketKey, statusName: STATUSES.BUG_TO_FIX });
-    console.log('Moved', ticketKey, 'to', STATUSES.BUG_TO_FIX);
+    jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BUG_TO_FIX });
+    console.log('Moved', ticketKey, 'to', jiraConfig.statuses.BUG_TO_FIX);
 
     removeLabel(ticketKey, 'sm_bug_creation_triggered');
     removeLabel(ticketKey, 'sm_bulk_bugs_creation_triggered');
@@ -52,7 +54,7 @@ function action(params) {
         key: ticketKey,
         comment: 'h3. 🐛 Linked Non-Done Bug Found — Moved to Bug To Fix\n\n' +
             'This failed test case already has linked non-Done Bug issue(s), so it was moved to *' +
-            STATUSES.BUG_TO_FIX + '* instead of staying in *Failed* and re-running bug creation.'
+            jiraConfig.statuses.BUG_TO_FIX + '* instead of staying in *Failed* and re-running bug creation.'
     });
 
     // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider

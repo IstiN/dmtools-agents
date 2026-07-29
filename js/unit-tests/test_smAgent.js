@@ -201,7 +201,7 @@ suite('sm.json rule ordering', function() {
         });
 
         var failedTcBulk = indexByDescription['Failed Test Cases → create or link bugs in batch'];
-        var bugDevelopment = indexByDescription['Backlog / To Do / Ready For Development / In Development Bugs → trigger bug_development'];
+        var bugDevelopment = indexByDescription['Backlog / To Do / Ready For Development / In Development / In Rework Bugs → trigger bug_development'];
 
         assert.ok(failedTcBulk >= 0, 'failed TC bulk creation rule exists');
         assert.ok(bugDevelopment >= 0, 'bug development rule exists');
@@ -217,7 +217,7 @@ suite('sm.json rule ordering', function() {
         var bugDevelopment = null;
 
         rules.forEach(function(rule) {
-            if (rule.description === 'Backlog / To Do / Ready For Development / In Development Bugs → trigger bug_development') {
+            if (rule.description === 'Backlog / To Do / Ready For Development / In Development / In Rework Bugs → trigger bug_development') {
                 bugDevelopment = rule;
             }
         });
@@ -702,6 +702,27 @@ suite('smAgent: localTeammate execution mode', function() {
         assert.ok(cmd.indexOf('--ticket P-1') !== -1, 'passes ticket key');
     });
 
+    test('passes --base-branch from config.git.baseBranch (e.g. repos defaulting to master)', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" }, git: { baseBranch: "master" } };'
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'", {
+                configFile: 'agents/story_development.json',
+                localTeammate: true
+            })
+        ]));
+
+        var runs = localRunCommands(sm);
+        assert.equal(runs.length, 1, 'exactly one local run invoked');
+        assert.ok(runs[0].command.indexOf('--base-branch master') !== -1,
+            'passes the project-configured base branch instead of silently defaulting to "main"');
+    });
+
     test('adds rule labels after a successful local run', function() {
         var sm = makeSmAgent({
             fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
@@ -800,6 +821,86 @@ suite('smAgent: localTeammate execution mode', function() {
         assert.ok(writtenFiles[0].path.indexOf('P-7') !== -1, 'temp file name includes the ticket key');
         var cmd = sm.capturedCliCommands[0].command;
         assert.ok(cmd.indexOf('--encoded-config-file') !== -1, 'passes the encoded config file path');
+    });
+
+});
+
+suite('smAgent: forceLocalTeammate CLI override', function() {
+
+    test('switches a default-dispatch rule to local execution', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'", {
+                configFile: 'agents/story_development.json'
+            })
+        ]);
+        params.jobParams.forceLocalTeammate = true;
+
+        sm.action(params);
+
+        assert.equal(sm.capturedTriggers.length, 0, 'no GitHub Actions workflow should be dispatched');
+        assert.equal(localRunCommands(sm).length, 1, 'rule runs locally instead of dispatching');
+    });
+
+    test('leaves localExecution:true rules untouched', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };',
+                'agents/test.json': MINIMAL_AGENT_CONFIG
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", { localExecution: true })
+        ]);
+        params.jobParams.forceLocalTeammate = true;
+
+        sm.action(params);
+
+        assert.equal(localRunCommands(sm).length, 0, 'localExecution rules do not go through run-teammate-local.sh');
+        assert.equal(sm.capturedTriggers.length, 0, 'localExecution rules never dispatch either');
+    });
+
+    test('respects an explicit localTeammate:false opt-out', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/story_development.json',
+                localTeammate: false
+            })
+        ]);
+        params.jobParams.forceLocalTeammate = true;
+
+        sm.action(params);
+
+        assert.equal(localRunCommands(sm).length, 0, 'opted-out rule must not run locally');
+        assert.equal(sm.capturedTriggers.length, 1, 'opted-out rule dispatches as normal');
+    });
+
+    test('is a no-op when not set (default remote dispatch)', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", { configFile: 'agents/story_development.json' })
+        ]);
+        // forceLocalTeammate intentionally omitted
+
+        sm.action(params);
+
+        assert.equal(sm.capturedTriggers.length, 1, 'default behavior still dispatches to GitHub Actions');
+        assert.equal(localRunCommands(sm).length, 0);
     });
 
 });

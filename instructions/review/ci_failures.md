@@ -7,3 +7,5 @@ If `ci_failures.md` exists:
 - Do not invent root causes when logs are insufficient.
 - Mention CI failures in the tracker comment and PR general comment.
 
+Full (untruncated) logs are available in `ci_failures_full.log` when present.
+

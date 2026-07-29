@@ -7,7 +7,7 @@
  *    story_test_automation.
  */
 
-const { STATUSES } = require('./config.js');
+const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 
 function action(params) {
@@ -15,12 +15,14 @@ function action(params) {
     if (!ticketKey) {
         return { success: false, error: 'No ticket key found in params' };
     }
+    const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+    const jiraConfig = projectConfig.jira;
 
     console.log('=== Finishing test case generation for', ticketKey, '===');
 
     try {
-        jira_move_to_status({ key: ticketKey, statusName: STATUSES.READY_FOR_TESTING });
-        console.log('✅ Moved', ticketKey, 'to', STATUSES.READY_FOR_TESTING);
+        jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.READY_FOR_TESTING });
+        console.log('✅ Moved', ticketKey, 'to', jiraConfig.statuses.READY_FOR_TESTING);
     } catch (e) {
         console.warn('Could not move Story to Ready For Testing:', e);
     }

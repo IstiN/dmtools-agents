@@ -14,7 +14,7 @@
  *                   Useful for tickets (e.g. bugs) where the field already has content that must be preserved.
  */
 
-const { LABELS, DIAGRAM_FORMAT, JIRA_FIELDS, STATUSES } = require('./config.js');
+const { LABELS, DIAGRAM_FORMAT, JIRA_FIELDS } = require('./config.js');
 const configLoader = require('./configLoader.js');
 const scmModule = require('./common/scm.js');
 const autoStart = require('./common/autoStart.js');
@@ -32,6 +32,7 @@ function action(params) {
         // Resolve field names from customParams if provided
         var customParams = (params.customParams) || (params.jobParams && params.jobParams.customParams) || {};
         var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+        var jiraConfig = projectConfig.jira;
         var solutionField = customParams.solutionField || JIRA_FIELDS.SOLUTION;
         var diagramField  = (customParams.diagramField !== undefined) ? customParams.diagramField : JIRA_FIELDS.DIAGRAMS;
         var outputType    = customParams.outputType || 'replace'; // 'replace' | 'append'
@@ -122,7 +123,7 @@ function action(params) {
 
         // 7. Move to Ready For Development
         try {
-            jira_move_to_status({ key: ticketKey, statusName: STATUSES.READY_FOR_DEVELOPMENT });
+            jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.READY_FOR_DEVELOPMENT });
             console.log('Moved ' + ticketKey + ' to Ready For Development');
         } catch (e) {
             console.warn('Failed to move to Ready For Development:', e);

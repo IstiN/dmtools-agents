@@ -8,6 +8,7 @@ function loadCheckBugToFixReady(mocks) {
         'js/checkBugToFixReady.js',
         makeRequire({
             './config.js': configModule,
+            './configLoader.js': makeDefaultConfigLoaderMock(),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
         mocks

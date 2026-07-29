@@ -80,7 +80,7 @@ function action(params) {
                 const err = 'No test PR and no remote branch found for ' + testBranchName + '. Moving to Backlog for re-automation.';
                 try {
                     jira_post_comment({ key: ticketKey, comment: 'h3. ❌ Test Rework Setup Failed\n\n' + err });
-                    jira_move_to_status({ key: ticketKey, statusName: 'Backlog' });
+                    jira_move_to_status({ key: ticketKey, statusName: config.jira.statuses.BACKLOG });
                 } catch (e) {}
                 return { success: false, error: err };
             }

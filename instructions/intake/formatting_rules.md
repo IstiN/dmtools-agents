@@ -31,23 +31,4 @@
 
 ## Description files: `outputs/stories/story-N.md`, `epic-N.md`, `bug-N.md`
 
-- Start directly with content — no header line.
-- Use tracker-appropriate heading syntax (e.g. `###` for Markdown-based trackers, `h3.` for Jira wiki).
-- Do NOT include Acceptance Criteria.
-- Avoid filler; be specific.
-
-### Description structure
-
-```
-### Goal
- what & why
-
-### Scope
- minimal requirements: functional, data, behaviour, integrations, constraints
-
-### Out of scope
- explicitly NOT included
-
-### Notes
- assumptions, questions, links
-```
+See `description_template.md` for the required generic structure and the mandatory tracker-markup transform step.

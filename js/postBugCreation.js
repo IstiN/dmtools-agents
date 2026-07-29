@@ -12,7 +12,8 @@
  * Link direction: Bug "blocks" TC (TC is blocked by the Bug until it's fixed).
  */
 
-const { STATUSES, LABELS } = require('./config.js');
+const { LABELS } = require('./config.js');
+const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 
 function readFile(path) {
@@ -61,9 +62,9 @@ function linkBugToTC(ticketKey, bugKey) {
     console.log('✅ Linked:', bugKey, 'blocks', ticketKey);
 }
 
-function moveFailedTcToRework(ticketKey) {
-    jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_REWORK || 'In Rework' });
-    console.log('🔧 Moved', ticketKey, 'to', STATUSES.IN_REWORK || 'In Rework');
+function moveFailedTcToRework(ticketKey, jiraConfig) {
+    jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.IN_REWORK });
+    console.log('🔧 Moved', ticketKey, 'to', jiraConfig.statuses.IN_REWORK);
     try {
         jira_remove_label({ key: ticketKey, label: 'sm_test_automation_triggered' });
         console.log('✅ Removed sm_test_automation_triggered');
@@ -73,6 +74,8 @@ function moveFailedTcToRework(ticketKey) {
 function action(params) {
     try {
         var ticketKey = params.ticket.key;
+        var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+        var jiraConfig = projectConfig.jira;
         console.log('=== Processing bug creation decision for', ticketKey, '===');
 
         var customParams = params.jobParams && params.jobParams.customParams;
@@ -158,8 +161,8 @@ function action(params) {
 
             try { jira_post_comment({ key: ticketKey, comment: comment }); } catch (e) {}
             try {
-                jira_move_to_status({ key: ticketKey, statusName: STATUSES.PASSED });
-                console.log('✅ Tests pass — moved', ticketKey, 'to', STATUSES.PASSED);
+                jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.PASSED });
+                console.log('✅ Tests pass — moved', ticketKey, 'to', jiraConfig.statuses.PASSED);
             } catch (e) {
                 console.warn('Failed to move to Passed:', e);
             }
@@ -176,7 +179,7 @@ function action(params) {
                 '\n\n_TC moved to *In Rework* so the test automation can be fixed instead of staying in *Failed*._';
 
             try { jira_post_comment({ key: ticketKey, comment: comment }); } catch (e) {}
-            moveFailedTcToRework(ticketKey);
+            moveFailedTcToRework(ticketKey, jiraConfig);
             try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
             if (smTriggerLabel) {
                 try { jira_remove_label({ key: ticketKey, label: smTriggerLabel }); } catch (e) {}
@@ -195,8 +198,8 @@ function action(params) {
         // Move TC to Bug To Fix after successful link or create
         if (bugLinked) {
             try {
-                jira_move_to_status({ key: ticketKey, statusName: STATUSES.BUG_TO_FIX });
-                console.log('✅ Moved', ticketKey, 'to', STATUSES.BUG_TO_FIX);
+                jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BUG_TO_FIX });
+                console.log('✅ Moved', ticketKey, 'to', jiraConfig.statuses.BUG_TO_FIX);
             } catch (e) {
                 console.warn('Failed to move to Bug To Fix:', e);
             }
@@ -204,8 +207,8 @@ function action(params) {
             // Move the bug to Ready For Development so it gets picked up
             if (bugKey) {
                 try {
-                    jira_move_to_status({ key: bugKey, statusName: STATUSES.READY_FOR_DEVELOPMENT });
-                    console.log('✅ Moved bug', bugKey, 'to', STATUSES.READY_FOR_DEVELOPMENT);
+                    jira_move_to_status({ key: bugKey, statusName: jiraConfig.statuses.READY_FOR_DEVELOPMENT });
+                    console.log('✅ Moved bug', bugKey, 'to', jiraConfig.statuses.READY_FOR_DEVELOPMENT);
                 } catch (e) {
                     console.warn('Failed to move bug to Ready For Development:', e);
                 }

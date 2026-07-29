@@ -24,7 +24,6 @@ function action(params) {
     const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
     const questionsJql = projectConfig.jira.questions.fetchJql;
     const baAnalysisStatus = projectConfig.jira.statuses.BA_ANALYSIS;
-    const subtaskIssueType = projectConfig.jira.issueTypes.SUBTASK;
 
     function releaseLock() {
         if (ticketKey && removeLabel) {
@@ -71,7 +70,7 @@ function action(params) {
 
         // Step 2: Find subtasks NOT yet Done via JQL (more reliable than client-side field check)
         const notDoneSubtasks = jira_search_by_jql({
-            jql: allJql.replace('ORDER BY created ASC', '') + ' AND status != "Done"',
+            jql: allJql.replace('ORDER BY created ASC', '') + ' AND status != "' + projectConfig.jira.statuses.DONE + '"',
             maxResults: 1
         }) || [];
         const notDoneCount = notDoneSubtasks.length;

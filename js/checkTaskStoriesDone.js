@@ -10,13 +10,15 @@
  *   this check on the next cycle.
  */
 
-const { STATUSES } = require('./config.js');
+const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 
 function action(params) {
     const ticketKey = params.ticket && params.ticket.key;
     const customParams = params.jobParams && params.jobParams.customParams;
     const removeLabel = customParams && customParams.removeLabel;
+    const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+    const jiraConfig = projectConfig.jira;
 
     function releaseLock() {
         if (ticketKey && removeLabel) {
@@ -49,7 +51,7 @@ function action(params) {
 
         // Step 2: Find linked Stories/Bugs NOT yet Done
         const notDoneItems = jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype in (Story, Bug) AND status != "Done"',
+            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype in (Story, Bug) AND status != "' + jiraConfig.statuses.DONE + '"',
             maxResults: 1
         }) || [];
         const notDoneCount = notDoneItems.length;
@@ -66,7 +68,7 @@ function action(params) {
 
         jira_move_to_status({
             key: ticketKey,
-            statusName: STATUSES.READY_FOR_TESTING
+            statusName: jiraConfig.statuses.READY_FOR_TESTING
         });
 
         jira_post_comment({

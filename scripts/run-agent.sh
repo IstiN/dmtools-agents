@@ -3,6 +3,30 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# ── Ensure Node/npm/npx are on PATH even in non-interactive shells ───────────
+# Several providers below shell out to `npx @github/copilot@...`/`npx
+# @anthropic-ai/claude-code` etc. when the CLI binary itself isn't globally
+# installed. Node is typically managed by nvm, and nvm only auto-loads via
+# ~/.bashrc — but ~/.bashrc's very first lines ("If not running
+# interactively, don't do anything") make it a no-op for any NON-interactive
+# shell, including `bash -lc "..."` (which is exactly how dmtools/Java spawns
+# this script via ProcessBuilder, and how run-teammate-local.sh/CI invoke it
+# too). Without this, every `npx ...` call fails outright with
+# "npx: command not found" (exit 127) — but the surrounding Teammate job
+# still reports success and its postJSAction still advances the ticket
+# (labels + status change), producing a "completed" run that silently wrote
+# NO content at all (see e.g. agents/js/assignForSolutionArchitecture.js).
+# Guarded on `command -v npx` so this is a fast no-op once Node is already
+# resolvable (global install, PATH already exporting nvm's bin dir, etc).
+if ! command -v npx >/dev/null 2>&1; then
+  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  if [ -s "${NVM_DIR}/nvm.sh" ]; then
+    # shellcheck source=/dev/null
+    \. "${NVM_DIR}/nvm.sh" --no-use
+    nvm use default >/dev/null 2>&1 || nvm use node >/dev/null 2>&1 || true
+  fi
+fi
+
 # Load shared helpers and provider implementations.
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/providers/_common.sh"
@@ -66,13 +90,22 @@ for arg in "$@"; do
 done
 
 # Load dmtools.env if exists (for local runs)
-# Uses grep to filter only valid KEY=VALUE lines — avoids bash executing bare values
-# (e.g. a multi-line API key where the continuation line has no KEY= prefix)
+# `while IFS='=' read -r k v; ... export "${k}=${v}"` (matching
+# run-teammate-local.sh's loader) instead of `source <(grep ...)`: `source`
+# executes each line as a shell command, so any UNQUOTED value containing
+# spaces (e.g. `JIRA_EXTRA_FIELDS=Acceptance criteria,Solution,...`) is
+# parsed as `KEY=firstword secondword...` — a command invocation, not an
+# assignment — which either errors ("command not found") or, worse, silently
+# leaves that var (and, depending on shell/error-handling quirks, everything
+# defined further down the file) unset. Splitting on the first '=' via `read`
+# preserves the rest of the line — spaces included — as one literal value,
+# with no shell re-evaluation.
 if [ -f "dmtools.env" ]; then
   echo "Loading environment from dmtools.env"
-  set -a
-  source <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' dmtools.env)
-  set +a
+  while IFS='=' read -r k v; do
+    [[ "${k}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    export "${k}=${v}"
+  done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' dmtools.env)
 fi
 
 # Extract prompt (last argument).

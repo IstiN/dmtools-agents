@@ -14,7 +14,6 @@
  *   bugs) → moves the Story back to "Ready For Testing" to trigger a re-run.
  */
 
-const { STATUSES, resolveStatuses } = require('./config.js');
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 
@@ -22,11 +21,12 @@ function action(params) {
     const ticketKey = params.ticket && params.ticket.key;
     const customParams = params.jobParams && params.jobParams.customParams;
     const removeLabel = customParams && customParams.removeLabel;
-    const statuses = resolveStatuses(customParams);
-
     const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-    const testCaseType = (projectConfig.jira && projectConfig.jira.issueTypes && projectConfig.jira.issueTypes.TEST_CASE) || 'Test Case';
-    const bugType = (projectConfig.jira && projectConfig.jira.issueTypes && projectConfig.jira.issueTypes.BUG) || 'Bug';
+    const jiraConfig = projectConfig.jira;
+    // Legacy override channel: customParams.customStatuses still wins over .dmtools/config.js statuses
+    const statuses = Object.assign({}, jiraConfig.statuses, (customParams && customParams.customStatuses) || {});
+    const testCaseType = jiraConfig.issueTypes.TEST_CASE || 'Test Case';
+    const bugType = jiraConfig.issueTypes.BUG || 'Bug';
 
     function releaseLock() {
         if (ticketKey && removeLabel) {
@@ -69,7 +69,7 @@ function action(params) {
         var bugs = findLinkedBugs(tcKey);
         for (var i = 0; i < bugs.length; i++) {
             var status = bugs[i].fields && bugs[i].fields.status && bugs[i].fields.status.name;
-            if (status !== STATUSES.DONE) {
+            if (status !== statuses.DONE) {
                 return bugs[i].key;
             }
         }

@@ -7,6 +7,10 @@ function loadRetryMergePR(options) {
     var autoStartCalls = [];
     var config = options.config || {
         repository: { owner: 'IstiN', repo: 'trackstate' },
+        jira: {
+            issueTypes: configModule.ISSUE_TYPES,
+            statuses: configModule.STATUSES
+        },
         jobParamPatches: {
             retry_merge: {
                 customParams: {

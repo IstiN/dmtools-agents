@@ -15,11 +15,9 @@ function loadRecoverStuckTestCase(options) {
         'js/recoverStuckTestCase.js',
         makeRequire({
             './config.js': configModule,
-            './configLoader.js': {
-                loadProjectConfig: function() {
-                    return { repository: { owner: 'IstiN', repo: 'trackstate' } };
-                }
-            },
+            './configLoader.js': makeDefaultConfigLoaderMock({
+                repository: { owner: 'IstiN', repo: 'trackstate' }
+            }),
             './common/scm.js': { createScm: function() { return scm; } },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),

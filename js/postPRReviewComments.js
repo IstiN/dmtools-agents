@@ -184,7 +184,7 @@ function attemptResumeIfReviewOutputsMissing(ticketKey) {
     var recoveryPrompt =
         'RESUME TASK: The previous PR review run ended without writing mandatory review output files.\n\n' +
         'Do not rework product code. Read input/' + ticketKey + '/pr_info.md, pr_diff.txt, pr_discussions.md, ' +
-        'pr_discussions_raw.json when present, ci_failures.md when present, and the current PR context.\n\n' +
+        'pr_discussions_raw.json when present, ci_failures.md and ci_failures_full.log when present, and the current PR context.\n\n' +
         'Write these files before stopping:\n' +
         '1. outputs/pr_review.json with fields recommendation, generalComment, resolvedThreadIds, inlineComments, issueCounts.\n' +
         '2. outputs/pr_review_general.md with a short GitHub Markdown review summary.\n' +

@@ -3,7 +3,7 @@
  * Moves the ticket to "In Testing" status after test cases are generated.
  */
 
-const { STATUSES } = require('./config.js');
+const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 
 function action(params) {
@@ -12,12 +12,14 @@ function action(params) {
         if (!ticketKey) {
             return { success: false, error: 'No ticket key found in params' };
         }
+        const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+        const jiraConfig = projectConfig.jira;
 
-        console.log('Moving ' + ticketKey + ' to ' + STATUSES.IN_TESTING);
+        console.log('Moving ' + ticketKey + ' to ' + jiraConfig.statuses.IN_TESTING);
 
         jira_move_to_status({
             key: ticketKey,
-            statusName: STATUSES.IN_TESTING
+            statusName: jiraConfig.statuses.IN_TESTING
         });
 
         try {
@@ -26,7 +28,7 @@ function action(params) {
             console.log('Label sm_test_cases_triggered not found or already removed');
         }
 
-        console.log('✅ ' + ticketKey + ' moved to ' + STATUSES.IN_TESTING);
+        console.log('✅ ' + ticketKey + ' moved to ' + jiraConfig.statuses.IN_TESTING);
 
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
@@ -38,7 +40,7 @@ function action(params) {
 
         return {
             success: true,
-            message: ticketKey + ' moved to ' + STATUSES.IN_TESTING
+            message: ticketKey + ' moved to ' + jiraConfig.statuses.IN_TESTING
         };
 
     } catch (error) {

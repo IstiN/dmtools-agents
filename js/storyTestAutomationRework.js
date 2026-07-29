@@ -6,7 +6,7 @@
 var configLoader = require('./configLoader.js');
 var autoStart = require('./common/autoStart.js');
 var prHelper = require('./common/pullRequest.js');
-const { STATUSES, LABELS } = require('./config.js');
+const { LABELS } = require('./config.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
 function smLabelForContext(contextId) {
@@ -204,6 +204,7 @@ function action(params) {
     const actualParams = params.ticket ? params : (params.jobParams || params);
     const storyKey = actualParams.ticket.key;
     const config = configLoader.loadProjectConfig(params.jobParams || params);
+    const jiraConfig = config.jira;
     const scm = configLoader.createScm(config);
     const customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
     const contextId = actualParams.metadata && actualParams.metadata.contextId;
@@ -274,8 +275,8 @@ function action(params) {
 
         // Step 3: Move Story back to In Testing
         try {
-            jira_move_to_status({ key: storyKey, statusName: STATUSES.IN_TESTING });
-            console.log('✅ Moved Story', storyKey, 'to', STATUSES.IN_TESTING);
+            jira_move_to_status({ key: storyKey, statusName: jiraConfig.statuses.IN_TESTING });
+            console.log('✅ Moved Story', storyKey, 'to', jiraConfig.statuses.IN_TESTING);
         } catch (e) {
             console.warn('Failed to move Story to In Testing:', e);
         }

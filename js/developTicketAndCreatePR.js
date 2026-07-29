@@ -504,13 +504,26 @@ function resetDevelopmentForRetry(ticketKey, statuses, customParams, metadata, s
 }
 
 function resumeDevelopmentAgent(params, ticketKey, customParams, stage, errorMessage) {
-    return feedbackLoop.resumeAgent({
-        ticketKey: ticketKey,
-        customParams: customParams,
-        section: 'postAction',
-        stage: stage,
-        error: errorMessage
-    }).attempted;
+    // feedbackLoop.resumeAgent() itself shells out (mkdir/bash/run-agent.sh --continue --resume).
+    // If that self-invocation is ever blocked (e.g. a misconfigured CLI_ALLOWED_COMMANDS
+    // whitelist) or fails for any other unexpected reason, it can throw instead of returning
+    // { attempted: false }. Every call site below treats a falsy return as "could not resume"
+    // and falls through to resetDevelopmentForRetry() to post an honest error comment and move
+    // the ticket back to Ready For Development. An uncaught throw here would skip that recovery
+    // path entirely, silently leaving the ticket stuck with no explanation. Treat any such
+    // failure the same as "not resumed" so the existing reset-for-retry fallback always runs.
+    try {
+        return feedbackLoop.resumeAgent({
+            ticketKey: ticketKey,
+            customParams: customParams,
+            section: 'postAction',
+            stage: stage,
+            error: errorMessage
+        }).attempted;
+    } catch (resumeError) {
+        console.error('resumeDevelopmentAgent: feedbackLoop.resumeAgent failed unexpectedly — treating as "not resumed" so the ticket can still be reset for retry:', resumeError);
+        return false;
+    }
 }
 
 /**

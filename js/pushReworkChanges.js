@@ -20,6 +20,23 @@ var cacheToReleases = require('./cacheToReleases.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
 /**
+ * Wraps feedbackLoop.resumeAgent() so an unexpected failure inside it (e.g. its own
+ * mkdir/bash/run-agent.sh --continue --resume self-invocation being blocked by a
+ * misconfigured CLI_ALLOWED_COMMANDS whitelist) can never throw out of a call site.
+ * Every caller treats { attempted: false } as "could not resume" and falls through to
+ * posting an honest error comment / resetting the ticket — an uncaught throw here would
+ * skip that fallback entirely and leave the ticket silently stuck.
+ */
+function tryResumeAgent(options) {
+    try {
+        return feedbackLoop.resumeAgent(options);
+    } catch (resumeError) {
+        console.error('tryResumeAgent: feedbackLoop.resumeAgent failed unexpectedly — treating as "not attempted" so the caller\'s reset/error-comment fallback still runs:', resumeError);
+        return { attempted: false };
+    }
+}
+
+/**
  * Returns true if the Jira ticket has the pr_approved label.
  */
 function hasPrApprovedLabel(ticket) {
@@ -562,7 +579,7 @@ function action(params) {
             codeChangesCommitted = pushResult.hasChanges;
         } catch (gitError) {
             console.error('Git operations failed:', gitError);
-            var resume = feedbackLoop.resumeAgent({
+            var resume = tryResumeAgent({
                 ticketKey: ticketKey,
                 customParams: _customParams,
                 section: 'postAction',
@@ -603,7 +620,7 @@ function action(params) {
         }
 
         if (isInterruptedReworkResponse(fixSummary)) {
-            var interruptedResume = feedbackLoop.resumeAgent({
+            var interruptedResume = tryResumeAgent({
                 ticketKey: ticketKey,
                 customParams: _customParams,
                 section: 'postAction',
@@ -759,7 +776,7 @@ function action(params) {
             const actualParams = params.ticket ? params : (params.jobParams || params);
             if (actualParams && actualParams.ticket && actualParams.ticket.key) {
                 const customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
-                var resume = feedbackLoop.resumeAgent({
+                var resume = tryResumeAgent({
                     ticketKey: actualParams.ticket.key,
                     customParams: customParams,
                     section: 'postAction',
