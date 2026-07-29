@@ -25,6 +25,20 @@ _ensure_cursor_agent_symlink() {
   fi
 }
 
+# ── Configure stable Cursor session for AI Teammate runs ────────────────────
+_configure_session() {
+  # When running inside AI Teammate, derive a stable session id per
+  # repo:ticket:agent_group and cache ~/.cursor/chats so the session can be
+  # resumed across CI runs.
+  if [ -z "${AI_TEAMMATE_CONFIG_FILE:-}" ]; then
+    return 0
+  fi
+  if [ -f "${SCRIPT_DIR}/cursor-session.sh" ]; then
+    # shellcheck source=/dev/null
+    source "${SCRIPT_DIR}/cursor-session.sh" env
+  fi
+}
+
 # ── Register bin dirs (before install check, like copilot.sh) ────────────────
 mkdir -p "${CURSOR_LOCAL_BIN}"
 register_path "${CURSOR_LOCAL_BIN}"
@@ -33,16 +47,19 @@ register_path "${CURSOR_BIN_DIR}"
 # ── Already installed? ────────────────────────────────────────────────────────
 if is_installed cursor-agent; then
   echo "✅ cursor-agent already installed: $(cursor-agent --version 2>/dev/null || echo 'present')"
+  _configure_session
   exit 0
 fi
 if is_installed agent; then
   _ensure_cursor_agent_symlink
   echo "✅ agent already on PATH: $(agent --version 2>/dev/null || echo 'present')"
+  _configure_session
   exit 0
 fi
 if [ -x "${CURSOR_BIN_DIR}/agent" ] || [ -x "${CURSOR_LOCAL_BIN}/agent" ]; then
   _ensure_cursor_agent_symlink
   echo "✅ Cursor Agent CLI already installed (cached)"
+  _configure_session
   exit 0
 fi
 
@@ -60,6 +77,7 @@ _ensure_cursor_agent_symlink
 
 if is_installed cursor-agent || is_installed agent; then
   echo "✅ Cursor Agent CLI $(cursor-agent --version 2>/dev/null || agent --version 2>/dev/null || echo 'installed')"
+  _configure_session
 else
   echo "❌ cursor-agent not found after install" >&2
   exit 1
