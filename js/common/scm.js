@@ -110,6 +110,69 @@ function _runGitDiff(baseRef, headRef, workingDir) {
     return '';
 }
 
+/**
+ * Normalize a legacy GitHub commit-status entry (the classic pre-Checks-API
+ * `/commits/{sha}/statuses` endpoint, still used by external CI systems such as Jenkins
+ * that report build results via the Status API instead of GitHub Check Runs) into the same
+ * shape detectFailedChecks() expects from github_get_commit_check_runs: { name, conclusion, details_url }.
+ */
+function _normalizeGithubCommitStatus(status) {
+    var s = String((status && status.state) || '').toLowerCase();
+    var conclusion = (s === 'failure' || s === 'error') ? 'failure'
+        : (s === 'success') ? 'success'
+        : s; // pending passes through and is filtered out by detectFailedChecks
+    return {
+        name: (status && status.context) || 'unknown',
+        conclusion: conclusion,
+        details_url: (status && status.target_url) || null
+    };
+}
+
+/**
+ * Fetch legacy commit statuses for a GitHub commit. No dedicated MCP tool exists for the
+ * classic Status API, so this shells out via `gh api` (same established pattern as
+ * updateBranch() below) and keeps only the most recent report per context — GitHub returns
+ * statuses newest-first, so the first occurrence per context wins.
+ */
+function _getLegacyGithubCommitStatuses(workspace, repository, sha) {
+    try {
+        var raw = cli_execute_command({
+            command: 'gh api repos/' + workspace + '/' + repository + '/commits/' + sha + '/statuses --paginate'
+        }) || '';
+        var cleaned = _cleanCommandOutput(raw);
+        if (!cleaned) return [];
+        var statuses = JSON.parse(cleaned);
+        if (!Array.isArray(statuses)) return [];
+        var seenContexts = {};
+        var latest = [];
+        for (var i = 0; i < statuses.length; i++) {
+            var ctx = statuses[i].context || 'unknown';
+            if (seenContexts[ctx]) continue;
+            seenContexts[ctx] = true;
+            latest.push(statuses[i]);
+        }
+        return latest;
+    } catch (e) {
+        console.warn('SCM GitHub: failed to fetch legacy commit statuses for', sha, ':', e.message || e);
+        return [];
+    }
+}
+
+/**
+ * Unwrap the raw github_get_commit_check_runs() response into a plain array, tolerating the
+ * various envelopes DMTools builds have used ({"result": ...}, {"check_runs": [...]}, a raw
+ * array, or a single object).
+ */
+function _unwrapGithubCheckRuns(raw) {
+    var parsed = _parseJson(raw);
+    if (parsed && typeof parsed.result !== 'undefined') {
+        parsed = _parseJson(parsed.result);
+    }
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && Array.isArray(parsed.check_runs)) return parsed.check_runs;
+    return parsed ? [parsed] : [];
+}
+
 function _createGithubProvider(workspace, repository) {
     return {
         listPrs: function(state) {
@@ -213,7 +276,30 @@ function _createGithubProvider(workspace, repository) {
             return raw || '';
         },
         getCommitCheckRuns: function(sha) {
-            return github_get_commit_check_runs({ workspace: workspace, repository: repository, commitSha: sha });
+            if (!sha) return null;
+            var checkRuns = [];
+            try {
+                var raw = github_get_commit_check_runs({ workspace: workspace, repository: repository, commitSha: sha });
+                checkRuns = _unwrapGithubCheckRuns(raw);
+            } catch (e) {
+                console.warn('SCM GitHub: failed to fetch check runs for', sha, ':', e.message || e);
+            }
+
+            // Some repos are wired to an external CI (e.g. Jenkins) that reports build
+            // results via the classic commit-status API instead of GitHub Check Runs, so
+            // checkRuns above can legitimately be empty even when CI actually ran and
+            // failed. Merge in legacy statuses (by name) so detectFailedChecks() still sees them.
+            var legacyStatuses = _getLegacyGithubCommitStatuses(workspace, repository, sha)
+                .map(_normalizeGithubCommitStatus);
+            if (!legacyStatuses.length) {
+                return checkRuns;
+            }
+            var existingNames = {};
+            checkRuns.forEach(function(c) { existingNames[c.name] = true; });
+            legacyStatuses.forEach(function(s) {
+                if (!existingNames[s.name]) checkRuns.push(s);
+            });
+            return checkRuns;
         },
         getJobLogs: function(jobId) {
             return github_get_job_logs({ workspace: workspace, repository: repository, jobId: String(jobId) });
@@ -946,5 +1032,8 @@ module.exports = {
     _createGithubProvider: _createGithubProvider,
     _createGitLabProvider: _createGitLabProvider,
     _createAdoProvider: _createAdoProvider,
-    _normalizeGitLabCommitStatus: _normalizeGitLabCommitStatus
+    _normalizeGitLabCommitStatus: _normalizeGitLabCommitStatus,
+    _normalizeGithubCommitStatus: _normalizeGithubCommitStatus,
+    _getLegacyGithubCommitStatuses: _getLegacyGithubCommitStatuses,
+    _unwrapGithubCheckRuns: _unwrapGithubCheckRuns
 };

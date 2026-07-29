@@ -630,6 +630,127 @@ suite('scm GitHub provider getPrDiff fallback', function() {
         assert.ok(diff.indexOf('diff --git') === 0, 'should return raw diff, not JSON envelope');
     });
 });
+
+suite('scm GitHub provider getCommitCheckRuns', function() {
+
+    test('returns native check runs as-is when the Checks API already reports them', function() {
+        var checkRunArgs = null;
+        var cliCalls = [];
+        var scmModule = loadScm({
+            github_get_commit_check_runs: function(args) {
+                checkRunArgs = args;
+                return { check_runs: [{ name: 'build', conclusion: 'failure' }] };
+            },
+            cli_execute_command: function(args) { cliCalls.push(args.command); return '[]'; }
+        });
+
+        var provider = scmModule._createGithubProvider('IstiN', 'trackstate');
+        var runs = provider.getCommitCheckRuns('abc123');
+
+        assert.equal(checkRunArgs.workspace, 'IstiN');
+        assert.equal(checkRunArgs.repository, 'trackstate');
+        assert.equal(checkRunArgs.commitSha, 'abc123');
+        assert.equal(runs.length, 1);
+        assert.equal(runs[0].name, 'build');
+        assert.equal(runs[0].conclusion, 'failure');
+    });
+
+    test('merges legacy commit statuses (e.g. an external Jenkins) when the Checks API has none', function() {
+        var cliCommand = null;
+        var scmModule = loadScm({
+            github_get_commit_check_runs: function() { return { check_runs: [] }; },
+            cli_execute_command: function(args) {
+                cliCommand = args.command;
+                return JSON.stringify([
+                    { context: 'continuous-integration/jenkins/pr-merge', state: 'error', target_url: 'https://jenkins.example.com/job/x/job/PR-1/5/display/redirect' },
+                    { context: 'continuous-integration/jenkins/pr-merge', state: 'pending', target_url: 'https://jenkins.example.com/job/x/job/PR-1/5/display/redirect' },
+                    { context: 'other-check', state: 'success', target_url: 'https://ci.example.com/1' }
+                ]);
+            }
+        });
+
+        var provider = scmModule._createGithubProvider('acme', 'widgets');
+        var runs = provider.getCommitCheckRuns('deadbeef');
+
+        assert.ok(cliCommand.indexOf('repos/acme/widgets/commits/deadbeef/statuses') !== -1, 'should call gh api for the right repo/sha');
+        assert.equal(runs.length, 2, 'should dedupe to the most recent status per context');
+        assert.equal(runs[0].name, 'continuous-integration/jenkins/pr-merge');
+        assert.equal(runs[0].conclusion, 'failure', 'most recent report (error) wins over the older pending one');
+        assert.equal(runs[0].details_url, 'https://jenkins.example.com/job/x/job/PR-1/5/display/redirect');
+        assert.equal(runs[1].name, 'other-check');
+        assert.equal(runs[1].conclusion, 'success');
+    });
+
+    test('does not duplicate a check that is already reported by the Checks API', function() {
+        var scmModule = loadScm({
+            github_get_commit_check_runs: function() { return { check_runs: [{ name: 'shared-check', conclusion: 'success' }] }; },
+            cli_execute_command: function() {
+                return JSON.stringify([{ context: 'shared-check', state: 'failure', target_url: 'https://x/1' }]);
+            }
+        });
+
+        var provider = scmModule._createGithubProvider('acme', 'widgets');
+        var runs = provider.getCommitCheckRuns('deadbeef');
+
+        assert.equal(runs.length, 1, 'Checks API entry should win, not be duplicated by the legacy status');
+        assert.equal(runs[0].conclusion, 'success');
+    });
+
+    test('returns only check runs when there are no legacy statuses', function() {
+        var scmModule = loadScm({
+            github_get_commit_check_runs: function() { return { check_runs: [{ name: 'build', conclusion: 'success' }] }; },
+            cli_execute_command: function() { return '[]'; }
+        });
+
+        var provider = scmModule._createGithubProvider('acme', 'widgets');
+        var runs = provider.getCommitCheckRuns('deadbeef');
+
+        assert.equal(runs.length, 1);
+        assert.equal(runs[0].name, 'build');
+    });
+
+    test('does not throw when the legacy status CLI call fails', function() {
+        var scmModule = loadScm({
+            github_get_commit_check_runs: function() { return { check_runs: [{ name: 'build', conclusion: 'failure' }] }; },
+            cli_execute_command: function() { throw new Error('gh not authenticated'); }
+        });
+
+        var provider = scmModule._createGithubProvider('acme', 'widgets');
+        var runs = provider.getCommitCheckRuns('deadbeef');
+
+        assert.equal(runs.length, 1, 'should still return the native check runs it already had');
+        assert.equal(runs[0].name, 'build');
+    });
+
+    test('does not throw when the Checks API call fails, and still surfaces legacy statuses', function() {
+        var scmModule = loadScm({
+            github_get_commit_check_runs: function() { throw new Error('boom'); },
+            cli_execute_command: function() {
+                return JSON.stringify([{ context: 'continuous-integration/jenkins/pr-merge', state: 'error', target_url: 'https://x/1' }]);
+            }
+        });
+
+        var provider = scmModule._createGithubProvider('acme', 'widgets');
+        var runs = provider.getCommitCheckRuns('deadbeef');
+
+        assert.equal(runs.length, 1);
+        assert.equal(runs[0].name, 'continuous-integration/jenkins/pr-merge');
+        assert.equal(runs[0].conclusion, 'failure');
+    });
+
+    test('returns null without calling any tool when sha is missing', function() {
+        var calls = [];
+        var scmModule = loadScm({
+            github_get_commit_check_runs: function() { calls.push('checks'); return { check_runs: [] }; },
+            cli_execute_command: function() { calls.push('cli'); return '[]'; }
+        });
+
+        var provider = scmModule._createGithubProvider('acme', 'widgets');
+        assert.equal(provider.getCommitCheckRuns(null), null);
+        assert.equal(calls.length, 0);
+    });
+});
+
 suite('scm GitLab provider getPrDiff fallback', function() {
 
     test('prefers gitlab_get_mr_diff_text when available', function() {
