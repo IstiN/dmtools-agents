@@ -878,13 +878,28 @@ function action(params) {
                     label: LABELS.PR_APPROVED
                 });
                 console.log('✅ Added pr_approved label to Jira ticket — SM will retry merge');
-            } else {
-                // Has issues → move to In Rework for focused fixes
+            } else if (prNumber && repoInfo) {
+                // Has issues, and there is an actual PR to rework → move to In Rework for focused fixes
                 jira_move_to_status({
                     key: ticketKey,
                     statusName: statuses.IN_REWORK
                 });
                 console.log('✅ Ticket moved to In Rework');
+            } else {
+                // Has issues, but no PR was ever matched to this ticket — moving to In Rework
+                // would start a rework cycle with nothing to rework. Leave the status alone
+                // and surface this explicitly instead of silently transitioning the ticket.
+                try {
+                    jira_post_comment({
+                        key: ticketKey,
+                        comment: 'h3. ⚠️ PR Review Could Not Be Attached\n\n' +
+                            'The review analysis completed, but no open Pull Request could be matched to this ticket. ' +
+                            'The ticket status was left unchanged (not moved to In Rework) since there is no PR to rework.'
+                    });
+                } catch (commentError) {
+                    console.warn('Could not post PR-review-could-not-be-attached comment:', commentError);
+                }
+                console.warn('⚠️ No PR found for', ticketKey, '— leaving ticket status unchanged');
             }
         } catch (statusError) {
             console.warn('Could not update ticket status/label:', statusError);
@@ -937,9 +952,11 @@ function action(params) {
             console.warn('Failed to assign ticket:', error);
         }
 
-        // Step 12: Auto-start pr_rework when changes were requested (opt-in via customParams)
+        // Step 12: Auto-start pr_rework when changes were requested (opt-in via customParams).
+        // Only when there's an actual PR to rework — with no PR found, there's nothing for a
+        // rework cycle to act on, so don't mark for SM rework or trigger SM.
         var reworkStarted = false;
-        if (!isApproved) {
+        if (!isApproved && prNumber && repoInfo) {
             const autoStartRework = customParams && customParams.autoStartRework;
             const reworkConfigFile = customParams && customParams.autoStartReworkConfigFile;
             if (autoStartRework && reworkConfigFile) {
