@@ -19,7 +19,7 @@ Full prompt / instruction set: [`agents/snapshots/bug_test_automation_merge.md`]
 
 ### postJSAction: `mergeStoryTestAutomationPR.js`
 
-_Merge Story Test Automation PR_
+_Merge Story/Bug Test Automation PR_
 
 - Source: `agents/js/mergeStoryTestAutomationPR.js`
 - Side effects:

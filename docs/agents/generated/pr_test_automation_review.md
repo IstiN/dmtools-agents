@@ -14,23 +14,15 @@ Full prompt / instruction set: [`agents/snapshots/pr_test_automation_review.md`]
 
 ## Actions
 
-### preJSAction: `checkWipLabel.js`
+### preJSAction: `prepareTestPRForReview.js`
 
-_Check WIP Label Pre-Action_
-
-- Source: `agents/js/checkWipLabel.js`
-- Side effects:
-  - post Jira comment
-
-### preCliJSAction: `prepareTestPRForReview.js`
-
-_Prepare Test PR For Review Action (preCliJSAction for pr_test_automation_review)_
+_Prepare Test PR For Review Action (preJSAction for test-automation review agents)_
 
 - Source: `agents/js/prepareTestPRForReview.js`
 - Side effects:
-  - move ticket to status "In Rework"
   - post Jira comment
   - git push
+
 
 
 ### postJSAction: `postTestReviewComments.js`

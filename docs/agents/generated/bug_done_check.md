@@ -23,6 +23,8 @@ _Check Bug Tests Passed — postJSAction for bug_done_check agent._
 
 - Source: `agents/js/checkBugTestsPassed.js`
 - Side effects:
+  - add label "sm_bug_rework_attempted"
+  - remove label "sm_bug_rework_attempted"
   - post Jira comment
 
 ## LLM step

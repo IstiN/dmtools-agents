@@ -40,7 +40,6 @@ _Post Test Automation Results Action (postJSAction for test_case_automation)_
 
 - Source: `agents/js/postTestAutomationResults.js`
 - Side effects:
-  - move ticket to status "Backlog"
   - remove label "sm_test_automation_triggered"
   - post Jira comment
   - git push

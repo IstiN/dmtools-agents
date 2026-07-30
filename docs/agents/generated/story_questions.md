@@ -32,6 +32,7 @@ _Create Questions and Assign For Review Post-Action_
 - Reads:
   - `outputs/questions.json`
 - Side effects:
+  - post Jira comment
   - create Jira ticket
   - assign ticket
 

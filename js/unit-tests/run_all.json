@@ -30,6 +30,8 @@
         "js/unit-tests/test_recoverStuckTestCase.js",
         "js/unit-tests/test_recoverFailedTCBugStatus.js",
         "js/unit-tests/test_unblockResolvedDependencies.js",
+        "js/unit-tests/test_prepareDiscoveryContext.js",
+        "js/unit-tests/test_publishDiscoveryToConfluence.js",
         "js/unit-tests/test_feedbackLoop.js",
         "js/unit-tests/test_setupCommands.js",
         "js/unit-tests/test_outputFiles.js",
