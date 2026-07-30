@@ -9,9 +9,14 @@
  *     no project specifics live in this file.
  *  2. If a Confluence page for this ticket already exists under that parent
  *     (title starting with the ticket key), snapshots its current page tree as
- *     Markdown into input/discovery-context/ so the CLI agent treats prior
- *     discovery output as the living context pack to iterate on, instead of
- *     starting from scratch every run.
+ *     Markdown files directly into outputs/discovery/ (the SAME folder the CLI
+ *     agent is instructed to write its final output into — see
+ *     instructions/discovery/output_rules.md). This means a second/iteration
+ *     run starts with the previously published state already sitting in
+ *     outputs/discovery/, so the CLI agent edits those files in place instead
+ *     of relying on it to notice and copy prior content from a separate
+ *     "context" location — the sync step then only ever sees the merged
+ *     result, never a stale, half-copied intermediate state.
  *  3. Writes input/discovery_meta.json with the resolved space/parentPageId
  *     and the existing page id (if found) — read by the matching postJSAction
  *     (publishDiscoveryToConfluence.js) so both steps agree on where to publish
@@ -19,6 +24,8 @@
  */
 
 var configLoader = require('./configLoader.js');
+
+var DISCOVERY_OUTPUT_DIR = 'outputs/discovery';
 
 function sanitizeFileName(title) {
     return String(title || 'untitled').replace(/[\\/:*?"<>|]/g, '-').trim();
@@ -41,10 +48,8 @@ function findTicketPage(children, ticketKey) {
 
 /**
  * Snapshot an existing discovery page + its direct children as Markdown files
- * under targetDir, mirroring the same file-per-page convention the CLI agent
- * is instructed to write under outputs/discovery/ (see instructions/discovery/
- * output_rules.md), so it can read prior published state the same way it will
- * write new state.
+ * directly into outputs/discovery/ (see module docstring) — index.md for the
+ * page's own body, one file per child page named after its title.
  */
 function snapshotPageTree(page, targetDir) {
     try {
@@ -84,7 +89,7 @@ function action(params) {
         meta.parentPageId = discoveryConfig.parentPageId || null;
 
         if (!meta.space || !meta.parentPageId) {
-            console.warn('discovery.space / discovery.parentPageId are not configured — set them in this project\'s .dmtools/config.js before discovery pages can be published to Confluence. Continuing without prior-context lookup.');
+            console.warn('discovery.space / discovery.parentPageId are not configured — set them in this project\'s .dmtools/config.js before discovery pages can be published to Confluence. Continuing without prior-state seeding.');
             file_write(folder + '/discovery_meta.json', JSON.stringify(meta, null, 2));
             return { success: true, action: 'not_configured', ticketKey: ticketKey };
         }
@@ -106,8 +111,8 @@ function action(params) {
         }
 
         meta.existingPageId = existing.id;
-        console.log('Found existing discovery page for ' + ticketKey + ': ' + existing.id + ' ("' + existing.title + '")');
-        var snapshotted = snapshotPageTree(existing, folder + '/discovery-context');
+        console.log('Found existing discovery page for ' + ticketKey + ': ' + existing.id + ' ("' + existing.title + '") — seeding ' + DISCOVERY_OUTPUT_DIR + ' with its current content for in-place editing.');
+        var snapshotted = snapshotPageTree(existing, DISCOVERY_OUTPUT_DIR);
         file_write(folder + '/discovery_meta.json', JSON.stringify(meta, null, 2));
 
         return { success: true, action: 'iteration', ticketKey: ticketKey, existingPageId: existing.id, snapshottedPages: snapshotted };
@@ -123,5 +128,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, findTicketPage, sanitizeFileName };
+    module.exports = { action, findTicketPage, sanitizeFileName, DISCOVERY_OUTPUT_DIR };
 }

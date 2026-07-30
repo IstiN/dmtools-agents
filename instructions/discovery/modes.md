@@ -15,8 +15,8 @@ flowchart TD
 
 Run **only the modes the available input actually supports** this session — do not fabricate opportunity framing, mappings, or a PRD out of thin air just to fill every section.
 
-- **First run for a ticket** (no `input/discovery-context/`): typically 0 → 2 → 3 → 4 (if the flow is knowable yet) → 6 (draft, even if partial) — skip modes that lack input.
-- **Iteration run** (prior context exists): re-read it, apply the **Iteration protocol** delta, and update whichever mode files the new ticket comment/attachment actually informs. Don't touch files unrelated to the new artefact.
+- **First run for a ticket** (`outputs/discovery/` starts empty): typically 0 → 2 → 3 → 4 (if the flow is knowable yet) → 6 (draft, even if partial) — skip modes that lack input.
+- **Iteration run** (`outputs/discovery/` already seeded with prior published content): re-read it, apply the **Iteration protocol** delta, and update whichever mode files the new ticket comment/attachment actually informs. Don't touch files unrelated to the new artefact.
 - Single-mode runs are fine — e.g. only a gap check against a newly attached spec.
 
 ## PRD structure (Mode 6 — `outputs/discovery/prd.md`)

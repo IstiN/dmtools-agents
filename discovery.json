@@ -22,14 +22,6 @@
       "./agents/instructions/discovery/formatting_rules.md",
       "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md"
-    ],
-    "cliPromptsByTracker": {
-      "jira": [
-        "./agents/instructions/tracker/jira_markup_transform.md"
-      ],
-      "ado": [
-        "./agents/instructions/tracker/ado_markup_transform.md"
-      ]
-    }
+    ]
   }
 }

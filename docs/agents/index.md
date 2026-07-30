@@ -379,7 +379,7 @@ This document describes every agent in the `agents/` directory: what ticket it h
 #### `discovery.json` — Continuous PM discovery published to Confluence
 - **ContextId**: `discovery`
 - **Ticket type**: any (project decides via its own SM rule/JQL — not wired into `sm.json` by default, since the triggering status/label is project-specific)
-- **Pre-action**: `prepareDiscoveryContext.js` — resolves `discovery.space` / `discovery.parentPageId` from project config and, if a discovery page already exists for this ticket, snapshots it into `input/<KEY>/discovery-context/` so the CLI agent iterates instead of restarting
+- **Pre-action**: `prepareDiscoveryContext.js` — resolves `discovery.space` / `discovery.parentPageId` from project config and, if a discovery page already exists for this ticket, seeds `outputs/discovery/` directly with its current content so the CLI agent edits in place instead of restarting from a blank folder
 - **Post-action**: `publishDiscoveryToConfluence.js` — finds-or-creates the ticket's Confluence page (`<TICKET-KEY> <summary>`) under `discovery.parentPageId`, then syncs `outputs/discovery/` to it via `confluence_sync_markdown_directory` (an `index.md` becomes the page body, every other `.md` becomes a child page), and posts a Jira comment linking to it
 - **Outputs**: `outputs/discovery/index.md` + one `.md` file per discovery mode actually run (see `instructions/discovery/output_rules.md`)
 - **Required project config** (`.dmtools/config.js`, this repo stays project-agnostic):

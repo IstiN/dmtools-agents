@@ -70,7 +70,7 @@ suite('prepareDiscoveryContext', function() {
         assert.equal(meta.existingPageId, null);
     });
 
-    test('iteration — existing page found, snapshots root + children to discovery-context/', function() {
+    test('iteration — existing page found, seeds outputs/discovery/ with root + children content', function() {
         var writes = {};
         var mod = loadPrepareDiscoveryContext({
             confluence_get_children_by_id: function(args) {
@@ -96,8 +96,8 @@ suite('prepareDiscoveryContext', function() {
         assert.equal(result.action, 'iteration');
         assert.equal(result.existingPageId, '456');
         assert.equal(result.snapshottedPages, 1);
-        assert.equal(writes['input/PROJ-2/discovery-context/index.md'], '# Index\nlanding page');
-        assert.equal(writes['input/PROJ-2/discovery-context/PRD.md'], '# PRD\ncontent');
+        assert.equal(writes['outputs/discovery/index.md'], '# Index\nlanding page');
+        assert.equal(writes['outputs/discovery/PRD.md'], '# PRD\ncontent');
 
         var meta = JSON.parse(writes['input/PROJ-2/discovery_meta.json']);
         assert.equal(meta.existingPageId, '456');

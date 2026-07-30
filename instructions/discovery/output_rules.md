@@ -33,4 +33,4 @@ Link between your own files with plain relative Markdown links, e.g. `[see the P
 
 ## Re-runs / iteration
 
-If `input/discovery-context/index.md` (and siblings) exist, they are the **last published state** of these same files. Read them, then **update the same file in place** with the merged result (old content + this run's delta) rather than starting a new file — this keeps the same Confluence page updated instead of creating a duplicate tree.
+⚠️ **On an iteration run, `outputs/discovery/` is NOT empty when you start** — the pre-CLI step seeds it with the last published Confluence content (one file per page, same naming as the table above) before you run. **Read what's already there first.** Then **edit the same file in place** with the merged result (old content + this run's delta) rather than deleting it and starting fresh — this keeps the same Confluence page updated instead of creating a duplicate tree, and guarantees nothing you didn't intend to touch gets silently dropped.
