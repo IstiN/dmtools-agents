@@ -11,6 +11,59 @@ flowchart TD
     M8["Mode 8: Readiness — four risks + evidence + trio check; ready for delivery handoff or not"]
 ```
 
+## Per-mode required structure (every file needs at least one table and bolded key terms)
+
+Every mode file below MUST include the listed table(s) — not just prose — and bold every labeled term (risk levels, verdicts, scores). A file with only `##` headings and bullet lists, no table, is incomplete for that mode.
+
+### Mode 0 — `opportunity-assessment.md`
+
+- `## Problem` / `## Target users` / `## Alternatives today` as prose or bullets (bold the alternative names).
+- **Required table** — Alternatives/competitors comparison: `Option | What it does | Strengths | Weaknesses | Source`.
+- **Required table** — Success metrics: `Metric | Target | How measured`.
+- `## Go / Explore / No-go` — bold the verdict itself: `**Recommendation: Explore-further**`.
+
+### Mode 1 — `domain-brief.md`
+
+- **Required table** — Concept/tool comparison relevant to the domain: `Concept or tool | What it is | When to use it | Source (link)`.
+- Bold every tool/product/concept name on first mention (`**Remotion**`, `**Revideo**`).
+- `## Key technical constraints` as a bulleted list, each item bold-labeled (`**Rendering cost:**`, `**Integration:**`).
+
+### Mode 2 — `source-distillate.md`
+
+- **Required table** — Source index: `Source | Type (ticket/comment/web/codebase) | What it contributed | Link`.
+- Everything else can stay prose/bullets — this file is deliberately close to a raw compression, but the source table is still mandatory for traceability.
+
+### Mode 3 — `discovery-plan.md`
+
+- **Required table** — Four risks: `Risk type | Severity | Evidence bar | Status`.
+- **Required table** — Known vs unknown: `Item | Known / Gap | Source or evidence needed`.
+
+### Mode 4 — `as-is-to-be.md`
+
+- **Required table** — Actors/systems: `Actor or system | Role in AS IS | Role in TO BE`.
+- Keep the flow narrative itself as numbered steps (AS IS steps 1..n, then TO BE steps 1..n) — bold each step's actor (`**User**`, `**System**`).
+
+### Mode 5 — `mapping.md`
+
+- **Required table** — Field/interface mapping: `Field | Source system | Target system | Notes`. This mode is a table by definition — no prose-only version is acceptable.
+
+### Mode 6 — `prd.md`
+
+See PRD structure below. **Required table** — Decisions log: `Decision | Date/source | Status (confirmed/provisional)`.
+
+### Mode 7 — `experiments.md`
+
+- **Required table** — Experiments: `Hypothesis | Method | Audience | Success signal | Timebox`.
+
+### Mode 8 — `readiness.md`
+
+- **Required table** — Four risks readiness: `Risk type | Severity | Evidence on hand | Residual risk`.
+- `## Trio check` — bold each role's status (`**Product:** reviewed`, `**Engineering:** pending`).
+
+### `recommendations.md` (always, every run)
+
+See `output_rules.md`'s dedicated section — already fully specified there (challenge table, open-questions table, etc.).
+
 ## Choosing which modes to run
 
 Run **only the modes the available input actually supports** this session — do not fabricate opportunity framing, mappings, or a PRD out of thin air just to fill every section.

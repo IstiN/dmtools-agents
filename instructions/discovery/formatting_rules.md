@@ -42,3 +42,12 @@ Every finding sourced from the web, a linked Confluence page, or a codebase file
 ## Evidence and decisions must be traceable
 
 Every row in a decisions/assumptions/open-questions table needs a source column with a real link where one exists (a URL, a Confluence page, a file path) — "ticket comment 2026-07-20" is acceptable only when there is genuinely no linkable artifact (e.g. a verbal/chat comment with no URL). Never leave the source column blank.
+
+## Self-check before finishing EACH file (not just recommendations.md)
+
+⚠️ Every single file in `outputs/discovery/` — not only `recommendations.md` — needs this check. See `modes.md`'s "Per-mode required structure" for the specific table(s) each mode's file needs. Before moving to the next file, verify:
+
+1. Does this file contain **at least one Markdown table** (`| ... | ... |`)? If a file only has `##` headings and bullet/numbered lists with zero tables, go back and add the table `modes.md` specifies for that mode — this is the single most common formatting failure.
+2. Does this file have **at least 3 bolded terms** (`**...**`)? Plain `<h2>` + `<ul>` with no bold anywhere is a formatting failure even if a table is present elsewhere.
+3. Is every external/web finding a clickable `[label](url)` link, not a bare product/tool name with no href?
+4. If the honest answer to 1 or 2 is "no" — stop and fix that file before writing the next one. Do not treat rich formatting as optional polish only for `recommendations.md`; every mode file needs it.
