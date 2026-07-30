@@ -9,7 +9,8 @@ function loadPullRequestHelper(mocks) {
         Object.assign({
             cli_execute_command: function() { return ''; },
             file_read: function() { return null; },
-            file_write: function() {}
+            file_write: function() {},
+            file_delete: function() {}
         }, mocks || {})
     );
 }
