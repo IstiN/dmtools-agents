@@ -759,6 +759,79 @@ suite('smAgent: localTeammate execution mode', function() {
         assert.equal(sm.capturedLabels.length, 0, 'no label added when the local run fails');
     });
 
+    // Regression test for a real production bug: pr_review.json/pr_rework.json's own
+    // postJSAction removes its addLabel (sm_story_review_triggered / sm_story_rework_triggered)
+    // as part of completing, to let a ticket cycle between In Review <-> In Rework. Since
+    // runTeammateLocally() runs that entire job synchronously, re-adding the label afterward
+    // would immediately undo that cleanup and permanently stick the ticket (no stale-label
+    // recovery exists for local rules) — this is exactly what happened to SOHO-131.
+    test('does not re-add the label after a local run when the target job self-manages it', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };',
+                'agents/pr_review.json': JSON.stringify({
+                    params: { customParams: { removeLabel: 'sm_story_review_triggered' } }
+                })
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/pr_review.json',
+                localTeammate: true,
+                addLabel: 'sm_story_review_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedLabels.length, 0,
+            'smAgent must not re-add a label the target job manages/removes itself');
+    });
+
+    test('does not re-add any addLabels when the target job self-manages one of them via removeLabels', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };',
+                'agents/pr_rework.json': JSON.stringify({
+                    params: { customParams: { removeLabels: ['sm_story_rework_triggered', 'sm_story_review_triggered'] } }
+                })
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/pr_rework.json',
+                localTeammate: true,
+                addLabel: 'sm_story_rework_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedLabels.length, 0,
+            'smAgent must not re-add sm_story_rework_triggered either, since pr_rework.json manages it');
+    });
+
+    test('still adds the label for a non-self-managing local rule (unaffected by the self-managing check)', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };',
+                'agents/story_solution.json': JSON.stringify({ params: { customParams: {} } })
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/story_solution.json',
+                localTeammate: true,
+                addLabel: 'sm_story_solution_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedLabels.length, 1, 'label is still added when the target job does not self-manage it');
+        assert.equal(sm.capturedLabels[0].label, 'sm_story_solution_triggered');
+    });
+
     test('respects skipIfLabel without checking GitHub Actions run state', function() {
         var sm = makeSmAgent({
             fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
@@ -1096,6 +1169,32 @@ suite('smAgent: skipIfLabel', function() {
         assert.equal(sm.capturedLabels.length, 2);
         assert.equal(sm.capturedLabels[0].label, 'primary_label');
         assert.equal(sm.capturedLabels[1].label, 'secondary_label');
+    });
+
+    // The self-managing skip only applies to localTeammate (synchronous) rules — for the
+    // async workflow_dispatch path the label really is the only in-flight guard (the actual
+    // job runs later on a GitHub Actions runner and clears it on completion), so it must
+    // still be added right after a successful dispatch even if the target config also
+    // happens to declare a matching removeLabel.
+    test('still adds the label after an async dispatch even if the target config declares a matching removeLabel', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                'agents/pr_review.json': JSON.stringify({
+                    params: { customParams: { removeLabel: 'sm_story_review_triggered' } }
+                })
+            },
+            tickets: [{ key: 'T-21', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", {
+                configFile: 'agents/pr_review.json',
+                addLabel: 'sm_story_review_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedLabels.length, 1,
+            'async dispatch must still add its idempotency label regardless of the self-managing check');
     });
 
 });

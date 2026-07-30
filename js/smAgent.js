@@ -429,6 +429,25 @@ function addRuleLabels(ticketKey, rule) {
     });
 }
 
+// True when the rule's own target config (e.g. pr_review.json, pr_rework.json,
+// bug_development.json) already removes this exact addLabel itself via
+// customParams.removeLabel/removeLabels — i.e. the job manages the label's full
+// lifecycle (add is implied by dispatch, remove happens on its own completion) and
+// smAgent must not re-add it afterward. See processRule()'s localTeammate handling.
+function ruleTargetSelfManagesLabel(rule) {
+    var addLabels = normalizeLabels(rule.addLabel, rule.addLabels);
+    if (!addLabels.length || !rule.configFile) return false;
+    try {
+        var raw = file_read({ path: rule.configFile });
+        var targetConfig = JSON.parse(raw);
+        var customParams = (targetConfig.params && targetConfig.params.customParams) || {};
+        var removeLabels = normalizeLabels(customParams.removeLabel, customParams.removeLabels);
+        return addLabels.some(function(label) { return removeLabels.indexOf(label) !== -1; });
+    } catch (e) {
+        return false;
+    }
+}
+
 function removeRuleLabel(ticketKey, label) {
     if (!ticketKey || !label) return;
     try {
@@ -645,6 +664,14 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         return { processedKeys: [], skippedKeys: [] };
     }
 
+    // Computed once per rule (not per ticket) — see ruleTargetSelfManagesLabel() and its
+    // use in the localTeammate branch below.
+    var ruleSelfManagesLabel = rule.localTeammate && ruleTargetSelfManagesLabel(rule);
+    if (ruleSelfManagesLabel) {
+        console.log('  ℹ️  Target job self-manages "' + (rule.addLabel || rule.addLabels) +
+            '" — smAgent will not re-add it after a local run');
+    }
+
     var ruleLimit = (typeof rule.limit === 'number' && rule.limit > 0) ? Math.floor(rule.limit) : null;
     var effectiveLimit = ruleLimit;
     if (workflowBudget && !rule.localTeammate) {
@@ -707,11 +734,19 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             moveStatus(key, rule.targetStatus);
         }
 
+        // localTeammate runs the *entire* job (checkout, AI CLI, postJSAction) synchronously
+        // before returning here — unlike the async workflow_dispatch path, there is no in-flight
+        // gap left to guard once it returns. Jobs whose own customParams already
+        // remove/removeLabels this exact addLabel (pr_review, pr_rework, bug_development, ...)
+        // are trusted to manage it themselves — e.g. clearing it on completion so the next
+        // review<->rework cycle can re-trigger. Re-adding it here afterward would immediately
+        // stomp on that cleanup and permanently stick the ticket, since local rules have no
+        // stale-label recovery. Only add it when the target job does *not* already self-manage it.
         var triggered = rule.localTeammate
             ? runTeammateLocally(key, rule, effectiveConfig)
             : triggerWorkflow(effectiveRepoInfo, key, rule, effectiveConfig, workflowBudget);
 
-        if (triggered) addRuleLabels(key, rule);
+        if (triggered && !ruleSelfManagesLabel) addRuleLabels(key, rule);
 
         if (triggered) {
             processedKeys.push(key);
