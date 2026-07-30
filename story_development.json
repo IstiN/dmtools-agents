@@ -20,6 +20,9 @@
     "preJSAction": "agents/js/checkWipLabel.js",
     "preCliJSAction": "agents/js/preCliDevelopmentSetup.js",
     "postJSAction": "agents/js/developTicketAndCreatePR.js",
+    "customParams": {
+      "removeLabel": "sm_story_dev_triggered"
+    },
     "inputJql": "key in (JD-82)",
     "cliPrompts": [
       "Senior Developer Engineer",
