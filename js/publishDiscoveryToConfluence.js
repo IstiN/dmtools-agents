@@ -41,14 +41,28 @@ function buildPageUrl(page) {
     var webui = page._links.webui;
     if (!webui) return null;
     var base = page._links.base;
-    if (!base) {
-        try {
-            base = java.lang.System.getenv('CONFLUENCE_BASE_PATH') || '';
-        } catch (e) {
-            base = '';
-        }
-    }
+    if (!base) return null;
     return base + webui;
+}
+
+/**
+ * Resolve a page's fully-qualified view URL. `page` objects returned by
+ * confluence_get_children_by_id (used to find an already-existing ticket page)
+ * omit `_links.base` — only a single-item GET (confluence_content_by_id)
+ * reliably includes it. Do one lightweight follow-up GET to get an
+ * authoritative, always-populated `_links.base` rather than depending on env
+ * var access from within the JS sandbox.
+ */
+function resolvePageUrl(page) {
+    var direct = buildPageUrl(page);
+    if (direct) return direct;
+    try {
+        var fresh = confluence_content_by_id({ contentId: page.id });
+        return buildPageUrl(fresh);
+    } catch (e) {
+        console.warn('resolvePageUrl: follow-up confluence_content_by_id lookup failed:', e);
+        return null;
+    }
 }
 
 function action(params) {
@@ -126,7 +140,7 @@ function action(params) {
             syncSummary = { raw: syncSummaryRaw };
         }
 
-        var pageUrl = buildPageUrl(page);
+        var pageUrl = resolvePageUrl(page);
         var syncedCount = (syncSummary.syncedPages && syncSummary.syncedPages.length) || 0;
 
         var comment = 'h3. 📚 Discovery published to Confluence\n\n' +
@@ -168,5 +182,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, findTicketPage, buildPageUrl };
+    module.exports = { action, findTicketPage, buildPageUrl, resolvePageUrl };
 }

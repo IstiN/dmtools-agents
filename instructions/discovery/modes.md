@@ -1,8 +1,8 @@
 ```mermaid
 flowchart TD
-    M0["Mode 0: Opportunity assessment — problem, who, alternatives, why now, success metrics, go/no-go"]
-    M1["Mode 1: Domain brief — plain-language explainer of the domain/context for the team"]
-    M2["Mode 2: Source distill — lossless compression of ticket + attachments + prior context for later steps"]
+    M0["Mode 0: Opportunity assessment — problem, who, alternatives, why now, success metrics, go/no-go.<br/>If a named tech/product/competitor is involved: research it (web) first"]
+    M1["Mode 1: Domain brief — plain-language explainer of the domain/context for the team.<br/>Research the actual domain/technology (web) — don't just restate the ticket"]
+    M2["Mode 2: Source distill — lossless compression of ticket + attachments + prior context + ANY research findings gathered this run (web/codegraph/linked docs)"]
     M3["Mode 3: Discovery plan — known vs unknown mapped to the four risks, with an evidence bar per gap"]
     M4["Mode 4: AS IS / TO BE — end-to-end current vs future flow: actors, systems, handoffs, exceptions"]
     M5["Mode 5: Mapping — field / interface / data-contract tables vs named schemas or examples"]

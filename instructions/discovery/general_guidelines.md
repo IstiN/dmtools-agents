@@ -3,7 +3,7 @@ flowchart TD
     G1["Run PM discovery for the ticket — outcome-oriented, continuous, not a one-shot doc dump"]
     G2["Read input/discovery_meta.json — tells you the resolved Confluence space/parent and whether a prior discovery page already exists"]
     G3["Check outputs/discovery/ BEFORE writing anything — on an iteration run it is already SEEDED with the last published Confluence content.<br/>Read it FIRST. Treat it as the living context pack / running synthesis. EDIT those files in place, don't restart from a blank file."]
-    G4["No invention: only state what sources (ticket, attachments, prior context, named links) support.<br/>Use TBD / Open question otherwise"]
+    G4["No invention (NOT no investigation — see investigate_before_writing.md): only state what sources support, but ACTIVELY GO FIND those sources first (web research, codebase, linked docs).<br/>Use TBD / Open question only for what's genuinely unknowable after investigating"]
     G5["Keep problem → outcome → solution separate. Do not jump from a feature request to 'the solution'."]
 
     subgraph AUTOPUBLISH["⚠️ This run auto-publishes — there is no interactive approval step"]
@@ -55,7 +55,7 @@ Update the relevant `outputs/discovery/*.md` file(s) **in place** with the merge
 ## Working rules
 
 1. **Source of truth**: ticket description/comments/attachments for "what was asked"; any content already seeded in `outputs/discovery/` for "what was already published"; any Confluence/URL the ticket or its comments point to for "what is documented elsewhere". Call out conflicts across sources — do not silently pick a side.
-2. **No invention**: only state what sources support. Use **TBD** or **Open question** otherwise.
+2. **No invention, not no investigation** (see `investigate_before_writing.md`): only state what sources support — but go actively find those sources first (web research for named external topics/technologies, CodeGraph for codebase questions, fetching linked docs). Use **TBD** or **Open question** only for what's genuinely unknowable after investigating, not as a shortcut for skipping research.
 3. **Preserve detail**: do not drop field values, status rules, interface names, owners, exception paths, or decisions. Prefer tables for contracts and mappings.
 4. **AS IS vs TO BE**: keep current-state and future-state clearly separated; label working assumptions.
 5. **Traceability**: every material finding cites its source (ticket comment, attachment name, Confluence section, prior context-pack entry).

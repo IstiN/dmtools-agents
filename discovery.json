@@ -17,6 +17,7 @@
       "./agents/instructions/common/agent_task_preamble.md",
       "./agents/instructions/discovery/general_guidelines.md",
       "./agents/instructions/common/input_context_reading.md",
+      "./agents/instructions/discovery/investigate_before_writing.md",
       "./agents/instructions/discovery/modes.md",
       "./agents/instructions/discovery/output_rules.md",
       "./agents/instructions/discovery/formatting_rules.md",
