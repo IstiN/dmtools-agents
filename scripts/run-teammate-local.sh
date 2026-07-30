@@ -224,6 +224,23 @@ if [ -n "${INSTALL_TOOLS}" ]; then
   bash "${SCRIPT_DIR}/../setup/install.sh" ${INSTALL_TOOLS}
 fi
 
+# ── Clear stale scratch artifacts from any previous ticket's run ────────────
+# This checkout is reused across tickets (no worktrees — see module docstring),
+# and the CLI agent + js/*.js actions read/write outputs/ (response.md,
+# diagram.md, questions.json, *_usage.json) and input/ at fixed, ticket-agnostic
+# paths (js/common/outputFiles.js checks outputs/<name> before outputs/<ticket>/
+# <name>). If this ticket's CLI run fails to (re)write a fresh outputs/response.md
+# — e.g. it crashes, times out, or is otherwise interrupted — postJSAction hooks
+# such as developTicketAndCreatePR.js's "no git changes" branch and
+# writeSolutionAndDiagrams.js treat ANY non-empty outputs/response.md as proof
+# the agent "completed successfully", so a leftover file from a PREVIOUS ticket
+# gets silently posted onto THIS ticket's Jira fields/comments — wrong content
+# reported as a false success. Removing outputs/ and input/ before every ticket
+# guarantees a failed/interrupted run leaves them empty (correctly triggering the
+# "interrupted, retry" path) instead of stale (incorrectly triggering "success").
+echo "🧹 Clearing outputs/ and input/ scratch dirs from any previous ticket run..."
+rm -rf outputs input
+
 # ── Run the agent via dmtools (same entrypoint ai-teammate.yml uses) ────────
 mkdir -p .dmtools
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
