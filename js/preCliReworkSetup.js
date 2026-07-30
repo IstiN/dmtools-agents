@@ -15,6 +15,45 @@ const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 var restoreFromReleases = require('./restoreFromReleases.js');
 var setupCommands = require('./common/setupCommands.js');
 
+/**
+ * Optionally syncs the PR's base branch with its own upstream (config.git.baseBranch)
+ * before merge-conflict detection runs. Relevant in two-branch mode, where the PR's base is
+ * a long-lived branch (e.g. "release/rc_*") that can drift stale relative to
+ * config.git.baseBranch over time. Delegates to a project-specific hook
+ * (customParams.branchSyncFnPath) because syncing may require bypassing branch-protection
+ * rules that block direct pushes to that branch — same rationale as
+ * customParams.branchCreateFnPath in checkoutBranch.js.
+ *
+ * No-op when branchSyncFnPath isn't configured, or when the PR's base already IS
+ * config.git.baseBranch (nothing to sync). Failures are logged and swallowed — the sync is
+ * a best-effort freshness step, not a hard prerequisite for the rest of the rework flow.
+ *
+ * @param {string} baseBranch    - the PR's base branch (prDetails.base.ref)
+ * @param {Object} customParams  - agent customParams (may contain branchSyncFnPath)
+ * @param {Object} config        - resolved project config (config.git.baseBranch, workingDir)
+ */
+function syncBaseBranchIfConfigured(baseBranch, customParams, config) {
+    if (!customParams.branchSyncFnPath || !baseBranch || baseBranch === config.git.baseBranch) {
+        return;
+    }
+    var branchSyncFn = configLoader.loadHookFn(customParams.branchSyncFnPath, 'branchSyncFnPath');
+    if (!branchSyncFn) {
+        return;
+    }
+    try {
+        console.log('Syncing base branch', baseBranch, 'via', customParams.branchSyncFnPath);
+        branchSyncFn({
+            branchName: baseBranch,
+            targetBranch: config.git.baseBranch,
+            workingDir: config.workingDir,
+            config: config
+        });
+        cli_execute_command({ command: gh.buildOriginFetchCommand() });
+    } catch (e) {
+        console.warn('branchSyncFnPath failed (non-fatal):', e && e.toString ? e.toString() : String(e));
+    }
+}
+
 function failSetup(ticketKey, inputFolder, message) {
     try {
         file_write({
@@ -98,6 +137,10 @@ function action(params) {
 
         // Step 5: Diff + discussions (human-readable + raw with IDs)
         const baseBranch = prDetails.base ? prDetails.base.ref : config.git.baseBranch;
+
+        // Step 4.4: Optionally sync the PR's base branch with its own upstream — see
+        // syncBaseBranchIfConfigured() docblock for the rationale.
+        syncBaseBranchIfConfigured(baseBranch, customParams, config);
 
         // Step 4.5: Merge base branch and detect conflicts
         // Always merges origin/{baseBranch} so the branch stays up to date.
@@ -187,5 +230,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = { action, syncBaseBranchIfConfigured };
 }

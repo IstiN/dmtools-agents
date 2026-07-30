@@ -4,6 +4,13 @@
  * Branch name format: ai/<TICKET-KEY>
  * If the branch already exists (locally or remotely), it is checked out directly.
  * postAction (developTicketAndCreatePR) then just commits and pushes the current branch.
+ *
+ * Two-branch mode (config.git.featureBranch.enabled): when the "feature" branch doesn't
+ * exist yet remotely, customParams.branchCreateFnPath can point to a JS file (module.exports
+ * = function(ctx)) that creates it by some project-specific mechanism instead of a plain
+ * `git push -u origin` — e.g. a repo whose branch-protection rules block direct pushes for
+ * that branch pattern and require going through an external CI job. See loadHookFn() in
+ * configLoader.js for the loading contract. When not configured, behavior is unchanged.
  */
 
 const { GIT_CONFIG } = require('./config.js');
@@ -31,6 +38,7 @@ function cleanCommandOutput(output) {
 function action(params) {
     try {
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
         var ticketKey = params.ticket.key;
         var branchName = configLoader.resolveBranchName(config, params.ticket, 'development');
 
@@ -66,11 +74,30 @@ function action(params) {
                 featureRemote = cleanCommandOutput(cli_execute_command({ command: 'git ls-remote --heads origin ' + featureBranchName }) || '');
             } catch (e) {}
             if (!featureLocal.trim() && !featureRemote.trim()) {
-                console.log('Two-branch mode: creating feature branch from', config.git.baseBranch + ':', featureBranchName);
-                cli_execute_command({ command: 'git checkout ' + config.git.baseBranch });
-                cli_execute_command({ command: 'git pull origin ' + config.git.baseBranch });
-                cli_execute_command({ command: 'git checkout -b ' + featureBranchName });
-                cli_execute_command({ command: 'git push -u origin ' + featureBranchName });
+                var branchCreateFn = customParams.branchCreateFnPath
+                    ? configLoader.loadHookFn(customParams.branchCreateFnPath, 'branchCreateFnPath')
+                    : null;
+                if (branchCreateFn) {
+                    console.log('Two-branch mode: delegating feature branch creation to', customParams.branchCreateFnPath, '→', featureBranchName);
+                    branchCreateFn({
+                        branchName: featureBranchName,
+                        baseBranch: config.git.baseBranch,
+                        workingDir: config.workingDir,
+                        ticket: params.ticket,
+                        config: config
+                    });
+                    // The hook is responsible for making featureBranchName exist on origin
+                    // (e.g. via an external CI job) — fetch it and check it out like any
+                    // other pre-existing remote branch.
+                    cli_execute_command({ command: prHelper.buildOriginFetchCommand() });
+                    cli_execute_command({ command: 'git checkout -b ' + featureBranchName + ' origin/' + featureBranchName });
+                } else {
+                    console.log('Two-branch mode: creating feature branch from', config.git.baseBranch + ':', featureBranchName);
+                    cli_execute_command({ command: 'git checkout ' + config.git.baseBranch });
+                    cli_execute_command({ command: 'git pull origin ' + config.git.baseBranch });
+                    cli_execute_command({ command: 'git checkout -b ' + featureBranchName });
+                    cli_execute_command({ command: 'git push -u origin ' + featureBranchName });
+                }
             } else if (featureRemote.trim() && !featureLocal.trim()) {
                 cli_execute_command({ command: 'git checkout -b ' + featureBranchName + ' origin/' + featureBranchName });
             } else {
@@ -122,4 +149,11 @@ function action(params) {
         console.error('Error in checkoutBranch:', error);
         // Non-fatal: log but do not block CLI execution
     }
+}
+
+// Guarded export — dmtools invokes the top-level `action` global directly as a
+// preCliJSAction, but exposing it via module.exports also lets unit tests load this file
+// in isolation (see js/unit-tests/test_checkoutBranch.js).
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { action };
 }

@@ -776,3 +776,49 @@ suite('configLoader: jira.questions', function() {
     });
 
 });
+
+// ── loadHookFn ─────────────────────────────────────────────────────────────
+
+function makeIsolatedConfigLoaderForHooks(fileMap) {
+    var fr = function(opts) {
+        var p = opts && (opts.path || opts);
+        if (fileMap && fileMap[p] !== undefined) return fileMap[p];
+        // Block all config discovery to prevent loading a real parent .dmtools/config.js
+        if (p && p.indexOf('.dmtools/config') !== -1) return null;
+        return null;
+    };
+    return loadModule('js/configLoader.js', makeRequire({ './config.js': configModule }), { file_read: fr });
+}
+
+suite('configLoader.loadHookFn', function() {
+
+    test('returns null without reading anything when path is falsy', function() {
+        var cl = makeIsolatedConfigLoaderForHooks({});
+        assert.equal(cl.loadHookFn(null, 'branchCreateFnPath'), null);
+        assert.equal(cl.loadHookFn('', 'branchCreateFnPath'), null);
+    });
+
+    test('returns null when the file does not exist', function() {
+        var cl = makeIsolatedConfigLoaderForHooks({});
+        var result = cl.loadHookFn('.dmtools/branchNaming/missing.js', 'branchCreateFnPath');
+        assert.equal(result, null);
+    });
+
+    test('returns null when the file does not export a function', function() {
+        var cl = makeIsolatedConfigLoaderForHooks({
+            '.dmtools/branchNaming/not_a_fn.js': 'module.exports = { foo: 1 };'
+        });
+        var result = cl.loadHookFn('.dmtools/branchNaming/not_a_fn.js', 'branchCreateFnPath');
+        assert.equal(result, null);
+    });
+
+    test('returns the exported function and it is callable', function() {
+        var cl = makeIsolatedConfigLoaderForHooks({
+            '.dmtools/branchNaming/create.js': 'module.exports = function(ctx) { return "created:" + ctx.branchName; };'
+        });
+        var fn = cl.loadHookFn('.dmtools/branchNaming/create.js', 'branchCreateFnPath');
+        assert.equal(typeof fn, 'function');
+        assert.equal(fn({ branchName: 'release/rc_mobile_proj-1' }), 'created:release/rc_mobile_proj-1');
+    });
+
+});
