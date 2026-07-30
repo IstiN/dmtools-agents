@@ -127,8 +127,9 @@ function alignBranchWithBase(ticketKey, branchName, baseBranch) {
     console.warn('Keeping divergent branch ' + branchName + '; conflict guidance written for the agent.');
 }
 
-function checkoutBranch(ticketKey, config, ticket) {
+function checkoutBranch(ticketKey, config, ticket, customParams) {
     ticket = ticket || { key: ticketKey, fields: {} };
+    customParams = customParams || {};
     _workingDir = config.workingDir || null;
     // Write workingDir to a known file so CLI shell scripts (e.g. create_test_commit.sh)
     // can discover the correct dependency dir without duplicating resolution logic.
@@ -200,11 +201,30 @@ function checkoutBranch(ticketKey, config, ticket) {
                     featureRemote = cleanCommandOutput(runCmd({ command: 'git ls-remote --heads origin ' + featureBranchName }) || '');
                 } catch (e) {}
                 if (!featureLocal.trim() && !featureRemote.trim()) {
-                    console.log('Two-branch mode: creating feature branch from', config.git.baseBranch + ':', featureBranchName);
-                    runCmd({ command: 'git checkout ' + config.git.baseBranch });
-                    runCmd({ command: 'git pull origin ' + config.git.baseBranch });
-                    runCmd({ command: 'git checkout -b ' + featureBranchName });
-                    runCmd({ command: 'git push -u origin ' + featureBranchName });
+                    var branchCreateFn = customParams.branchCreateFnPath
+                        ? configLoader.loadHookFn(customParams.branchCreateFnPath, 'branchCreateFnPath')
+                        : null;
+                    if (branchCreateFn) {
+                        console.log('Two-branch mode: delegating feature branch creation to', customParams.branchCreateFnPath, '→', featureBranchName);
+                        branchCreateFn({
+                            branchName: featureBranchName,
+                            baseBranch: config.git.baseBranch,
+                            workingDir: config.workingDir,
+                            ticket: ticket,
+                            config: config
+                        });
+                        // The hook is responsible for making featureBranchName exist on origin
+                        // (e.g. via an external CI job) — fetch it and check it out like any
+                        // other pre-existing remote branch.
+                        runCmd({ command: prHelper.buildOriginFetchCommand() });
+                        runCmd({ command: 'git checkout -b ' + featureBranchName + ' origin/' + featureBranchName });
+                    } else {
+                        console.log('Two-branch mode: creating feature branch from', config.git.baseBranch + ':', featureBranchName);
+                        runCmd({ command: 'git checkout ' + config.git.baseBranch });
+                        runCmd({ command: 'git pull origin ' + config.git.baseBranch });
+                        runCmd({ command: 'git checkout -b ' + featureBranchName });
+                        runCmd({ command: 'git push -u origin ' + featureBranchName });
+                    }
                 } else if (featureRemote.trim() && !featureLocal.trim()) {
                     runCmd({ command: 'git checkout -b ' + featureBranchName + ' origin/' + featureBranchName });
                 } else {
@@ -264,7 +284,7 @@ function action(params) {
         // 2. Checkout or create feature branch
         try {
             var ticket = params.ticket || actualParams.ticket || { key: ticketKey, fields: {} };
-            checkoutBranch(ticketKey, config, ticket);
+            checkoutBranch(ticketKey, config, ticket, customParams);
         } catch (e) {
             var branchError = e && e.toString ? e.toString() : String(e);
             console.error('Branch checkout failed:', branchError);
@@ -308,5 +328,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = { action, checkoutBranch };
 }
