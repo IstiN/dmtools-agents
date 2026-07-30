@@ -15,8 +15,10 @@ flowchart TD
 
 Run **only the modes the available input actually supports** this session — do not fabricate opportunity framing, mappings, or a PRD out of thin air just to fill every section.
 
+⚠️ **`recommendations.md` is not tied to a mode number — write it every run**, regardless of which mode(s) above you ran or skipped (see `output_rules.md`). Even a bare "0 → 2" run must end with a stated go/no-go stance and a concrete proposal, not just the raw opportunity/distillate findings.
+
 - **First run for a ticket** (`outputs/discovery/` starts empty): typically 0 → 2 → 3 → 4 (if the flow is knowable yet) → 6 (draft, even if partial) — skip modes that lack input.
-- **Iteration run** (`outputs/discovery/` already seeded with prior published content): re-read it, apply the **Iteration protocol** delta, and update whichever mode files the new ticket comment/attachment actually informs. Don't touch files unrelated to the new artefact.
+- **Iteration run** (`outputs/discovery/` already seeded with prior published content): re-read it, apply the **Iteration protocol** delta, and update whichever mode files the new ticket comment/attachment actually informs. Don't touch files unrelated to the new artefact — but do revisit `recommendations.md` to confirm the recommendation still holds or needs sharpening/revising given the delta.
 - Single-mode runs are fine — e.g. only a gap check against a newly attached spec.
 
 ## PRD structure (Mode 6 — `outputs/discovery/prd.md`)
