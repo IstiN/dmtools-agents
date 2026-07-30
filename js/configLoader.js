@@ -256,6 +256,28 @@ function loadConfigFile(path) {
 }
 
 /**
+ * Loads a project-supplied "hook" JS file (same GraalJS-safe loader as branchNamingFnPath)
+ * whose module.exports must be a function. Used for extension points such as
+ * customParams.branchCreateFnPath / branchSyncFnPath, where a project can plug in custom
+ * branch-creation/sync logic (e.g. delegating to an external CI job) without that logic
+ * living in this generic repo. Returns null (with a console.warn) if the path isn't set,
+ * the file can't be loaded, or it doesn't export a function.
+ *
+ * @param {string} path     - customParams.<x>FnPath value
+ * @param {string} hookName - label used in warning messages, e.g. "branchCreateFnPath"
+ * @returns {Function|null}
+ */
+function loadHookFn(path, hookName) {
+    if (!path) return null;
+    var fn = loadConfigFile(path);
+    if (typeof fn !== 'function') {
+        console.warn('configLoader: ' + hookName + ' "' + path + '" did not export a function — ignoring');
+        return null;
+    }
+    return fn;
+}
+
+/**
  * Load project configuration with discovery and merging.
  *
  * Discovery order:
@@ -620,5 +642,7 @@ module.exports = {
     resolvePRTargetBranch: resolvePRTargetBranch,
     resolveConfluenceUrls: resolveConfluenceUrls,
     resolveInstructions: resolveInstructions,
+    loadConfigFile: loadConfigFile,
+    loadHookFn: loadHookFn,
     createScm: _scmModule ? _scmModule.createScm : function() { throw new Error('scm.js not available in this environment'); }
 };
