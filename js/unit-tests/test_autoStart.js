@@ -114,6 +114,28 @@ suite('autoStart helper', function() {
         assert.equal(decoded.params.fromSharedBuilder, true, 'encoded_config should be built by shared builder');
     });
 
+    test('dispatches against config.git.baseBranch instead of assuming main', function() {
+        var triggeredPayload = null;
+        var autoStart = loadAutoStartHelper({
+            github_list_workflow_runs: function() {
+                return JSON.stringify({ workflow_runs: [] });
+            },
+            github_trigger_workflow: function(owner, repo, workflowFile, payload, ref) {
+                triggeredPayload = { ref: ref };
+            }
+        });
+
+        var result = autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: 'TS-90',
+            config: { repository: { owner: 'IstiN', repo: 'trackstate' }, git: { baseBranch: 'master' } },
+            customParams: {},
+            configFile: 'agents/pr_test_automation_rework.json'
+        });
+
+        assert.equal(result, true);
+        assert.equal(triggeredPayload.ref, 'master', 'should dispatch against the repo default branch, not a hardcoded main');
+    });
+
     test('skips trigger when global active workflow cap is reached', function() {
         var triggered = false;
         var autoStart = loadAutoStartHelper({
@@ -203,6 +225,26 @@ suite('triggerSmIfIdle', function() {
         assert.equal(triggeredWorkflow.owner, 'IstiN');
         assert.equal(triggeredWorkflow.repo, 'trackstate');
         assert.equal(triggeredWorkflow.ref, 'main');
+    });
+
+    test('dispatches SM fallback against config.git.baseBranch instead of assuming main', function() {
+        var triggeredWorkflow = null;
+        var autoStart = loadAutoStartHelper({
+            github_list_workflow_runs: function() {
+                return JSON.stringify({ workflow_runs: [] });
+            },
+            github_trigger_workflow: function(owner, repo, workflowFile, payload, ref) {
+                triggeredWorkflow = { ref: ref };
+            }
+        });
+
+        var result = autoStart.triggerSmIfIdle({
+            config: { repository: { owner: 'IstiN', repo: 'trackstate' }, git: { baseBranch: 'master' } },
+            customParams: { smFallback: true }
+        });
+
+        assert.equal(result, true, 'should trigger SM when idle');
+        assert.equal(triggeredWorkflow.ref, 'master', 'should dispatch against the repo default branch, not a hardcoded main');
     });
 
     test('triggers SM when only 1 run active (the current finishing one)', function() {
