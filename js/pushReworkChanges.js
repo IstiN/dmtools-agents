@@ -21,7 +21,7 @@ var tokenUsageComment = require('./common/tokenUsageComment.js');
 
 /**
  * Wraps feedbackLoop.resumeAgent() so an unexpected failure inside it (e.g. its own
- * mkdir/bash/run-agent.sh --continue --resume self-invocation being blocked by a
+ * mkdir/bash/run-agent.sh --continue self-invocation being blocked by a
  * misconfigured CLI_ALLOWED_COMMANDS whitelist) can never throw out of a call site.
  * Every caller treats { attempted: false } as "could not resume" and falls through to
  * posting an honest error comment / resetting the ticket — an uncaught throw here would

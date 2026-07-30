@@ -187,7 +187,10 @@ function attemptResumeIfOutputsIncomplete(storyKey, result, linkedTestCases, wor
         return { attempted: false, reason: 'write-failed', missingKeys: missingKeys };
     }
 
-    var command = 'bash agents/scripts/run-agent.sh --continue --resume ' + promptPath;
+    // `--continue` alone resumes the most recent session in this directory; pairing it
+    // with `--resume` is rejected by the Copilot CLI as mutually exclusive, which made
+    // this recovery run fail deterministically before ever reaching the agent.
+    var command = 'bash agents/scripts/run-agent.sh --continue ' + promptPath;
     console.log('Story test output incomplete — resuming agent for missing TCs (attempt ' + attempt + '/' + maxAttempts + '):', missingKeys.join(', '));
     try {
         var output = runInRepo(command, workingDir);

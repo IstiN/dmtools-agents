@@ -201,7 +201,11 @@ function attemptResumeIfReviewOutputsMissing(ticketKey) {
 
     try {
         var resumeResult = cli_execute_command({
-            command: 'bash agents/scripts/run-agent.sh --continue --resume ' + promptFile
+            // `--continue` alone resumes the most recent session in this directory;
+            // pairing it with `--resume` is rejected by the Copilot CLI as mutually
+            // exclusive ("cannot be used with option '--continue'"), which made this
+            // recovery run fail deterministically before ever reaching the agent.
+            command: 'bash agents/scripts/run-agent.sh --continue ' + promptFile
         });
         console.log('Review output resume run output:', (resumeResult || '').substring(0, 500));
         return true;

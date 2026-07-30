@@ -83,7 +83,11 @@ function extractTokenUsage(logs) {
             resumeDetected = true;
             feedbackLoopCount += 1;
             resumeStages.push((resumeMatch[1] || 'resume') + ' ' + resumeMatch[2] + '/' + resumeMatch[3]);
-        } else if (line.indexOf('--resume') !== -1 || line.indexOf('--continue --resume') !== -1) {
+        } else if (line.indexOf('--resume') !== -1 || line.indexOf('run-agent.sh --continue') !== -1) {
+            // 'run-agent.sh --continue' (without '--resume') is the recovery command shape
+            // used since --continue and --resume were found to be mutually exclusive in the
+            // Copilot CLI; kept alongside the older '--continue --resume' shape (still
+            // matched via the '--resume' check above) so historical logs still parse.
             resumeDetected = true;
         }
         if (/Copilot rate limit detected; retrying/i.test(line)) {
