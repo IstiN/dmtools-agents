@@ -171,7 +171,10 @@ function triggerConfiguredWorkflowForTicket(options) {
     var config = options.config || {};
     var configFile = options.configFile;
     var workflowFile = options.workflowFile || 'ai-teammate.yml';
-    var ref = options.ref || 'main';
+    // Default to the target repo's actual default branch (config.git.baseBranch, e.g. 'master')
+    // rather than assuming 'main' — dispatching a workflow_dispatch against a non-existent ref
+    // fails with "No ref found for: <ref>" (HTTP 422) and silently breaks auto-chaining.
+    var ref = options.ref || (config.git && config.git.baseBranch) || 'main';
     var label = options.label || configFile || workflowFile;
     if (!ticketKey || !configFile) {
         console.warn('autoStart: missing ticketKey or configFile — skipping');
@@ -278,7 +281,8 @@ function triggerSmIfIdle(options) {
     }
 
     try {
-        scm.triggerWorkflow(aiOwner, aiRepo, smWorkflowFile, '{}', 'main');
+        var ref = (config.git && config.git.baseBranch) || 'main';
+        scm.triggerWorkflow(aiOwner, aiRepo, smWorkflowFile, '{}', ref);
         console.log('✅ SM fallback: system idle — triggered ' + smWorkflowFile);
         return true;
     } catch (e) {
