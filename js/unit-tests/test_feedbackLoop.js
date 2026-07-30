@@ -76,7 +76,7 @@ suite('feedbackLoop helper', function() {
         assert.contains(loaded.files['outputs/feedback/TS-1_git_operations.md'], 'git failed');
         assert.deepEqual(loaded.commands, [
             'mkdir -p outputs/feedback',
-            'bash agents/scripts/run-agent.sh --continue --resume outputs/feedback/TS-1_git_operations.md'
+            'bash agents/scripts/run-agent.sh --continue outputs/feedback/TS-1_git_operations.md'
         ]);
     });
 
@@ -110,7 +110,7 @@ suite('feedbackLoop helper', function() {
         assert.deepEqual(loaded.commands, [
             'flutter test --coverage',
             'mkdir -p outputs/feedback',
-            'bash agents/scripts/run-agent.sh --continue --resume outputs/feedback/TS-2_quality_gate_flutter-test.md',
+            'bash agents/scripts/run-agent.sh --continue outputs/feedback/TS-2_quality_gate_flutter-test.md',
             'flutter test --coverage'
         ]);
     });
@@ -216,7 +216,7 @@ suite('feedbackLoop helper', function() {
         assert.equal(loaded.commands[1].command, 'mkdir -p outputs/feedback');
         assert.equal(
             loaded.commands[2].command,
-            'bash agents/scripts/run-agent.sh --continue --resume outputs/feedback/TS-5_post_publish_gate_accessibility-lint.md'
+            'bash agents/scripts/run-agent.sh --continue outputs/feedback/TS-5_post_publish_gate_accessibility-lint.md'
         );
         assert.contains(
             loaded.files['outputs/feedback/TS-5_post_publish_gate_accessibility-lint.md'],

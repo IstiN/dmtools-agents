@@ -465,7 +465,7 @@ suite('pushReworkChanges.action — rework_setup_failed.md guard (#310)', functi
 });
 
 // ── action(): resumeAgent exception safety ───────────────────────────────────
-// feedbackLoop.resumeAgent() shells out (mkdir/bash/run-agent.sh --continue --resume) and
+// feedbackLoop.resumeAgent() shells out (mkdir/bash/run-agent.sh --continue) and
 // can itself throw (e.g. blocked by a misconfigured CLI_ALLOWED_COMMANDS whitelist). Every
 // call site wraps it via tryResumeAgent() so that failure is treated the same as
 // { attempted: false } instead of propagating and skipping the honest error-comment fallback.

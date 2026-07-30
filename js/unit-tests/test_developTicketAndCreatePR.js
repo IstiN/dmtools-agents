@@ -94,7 +94,7 @@ suite('developTicketAndCreatePR > failure recovery', function() {
             },
             {
                 // Simulate the real-world bug: the feedback loop's own self-invocation
-                // (mkdir/bash/run-agent.sh --continue --resume) gets blocked by a
+                // (mkdir/bash/run-agent.sh --continue) gets blocked by a
                 // misconfigured CLI_ALLOWED_COMMANDS whitelist and throws instead of
                 // returning { attempted: false }.
                 resumeAgent: function() { throw new Error('Security violation: Command not whitelisted: bash'); }

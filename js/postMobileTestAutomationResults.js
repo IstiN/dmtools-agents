@@ -6,7 +6,7 @@
  * labels and updates the feature PR, and posts results to Jira.
  *
  * Steps:
- * 1. If mandatory output files are missing, attempt one resume run via run-agent.sh --continue --resume
+ * 1. If mandatory output files are missing, attempt one resume run via run-agent.sh --continue
  * 2. Read outputs/test_automation_result.json
  * 3. Commit + push test files in the automation repo (src/tests/)
  * 4. Create or find PR in the test automation repository
@@ -66,7 +66,7 @@ function createScmCompat(config, owner, repo) {
 
 /**
  * If mandatory output files are missing and a resume has not already been attempted,
- * run `run-agent.sh --continue --resume` with a targeted recovery prompt so the agent
+ * run `run-agent.sh --continue` with a targeted recovery prompt so the agent
  * writes outputs/test_automation_result.json, outputs/response.md, outputs/pr_body.md,
  * and outputs/pr_feature_update.md without rewriting the already-committed flows.
  *
@@ -132,7 +132,11 @@ function attemptResumeIfOutputsMissing(ticketKey, workingDir) {
 
     try {
         var resumeResult = cli_execute_command({
-            command: 'bash agents/scripts/run-agent.sh --continue --resume ' + promptFile
+            // `--continue` alone resumes the most recent session in this directory;
+            // pairing it with `--resume` is rejected by the Copilot CLI as mutually
+            // exclusive ("cannot be used with option '--continue'"), which made this
+            // recovery run fail deterministically before ever reaching the agent.
+            command: 'bash agents/scripts/run-agent.sh --continue ' + promptFile
         });
         console.log('Resume run output:', (resumeResult || '').substring(0, 500));
         return true;

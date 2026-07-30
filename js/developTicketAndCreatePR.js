@@ -504,7 +504,7 @@ function resetDevelopmentForRetry(ticketKey, statuses, customParams, metadata, s
 }
 
 function resumeDevelopmentAgent(params, ticketKey, customParams, stage, errorMessage) {
-    // feedbackLoop.resumeAgent() itself shells out (mkdir/bash/run-agent.sh --continue --resume).
+    // feedbackLoop.resumeAgent() itself shells out (mkdir/bash/run-agent.sh --continue).
     // If that self-invocation is ever blocked (e.g. a misconfigured CLI_ALLOWED_COMMANDS
     // whitelist) or fails for any other unexpected reason, it can throw instead of returning
     // { attempted: false }. Every call site below treats a falsy return as "could not resume"

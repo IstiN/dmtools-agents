@@ -128,7 +128,13 @@ function resumeAgent(options) {
     var promptPath = 'outputs/feedback/' + key + '.md';
     writeFile(promptPath, prompt);
 
-    var resumeArgs = config.resumeArgs || '--continue --resume';
+    // Copilot CLI's `--continue` already means "resume the most recent session in this
+    // directory" (no value needed); its own `-r, --resume[=value]` flag is a second,
+    // mutually exclusive way to resume (by explicit id or an interactive picker when bare).
+    // Passing both together is rejected outright: "error: option '-r, --resume[=value]'
+    // cannot be used with option '--continue'" — which made every feedback-loop retry fail
+    // deterministically before the agent ever got a chance to act on the new prompt.
+    var resumeArgs = config.resumeArgs || '--continue';
     var command = 'bash agents/scripts/run-agent.sh ' + resumeArgs + ' ' + promptPath;
     console.log('Feedback loop: resuming agent for ' + (options.stage || 'failure') + ' attempt ' + attempt + '/' + maxAttempts);
     runCommand(command);

@@ -61,7 +61,8 @@ Example:
 Notes:
   - Provide the prompt as a single argument
   - Extra arguments before the prompt are passed through to the agent (cursor and codemie)
-  - Useful for resume: $(basename "$0") --continue --resume "fix the push error"
+  - Useful for resume: $(basename "$0") --continue "fix the push error"
+    (do NOT combine with --resume: Copilot CLI rejects --continue + --resume together)
   - For codemie: requires CODEMIE_API_KEY and CODEMIE_BASE_URL environment variables
   - For copilot: requires COPILOT_GITHUB_TOKEN or GITHUB_TOKEN environment variable
   - For cursor: optional CURSOR_MODEL env var (default: auto)
