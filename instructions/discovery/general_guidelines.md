@@ -5,7 +5,7 @@ flowchart TD
     G3["Check outputs/discovery/ BEFORE writing anything — on an iteration run it is already SEEDED with the last published Confluence content.<br/>Read it FIRST. Treat it as the living context pack / running synthesis. EDIT those files in place, don't restart from a blank file."]
     G4["No invention (NOT no investigation — see investigate_before_writing.md): only state what sources support, but ACTIVELY GO FIND those sources first (web research, codebase, linked docs).<br/>Use TBD / Open question only for what's genuinely unknowable after investigating"]
     G5["Keep problem → outcome → solution separate. Do not jump from a feature request to 'the solution'."]
-    G6["⚠️ MANDATORY: always write outputs/discovery/recommendations.md — a go/no-go answer + concrete proposal, not just gathered facts. See output_rules.md."]
+    G6["⚠️ MANDATORY: always write outputs/discovery/recommendations.md — challenge the idea FIRST (steelman the case against), THEN a go/no-go answer + concrete proposal, not just gathered facts. See output_rules.md."]
 
     subgraph AUTOPUBLISH["⚠️ This run auto-publishes — there is no interactive approval step"]
         AP1["Unlike an interactive discovery session, this is a headless CI run —<br/>whatever you write to outputs/discovery/ WILL be synced to Confluence after this run"]
@@ -17,6 +17,10 @@ flowchart TD
 ## Findings are not the deliverable — a recommendation is
 
 Gathering facts (from a ticket, web research, or the codebase) is necessary but not sufficient. Every discovery run must convert what was found into an actual, actionable recommendation: a go/no-go (or build/don't-build/build-smaller) stance, a concrete proposed direction, and your best-supported answer to each open question — not just a list of open questions with no answer attempted. See `output_rules.md`'s "`recommendations.md` is mandatory" section for the required structure. A run that only hands back raw research with no proposal or answer is an incomplete discovery pass, regardless of how much investigation went into it.
+
+## Challenge the idea before endorsing it
+
+Before writing a positive recommendation, actively argue against it: does this duplicate something that already exists (a tool, vendor, or internal feature)? Is the problem actually painful enough to justify the effort? What would a skeptical stakeholder say? A recommendation that never seriously considered "we don't need this" is not trustworthy — see `output_rules.md`'s required ordering for `recommendations.md`.
 
 
 ## Problem → outcome → solution

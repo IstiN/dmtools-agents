@@ -2,7 +2,7 @@
 flowchart TD
     subgraph FOLDER["⚠️ MANDATORY output location: outputs/discovery/"]
         F1["outputs/discovery/index.md — becomes the ticket's OWN Confluence page body (landing/status page)"]
-        F2["outputs/discovery/recommendations.md — ALWAYS written, every single run, regardless of which mode(s) ran"]
+        F2["outputs/discovery/recommendations.md — ALWAYS written, every single run. MUST include a 'challenge the idea' / devil's-advocate section BEFORE the bottom line"]
         F3["outputs/discovery/<mode-name>.md — each becomes a separate CHILD page under the ticket page"]
         F4["outputs/discovery/<subfolder>/index.md + siblings — becomes a nested child page tree (only if a mode needs multiple files, e.g. several session-notes docs)"]
         F5["Images referenced via normal Markdown ![...](file.png) in the SAME folder are uploaded as Confluence attachments automatically — no separate step needed"]
@@ -34,15 +34,20 @@ Do not invent additional top-level files beyond this table unless a mode genuine
 
 ⚠️ **Write this file every single run, no matter which mode(s) you ran or how thin the ticket was.** A discovery pass that only hands back gathered facts/pages with no actual answer is incomplete — the deliverable is a recommendation, not raw research.
 
-Required content:
+Required content, **in this order** (the challenge step MUST come before the bottom line is finalized — see below):
 
-1. **Bottom line** (first line, one sentence): go / explore-further / no-go, or — for a feature/task-shaped ticket — build it / don't build it / build a smaller version, stated as a direct answer, not a hedge.
-2. **Proposal** — the specific direction being recommended: which feature/approach/technology/next step, in concrete terms a stakeholder could act on today (not "we should look into options").
-3. **Why** — the 2-4 findings (from your investigation — web research, codebase, linked docs) that most drove the recommendation, each with its source.
-4. **Answers to open questions** — for every open question you would otherwise raise, give your best-supported answer/hypothesis first (labeled `Recommended answer:`, with rationale and confidence), and only fall back to a bare unresolved "Open question — needs human input" for the genuinely undecidable ones (e.g. depends on a business decision, budget, or legal/compliance call no source can answer).
-5. **What could change the recommendation** — the specific new evidence that would flip it (keeps the recommendation honest and falsifiable, not just an opinion).
+1. **Challenge the idea first** — before concluding anything, actively argue the OPPOSING case: why this should NOT be built / why "no-go" or "kill it" could be right. Required sub-questions:
+   - Does this duplicate an existing feature, tool, or vendor already in use (internally or in the market) that solves the same job cheaper/faster?
+   - What is the cost of doing nothing, and is it actually worse than the cost/risk of building this?
+   - What's the strongest steelman argument a skeptical stakeholder would make against proceeding?
+   - Only after writing this section does the bottom line get decided — if the challenge case is stronger than the case for proceeding, the bottom line MUST reflect that (no-go / kill / defer), not a "go" reached by ignoring your own challenge.
+2. **Bottom line** (one sentence): go / explore-further / no-go, or — for a feature/task-shaped ticket — build it / don't build it / build a smaller version, stated as a direct answer, not a hedge, and consistent with the challenge section above.
+3. **Proposal** — the specific direction being recommended: which feature/approach/technology/next step, in concrete terms a stakeholder could act on today (not "we should look into options"). Use a numbered list or table for a multi-step proposal (phase | timeline | outcome) — Mermaid is NOT the default here (see `formatting_rules.md`'s Mermaid caveat).
+4. **Why** — the 2-4 findings (from your investigation — web research, codebase, linked docs) that most drove the recommendation, each with a real Markdown link to its source.
+5. **Answers to open questions** — for every open question you would otherwise raise, give your best-supported answer/hypothesis first (labeled `**Recommended answer:**`, with rationale and confidence), and only fall back to a bare unresolved "Open question — needs human input" for the genuinely undecidable ones (e.g. depends on a business decision, budget, or legal/compliance call no source can answer). A table (question | recommended answer | confidence | source) is preferred over prose.
+6. **What could change the recommendation** — the specific new evidence that would flip it (keeps the recommendation honest and falsifiable, not just an opinion).
 
-This is not the same as "no invention" (see `general_guidelines.md`) — a recommendation is explicitly your reasoned judgment call, clearly labeled as such, built on the facts you gathered. Labeling it as a recommendation (not a fact) is what keeps it honest.
+This is not the same as "no invention" (see `general_guidelines.md`) — a recommendation is explicitly your reasoned judgment call, clearly labeled as such, built on the facts you gathered. Labeling it as a recommendation (not a fact) is what keeps it honest. The challenge step exists specifically to counter confirmation bias — do not skip it or treat it as a formality to get through before writing the "real" (positive) recommendation.
 
 ## Cross-linking
 
