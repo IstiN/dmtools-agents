@@ -16,7 +16,7 @@
     "preCliJSAction": "agents/js/preCliDevelopmentSetup.js",
     "postJSAction": "agents/js/developBugAndCreatePR.js",
     "customParams": {
-      "removeLabel": "sm_bug_development_triggered"
+      "removeLabel": "sm_bug_dev_triggered"
     },
     "inputJql": "key = PROJ-74",
     "cliPrompts": [
