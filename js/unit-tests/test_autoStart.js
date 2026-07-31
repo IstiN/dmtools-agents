@@ -10,20 +10,21 @@ function makeBuildEncodedConfigMock() {
         resolveConfigFile: function(rule) {
             return rule && rule.configFile;
         },
-        buildEncodedConfig: function(ticketKey, rule, effectiveConfig) {
+        buildEncodedConfig: function(ticketKey, rule, effectiveConfig, isLocal) {
             return encodeURIComponent(JSON.stringify({
                 params: {
                     inputJql: 'key = ' + ticketKey,
                     configFile: rule && rule.configFile,
                     projectKey: rule && rule.projectKey || '',
-                    fromSharedBuilder: true
+                    fromSharedBuilder: true,
+                    customParams: isLocal ? { localTeammate: true } : undefined
                 }
             }));
         }
     };
 }
 
-function loadAutoStartHelper(scmMocks, builderMock) {
+function loadAutoStartHelper(scmMocks, builderMock, extraMocks) {
     var scm = loadModule(
         'js/common/scm.js',
         null,
@@ -35,7 +36,8 @@ function loadAutoStartHelper(scmMocks, builderMock) {
     var buildEncodedConfig = builderMock || makeBuildEncodedConfigMock();
     return loadModule(
         'js/common/autoStart.js',
-        makeRequire({ './scm.js': scm, './buildEncodedConfig.js': buildEncodedConfig })
+        makeRequire({ './scm.js': scm, './buildEncodedConfig.js': buildEncodedConfig }),
+        extraMocks || {}
     );
 }
 
@@ -198,6 +200,129 @@ suite('autoStart helper', function() {
 
         assert.equal(result, true);
         assert.equal(triggered, true, 'stale queued workflow should not consume the global slot');
+    });
+
+});
+
+suite('triggerConfiguredWorkflowForTicket local-execution chaining', function() {
+
+    test('runs the next stage locally instead of dispatching to GitHub Actions when customParams.localTeammate is true', function() {
+        var remoteTriggered = false;
+        var executedCommands = [];
+        var writtenFiles = {};
+        var autoStart = loadAutoStartHelper(
+            {
+                github_list_workflow_runs: function() { return JSON.stringify({ workflow_runs: [] }); },
+                github_trigger_workflow: function() { remoteTriggered = true; }
+            },
+            null,
+            {
+                file_write: function(opts) { writtenFiles[opts.path] = opts.content; },
+                cli_execute_command: function(opts) { executedCommands.push(opts.command); return ''; }
+            }
+        );
+
+        var result = autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: 'SOHO-132',
+            config: { repository: { owner: 'EPAM-DarkFactory', repo: 'SH_ANDR_WIP' } },
+            customParams: { localTeammate: true },
+            configFile: 'agents/pr_rework.json'
+        });
+
+        assert.equal(result, true);
+        assert.equal(remoteTriggered, false, 'must not dispatch a GitHub Actions workflow_dispatch in local mode');
+        assert.equal(executedCommands.length, 2, 'expected one dmtools run command + one cleanup rm command');
+        assert.contains(executedCommands[0], 'dmtools --debug run agents/pr_rework.json');
+        assert.contains(executedCommands[0], '--inputJql "key = SOHO-132"');
+        assert.contains(executedCommands[0], '--ciRunUrl "local://autochain/SOHO-132/');
+        assert.contains(executedCommands[1], 'rm -f');
+
+        var writtenPaths = Object.keys(writtenFiles);
+        assert.equal(writtenPaths.length, 1, 'should write exactly one encoded-config temp file');
+        var decoded = JSON.parse(decodeURIComponent(writtenFiles[writtenPaths[0]]));
+        assert.equal(decoded.params.configFile, 'agents/pr_rework.json');
+        assert.deepEqual(decoded.params.customParams, { localTeammate: true },
+            'chained job must also be marked localTeammate so further auto-chaining stays local too');
+    });
+
+    test('falls back to GitHub Actions dispatch when customParams.localTeammate is not set', function() {
+        var remoteTriggered = false;
+        var localCommandsRan = false;
+        var autoStart = loadAutoStartHelper(
+            {
+                github_list_workflow_runs: function() { return JSON.stringify({ workflow_runs: [] }); },
+                github_trigger_workflow: function() { remoteTriggered = true; }
+            },
+            null,
+            {
+                file_write: function() { localCommandsRan = true; },
+                cli_execute_command: function() { localCommandsRan = true; }
+            }
+        );
+
+        var result = autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: 'SOHO-132',
+            config: { repository: { owner: 'EPAM-DarkFactory', repo: 'SH_ANDR_WIP' } },
+            customParams: {},
+            configFile: 'agents/pr_rework.json'
+        });
+
+        assert.equal(result, true);
+        assert.equal(remoteTriggered, true, 'default (non-local) behavior must be unchanged: dispatch via GitHub Actions');
+        assert.equal(localCommandsRan, false, 'must not touch local execution helpers when not in local mode');
+    });
+
+    test('returns false and does not throw when writing the encoded config file fails', function() {
+        var remoteTriggered = false;
+        var autoStart = loadAutoStartHelper(
+            {
+                github_list_workflow_runs: function() { return JSON.stringify({ workflow_runs: [] }); },
+                github_trigger_workflow: function() { remoteTriggered = true; }
+            },
+            null,
+            {
+                file_write: function() { throw new Error('disk full'); },
+                cli_execute_command: function() { return ''; }
+            }
+        );
+
+        var result = autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: 'SOHO-132',
+            config: { repository: { owner: 'EPAM-DarkFactory', repo: 'SH_ANDR_WIP' } },
+            customParams: { localTeammate: true },
+            configFile: 'agents/pr_rework.json'
+        });
+
+        assert.equal(result, false);
+        assert.equal(remoteTriggered, false);
+    });
+
+    test('returns false when the local dmtools run command fails', function() {
+        var autoStart = loadAutoStartHelper(
+            {
+                github_list_workflow_runs: function() { return JSON.stringify({ workflow_runs: [] }); },
+                github_trigger_workflow: function() {}
+            },
+            null,
+            {
+                file_write: function() {},
+                cli_execute_command: function(opts) {
+                    if (opts.command.indexOf('dmtools --debug run') !== -1) {
+                        throw new Error('job exited non-zero');
+                    }
+                    return '';
+                }
+            }
+        );
+
+        var result = autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: 'SOHO-132',
+            config: { repository: { owner: 'EPAM-DarkFactory', repo: 'SH_ANDR_WIP' } },
+            customParams: { localTeammate: true },
+            configFile: 'agents/pr_rework.json'
+        });
+
+        assert.equal(result, false, 'a failed local dmtools run must be reported as a failure, not silently swallowed');
     });
 
 });

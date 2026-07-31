@@ -149,6 +149,35 @@ suite('buildEncodedConfig payload', function() {
         assert.equal(decoded.params.customParams.configPath, 'projects/web/.dmtools/config.js');
     });
 
+    test('sets customParams.localTeammate=true when isLocal is passed', function() {
+        var builder = loadBuilder({
+            'agents/test.json': JSON.stringify({ params: {} })
+        });
+        var encoded = builder.buildEncodedConfig('T-1', { configFile: 'agents/test.json' }, {}, true);
+        var decoded = decode(encoded);
+        assert.equal(decoded.params.customParams.localTeammate, true);
+    });
+
+    test('does not set customParams.localTeammate when isLocal is omitted (default/back-compat)', function() {
+        var builder = loadBuilder({
+            'agents/test.json': JSON.stringify({ params: {} })
+        });
+        var encoded = builder.buildEncodedConfig('T-1', { configFile: 'agents/test.json' }, {});
+        var decoded = decode(encoded);
+        assert.notOk(decoded.params.customParams, 'customParams should not be created just for isLocal when omitted');
+    });
+
+    test('preserves both configPath and localTeammate together in customParams', function() {
+        var builder = loadBuilder({
+            'agents/test.json': JSON.stringify({ params: {} })
+        });
+        var config = { _configPath: 'projects/web/.dmtools/config.js' };
+        var encoded = builder.buildEncodedConfig('T-1', { configFile: 'agents/test.json' }, config, true);
+        var decoded = decode(encoded);
+        assert.equal(decoded.params.customParams.configPath, 'projects/web/.dmtools/config.js');
+        assert.equal(decoded.params.customParams.localTeammate, true);
+    });
+
     test('uses project-specific agent JSON when it exists', function() {
         var builder = loadBuilder({
             'agents/test.json': JSON.stringify({ params: { generic: true, value: 'base' } }),
