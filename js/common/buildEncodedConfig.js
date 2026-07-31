@@ -118,9 +118,16 @@ function resolveParentMerge(agentJson, agentPath, depth) {
  * @param {string} ticketKey - Ticket key to process.
  * @param {Object|string} rule - Rule object or resolved config file path.
  * @param {Object} effectiveConfig - Project config from configLoader.
+ * @param {boolean} [isLocal] - When true, marks the built config with
+ *   `customParams.localTeammate = true` so the job it starts knows it is
+ *   running locally (via smAgent's runTeammateLocally/forceLocalTeammate path)
+ *   rather than as a GitHub Actions workflow_dispatch. Consumed by
+ *   autoStart.js's triggerConfiguredWorkflowForTicket() to keep any further
+ *   autoStartReview/autoStartRework chaining on the same machine instead of
+ *   dispatching to GitHub Actions.
  * @returns {string} URL-encoded JSON string for workflow_dispatch `encoded_config`.
  */
-function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
+function buildEncodedConfig(ticketKey, rule, effectiveConfig, isLocal) {
     var p = { inputJql: 'key = ' + ticketKey };
     var resolvedCf = resolveConfigFile(rule, effectiveConfig);
 
@@ -229,6 +236,11 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig) {
     if (effectiveConfig && effectiveConfig._configPath) {
         if (!p.customParams) p.customParams = {};
         p.customParams.configPath = effectiveConfig._configPath;
+    }
+
+    if (isLocal) {
+        if (!p.customParams) p.customParams = {};
+        p.customParams.localTeammate = true;
     }
 
     if (!p.agentParams) p.agentParams = {};

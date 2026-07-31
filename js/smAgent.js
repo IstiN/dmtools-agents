@@ -330,7 +330,11 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
  */
 function runTeammateLocally(ticketKey, rule, effectiveConfig) {
     var resolvedCf = buildEncodedConfigModule.resolveConfigFile(rule, effectiveConfig);
-    var encodedConfig = buildEncodedConfigModule.buildEncodedConfig(ticketKey, rule, effectiveConfig);
+    // isLocal=true marks the encoded config with customParams.localTeammate=true so
+    // any autoStartReview/autoStartRework chaining triggered by this job's postJSAction
+    // (see js/common/autoStart.js) keeps running on this machine instead of dispatching
+    // a GitHub Actions workflow_dispatch that can't see this checkout's in-flight state.
+    var encodedConfig = buildEncodedConfigModule.buildEncodedConfig(ticketKey, rule, effectiveConfig, true);
 
     var projectKey = rule.projectKey || '';
     if (!projectKey && effectiveConfig && effectiveConfig._configPath) {
