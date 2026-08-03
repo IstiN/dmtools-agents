@@ -8,10 +8,28 @@ run_copilot() {
     echo "Using GITHUB_TOKEN as COPILOT_GITHUB_TOKEN"
   fi
 
+  # The local Copilot CLI can use cached device-code credentials in
+  # ~/.config/github-copilot/auth.db when no token env var is set. Allow that
+  # mode by skipping the hard error if gh CLI reports an active account.
   if [ -z "${COPILOT_GITHUB_TOKEN:-}" ]; then
-    echo "Error: COPILOT_GITHUB_TOKEN or GITHUB_TOKEN environment variable is required for copilot provider" >&2
-    echo "Set it in dmtools.env or as an environment variable" >&2
-    return 1
+    if command -v copilot >/dev/null 2>&1; then
+      # Try a tiny non-interactive prompt. If the CLI produces output and exits 0,
+      # cached credentials are working. This avoids depending on the exact wording
+      # of `gh auth status` while still requiring a working Copilot session.
+      local probe_output
+      probe_output=$(printf 'Reply exactly: ok' | copilot --allow-all -p "Reply exactly: ok" 2>&1 || true)
+      if echo "$probe_output" | grep -Eq "^ok$"; then
+        echo "Copilot CLI authenticated via cached credentials (no token env var needed)"
+      else
+        echo "Error: COPILOT_GITHUB_TOKEN or GITHUB_TOKEN environment variable is required for copilot provider" >&2
+        echo "Set it in dmtools.env or as an environment variable, or run 'copilot auth login'" >&2
+        return 1
+      fi
+    else
+      echo "Error: COPILOT_GITHUB_TOKEN or GITHUB_TOKEN environment variable is required for copilot provider" >&2
+      echo "Set it in dmtools.env or as an environment variable" >&2
+      return 1
+    fi
   fi
 
   local copilot_default_model copilot_model_value script_dir
