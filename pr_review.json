@@ -13,6 +13,9 @@
     "cleanupInputFolder": false,
     "skipAIProcessing": true,
     "alwaysPostComments": true,
+    "envVariables": {
+      "CLI_ALLOWED_COMMANDS": "find,ls,cat,mkdir,bash,run-agent.sh"
+    },
     "preJSAction": "agents/js/checkWipLabel.js",
     "preCliJSAction": "agents/js/preparePRForReview.js",
     "postJSAction": "agents/js/postPRReviewComments.js",
