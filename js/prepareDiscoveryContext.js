@@ -8,8 +8,9 @@
  *     DEFAULTS.discovery). Left blank by default so this agent stays generic;
  *     no project specifics live in this file.
  *  2. If a Confluence page for this ticket already exists under that parent
- *     (title starting with the ticket key), snapshots its current page tree as
- *     Markdown files directly into outputs/discovery/ (the SAME folder the CLI
+ *     (title starting with the ticket key), snapshots its ENTIRE current page
+ *     tree — recursively, to any depth, not just direct children — as Markdown
+ *     files/folders directly into outputs/discovery/ (the SAME folder the CLI
  *     agent is instructed to write its final output into — see
  *     instructions/discovery/output_rules.md). This means a second/iteration
  *     run starts with the previously published state already sitting in
@@ -17,6 +18,12 @@
  *     of relying on it to notice and copy prior content from a separate
  *     "context" location — the sync step then only ever sees the merged
  *     result, never a stale, half-copied intermediate state.
+ *     Recursion matters: a mature discovery tree commonly grows nested
+ *     sub-trees (e.g. a topic page that itself has several detail sub-pages)
+ *     — seeding only one level would silently drop those nested pages from
+ *     the CLI agent's view on the next iteration, and a project with
+ *     deleteOrphans enabled would then delete them from Confluence entirely
+ *     on publish, even though nothing about them changed.
  *  3. Writes input/discovery_meta.json with the resolved space/parentPageId
  *     and the existing page id (if found) — read by the matching postJSAction
  *     (publishDiscoveryToConfluence.js) so both steps agree on where to publish
@@ -47,11 +54,21 @@ function findTicketPage(children, ticketKey) {
 }
 
 /**
- * Snapshot an existing discovery page + its direct children as Markdown files
- * directly into outputs/discovery/ (see module docstring) — index.md for the
- * page's own body, one file per child page named after its title.
+ * Recursively snapshot an existing discovery page + all of its descendants
+ * (any depth) as Markdown files directly into outputs/discovery/ (see module
+ * docstring): index.md for a page's own body at each level, one file (or, if
+ * it has its own children, one subfolder) per child page named after its
+ * title — mirroring exactly the tree shape confluence_sync_markdown_directory
+ * itself produces when publishing (see output_rules.md), so a round-trip
+ * (publish → seed next run → publish again) is lossless.
+ *
+ * @param {Object} page - Confluence content object (needs .id)
+ * @param {string} targetDir - local directory to write this page's own
+ *     index.md into (its children go into named subfolders/files here)
+ * @returns {number} total number of descendant pages snapshotted (all depths)
  */
 function snapshotPageTree(page, targetDir) {
+    var total = 0;
     try {
         var rootMd = confluence_content_by_id({ contentId: page.id, format: 'md' });
         var rootBody = (rootMd && rootMd.body && rootMd.body.storage && rootMd.body.storage.value) || '';
@@ -59,15 +76,32 @@ function snapshotPageTree(page, targetDir) {
 
         var children = confluence_get_children_by_id({ contentId: page.id, format: 'md' }) || [];
         children.forEach(function(child) {
-            var childBody = (child.body && child.body.storage && child.body.storage.value) || '';
-            var fileName = sanitizeFileName(child.title) + '.md';
-            file_write(targetDir + '/' + fileName, childBody || '_(existing page had no body)_');
+            total += 1;
+            var fileName = sanitizeFileName(child.title);
+
+            var grandchildren;
+            try {
+                grandchildren = confluence_get_children_by_id({ contentId: child.id, format: 'md' }) || [];
+            } catch (e) {
+                grandchildren = [];
+            }
+
+            if (grandchildren.length > 0) {
+                // This child has its own descendants — recurse into a subfolder
+                // named after it, matching the sync tool's folder-with-index.md
+                // convention for a page that itself has children.
+                total += snapshotPageTree(child, targetDir + '/' + fileName);
+            } else {
+                // Leaf page — a single Markdown file is enough.
+                var childBody = (child.body && child.body.storage && child.body.storage.value) || '';
+                file_write(targetDir + '/' + fileName + '.md', childBody || '_(existing page had no body)_');
+            }
         });
 
-        return children.length;
+        return total;
     } catch (e) {
-        console.warn('prepareDiscoveryContext: failed to snapshot existing page tree:', e);
-        return 0;
+        console.warn('prepareDiscoveryContext: failed to snapshot existing page tree at ' + targetDir + ':', e);
+        return total;
     }
 }
 
@@ -111,7 +145,7 @@ function action(params) {
         }
 
         meta.existingPageId = existing.id;
-        console.log('Found existing discovery page for ' + ticketKey + ': ' + existing.id + ' ("' + existing.title + '") — seeding ' + DISCOVERY_OUTPUT_DIR + ' with its current content for in-place editing.');
+        console.log('Found existing discovery page for ' + ticketKey + ': ' + existing.id + ' ("' + existing.title + '") — seeding ' + DISCOVERY_OUTPUT_DIR + ' with its current content (full tree, recursively) for in-place editing.');
         var snapshotted = snapshotPageTree(existing, DISCOVERY_OUTPUT_DIR);
         file_write(folder + '/discovery_meta.json', JSON.stringify(meta, null, 2));
 
@@ -128,5 +162,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, findTicketPage, sanitizeFileName, DISCOVERY_OUTPUT_DIR };
+    module.exports = { action, findTicketPage, sanitizeFileName, snapshotPageTree, DISCOVERY_OUTPUT_DIR };
 }

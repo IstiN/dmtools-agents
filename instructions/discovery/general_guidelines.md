@@ -2,7 +2,7 @@
 flowchart TD
     G1["Run PM discovery for the ticket — outcome-oriented, continuous, not a one-shot doc dump"]
     G2["Read input/discovery_meta.json — tells you the resolved Confluence space/parent and whether a prior discovery page already exists"]
-    G3["Check outputs/discovery/ BEFORE writing anything — on an iteration run it is already SEEDED with the last published Confluence content.<br/>Read it FIRST. Treat it as the living context pack / running synthesis. EDIT those files in place, don't restart from a blank file."]
+    G3["Check outputs/discovery/ BEFORE writing anything — on an iteration run it is already SEEDED with the last published Confluence content, at EVERY depth of the page tree (including nested subfolders).<br/>Read it FIRST. Treat it as the living context pack / running synthesis. EDIT those files in place, don't restart from a blank file."]
     G4["No invention (NOT no investigation — see investigate_before_writing.md): only state what sources support, but ACTIVELY GO FIND those sources first (web research, codebase, linked docs).<br/>Use TBD / Open question only for what's genuinely unknowable after investigating"]
     G5["Keep problem → outcome → solution separate. Do not jump from a feature request to 'the solution'."]
     G6["⚠️ MANDATORY: always write outputs/discovery/recommendations.md — challenge the idea FIRST (steelman the case against), THEN a go/no-go answer + concrete proposal, not just gathered facts. See output_rules.md."]
@@ -61,6 +61,15 @@ Before writing anything, check `outputs/discovery/` — on an iteration run it a
 | **Scope impact** | Suggested in-scope / out-of-scope moves |
 
 Update the relevant `outputs/discovery/*.md` file(s) **in place** with the merged result (prior content + delta) — since these files already contain the prior published state, this is a direct edit, not a copy-then-merge step. Note the delta itself in `outputs/discovery/index.md`'s "Last iteration" section too — don't leave the delta only in chat/log output, since Confluence readers only see the published files.
+
+### Append-only artifacts are the one exception to "edit in place"
+
+Most files above get merged/edited in place. Two optional files work differently — they exist specifically to preserve history across many iterations, so a run must never rewrite or drop their prior rows:
+
+- **`decisions-log.md`** — running Q&A/decisions record. Append new rows for what this run surfaced; never edit or delete an existing row (if an old open question now has an answer, add a new row referencing it).
+- **`references.md`** — consolidated external-artifact index. Append new rows for new artifacts; never remove an old row even if that artifact's topic later drops out of scope (mark it accordingly instead).
+
+See `output_rules.md` for the exact table shape and when to bother creating these files at all (skip them for a single-session, one-shot discovery with no back-and-forth).
 
 ## Working rules
 

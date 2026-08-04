@@ -25,7 +25,7 @@ Every mode file below MUST include the listed table(s) — not just prose — an
 ### Mode 1 — `domain-brief.md`
 
 - **Required table** — Concept/tool comparison relevant to the domain: `Concept or tool | What it is | When to use it | Source (link)`.
-- Bold every tool/product/concept name on first mention (`**Remotion**`, `**Revideo**`).
+- Bold every tool/product/concept name on first mention (e.g. `**Vendor A**`, `**Vendor B**`).
 - `## Key technical constraints` as a bulleted list, each item bold-labeled (`**Rendering cost:**`, `**Integration:**`).
 
 ### Mode 2 — `source-distillate.md`
@@ -40,8 +40,14 @@ Every mode file below MUST include the listed table(s) — not just prose — an
 
 ### Mode 4 — `as-is-to-be.md`
 
-- **Required table** — Actors/systems: `Actor or system | Role in AS IS | Role in TO BE`.
+- **Required table** — Systems/Actors Overview: `System or actor | Role`. When AS IS and TO BE genuinely assign a system a *different* role, use `System or actor | Role in AS IS | Role in TO BE` instead. List every distinct system, service, or actor involved in the flow before narrating the flow itself — a reader should be able to see the full cast in one glance.
 - Keep the flow narrative itself as numbered steps (AS IS steps 1..n, then TO BE steps 1..n) — bold each step's actor (`**User**`, `**System**`).
+- **Multi-stage flows — split into sub-pages when it helps.** When the end-to-end flow has several distinct stages (e.g. a pipeline where each stage transforms/hands off data or material to the next), and each stage has enough of its own detail (its own inputs, steps, outputs, exceptions) to be substantial on its own, split them into `as-is-to-be/<stage-name>.md` sub-pages instead of one long flat page. For each stage sub-page, structure it as:
+  - **Inputs** — what enters this stage and from where
+  - **Process** — the steps/logic performed in this stage
+  - **Outputs** — what this stage produces/hands off, and to which next stage
+  - A referenced diagram (`![diagram](diagram.png)`) when the stage's flow is easier to show than to describe in text
+  Keep `as-is-to-be.md` itself as the index/summary page linking to each stage sub-page — don't duplicate the full detail in both places.
 
 ### Mode 5 — `mapping.md`
 
@@ -63,6 +69,14 @@ See PRD structure below. **Required table** — Decisions log: `Decision | Date/
 ### `recommendations.md` (always, every run)
 
 See `output_rules.md`'s dedicated section — already fully specified there (challenge table, open-questions table, etc.).
+
+## Architecture/process decision records — Option/Pros/Cons pattern
+
+Whenever a discovery surfaces a genuine fork in approach (multiple viable ways to solve the same problem, each with real tradeoffs — e.g. two different technical approaches, two different process designs, build vs buy vs integrate), record it as an explicit decision record rather than folding it into prose. Use this table shape, inline within whichever file the decision belongs to (`discovery-plan.md`, `prd.md`, or a dedicated `decisions/<topic>.md` sub-page if there are several such decisions worth their own pages):
+
+`Option | Pros | Cons`
+
+Follow the table with a bolded chosen/recommended option and why, e.g. `**Chosen: Option 2** — because ...`. This is distinct from `recommendations.md`'s "Challenge the idea" section (which argues for/against the initiative as a whole) — this pattern is for a specific fork in *how* to implement something once the initiative itself is already a "go".
 
 ## Choosing which modes to run
 

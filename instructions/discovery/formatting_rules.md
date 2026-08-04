@@ -34,10 +34,11 @@ Prefer a table whenever you are recording: risks (risk type | severity | evidenc
 
 Every finding sourced from the web, a linked Confluence page, or a codebase file **must** be a real Markdown link, not plain text naming the source:
 
-- Web research: `[Remotion docs](https://www.remotion.dev/)`, not "source: Remotion docs" or a bare pasted URL with no link syntax.
+- Web research: `[Vendor X product docs](https://example.com/docs)`, not "source: Vendor X docs" or a bare pasted URL with no link syntax.
 - Codebase findings: `[UserService.java](../src/main/java/.../UserService.java)` style reference (or the file path in backtick-code if it isn't a resolvable relative link from the output folder) plus the relevant symbol/line if known.
+- External non-web artifacts (a recorded call, a shared spec document, a design file, an example data file, a diagramming-tool link) — link them the same way: `[gap-analysis-2026-04.xlsx](https://.../shared-doc-link)`. Never just name an artifact without its link, even if the link is long/ugly — a reader needs to actually reach it.
 - Cross-file references within this discovery output: `[see the PRD](prd.md)` per the Cross-linking section below.
-- A **References** section at the bottom of any file with more than 2 citations, listing every link once, is preferred over scattering unlinked source names through prose.
+- A **References** section at the bottom of any file with more than 2 citations, listing every link once, is preferred over scattering unlinked source names through prose. If the discovery as a whole accumulates several such artifacts across multiple files, also add them to the discovery-wide `references.md` (see `output_rules.md`) so they're all findable from one place.
 
 ## Evidence and decisions must be traceable
 
