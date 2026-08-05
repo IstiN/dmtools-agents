@@ -44,6 +44,15 @@ Every finding sourced from the web, a linked Confluence page, or a codebase file
 
 Every row in a decisions/assumptions/open-questions table needs a source column with a real link where one exists (a URL, a Confluence page, a file path) — "ticket comment 2026-07-20" is acceptable only when there is genuinely no linkable artifact (e.g. a verbal/chat comment with no URL). Never leave the source column blank.
 
+## Findings must be atomic and falsifiable, not vague vibes
+
+A finding should support exactly one defensible, checkable claim — not a sweeping conclusion:
+
+- **Bad**: "The process is inefficient and needs automation."
+- **Good**: "The user opened three separate tools (the primary system, a spreadsheet, and a chat app) before completing the task — observed in 2 of 3 sessions."
+
+See `evidence_and_methods.md` for the full evidence-class vocabulary this pairs with.
+
 ## Self-check before finishing EACH file (not just recommendations.md)
 
 ⚠️ Every single file in `outputs/discovery/` — not only `recommendations.md` — needs this check. See `modes.md`'s "Per-mode required structure" for the specific table(s) each mode's file needs. Before moving to the next file, verify:

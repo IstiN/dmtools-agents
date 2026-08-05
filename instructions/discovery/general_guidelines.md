@@ -4,7 +4,7 @@ flowchart TD
     G2["Read input/discovery_meta.json — tells you the resolved Confluence space/parent and whether a prior discovery page already exists"]
     G3["Check outputs/discovery/ BEFORE writing anything — on an iteration run it is already SEEDED with the last published Confluence content, at EVERY depth of the page tree (including nested subfolders).<br/>Read it FIRST. Treat it as the living context pack / running synthesis. EDIT those files in place, don't restart from a blank file."]
     G4["No invention (NOT no investigation — see investigate_before_writing.md): only state what sources support, but ACTIVELY GO FIND those sources first (web research, codebase, linked docs).<br/>Use TBD / Open question only for what's genuinely unknowable after investigating"]
-    G5["Keep problem → outcome → solution separate. Do not jump from a feature request to 'the solution'."]
+    G5["Keep feature-request → symptom → problem → root cause → outcome → solution separate. Do not jump from a feature request straight to 'the solution' — a feature request is an INPUT, not a validated requirement."]
     G6["⚠️ MANDATORY: always write outputs/discovery/recommendations.md — challenge the idea FIRST (steelman the case against), THEN a go/no-go answer + concrete proposal, not just gathered facts. See output_rules.md."]
 
     subgraph AUTOPUBLISH["⚠️ This run auto-publishes — there is no interactive approval step"]
@@ -27,14 +27,19 @@ Before writing a positive recommendation, actively argue against it: does this d
 
 Keep these layers separate in every artefact you write:
 
-1. **Problem** — whose pain / job; why it matters now
-2. **Outcome** — measurable or observable change if this succeeds
-3. **Solution ideas** — options under consideration
-4. **Committed solution (for build)** — only what sources/decisions actually support
+1. **Feature request (input only)** — what was literally asked for; not yet validated as the right thing to build
+2. **Symptom** — the visible complaint or friction (may not be the real problem)
+3. **Problem** — whose pain / job; why it matters now; the underlying cause, not just the symptom
+4. **Root cause** — why the problem happens at all (at least a provisional hypothesis, cited to evidence)
+5. **Consequence** — what actually goes wrong when the problem occurs (delay, cost, error, escalation, churn, etc.)
+6. **Outcome** — measurable or observable change if this succeeds
+7. **Opportunity** — the intervention area the evidence actually supports
+8. **Solution ideas** — options under consideration (see `decision_and_governance.md`'s solution-classes catalog — don't assume "build something new" is the only option)
+9. **Committed solution (for build)** — only what sources/decisions actually support
 
-Do not leap from a stakeholder feature request straight to "the solution" without naming the problem and outcome first.
+Do not leap from a stakeholder feature request straight to "the solution" without working through problem → root cause → outcome first. A feature request is an input to discovery, not a pre-validated requirement.
 
-## Four big risks
+## Four big risks (plus domain-conditional risks when they apply)
 
 Use these consistently in the discovery plan, open questions, experiment design, and readiness sections:
 
@@ -45,7 +50,14 @@ Use these consistently in the discovery plan, open questions, experiment design,
 | **Feasibility** | Can we build/operate it with our skills, time, systems, and partners? |
 | **Business viability** | Does it work for the business (compliance, partners, cost, go-to-market, brand, ops)? |
 
-For each material unknown: name the risk type, its severity (High/Med/Low/Unknown), and the lightest adequate **evidence bar** (e.g. stakeholder confirmation, workflow observation, prototype feedback, technical spike, compliance confirmation, metrics baseline). Do not demand the same rigor for every TBD — high consequence needs stronger evidence, low risk needs lighter confirmation.
+Add these two **only when the domain genuinely warrants them** (e.g. safety-critical, regulated, or compliance-sensitive processes — do not add them by default for a low-stakes internal tool):
+
+| Risk | Question |
+|------|----------|
+| **Operational/safety risk** | Could a failure mode cause incorrect processing, a missed decision, unsafe automation, or physical/operational harm? |
+| **Compliance/privacy risk** | Does it meet the audit, validation, access, confidentiality, and data-protection obligations that apply here? |
+
+For each material unknown: name the risk type, its severity (High/Med/Low/Unknown), and the lightest adequate **evidence bar** (e.g. stakeholder confirmation, workflow observation, prototype feedback, technical spike, compliance confirmation, metrics baseline). Do not demand the same rigor for every TBD — high consequence needs stronger evidence, low risk needs lighter confirmation. See `evidence_and_methods.md` for evidence classes and confidence levels to label findings with, and `decision_and_governance.md` for matching an experiment method to each risk type.
 
 ## Iteration protocol (when outputs/discovery/ is already seeded with prior published content)
 

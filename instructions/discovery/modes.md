@@ -1,19 +1,39 @@
 ```mermaid
 flowchart TD
+    MR["Optional Mode R: Research brief — decision framing BEFORE evidence gathering, for ambiguous/high-stakes tickets only"]
     M0["Mode 0: Opportunity assessment — problem, who, alternatives, why now, success metrics, go/no-go.<br/>If a named tech/product/competitor is involved: research it (web) first"]
     M1["Mode 1: Domain brief — plain-language explainer of the domain/context for the team.<br/>Research the actual domain/technology (web) — don't just restate the ticket"]
     M2["Mode 2: Source distill — lossless compression of ticket + attachments + prior context + ANY research findings gathered this run (web/codegraph/linked docs)"]
-    M3["Mode 3: Discovery plan — known vs unknown mapped to the four risks, with an evidence bar per gap"]
+    M3["Mode 3: Discovery plan — known vs unknown mapped to the four (or more, if domain-conditional) risks, with an evidence bar per gap"]
     M4["Mode 4: AS IS / TO BE — end-to-end current vs future flow: actors, systems, handoffs, exceptions"]
     M5["Mode 5: Mapping — field / interface / data-contract tables vs named schemas or examples"]
     M6["Mode 6: PRD draft — problem → outcome → solution shaped page (see structure below)"]
-    M7["Mode 7: Experiment design — cheapest test for the dominant risk (interview, walkthrough, spike)"]
-    M8["Mode 8: Readiness — four risks + evidence + trio check; ready for delivery handoff or not"]
+    M7["Mode 7: Experiment design — method matched to the dominant risk (see decision_and_governance.md)"]
+    M8["Mode 8: Readiness — four risks + evidence + trio check; 4-state verdict, not binary"]
 ```
 
 ## Per-mode required structure (every file needs at least one table and bolded key terms)
 
 Every mode file below MUST include the listed table(s) — not just prose — and bold every labeled term (risk levels, verdicts, scores). A file with only `##` headings and bullet lists, no table, is incomplete for that mode.
+
+### Optional framing file — `research-brief.md` (write BEFORE other modes on an ambiguous or high-stakes first run)
+
+For a genuinely ambiguous, high-stakes, or easily-misframed ticket (the kind where jumping straight into "opportunity assessment" risks investigating the wrong thing), write `research-brief.md` first to explicitly frame the decision before gathering evidence:
+
+| Field | Required content |
+|---|---|
+| **Decision to make** | The concrete product/process decision this discovery must support — stated as a decision, not a feature request |
+| **Business context** | Why it matters now |
+| **Initial request** | What was literally asked for, without treating it as already validated |
+| **Problem hypothesis** | The suspected problem, explicitly marked as a hypothesis, not a fact yet |
+| **Target roles/users** | Who is affected |
+| **Scope** | What's in scope |
+| **Out of scope** | Explicit exclusions |
+| **Known evidence** | What's already known, labeled by evidence class (see `evidence_and_methods.md`) |
+| **Evidence gaps** | What's missing before the decision can be made |
+| **Success criteria** | What evidence would be enough to actually make the decision |
+
+Skip this file for a simple, clearly-scoped ticket — it exists to prevent investigating the wrong question on a genuinely ambiguous one, not as a mandatory first step for every ticket.
 
 ### Mode 0 — `opportunity-assessment.md`
 
@@ -37,6 +57,7 @@ Every mode file below MUST include the listed table(s) — not just prose — an
 
 - **Required table** — Four risks: `Risk type | Severity | Evidence bar | Status`.
 - **Required table** — Known vs unknown: `Item | Known / Gap | Source or evidence needed`.
+- **When multiple customers/segments/sites are involved**: add a cross-segment comparison table (see `evidence_and_methods.md`'s "Cross-segment / cross-customer comparison") instead of blending everyone's input into one narrative.
 
 ### Mode 4 — `as-is-to-be.md`
 
@@ -60,11 +81,14 @@ See PRD structure below. **Required table** — Decisions log: `Decision | Date/
 ### Mode 7 — `experiments.md`
 
 - **Required table** — Experiments: `Hypothesis | Method | Audience | Success signal | Timebox`.
+- Pick the method per risk from `decision_and_governance.md`'s risk→method table — don't default to "interview" for every risk type.
+- For each experiment, also define the **measurement contract** (baseline, target, success metric, guardrail metric — see `decision_and_governance.md`) and classify its eventual result as Passed/Failed/Inconclusive/Invalid — never quietly reinterpret a failed result as a pass.
 
 ### Mode 8 — `readiness.md`
 
 - **Required table** — Four risks readiness: `Risk type | Severity | Evidence on hand | Residual risk`.
 - `## Trio check` — bold each role's status (`**Product:** reviewed`, `**Engineering:** pending`).
+- **Verdict**: use the 4-state scale from `decision_and_governance.md` — **Not ready** / **Conditionally ready** (list the specific conditions) / **Ready with accepted residual risk** (name the risk + owner) / **Ready** — not a binary yes/no.
 
 ### `recommendations.md` (always, every run)
 
@@ -98,7 +122,7 @@ Adapt to what sources support; leave TBD where not yet known:
 - Systems / actors involved
 - Scope / out of scope
 - AS IS and TO BE (or link to `as-is-to-be.md`)
-- Solution options considered (brief) vs committed direction
+- Solution options considered — generate across the solution classes in `decision_and_governance.md` (don't assume "build new"/"add AI" by default) — vs committed direction
 - Interface / data-contract highlights (if applicable, or link to `mapping.md`)
 - Features + acceptance criteria (only where sources support)
 - Data / configuration notes that affect build
@@ -110,11 +134,12 @@ Keep problem/outcome visible above any feature list — do not let a feature che
 
 ## Delivery handoff gate (Mode 8 — readiness)
 
-Only report **ready** when:
+Only report **Ready** (or **Ready with accepted residual risk** — see `decision_and_governance.md`'s 4-state verdict scale) when:
 
 - Problem and outcome are stated (even if metrics are TBD)
-- Dominant risks are identified and reduced enough to commit (or explicitly accepted)
+- Dominant risks are identified and reduced enough to commit (or explicitly accepted, with a named owner)
 - Critical contradictions are resolved or parked with an owner
 - Trio check is done or explicitly marked pending/waived
+- Any material sensitivity/publication concern from `decision_and_governance.md`'s governance gate has been addressed or explicitly flagged
 
 Not ready merely because the PRD is long or "looks complete" — judge against the risks, not the page count.
