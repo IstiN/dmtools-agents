@@ -83,6 +83,15 @@ This is not the same as "no invention" (see `general_guidelines.md`) — a recom
 
 Link between your own files with plain relative Markdown links, e.g. `[see the PRD](prd.md)` or `[mapping details](mapping.md)` — the Confluence sync step rewrites these into real Confluence page links automatically. Do not use absolute file paths or guess Confluence page IDs yourself.
 
+⚠️ **The link text must always be a natural-language phrase — never the bare filename.** This is not just a style preference: Confluence's link-safety UI shows a "Check this link — this is taking you to a different site" interstitial click-through warning whenever the visible link text doesn't resemble the resolved destination, and a bare filename (`as-is-to-be.md`, `prd.md`) never resembles a Confluence page title/URL, so it reliably triggers that warning on every single click — even though the link itself is a correct, internal, same-space reference. A natural-language phrase describing what the reader will find avoids this entirely.
+
+- ❌ `See [as-is-to-be.md](as-is-to-be.md) for the full current vs. future flow.`
+- ✅ `See [the AS IS / TO BE flow](as-is-to-be.md) for the full current vs. future flow.`
+- ❌ `<code>prd.md</code>` as a table cell's only content
+- ✅ `[PRD draft](prd.md)` or `[the PRD](prd.md)` as the table cell's content
+
+This applies equally to `index.md`'s own "pages produced this run" table (see the file-naming table above) — link the descriptive title, not the filename. If you want the raw filename visible too for orientation, put it in a separate non-linked `` `filename.md` `` note next to the real link, don't make the filename itself the clickable text.
+
 ## Re-runs / iteration
 
 ⚠️ **On an iteration run, `outputs/discovery/` is NOT empty when you start** — the pre-CLI step seeds it with the last published Confluence content, recursively at every depth of the existing page tree (same file/subfolder naming as the table above), before you run. **Read what's already there first, including any nested subfolders.** Then **edit the same file in place** with the merged result (old content + this run's delta) rather than deleting it and starting fresh — this keeps the same Confluence page updated instead of creating a duplicate tree, and guarantees nothing you didn't intend to touch gets silently dropped. This applies to `recommendations.md` too: re-affirm, sharpen, or revise the recommendation based on any new artefact — don't leave a stale recommendation unexamined.
