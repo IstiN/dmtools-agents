@@ -1,0 +1,30 @@
+{
+  "name": "Teammate",
+  "params": {
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
+    "outputType": "none",
+    "ticketContextDepth": 1,
+    "attachResponseAsFile": false,
+    "skipAIProcessing": true,
+    "alwaysPostComments": true,
+    "preCliJSAction": "agents/js/prepareDiscoveryContext.js",
+    "postJSAction": "agents/js/publishDiscoveryToConfluence.js",
+    "inputJql": "key = JD-82",
+    "cliPrompts": [
+      "Experienced Product Discovery Lead / Business Analyst",
+      "./agents/instructions/common/agent_task_preamble.md",
+      "./agents/instructions/discovery/general_guidelines.md",
+      "./agents/instructions/common/input_context_reading.md",
+      "./agents/instructions/discovery/investigate_before_writing.md",
+      "./agents/instructions/discovery/evidence_and_methods.md",
+      "./agents/instructions/discovery/decision_and_governance.md",
+      "./agents/instructions/discovery/modes.md",
+      "./agents/instructions/discovery/output_rules.md",
+      "./agents/instructions/discovery/formatting_rules.md",
+      "./agents/instructions/common/dmtools_cli.md",
+      "./agents/prompts/bash_tools.md"
+    ]
+  }
+}

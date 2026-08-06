@@ -15,7 +15,7 @@
  *     override only the keys it renames; unspecified keys keep the defaults from config.js
  *   - jira.questions, labels: FULL REPLACEMENT when provided
  *   - smRules, smMergeRules: FULL REPLACEMENT when provided
- *   - repository, git, formats, confluence, jira.fields: DEEP MERGE
+ *   - repository, git, formats, confluence, discovery, jira.fields: DEEP MERGE
  *   - additionalInstructions, instructionOverrides, cliPrompts, cliPromptOverrides, agentParamPatches, jobParamPatches:
  *     FULL REPLACEMENT when provided (per agent key)
  *   - globalCliPrompts, globalAdditionalInstructions: APPENDED to every agent (inject-to-all)
@@ -92,6 +92,17 @@ var DEFAULTS = {
         templateJiraMarkdown: 'https://dmtools.atlassian.net/wiki/spaces/AINA/pages/18186241/Template+Jira+Markdown',
         templateSolutionDesign: 'https://dmtools.atlassian.net/wiki/spaces/AINA/pages/56754177/Template+Solution+Design',
         templateQuestions: 'https://dmtools.atlassian.net/wiki/spaces/AINA/pages/11665581/Template+Q'
+    },
+
+    // Used by the discovery agent (discovery.json) to publish outputs/discovery/
+    // to Confluence. Left blank by default — every project MUST set these in its
+    // own .dmtools/config.js before discovery pages can be published; this repo
+    // stays project-agnostic.
+    discovery: {
+        space: '',            // Confluence space key discovery pages are created in
+        parentPageId: '',     // Confluence page ID each ticket's discovery page nests under
+        deleteOrphans: false  // Whether confluence_sync_markdown_directory removes child
+                               // pages no longer present in outputs/discovery/
     },
 
     smRules: null,
