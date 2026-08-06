@@ -57,6 +57,7 @@ var DEFAULTS = {
 
     git: {
         baseBranch: DEFAULT_CONFIG.GIT_CONFIG.DEFAULT_BASE_BRANCH,
+        snapshotBranch: '',     // optional branch for BA/SA/discovery codegraph snapshots
         authorName: DEFAULT_CONFIG.GIT_CONFIG.AUTHOR_NAME,
         authorEmail: DEFAULT_CONFIG.GIT_CONFIG.AUTHOR_EMAIL,
         branchPrefix: {
@@ -369,6 +370,49 @@ function loadProjectConfig(params) {
     // This lets project-specific naming functions read explicit, non-generic
     // settings without hardcoding them in the shared agents repo.
     config.customParams = customParams;
+
+    // Apply baseBranchResolverFnPath from config.git — project-specific function
+    // that can override config.git.baseBranch based on the ticket (e.g. mapping from
+    // a Jira fixVersion to a release branch). The resolver receives
+    // (ticket, candidateBaseBranch, config) and must return a branch name;
+    // returning a falsy value keeps the candidate branch.
+    var baseBranchResolverPath = config.git && config.git.baseBranchResolverFnPath;
+    if (baseBranchResolverPath && params && params.ticket) {
+        var baseBranchResolver = loadHookFn(baseBranchResolverPath, 'baseBranchResolverFnPath');
+        if (baseBranchResolver) {
+            var candidateBaseBranch = config.git.baseBranch;
+            try {
+                var resolvedBaseBranch = baseBranchResolver(params.ticket, candidateBaseBranch, config);
+                if (resolvedBaseBranch) {
+                    config.git.baseBranch = resolvedBaseBranch;
+                    console.log('configLoader: Resolved baseBranch via ' + baseBranchResolverPath + ' → ' + resolvedBaseBranch);
+                }
+            } catch (e) {
+                console.warn('configLoader: baseBranchResolver failed, keeping candidate baseBranch:', e.message || e);
+            }
+        }
+    }
+
+    // Apply snapshotBranchResolverFnPath from config.git — project-specific function
+    // that selects the branch used for BA/SA/discovery codegraph snapshots.
+    // Differs from baseBranchResolver in that it may fall back to the latest
+    // existing release branch rather than the repository's default base branch.
+    var snapshotBranchResolverPath = config.git && config.git.snapshotBranchResolverFnPath;
+    if (snapshotBranchResolverPath && params && params.ticket) {
+        var snapshotBranchResolver = loadHookFn(snapshotBranchResolverPath, 'snapshotBranchResolverFnPath');
+        if (snapshotBranchResolver) {
+            var candidateSnapshotBranch = config.git.snapshotBranch || config.git.baseBranch;
+            try {
+                var resolvedSnapshotBranch = snapshotBranchResolver(params.ticket, candidateSnapshotBranch, config);
+                if (resolvedSnapshotBranch) {
+                    config.git.snapshotBranch = resolvedSnapshotBranch;
+                    console.log('configLoader: Resolved snapshotBranch via ' + snapshotBranchResolverPath + ' → ' + resolvedSnapshotBranch);
+                }
+            } catch (e) {
+                console.warn('configLoader: snapshotBranchResolver failed, keeping candidate snapshotBranch:', e.message || e);
+            }
+        }
+    }
 
     // Apply branchNamingFnPath from customParams — loads a JS file whose module.exports
     // is a function(ticket, branchRole, config) → string.  Takes priority over config.git.branchNamingFn.
