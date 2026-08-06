@@ -324,6 +324,104 @@ suite('configLoader.loadProjectConfig', function() {
         assert.equal(config.workingDir, 'other-repo');
     });
 
+    test('applies baseBranchResolverFnPath using ticket fixVersion', function() {
+        var cl = makeLoader({
+            '.dmtools/config.js':
+                'module.exports = { git: { baseBranchResolverFnPath: "./.dmtools/resolver.js", baseBranchByFixVersionPattern: "develop/{version}" } };',
+            './.dmtools/resolver.js':
+                'module.exports = function(ticket, candidateBaseBranch, config) { ' +
+                '  var targetRepo = config.customParams && config.customParams.targetRepository; ' +
+                '  if (!targetRepo || targetRepo.repo !== "example-repo") return candidateBaseBranch; ' +
+                '  var pattern = config.git && config.git.baseBranchByFixVersionPattern || "develop/{version}"; ' +
+                '  var versions = ticket && ticket.fields && ticket.fields.fixVersions; ' +
+                '  if (versions && versions.length > 0) { ' +
+                '    var v = versions[0]; var name = v && v.name ? v.name : v; ' +
+                '    if (name) return pattern.replace("{version}", name); ' +
+                '  } ' +
+                '  return candidateBaseBranch; ' +
+                '};'
+        });
+        var config = cl.loadProjectConfig({
+            ticket: { key: 'PROJ-1', fields: { fixVersions: [{ name: '3.9.0' }] } },
+            customParams: {
+                targetRepository: { owner: 'acme-corp', repo: 'example-repo', baseBranch: 'master' }
+            }
+        });
+        assert.equal(config.git.baseBranch, 'develop/3.9.0');
+    });
+
+    test('baseBranchResolverFnPath falls back to candidate baseBranch when no fixVersion', function() {
+        var cl = makeLoader({
+            '.dmtools/config.js':
+                'module.exports = { git: { baseBranchResolverFnPath: "./.dmtools/resolver.js" } };',
+            './.dmtools/resolver.js':
+                'module.exports = function(ticket, candidateBaseBranch) { ' +
+                '  var versions = ticket && ticket.fields && ticket.fields.fixVersions; ' +
+                '  if (versions && versions.length > 0) return "develop/" + versions[0].name; ' +
+                '  return candidateBaseBranch; ' +
+                '};'
+        });
+        var config = cl.loadProjectConfig({
+            ticket: { key: 'PROJ-1', fields: {} },
+            customParams: {
+                targetRepository: { owner: 'acme-corp', repo: 'example-repo', baseBranch: 'master' }
+            }
+        });
+        assert.equal(config.git.baseBranch, 'master');
+    });
+
+    test('baseBranchResolverFnPath ignored when no ticket provided', function() {
+        var cl = makeLoader({
+            '.dmtools/config.js':
+                'module.exports = { git: { baseBranchResolverFnPath: "./.dmtools/resolver.js" } };',
+            './.dmtools/resolver.js':
+                'module.exports = function(ticket, candidateBaseBranch) { return "develop/forced"; };'
+        });
+        var config = cl.loadProjectConfig({
+            customParams: {
+                targetRepository: { owner: 'acme-corp', repo: 'example-repo', baseBranch: 'master' }
+            }
+        });
+        assert.equal(config.git.baseBranch, 'master');
+    });
+
+    test('snapshotBranchResolverFnPath resolves snapshotBranch from ticket', function() {
+        var cl = makeLoader({
+            '.dmtools/config.js':
+                'module.exports = { git: { snapshotBranchResolverFnPath: "./.dmtools/snapshot-resolver.js" } };',
+            './.dmtools/snapshot-resolver.js':
+                'module.exports = function(ticket, candidateBranch) { ' +
+                '  var versions = ticket && ticket.fields && ticket.fields.fixVersions; ' +
+                '  if (versions && versions.length > 0) return "develop/" + versions[0].name; ' +
+                '  return candidateBranch; ' +
+                '};'
+        });
+        var config = cl.loadProjectConfig({
+            ticket: { key: 'PROJ-1', fields: { fixVersions: [{ name: '3.9.0' }] } },
+            customParams: {
+                targetRepository: { owner: 'acme-corp', repo: 'example-repo', baseBranch: 'master' }
+            }
+        });
+        assert.equal(config.git.snapshotBranch, 'develop/3.9.0');
+        assert.equal(config.git.baseBranch, 'master', 'baseBranch unchanged');
+    });
+
+    test('snapshotBranchResolverFnPath falls back to candidate branch', function() {
+        var cl = makeLoader({
+            '.dmtools/config.js':
+                'module.exports = { git: { snapshotBranchResolverFnPath: "./.dmtools/snapshot-resolver.js" } };',
+            './.dmtools/snapshot-resolver.js':
+                'module.exports = function(ticket, candidateBranch) { return candidateBranch; };'
+        });
+        var config = cl.loadProjectConfig({
+            ticket: { key: 'PROJ-1', fields: {} },
+            customParams: {
+                targetRepository: { owner: 'acme-corp', repo: 'example-repo', baseBranch: 'master' }
+            }
+        });
+        assert.equal(config.git.snapshotBranch, 'master');
+    });
+
     test('partial config — only overridden fields change', function() {
         var cl = makeLoader({
             '../.dmtools/config.js':
