@@ -207,7 +207,7 @@ run_cursor() {
   echo ""
 
   local agent_log
-  agent_log="$(mktemp)"
+  agent_log="$(new_agent_log_file "cursor")"
   set +e
   "${cmd[@]}" 2>&1 | tee "$agent_log"
   local exit_code=${PIPESTATUS[0]}
@@ -233,7 +233,7 @@ run_cursor() {
     fi
   fi
 
-  rm -f "$agent_log"
+  echo "Full transcript saved to: ${agent_log}"
 
   echo ""
   echo "=== Agent completed with exit code: $exit_code ==="

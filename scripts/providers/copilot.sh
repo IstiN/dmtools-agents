@@ -167,10 +167,16 @@ run_copilot() {
   local retry_delay="${COPILOT_RATE_LIMIT_RETRY_DELAY_SECONDS:-90}"
   local attempt=1
   local exit_code=1
+  # Every attempt (including model-fallback and rate-limit retries) gets its
+  # own persisted transcript file — unlike the old mktemp+rm pattern, none of
+  # these are deleted, so a full history of what Copilot actually did/said
+  # across retries is recoverable after the job finishes.
+  local copilot_log_files=()
 
   while [ "$attempt" -le "$max_attempts" ]; do
     local copilot_log
-    copilot_log="$(mktemp)"
+    copilot_log="$(new_agent_log_file "copilot-attempt${attempt}")"
+    copilot_log_files+=("$copilot_log")
     set +e
     run_copilot_once "$copilot_log" "$copilot_model_value"
     exit_code=$?
@@ -182,7 +188,6 @@ run_copilot() {
 
     if [ "$exit_code" -eq 0 ]; then
       record_codegraph_usage "$copilot_log"
-      rm -f "$copilot_log"
       break
     fi
 
@@ -190,8 +195,8 @@ run_copilot() {
       echo ""
       echo "Copilot model ${copilot_model_value} is unavailable; retrying with ${copilot_default_model}"
       record_codegraph_usage "$copilot_log"
-      rm -f "$copilot_log"
-      copilot_log="$(mktemp)"
+      copilot_log="$(new_agent_log_file "copilot-attempt${attempt}-fallback")"
+      copilot_log_files+=("$copilot_log")
       set +e
       run_copilot_once "$copilot_log" "$copilot_default_model"
       exit_code=$?
@@ -199,7 +204,6 @@ run_copilot() {
       copilot_model_value="$copilot_default_model"
       if [ "$exit_code" -eq 0 ]; then
         record_codegraph_usage "$copilot_log"
-        rm -f "$copilot_log"
         break
       fi
     fi
@@ -208,16 +212,18 @@ run_copilot() {
       echo ""
       echo "Copilot rate limit detected; retrying in ${retry_delay}s (attempt $((attempt + 1))/${max_attempts})"
       record_codegraph_usage "$copilot_log"
-      rm -f "$copilot_log"
       sleep "$retry_delay"
       attempt=$((attempt + 1))
       continue
     fi
 
     record_codegraph_usage "$copilot_log"
-    rm -f "$copilot_log"
     break
   done
+
+  echo ""
+  echo "Full transcript(s) saved to:"
+  printf '  %s\n' "${copilot_log_files[@]}"
 
   echo ""
   echo "=== Agent completed with exit code: $exit_code ==="
