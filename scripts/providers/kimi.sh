@@ -197,7 +197,7 @@ PY
   # Stdin mode causes kimi to enter interactive TUI which hangs/does nothing in CI.
   # For local interactive use, stdin is fine but -p is still preferred for reliability.
   local kimi_log
-  kimi_log="$(mktemp)"
+  kimi_log="$(new_agent_log_file "kimi")"
   echo "Running: kimi ${kimi_model_args[*]:-} ${kimi_session_args[*]:-} ${kimi_pass_args[*]:-} -p <prompt:${PROMPT_BYTES} bytes>"
   echo ""
   set +e
@@ -244,7 +244,7 @@ PY
 
   print_kimi_usage_summary_and_write_json "${effective_session_id}"
 
-  rm -f "$kimi_log"
+  echo "Full transcript saved to: ${kimi_log}"
 
   echo ""
   echo "=== Agent completed with exit code: $exit_code ==="

@@ -47,13 +47,13 @@ run_codemie() {
   echo ""
 
   local agent_log
-  agent_log="$(mktemp)"
+  agent_log="$(new_agent_log_file "codemie")"
   set +e
   "${cmd[@]}" 2>&1 | tee "$agent_log"
   local exit_code=${PIPESTATUS[0]}
   set -e
   record_codegraph_usage "$agent_log"
-  rm -f "$agent_log"
+  echo "Full transcript saved to: ${agent_log}"
 
   echo ""
   echo "=== Agent completed with exit code: $exit_code ==="

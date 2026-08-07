@@ -45,7 +45,7 @@ run_claude_code() {
 
   local claude_code_exit_code=0
   local claude_code_log
-  claude_code_log="$(mktemp)"
+  claude_code_log="$(new_agent_log_file "claude-code")"
   # Session resume: if .claude-session-id exists from a previous run, continue that session.
   local claude_resume_args=()
   if [ -f ".claude-session-id" ]; then
@@ -95,7 +95,8 @@ run_claude_code() {
     echo "${saved_session_id}" > .claude-session-id
     echo "💾 Claude session saved: ${saved_session_id}"
   fi
-  rm -f "${claude_code_log}"
+
+  echo "Full transcript saved to: ${claude_code_log}"
 
   echo ""
   echo "=== Agent completed with exit code: $claude_code_exit_code ==="

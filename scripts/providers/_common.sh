@@ -1,6 +1,40 @@
 #!/bin/bash
 # Common helpers shared by all run-agent provider subscripts.
 
+# Directory where the full, untruncated CLI-agent provider transcript (Claude
+# Code / Copilot / Cursor / Kimi / Codemie stdout+stderr) is persisted.
+#
+# Every provider used to `tee` its raw output to a `mktemp` file, grep it once
+# for codegraph usage / session-id extraction, then `rm -f` it — so the actual
+# conversation the agent had was never recoverable after the job finished,
+# even though `record_codegraph_usage` had already looked at it. That is the
+# single biggest source of "blind" CI runs: unlike nested `dmtools run`
+# subprocess output (capped/persisted on the Java side via
+# CommandLineUtils/DMTOOLS_CLI_LOG_DIR), the top-level agent's own transcript
+# was never written anywhere durable at all.
+#
+# Uses the SAME .dmtools-logs/cli root as DMTOOLS_CLI_LOG_DIR on the Java side
+# (see CommandLineUtils.java / PropertyReader.getCliFullOutputLogDir) so a
+# single CI artifact glob (.dmtools-logs/**) picks up both nested `dmtools run`
+# transcripts and the top-level provider CLI transcript.
+agent_full_log_dir() {
+  echo "${DMTOOLS_CLI_LOG_DIR:-.dmtools-logs/cli}/agent"
+}
+
+# Allocates a fresh, unique path under agent_full_log_dir() for a provider to
+# tee its full stdout+stderr to. $1: provider/attempt label (e.g. "copilot",
+# "copilot-attempt2", "claude-code"). The caller is responsible for `tee`-ing
+# into this path and MUST NOT delete it afterwards (unlike the old mktemp
+# pattern) — that's the whole point: it needs to survive for the CI job to
+# archive as an artifact.
+new_agent_log_file() {
+  local label="${1:-agent}"
+  local dir
+  dir="$(agent_full_log_dir)"
+  mkdir -p "$dir"
+  echo "${dir}/${label}-$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}.log"
+}
+
 # Record a *_usage.json file path to outputs/token_usage_files.json so that
 # post-action JavaScript can discover usage summaries without relying on fs.
 record_usage_file() {
