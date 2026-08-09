@@ -23,7 +23,7 @@ function parseWorkflowRuns(raw) {
     }
 }
 
-function hasActiveTargetRun(scm, configFile, ticketKey, workflowFile) {
+function hasActiveTargetRun(scm, configFile, ticketKey, workflowFile, owner, repo) {
     var expectedName = configFile + ' : ' + ticketKey;
     var expectedNameSuffix = ' : ' + ticketKey;
     var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
@@ -31,7 +31,7 @@ function hasActiveTargetRun(scm, configFile, ticketKey, workflowFile) {
     for (var i = 0; i < statuses.length; i++) {
         var runsRaw = null;
         try {
-            runsRaw = scm.listWorkflowRuns(statuses[i], workflowFile, 50);
+            runsRaw = scm.listWorkflowRuns(statuses[i], workflowFile, 50, owner, repo);
         } catch (e) {
             console.warn('autoStart: could not list ' + statuses[i] + ' workflow runs:', e.message || e);
             continue;
@@ -97,7 +97,7 @@ function normalizePositiveInt(value) {
     return normalized > 0 ? normalized : null;
 }
 
-function collectActiveWorkflowRuns(scm, workflowFile) {
+function collectActiveWorkflowRuns(scm, workflowFile, owner, repo) {
     var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
     var seen = {};
     var count = 0;
@@ -106,7 +106,7 @@ function collectActiveWorkflowRuns(scm, workflowFile) {
     for (var i = 0; i < statuses.length; i++) {
         var runsRaw = null;
         try {
-            runsRaw = scm.listWorkflowRuns(statuses[i], workflowFile, 50);
+            runsRaw = scm.listWorkflowRuns(statuses[i], workflowFile, 50, owner, repo);
         } catch (e) {
             console.warn('autoStart: could not count ' + statuses[i] + ' workflow runs:', e.message || e);
             continue;
@@ -128,8 +128,8 @@ function collectActiveWorkflowRuns(scm, workflowFile) {
     return { count: count, summaries: summaries };
 }
 
-function countActiveWorkflowRuns(scm, workflowFile) {
-    return collectActiveWorkflowRuns(scm, workflowFile).count;
+function countActiveWorkflowRuns(scm, workflowFile, owner, repo) {
+    return collectActiveWorkflowRuns(scm, workflowFile, owner, repo).count;
 }
 
 function logBlockingWorkflowRuns(summaries) {
@@ -150,10 +150,11 @@ function resolveActiveWorkflowCap(options) {
 }
 
 function isGlobalWorkflowCapReached(scm, workflowFile, options) {
-    var cap = resolveActiveWorkflowCap(options || {});
+    options = options || {};
+    var cap = resolveActiveWorkflowCap(options);
     if (!cap) return false;
 
-    var active = collectActiveWorkflowRuns(scm, workflowFile);
+    var active = collectActiveWorkflowRuns(scm, workflowFile, options.owner, options.repo);
     var activeCount = active.count;
     if (activeCount >= cap) {
         console.log('autoStart: skipped workflow trigger because ' + activeCount +
@@ -290,12 +291,14 @@ function triggerConfiguredWorkflowForTicket(options) {
 
     if (isGlobalWorkflowCapReached(scm, workflowFile, {
             config: config,
-            maxActiveWorkflows: options.maxActiveWorkflows
+            maxActiveWorkflows: options.maxActiveWorkflows,
+            owner: aiOwner,
+            repo: aiRepo
         })) {
         return false;
     }
 
-    if (hasActiveTargetRun(scm, configFile, ticketKey, workflowFile)) {
+    if (hasActiveTargetRun(scm, configFile, ticketKey, workflowFile, aiOwner, aiRepo)) {
         return false;
     }
 
@@ -343,8 +346,9 @@ function triggerSmIfIdle(options) {
         return false;
     }
 
-    var aiOwner = (config.repository && config.repository.owner);
-    var aiRepo = (config.repository && config.repository.repo);
+    var aiRepoCfg = customParams.aiRepository;
+    var aiOwner = (aiRepoCfg && aiRepoCfg.owner) || (config.repository && config.repository.owner);
+    var aiRepo = (aiRepoCfg && aiRepoCfg.repo) || (config.repository && config.repository.repo);
     if (!aiOwner || !aiRepo) {
         console.warn('SM fallback: config.repository.owner/repo not set — skipping');
         return false;
@@ -356,7 +360,7 @@ function triggerSmIfIdle(options) {
     var statuses = ['queued', 'in_progress', 'waiting', 'pending'];
     for (var i = 0; i < statuses.length; i++) {
         try {
-            var runsRaw = scm.listWorkflowRuns(statuses[i], agentWorkflowFile, 50);
+            var runsRaw = scm.listWorkflowRuns(statuses[i], agentWorkflowFile, 50, aiOwner, aiRepo);
             var runs = parseWorkflowRuns(runsRaw);
             activeCount += runs.length;
         } catch (e) {

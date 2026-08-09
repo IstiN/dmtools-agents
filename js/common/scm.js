@@ -304,8 +304,8 @@ function _createGithubProvider(workspace, repository) {
         getJobLogs: function(jobId) {
             return github_get_job_logs({ workspace: workspace, repository: repository, jobId: String(jobId) });
         },
-        listWorkflowRuns: function(status, workflowId, limit) {
-            return github_list_workflow_runs(workspace, repository, status, workflowId, limit || 50);
+        listWorkflowRuns: function(status, workflowId, limit, owner, repo) {
+            return github_list_workflow_runs(owner || workspace, repo || repository, status, workflowId, limit || 50);
         },
         triggerWorkflow: function(owner, repo, workflowFile, payload, ref) {
             return github_trigger_workflow(owner, repo, workflowFile, payload, ref);
@@ -644,10 +644,10 @@ function _createGitLabProvider(workspace, repository) {
         getJobLogs: function(jobId) {
             return gitlab_get_job_logs({ workspace: workspace, repository: repository, jobId: String(jobId) });
         },
-        listWorkflowRuns: function(status, workflowId, limit) {
+        listWorkflowRuns: function(status, workflowId, limit, owner, repo) {
             var runs = _toArray(gitlab_list_pipeline_runs({
-                workspace: workspace,
-                repository: repository,
+                workspace: owner || workspace,
+                repository: repo || repository,
                 status: _normalizeGitLabPipelineStatus(status),
                 ref: null,
                 limit: String(limit || 50)
