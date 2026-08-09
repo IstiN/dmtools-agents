@@ -396,7 +396,12 @@ function sortAttr(value) {
 }
 
 function buildHtml(rows, summary) {
-    var payload = JSON.stringify({ rows: rows, summary: summary });
+    var payload = JSON.stringify({ rows: rows, summary: summary })
+        .replace(/&/g, '\\u0026')
+        .replace(/</g, '\\u003c')
+        .replace(/>/g, '\\u003e')
+        .replace(/ /g, '\\u2028')
+        .replace(/ /g, '\\u2029');
     var topAgents = summary.byAgent.slice().sort(function(a, b) {
         return (b.readTokens + b.writeTokens + b.cachedTokens + b.reasoningTokens) -
                (a.readTokens + a.writeTokens + a.cachedTokens + a.reasoningTokens);
@@ -451,7 +456,7 @@ function buildHtml(rows, summary) {
         recentRows.map(function(r) {
             return '<tr><td' + sortAttr(r.createdAt) + '>' + htmlEscape(r.createdAt) + '</td><td' + sortAttr(r.agent) + '>' + htmlEscape(r.agent) + '</td><td' + sortAttr(r.ticketKey) + '>' + htmlEscape(r.ticketKey) + '</td><td' + sortAttr(r.conclusion) + '>' + htmlEscape(r.conclusion) + '</td><td class="num"' + sortAttr(r.durationSeconds) + '>' + htmlEscape(r.duration || '0s') + '</td><td class="num"' + sortAttr(r.samples) + '>' + htmlEscape(r.samples || 1) + '</td><td' + sortAttr(r.resumeDetected ? 'yes' : 'no') + '>' + (r.resumeDetected ? 'yes' : 'no') + '</td><td class="num"' + sortAttr(r.feedbackLoopCount) + '>' + (r.feedbackLoopCount || 0) + '</td><td class="num"' + sortAttr(r.rateLimitRetryCount) + '>' + (r.rateLimitRetryCount || 0) + '</td><td class="num"' + sortAttr(r.timeoutCount) + '>' + (r.timeoutCount || 0) + '</td><td class="num"' + sortAttr(r.readTokens) + '>' + formatShort(r.readTokens) + '</td><td class="num"' + sortAttr(r.writeTokens) + '>' + formatShort(r.writeTokens) + '</td><td class="num"' + sortAttr(r.cachedTokens) + '>' + formatShort(r.cachedTokens) + '</td><td class="num"' + sortAttr(r.reasoningTokens) + '>' + formatShort(r.reasoningTokens) + '</td><td' + sortAttr(r.runNumber) + '><a href="' + htmlEscape(r.url) + '">#' + htmlEscape(r.runNumber) + '</a></td></tr>';
         }).join('') +
-        '</tbody></table></div></section>\n</main><div id="chartTooltip" class="tooltip"></div>\n<script>const DATA=' + payload.replace(/</g, '\\u003c') + ';\n' +
+        '</tbody></table></div></section>\n</main><div id="chartTooltip" class="tooltip"></div>\n<script>const DATA=' + payload + ';\n' +
         'function short(v){v=v||0;if(v>=1e9)return(v/1e9).toFixed(1).replace(/\\.0$/,"")+"b";if(v>=1e6)return(v/1e6).toFixed(1).replace(/\\.0$/,"")+"m";if(v>=1e3)return(v/1e3).toFixed(1).replace(/\\.0$/,"")+"k";return String(v)}' +
         'function dur(v){v=Math.max(0,Math.round(v||0));const d=Math.floor(v/86400),h=Math.floor(v%86400/3600),m=Math.floor(v%3600/60),s=v%60;if(d)return d+"d "+h+"h";if(h)return h+"h "+m+"m";if(m)return m+"m "+s+"s";return s+"s"}' +
         'function labelLines(label,mode){let text=String(label||"");if(mode==="date")text=text.slice(5);if(mode==="agent"){const chunks=text.split("_");const lines=[];let line="";chunks.forEach(part=>{const next=line?line+"_"+part:part;if(next.length>14&&line){lines.push(line);line=part}else line=next});if(line)lines.push(line);return lines.slice(0,4)}return [text]}' +
