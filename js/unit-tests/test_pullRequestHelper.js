@@ -9,7 +9,8 @@ function loadPullRequestHelper(mocks) {
         Object.assign({
             cli_execute_command: function() { return ''; },
             file_read: function() { return null; },
-            file_write: function() {}
+            file_write: function() {},
+            file_delete: function() {}
         }, mocks || {})
     );
 }
@@ -74,6 +75,56 @@ suite('pullRequest helper', function() {
         assert.deepEqual(writes[0], { path: 'repo/pr_body_tmp.md', content: 'body' });
         assert.contains(commands[1].command, '--body-file "pr_body_tmp.md"');
         assert.equal(commands[1].workingDirectory, 'repo');
+    });
+
+    test('removes the temp PR body file after a successful gh pr create', function() {
+        var deletes = [];
+        var pr = loadPullRequestHelper({
+            cli_execute_command: function(args) {
+                if (args.command.indexOf('gh pr list --head feature/DMC-1b') === 0) return '';
+                if (args.command.indexOf('gh pr create') === 0) return 'https://github.com/org/repo/pull/124';
+                return '';
+            },
+            file_delete: function(args) {
+                deletes.push(args.path);
+            }
+        });
+
+        var result = pr.createPullRequest({
+            title: 'DMC-1b Example',
+            branchName: 'feature/DMC-1b',
+            baseBranch: 'main',
+            workingDir: 'repo',
+            bodyContent: 'body'
+        });
+
+        assert.equal(result.success, true);
+        assert.deepEqual(deletes, ['repo/pr_body_tmp.md']);
+    });
+
+    test('removes the temp PR body file even when gh pr create fails', function() {
+        var deletes = [];
+        var pr = loadPullRequestHelper({
+            cli_execute_command: function(args) {
+                if (args.command.indexOf('gh pr list --head feature/DMC-1c') === 0) return '';
+                if (args.command.indexOf('gh pr create') === 0) throw new Error('boom: gh command failed');
+                return '';
+            },
+            file_delete: function(args) {
+                deletes.push(args.path);
+            }
+        });
+
+        var result = pr.createPullRequest({
+            title: 'DMC-1c Example',
+            branchName: 'feature/DMC-1c',
+            baseBranch: 'main',
+            workingDir: 'repo',
+            bodyContent: 'body'
+        });
+
+        assert.equal(result.success, false);
+        assert.deepEqual(deletes, ['repo/pr_body_tmp.md']);
     });
 
     test('returns existing PR without creating a duplicate', function() {
