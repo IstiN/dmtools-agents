@@ -176,15 +176,6 @@
           "localExecution": true
         },
         {
-          "description": "Merged Stories & Bugs → distill review-knowledge lessons (no-op unless repo-agent config sets customParams.knowledgeDir)",
-          "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('Merged') AND (labels is EMPTY OR labels NOT IN ('sm_knowledge_update_triggered'))",
-          "configFile": "agents/pr_knowledge_update.json",
-          "skipIfLabel": "sm_knowledge_update_triggered",
-          "addLabel": "sm_knowledge_update_triggered",
-          "enabled": true,
-          "localExecution": true
-        },
-        {
           "description": "Ready For Testing Bugs → generate test cases",
           "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('Ready For Testing') AND (labels is EMPTY OR labels NOT IN ('sm_bug_test_cases_triggered'))",
           "configFile": "agents/bug_test_cases_generator.json",

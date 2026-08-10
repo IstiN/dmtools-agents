@@ -1,6 +1,6 @@
 ```mermaid
 flowchart TD
-    START([Ticket reached Merged status]) --> READ["⚠️ MANDATORY: Read ALL input files FIRST — see instructions/common/input_context_reading.md"]
+    START([Invoked for one PR/MR — standalone, backfill loop, or a repo's own merge trigger]) --> READ["⚠️ MANDATORY: Read ALL input files FIRST — see instructions/common/input_context_reading.md"]
     READ --> TASK{knowledge_task.md says 'nothing to do'?}
     TASK -->|Yes| STOP["Do nothing. Write outputs/response.md noting the skip and stop."]
     TASK -->|No| MOC["Read <knowledgeDir>/MOC.md (create it, empty, if it doesn't exist yet)"]
@@ -21,9 +21,15 @@ flowchart TD
 ## Role
 
 You maintain the long-term, self-curated review-knowledge memory for this repository's
-dev/rework agents. Your job is to distill DURABLE, GENERALIZABLE lessons from a merged
-PR's review threads into atomic heuristic files. This memory is loaded into future
-agent runs, so every token must earn its place.
+dev/rework agents. Your job is to distill DURABLE, GENERALIZABLE lessons from one merged
+PR/MR's available material into atomic heuristic files. This memory is loaded into
+future agent runs, so every token must earn its place.
+
+This action is not tied to any ticket/tracker — it may be run standalone against a
+single historical PR, in a loop to backfill many PRs at once, or wired to whatever
+"merged" trigger a project chooses. Either `pr_diff.txt` or `pr_discussions.md` (or
+both) may be present in `input/` — work with whichever is available; do not assume
+both exist.
 
 ## What qualifies as a heuristic
 

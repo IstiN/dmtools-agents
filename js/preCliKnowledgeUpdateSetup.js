@@ -1,11 +1,19 @@
 /**
  * Pre-CLI Knowledge Update Setup Action (preCliJSAction for pr_knowledge_update agent)
  *
- * Runs after a ticket reaches a "merged" status. Prepares input context so a
- * CLI agent can distill review-thread pain points from the just-merged PR/MR
- * into a self-curated, repo-specific knowledge base — without any repo-specific
- * logic living here. See agents/instructions/knowledge_update/ for the
- * generic read/write protocol the CLI agent follows.
+ * Prepares input context so a CLI agent can distill review-thread pain points
+ * from a merged PR/MR into a self-curated, repo-specific knowledge base —
+ * without any repo-specific or tracker-specific logic living here. See
+ * agents/instructions/knowledge_update/ for the generic read/write protocol
+ * the CLI agent follows.
+ *
+ * This job is intentionally NOT bound to a ticket/tracker. It is driven purely
+ * by customParams, so it can be:
+ *   - run standalone against any already-merged PR/MR to backfill a knowledge
+ *     base in bulk (e.g. looping over a list of historical PR numbers), or
+ *   - wired to whatever "PR merged" trigger a project chooses (a webhook, a
+ *     scheduled scan of recently-merged PRs, a manual one-off invocation,
+ *     etc.) — that trigger mechanism is deliberately out of scope here.
  *
  * customParams.knowledgeDir is the ONLY repo-specific piece of configuration
  * this action reads, and it is entirely optional: when it is not set (the
@@ -16,17 +24,31 @@
  * (e.g. baseBranchResolverFnPath, snapshotBranchResolverFnPath) — a project
  * that hasn't opted in must never fail or produce noise.
  *
- * When knowledgeDir IS configured:
- * 1. Finds the most recently MERGED PR/MR for the ticket (not open — the
- *    ticket already transitioned to "Merged").
- * 2. Fetches its diff text and review discussions via the PR API (works even
- *    after the head branch was deleted post-merge — no local git checkout of
- *    the target repo is required for this flow).
- * 3. Writes the standard pr_info.md / pr_diff.txt / pr_discussions.md /
- *    pr_discussions_raw.json context files.
- * 4. Writes knowledge_task.md naming the resolved knowledge directory, which
- *    the generic write-protocol prompt reads to know where to read/write
- *    MOC.md + heuristics/*.md.
+ * When knowledgeDir IS configured, one of three input modes is used (checked
+ * in this order):
+ *
+ *   1. Direct content (customParams.diffText and/or customParams.discussionsMarkdown
+ *      already provided) — no SCM calls at all. Use this to feed the agent
+ *      diff-only or conversations-only material gathered by some external
+ *      process (e.g. a bulk-export script, or a PR whose head branch/API
+ *      access is no longer available).
+ *
+ *   2. Direct PR/MR reference (customParams.prNumber) — fetches PR details,
+ *      diff text, and discussions straight from the SCM API for that single
+ *      PR/MR number. This is the primary way to run this job standalone,
+ *      e.g. `dmtools run pr_knowledge_update.json --customParams
+ *      '{"knowledgeDir":"...","prNumber":"123"}'`, including in a loop over
+ *      many historical PR numbers to backfill a knowledge base quickly.
+ *
+ *   3. Ticket-based (only if this action is invoked with a ticket in context,
+ *      e.g. params.ticket) — finds the most recently MERGED PR/MR for that
+ *      ticket via findMergedPRForTicket(). Kept for projects that prefer to
+ *      drive this from their own ticket-status automation.
+ *
+ * In every mode, diff text and discussions are each optional on their own —
+ * a PR with no review comments (diff-only) or a PR whose diff could not be
+ * fetched (discussions-only) both still produce useful, if narrower, context.
+ * Only the total absence of both is treated as "nothing to learn from".
  */
 
 var configLoader = require('./configLoader.js');
@@ -41,15 +63,103 @@ function writeNoOpMarker(inputFolder, reason) {
     });
 }
 
+function writeTaskMarker(inputFolder, knowledgeDir, prDetails) {
+    var prLine = prDetails && prDetails.number
+        ? 'Source PR/MR: [#' + prDetails.number + '](' + (prDetails.html_url || 'unknown') + ')\n\n'
+        : 'Source PR/MR: unknown (content supplied directly, no PR reference available)\n\n';
+
+    file_write({
+        path: inputFolder + '/knowledge_task.md',
+        content: '# Knowledge Update Task\n\n' + prLine +
+            'Target knowledge directory (relative to your current working directory): `' +
+            knowledgeDir + '`\n\n' +
+            'Follow the read/write protocol described in your instructions to distill ' +
+            'generalized heuristics from pr_discussions.md and/or pr_diff.txt (either may be ' +
+            'absent — work with whichever is available) into that directory. Do not invent a ' +
+            'different location.\n'
+    });
+}
+
+/**
+ * Resolves how to source PR context, in priority order:
+ * direct content > direct PR reference > ticket-based lookup.
+ *
+ * Returns { prDetails, diffText, discussionsMarkdown, discussionsRaw } or null
+ * if nothing usable could be resolved (caller writes the no-op marker).
+ */
+function resolvePrContext(scm, customParams, ticketKey) {
+    // Mode 1: direct content — fully offline, no SCM calls.
+    if (customParams.diffText || customParams.discussionsMarkdown) {
+        console.log('Knowledge update: using directly supplied diff/discussions content (no SCM calls).');
+        var directPr = {
+            number: customParams.prNumber || null,
+            html_url: customParams.prUrl || null,
+            title: customParams.prTitle || null,
+            state: 'merged'
+        };
+        return {
+            prDetails: directPr,
+            diffText: customParams.diffText || null,
+            discussionsMarkdown: customParams.discussionsMarkdown || null,
+            discussionsRaw: null
+        };
+    }
+
+    // Mode 2: direct PR/MR reference — the primary standalone/backfill entry point.
+    if (customParams.prNumber) {
+        console.log('Knowledge update: resolving PR/MR #' + customParams.prNumber + ' directly.');
+        var prByNumber = gh.getPRDetails(scm, customParams.prNumber);
+        if (!prByNumber) {
+            console.warn('Could not fetch PR/MR #' + customParams.prNumber + ' — skipping.');
+            return null;
+        }
+        return fetchDiffAndDiscussions(scm, prByNumber);
+    }
+
+    // Mode 3: ticket-based — only when this action happens to be invoked with a ticket.
+    if (ticketKey) {
+        console.log('Knowledge update: resolving merged PR/MR for ticket', ticketKey, '.');
+        var prByTicket = gh.findMergedPRForTicket(scm, ticketKey);
+        if (!prByTicket) {
+            console.warn('No merged PR found for ticket', ticketKey, '— skipping.');
+            return null;
+        }
+        var prDetails = gh.getPRDetails(scm, prByTicket.number) || prByTicket;
+        return fetchDiffAndDiscussions(scm, prDetails);
+    }
+
+    return null;
+}
+
+function fetchDiffAndDiscussions(scm, prDetails) {
+    var diffText = null;
+    if (typeof scm.getDiffText === 'function') {
+        diffText = scm.getDiffText(prDetails.number);
+    }
+    if (!diffText) {
+        console.warn('Diff text unavailable for PR #' + prDetails.number + ' — proceeding with discussions only (if any).');
+    }
+
+    console.log('Fetching discussions for PR/MR #' + prDetails.number + '...');
+    var discussionData = gh.fetchDiscussionsAndRawData(scm, prDetails.number) || {};
+
+    return {
+        prDetails: prDetails,
+        diffText: diffText,
+        discussionsMarkdown: discussionData.markdown || null,
+        discussionsRaw: discussionData.rawThreads || null
+    };
+}
+
 function action(params) {
     try {
         var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
         var inputFolder = actualParams.inputFolderPath;
-        var ticketKey = inputFolder.split('/').pop();
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams || {};
+        var ticketKey = actualParams.ticket ? (actualParams.ticket.key || actualParams.ticket) : (customParams.ticket || null);
 
-        console.log('=== Knowledge update setup for:', ticketKey, '===');
+        console.log('=== Knowledge update setup ===');
 
         var knowledgeDir = customParams.knowledgeDir;
         if (!knowledgeDir) {
@@ -60,49 +170,36 @@ function action(params) {
             return { success: true, skipped: true, reason: 'knowledgeDir not configured' };
         }
 
-        var scm = configLoader.createScm(config);
+        var hasDirectContent = !!(customParams.diffText || customParams.discussionsMarkdown);
+        var scm = hasDirectContent ? null : configLoader.createScm(config);
 
-        var pr = gh.findMergedPRForTicket(scm, ticketKey);
-        if (!pr) {
-            console.warn('No merged PR found for ticket', ticketKey, '— skipping.');
+        var resolved = resolvePrContext(scm, customParams, ticketKey);
+        if (!resolved) {
             writeNoOpMarker(inputFolder,
-                'No merged Pull Request / Merge Request could be found for ' + ticketKey + '.');
-            return { success: true, skipped: true, reason: 'no merged PR found' };
+                'No PR/MR context could be resolved. Provide `customParams.prNumber` (direct ' +
+                'backfill run), `customParams.diffText`/`discussionsMarkdown` (direct content), ' +
+                'or invoke this action with a ticket in context.');
+            return { success: true, skipped: true, reason: 'no PR context resolved' };
         }
 
-        var prDetails = gh.getPRDetails(scm, pr.number) || pr;
-
-        var diffText = null;
-        if (typeof scm.getDiffText === 'function') {
-            diffText = scm.getDiffText(pr.number);
-        }
-        if (!diffText) {
-            console.warn('Diff text unavailable for PR #' + pr.number + ' — proceeding with discussions only.');
+        if (!resolved.diffText && !resolved.discussionsMarkdown) {
+            console.warn('Neither diff nor discussions could be obtained — nothing to learn from.');
+            writeNoOpMarker(inputFolder,
+                'Both the diff and the discussions were unavailable for this PR/MR — there is ' +
+                'nothing to distill.');
+            return { success: true, skipped: true, reason: 'no diff or discussions available' };
         }
 
-        console.log('Fetching PR discussions for merged PR #' + pr.number + '...');
-        var discussionData = gh.fetchDiscussionsAndRawData(scm, pr.number) || {};
+        var prDetailsForContext = resolved.prDetails || {};
+        gh.writePRContext(inputFolder, prDetailsForContext, resolved.diffText, resolved.discussionsMarkdown, resolved.discussionsRaw);
+        writeTaskMarker(inputFolder, knowledgeDir, resolved.prDetails);
 
-        gh.writePRContext(inputFolder, prDetails, diffText, discussionData.markdown, discussionData.rawThreads);
-
-        file_write({
-            path: inputFolder + '/knowledge_task.md',
-            content: '# Knowledge Update Task\n\n' +
-                'Ticket: ' + ticketKey + '\n' +
-                'Merged PR: [#' + prDetails.number + '](' + prDetails.html_url + ')\n\n' +
-                'Target knowledge directory (relative to your current working directory): `' +
-                knowledgeDir + '`\n\n' +
-                'Follow the read/write protocol described in your instructions to distill ' +
-                'generalized heuristics from pr_discussions.md and pr_diff.txt into that ' +
-                'directory. Do not invent a different location.\n'
-        });
-
-        console.log('✅ Knowledge update setup complete — PR #' + prDetails.number, '| target:', knowledgeDir);
+        console.log('✅ Knowledge update setup complete — target:', knowledgeDir);
 
         return {
             success: true,
-            prNumber: prDetails.number,
-            prUrl: prDetails.html_url,
+            prNumber: prDetailsForContext.number || null,
+            prUrl: prDetailsForContext.html_url || null,
             knowledgeDir: knowledgeDir
         };
 
@@ -113,5 +210,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, writeNoOpMarker };
+    module.exports = { action, writeNoOpMarker, resolvePrContext };
 }

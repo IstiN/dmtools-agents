@@ -4,7 +4,11 @@
  * Commits and pushes whatever the CLI agent changed under customParams.knowledgeDir
  * — the ONLY repo-specific piece of config this action reads, same as its
  * preCliJSAction counterpart (preCliKnowledgeUpdateSetup.js). Fully generic
- * otherwise: no knowledge of any particular repo's directory layout or content.
+ * otherwise: no knowledge of any particular repo's directory layout or content,
+ * and no dependency on a ticket/tracker — this job is driven purely by
+ * customParams (see preCliKnowledgeUpdateSetup.js), so the branch name is
+ * derived from customParams.prNumber (or a timestamp when no PR number is
+ * available, e.g. a direct-content-only run) instead of a ticket key.
  *
  * Behavior:
  * - If knowledgeDir isn't configured, or the CLI agent made no changes under it
@@ -24,10 +28,19 @@ function cleanOutput(output) {
     return (output || '').toString().trim();
 }
 
+function branchSlugFor(customParams) {
+    if (customParams.prNumber) {
+        return 'pr-' + String(customParams.prNumber).toLowerCase();
+    }
+    // No PR reference available (e.g. a direct-content-only run) — fall back to
+    // a timestamp so concurrent/repeated runs don't collide on the same branch name.
+    var ts = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+    return 'update-' + ts;
+}
+
 function action(params) {
     try {
-        var actualParams = params.ticket ? params : (params.jobParams || params);
-        var ticketKey = actualParams.ticket ? actualParams.ticket.key : (actualParams.inputFolderPath || '').split('/').pop();
+        var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams || {};
 
@@ -48,12 +61,15 @@ function action(params) {
         cli_execute_command({ command: 'git config user.name "' + GIT_CONFIG.AUTHOR_NAME + '"' });
         cli_execute_command({ command: 'git config user.email "' + GIT_CONFIG.AUTHOR_EMAIL + '"' });
 
-        var branchName = 'knowledge/' + (ticketKey || 'update').toLowerCase() + '-review-lessons';
+        var slug = branchSlugFor(customParams);
+        var branchName = 'knowledge/' + slug + '-review-lessons';
+        var commitSubject = customParams.prNumber
+            ? 'knowledge(pr-' + customParams.prNumber + '): distill review lessons from merged PR'
+            : 'knowledge: distill review lessons';
+
         cli_execute_command({ command: 'git checkout -b "' + branchName + '"' });
         cli_execute_command({ command: 'git add -- "' + knowledgeDir + '"' });
-        cli_execute_command({
-            command: 'git commit -m "knowledge(' + (ticketKey || 'update') + '): distill review lessons from merged PR"'
-        });
+        cli_execute_command({ command: 'git commit -m "' + commitSubject + '"' });
 
         var pushOutput = cleanOutput(cli_execute_command({ command: 'git push -u origin "' + branchName + '"' }));
         console.log('pushKnowledgeUpdate: pushed branch', branchName);

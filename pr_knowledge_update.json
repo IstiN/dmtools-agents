@@ -2,7 +2,8 @@
   "name": "CliAgent",
   "params": {
     "metadata": {
-      "contextId": "pr_knowledge_update"
+      "contextId": "pr_knowledge_update",
+      "usage": "dmtools run agents/pr_knowledge_update.json --customParams '{\"knowledgeDir\":\"<path>\",\"prNumber\":\"<pr-or-mr-number>\"}'"
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"
@@ -14,10 +15,7 @@
     },
     "preCliJSAction": "agents/js/preCliKnowledgeUpdateSetup.js",
     "postJSAction": "agents/js/pushKnowledgeUpdate.js",
-    "customParams": {
-      "removeLabel": "sm_knowledge_update_triggered"
-    },
-    "inputJql": "key = PROJ-1",
+    "customParams": {},
     "cliPrompts": [
       "Senior Engineer maintaining a self-curated review-knowledge base",
       "./agents/instructions/common/agent_task_preamble.md",

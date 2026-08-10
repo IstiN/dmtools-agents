@@ -69,7 +69,9 @@
         "js/unit-tests/test_preCliDevelopmentSetupDynamicRepo.js",
         "js/unit-tests/test_checkoutBranch.js",
         "js/unit-tests/test_preCliReworkSetup.js",
-        "js/unit-tests/test_preCliDevelopmentSetup.js"
+        "js/unit-tests/test_preCliDevelopmentSetup.js",
+        "js/unit-tests/test_preCliKnowledgeUpdateSetup.js",
+        "js/unit-tests/test_pushKnowledgeUpdate.js"
       ]
     }
   }
