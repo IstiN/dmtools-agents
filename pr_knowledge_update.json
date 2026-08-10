@@ -1,0 +1,30 @@
+{
+  "name": "CliAgent",
+  "params": {
+    "metadata": {
+      "contextId": "pr_knowledge_update"
+    },
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
+    "outputType": "none",
+    "cleanupInputFolder": false,
+    "envVariables": {
+      "CLI_ALLOWED_COMMANDS": "find,ls,cat,mkdir,bash,run-agent.sh"
+    },
+    "preCliJSAction": "agents/js/preCliKnowledgeUpdateSetup.js",
+    "postJSAction": "agents/js/pushKnowledgeUpdate.js",
+    "customParams": {
+      "removeLabel": "sm_knowledge_update_triggered"
+    },
+    "inputJql": "key = PROJ-1",
+    "cliPrompts": [
+      "Senior Engineer maintaining a self-curated review-knowledge base",
+      "./agents/instructions/common/agent_task_preamble.md",
+      "./agents/instructions/knowledge_update/general_guidelines.md",
+      "./agents/instructions/knowledge_update/output_rules.md",
+      "./agents/instructions/common/dmtools_cli.md",
+      "./agents/prompts/bash_tools.md"
+    ]
+  }
+}

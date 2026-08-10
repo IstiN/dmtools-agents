@@ -83,6 +83,45 @@ function findPRForTicket(scmOrWorkspace, repositoryOrTicketKey, ticketKeyOpt) {
     }
 }
 
+/**
+ * Finds the most recently MERGED PR/MR for a ticket — the counterpart to
+ * findPRForTicket() (which only looks at open PRs). Used by flows that run
+ * after a ticket reaches a "merged" status, e.g. distilling review-knowledge
+ * lessons once the PR is closed and no longer editable.
+ *
+ * Matches by ticket key in the PR title or head branch name, same as
+ * findPRForTicket(). Only the scm-object calling convention is supported
+ * (unlike findPRForTicket, no legacy workspace/repository overload).
+ */
+function findMergedPRForTicket(scm, ticketKey) {
+    try {
+        console.log('Searching for merged PR related to', ticketKey);
+        var closedPRs = scm.listPrs('closed') || [];
+        console.log('Found', closedPRs.length, 'closed PRs');
+
+        var match = function(pr) {
+            return (pr.title && pr.title.indexOf(ticketKey) !== -1) ||
+                   (pr.head && pr.head.ref && pr.head.ref.indexOf(ticketKey) !== -1);
+        };
+
+        var merged = closedPRs.filter(function(pr) { return match(pr) && !!pr.merged_at; });
+        if (merged.length === 0) {
+            console.warn('No merged PR found for ticket', ticketKey);
+            return null;
+        }
+
+        merged.sort(function(a, b) {
+            return new Date(b.merged_at).getTime() - new Date(a.merged_at).getTime();
+        });
+
+        console.log('Found merged PR #' + merged[0].number + ':', merged[0].title);
+        return merged[0];
+    } catch (e) {
+        console.error('Failed to find merged PR for ticket:', e);
+        return null;
+    }
+}
+
 function getPRDetails(scmOrWorkspace, repositoryOrPrId, pullRequestIdOpt) {
     try {
         var pr;
@@ -476,6 +515,7 @@ module.exports = {
     getGitHubRepoInfo: getGitHubRepoInfo,
     _isScm: _isScm,
     findPRForTicket: findPRForTicket,
+    findMergedPRForTicket: findMergedPRForTicket,
     getPRDetails: getPRDetails,
     fetchDiscussionsAndRawData: fetchDiscussionsAndRawData,
     detectFailedChecks: detectFailedChecks,

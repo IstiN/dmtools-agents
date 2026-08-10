@@ -184,6 +184,18 @@ function _createGithubProvider(workspace, repository) {
         getPrComments: function(prId) {
             return github_get_pr_comments({ workspace: workspace, repository: repository, pullRequestId: String(prId) });
         },
+        // Raw unified diff text via the PR API — works even after the PR is merged and
+        // its head branch deleted (unlike a local `git diff <head>..<base>`).
+        // Requires IS_READ_PULL_REQUEST_DIFF to be enabled; returns null on failure so
+        // callers can fall back gracefully.
+        getDiffText: function(prId) {
+            try {
+                return github_get_pr_diff_text({ workspace: workspace, repository: repository, pullRequestID: String(prId) });
+            } catch (e) {
+                console.warn('getDiffText (github) failed:', e && e.toString ? e.toString() : String(e));
+                return null;
+            }
+        },
         addComment: function(prId, text) {
             return github_add_pr_comment({ workspace: workspace, repository: repository, pullRequestId: String(prId), text: text });
         },
@@ -530,6 +542,15 @@ function _createGitLabProvider(workspace, repository) {
         getPrComments: function(prId) {
             return _toArray(gitlab_get_mr_comments({ workspace: workspace, repository: repository, pullRequestId: String(prId) }));
         },
+        // See _createGithubProvider.getDiffText — same rationale (works post-merge).
+        getDiffText: function(prId) {
+            try {
+                return gitlab_get_mr_diff_text({ workspace: workspace, repository: repository, pullRequestId: String(prId) });
+            } catch (e) {
+                console.warn('getDiffText (gitlab) failed:', e && e.toString ? e.toString() : String(e));
+                return null;
+            }
+        },
         addComment: function(prId, text) {
             return gitlab_add_mr_comment({ workspace: workspace, repository: repository, pullRequestId: String(prId), text: text });
         },
@@ -802,6 +823,11 @@ function _createAdoProvider(repository) {
         getPrComments: function(prId) {
             var parsed = _parseJson(ado_get_pr_comments({ repository: repository, pullRequestId: String(prId) }));
             return (parsed && parsed.value) ? parsed.value : (parsed || []);
+        },
+        // ADO has no raw-unified-diff-text API (only file-level change stats via
+        // ado_get_pr_diff) — return null so callers fall back to a file list.
+        getDiffText: function() {
+            return null;
         },
         addComment: function(prId, text) {
             return ado_add_pr_comment({ repository: repository, pullRequestId: String(prId), text: text });

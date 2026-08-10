@@ -1021,3 +1021,137 @@ suite('githubHelpers.detectFailedChecks — Jenkins failed checks', function() {
         assert.ok(!fullLogWrite, 'ci_failures_full.log should not be written when no logs were fetched');
     });
 });
+
+suite('githubHelpers.findMergedPRForTicket', function() {
+
+    function scmWithClosedPrs(prs) {
+        return {
+            listPrs: function(state) {
+                assert.equal(state, 'closed', 'findMergedPRForTicket must request closed PRs');
+                return prs;
+            }
+        };
+    }
+
+    test('returns null when no closed PR matches the ticket key', function() {
+        var gh = loadGithubHelpers();
+        var scm = scmWithClosedPrs([
+            { number: 1, title: 'OTHER-1: unrelated', merged_at: '2026-01-01T00:00:00Z' }
+        ]);
+
+        var result = gh.findMergedPRForTicket(scm, 'ABC-123');
+
+        assert.ok(!result, 'no matching PR should return null/falsy');
+    });
+
+    test('ignores closed-but-not-merged PRs even when the title matches', function() {
+        var gh = loadGithubHelpers();
+        var scm = scmWithClosedPrs([
+            { number: 1, title: 'ABC-123: fix', merged_at: null }
+        ]);
+
+        var result = gh.findMergedPRForTicket(scm, 'ABC-123');
+
+        assert.ok(!result, 'closed-without-merge PR must not be returned');
+    });
+
+    test('matches by ticket key in the head branch ref when title has no match', function() {
+        var gh = loadGithubHelpers();
+        var scm = scmWithClosedPrs([
+            { number: 7, title: 'Unrelated title', head: { ref: 'feature/ABC-123-fix' }, merged_at: '2026-02-01T00:00:00Z' }
+        ]);
+
+        var result = gh.findMergedPRForTicket(scm, 'ABC-123');
+
+        assert.ok(result, 'should match via head.ref');
+        assert.equal(result.number, 7);
+    });
+
+    test('when several merged PRs match, returns the most recently merged one', function() {
+        var gh = loadGithubHelpers();
+        var scm = scmWithClosedPrs([
+            { number: 1, title: 'ABC-123: first attempt', merged_at: '2026-01-01T00:00:00Z' },
+            { number: 2, title: 'ABC-123: second attempt', merged_at: '2026-03-01T00:00:00Z' },
+            { number: 3, title: 'ABC-123: third attempt (older)', merged_at: '2026-02-01T00:00:00Z' }
+        ]);
+
+        var result = gh.findMergedPRForTicket(scm, 'ABC-123');
+
+        assert.equal(result.number, 2, 'the PR with the latest merged_at should win');
+    });
+
+    test('returns null and does not throw when scm.listPrs throws', function() {
+        var gh = loadGithubHelpers();
+        var scm = {
+            listPrs: function() { throw new Error('boom'); }
+        };
+
+        var result = gh.findMergedPRForTicket(scm, 'ABC-123');
+
+        assert.ok(!result, 'errors should be swallowed and null returned');
+    });
+});
+
+suite('scm.getDiffText', function() {
+
+    test('GitHub provider calls github_get_pr_diff_text with workspace/repository/pullRequestID', function() {
+        var call = null;
+        var scmModule = loadScm({
+            github_get_pr_diff_text: function(args) {
+                call = args;
+                return 'diff --git a/x b/x';
+            }
+        });
+
+        var provider = scmModule._createGithubProvider('epam', 'dm.ai');
+        var diff = provider.getDiffText(42);
+
+        assert.deepEqual(call, { workspace: 'epam', repository: 'dm.ai', pullRequestID: '42' });
+        assert.equal(diff, 'diff --git a/x b/x');
+    });
+
+    test('GitHub provider returns null instead of throwing when the diff-text tool fails', function() {
+        var scmModule = loadScm({
+            github_get_pr_diff_text: function() { throw new Error('IS_READ_PULL_REQUEST_DIFF disabled'); }
+        });
+
+        var provider = scmModule._createGithubProvider('epam', 'dm.ai');
+        var diff = provider.getDiffText(42);
+
+        assert.ok(diff === null, 'must gracefully return null on failure');
+    });
+
+    test('GitLab provider calls gitlab_get_mr_diff_text with workspace/repository/pullRequestId', function() {
+        var call = null;
+        var scmModule = loadScm({
+            gitlab_get_mr_diff_text: function(args) {
+                call = args;
+                return 'diff --git a/x b/x';
+            }
+        });
+
+        var provider = scmModule._createGitLabProvider('mobile', 'dmtools-epamsample');
+        var diff = provider.getDiffText(7);
+
+        assert.deepEqual(call, { workspace: 'mobile', repository: 'dmtools-epamsample', pullRequestId: '7' });
+        assert.equal(diff, 'diff --git a/x b/x');
+    });
+
+    test('GitLab provider returns null instead of throwing when the diff-text tool fails', function() {
+        var scmModule = loadScm({
+            gitlab_get_mr_diff_text: function() { throw new Error('boom'); }
+        });
+
+        var provider = scmModule._createGitLabProvider('mobile', 'dmtools-epamsample');
+        var diff = provider.getDiffText(7);
+
+        assert.ok(diff === null, 'must gracefully return null on failure');
+    });
+
+    test('ADO provider always returns null (no raw diff-text API available)', function() {
+        var scmModule = loadScm({});
+        var provider = scmModule._createAdoProvider('dmtools-epamsample');
+
+        assert.ok(provider.getDiffText(7) === null);
+    });
+});
