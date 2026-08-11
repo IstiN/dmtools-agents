@@ -401,11 +401,11 @@ suite('scm GitLab provider', function() {
         var failed = scmModule._normalizeGitLabCommitStatus({
             name: 'sonar-tests/Merge requests check',
             status: 'failed',
-            target_url: 'https://jenkins.ci.genosity.com/job/sonar-tests/job/Merge%20requests%20check/23681/'
+            target_url: 'https://jenkins.ci.example.com/job/sonar-tests/job/Merge%20requests%20check/23681/'
         });
         assert.equal(failed.name, 'sonar-tests/Merge requests check');
         assert.equal(failed.conclusion, 'failure');
-        assert.equal(failed.details_url, 'https://jenkins.ci.genosity.com/job/sonar-tests/job/Merge%20requests%20check/23681/');
+        assert.equal(failed.details_url, 'https://jenkins.ci.example.com/job/sonar-tests/job/Merge%20requests%20check/23681/');
 
         var succeeded = scmModule._normalizeGitLabCommitStatus({ name: 'ai-teammate', status: 'success' });
         assert.equal(succeeded.conclusion, 'success');
@@ -423,17 +423,17 @@ suite('scm GitLab provider', function() {
             gitlab_get_commit_statuses: function(args) {
                 calledArgs = args;
                 return JSON.stringify([
-                    { name: 'sonar-tests/Merge requests check', status: 'failed', target_url: 'https://jenkins.ci.genosity.com/job/sonar-tests/job/Merge%20requests%20check/23681/' },
-                    { name: 'ai-teammate', status: 'success', target_url: 'https://git.epam.com/gens-sup/ai-teammate/-/pipelines/1' }
+                    { name: 'sonar-tests/Merge requests check', status: 'failed', target_url: 'https://jenkins.ci.example.com/job/sonar-tests/job/Merge%20requests%20check/23681/' },
+                    { name: 'ai-teammate', status: 'success', target_url: 'https://git.epam.com/acme-org/ai-teammate/-/pipelines/1' }
                 ]);
             }
         });
 
-        var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
+        var provider = scmModule._createGitLabProvider('acme-org/develop', 'service-api');
         var runs = provider.getCommitCheckRuns('7b74c0eb5f0fdfa3d18472d3c55e91235a0924aa');
 
-        assert.equal(calledArgs.workspace, 'gens-sup/develop');
-        assert.equal(calledArgs.repository, 'gens-igt');
+        assert.equal(calledArgs.workspace, 'acme-org/develop');
+        assert.equal(calledArgs.repository, 'service-api');
         assert.equal(calledArgs.commitSha, '7b74c0eb5f0fdfa3d18472d3c55e91235a0924aa');
         assert.equal(runs.length, 2);
         assert.equal(runs[0].conclusion, 'failure');
@@ -444,7 +444,7 @@ suite('scm GitLab provider', function() {
         var scmModule = loadScm({
             gitlab_get_commit_statuses: function() { return '[]'; }
         });
-        var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
+        var provider = scmModule._createGitLabProvider('acme-org/develop', 'service-api');
         assert.equal(provider.getCommitCheckRuns('deadbeef'), null);
     });
 
@@ -452,7 +452,7 @@ suite('scm GitLab provider', function() {
         var scmModule = loadScm({
             gitlab_get_commit_statuses: function() { throw new Error('boom'); }
         });
-        var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
+        var provider = scmModule._createGitLabProvider('acme-org/develop', 'service-api');
         assert.equal(provider.getCommitCheckRuns('deadbeef'), null);
     });
 
@@ -765,7 +765,7 @@ suite('scm GitLab provider getPrDiff fallback', function() {
             cli_execute_command: function() { throw new Error('git diff should not be called'); }
         });
 
-        var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
+        var provider = scmModule._createGitLabProvider('acme-org/develop', 'service-api');
         var diff = provider.getPrDiff('7860');
 
         assert.ok(diff.indexOf('diff --git') !== -1, 'should return diff from new tool');
@@ -783,7 +783,7 @@ suite('scm GitLab provider getPrDiff fallback', function() {
             }
         });
 
-        var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
+        var provider = scmModule._createGitLabProvider('acme-org/develop', 'service-api');
         var diff = provider.getPrDiff('7860');
 
         assert.ok(diff.indexOf('diff --git') !== -1, 'should fall back to legacy tool result');
@@ -802,7 +802,7 @@ suite('scm GitLab provider getPrDiff fallback', function() {
             cli_execute_command: function(args) { gitCalls.push(args.command); return ''; }
         });
 
-        var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
+        var provider = scmModule._createGitLabProvider('acme-org/develop', 'service-api');
         var diff = provider.getPrDiff('7860');
 
         assert.ok(diff.indexOf('diff --git') !== -1, 'should return usable diff');
@@ -835,8 +835,8 @@ suite('scm GitLab provider getPrDiff fallback', function() {
             }
         });
 
-        var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
-        var diff = provider.getPrDiff('7860', './dependencies/gens-igt');
+        var provider = scmModule._createGitLabProvider('acme-org/develop', 'service-api');
+        var diff = provider.getPrDiff('7860', './dependencies/service-api');
 
         assert.ok(diff.indexOf('diff --git') !== -1, 'should return usable local diff');
         assert.equal(mrDiffCalls.length, 1);
@@ -859,10 +859,10 @@ suite('scm GitLab provider getPrDiff fallback', function() {
             }
         });
 
-        var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
-        provider.getPrDiff('7860', './dependencies/gens-igt');
+        var provider = scmModule._createGitLabProvider('acme-org/develop', 'service-api');
+        provider.getPrDiff('7860', './dependencies/service-api');
 
-        assert.equal(gitOpts[0].workingDirectory, './dependencies/gens-igt', 'should run git diff in the checked-out repo dir');
+        assert.equal(gitOpts[0].workingDirectory, './dependencies/service-api', 'should run git diff in the checked-out repo dir');
     });
 
     test('returns raw (unusable) value when both MCP diff and local git diff fail', function() {
@@ -873,8 +873,8 @@ suite('scm GitLab provider getPrDiff fallback', function() {
             cli_execute_command: function() { throw new Error('should not be called without diff_refs'); }
         });
 
-        var provider = scmModule._createGitLabProvider('gens-sup/develop', 'gens-igt');
-        var diff = provider.getPrDiff('7860', './dependencies/gens-igt');
+        var provider = scmModule._createGitLabProvider('acme-org/develop', 'service-api');
+        var diff = provider.getPrDiff('7860', './dependencies/service-api');
 
         assert.equal(diff, 'com.github.istin.dmtools.gitlab.GitLab$4@b2c4a8b', 'should fall back to raw value, not throw');
     });

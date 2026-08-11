@@ -5,11 +5,11 @@
 var GROUPED_REPOS_JSON = JSON.stringify({
     git: { userName: 'AI', userEmail: 'ai@test.com' },
     repositories: {
-        'gens-sup': [
-            { provider: 'gitlab', repo: 'sample-db', gitlabGroup: 'gens-sup/develop', branch: 'develop' },
-            { provider: 'gitlab', repo: 'gens-igt',    gitlabGroup: 'gens-sup/develop', branch: 'develop' },
-            { provider: 'gitlab', repo: 'lims-ui',     gitlabGroup: 'gens-sup/develop', branch: 'develop' },
-            { provider: 'gitlab', repo: 'ultraqc',     gitlabGroup: 'gens-sup/develop', branch: 'master'  }
+        'acme-org': [
+            { provider: 'gitlab', repo: 'core-db', gitlabGroup: 'acme-org/develop', branch: 'develop' },
+            { provider: 'gitlab', repo: 'service-api',    gitlabGroup: 'acme-org/develop', branch: 'develop' },
+            { provider: 'gitlab', repo: 'web-ui',     gitlabGroup: 'acme-org/develop', branch: 'develop' },
+            { provider: 'gitlab', repo: 'qa-tools',     gitlabGroup: 'acme-org/develop', branch: 'master'  }
         ]
     }
 });
@@ -47,15 +47,15 @@ suite('resolveRepoFromTicket — STRATEGIES.fromSummary', function() {
 
     test('extracts repo name from [bracket] at start of summary', function() {
         var mod = makeModule();
-        var ticket = { key: 'X-1', fields: { summary: '[gens-igt] Create PacBio WF' } };
+        var ticket = { key: 'X-1', fields: { summary: '[service-api] Create Create webhook' } };
         var name = mod.STRATEGIES.fromSummary(ticket);
-        assert.equal(name, 'gens-igt', 'repo name extracted');
+        assert.equal(name, 'service-api', 'repo name extracted');
     });
 
     test('handles hyphenated and dotted repo names', function() {
         var mod = makeModule();
-        var ticket = { key: 'X-2', fields: { summary: '[sample-db] Migrate schema' } };
-        assert.equal(mod.STRATEGIES.fromSummary(ticket), 'sample-db', 'hyphenated name');
+        var ticket = { key: 'X-2', fields: { summary: '[core-db] Migrate schema' } };
+        assert.equal(mod.STRATEGIES.fromSummary(ticket), 'core-db', 'hyphenated name');
     });
 
     test('returns null when summary has no leading bracket', function() {
@@ -83,15 +83,15 @@ suite('resolveRepoFromTicket — findRepoEntry', function() {
 
     test('finds repo in grouped repositories structure', function() {
         var mod = makeModule({ '.dmtools/repositories.json': GROUPED_REPOS_JSON });
-        var entry = mod.findRepoEntry('gens-igt');
+        var entry = mod.findRepoEntry('service-api');
         assert.equal(entry !== null, true, 'entry found');
         assert.equal(entry.branch, 'develop', 'correct branch');
-        assert.equal(entry.gitlabGroup, 'gens-sup/develop', 'correct group');
+        assert.equal(entry.gitlabGroup, 'acme-org/develop', 'correct group');
     });
 
     test('finds repo with non-default branch in grouped structure', function() {
         var mod = makeModule({ '.dmtools/repositories.json': GROUPED_REPOS_JSON });
-        var entry = mod.findRepoEntry('ultraqc');
+        var entry = mod.findRepoEntry('qa-tools');
         assert.equal(entry.branch, 'master', 'master branch resolved');
     });
 
@@ -134,15 +134,15 @@ suite('resolveRepoFromTicket — action', function() {
     test('writes targetRepository to params.customParams when repo found in file', function() {
         var mod = makeModule({ '.dmtools/repositories.json': GROUPED_REPOS_JSON });
         var params = {
-            ticket: { key: 'PROJ-1', fields: { summary: '[gens-igt] Create feature' } }
+            ticket: { key: 'PROJ-1', fields: { summary: '[service-api] Create feature' } }
         };
         var result = mod.action(params);
         assert.equal(result, true, 'returns true (continue)');
         assert.equal(params.customParams !== null && params.customParams !== undefined, true, 'customParams created');
-        assert.equal(params.customParams.targetRepository.repo, 'gens-igt', 'repo name set');
+        assert.equal(params.customParams.targetRepository.repo, 'service-api', 'repo name set');
         assert.equal(params.customParams.targetRepository.baseBranch, 'develop', 'baseBranch from file');
-        assert.equal(params.customParams.targetRepository.owner, 'gens-sup/develop', 'owner from file');
-        assert.equal(params.customParams.targetRepository.workingDir, './dependencies/gens-igt', 'default workingDir derived');
+        assert.equal(params.customParams.targetRepository.owner, 'acme-org/develop', 'owner from file');
+        assert.equal(params.customParams.targetRepository.workingDir, './dependencies/service-api', 'default workingDir derived');
     });
 
     test('writes only repoName when repo not found in repositories file', function() {
@@ -175,11 +175,11 @@ suite('resolveRepoFromTicket — action', function() {
     test('uses fromSummary strategy by default', function() {
         var mod = makeModule({ '.dmtools/repositories.json': GROUPED_REPOS_JSON });
         var params = {
-            ticket: { key: 'PROJ-5', fields: { summary: '[lims-ui] Add filter' } },
+            ticket: { key: 'PROJ-5', fields: { summary: '[web-ui] Add filter' } },
             customParams: {}
         };
         mod.action(params);
-        assert.equal(params.customParams.targetRepository.repo, 'lims-ui', 'default strategy resolves from summary');
+        assert.equal(params.customParams.targetRepository.repo, 'web-ui', 'default strategy resolves from summary');
     });
 
     test('uses custom repositoriesFile from customParams', function() {
@@ -195,21 +195,21 @@ suite('resolveRepoFromTicket — action', function() {
     test('derives workingDir from dependenciesDir/repoName by default', function() {
         var mod = makeModule({ '.dmtools/repositories.json': GROUPED_REPOS_JSON });
         var params = {
-            ticket: { key: 'PROJ-11', fields: { summary: '[sample-db] Schema' } },
+            ticket: { key: 'PROJ-11', fields: { summary: '[core-db] Schema' } },
             customParams: {}
         };
         mod.action(params);
-        assert.equal(params.customParams.targetRepository.workingDir, './dependencies/sample-db', 'default workingDir');
+        assert.equal(params.customParams.targetRepository.workingDir, './dependencies/core-db', 'default workingDir');
     });
 
     test('respects custom dependenciesDir from customParams', function() {
         var mod = makeModule({ '.dmtools/repositories.json': GROUPED_REPOS_JSON });
         var params = {
-            ticket: { key: 'PROJ-12', fields: { summary: '[lims-ui] Feature' } },
+            ticket: { key: 'PROJ-12', fields: { summary: '[web-ui] Feature' } },
             customParams: { dependenciesDir: '/workspace/repos' }
         };
         mod.action(params);
-        assert.equal(params.customParams.targetRepository.workingDir, '/workspace/repos/lims-ui', 'custom dependenciesDir used');
+        assert.equal(params.customParams.targetRepository.workingDir, '/workspace/repos/web-ui', 'custom dependenciesDir used');
     });
 
     test('returns true for unknown strategy (graceful skip)', function() {
@@ -225,34 +225,34 @@ suite('resolveRepoFromTicket — action', function() {
     test('also writes targetRepository into params.jobParams.customParams for postJSAction path', function() {
         var mod = makeModule({ '.dmtools/repositories.json': GROUPED_REPOS_JSON });
         var params = {
-            ticket: { key: 'PROJ-9', fields: { summary: '[gens-igt] Feature' } },
+            ticket: { key: 'PROJ-9', fields: { summary: '[service-api] Feature' } },
             jobParams: { customParams: { existingKey: 'value' } }
         };
         mod.action(params);
-        assert.equal(params.jobParams.customParams.targetRepository.repo, 'gens-igt', 'jobParams.customParams.targetRepository set');
+        assert.equal(params.jobParams.customParams.targetRepository.repo, 'service-api', 'jobParams.customParams.targetRepository set');
         assert.equal(params.jobParams.customParams.existingKey, 'value', 'existing jobParams.customParams fields preserved');
     });
 
     test('creates params.jobParams.customParams if absent', function() {
         var mod = makeModule({ '.dmtools/repositories.json': GROUPED_REPOS_JSON });
         var params = {
-            ticket: { key: 'PROJ-10', fields: { summary: '[lims-ui] Fix' } },
+            ticket: { key: 'PROJ-10', fields: { summary: '[web-ui] Fix' } },
             jobParams: {}
         };
         mod.action(params);
-        assert.equal(params.jobParams.customParams.targetRepository.repo, 'lims-ui', 'targetRepository created in jobParams.customParams');
+        assert.equal(params.jobParams.customParams.targetRepository.repo, 'web-ui', 'targetRepository created in jobParams.customParams');
     });
 
     test('preserves existing customParams fields while adding targetRepository', function() {
         var mod = makeModule({ '.dmtools/repositories.json': GROUPED_REPOS_JSON });
         var params = {
-            ticket: { key: 'PROJ-8', fields: { summary: '[sample-db] Schema' } },
+            ticket: { key: 'PROJ-8', fields: { summary: '[core-db] Schema' } },
             customParams: { blocksRelationship: 'Blocks', labels: ['development'] }
         };
         mod.action(params);
         assert.equal(params.customParams.blocksRelationship, 'Blocks', 'existing fields preserved');
         assert.deepEqual(params.customParams.labels, ['development'], 'labels preserved');
-        assert.equal(params.customParams.targetRepository.repo, 'sample-db', 'targetRepository added');
+        assert.equal(params.customParams.targetRepository.repo, 'core-db', 'targetRepository added');
     });
 });
 
