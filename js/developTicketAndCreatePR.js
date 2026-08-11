@@ -601,7 +601,10 @@ function action(params) {
         // - Teammate workflow: params.ticket exists directly
         // - Standalone dmtools (JSRunner): params.jobParams.ticket
         const actualParams = params.ticket ? params : (params.jobParams || params);
-        var config = configLoader.loadProjectConfig(params.jobParams || params);
+        // paramsForConfigLoad re-attaches params.ticket (sibling of jobParams in the
+        // real Teammate execution path) so baseBranchResolverFnPath can key off the
+        // ticket's fixVersion — see configLoader.js for details.
+        var config = configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params));
         _workingDir = config.workingDir || null;
         _scm = configLoader.createScm(config);
 

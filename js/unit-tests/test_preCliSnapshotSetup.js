@@ -19,6 +19,9 @@ function loadPreCliSnapshotSetup(configLoaderStub, mocks) {
 
 function makeConfigLoaderStub(snapshotBranch) {
     return {
+        paramsForConfigLoad: function(params) {
+            return (params && params.jobParams) || params || {};
+        },
         loadProjectConfig: function() {
             return {
                 git: {

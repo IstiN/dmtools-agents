@@ -126,7 +126,10 @@ function action(params) {
         }
 
         // 2. Resolve config. snapshotBranch is filled by snapshotBranchResolverFnPath if configured.
-        var config = configLoader.loadProjectConfig(params.jobParams || params);
+        // paramsForConfigLoad re-attaches params.ticket (sibling of jobParams in the
+        // real Teammate execution path) so snapshotBranchResolverFnPath can key off the
+        // ticket's fixVersion — see configLoader.js for details.
+        var config = configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params));
         var snapshotBranch = config.git && config.git.snapshotBranch;
         if (!snapshotBranch) {
             console.log('preCliSnapshotSetup: no snapshotBranch configured — nothing to do');

@@ -77,7 +77,10 @@ function action(params) {
         var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
         var inputFolder = actualParams.inputFolderPath;
         var ticketKey = inputFolder.split('/').pop();
-        var config = configLoader.loadProjectConfig(params.jobParams || params);
+        // paramsForConfigLoad re-attaches params.ticket (sibling of jobParams in the
+        // real Teammate execution path) so baseBranchResolverFnPath can key off the
+        // ticket's fixVersion — see configLoader.js for details.
+        var config = configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params));
         var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
         var scm = configLoader.createScm(config);
 
