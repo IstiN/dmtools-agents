@@ -441,6 +441,82 @@ suite('configLoader.loadProjectConfig', function() {
         assert.equal(config.git.baseBranch, 'main', 'falls back to defaults on parse error');
     });
 
+    // ── paramsForConfigLoad ─────────────────────────────────────────────────
+    // Regression coverage for the bug where baseBranchResolverFnPath/
+    // snapshotBranchResolverFnPath silently never fired in production: real
+    // Teammate execution passes preJSAction/postJSAction params as sibling
+    // top-level keys { jobParams, ticket, response } (see JavaScriptExecutor.
+    // withJobContext in dm.ai), but every call site read `params.jobParams ||
+    // params` to reach customParams/configPath, which discarded the sibling
+    // `params.ticket`.
+
+    test('paramsForConfigLoad re-attaches sibling params.ticket onto jobParams (real Teammate shape)', function() {
+        var cl = makeLoader({});
+        var ticket = { key: 'PROJ-1', fields: { fixVersions: [{ name: '3.9.0' }] } };
+        var result = cl.paramsForConfigLoad({
+            jobParams: { customParams: { targetRepository: { repo: 'example-repo' } } },
+            ticket: ticket,
+            response: 'some response'
+        });
+        assert.equal(result.ticket, ticket, 'ticket carried over onto the jobParams-derived object');
+        assert.equal(result.customParams.targetRepository.repo, 'example-repo', 'jobParams.customParams preserved');
+    });
+
+    test('paramsForConfigLoad does not mutate the original jobParams object', function() {
+        var cl = makeLoader({});
+        var jobParams = { customParams: {} };
+        var ticket = { key: 'PROJ-1' };
+        cl.paramsForConfigLoad({ jobParams: jobParams, ticket: ticket });
+        assert.equal(jobParams.ticket, undefined, 'original jobParams left untouched');
+    });
+
+    test('paramsForConfigLoad leaves jobParams.ticket alone when already present (standalone/JSRunner shape)', function() {
+        var cl = makeLoader({});
+        var innerTicket = { key: 'PROJ-2' };
+        var outerTicket = { key: 'PROJ-3' };
+        var result = cl.paramsForConfigLoad({
+            jobParams: { ticket: innerTicket, customParams: {} },
+            ticket: outerTicket
+        });
+        assert.equal(result.ticket, innerTicket, 'jobParams.ticket wins when already set');
+    });
+
+    test('paramsForConfigLoad falls back to params itself when no jobParams present', function() {
+        var cl = makeLoader({});
+        var ticket = { key: 'PROJ-4' };
+        var result = cl.paramsForConfigLoad({ ticket: ticket, customParams: {} });
+        assert.equal(result.ticket, ticket);
+    });
+
+    test('end-to-end: baseBranchResolverFnPath now fires from the real Teammate params shape', function() {
+        var cl = makeLoader({
+            '.dmtools/config.js':
+                'module.exports = { git: { baseBranchResolverFnPath: "./.dmtools/resolver.js", baseBranchByFixVersionPattern: "develop/{version}" } };',
+            './.dmtools/resolver.js':
+                'module.exports = function(ticket, candidateBaseBranch, config) { ' +
+                '  var targetRepo = config.customParams && config.customParams.targetRepository; ' +
+                '  if (!targetRepo || targetRepo.repo !== "example-repo") return candidateBaseBranch; ' +
+                '  var versions = ticket && ticket.fields && ticket.fields.fixVersions; ' +
+                '  if (versions && versions.length > 0) return "develop/" + versions[0].name; ' +
+                '  return candidateBaseBranch; ' +
+                '};'
+        });
+        // Simulate the real Teammate shape: jobParams and ticket as siblings —
+        // this is exactly what preCliDevelopmentSetup/developTicketAndCreatePR/
+        // preCliReworkSetup/preCliSnapshotSetup receive in production.
+        var realShapeParams = {
+            jobParams: {
+                customParams: {
+                    targetRepository: { owner: 'acme-corp', repo: 'example-repo', baseBranch: 'main' }
+                }
+            },
+            ticket: { key: 'PROJ-5', fields: { fixVersions: [{ name: '3.9.0' }] } }
+        };
+        var config = cl.loadProjectConfig(cl.paramsForConfigLoad(realShapeParams));
+        assert.equal(config.git.baseBranch, 'develop/3.9.0',
+            'resolver must fire even though ticket only exists as a sibling of jobParams');
+    });
+
 });
 
 // ── resolveConfluenceUrls ─────────────────────────────────────────────────────

@@ -303,6 +303,31 @@ function loadHookFn(path, hookName) {
  * @param {Object} params - Agent params (jobParams or top-level params)
  * @returns {Object} Merged configuration
  */
+/**
+ * Build the params object to pass into loadProjectConfig() when the caller needs
+ * ticket-aware resolvers (baseBranchResolverFnPath / snapshotBranchResolverFnPath).
+ *
+ * Background: in the real Teammate execution path, preJSAction/postJSAction params
+ * have `jobParams` and `ticket` as *sibling* top-level keys (see JavaScriptExecutor.
+ * withJobContext in dm.ai — parameters.put("jobParams", ...); parameters.put("ticket", ...)).
+ * Most call sites use `params.jobParams || params` to read customParams/configPath,
+ * which silently drops the sibling `params.ticket` since it's never nested inside
+ * jobParams in that mode. Any resolver keyed off params.ticket (fixVersion-based
+ * branch resolution, etc.) would then never fire. This helper re-attaches the
+ * ticket without mutating the original params/jobParams objects.
+ *
+ * @param {Object} params - Full action params (may have .jobParams and/or .ticket)
+ * @returns {Object} params object safe to pass into loadProjectConfig()
+ */
+function paramsForConfigLoad(params) {
+    var base = (params && params.jobParams) || params || {};
+    var ticket = (base && base.ticket) || (params && params.ticket);
+    if (ticket && base.ticket !== ticket) {
+        base = Object.assign({}, base, { ticket: ticket });
+    }
+    return base;
+}
+
 function loadProjectConfig(params) {
     var customParams = (params && params.customParams) || {};
     var loaded = null;
@@ -688,6 +713,7 @@ function resolveInstructions(agentName, defaultInstructions, config, agentCliPro
 module.exports = {
     DEFAULTS: DEFAULTS,
     loadProjectConfig: loadProjectConfig,
+    paramsForConfigLoad: paramsForConfigLoad,
     mergeProjectConfig: mergeProjectConfig,
     deepMerge: deepMerge,
     formatTemplate: formatTemplate,
