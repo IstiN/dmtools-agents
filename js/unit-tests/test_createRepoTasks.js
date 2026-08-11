@@ -62,8 +62,8 @@ suite('createRepoTasks — parseAffectedRepos', function() {
 
 suite('createRepoTasks — action', function() {
     var reposJson = JSON.stringify([
-        { name: 'sample-db', reason: 'DB migration' },
-        { name: 'gens-igt',    reason: 'API change', depends_on: ['sample-db'] }
+        { name: 'core-db', reason: 'DB migration' },
+        { name: 'service-api',    reason: 'API change', depends_on: ['core-db'] }
     ]);
     var description = 'Solution text\n\n{code:json|title=affected_repos}\n' + reposJson + '\n{code}\n\n----';
 
@@ -71,32 +71,32 @@ suite('createRepoTasks — action', function() {
         var created = [];
         var mod = makeModule({
             jira_get_ticket: function(opts) {
-                if (opts.key === 'GENSGENP-100') {
-                    return { fields: { description: description, parent: { key: 'GENSGENP-50' } } };
+                if (opts.key === 'PROJ-100') {
+                    return { fields: { description: description, parent: { key: 'PROJ-50' } } };
                 }
                 return { fields: { summary: 'Build PacBio workflow' } };
             },
             jira_search_by_jql: function() { return []; },
             jira_create_ticket_with_parent: function(opts) {
                 created.push(opts);
-                return '{"key":"GENSGENP-' + (200 + created.length) + '"}';
+                return '{"key":"PROJ-' + (200 + created.length) + '"}';
             },
             jira_link_issues: function() {},
             jira_move_to_status: function() {},
             jira_post_comment: function() {}
         });
 
-        var result = mod.action({ ticket: { key: 'GENSGENP-100' } });
+        var result = mod.action({ ticket: { key: 'PROJ-100' } });
 
         assert.equal(result.success, true, 'succeeds');
         assert.equal(created.length, 2, 'two sub-tasks created');
-        assert.equal(created[0].parentKey, 'GENSGENP-50', 'parent is story');
+        assert.equal(created[0].parentKey, 'PROJ-50', 'parent is story');
         assert.equal(created[0].issueType, 'Sub-task', 'issueType is Sub-task');
-        assert.equal(created[0].summary.indexOf('[sample-db]') === 0, true, 'summary starts with [repo]');
+        assert.equal(created[0].summary.indexOf('[core-db]') === 0, true, 'summary starts with [repo]');
         assert.equal(created[0].summary.indexOf('Build PacBio workflow') !== -1, true, 'parent summary in subtask summary');
-        assert.equal(created[0].description.indexOf('sample-db') !== -1, true, 'repo name in description');
-        assert.equal(created[0].description.indexOf('GENSGENP-100') !== -1, true, 'SA ticket link in description');
-        assert.equal(created[0].description.indexOf('GENSGENP-50') !== -1, true, 'parent link in description');
+        assert.equal(created[0].description.indexOf('core-db') !== -1, true, 'repo name in description');
+        assert.equal(created[0].description.indexOf('PROJ-100') !== -1, true, 'SA ticket link in description');
+        assert.equal(created[0].description.indexOf('PROJ-50') !== -1, true, 'parent link in description');
         assert.deepEqual(created[0].labels, ['development'], 'default development label set');
     });
 
@@ -106,30 +106,30 @@ suite('createRepoTasks — action', function() {
         var ticketCounter = 200;
         var mod = makeModule({
             jira_get_ticket: function(opts) {
-                if (opts.key === 'GENSGENP-100') {
-                    return { fields: { description: description, parent: { key: 'GENSGENP-50' } } };
+                if (opts.key === 'PROJ-100') {
+                    return { fields: { description: description, parent: { key: 'PROJ-50' } } };
                 }
                 return { fields: { summary: 'Build PacBio workflow' } };
             },
             jira_search_by_jql: function() { return []; },
             jira_create_ticket_with_parent: function() {
                 ticketCounter++;
-                return '{"key":"GENSGENP-' + ticketCounter + '"}';
+                return '{"key":"PROJ-' + ticketCounter + '"}';
             },
             jira_link_issues: function(opts) { links.push(opts); },
             jira_move_to_status: function(opts) { moved.push(opts); },
             jira_post_comment: function() {}
         });
 
-        mod.action({ ticket: { key: 'GENSGENP-100' } });
+        mod.action({ ticket: { key: 'PROJ-100' } });
 
-        // gens-igt depends_on sample-db → sample-db (GENSGENP-201) blocks gens-igt (GENSGENP-202)
+        // service-api depends_on core-db → core-db (PROJ-201) blocks service-api (PROJ-202)
         assert.equal(links.length, 1, 'one Blocks link created');
         assert.equal(links[0].relationship, 'Blocks', 'relationship is Blocks');
-        assert.equal(links[0].sourceKey, 'GENSGENP-201', 'blocker is sample-db ticket');
-        assert.equal(links[0].anotherKey, 'GENSGENP-202', 'dependent is gens-igt ticket');
+        assert.equal(links[0].sourceKey, 'PROJ-201', 'blocker is core-db ticket');
+        assert.equal(links[0].anotherKey, 'PROJ-202', 'dependent is service-api ticket');
         assert.equal(moved.length, 1, 'one ticket moved to Blocked');
-        assert.equal(moved[0].key, 'GENSGENP-202', 'gens-igt moved to Blocked');
+        assert.equal(moved[0].key, 'PROJ-202', 'service-api moved to Blocked');
         assert.equal(moved[0].statusName, 'Blocked', 'status is Blocked');
     });
 
@@ -139,15 +139,15 @@ suite('createRepoTasks — action', function() {
         var ticketCounter = 300;
         var mod = makeModule({
             jira_get_ticket: function(opts) {
-                if (opts.key === 'GENSGENP-100') {
-                    return { fields: { description: description, parent: { key: 'GENSGENP-50' } } };
+                if (opts.key === 'PROJ-100') {
+                    return { fields: { description: description, parent: { key: 'PROJ-50' } } };
                 }
                 return { fields: { summary: 'Story' } };
             },
             jira_search_by_jql: function() { return []; },
             jira_create_ticket_with_parent: function() {
                 ticketCounter++;
-                return '{"key":"GENSGENP-' + ticketCounter + '"}';
+                return '{"key":"PROJ-' + ticketCounter + '"}';
             },
             jira_link_issues: function(opts) { links.push(opts); },
             jira_move_to_status: function(opts) { moved.push(opts); },
@@ -155,7 +155,7 @@ suite('createRepoTasks — action', function() {
         });
 
         mod.action({
-            ticket: { key: 'GENSGENP-100' },
+            ticket: { key: 'PROJ-100' },
             customParams: { blocksRelationship: 'is blocked by', blockedStatus: 'On Hold' }
         });
 
@@ -168,24 +168,24 @@ suite('createRepoTasks — action', function() {
         var created = [];
         var mod = makeModule({
             jira_get_ticket: function(opts) {
-                if (opts.key === 'GENSGENP-100') {
-                    return { fields: { description: description, parent: { key: 'GENSGENP-50' } } };
+                if (opts.key === 'PROJ-100') {
+                    return { fields: { description: description, parent: { key: 'PROJ-50' } } };
                 }
                 return { fields: { summary: 'Parent story' } };
             },
             jira_search_by_jql: function() {
-                return [{ fields: { summary: '[sample-db] Parent story' } }]; // already exists
+                return [{ fields: { summary: '[core-db] Parent story' } }]; // already exists
             },
-            jira_create_ticket_with_parent: function(opts) { created.push(opts); return '{"key":"GENSGENP-201"}'; },
+            jira_create_ticket_with_parent: function(opts) { created.push(opts); return '{"key":"PROJ-201"}'; },
             jira_post_comment: function() {}
         });
 
-        var result = mod.action({ ticket: { key: 'GENSGENP-100' } });
+        var result = mod.action({ ticket: { key: 'PROJ-100' } });
 
         assert.equal(result.success, true, 'succeeds');
-        assert.equal(created.length, 1, 'only one created (sample-db skipped)');
+        assert.equal(created.length, 1, 'only one created (core-db skipped)');
         assert.equal(result.skipped, 1, 'one skipped');
-        assert.equal(created[0].summary.indexOf('[gens-igt]') === 0, true, 'gens-igt was created');
+        assert.equal(created[0].summary.indexOf('[service-api]') === 0, true, 'service-api was created');
     });
 
     test('returns error when SA ticket has no parent', function() {
@@ -194,7 +194,7 @@ suite('createRepoTasks — action', function() {
                 return { fields: { description: description, parent: null } };
             }
         });
-        var result = mod.action({ ticket: { key: 'GENSGENP-100' } });
+        var result = mod.action({ ticket: { key: 'PROJ-100' } });
         assert.equal(result.success, false, 'fails without parent');
         assert.equal(result.error.indexOf('no parent') !== -1, true, 'error mentions parent');
     });
@@ -202,13 +202,13 @@ suite('createRepoTasks — action', function() {
     test('returns error when no affected_repos block in description', function() {
         var mod = makeModule({
             jira_get_ticket: function(opts) {
-                if (opts.key === 'GENSGENP-100') {
-                    return { fields: { description: 'Just some text, no repos block', parent: { key: 'GENSGENP-50' } } };
+                if (opts.key === 'PROJ-100') {
+                    return { fields: { description: 'Just some text, no repos block', parent: { key: 'PROJ-50' } } };
                 }
                 return { fields: { summary: 'Parent story' } };
             }
         });
-        var result = mod.action({ ticket: { key: 'GENSGENP-100' } });
+        var result = mod.action({ ticket: { key: 'PROJ-100' } });
         assert.equal(result.success, false, 'fails without repos block');
     });
 

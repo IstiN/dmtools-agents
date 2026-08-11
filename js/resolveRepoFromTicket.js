@@ -7,7 +7,7 @@
  *
  * Strategy (customParams.repoNameStrategy, default: 'fromSummary'):
  *   fromSummary — parses the leading [bracket-tag] from ticket summary, e.g.
- *                 "[gens-igt] Create PacBio WF" → "gens-igt"
+ *                 "[payments-api] Create webhook" → "payments-api"
  *
  * Additional strategies can be registered in STRATEGIES by extending this file
  * in the future (e.g. fromLabel, fromCustomField).
