@@ -180,6 +180,41 @@ function buildOriginFetchCommand(refSpec) {
     return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
 }
 
+/**
+ * Ensures `refs/remotes/origin/<branchName>` exists and is up to date.
+ *
+ * `git fetch origin <branchName>` (no destination refspec) only updates
+ * FETCH_HEAD — it never creates/updates the `origin/<branchName>` tracking
+ * ref. That "worked" for base branch "main" only because long-lived cached
+ * checkouts (e.g. CI dependency caches) already had `origin/main` from an
+ * earlier full clone or wildcard fetch. Any other base branch (e.g. a
+ * fixVersion-derived "develop/3.9.0") that was never explicitly fetched with
+ * a destination refspec into that cache genuinely has no local tracking ref,
+ * so every later git command that reads `origin/<branchName>` (merge-base,
+ * merge, diff) fails with "unknown revision or path not in the working
+ * tree" — even though the branch exists on the remote.
+ *
+ * Uses an explicit refspec (`+refs/heads/<b>:refs/remotes/origin/<b>`) so the
+ * tracking ref is created/updated regardless of the remote's configured
+ * fetch refspec (e.g. a shallow/single-branch clone in CI).
+ *
+ * @returns {boolean} true if the fetch succeeded (ref should now exist)
+ */
+function ensureRemoteBranchRef(runCommand, workingDir, branchName) {
+    if (!branchName || !isSafeRefName(branchName)) return false;
+
+    try {
+        runCommand(
+            'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName,
+            workingDir
+        );
+        return true;
+    } catch (e) {
+        console.warn('Could not fetch explicit ref for origin/' + branchName + ':', e.message || e);
+        return false;
+    }
+}
+
 function readTrackedStatus(runCommand, workingDir) {
     return cleanCommandOutput(
         runCommand('git status --porcelain --ignore-submodules=dirty', workingDir) || ''
@@ -290,7 +325,7 @@ function syncBranchWithBase(options) {
 
     try {
         console.log('Synchronizing ' + branchName + ' with origin/' + baseBranch + ' before publishing...');
-        runCommand(buildOriginFetchCommand(baseBranch), workingDir);
+        ensureRemoteBranchRef(runCommand, workingDir, baseBranch);
 
         var upToDate = branchContainsBase(runCommand, workingDir, baseBranch);
         if (upToDate) {
@@ -338,9 +373,14 @@ function syncBranchWithBase(options) {
         var message = error && error.message ? error.message : String(error);
         if (conflictFiles.length > 0) {
             message = 'Merge conflict while syncing with origin/' + baseBranch + ': ' + conflictFiles.join(', ');
-        } else if (autoResolve.error) {
+        } else if (autoResolve.error && autoResolve.error !== 'No conflicted files detected') {
+            // A specific auto-resolve failure (unresolved conflicts, commit failure)
+            // is more actionable than the original git error — surface it.
             message = autoResolve.error;
         }
+        // Otherwise autoResolve found zero conflict markers, meaning `error` was
+        // never a real merge conflict (e.g. a missing origin/<baseBranch> ref) —
+        // keep the original git error instead of the misleading generic message.
         console.warn('Could not synchronize branch with base:', message);
         return {
             success: false,
@@ -457,6 +497,7 @@ module.exports = {
     sanitizeTitle: sanitizeTitle,
     sanitizeCommitMessage: sanitizeCommitMessage,
     buildOriginFetchCommand: buildOriginFetchCommand,
+    ensureRemoteBranchRef: ensureRemoteBranchRef,
     readTrackedStatus: readTrackedStatus,
     readStagedDiffStat: readStagedDiffStat,
     syncBranchWithBase: syncBranchWithBase,
