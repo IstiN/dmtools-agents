@@ -143,6 +143,14 @@ function checkoutPRBranch(branchName, workingDir, baseBranch) {
 
     // 4. Hard invariant: never report success while parked on the base branch.
     if (baseBranch) {
+        // Make sure origin/<baseBranch> tracking ref exists before anything
+        // downstream (detectMergeConflicts, getPRDiff, syncBranchWithBase)
+        // relies on it — a plain `fetch --prune` above only refreshes refs
+        // already tracked per the remote's configured refspec, which is
+        // insufficient for a base branch never explicitly fetched before
+        // (e.g. a fixVersion-derived "develop/3.9.0" in a shallow CI clone).
+        prHelper.ensureRemoteBranchRef(cmd, workingDir, baseBranch);
+
         var current = cleanCommandOutput(cmd('git rev-parse --abbrev-ref HEAD') || '').trim();
         if (current === baseBranch) {
             console.warn('⚠️ Still on base branch "' + baseBranch + '" after checkout — recreating ' + branchName + ' from origin/' + baseBranch);
@@ -159,6 +167,13 @@ function getPRDiff(baseBranch, headBranch, workingDir) {
     var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
     try {
         console.log('Generating diff between', baseBranch, 'and', headBranch, workingDir ? '(in ' + workingDir + ')' : '');
+
+        // Make sure origin/<baseBranch> tracking ref exists, in case this is
+        // called standalone (without a preceding checkoutPRBranch in the same
+        // working dir) against a base branch never fetched with an explicit
+        // refspec before.
+        var baseBranchName = baseBranch.indexOf('origin/') === 0 ? baseBranch.slice('origin/'.length) : baseBranch;
+        prHelper.ensureRemoteBranchRef(cmd, workingDir, baseBranchName);
 
         // Unshallow if needed so there is a full merge base available
         try {
@@ -228,6 +243,11 @@ function detectMergeConflicts(baseBranch, inputFolder, workingDir) {
     var cmd = function(command) { return cli_execute_command(Object.assign({}, cmdOpts, { command: command })); };
     try {
         console.log('Checking for merge conflicts with origin/' + baseBranch + (workingDir ? ' in ' + workingDir : '') + '...');
+
+        // See getPRDiff/checkoutPRBranch — ensure the tracking ref exists in
+        // case this is the first git command in the working dir to reference
+        // origin/<baseBranch>.
+        prHelper.ensureRemoteBranchRef(cmd, workingDir, baseBranch);
 
         try {
             var isShallow = cleanCommandOutput(cmd('git rev-parse --is-shallow-repository') || 'false');
