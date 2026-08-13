@@ -143,7 +143,7 @@ suite('pullRequest helper', function() {
         assert.equal(result.success, true);
         assert.equal(result.updated, true);
         assert.deepEqual(commands, [
-            { command: 'git -c fetch.recurseSubmodules=no fetch origin main', workingDirectory: 'repo' },
+            { command: 'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/main:refs/remotes/origin/main', workingDirectory: 'repo' },
             { command: 'git rev-parse origin/main', workingDirectory: 'repo' },
             { command: 'git merge-base origin/main HEAD', workingDirectory: 'repo' },
             { command: 'git merge-base origin/main HEAD', workingDirectory: 'repo' },
@@ -170,7 +170,7 @@ suite('pullRequest helper', function() {
         assert.equal(result.success, true);
         assert.equal(result.updated, false);
         assert.deepEqual(commands, [
-            'git -c fetch.recurseSubmodules=no fetch origin release',
+            'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/release:refs/remotes/origin/release',
             'git rev-parse origin/release',
             'git merge-base origin/release HEAD'
         ]);
@@ -196,7 +196,7 @@ suite('pullRequest helper', function() {
         assert.equal(result.success, true);
         assert.equal(result.updated, true);
         assert.deepEqual(commands, [
-            { command: 'git -c fetch.recurseSubmodules=no fetch origin main', workingDirectory: 'repo' },
+            { command: 'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/main:refs/remotes/origin/main', workingDirectory: 'repo' },
             { command: 'git rev-parse origin/main', workingDirectory: 'repo' },
             { command: 'git merge-base origin/main HEAD', workingDirectory: 'repo' },
             { command: 'git merge-base origin/main HEAD', workingDirectory: 'repo' },

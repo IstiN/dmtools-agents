@@ -17,6 +17,18 @@ function loadGitOps(mocks) {
             './pullRequest.js': {
                 buildOriginFetchCommand: function(refSpec) {
                     return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+                },
+                ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
+                    if (!branchName) return false;
+                    try {
+                        runCommand(
+                            'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName,
+                            workingDir
+                        );
+                        return true;
+                    } catch (e) {
+                        return false;
+                    }
                 }
             }
         }),
