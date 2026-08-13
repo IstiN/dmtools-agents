@@ -17,7 +17,10 @@
  *
  * Configuration (customParams.directPush):
  *   - commitMessage:    e.g. "Update {ticketKey} artifacts"
- *   - gateCommand:      e.g. "npm run build" (optional, supports {ticketKey})
+ *   - gateCommand:      e.g. "bash scripts/gate.sh {ticketKey}" (optional,
+ *                       supports {ticketKey}). Must be a SINGLE plain command —
+ *                       the executor rejects shell metacharacters
+ *                       (&&, ||, |, ;, >, <). Wrap logic in a script file.
  *   - resultUrlTemplate: e.g. "https://example.com/{ticketKey}/" (optional)
  *   - successComment:   comment posted on success (optional)
  *   - noChangesComment: comment posted when nothing changed (optional)
@@ -83,9 +86,13 @@ function action(params) {
         }
 
         if (opts.gateCommand) {
+            // NOTE: cli_execute_command rejects shell metacharacters
+            // (&&, ||, |, ;, >, <, ...). gateCommand must be a single plain
+            // invocation — wrap any logic into a script in the target repo
+            // (e.g. "bash scripts/gate.sh {ticketKey}").
             var gateCmd = opts.gateCommand.split('{ticketKey}').join(ticketKey);
             try {
-                var gateOut = cleanCommandOutput(runCmd({ command: gateCmd + ' 2>&1 | tail -20' }));
+                var gateOut = cleanCommandOutput(runCmd({ command: gateCmd }));
                 console.log('commitAndPushToBaseBranch: gate passed. ' + gateOut);
             } catch (gateError) {
                 console.error('commitAndPushToBaseBranch: gate failed, not pushing:', gateError.toString());
