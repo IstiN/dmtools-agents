@@ -9,6 +9,10 @@
  * Ensures the working copy (customParams.targetRepository.workingDir) is on
  * the configured baseBranch and fast-forwarded to origin.
  *
+ * Shell-safety: cli_execute_command rejects shell metacharacters
+ * (&&, ||, |, ;, >, <, backticks, $(...), ${...}) — every command here is a
+ * single plain invocation. Never chain commands in this file.
+ *
  * Configuration (customParams.targetRepository):
  *   - baseBranch: branch to sync (default "main")
  *   - workingDir: checkout directory (from targetRepository.workingDir)
@@ -38,9 +42,10 @@ function action(params) {
     var baseBranch = (config.git && config.git.baseBranch) || 'main';
 
     try {
-        var out = cleanCommandOutput(runCmd({
-            command: 'git checkout ' + baseBranch + ' && git pull --ff-only origin ' + baseBranch
-        }));
+        // NOTE: cli_execute_command rejects shell metacharacters (&&, |, ;, ...).
+        // Each git invocation must be a separate call.
+        cleanCommandOutput(runCmd({ command: 'git checkout ' + baseBranch }));
+        var out = cleanCommandOutput(runCmd({ command: 'git pull --ff-only origin ' + baseBranch }));
         console.log('preCliSyncBaseBranch: on ' + baseBranch + ', up to date. ' + out);
         return true;
     } catch (e) {
