@@ -240,6 +240,67 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
         assert.contains(html, 'function showTip');
     });
 
+    test('escapes script-breaking characters in embedded JSON payload', function() {
+        var reporter = loadReporter();
+        var summary = reporter.buildSummary([{
+            createdAt: '2026-06-01T00:00:00Z',
+            startedAt: '2026-06-01T00:00:00Z',
+            updatedAt: '2026-06-01T00:27:02Z',
+            day: '2026-06-01',
+            agent: 'pr_rework',
+            readTokens: 100,
+            writeTokens: 10,
+            cachedTokens: 50,
+            reasoningTokens: 5,
+            samples: 1,
+            resumeDetected: false,
+            feedbackLoopCount: 0,
+            rateLimitRetryCount: 0,
+            rateLimitDetected: false,
+            timeoutCount: 0,
+            durationSeconds: 60
+        }], 1);
+        var malicious = "';alert(1);//<script>alert(2)</script>" + '\u2028' + '\u2029';
+        var html = reporter.buildHtml([{
+            createdAt: '2026-06-01T00:00:00Z',
+            agent: malicious,
+            ticketKey: malicious,
+            conclusion: 'success',
+            samples: 1,
+            resumeDetected: false,
+            feedbackLoopCount: 0,
+            rateLimitRetryCount: 0,
+            timeoutCount: 0,
+            durationSeconds: 60,
+            duration: '1m 0s',
+            readTokens: 10,
+            writeTokens: 1,
+            cachedTokens: 5,
+            reasoningTokens: 0,
+            runNumber: 1,
+            url: malicious
+        }], summary);
+
+        var dataOpen = 'const DATA=JSON.parse("';
+        var start = html.indexOf(dataOpen);
+        assert.notEqual(start, -1, 'JSON.parse DATA declaration missing');
+        var payloadStart = start + dataOpen.length;
+        var payloadEnd = html.indexOf('");', payloadStart);
+        assert.notEqual(payloadEnd, -1, 'JSON.parse DATA declaration not closed');
+        var payload = html.substring(payloadStart, payloadEnd);
+
+        assert.notContains(payload, '<script>', 'payload contains raw <script>');
+        assert.notContains(payload, '</script>', 'payload contains raw </script>');
+        assert.notContains(payload, "'", 'payload contains raw single quote');
+        assert.notContains(payload, '\u2028', 'payload contains raw U+2028');
+        assert.notContains(payload, '\u2029', 'payload contains raw U+2029');
+        assert.contains(payload, '\\u003c', 'payload does not escape <');
+        assert.contains(payload, '\\u003e', 'payload does not escape >');
+        assert.contains(payload, '\\u0027', 'payload does not escape single quote');
+        assert.contains(payload, '\\u2028', 'payload does not escape U+2028');
+        assert.contains(payload, '\\u2029', 'payload does not escape U+2029');
+    });
+
     test('action reuses cached run usage and writes cache progress', function() {
         var writes = {};
         var logDownloads = [];
