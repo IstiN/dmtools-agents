@@ -78,8 +78,21 @@ var fileReadMock = function(opts) {
 
 ## Conventions
 
-### No project-specific content
-This repo must not contain customer names, ticket keys, repo paths, branch names, or technology rules that belong to a single project. Project context goes in the target repo's `.dmtools/config.js`.
+### No project-specific content — STRICT RULE
+
+**This is a public, product-agnostic repository. NEVER commit anything company- or customer-specific here.** Violations are a fireable offense and require history rewrite.
+
+Forbidden anywhere in this repo (code, comments, prompts, instructions, tests, docs, commit messages):
+
+- Company, customer, or product names
+- Internal hostnames, URLs, IPs, Jira/Confluence links, real ticket keys
+- Internal label/branch/repo naming conventions tied to one organization
+- File paths pointing to internal repos, internal registry URLs
+- Sample data copied from real internal systems
+
+Everything here must be **generic and configurable**: names like `example.com`, `PROJ-123`, `acme`; behavior driven by `customParams` / `.dmtools/config.js` in the consuming repo. Project context goes in the target repo's `.dmtools/config.js` or the corporate orchestrator repo — never here.
+
+**Before every commit**: re-read your diff and check it against this list.
 
 ### Agent config structure
 - `metadata.contextId` identifies the workflow (used for config composition lookups).
