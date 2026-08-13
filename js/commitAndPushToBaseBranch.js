@@ -67,9 +67,9 @@ function action(params) {
         return false;
     }
 
-    var config = configLoader.loadConfig(params);
+    var config = configLoader.loadProjectConfig(params.jobParams || params);
     _workingDir = config.workingDir || null;
-    var baseBranch = (config.targetRepository && config.targetRepository.baseBranch) || 'main';
+    var baseBranch = (config.git && config.git.baseBranch) || 'main';
     var opts = (config.customParams && config.customParams.directPush) || {};
 
     try {
