@@ -1,0 +1,15 @@
+{
+  "name": "Teammate",
+  "parent": {
+    "path": "story_solution_e2e.json",
+    "merge": ["params.cliPrompts"]
+  },
+  "params": {
+    "metadata": {
+      "contextId": "story_solution_e2e_multi"
+    },
+    "cliPrompts": [
+      "./agents/instructions/story_solution/affected_repos_multi_task_split.md"
+    ]
+  }
+}
