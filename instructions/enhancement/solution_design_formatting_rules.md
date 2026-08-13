@@ -31,6 +31,7 @@ The block below is a **structural template / example only**. The tags such as `<
 <bold>API Contracts:</bold>
 <bullet> <code>POST /api/example</code>: [request payload shape] → [response shape].
 <bullet> <code>GET /api/example/{id}</code>: [purpose and return shape].
+<bullet> [If a new/changed enum or literal id value is introduced here and another repository will hardcode it verbatim: call out here that the consuming repo's implementation MUST verify the exact literal against the actual merged source of truth (not just this design doc) before its change merges, and should cover it with a test that fails if the source value ever drifts — not one that only mocks the id locally.]
 
 <bold>AC Coverage:</bold>
 The Acceptance Criteria are defined in the BA ticket (<link>BA-TICKET|https://jira.example.com/browse/BA-TICKET</link>) and are the single source of truth.
