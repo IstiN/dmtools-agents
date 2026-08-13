@@ -17,7 +17,7 @@
  *
  * Configuration (customParams.directPush):
  *   - commitMessage:    e.g. "Update {ticketKey} artifacts"
- *   - gateCommand:      e.g. "npm run build" (optional)
+ *   - gateCommand:      e.g. "npm run build" (optional, supports {ticketKey})
  *   - resultUrlTemplate: e.g. "https://example.com/{ticketKey}/" (optional)
  *   - successComment:   comment posted on success (optional)
  *   - noChangesComment: comment posted when nothing changed (optional)
@@ -83,8 +83,9 @@ function action(params) {
         }
 
         if (opts.gateCommand) {
+            var gateCmd = opts.gateCommand.split('{ticketKey}').join(ticketKey);
             try {
-                var gateOut = cleanCommandOutput(runCmd({ command: opts.gateCommand + ' 2>&1 | tail -20' }));
+                var gateOut = cleanCommandOutput(runCmd({ command: gateCmd + ' 2>&1 | tail -20' }));
                 console.log('commitAndPushToBaseBranch: gate passed. ' + gateOut);
             } catch (gateError) {
                 console.error('commitAndPushToBaseBranch: gate failed, not pushing:', gateError.toString());
