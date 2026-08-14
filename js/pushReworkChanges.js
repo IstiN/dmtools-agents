@@ -210,7 +210,7 @@ function commitAndPush(ticketKey, config, customParams) {
         console.warn('Could not remove tracked Copilot session cache before staging:', cleanupErr);
     }
 
-    cmd('git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**"');
+    cmd('git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**" ":!.codegraph" ":!.codegraph/**"');
 
     const status = prHelper.readStagedDiffStat(cmd, workingDir);
 
