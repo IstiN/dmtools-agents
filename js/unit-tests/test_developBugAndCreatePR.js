@@ -109,7 +109,10 @@ suite('developBugAndCreatePR', function() {
         assert.equal(result.path, 'interrupted');
         assert.notOk(
             loaded.commands.some(function(c) {
-                return c.indexOf('.agent-bin') !== -1 || c.indexOf('.codegraph') !== -1;
+                // Pathspec exclusions (":!.codegraph") are staging guards, not cleanup —
+                // strip them before checking for actual artifact management commands.
+                var stripped = c.split('":!.codegraph/**"').join('').split('":!.codegraph"').join('');
+                return stripped.indexOf('.agent-bin') !== -1 || stripped.indexOf('.codegraph') !== -1;
             }),
             'CodeGraph setup/cleanup belongs to setup scripts, not JS post-actions'
         );

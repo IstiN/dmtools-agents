@@ -127,6 +127,36 @@ function alignBranchWithBase(ticketKey, branchName, baseBranch) {
     console.warn('Keeping divergent branch ' + branchName + '; conflict guidance written for the agent.');
 }
 
+// ── Generated index guard (.codegraph) ──────────────────────────────────────
+// `codegraph init/sync` (CI setup step) stages .codegraph/ into the git index.
+// If an older run auto-committed that generated index onto the target branch,
+// `git checkout <branch>` fails with "Your local changes ... would be
+// overwritten". Move the index aside for the duration of branch setup and
+// restore it afterwards; if the checked-out branch still tracks .codegraph,
+// untrack it so the next auto-commit removes it (self-healing).
+function stashGeneratedIndex() {
+    try { runCmd({ command: 'git rm -r --cached --ignore-unmatch .codegraph' }); } catch (e) {}
+    try {
+        runCmd({ command: 'if [ -d .codegraph ]; then rm -rf .codegraph.branch-setup-bak && mv .codegraph .codegraph.branch-setup-bak; fi' });
+    } catch (e) {
+        console.warn('Could not move .codegraph aside before branch setup:', e);
+    }
+}
+
+function restoreGeneratedIndex() {
+    try { runCmd({ command: 'git rm -r --cached --ignore-unmatch .codegraph' }); } catch (e) {}
+    try {
+        runCmd({ command: 'if [ -f .gitignore ] && ! grep -qxF ".codegraph/" .gitignore; then printf "\\n# CodeGraph generated index - regenerated per-run, must never be committed\\n.codegraph/\\n" >> .gitignore; fi' });
+    } catch (e) {
+        console.warn('Could not add .codegraph/ to .gitignore:', e);
+    }
+    try {
+        runCmd({ command: 'if [ -d .codegraph.branch-setup-bak ]; then rm -rf .codegraph && mv .codegraph.branch-setup-bak .codegraph; fi' });
+    } catch (e) {
+        console.warn('Could not restore .codegraph after branch setup:', e);
+    }
+}
+
 function checkoutBranch(ticketKey, config, ticket, customParams) {
     ticket = ticket || { key: ticketKey, fields: {} };
     customParams = customParams || {};
@@ -139,6 +169,8 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
     var branchName = configLoader.resolveBranchName(config, ticket, 'development');
     var rebaseBase = configLoader.resolvePRTargetBranch(config, ticket);
     console.log('Setting up branch:', branchName);
+
+    stashGeneratedIndex();
 
     try {
         runCmd({ command: 'git config user.name "' + config.git.authorName + '"' });
@@ -161,6 +193,7 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
         console.warn('Error checking local branches:', e);
     }
 
+    try {
     if (localBranches.trim()) {
         console.log('Branch exists locally, aligning with base:', branchName);
         runCmd({ command: 'git checkout ' + branchName });
@@ -241,6 +274,9 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
     }
 
     console.log('Branch ready:', branchName);
+    } finally {
+        restoreGeneratedIndex();
+    }
 }
 
 function postSetupErrorToJira(ticketKey, stage, errorMessage) {

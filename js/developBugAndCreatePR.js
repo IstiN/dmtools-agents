@@ -214,7 +214,7 @@ function action(params) {
             } catch (cleanupErr) {
                 console.warn('Could not remove tracked Copilot session cache before checking status:', cleanupErr);
             }
-            cli_execute_command({ command: 'git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**"' });
+            cli_execute_command({ command: 'git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**" ":!.codegraph" ":!.codegraph/**"' });
             const rawStatus = cli_execute_command({ command: 'git status --porcelain' }) || '';
             const statusLines = rawStatus.split('\n').filter(function(l) {
                 return l.trim() &&
