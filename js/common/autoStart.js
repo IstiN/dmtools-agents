@@ -243,10 +243,15 @@ function triggerConfiguredWorkflowForTicket(options) {
     var config = options.config || {};
     var configFile = options.configFile;
     var workflowFile = options.workflowFile || 'ai-teammate.yml';
-    // Default to the target repo's actual default branch (config.git.baseBranch, e.g. 'master')
-    // rather than assuming 'main' — dispatching a workflow_dispatch against a non-existent ref
-    // fails with "No ref found for: <ref>" (HTTP 422) and silently breaks auto-chaining.
-    var ref = options.ref || (config.git && config.git.baseBranch) || 'main';
+    // The dispatch targets the AI repo (customParams.aiRepository), which may differ
+    // from the target repo — then the target's baseBranch may not exist there
+    // ("No ref found for: <ref>", HTTP 422). Precedence: explicit options.ref →
+    // aiRepository.ref/branch → target repo's baseBranch → 'main'.
+    var aiRepoCfgForRef = customParams.aiRepository;
+    var ref = options.ref
+        || (aiRepoCfgForRef && (aiRepoCfgForRef.ref || aiRepoCfgForRef.branch))
+        || (config.git && config.git.baseBranch)
+        || 'main';
     var label = options.label || configFile || workflowFile;
     if (!ticketKey || !configFile) {
         console.warn('autoStart: missing ticketKey or configFile — skipping');
@@ -375,7 +380,11 @@ function triggerSmIfIdle(options) {
     }
 
     try {
-        var ref = (config.git && config.git.baseBranch) || 'main';
+        // Same ref precedence as triggerConfiguredWorkflowForTicket: the dispatch goes
+        // to the AI repo, whose default branch may differ from the target repo's.
+        var ref = (aiRepoCfg && (aiRepoCfg.ref || aiRepoCfg.branch))
+            || (config.git && config.git.baseBranch)
+            || 'main';
         scm.triggerWorkflow(aiOwner, aiRepo, smWorkflowFile, '{}', ref);
         console.log('✅ SM fallback: system idle — triggered ' + smWorkflowFile);
         return true;

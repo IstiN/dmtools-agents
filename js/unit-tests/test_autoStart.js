@@ -467,3 +467,105 @@ suite('triggerSmIfIdle', function() {
     });
 
 });
+
+suite('autoStart — AI-repo dispatch ref (aiRepository.ref)', function() {
+
+    test('workflow dispatch uses aiRepository.ref over target baseBranch', function() {
+        var triggeredPayload = null;
+        var autoStart = loadAutoStartHelper({
+            github_list_workflow_runs: function() {
+                return JSON.stringify({ workflow_runs: [] });
+            },
+            github_trigger_workflow: function(owner, repo, workflowFile, payload, ref) {
+                triggeredPayload = { owner: owner, repo: repo, ref: ref };
+            }
+        });
+
+        // Target repo's baseBranch ('develop') does not exist in the AI repo —
+        // dispatching there must use the AI repo's own ref.
+        var result = autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: 'TS-90',
+            config: { repository: { owner: 'IstiN', repo: 'target-repo' }, git: { baseBranch: 'develop' } },
+            customParams: {
+                aiRepository: { owner: 'IstiN', repo: 'ai-repo', ref: 'main' }
+            },
+            configFile: 'agents/pr_review.json'
+        });
+
+        assert.equal(result, true);
+        assert.equal(triggeredPayload.repo, 'ai-repo');
+        assert.equal(triggeredPayload.ref, 'main', 'should dispatch against aiRepository.ref, not the target baseBranch');
+    });
+
+    test('workflow dispatch accepts aiRepository.branch as alias', function() {
+        var triggeredPayload = null;
+        var autoStart = loadAutoStartHelper({
+            github_list_workflow_runs: function() {
+                return JSON.stringify({ workflow_runs: [] });
+            },
+            github_trigger_workflow: function(owner, repo, workflowFile, payload, ref) {
+                triggeredPayload = { ref: ref };
+            }
+        });
+
+        var result = autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: 'TS-90',
+            config: { repository: { owner: 'IstiN', repo: 'target-repo' }, git: { baseBranch: 'develop' } },
+            customParams: {
+                aiRepository: { owner: 'IstiN', repo: 'ai-repo', branch: 'main' }
+            },
+            configFile: 'agents/pr_review.json'
+        });
+
+        assert.equal(result, true);
+        assert.equal(triggeredPayload.ref, 'main');
+    });
+
+    test('workflow dispatch falls back to target baseBranch when aiRepository has no ref', function() {
+        var triggeredPayload = null;
+        var autoStart = loadAutoStartHelper({
+            github_list_workflow_runs: function() {
+                return JSON.stringify({ workflow_runs: [] });
+            },
+            github_trigger_workflow: function(owner, repo, workflowFile, payload, ref) {
+                triggeredPayload = { ref: ref };
+            }
+        });
+
+        var result = autoStart.triggerConfiguredWorkflowForTicket({
+            ticketKey: 'TS-90',
+            config: { repository: { owner: 'IstiN', repo: 'trackstate' }, git: { baseBranch: 'master' } },
+            customParams: {
+                aiRepository: { owner: 'IstiN', repo: 'trackstate' }
+            },
+            configFile: 'agents/pr_review.json'
+        });
+
+        assert.equal(result, true);
+        assert.equal(triggeredPayload.ref, 'master', 'same-repo setups keep dispatching against baseBranch');
+    });
+
+    test('SM fallback uses aiRepository.ref over target baseBranch', function() {
+        var triggeredWorkflow = null;
+        var autoStart = loadAutoStartHelper({
+            github_list_workflow_runs: function() {
+                return JSON.stringify({ workflow_runs: [] });
+            },
+            github_trigger_workflow: function(owner, repo, workflowFile, payload, ref) {
+                triggeredWorkflow = { ref: ref };
+            }
+        });
+
+        var result = autoStart.triggerSmIfIdle({
+            config: { repository: { owner: 'IstiN', repo: 'target-repo' }, git: { baseBranch: 'develop' } },
+            customParams: {
+                smFallback: true,
+                aiRepository: { owner: 'IstiN', repo: 'ai-repo', ref: 'main' }
+            }
+        });
+
+        assert.equal(result, true);
+        assert.equal(triggeredWorkflow.ref, 'main', 'SM fallback should dispatch against aiRepository.ref');
+    });
+
+});
