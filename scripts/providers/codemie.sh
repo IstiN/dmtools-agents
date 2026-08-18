@@ -56,7 +56,7 @@ run_codemie() {
     # Make all of root's home world-readable/executable so _aiagent can find
     # binaries installed under $HOME (codemie-claude, the claude binary from
     # 'codemie install claude', etc.).
-    chmod -R a+rX "${HOME}" 2>/dev/null || true
+    chmod -R a+rwX "${HOME}" 2>/dev/null || true
     for _bin in codemie-claude node npm npx; do
       _src="$(command -v "$_bin" 2>/dev/null)" || continue
       ln -sf "$_src" "/usr/local/bin/$_bin" 2>/dev/null || true
