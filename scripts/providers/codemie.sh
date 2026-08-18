@@ -77,6 +77,11 @@ run_codemie() {
   echo "Full transcript saved to: ${agent_log}"
 
   echo ""
+  echo "=== Agent Transcript ==="
+  cat "$agent_log" 2>/dev/null || echo "(transcript file not found)"
+  echo "=== End Transcript ==="
+
+  echo ""
   echo "=== Agent completed with exit code: $exit_code ==="
   return $exit_code
 }
