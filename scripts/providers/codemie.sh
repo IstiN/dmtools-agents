@@ -49,7 +49,24 @@ run_codemie() {
   local agent_log
   agent_log="$(new_agent_log_file "codemie")"
   set +e
-  "${cmd[@]}" 2>&1 | tee "$agent_log"
+  if [ "$(id -u)" = "0" ]; then
+    # codemie-claude blocks --dangerously-skip-permissions when running as root.
+    # Create a non-root user and delegate execution to it.
+    useradd -m -s /bin/bash _aiagent 2>/dev/null || true
+    for _bin in codemie-claude node npm npx; do
+      _src="$(command -v "$_bin" 2>/dev/null)" || continue
+      cp -n "$_src" "/usr/local/bin/$_bin" 2>/dev/null && chmod +x "/usr/local/bin/$_bin" || true
+    done
+    su _aiagent -c "git config --global user.name 'dm.ai'; git config --global user.email 'dm.ai@epam.com'" 2>/dev/null || true
+    chown -R _aiagent:_aiagent "$(pwd)"
+    local _quoted_cmd
+    _quoted_cmd=$(printf ' %q' "${cmd[@]}")
+    local _work_dir
+    _work_dir=$(pwd)
+    su -m _aiagent -c "HOME=/home/_aiagent && cd $(printf '%q' "$_work_dir") && ${_quoted_cmd}" 2>&1 | tee "$agent_log"
+  else
+    "${cmd[@]}" 2>&1 | tee "$agent_log"
+  fi
   local exit_code=${PIPESTATUS[0]}
   set -e
   record_codegraph_usage "$agent_log"
