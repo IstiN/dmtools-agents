@@ -53,7 +53,10 @@ function _switchToBranch(branchName, cmd) {
         // local and remote branches diverge and 'git pull' fails with
         // "Need to specify how to reconcile divergent branches".
         // The remote is always the source of truth for an existing PR branch.
-        cmd(prHelper.buildOriginFetchCommand(branchName + ':' + branchName));
+        // NOTE: fetch with explicit remote-tracking refspec (+refs/heads/<b>:refs/remotes/origin/<b>)
+        // — a plain '<branch>:<branch>' refspec would try to update the local branch ref
+        // and fails when HEAD is currently on that branch ("Refusing to fetch into current branch").
+        cmd(prHelper.buildOriginFetchCommand('+refs/heads/' + branchName + ':refs/remotes/origin/' + branchName));
         cmd('git reset --hard origin/' + branchName);
     } else {
         const remoteBranch = cleanCommandOutput(cmd('git ls-remote --heads origin ' + branchName) || '');
