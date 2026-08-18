@@ -49,7 +49,12 @@ function _switchToBranch(branchName, cmd) {
 
     if (localBranchExists()) {
         cmd('git checkout ' + branchName);
-        cmd('git pull origin ' + branchName);
+        // Use reset --hard instead of pull: after a force-push (e.g. a rebase),
+        // local and remote branches diverge and 'git pull' fails with
+        // "Need to specify how to reconcile divergent branches".
+        // The remote is always the source of truth for an existing PR branch.
+        cmd(prHelper.buildOriginFetchCommand(branchName + ':' + branchName));
+        cmd('git reset --hard origin/' + branchName);
     } else {
         const remoteBranch = cleanCommandOutput(cmd('git ls-remote --heads origin ' + branchName) || '');
         if (remoteBranch.trim()) {
