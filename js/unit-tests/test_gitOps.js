@@ -162,5 +162,27 @@ suite('gitOps.checkoutPRBranch', function() {
         assert.equal(commands.indexOf('git rev-parse --abbrev-ref HEAD'), -1,
             'invariant check must be skipped entirely when baseBranch is not supplied');
     });
+
+    test('resets local branch to origin after force-push (divergent branches)', function() {
+        var commands = [];
+        var gitOps = loadGitOps({
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git status --porcelain') return '\nCOMMAND_EXIT_CODE=0';
+                if (args.command === 'git branch --list "ai/TS-1268"') return '  ai/TS-1268\nCOMMAND_EXIT_CODE=0';
+                // git pull would fail here with divergent branches — reset --hard is used instead
+                if (args.command === 'git pull origin ai/TS-1268') {
+                    throw new Error('fatal: Need to specify how to reconcile divergent branches.');
+                }
+                return 'COMMAND_EXIT_CODE=0';
+            }
+        });
+
+        gitOps.checkoutPRBranch('ai/TS-1268');
+
+        assert.ok(commands.indexOf('git checkout ai/TS-1268') !== -1, 'local branch is checked out');
+        assert.equal(commands.indexOf('git pull origin ai/TS-1268'), -1, 'git pull must NOT be used (fails on divergent branches)');
+        assert.ok(commands.indexOf('git reset --hard origin/ai/TS-1268') !== -1, 'git reset --hard origin/<branch> is used to sync with remote');
+    });
 });
 
