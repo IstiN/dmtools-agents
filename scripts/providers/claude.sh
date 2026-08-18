@@ -88,6 +88,28 @@ run_claude_code() {
   set -e
 
   record_codegraph_usage "${claude_code_log}"
+
+  # Claude Code's stream-json output carries aggregate usage in the final
+  # result.modelUsage object. Normalize it to the same provider-neutral JSON
+  # schema used by the Jira token-usage comment helper. Reporting is strictly
+  # best-effort and must never replace the Claude process exit code.
+  local provider_script_dir usage_name usage_file usage_exit_code manifest_exit_code
+  provider_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  usage_name="${AI_AGENT_USAGE_NAME:-claude-code}"
+  usage_file="outputs/${usage_name}_usage.json"
+  rm -f "${usage_file}" 2>/dev/null || true
+  usage_exit_code=0
+  python3 "${provider_script_dir}/claude_usage.py" "${claude_code_log}" "${usage_file}" || usage_exit_code=$?
+  if [ "${usage_exit_code}" -eq 0 ]; then
+    manifest_exit_code=0
+    record_usage_file "${usage_file}" || manifest_exit_code=$?
+    if [ "${manifest_exit_code}" -ne 0 ]; then
+      echo "⚠️  Claude token usage was extracted but could not be added to the manifest (exit ${manifest_exit_code}); continuing with agent exit ${claude_code_exit_code}."
+    fi
+  else
+    echo "⚠️  Claude token usage could not be recorded (extractor exit ${usage_exit_code}); continuing with agent exit ${claude_code_exit_code}."
+  fi
+
   # Save session ID for the next run to resume from.
   local saved_session_id
   saved_session_id="$(grep -o '"session_id":"[^"]*"' "${claude_code_log}" 2>/dev/null | head -1 | grep -o '"[^"]*"$' | tr -d '"')"
