@@ -349,7 +349,7 @@ function downloadBitriseApp(ticketKey, folder, bitriseBuild, branch, workingDir)
     var appDir = folder + '/app';
     var zipPath = folder + '/app.zip';
     try {
-        cli_execute_command({ command: 'mkdir -p "' + appDir + '"' });
+        cli_execute_command({ command: 'bash -c "mkdir -p \'' + appDir + '\'"' });
         console.log('⬇️  Downloading artifact to', zipPath, '...');
         cli_execute_command({
             command: 'curl -s -L "' + downloadUrl + '" -o "' + zipPath + '"'

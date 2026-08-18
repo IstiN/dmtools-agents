@@ -215,7 +215,7 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
         // Stage all changes
         console.log('Staging changes...');
         runCmd({
-            command: 'git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**" ":!.codegraph" ":!.codegraph/**"'
+            command: 'git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**"'
         });
 
         // Check if there are changes to commit

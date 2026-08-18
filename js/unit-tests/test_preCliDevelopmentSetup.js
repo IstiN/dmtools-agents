@@ -196,8 +196,8 @@ suite('preCliDevelopmentSetup.checkoutBranch — two-branch mode feature branch 
 suite('preCliDevelopmentSetup.checkoutBranch — generated .codegraph index guard', function() {
 
     var STASH_RM_CMD = 'git rm -r --cached --ignore-unmatch .codegraph';
-    var STASH_MV_CMD = 'if [ -d .codegraph ]; then rm -rf .codegraph.branch-setup-bak && mv .codegraph .codegraph.branch-setup-bak; fi';
-    var RESTORE_MV_CMD = 'if [ -d .codegraph.branch-setup-bak ]; then rm -rf .codegraph && mv .codegraph.branch-setup-bak .codegraph; fi';
+    var STASH_MV_CMD = 'bash -c "if [ -d .codegraph ]; then rm -rf .codegraph.branch-setup-bak && mv .codegraph .codegraph.branch-setup-bak; fi"';
+    var RESTORE_MV_CMD = 'bash -c "if [ -d .codegraph.branch-setup-bak ]; then rm -rf .codegraph && mv .codegraph.branch-setup-bak .codegraph; fi"';
 
     function loadForGuard(calls, responses) {
         var config = makeConfig({ git: { featureBranch: { enabled: false } } });
