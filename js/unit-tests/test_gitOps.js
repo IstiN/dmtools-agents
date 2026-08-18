@@ -183,6 +183,12 @@ suite('gitOps.checkoutPRBranch', function() {
         assert.ok(commands.indexOf('git checkout ai/TS-1268') !== -1, 'local branch is checked out');
         assert.equal(commands.indexOf('git pull origin ai/TS-1268'), -1, 'git pull must NOT be used (fails on divergent branches)');
         assert.ok(commands.indexOf('git reset --hard origin/ai/TS-1268') !== -1, 'git reset --hard origin/<branch> is used to sync with remote');
+        // Fetch must use explicit remote-tracking refspec — a plain '<branch>:<branch>' refspec
+        // fails when HEAD is on that branch ("Refusing to fetch into current branch").
+        var hasCorrectFetch = commands.some(function(c) {
+            return c && c.indexOf('fetch origin') !== -1 && c.indexOf('+refs/heads/ai/TS-1268:refs/remotes/origin/ai/TS-1268') !== -1;
+        });
+        assert.ok(hasCorrectFetch, 'fetch must use +refs/heads/<b>:refs/remotes/origin/<b> refspec');
     });
 });
 
