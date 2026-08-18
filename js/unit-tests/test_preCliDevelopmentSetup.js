@@ -286,3 +286,65 @@ suite('preCliDevelopmentSetup.checkoutBranch — generated .codegraph index guar
     });
 
 });
+
+suite('preCliDevelopmentSetup.checkoutBranch — base branch fetch before checkout', function() {
+
+    test('fetches baseBranch from origin before git checkout when creating a new branch', function() {
+        var calls = [];
+        var configLoaderStub = makeConfigLoaderStub({ development: 'ai/PROJ-1' }, 'master', null, []);
+        var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: makeCliMock(calls, {})
+        });
+        var config = makeConfig({ git: { featureBranch: { enabled: false } } });
+
+        mod.checkoutBranch('PROJ-1', config, TICKET, {});
+
+        var fetchIdx = -1;
+        var checkoutIdx = -1;
+        for (var i = 0; i < calls.length; i++) {
+            if (calls[i] && calls[i].indexOf('fetch origin') !== -1 && calls[i].indexOf('master') !== -1) {
+                fetchIdx = i;
+            }
+            if (calls[i] === 'git checkout master') {
+                checkoutIdx = i;
+            }
+        }
+        assert.ok(fetchIdx !== -1, 'git fetch origin master must run before checkout');
+        assert.ok(checkoutIdx !== -1, 'git checkout master must run');
+        assert.ok(fetchIdx < checkoutIdx, 'fetch must come before checkout (fetchIdx=' + fetchIdx + ', checkoutIdx=' + checkoutIdx + ')');
+    });
+
+    test('fetches two-branch feature base before git checkout when creating a new branch', function() {
+        var calls = [];
+        var hookLoadCalls = [];
+        var configLoaderStub = makeConfigLoaderStub(
+            { development: 'ai/PROJ-1', feature: 'release/rc_mobile_proj-1' },
+            'master',
+            null,
+            hookLoadCalls
+        );
+        var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: makeCliMock(calls, {})
+        });
+        var config = makeConfig(); // featureBranch.enabled = true by default
+
+        mod.checkoutBranch('PROJ-1', config, TICKET, {});
+
+        // In two-branch mode the dev branch is created from the feature branch,
+        // so the fetch must target the feature branch name, not the raw baseBranch.
+        var fetchIdx = -1;
+        var checkoutIdx = -1;
+        for (var i = 0; i < calls.length; i++) {
+            if (calls[i] && calls[i].indexOf('fetch origin') !== -1 && calls[i].indexOf('release/rc_mobile_proj-1') !== -1) {
+                fetchIdx = i;
+            }
+            if (calls[i] === 'git checkout release/rc_mobile_proj-1') {
+                checkoutIdx = i;
+            }
+        }
+        assert.ok(fetchIdx !== -1, 'git fetch origin release/rc_mobile_proj-1 must run before checkout');
+        assert.ok(checkoutIdx !== -1, 'git checkout release/rc_mobile_proj-1 must run');
+        assert.ok(fetchIdx < checkoutIdx, 'fetch must come before checkout');
+    });
+
+});
