@@ -55,7 +55,7 @@ run_codemie() {
     useradd -m -s /bin/bash _aiagent 2>/dev/null || true
     for _bin in codemie-claude node npm npx; do
       _src="$(command -v "$_bin" 2>/dev/null)" || continue
-      cp -n "$_src" "/usr/local/bin/$_bin" 2>/dev/null && chmod +x "/usr/local/bin/$_bin" || true
+      ln -sf "$_src" "/usr/local/bin/$_bin" 2>/dev/null || true
     done
     su _aiagent -c "git config --global user.name 'dm.ai'; git config --global user.email 'dm.ai@epam.com'" 2>/dev/null || true
     chown -R _aiagent:_aiagent "$(pwd)"
