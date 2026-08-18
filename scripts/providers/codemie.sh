@@ -53,11 +53,10 @@ run_codemie() {
     # codemie-claude blocks --dangerously-skip-permissions when running as root.
     # Create a non-root user and delegate execution to it.
     useradd -m -s /bin/bash _aiagent 2>/dev/null || true
-    # codemie-claude is in root's npm-global which _aiagent cannot traverse (/root is 700).
-    # Make the path accessible in this ephemeral container.
-    _npm_prefix="$(npm config get prefix 2>/dev/null || echo \"${HOME}/.npm-global\")"
-    chmod a+x "${HOME}" 2>/dev/null || true
-    chmod -R a+rX "${_npm_prefix}" 2>/dev/null || true
+    # Make all of root's home world-readable/executable so _aiagent can find
+    # binaries installed under $HOME (codemie-claude, the claude binary from
+    # 'codemie install claude', etc.).
+    chmod -R a+rX "${HOME}" 2>/dev/null || true
     for _bin in codemie-claude node npm npx; do
       _src="$(command -v "$_bin" 2>/dev/null)" || continue
       ln -sf "$_src" "/usr/local/bin/$_bin" 2>/dev/null || true
@@ -68,7 +67,7 @@ run_codemie() {
     _quoted_cmd=$(printf ' %q' "${cmd[@]}")
     local _work_dir
     _work_dir=$(pwd)
-    su -m _aiagent -c "HOME=/home/_aiagent && cd $(printf '%q' "$_work_dir") && ${_quoted_cmd}" 2>&1 | tee "$agent_log"
+    su -m _aiagent -c "cd $(printf '%q' "$_work_dir") && ${_quoted_cmd}" 2>&1 | tee "$agent_log"
   else
     "${cmd[@]}" 2>&1 | tee "$agent_log"
   fi
