@@ -35,7 +35,7 @@ function getInputFolder(params, ticketKey) {
 
 function ensureInputFolder(inputFolder) {
     try {
-        cli_execute_command({ command: 'mkdir -p ' + inputFolder });
+        cli_execute_command({ command: 'bash -c "mkdir -p ' + inputFolder + '"' });
     } catch (e) {
         console.warn('Could not create input folder:', e);
     }

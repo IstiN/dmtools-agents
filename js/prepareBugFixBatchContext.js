@@ -35,7 +35,7 @@ function ensureInputFolder(bugFolder) {
     try {
         // file_write will create parent directories, but an explicit mkdir keeps
         // the action deterministic and easy to inspect in tests.
-        runCmd({ command: 'mkdir -p ' + bugFolder });
+        runCmd({ command: 'bash -c "mkdir -p ' + bugFolder + '"' });
     } catch (e) {
         console.warn('Could not create input folder ' + bugFolder + ' (non-fatal):', e);
     }

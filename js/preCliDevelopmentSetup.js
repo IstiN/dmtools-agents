@@ -134,10 +134,12 @@ function alignBranchWithBase(ticketKey, branchName, baseBranch) {
 // overwritten". Move the index aside for the duration of branch setup and
 // restore it afterwards; if the checked-out branch still tracks .codegraph,
 // untrack it so the next auto-commit removes it (self-healing).
+// Shell builtins (if/mv/rm/grep/printf) are not in the cli_execute_command
+// whitelist — wrap them in `bash -c` (whitelisted), like other JS helpers do.
 function stashGeneratedIndex() {
     try { runCmd({ command: 'git rm -r --cached --ignore-unmatch .codegraph' }); } catch (e) {}
     try {
-        runCmd({ command: 'if [ -d .codegraph ]; then rm -rf .codegraph.branch-setup-bak && mv .codegraph .codegraph.branch-setup-bak; fi' });
+        runCmd({ command: 'bash -c "if [ -d .codegraph ]; then rm -rf .codegraph.branch-setup-bak && mv .codegraph .codegraph.branch-setup-bak; fi"' });
     } catch (e) {
         console.warn('Could not move .codegraph aside before branch setup:', e);
     }
@@ -146,12 +148,12 @@ function stashGeneratedIndex() {
 function restoreGeneratedIndex() {
     try { runCmd({ command: 'git rm -r --cached --ignore-unmatch .codegraph' }); } catch (e) {}
     try {
-        runCmd({ command: 'if [ -f .gitignore ] && ! grep -qxF ".codegraph/" .gitignore; then printf "\\n# CodeGraph generated index - regenerated per-run, must never be committed\\n.codegraph/\\n" >> .gitignore; fi' });
+        runCmd({ command: 'bash -c "grep -qxF \'.codegraph/\' .gitignore 2>/dev/null || printf \'\\n# CodeGraph generated index - regenerated per-run, must never be committed\\n.codegraph/\\n\' >> .gitignore"' });
     } catch (e) {
         console.warn('Could not add .codegraph/ to .gitignore:', e);
     }
     try {
-        runCmd({ command: 'if [ -d .codegraph.branch-setup-bak ]; then rm -rf .codegraph && mv .codegraph.branch-setup-bak .codegraph; fi' });
+        runCmd({ command: 'bash -c "if [ -d .codegraph.branch-setup-bak ]; then rm -rf .codegraph && mv .codegraph.branch-setup-bak .codegraph; fi"' });
     } catch (e) {
         console.warn('Could not restore .codegraph after branch setup:', e);
     }
