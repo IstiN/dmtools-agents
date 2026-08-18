@@ -267,6 +267,12 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
                 console.log('Two-branch mode: dev branch will be created from feature branch:', featureBranchName);
             }
             console.log('Creating new branch from', branchBase + ':', branchName);
+            // Explicitly fetch the base branch with a destination refspec so
+            // refs/remotes/origin/<branchBase> is created locally. A plain
+            // 'git fetch origin <branch>' only updates FETCH_HEAD — it does NOT
+            // create the remote-tracking ref, so git checkout would still fail
+            // in a shallow clone (--depth 1 --branch main).
+            runCmd({ command: prHelper.buildOriginFetchCommand('+refs/heads/' + branchBase + ':refs/remotes/origin/' + branchBase) });
             runCmd({ command: 'git checkout ' + branchBase });
             runCmd({ command: 'git pull origin ' + branchBase });
             runCmd({ command: 'git checkout -b ' + branchName });
