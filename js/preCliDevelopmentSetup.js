@@ -267,6 +267,10 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
                 console.log('Two-branch mode: dev branch will be created from feature branch:', featureBranchName);
             }
             console.log('Creating new branch from', branchBase + ':', branchName);
+            // Explicitly fetch the base branch so origin/<branchBase> is available locally.
+            // git fetch origin --prune (done earlier) may not populate it in a shallow clone
+            // (e.g. cloned with --depth 1 --branch main, so only refs/heads/main exists locally).
+            runCmd({ command: prHelper.buildOriginFetchCommand(branchBase) });
             runCmd({ command: 'git checkout ' + branchBase });
             runCmd({ command: 'git pull origin ' + branchBase });
             runCmd({ command: 'git checkout -b ' + branchName });
