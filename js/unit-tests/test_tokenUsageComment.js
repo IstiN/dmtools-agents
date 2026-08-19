@@ -49,6 +49,34 @@ suite('tokenUsageComment', function() {
         assert.contains(comment, 'Initiator: [~accountid:abc]');
     });
 
+    // Regression test for IstiN/dmtools-agents#360: a comment that starts with
+    // "[label]" and ends with "[~accountid:...]" is exactly the shape the
+    // DMTools GraalJS bridge mis-parses as a JSON array, silently truncating
+    // the whole comment. The trailing-period guard must break that shape.
+    test('formatUsageComment appends a guard period when the comment would end with the mention bracket', function() {
+        var mod = loadTokenUsageComment({});
+        var comment = mod.formatUsageComment('outputs/claude-code_usage.json', { provider: 'claude-code' }, '712020:d28c649e-58fe-40e2-8d4f-ca1def1444a7');
+        assert.ok(comment.charAt(0) === '[', 'comment should still start with the [label] prefix');
+        assert.notOk(comment.charAt(comment.length - 1) === ']', 'comment must not end with "]" (would trigger the bridge bug)');
+        assert.ok(comment.charAt(comment.length - 1) === '.', 'comment should end with the guard period');
+        assert.contains(comment, 'Initiator: [~accountid:712020:d28c649e-58fe-40e2-8d4f-ca1def1444a7]');
+    });
+
+    test('formatUsageComment does not add a guard period when there is no initiator mention', function() {
+        var mod = loadTokenUsageComment({});
+        var comment = mod.formatUsageComment('outputs/claude-code_usage.json', { provider: 'claude-code' });
+        assert.notContains(comment, 'Initiator:');
+        assert.ok(comment.charAt(comment.length - 1) === '}', 'comment should end with the JSON payload unchanged');
+    });
+
+    test('avoidBridgeArrayMisparse appends a period only when the string starts with [ and ends with ]', function() {
+        var mod = loadTokenUsageComment({});
+        assert.equal(mod.avoidBridgeArrayMisparse('[claude-code]: {"a":1}\nInitiator: [~accountid:1]'), '[claude-code]: {"a":1}\nInitiator: [~accountid:1].');
+        assert.equal(mod.avoidBridgeArrayMisparse('[claude-code]: {"a":1}'), '[claude-code]: {"a":1}');
+        assert.equal(mod.avoidBridgeArrayMisparse('plain text'), 'plain text');
+        assert.equal(mod.avoidBridgeArrayMisparse('[]'), '[]');
+    });
+
     test('postTokenUsageComments posts a Jira comment for each usage file', function() {
         var posted = [];
         var mod = loadTokenUsageComment({

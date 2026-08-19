@@ -76,6 +76,30 @@ function formatJiraMention(notifierId) {
     return '[~accountid:' + id + ']';
 }
 
+/**
+ * Work around a bug in the DMTools GraalJS bridge (JobJavaScriptBridge):
+ * any string tool argument that starts with "[" and ends with "]" gets
+ * speculatively parsed as a JSON array. org.json's lenient tokenizer can
+ * "succeed" on a leading fragment (e.g. an unquoted bareword) and silently
+ * discard everything after the first matching "]", corrupting the rest of
+ * the string before it reaches the tool. See IstiN/dmtools-agents#360.
+ *
+ * Our comment format ("[label]: {...}\nInitiator: [~accountid:...]") is
+ * exactly this shape: it starts with "[" (the label) and ends with "]"
+ * (the mention). Appending a trailing period breaks the pattern without
+ * changing the meaningful content.
+ */
+function avoidBridgeArrayMisparse(str) {
+    if (typeof str !== 'string') {
+        return str;
+    }
+    var trimmed = str.trim();
+    if (trimmed.length > 2 && trimmed.charAt(0) === '[' && trimmed.charAt(trimmed.length - 1) === ']') {
+        return str + '.';
+    }
+    return str;
+}
+
 function formatUsageComment(filePath, data, initiator) {
     var fileName = fileNameFromPath(filePath);
     // Strip the _usage suffix so the comment label matches the agent name
@@ -92,7 +116,7 @@ function formatUsageComment(filePath, data, initiator) {
     if (mention) {
         comment += '\nInitiator: ' + mention;
     }
-    return comment;
+    return avoidBridgeArrayMisparse(comment);
 }
 
 /**
@@ -145,6 +169,7 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         postTokenUsageComments: postTokenUsageComments,
         findUsageFiles: findUsageFiles,
-        formatUsageComment: formatUsageComment
+        formatUsageComment: formatUsageComment,
+        avoidBridgeArrayMisparse: avoidBridgeArrayMisparse
     };
 }
