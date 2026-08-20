@@ -163,6 +163,16 @@ run_copilot() {
     return 0
   }
 
+  # COPILOT_HOME is cached and restored across CI runs, and the same session is
+  # resumed for a given ticket/group, so the session store can already contain
+  # usage rows from previous runs. Snapshot the highest row id now and report
+  # only what this run adds.
+  local copilot_usage_baseline_id=0
+  copilot_usage_baseline_id="$(python3 "${script_dir}/copilot_usage.py" --baseline 2>/dev/null || echo 0)"
+  case "${copilot_usage_baseline_id}" in
+    ''|*[!0-9]*) copilot_usage_baseline_id=0 ;;
+  esac
+
   local max_attempts="${COPILOT_RATE_LIMIT_RETRIES:-2}"
   local retry_delay="${COPILOT_RATE_LIMIT_RETRY_DELAY_SECONDS:-90}"
   local attempt=1
@@ -225,7 +235,51 @@ run_copilot() {
   echo "Full transcript(s) saved to:"
   printf '  %s\n' "${copilot_log_files[@]}"
 
+  report_copilot_usage "${exit_code}" "${copilot_usage_baseline_id}" "${copilot_log_files[@]}"
+
   echo ""
   echo "=== Agent completed with exit code: $exit_code ==="
   return $exit_code
+}
+
+# Normalize the Copilot CLI's token usage into the same provider-neutral JSON
+# schema the Jira token-usage comment helper consumes, and register it in the
+# outputs manifest. Reporting is strictly best-effort and must never replace
+# the Copilot process exit code.
+report_copilot_usage() {
+  local agent_exit_code="$1"
+  local baseline_id="$2"
+  shift 2
+
+  local provider_script_dir usage_name usage_file usage_exit_code manifest_exit_code
+  provider_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  usage_name="${AI_AGENT_USAGE_NAME:-copilot}"
+  usage_file="outputs/${usage_name}_usage.json"
+  rm -f "${usage_file}" 2>/dev/null || true
+
+  local usage_args=(--output "${usage_file}" --since-id "${baseline_id}")
+  if [ -n "${COPILOT_SESSION_ID:-}" ]; then
+    usage_args+=(--session-id "${COPILOT_SESSION_ID}")
+  fi
+  local log_file
+  for log_file in "$@"; do
+    if [ -n "${log_file}" ]; then
+      usage_args+=(--transcript "${log_file}")
+    fi
+  done
+
+  echo ""
+  usage_exit_code=0
+  python3 "${provider_script_dir}/copilot_usage.py" "${usage_args[@]}" || usage_exit_code=$?
+  if [ "${usage_exit_code}" -eq 0 ]; then
+    manifest_exit_code=0
+    record_usage_file "${usage_file}" || manifest_exit_code=$?
+    if [ "${manifest_exit_code}" -ne 0 ]; then
+      echo "⚠️  Copilot token usage was extracted but could not be added to the manifest (exit ${manifest_exit_code}); continuing with agent exit ${agent_exit_code}."
+    fi
+  else
+    echo "⚠️  Copilot token usage could not be recorded (extractor exit ${usage_exit_code}); continuing with agent exit ${agent_exit_code}."
+  fi
+
+  return 0
 }
