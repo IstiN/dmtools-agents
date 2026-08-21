@@ -7,6 +7,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "copilot_usage.py"
@@ -55,6 +56,23 @@ def make_store(directory, rows):
     connection = sqlite3.connect(store)
     try:
         connection.executescript(SCHEMA)
+        connection.executemany(
+            "INSERT INTO assistant_usage_events (session_id, model, input_tokens, output_tokens, "
+            "cache_read_tokens, cache_write_tokens, reasoning_tokens, total_nano_aiu, duration_ms) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return store
+
+
+def append_rows(directory, rows):
+    """Insert more rows into a store already created by make_store()."""
+    store = Path(directory) / "session-store.db"
+    connection = sqlite3.connect(store)
+    try:
         connection.executemany(
             "INSERT INTO assistant_usage_events (session_id, model, input_tokens, output_tokens, "
             "cache_read_tokens, cache_write_tokens, reasoning_tokens, total_nano_aiu, duration_ms) "
@@ -193,6 +211,107 @@ class StoreAggregationTest(unittest.TestCase):
             usage = copilot_usage.extract_usage([], home=home, session_ids=[SESSION_A])
 
         self.assertEqual(usage["total_tokens"], 110)
+
+    def test_falls_back_to_unscoped_query_when_no_session_id_is_known(self):
+        # Simulates a crash/timeout: no --resume=<uuid> line was ever printed and
+        # no COPILOT_SESSION_ID was passed, but a real (non-zero) baseline id was
+        # captured before the run, so the exact new rows can still be recovered.
+        with tempfile.TemporaryDirectory() as home:
+            make_store(home, [(SESSION_A, "gpt-5-mini", 999, 999, 0, 0, 0, 9_000_000_000, 0)])
+            baseline = copilot_usage.max_usage_event_id(home)
+            append_rows(home, [(SESSION_A, "gpt-5-mini", 100, 20, 0, 0, 0, 1_000_000_000, 0)])
+
+            usage = copilot_usage.extract_usage(
+                [], home=home, since_id=baseline, session_ids=[]
+            )
+
+        self.assertEqual(usage["usage_records"], 1)
+        self.assertEqual(usage["total_tokens"], 120)
+        self.assertEqual(usage["source"], "session-store")
+        self.assertEqual(usage["scoped"], False)
+
+    def test_unscoped_fallback_does_not_fire_when_baseline_is_zero(self):
+        # Without a real baseline (since_id defaults to 0), falling back to an
+        # unscoped query would leak the store's entire history rather than one
+        # run's usage, so it must stay empty here.
+        with tempfile.TemporaryDirectory() as home:
+            make_store(home, [(SESSION_A, "gpt-5-mini", 100, 20, 0, 0, 0, 0, 0)])
+
+            with self.assertRaises(copilot_usage.UsageNotFoundError):
+                copilot_usage.extract_usage([], home=home, since_id=0, session_ids=[])
+
+    def test_scoped_query_is_unaffected_when_session_ids_are_known(self):
+        with tempfile.TemporaryDirectory() as home:
+            make_store(home, [(SESSION_A, "gpt-5-mini", 100, 20, 0, 0, 0, 0, 0)])
+
+            usage = copilot_usage.extract_usage(
+                [], home=home, since_id=0, session_ids=[SESSION_A]
+            )
+
+        self.assertNotIn("scoped", usage)
+
+
+class ConnectReadonlyCleanupTest(unittest.TestCase):
+    def test_removes_temp_dir_when_the_fallback_copy_fails(self):
+        with tempfile.TemporaryDirectory() as home:
+            # A file that isn't a valid sqlite database forces _connect_readonly
+            # past its direct-open attempt and into the copy-to-tempdir fallback.
+            store = Path(home) / "session-store.db"
+            store.write_bytes(b"not a real sqlite database")
+
+            created: dict[str, str] = {}
+            real_mkdtemp = copilot_usage.tempfile.mkdtemp
+
+            def tracking_mkdtemp(*args, **kwargs):
+                path = real_mkdtemp(*args, **kwargs)
+                created["path"] = path
+                return path
+
+            with mock.patch.object(
+                copilot_usage.tempfile, "mkdtemp", side_effect=tracking_mkdtemp
+            ), mock.patch.object(
+                copilot_usage.shutil, "copyfile", side_effect=OSError("simulated disk full")
+            ):
+                with self.assertRaises(OSError):
+                    copilot_usage._connect_readonly(store)
+
+            self.assertIn("path", created)
+            self.assertFalse(
+                os.path.exists(created["path"]),
+                "temp dir from the failed copy attempt should have been removed",
+            )
+
+    def test_removes_temp_dir_when_connecting_to_the_copy_fails(self):
+        with tempfile.TemporaryDirectory() as home:
+            store = Path(home) / "session-store.db"
+            store.write_bytes(b"not a real sqlite database")
+
+            created: dict[str, str] = {}
+            real_mkdtemp = copilot_usage.tempfile.mkdtemp
+
+            def tracking_mkdtemp(*args, **kwargs):
+                path = real_mkdtemp(*args, **kwargs)
+                created["path"] = path
+                return path
+
+            real_connect = copilot_usage.sqlite3.connect
+
+            def flaky_connect(target, *args, **kwargs):
+                if str(store) not in str(target):
+                    # The copy lives under the tracked temp dir, not next to store.
+                    raise sqlite3.OperationalError("simulated corrupt copy")
+                return real_connect(target, *args, **kwargs)
+
+            with mock.patch.object(
+                copilot_usage.tempfile, "mkdtemp", side_effect=tracking_mkdtemp
+            ), mock.patch.object(
+                copilot_usage.sqlite3, "connect", side_effect=flaky_connect
+            ):
+                with self.assertRaises(sqlite3.OperationalError):
+                    copilot_usage._connect_readonly(store)
+
+            self.assertIn("path", created)
+            self.assertFalse(os.path.exists(created["path"]))
 
 
 class TranscriptFallbackTest(unittest.TestCase):

@@ -125,7 +125,11 @@ def _connect_readonly(store: Path) -> tuple[sqlite3.Connection, str | None]:
     """Open the store without mutating it.
 
     A live WAL sidecar cannot always be replayed through a read-only handle, so
-    fall back to reading a private copy of the database and its sidecars.
+    fall back to reading a private copy of the database and its sidecars. If
+    the copy or the connection to it fails partway through, the temp directory
+    is removed before the error propagates so failed attempts (e.g. permission
+    errors, a torn copy of a database being actively written) don't leak
+    directories on disk.
     """
     try:
         connection = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
@@ -135,13 +139,17 @@ def _connect_readonly(store: Path) -> tuple[sqlite3.Connection, str | None]:
         pass
 
     temp_dir = tempfile.mkdtemp(prefix="copilot-usage-")
-    copy = Path(temp_dir) / store.name
-    shutil.copyfile(store, copy)
-    for suffix in ("-wal", "-shm"):
-        sidecar = Path(str(store) + suffix)
-        if sidecar.exists():
-            shutil.copyfile(sidecar, Path(str(copy) + suffix))
-    return sqlite3.connect(f"file:{copy}?mode=ro", uri=True), temp_dir
+    try:
+        copy = Path(temp_dir) / store.name
+        shutil.copyfile(store, copy)
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(str(store) + suffix)
+            if sidecar.exists():
+                shutil.copyfile(sidecar, Path(str(copy) + suffix))
+        return sqlite3.connect(f"file:{copy}?mode=ro", uri=True), temp_dir
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
 
 
 def max_usage_event_id(home: str | None = None) -> int:
@@ -169,26 +177,45 @@ def read_store_rows(
     home: str | None = None,
     since_id: int = 0,
 ) -> list[dict[str, Any]]:
-    """Read usage rows for the given sessions that were written after since_id."""
-    if not session_ids:
-        return []
+    """Read usage rows written after since_id.
+
+    Rows are scoped to session_ids when any were resolved. If none were (the
+    CLI can crash or time out before printing its `--resume=<uuid>` line, or
+    an older CLI without `--session-id` support may pick its own random
+    session id that we never observe), fall back to every row newer than
+    since_id so the run's exact usage still gets reported instead of silently
+    dropping to nothing. That fallback only fires when since_id is a real,
+    non-zero baseline — with since_id == 0 it would return the store's entire
+    history rather than just this run's rows.
+    """
     store = resolve_store_path(home)
     if store is None:
         return []
 
-    placeholders = ",".join("?" for _ in session_ids)
-    query = (
-        "SELECT model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, "
-        "reasoning_tokens, total_nano_aiu, duration_ms FROM assistant_usage_events "
-        f"WHERE lower(session_id) IN ({placeholders}) AND id > ?"
-    )
+    if session_ids:
+        placeholders = ",".join("?" for _ in session_ids)
+        query = (
+            "SELECT model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, "
+            "reasoning_tokens, total_nano_aiu, duration_ms FROM assistant_usage_events "
+            f"WHERE lower(session_id) IN ({placeholders}) AND id > ?"
+        )
+        params: tuple[Any, ...] = (*session_ids, since_id)
+    elif since_id > 0:
+        query = (
+            "SELECT model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, "
+            "reasoning_tokens, total_nano_aiu, duration_ms FROM assistant_usage_events "
+            "WHERE id > ?"
+        )
+        params = (since_id,)
+    else:
+        return []
 
     connection = None
     temp_dir = None
     try:
         connection, temp_dir = _connect_readonly(store)
         connection.row_factory = sqlite3.Row
-        rows = connection.execute(query, (*session_ids, since_id)).fetchall()
+        rows = connection.execute(query, params).fetchall()
     except (sqlite3.Error, OSError):
         return []
     finally:
@@ -200,7 +227,7 @@ def read_store_rows(
     return [dict(row) for row in rows]
 
 
-def normalize_store_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def normalize_store_rows(rows: list[dict[str, Any]], scoped: bool = True) -> dict[str, Any]:
     """Aggregate raw session-store rows into the provider-neutral schema."""
     if not rows:
         raise UsageNotFoundError("no usage rows were found in the Copilot session store")
@@ -229,7 +256,7 @@ def normalize_store_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     # Copilot reports input_tokens as the grand total, cached segments included.
     input_other = max(0, total_input - input_cache_read - input_cache_creation)
 
-    return build_usage(
+    usage = build_usage(
         models=sorted(models),
         usage_records=len(rows),
         input_other=input_other,
@@ -241,6 +268,14 @@ def normalize_store_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         duration_ms=duration_ms,
         source="session-store",
     )
+    if not scoped:
+        # No session id could be resolved for this run; these rows are every
+        # new row in the store rather than rows we could tie to a specific
+        # Copilot session. Flag it so a concurrently-writing process sharing
+        # the same COPILOT_HOME is visible in the output instead of silently
+        # blended in.
+        usage["scoped"] = False
+    return usage
 
 
 def parse_transcript_footer(text: str) -> dict[str, Any] | None:
@@ -388,7 +423,7 @@ def extract_usage(
 
     rows = read_store_rows(resolved, home=home, since_id=since_id)
     if rows:
-        return normalize_store_rows(rows)
+        return normalize_store_rows(rows, scoped=bool(resolved))
     return normalize_transcript_footers(transcripts)
 
 
@@ -416,6 +451,9 @@ def print_usage_summary(usage: dict[str, Any], output_path: Path) -> None:
     print(f"  Source:                 {usage['source']}")
     if usage.get("approximate"):
         print("  Note:                   values are rounded by the Copilot CLI summary")
+    if usage.get("scoped") is False:
+        print("  Note:                   no session id was resolved; totals cover every new")
+        print("                          store row since baseline, not just this run's session")
     print(f"  Written to:             {output_path}")
     print("===================================")
 
