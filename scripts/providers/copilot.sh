@@ -196,6 +196,28 @@ run_copilot() {
       :
     fi
 
+    # Detect "empty resume": --resume on a completed/terminal session can exit 0
+    # after printing only the old session trailer (Changes/AI Units/Tokens) without
+    # processing the new prompt at all. A productive run always shows tool-call
+    # markers ("●"); a bare trailer means the prompt was never processed.
+    # Self-heal by starting a fresh session under a suffixed name.
+    if [ "$exit_code" -eq 0 ] && [ "${copilot_session_mode}" = "resume-name" ]; then
+      if ! grep -q "●" "$copilot_log"; then
+        echo ""
+        echo "Copilot resumed session ${COPILOT_SESSION_NAME} but produced no activity (terminal session state?)"
+        echo "Starting a fresh session with a new name instead"
+        COPILOT_SESSION_NAME="${COPILOT_SESSION_NAME}-r$(date +%s)"
+        copilot_session_args=(--name "${COPILOT_SESSION_NAME}")
+        copilot_session_mode="name"
+        copilot_log="$(new_agent_log_file "copilot-attempt${attempt}-fresh")"
+        copilot_log_files+=("$copilot_log")
+        set +e
+        run_copilot_once "$copilot_log" "$copilot_model_value"
+        exit_code=$?
+        set -e
+      fi
+    fi
+
     if [ "$exit_code" -eq 0 ]; then
       record_codegraph_usage "$copilot_log"
       break
