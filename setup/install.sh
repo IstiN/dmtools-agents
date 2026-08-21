@@ -18,8 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"
 
 # Canonical order for "all" (node before copilot, java before dmtools)
-ALL_TOOLS="java maven node dmtools maestro copilot codemie cursor codegraph playwright kimi gradle android emulator konan"
-
+ALL_TOOLS="java maven node dmtools maestro copilot codemie cursor codegraph playwright kimi fa gradle android emulator konan"
 if [ $# -eq 0 ]; then
   echo "Usage: install.sh tool1[:version] tool2[:version] ..."
   echo "       install.sh all [-tool ...]"
@@ -36,6 +35,8 @@ if [ $# -eq 0 ]; then
   echo "  codegraph — CodeGraph CLI (npm).     Default version: latest"
   echo "  playwright — Playwright + Chromium.  Default version: latest"
   echo "  kimi      — Kimi Code CLI.           Default version: latest"
+  echo "  fa        — Fa CLI (Dart agent).     Default version: latest"
+  echo "  fa        — Fa CLI (Dart agent).     Default version: latest"
   echo "  gradle    — Gradle wrapper pre-warm. Default version: (wrapper version)"
   echo "  android   — Android SDK cmdline.     Default compileSdk: 36"
   echo "  emulator  — Android AVD create+boot. Default: agent_avd, API 35, arch-matched ABI (needs android)"
@@ -205,6 +206,8 @@ for tool in ${TOOL_LIST}; do
     playwright) BIN="playwright" ;;
     kimi)    BIN="kimi" ;;
     gradle)  BIN="./gradlew" ;;  # project-local wrapper, never on PATH — see below
+
+    fa)      BIN="fa" ;;
     android) BIN="sdkmanager" ;;
     emulator) BIN="emulator" ;;
     konan)   continue ;;  # no standalone binary — toolchain lives in ~/.konan

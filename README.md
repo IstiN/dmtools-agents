@@ -728,7 +728,7 @@ ai-teammate.yml (GitHub Actions)
 │     └─ If wip label found → abort early, release lock
 ├─ 5. Run preCliJSAction (optional, e.g., fetchQuestionsToInput.js)
 │     └─ Fetches extra context and injects into prompt variables
-├─ 6. Invoke CLI Agent (Cursor / GitHub Copilot / Codemie)
+├─ 6. Invoke CLI Agent (Cursor / GitHub Copilot / Codemie / Fa)
 │     └─ Uses cliPrompt markdown file as the task specification
 │     └─ CLI agent reads Jira ticket, writes code, runs commands
 ├─ 7. Run postJSAction (e.g., developTicketAndCreatePR.js)
@@ -1101,3 +1101,49 @@ SM rules in `sm.json` use `{jiraProject}` and `{parentTicket}` placeholders:
 ```
 
 These are resolved at runtime from the project config. To fully replace all SM rules for a project with a completely different workflow, set `smRules` in the config to an array of rule objects.
+
+---
+
+## Fa Provider (`AI_AGENT_PROVIDER=fa`)
+
+Runs the [Fa CLI](https://fa1.dev) — a Dart-based AI agent harness (`fa`
+binary). Select with `AI_AGENT_PROVIDER=fa`; per-agent overrides work via the
+config's `envVariables` like for any other provider.
+
+### Environment variables
+
+| Variable | Required | Meaning |
+|----------|----------|---------|
+| `FA_PROVIDER_TYPE` | yes | fa provider kind: `dial`, `anthropic`, `google`, or `openai-completions` |
+| `FA_PROVIDER_MODEL` | yes | model id / deployment name (`--model`) |
+| `FA_PROVIDER_BASE_URL` | no | endpoint override (`--base-url`) |
+| `FA_PROVIDER_API_KEY` | no | API key; mapped to the env var the chosen kind reads (`DIAL_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `OPENROUTER_API_KEY`) and exported only into the `fa` subprocess |
+
+`DIAL_API_VERSION` (optional, `dial` type only) appends the `?api-version=`
+query parameter to DIAL chat requests — pass it through the job env when the
+DIAL Core deployment requires Azure-style versioning.
+
+### Sessions and CI cache
+
+fa resumes named sessions natively (`--session <name>` resumes when the name
+exists for the cwd, creates it otherwise), so — unlike kimi — no post-run
+session-directory rewrite is needed. `setup/fa.sh` (and
+`scripts/providers/fa.sh`) source `setup/fa-session.sh`, which derives a
+deterministic session name from `repo:ticket:group` (same seed and group
+mapping as kimi) and exports:
+
+- `FA_SESSION_NAME` / `FA_SESSION_ROOT` — the session name and its isolated
+  root `<workspace>/.dmtools/fa-sessions/<repo>/<key>/<group>` (git-excluded)
+- `FA_SESSION_CACHE_PATH` / `FA_SESSION_CACHE_KEY` /
+  `FA_SESSION_CACHE_RESTORE_KEY` — wire these into the workflow's
+  cache-restore/save steps (`actions/cache` or equivalent) exactly like
+  `KIMI_SESSION_CACHE_*`; the cache key format is
+  `fa-session-<repo>-<key>-<group>-v1-<run id>`.
+
+`setup/cache.sh fa-session` re-exports the cache vars for downstream repos.
+
+### Installation
+
+`setup/install.sh fa` runs `curl -fsSL "https://fa1.dev/install.sh?v=2" | sh`
+(binary `fa` → `~/.local/bin`, override with `FA_INSTALL_DIR`) and registers
+the bin dir on PATH for subsequent CI steps.
