@@ -517,6 +517,27 @@ suite('configLoader.loadProjectConfig', function() {
             'resolver must fire even though ticket only exists as a sibling of jobParams');
     });
 
+    test('loads prSearchFn from customParams.prSearchFnPath', function() {
+        var cl = makeLoader({
+            '.dmtools/prSearch/custom.js':
+                'module.exports = function(candidates, ticketKey, options) { return candidates[0]; };'
+        });
+        var config = cl.loadProjectConfig({
+            customParams: { prSearchFnPath: '.dmtools/prSearch/custom.js' }
+        });
+        assert.equal(typeof config.prSearchFn, 'function');
+    });
+
+    test('ignores prSearchFnPath that does not export a function', function() {
+        var cl = makeLoader({
+            '.dmtools/prSearch/bad.js': 'module.exports = { foo: 1 };'
+        });
+        var config = cl.loadProjectConfig({
+            customParams: { prSearchFnPath: '.dmtools/prSearch/bad.js' }
+        });
+        assert.ok(!config.prSearchFn, 'prSearchFn must not be set when file does not export a function');
+    });
+
 });
 
 // ── resolveConfluenceUrls ─────────────────────────────────────────────────────

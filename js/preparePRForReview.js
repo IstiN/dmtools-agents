@@ -45,7 +45,8 @@ function action(params) {
 
         // Step 2: Find PR
         console.log('Searching for open PR associated with ticket:', ticketKey);
-        const pr = gh.findPRForTicket(scm, ticketKey);
+        var prSearchOptions = config.prSearchFn ? { prSearchFn: config.prSearchFn } : {};
+        const pr = gh.findPRForTicket(scm, ticketKey, prSearchOptions);
         if (!pr) {
             console.warn('No open PR found for ticket:', ticketKey);
             try {

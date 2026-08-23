@@ -465,6 +465,20 @@ function loadProjectConfig(params) {
         }
     }
 
+    // Apply prSearchFnPath from customParams — loads a JS file whose module.exports is a
+    // function(candidates, ticketKey, options) → pr | null. Lets a project plug in custom
+    // PR selection logic without putting project-specific code in the shared agents repo.
+    if (customParams.prSearchFnPath) {
+        var prSearchFn = loadConfigFile(customParams.prSearchFnPath);
+        if (typeof prSearchFn === 'function') {
+            config.prSearchFn = prSearchFn;
+            console.log('configLoader: Loaded prSearchFn from ' + customParams.prSearchFnPath);
+        } else {
+            console.warn('configLoader: prSearchFnPath "' + customParams.prSearchFnPath +
+                '" did not export a function — ignoring');
+        }
+    }
+
     // Allow individual agents to enable two-branch flow via customParams.featureBranchEnabled,
     // without requiring a project-wide config.git.featureBranch.enabled change.
     if (customParams.featureBranchEnabled === true) {

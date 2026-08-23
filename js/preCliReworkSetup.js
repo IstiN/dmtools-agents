@@ -104,7 +104,8 @@ function action(params) {
         }
 
         // Step 2: Find existing PR
-        const pr = gh.findPRForTicket(scm, ticketKey);
+        var prSearchOptions = config.prSearchFn ? { prSearchFn: config.prSearchFn } : {};
+        const pr = gh.findPRForTicket(scm, ticketKey, prSearchOptions);
         if (!pr) {
             failSetup(
                 ticketKey,

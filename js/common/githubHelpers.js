@@ -49,34 +49,127 @@ function _isScm(x) {
     return x !== null && typeof x === 'object' && typeof x.listPrs === 'function';
 }
 
+// Helpers for robust ticket-key → PR matching.
+// Keep everything project-agnostic: no project/company names, no conventions tied to one org.
 
-function findPRForTicket(scmOrWorkspace, repositoryOrTicketKey, ticketKeyOpt) {
-    var openPRs, ticketKey;
+function _normalizeForMatch(s) {
+    return String(s || '').toLowerCase();
+}
+
+function _extractNumericPart(ticketKey) {
+    var m = String(ticketKey || '').match(/(\d+)$/);
+    return m ? m[1] : '';
+}
+
+function _containsBoundedNumber(s, number) {
+    if (!s || !number) return false;
+    var re = new RegExp('(^|[^a-z0-9])' + number + '([^a-z0-9]|$)', 'i');
+    return re.test(s);
+}
+
+function _isBotAuthor(author) {
+    if (!author) return false;
+    if (author.is_bot === true || author.type === 'Bot') return true;
+    var login = String(author.login || '');
+    return login.indexOf('[bot]') !== -1 ||
+           login.indexOf('-bot') !== -1 ||
+           login.indexOf('_bot') !== -1;
+}
+
+function _headPrefixScore(ref) {
+    if (!ref) return 0;
+    var lower = ref.toLowerCase();
+    if (lower.indexOf('feature/') === 0 || lower.indexOf('bug/') === 0) return 20;
+    if (lower.indexOf('release/') === 0) return -10;
+    return 0;
+}
+
+function _scorePR(pr, normalizedKey, numericPart) {
+    var title = _normalizeForMatch(pr.title);
+    var branch = _normalizeForMatch(pr.head && pr.head.ref);
+    var score = 0;
+
+    if (title.indexOf(normalizedKey) !== -1) score += 100;
+    if (branch.indexOf(normalizedKey) !== -1) score += 80;
+
+    if (numericPart && numericPart.length >= 3) {
+        if (_containsBoundedNumber(title, numericPart)) score += 40;
+        if (_containsBoundedNumber(branch, numericPart)) score += 30;
+    }
+
+    // Only apply preference bonuses/penalties when the PR actually matches the ticket.
+    if (score === 0) return 0;
+
+    score += _headPrefixScore(pr.head && pr.head.ref);
+
+    if (_isBotAuthor(pr.user || pr.author)) score -= 50;
+
+    var changedFiles = pr.changed_files;
+    if (typeof changedFiles === 'number') {
+        score += Math.max(0, 25 - Math.floor(changedFiles / 10));
+    }
+
+    return score;
+}
+
+function findPRForTicket(scmOrWorkspace, repositoryOrTicketKey, ticketKeyOpt, optionsOpt) {
+    var openPRs, ticketKey, options;
     try {
         if (_isScm(scmOrWorkspace)) {
             ticketKey = repositoryOrTicketKey;
+            options = ticketKeyOpt || {};
             console.log('Searching for PR related to', ticketKey);
             openPRs = scmOrWorkspace.listPrs('open');
         } else {
             ticketKey = ticketKeyOpt;
+            options = optionsOpt || {};
             console.log('Searching for PR related to', ticketKey);
             openPRs = github_list_prs({ workspace: scmOrWorkspace, repository: repositoryOrTicketKey, state: 'open' });
         }
         console.log('Found', openPRs.length, 'open PRs');
 
-        var match = function(pr) {
-            return (pr.title && pr.title.indexOf(ticketKey) !== -1) ||
-                   (pr.head && pr.head.ref && pr.head.ref.indexOf(ticketKey) !== -1);
-        };
+        var normalizedKey = _normalizeForMatch(ticketKey);
+        var numericPart = _extractNumericPart(ticketKey);
+        var candidates = [];
 
-        var openMatch = openPRs.filter(match);
-        if (openMatch.length > 0) {
-            console.log('Found open PR #' + openMatch[0].number + ':', openMatch[0].title);
-            return openMatch[0];
+        for (var i = 0; i < openPRs.length; i++) {
+            var pr = openPRs[i];
+            var score = _scorePR(pr, normalizedKey, numericPart);
+            if (score > 0) {
+                candidates.push({ pr: pr, score: score });
+            }
         }
 
-        console.warn('No open PR found for ticket', ticketKey);
-        return null;
+        if (candidates.length === 0) {
+            console.warn('No open PR found for ticket', ticketKey);
+            return null;
+        }
+
+        candidates.sort(function(a, b) {
+            if (b.score !== a.score) return b.score - a.score;
+            var aFiles = a.pr.changed_files || 0;
+            var bFiles = b.pr.changed_files || 0;
+            return aFiles - bFiles;
+        });
+
+        if (typeof options.prSearchFn === 'function') {
+            try {
+                var hookResult = options.prSearchFn(
+                    candidates.map(function(c) { return c.pr; }),
+                    ticketKey,
+                    options
+                );
+                if (hookResult) {
+                    console.log('Project prSearchFn selected PR #' + hookResult.number + ':', hookResult.title);
+                    return hookResult;
+                }
+            } catch (hookErr) {
+                console.warn('prSearchFn hook failed (non-fatal):', hookErr);
+            }
+        }
+
+        console.log('Selected open PR #' + candidates[0].pr.number + ':', candidates[0].pr.title);
+        return candidates[0].pr;
     } catch (e) {
         console.error('Failed to find PR for ticket:', e);
         return null;
@@ -93,29 +186,54 @@ function findPRForTicket(scmOrWorkspace, repositoryOrTicketKey, ticketKeyOpt) {
  * findPRForTicket(). Only the scm-object calling convention is supported
  * (unlike findPRForTicket, no legacy workspace/repository overload).
  */
-function findMergedPRForTicket(scm, ticketKey) {
+function findMergedPRForTicket(scm, ticketKey, options) {
     try {
+        options = options || {};
         console.log('Searching for merged PR related to', ticketKey);
         var closedPRs = scm.listPrs('closed') || [];
         console.log('Found', closedPRs.length, 'closed PRs');
 
-        var match = function(pr) {
-            return (pr.title && pr.title.indexOf(ticketKey) !== -1) ||
-                   (pr.head && pr.head.ref && pr.head.ref.indexOf(ticketKey) !== -1);
-        };
+        var normalizedKey = _normalizeForMatch(ticketKey);
+        var numericPart = _extractNumericPart(ticketKey);
+        var candidates = [];
 
-        var merged = closedPRs.filter(function(pr) { return match(pr) && !!pr.merged_at; });
-        if (merged.length === 0) {
+        for (var i = 0; i < closedPRs.length; i++) {
+            var pr = closedPRs[i];
+            if (!pr.merged_at) continue;
+            var score = _scorePR(pr, normalizedKey, numericPart);
+            if (score > 0) {
+                candidates.push({ pr: pr, score: score });
+            }
+        }
+
+        if (candidates.length === 0) {
             console.warn('No merged PR found for ticket', ticketKey);
             return null;
         }
 
-        merged.sort(function(a, b) {
-            return new Date(b.merged_at).getTime() - new Date(a.merged_at).getTime();
+        candidates.sort(function(a, b) {
+            if (b.score !== a.score) return b.score - a.score;
+            return new Date(b.pr.merged_at).getTime() - new Date(a.pr.merged_at).getTime();
         });
 
-        console.log('Found merged PR #' + merged[0].number + ':', merged[0].title);
-        return merged[0];
+        if (typeof options.prSearchFn === 'function') {
+            try {
+                var hookResult = options.prSearchFn(
+                    candidates.map(function(c) { return c.pr; }),
+                    ticketKey,
+                    options
+                );
+                if (hookResult) {
+                    console.log('Project prSearchFn selected merged PR #' + hookResult.number + ':', hookResult.title);
+                    return hookResult;
+                }
+            } catch (hookErr) {
+                console.warn('prSearchFn hook failed (non-fatal):', hookErr);
+            }
+        }
+
+        console.log('Found merged PR #' + candidates[0].pr.number + ':', candidates[0].pr.title);
+        return candidates[0].pr;
     } catch (e) {
         console.error('Failed to find merged PR for ticket:', e);
         return null;

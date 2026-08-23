@@ -87,6 +87,148 @@ function makeGraphQLResponse(nodes) {
     });
 }
 
+// ── Suite: findPRForTicket scoring/ranking ──────────────────────────────────
+
+function scmWithOpenPrs(prs) {
+    return {
+        listPrs: function(state) {
+            assert.equal(state, 'open', 'findPRForTicket must request open PRs');
+            return prs;
+        }
+    };
+}
+
+suite('githubHelpers.findPRForTicket', function() {
+
+    test('returns null when no open PR matches', function() {
+        var gh = loadGithubHelpers({});
+        var scm = scmWithOpenPrs([
+            { number: 1, title: 'OTHER-1: unrelated', head: { ref: 'feature/other-1' }, changed_files: 2 }
+        ]);
+
+        var result = gh.findPRForTicket(scm, 'PROJ-42');
+
+        assert.ok(!result, 'no matching PR should return null/falsy');
+    });
+
+    test('matches ticket key case-insensitively in title', function() {
+        var gh = loadGithubHelpers({});
+        var scm = scmWithOpenPrs([
+            { number: 1, title: 'proj-42: fix', head: { ref: 'feature/x' }, changed_files: 1 }
+        ]);
+
+        var result = gh.findPRForTicket(scm, 'PROJ-42');
+
+        assert.ok(result, 'should match lowercase title against uppercase ticket key');
+        assert.equal(result.number, 1);
+    });
+
+    test('matches ticket key case-insensitively in head branch', function() {
+        var gh = loadGithubHelpers({});
+        var scm = scmWithOpenPrs([
+            { number: 2, title: 'Unrelated title', head: { ref: 'feature/proj-42-fix' }, changed_files: 1 }
+        ]);
+
+        var result = gh.findPRForTicket(scm, 'PROJ-42');
+
+        assert.ok(result, 'should match lowercase branch against uppercase ticket key');
+        assert.equal(result.number, 2);
+    });
+
+    test('falls back to bounded numeric part when full key is absent', function() {
+        var gh = loadGithubHelpers({});
+        var scm = scmWithOpenPrs([
+            { number: 3, title: 'lions: update 420 navigation', head: { ref: 'feature/ft_lions_420_update' }, changed_files: 1 }
+        ]);
+
+        var result = gh.findPRForTicket(scm, 'PROJ-420');
+
+        assert.ok(result, 'should find PR by bounded ticket number when full key missing');
+        assert.equal(result.number, 3);
+    });
+
+    test('numeric fallback ignores unbounded digit substrings', function() {
+        var gh = loadGithubHelpers({});
+        var scm = scmWithOpenPrs([
+            { number: 4, title: 'fix for 14200 range', head: { ref: 'feature/x' }, changed_files: 1 }
+        ]);
+
+        var result = gh.findPRForTicket(scm, 'PROJ-420');
+
+        assert.ok(!result, 'number 420 embedded inside 14200 must not match');
+    });
+
+    test('prefers feature/bug prefix over release/ prefix', function() {
+        var gh = loadGithubHelpers({});
+        var scm = scmWithOpenPrs([
+            { number: 5, title: 'release: proj-42', head: { ref: 'release/rc_proj_42' }, changed_files: 250 },
+            { number: 6, title: 'proj-42 fix', head: { ref: 'feature/ft_proj_42' }, changed_files: 3 }
+        ]);
+
+        var result = gh.findPRForTicket(scm, 'PROJ-42');
+
+        assert.ok(result, 'should select a PR');
+        assert.equal(result.number, 6, 'feature branch PR should win over release/rc PR');
+    });
+
+    test('deprioritizes bot-authored PRs', function() {
+        var gh = loadGithubHelpers({});
+        var scm = scmWithOpenPrs([
+            { number: 7, title: 'proj-42 release', head: { ref: 'release/rc_proj_42' }, changed_files: 250, user: { login: 'release-bot', is_bot: true } },
+            { number: 8, title: 'proj-42 fix', head: { ref: 'feature/ft_proj_42' }, changed_files: 3, user: { login: 'dev' } }
+        ]);
+
+        var result = gh.findPRForTicket(scm, 'PROJ-42');
+
+        assert.equal(result.number, 8, 'human-authored feature PR should win over bot release PR');
+    });
+
+    test('uses changed_files as tie-breaker when scores are equal', function() {
+        var gh = loadGithubHelpers({});
+        var scm = scmWithOpenPrs([
+            { number: 9, title: 'PROJ-42 fix a', head: { ref: 'feature/ft_proj_42_a' }, changed_files: 10 },
+            { number: 10, title: 'PROJ-42 fix b', head: { ref: 'feature/ft_proj_42_b' }, changed_files: 2 }
+        ]);
+
+        var result = gh.findPRForTicket(scm, 'PROJ-42');
+
+        assert.equal(result.number, 10, 'smaller PR should win when scores are tied');
+    });
+
+    test('project prSearchFn hook can override selection', function() {
+        var gh = loadGithubHelpers({});
+        var scm = scmWithOpenPrs([
+            { number: 11, title: 'PROJ-42 first', head: { ref: 'feature/ft_proj_42_first' }, changed_files: 1 },
+            { number: 12, title: 'PROJ-42 second', head: { ref: 'feature/ft_proj_42_second' }, changed_files: 1 }
+        ]);
+        var hookCalled = false;
+        var options = {
+            prSearchFn: function(candidates, key, opts) {
+                hookCalled = true;
+                assert.equal(key, 'PROJ-42');
+                assert.equal(candidates.length, 2);
+                return candidates[1];
+            }
+        };
+
+        var result = gh.findPRForTicket(scm, 'PROJ-42', options);
+
+        assert.ok(hookCalled, 'prSearchFn hook should be called');
+        assert.equal(result.number, 12, 'hook should decide which PR to use');
+    });
+
+    test('returns null and does not throw when scm.listPrs throws', function() {
+        var gh = loadGithubHelpers({});
+        var scm = {
+            listPrs: function() { throw new Error('network down'); }
+        };
+
+        var result = gh.findPRForTicket(scm, 'PROJ-42');
+
+        assert.ok(!result, 'errors should be swallowed and null returned');
+    });
+});
+
 // ── Suite: resolved status from GraphQL ──────────────────────────────────────
 
 suite('github repo remote parsing', function() {
