@@ -15,6 +15,7 @@ var autoStart = require('./common/autoStart.js');
 var configLoader = require('./configLoader.js');
 var outputFiles = require('./common/outputFiles.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+var gh = require('./common/githubHelpers.js');
 
 var RESUME_MARKER = 'outputs/.pr-review-missing-output-resume-attempted';
 
@@ -286,28 +287,6 @@ function getGitHubRepoInfo() {
 
     } catch (error) {
         console.error('Failed to get GitHub repo info:', error);
-        return null;
-    }
-}
-
-function findPRForTicket(scm, ticketKey) {
-    try {
-        console.log('Searching for PR related to', ticketKey);
-        const openPRs = scm.listPrs('open');
-        console.log('Found', openPRs.length, 'open PRs');
-        const matchingPRs = openPRs.filter(function(pr) {
-            const titleMatch = pr.title && pr.title.indexOf(ticketKey) !== -1;
-            const branchMatch = pr.head && pr.head.ref && pr.head.ref.indexOf(ticketKey) !== -1;
-            return titleMatch || branchMatch;
-        });
-        if (matchingPRs.length === 0) {
-            console.log('No open PRs found mentioning', ticketKey);
-            return null;
-        }
-        console.log('Found matching PR:', matchingPRs[0].number);
-        return matchingPRs[0];
-    } catch (error) {
-        console.error('Error finding PR:', error);
         return null;
     }
 }
@@ -767,7 +746,8 @@ function action(params) {
         // Fallback: If no PR number found, search for PR using MCP tools
         if (!prNumber && repoInfo) {
             console.log('PR number not found in input folder, searching GitHub...');
-            const pr = findPRForTicket(scm, ticketKey);
+            var prSearchOptions = config.prSearchFn ? { prSearchFn: config.prSearchFn } : {};
+            const pr = gh.findPRForTicket(scm, ticketKey, prSearchOptions);
             if (pr) {
                 prNumber = pr.number;
                 prUrl = pr.html_url;

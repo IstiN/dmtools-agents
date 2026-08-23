@@ -69,7 +69,8 @@ function action(params) {
             try {
                 var config = configLoader.loadProjectConfig(params.jobParams || params);
                 var scm = configLoader.createScm(config);
-                var pr = gh.findPRForTicket(scm, ticketKey);
+                var prSearchOptions = config.prSearchFn ? { prSearchFn: config.prSearchFn } : {};
+                var pr = gh.findPRForTicket(scm, ticketKey, prSearchOptions);
                 if (!pr) {
                     console.log('⏸️  No open PR found for ' + ticketKey + ' - skipping processing');
                     try {

@@ -59,6 +59,10 @@ function loadPostStoryTestAutomationReview(mocks) {
             },
             './configLoader.js': freshConfigLoader,
             './common/outputFiles.js': outputFiles,
+            './common/githubHelpers.js': {
+                findPRForTicket: function() { return null; },
+                findMergedPRForTicket: function() { return null; }
+            },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
         allMocks

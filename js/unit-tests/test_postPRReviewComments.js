@@ -2,6 +2,11 @@
  * Unit tests for js/postPRReviewComments.js.
  */
 
+var githubHelpersStub = {
+    findPRForTicket: function() { return null; },
+    findMergedPRForTicket: function() { return null; }
+};
+
 function loadPostPRReviewComments(mocks) {
     var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({}), {
         file_read: (mocks && mocks.file_read) || function() { return null; }
@@ -14,6 +19,7 @@ function loadPostPRReviewComments(mocks) {
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
             './configLoader.js': configLoaderModule,
             './common/outputFiles.js': outputFiles,
+            './common/githubHelpers.js': githubHelpersStub,
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
         {
@@ -318,6 +324,7 @@ suite('postPRReviewComments', function() {
                         resolveInstructions: function() { return { jobParamPatch: {} }; }
                     },
                     './common/outputFiles.js': outputFiles,
+                    './common/githubHelpers.js': githubHelpersStub,
                     './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
                 }),
                 defaultMocks
