@@ -1,3 +1,9 @@
+**HARD GATE — read before any tool call:**
+
+1. Your FIRST code-investigation action MUST be `codegraph context "<ticket key> <feature summary>"` — before any grep / glob / file read of source code.
+2. Keep a running mental list of files you have already read and facts you have already established. **Never re-read a file or re-run a search you already did in this session** — quote your earlier finding instead. Re-reading the same file twice means your investigation is looping; stop investigating and start writing the output.
+3. If codegraph returns nothing useful, fall back to a few targeted grep/glob searches — but cap the fallback: after ~10 search calls you have enough to write the deliverable. Do not turn the fallback into a search loop.
+
 ```mermaid
 flowchart TD
     subgraph PURPOSE["Why investigate code"]
@@ -39,6 +45,7 @@ flowchart TD
         R2["✅ BA / question agents — use grep + codegraph together; grep is equally valid"]
         R3["❌ Never skip code investigation and invent questions about already-implemented things"]
         R4["❌ Never use codegraph sync unless you edited source files in this session"]
+        R5["❌ Never re-read a file already read in this session — track findings, write the output"]
     end
 
     PURPOSE --> TOOLS --> FLOW --> RULES
