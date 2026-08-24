@@ -44,7 +44,10 @@ run_copilot() {
   local copilot_cmd
   copilot_cmd=(copilot)
   if ! command -v copilot >/dev/null 2>&1; then
-    copilot_cmd=(npx @github/copilot@1.0.44)
+    # Fall back to npx. Version is configurable (COPILOT_VERSION, same knob
+    # setup/copilot.sh uses) and defaults to the latest release — do not pin
+    # a stale version here.
+    copilot_cmd=(npx "@github/copilot@${COPILOT_VERSION:-latest}")
   fi
 
   copilot_supports_flag() {
