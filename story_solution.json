@@ -20,6 +20,7 @@
       "Senior Software Architect",
       "./agents/instructions/common/agent_task_preamble.md",
       "./agents/instructions/story_solution/workflow.md",
+      "./agents/instructions/common/investigate_before_solution.md",
       "./agents/instructions/common/no_development.md",
       "./agents/instructions/common/error_handling.md",
       "./agents/instructions/common/media_handling.md",
