@@ -6,6 +6,7 @@ function loadPrepareDiscoveryContext(mocks, discoveryConfig) {
     var defaults = {
         confluence_get_children_by_id: function() { return []; },
         confluence_content_by_id: function() { return { body: { storage: { value: '' } } }; },
+        confluence_get_page_inline_comments: function() { return JSON.stringify({ results: [] }); },
         file_write: function() {}
     };
 
@@ -176,6 +177,68 @@ suite('prepareDiscoveryContext', function() {
         assert.equal(result.success, false);
         assert.equal(result.action, 'children_lookup_failed');
         assert.contains(writes['input/PROJ-2/discovery_meta.json'], '"space": "DISC"');
+    });
+
+    test('iteration — collects inline comments and writes input/discovery_inline_comments files', function() {
+        var writes = {};
+        var commentCalls = [];
+        var mod = loadPrepareDiscoveryContext({
+            confluence_get_children_by_id: function(args) {
+                if (args.contentId === '123') {
+                    return [{ id: '456', title: 'PROJ-2 Some feature' }];
+                }
+                if (args.contentId === '456') {
+                    return [
+                        { id: '457', title: 'PRD' }
+                    ];
+                }
+                return [];
+            },
+            confluence_content_by_id: function(args) {
+                if (args.contentId === '456') return { body: { storage: { value: '# Index' } } };
+                return { body: { storage: { value: '' } } };
+            },
+            confluence_get_page_inline_comments: function(args) {
+                commentCalls.push(args);
+                if (args.pageId === '456') {
+                    return JSON.stringify({
+                        results: [
+                            { id: 'c1', author: { displayName: 'Alice' }, createdDate: '2026-08-01', body: { storage: { value: '<p>Clarify the goal.</p>' } } }
+                        ]
+                    });
+                }
+                return JSON.stringify({ results: [] });
+            },
+            file_write: function(p, c) { writes[p] = c; }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        var result = mod.action(makeParams());
+
+        assert.equal(result.action, 'iteration');
+        assert.equal(result.inlineCommentsCount, 1);
+        assert.equal(commentCalls.length, 2, 'should fetch comments for root and child');
+        assert.contains(writes['input/PROJ-2/discovery_inline_comments.json'], '"commentId": "c1"');
+        assert.contains(writes['input/PROJ-2/discovery_inline_comments.md'], 'Clarify the goal.');
+        assert.contains(writes['input/PROJ-2/discovery_inline_comments.md'], 'pageId: 456');
+    });
+
+    test('iteration — includeConfluenceComments=false skips inline comment fetch', function() {
+        var commentCalls = [];
+        var writes = {};
+        var mod = loadPrepareDiscoveryContext({
+            confluence_get_children_by_id: function(args) {
+                if (args.contentId === '123') return [{ id: '456', title: 'PROJ-2 Some feature' }];
+                return [];
+            },
+            confluence_get_page_inline_comments: function(args) { commentCalls.push(args); return JSON.stringify({ results: [] }); },
+            file_write: function(p, c) { writes[p] = c; }
+        }, { space: 'DISC', parentPageId: '123', includeConfluenceComments: false });
+
+        var result = mod.action(makeParams());
+
+        assert.equal(result.action, 'iteration');
+        assert.equal(commentCalls.length, 0, 'should not fetch comments when disabled');
+        assert.equal(writes['input/PROJ-2/discovery_inline_comments.md'], undefined);
     });
 
 });

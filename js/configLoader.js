@@ -99,10 +99,11 @@ var DEFAULTS = {
     // own .dmtools/config.js before discovery pages can be published; this repo
     // stays project-agnostic.
     discovery: {
-        space: '',            // Confluence space key discovery pages are created in
-        parentPageId: '',     // Confluence page ID each ticket's discovery page nests under
-        deleteOrphans: false  // Whether confluence_sync_markdown_directory removes child
-                               // pages no longer present in outputs/discovery/
+        space: '',                     // Confluence space key discovery pages are created in
+        parentPageId: '',              // Confluence page ID each ticket's discovery page nests under
+        deleteOrphans: false,          // Whether confluence_sync_markdown_directory removes child
+                                       // pages no longer present in outputs/discovery/
+        includeConfluenceComments: true // Whether to fetch inline comments from existing discovery pages
     },
 
     smRules: null,
