@@ -24,7 +24,12 @@
  *     the CLI agent's view on the next iteration, and a project with
  *     deleteOrphans enabled would then delete them from Confluence entirely
  *     on publish, even though nothing about them changed.
- *  3. Writes input/discovery_meta.json with the resolved space/parentPageId
+ *  3. Collects inline comments (annotations) from every page in the existing
+ *     discovery tree and writes them to input/discovery_inline_comments.json
+ *     and input/discovery_inline_comments.md. The CLI agent can read these
+ *     comments as feedback and produce outputs/discovery_replies.json, which
+ *     publishDiscoveryToConfluence.js posts back to Confluence.
+ *  4. Writes input/discovery_meta.json with the resolved space/parentPageId
  *     and the existing page id (if found) — read by the matching postJSAction
  *     (publishDiscoveryToConfluence.js) so both steps agree on where to publish
  *     without re-resolving config or re-querying Confluence twice.
@@ -33,9 +38,105 @@
 var configLoader = require('./configLoader.js');
 
 var DISCOVERY_OUTPUT_DIR = 'outputs/discovery';
+var COMMENTS_FILE_NAME = 'discovery_inline_comments';
+var DEFAULT_COMMENTS_LIMIT = 100;
 
 function sanitizeFileName(title) {
     return String(title || 'untitled').replace(/[\\/:*?"<>|]/g, '-').trim();
+}
+
+function mergeObjects(base, override) {
+    var result = {};
+    var key;
+    for (key in (base || {})) {
+        if (Object.prototype.hasOwnProperty.call(base, key)) result[key] = base[key];
+    }
+    for (key in (override || {})) {
+        if (Object.prototype.hasOwnProperty.call(override, key)) result[key] = override[key];
+    }
+    return result;
+}
+
+/**
+ * Extract a readable string from a comment body returned by Confluence.
+ * Handles storage format, atlas_doc_format, plain strings, and fallbacks.
+ */
+function extractCommentBody(comment) {
+    if (!comment) return '';
+    var body = comment.body;
+    if (typeof body === 'string') return body;
+    if (body && body.storage && typeof body.storage.value === 'string') return body.storage.value;
+    if (body && body.atlas_doc_format && typeof body.atlas_doc_format.value === 'string') return body.atlas_doc_format.value;
+    if (body && body.view && typeof body.view.value === 'string') return body.view.value;
+    return JSON.stringify(body);
+}
+
+/**
+ * Fetch inline comments for every page in pageInfos. Errors are non-fatal.
+ */
+function fetchInlineComments(pageInfos, folder) {
+    var allComments = [];
+    var limit = DEFAULT_COMMENTS_LIMIT;
+    for (var i = 0; i < pageInfos.length; i++) {
+        var info = pageInfos[i];
+        try {
+            var raw = confluence_get_page_inline_comments({ pageId: String(info.id), limit: limit });
+            var parsed = JSON.parse(raw || '{}');
+            var comments = parsed.results || parsed.comments || (Array.isArray(parsed) ? parsed : []);
+            if (comments.length >= limit) {
+                console.warn('prepareDiscoveryContext: inline comments for page ' + info.id + ' may be truncated (limit ' + limit + ')');
+            }
+            for (var j = 0; j < comments.length; j++) {
+                var c = comments[j];
+                allComments.push({
+                    pageId: info.id,
+                    pageTitle: info.title || 'untitled',
+                    commentId: c.id || null,
+                    parentCommentId: c.parentCommentId || c.parentId || null,
+                    author: (c.author && (c.author.displayName || c.author.emailAddress)) || 'Unknown',
+                    created: c.createdDate || c.created || '',
+                    resolved: !!(c.resolvedDate || c.resolved || c.status === 'resolved' || c.status === 'closed'),
+                    body: extractCommentBody(c)
+                });
+            }
+        } catch (e) {
+            console.warn('prepareDiscoveryContext: failed to fetch inline comments for page ' + info.id + ':', e);
+        }
+    }
+    return allComments;
+}
+
+/**
+ * Write collected inline comments to both JSON (machine-readable) and Markdown
+ * (human/AI-readable) forms in the input folder.
+ */
+function writeCommentsFiles(folder, comments) {
+    try {
+        file_write(folder + '/' + COMMENTS_FILE_NAME + '.json', JSON.stringify({ comments: comments }, null, 2));
+    } catch (e) {
+        console.warn('prepareDiscoveryContext: failed to write ' + COMMENTS_FILE_NAME + '.json:', e);
+    }
+    try {
+        var lines = ['# Inline comments on discovery pages\n'];
+        if (!comments || comments.length === 0) {
+            lines.push('\n_No inline comments found._');
+        } else {
+            lines.push('\nTotal comments: ' + comments.length + '\n');
+            for (var i = 0; i < comments.length; i++) {
+                var c = comments[i];
+                lines.push('## Comment ' + (c.commentId || 'unknown') + ' on page "' + (c.pageTitle || 'untitled') + '" (pageId: ' + (c.pageId || 'unknown') + ')');
+                lines.push('- **Author:** ' + (c.author || 'Unknown'));
+                lines.push('- **Created:** ' + (c.created || ''));
+                lines.push('- **Resolved:** ' + (c.resolved ? 'yes' : 'no'));
+                if (c.parentCommentId) lines.push('- **Parent comment:** ' + c.parentCommentId);
+                lines.push('\n' + (c.body || ''));
+                lines.push('\n---\n');
+            }
+        }
+        file_write(folder + '/' + COMMENTS_FILE_NAME + '.md', lines.join('\n'));
+    } catch (e) {
+        console.warn('prepareDiscoveryContext: failed to write ' + COMMENTS_FILE_NAME + '.md:', e);
+    }
 }
 
 /**
@@ -67,16 +168,22 @@ function findTicketPage(children, ticketKey) {
  *     index.md into (its children go into named subfolders/files here)
  * @returns {number} total number of descendant pages snapshotted (all depths)
  */
-function snapshotPageTree(page, targetDir) {
+function snapshotPageTree(page, targetDir, pageInfos) {
     var total = 0;
     try {
         var rootMd = confluence_content_by_id({ contentId: page.id, format: 'md' });
         var rootBody = (rootMd && rootMd.body && rootMd.body.storage && rootMd.body.storage.value) || '';
         file_write(targetDir + '/index.md', rootBody || '_(existing page had no body)_');
+        if (pageInfos) {
+            pageInfos.push({ id: page.id, title: page.title || 'untitled' });
+        }
 
         var children = confluence_get_children_by_id({ contentId: page.id, format: 'md' }) || [];
         children.forEach(function(child) {
             total += 1;
+            if (pageInfos) {
+                pageInfos.push({ id: child.id, title: child.title || 'untitled' });
+            }
             var fileName = sanitizeFileName(child.title);
 
             var grandchildren;
@@ -90,7 +197,7 @@ function snapshotPageTree(page, targetDir) {
                 // This child has its own descendants — recurse into a subfolder
                 // named after it, matching the sync tool's folder-with-index.md
                 // convention for a page that itself has children.
-                total += snapshotPageTree(child, targetDir + '/' + fileName);
+                total += snapshotPageTree(child, targetDir + '/' + fileName, pageInfos);
             } else {
                 // Leaf page — a single Markdown file is enough.
                 var childBody = (child.body && child.body.storage && child.body.storage.value) || '';
@@ -118,7 +225,10 @@ function action(params) {
 
     try {
         var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
-        var discoveryConfig = projectConfig.discovery || {};
+        var discoveryConfig = mergeObjects(
+            projectConfig.discovery || {},
+            (projectConfig.customParams && projectConfig.customParams.discovery) || {}
+        );
         meta.space = discoveryConfig.space || null;
         meta.parentPageId = discoveryConfig.parentPageId || null;
 
@@ -145,11 +255,21 @@ function action(params) {
         }
 
         meta.existingPageId = existing.id;
-        console.log('Found existing discovery page for ' + ticketKey + ': ' + existing.id + ' ("' + existing.title + '") — seeding ' + DISCOVERY_OUTPUT_DIR + ' with its current content (full tree, recursively) for in-place editing.');
-        var snapshotted = snapshotPageTree(existing, DISCOVERY_OUTPUT_DIR);
+        var includeComments = discoveryConfig.includeConfluenceComments !== false;
+        console.log('Found existing discovery page for ' + ticketKey + ': ' + existing.id + ' ("' + existing.title + '") — seeding ' + DISCOVERY_OUTPUT_DIR + ' with its current content (full tree, recursively) for in-place editing. Inline comments enabled: ' + includeComments);
+        var pageInfos = [];
+        var snapshotted = snapshotPageTree(existing, DISCOVERY_OUTPUT_DIR, pageInfos);
+
+        if (includeComments && pageInfos.length > 0) {
+            var comments = fetchInlineComments(pageInfos, folder);
+            writeCommentsFiles(folder, comments);
+            meta.inlineCommentsCount = comments.length;
+            console.log('Collected ' + comments.length + ' inline comment(s) from ' + pageInfos.length + ' page(s)');
+        }
+
         file_write(folder + '/discovery_meta.json', JSON.stringify(meta, null, 2));
 
-        return { success: true, action: 'iteration', ticketKey: ticketKey, existingPageId: existing.id, snapshottedPages: snapshotted };
+        return { success: true, action: 'iteration', ticketKey: ticketKey, existingPageId: existing.id, snapshottedPages: snapshotted, inlineCommentsCount: meta.inlineCommentsCount || 0 };
     } catch (error) {
         console.error('Error in prepareDiscoveryContext:', error);
         try {
@@ -162,5 +282,16 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, findTicketPage, sanitizeFileName, snapshotPageTree, DISCOVERY_OUTPUT_DIR };
+    module.exports = {
+        action,
+        findTicketPage,
+        sanitizeFileName,
+        snapshotPageTree,
+        fetchInlineComments,
+        writeCommentsFiles,
+        extractCommentBody,
+        DISCOVERY_OUTPUT_DIR,
+        COMMENTS_FILE_NAME,
+        DEFAULT_COMMENTS_LIMIT
+    };
 }

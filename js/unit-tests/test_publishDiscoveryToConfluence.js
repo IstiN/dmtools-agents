@@ -9,6 +9,8 @@ function loadPublishDiscovery(mocks, discoveryConfig) {
         confluence_update_page: function(args) { return { id: args.contentId, title: args.title, _links: { webui: '/wiki/spaces/DISC/pages/1', base: 'https://confluence.example.com' } }; },
         confluence_content_by_id: function(args) { return { id: args.contentId, _links: { webui: '/wiki/spaces/DISC/pages/1', base: 'https://confluence.example.com' } }; },
         confluence_sync_markdown_directory: function() { return JSON.stringify({ syncedPages: ['index', 'prd'] }); },
+        confluence_reply_to_inline_comment: function(args) { return { id: 'reply-' + args.commentId }; },
+        file_read: function() { return ''; },
         jira_post_comment: function() {}
     };
 
@@ -203,6 +205,57 @@ suite('publishDiscoveryToConfluence', function() {
         assert.equal(result.action, 'error');
         assert.equal(comments.length, 1);
         assert.contains(comments[0].comment, 'publish failed');
+    });
+
+    test('publishes inline-comment replies from outputs/discovery_replies.json', function() {
+        var replies = [];
+        var comments = [];
+        var mod = loadPublishDiscovery({
+            confluence_get_children_by_id: function() {
+                return [{ id: '456', title: 'PROJ-2 Some feature', body: { storage: { value: '' } } }];
+            },
+            file_read: function(path) {
+                if (path === 'outputs/discovery_replies.json') {
+                    return JSON.stringify([
+                        { pageId: '456', commentId: 'c1', body: 'Fixed in AS IS section.' },
+                        { pageId: '457', commentId: 'c2', body: 'Added to PRD.' }
+                    ]);
+                }
+                return '';
+            },
+            confluence_reply_to_inline_comment: function(args) { replies.push(args); },
+            jira_post_comment: function(args) { comments.push(args); }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        var result = mod.action(makeParams());
+
+        assert.equal(result.success, true);
+        assert.equal(replies.length, 2);
+        assert.equal(replies[0].commentId, 'c1');
+        assert.equal(replies[1].pageId, '457');
+        assert.contains(comments[0].comment, 'Replied to *2* inline comment(s)');
+        assert.equal(result.replies.posted, 2);
+        assert.equal(result.replies.failed, 0);
+    });
+
+    test('missing or invalid replies file is ignored gracefully', function() {
+        var replies = [];
+        var comments = [];
+        var mod = loadPublishDiscovery({
+            confluence_get_children_by_id: function() {
+                return [{ id: '456', title: 'PROJ-2 Some feature', body: { storage: { value: '' } } }];
+            },
+            file_read: function() { throw new Error('file not found'); },
+            confluence_reply_to_inline_comment: function(args) { replies.push(args); },
+            jira_post_comment: function(args) { comments.push(args); }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        var result = mod.action(makeParams());
+
+        assert.equal(result.success, true);
+        assert.equal(replies.length, 0);
+        assert.equal(result.replies.posted, 0);
+        assert.notContains(comments[0].comment, 'inline comment');
     });
 
 });

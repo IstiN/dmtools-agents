@@ -24,6 +24,7 @@ var configLoader = require('./configLoader.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
 var DISCOVERY_OUTPUT_DIR = 'outputs/discovery';
+var REPLIES_FILE_PATH = 'outputs/discovery_replies.json';
 
 function findTicketPage(children, ticketKey) {
     if (!children || !Array.isArray(children)) return null;
@@ -63,6 +64,55 @@ function resolvePageUrl(page) {
         console.warn('resolvePageUrl: follow-up confluence_content_by_id lookup failed:', e);
         return null;
     }
+}
+
+/**
+ * Read the optional discovery replies file produced by the CLI agent.
+ * Expected shape: an array of { pageId, commentId, body } objects, or an
+ * object with a `replies` array. Missing/invalid file → empty array.
+ */
+function readRepliesFile() {
+    try {
+        var raw = file_read(REPLIES_FILE_PATH);
+        if (!raw || raw.trim() === '') return [];
+        var parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+        if (parsed && Array.isArray(parsed.replies)) return parsed.replies;
+        return [];
+    } catch (e) {
+        console.warn('publishDiscoveryToConfluence: could not read ' + REPLIES_FILE_PATH + ':', e);
+        return [];
+    }
+}
+
+/**
+ * Publish replies to Confluence inline comments. Errors are non-fatal.
+ */
+function publishCommentReplies(replies) {
+    var posted = 0;
+    var failed = 0;
+    if (!Array.isArray(replies) || replies.length === 0) return { posted: 0, failed: 0 };
+    for (var i = 0; i < replies.length; i++) {
+        var r = replies[i];
+        if (!r || !r.pageId || !r.commentId || !r.body) {
+            console.warn('publishDiscoveryToConfluence: skipping invalid reply entry', r);
+            failed += 1;
+            continue;
+        }
+        try {
+            confluence_reply_to_inline_comment({
+                pageId: String(r.pageId),
+                commentId: String(r.commentId),
+                body: String(r.body)
+            });
+            posted += 1;
+            console.log('Replied to inline comment ' + r.commentId + ' on page ' + r.pageId);
+        } catch (e) {
+            failed += 1;
+            console.warn('publishDiscoveryToConfluence: failed to reply to comment ' + r.commentId + ':', e);
+        }
+    }
+    return { posted: posted, failed: failed };
 }
 
 function action(params) {
@@ -143,9 +193,16 @@ function action(params) {
         var pageUrl = resolvePageUrl(page);
         var syncedCount = (syncSummary.syncedPages && syncSummary.syncedPages.length) || 0;
 
+        var replies = readRepliesFile();
+        var replyResult = publishCommentReplies(replies);
+
         var comment = 'h3. 📚 Discovery published to Confluence\n\n' +
             (pageUrl ? 'Page: ' + pageUrl + '\n\n' : '') +
             'Synced *' + syncedCount + '* page(s) from `' + DISCOVERY_OUTPUT_DIR + '`.';
+        if (replyResult.posted > 0 || replyResult.failed > 0) {
+            comment += '\n\nReplied to *' + replyResult.posted + '* inline comment(s)' +
+                (replyResult.failed > 0 ? ' (*' + replyResult.failed + '* failed)' : '') + '.';
+        }
         try {
             jira_post_comment({ key: ticketKey, comment: comment });
         } catch (commentError) {
@@ -165,7 +222,8 @@ function action(params) {
             ticketKey: ticketKey,
             pageId: page.id,
             pageUrl: pageUrl,
-            syncedPages: syncedCount
+            syncedPages: syncedCount,
+            replies: replyResult
         };
     } catch (error) {
         console.error('Error in publishDiscoveryToConfluence:', error);
@@ -182,5 +240,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, findTicketPage, buildPageUrl, resolvePageUrl };
+    module.exports = { action, findTicketPage, buildPageUrl, resolvePageUrl, readRepliesFile, publishCommentReplies };
 }
