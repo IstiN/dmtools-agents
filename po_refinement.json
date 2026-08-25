@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "po_refinement"
+      "contextId": "po_refinement",
+      "description": "Answers a Product Owner refinement question using the parent ticket context ([BA]/[SA]/[VD] siblings), writes the answer to the Answer field, and closes the question."
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

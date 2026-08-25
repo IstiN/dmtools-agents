@@ -6,7 +6,8 @@
   },
   "params": {
     "metadata": {
-      "contextId": "pr_rework_redirect"
+      "contextId": "pr_rework_redirect",
+      "description": "Redirect helper that routes a rework request to the correct PR rework configuration for the repository."
     },
     "customParams": {
       "targetAgentName": "pr_rework.json"

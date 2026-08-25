@@ -13,6 +13,9 @@
         "workflowRef": "main",
         "outputPath": "outputs/df_manager_report.json"
       }
+    },
+    "metadata": {
+      "description": "JSRunner job that coordinates dark-factory manager routines (scheduling and housekeeping) without an AI CLI step."
     }
   }
 }

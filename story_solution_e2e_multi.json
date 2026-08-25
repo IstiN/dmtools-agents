@@ -2,11 +2,14 @@
   "name": "Teammate",
   "parent": {
     "path": "story_solution_e2e.json",
-    "merge": ["params.cliPrompts"]
+    "merge": [
+      "params.cliPrompts"
+    ]
   },
   "params": {
     "metadata": {
-      "contextId": "story_solution_e2e_multi"
+      "contextId": "story_solution_e2e_multi",
+      "description": "Multi-task variant of story_solution_e2e that splits a large solution into several implementation tasks."
     },
     "cliPrompts": [
       "./agents/instructions/story_solution/affected_repos_multi_task_split.md"

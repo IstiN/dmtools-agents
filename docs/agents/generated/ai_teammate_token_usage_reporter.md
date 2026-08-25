@@ -1,5 +1,7 @@
 # JSRunner (`ai_teammate_token_usage_reporter.json`)
 
+JSRunner job that aggregates AI token usage written by agent runs and posts a summary report comment.
+
 ## Attributes
 
 | Attribute | Value |
@@ -13,6 +15,7 @@
 Full prompt / instruction set: [`agents/snapshots/ai_teammate_token_usage_reporter.md`](agents/snapshots/ai_teammate_token_usage_reporter.md)
 
 ## Actions
+
 
 
 

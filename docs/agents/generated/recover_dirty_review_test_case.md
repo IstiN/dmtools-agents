@@ -1,5 +1,7 @@
 # Teammate (`recover_dirty_review_test_case.json`)
 
+Recovery job that cleans up a test case left in a dirty in-review state (unfinished review bookkeeping) and restores a consistent status.
+
 ## Attributes
 
 | Attribute | Value |
@@ -27,6 +29,7 @@ _recoverDirtyReviewTestCase.js_
   - remove label "sm_test_automation_triggered"
   - remove label "sm_test_review_triggered"
   - post Jira comment
+
 
 ## LLM step
 

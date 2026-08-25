@@ -6,7 +6,8 @@
   },
   "params": {
     "metadata": {
-      "contextId": "story_development_redirect_test"
+      "contextId": "story_development_redirect_test",
+      "description": "Test variant of story_development_redirect used to exercise the redirect flow safely."
     },
     "customParams": {
       "targetAgentName": "story_development_test.json"

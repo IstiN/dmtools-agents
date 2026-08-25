@@ -1,7 +1,10 @@
 {
   "name": "Teammate",
   "params": {
-    "metadata": { "contextId": "bug_test_automation_merge" },
+    "metadata": {
+      "contextId": "bug_test_automation_merge",
+      "description": "Merges an approved bug-test-automation PR and updates the bug ticket with the result."
+    },
     "outputType": "none",
     "ticketContextDepth": 1,
     "skipAIProcessing": true,

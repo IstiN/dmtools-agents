@@ -1,5 +1,7 @@
 # JSRunner (`df_manager.json`)
 
+JSRunner job that coordinates dark-factory manager routines (scheduling and housekeeping) without an AI CLI step.
+
 ## Attributes
 
 | Attribute | Value |
@@ -13,6 +15,7 @@
 Full prompt / instruction set: [`agents/snapshots/df_manager.md`](agents/snapshots/df_manager.md)
 
 ## Actions
+
 
 
 

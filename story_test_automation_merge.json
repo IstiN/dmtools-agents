@@ -1,7 +1,10 @@
 {
   "name": "Teammate",
   "params": {
-    "metadata": { "contextId": "story_test_automation_merge" },
+    "metadata": {
+      "contextId": "story_test_automation_merge",
+      "description": "Merges an approved story-test-automation PR and updates the story ticket with the result."
+    },
     "outputType": "none",
     "ticketContextDepth": 1,
     "skipAIProcessing": true,

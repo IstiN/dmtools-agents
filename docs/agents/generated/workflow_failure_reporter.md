@@ -1,5 +1,7 @@
 # JSRunner (`workflow_failure_reporter.json`)
 
+JSRunner job that reports failed agent workflow runs (with links and error summaries) so failures are visible instead of silent.
+
 ## Attributes
 
 | Attribute | Value |
@@ -13,6 +15,7 @@
 Full prompt / instruction set: [`agents/snapshots/workflow_failure_reporter.md`](agents/snapshots/workflow_failure_reporter.md)
 
 ## Actions
+
 
 
 

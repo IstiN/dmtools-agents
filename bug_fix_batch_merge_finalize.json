@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "bug_fix_batch_merge_finalize"
+      "contextId": "bug_fix_batch_merge_finalize",
+      "description": "Finalizes a merged batch-fix PR: updates the batch epic, links results back to each bug, and moves the batch tickets forward."
     },
     "outputType": "none",
     "ticketContextDepth": 1,

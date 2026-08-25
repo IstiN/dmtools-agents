@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "bulk_bugs_creation"
+      "contextId": "bulk_bugs_creation",
+      "description": "Creates many bug tickets at once from a single analysis: drafts each bug and creates them in bulk with links back to the source."
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

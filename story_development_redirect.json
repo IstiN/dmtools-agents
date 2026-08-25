@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "story_development_redirect"
+      "contextId": "story_development_redirect",
+      "description": "Redirect helper that routes a story to the repository-specific development agent based on the ticket context."
     },
     "skipAIProcessing": true,
     "outputType": "none",

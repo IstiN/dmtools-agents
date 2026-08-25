@@ -37,6 +37,9 @@
       "ado": [
         "./agents/instructions/tracker/ado_markup_transform.md"
       ]
+    },
+    "metadata": {
+      "description": "Writes a full story description from the ticket context and linked questions; output goes to the Description field by default or to Confluence when contentOutput is configured."
     }
   }
 }

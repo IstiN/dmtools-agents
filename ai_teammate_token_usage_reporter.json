@@ -17,6 +17,9 @@
         "cacheWriteEvery": 25,
         "outputDir": "outputs/token_usage"
       }
+    },
+    "metadata": {
+      "description": "JSRunner job that aggregates AI token usage written by agent runs and posts a summary report comment."
     }
   }
 }

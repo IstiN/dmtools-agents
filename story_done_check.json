@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "story_done_check"
+      "contextId": "story_done_check",
+      "description": "Verifies that a story really can move to Done: checks tests passed and PRs merged, then transitions the ticket or reports what is missing."
     },
     "outputType": "none",
     "ticketContextDepth": 1,

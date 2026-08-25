@@ -43,6 +43,9 @@
         "thenAction": "assignForSolutionArchitecture.js",
         "assignForReview": false
       }
+    },
+    "metadata": {
+      "description": "Plural-name variant of story_acceptance_criteria kept for backward compatibility; same behavior."
     }
   }
 }

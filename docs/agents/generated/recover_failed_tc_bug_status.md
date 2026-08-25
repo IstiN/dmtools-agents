@@ -1,5 +1,7 @@
 # JSRunner (`recover_failed_tc_bug_status.json`)
 
+JSRunner recovery job that repairs the status of bugs whose test-case workflow failed mid-transition.
+
 ## Attributes
 
 | Attribute | Value |
@@ -24,6 +26,7 @@ _Recover Failed Test Cases after bug triage._
 - Source: `agents/js/recoverFailedTCBugStatus.js`
 - Side effects:
   - post Jira comment
+
 
 ## LLM step
 

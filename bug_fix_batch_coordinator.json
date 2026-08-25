@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "bug_fix_batch_coordinator"
+      "contextId": "bug_fix_batch_coordinator",
+      "description": "Collects several related bugs into one batch epic so they can be fixed together in a single development pass."
     },
     "outputType": "none",
     "ticketContextDepth": 1,

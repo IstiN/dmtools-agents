@@ -1,6 +1,9 @@
 {
   "name": "JSRunner",
   "params": {
-    "postJSAction": "agents/js/unblockResolvedDependencies.js"
+    "postJSAction": "agents/js/unblockResolvedDependencies.js",
+    "metadata": {
+      "description": "JSRunner job that finds tickets blocked by dependencies that are already resolved and moves them back to an actionable status."
+    }
   }
 }

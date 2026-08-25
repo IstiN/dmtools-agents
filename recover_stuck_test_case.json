@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "recover_stuck_test_case"
+      "contextId": "recover_stuck_test_case",
+      "description": "Recovery job that unsticks a test case left in an intermediate status after a failed or interrupted run."
     },
     "outputType": "none",
     "ticketContextDepth": 1,

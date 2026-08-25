@@ -4,6 +4,9 @@
     "inputJql": "key = GENSGENP-52851",
     "skipAIProcessing": true,
     "postJSAction": "agents/js/createRepoTasksMulti.js",
-    "localExecution": true
+    "localExecution": true,
+    "metadata": {
+      "description": "Same as createRepoTasks but fans out across multiple repositories in one run."
+    }
   }
 }

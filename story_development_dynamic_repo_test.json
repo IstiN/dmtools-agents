@@ -6,7 +6,8 @@
   },
   "params": {
     "metadata": {
-      "contextId": "story_development_dynamic_repo_test"
+      "contextId": "story_development_dynamic_repo_test",
+      "description": "Test variant of story_development_dynamic_repo used to exercise the dynamic-repo flow safely."
     },
     "cliCommands": [
       "agents/scripts/create_test_commit.sh"

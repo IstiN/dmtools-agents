@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "bug_creation"
+      "contextId": "bug_creation",
+      "description": "Turns a ready QA finding into a well-formed bug ticket: drafts summary, description, severity and steps, then creates the bug and links it to the source ticket."
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

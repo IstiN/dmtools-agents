@@ -4,6 +4,9 @@
     "inputJql": "key = GENSGENP-52851",
     "skipAIProcessing": true,
     "postJSAction": "agents/js/createRepoTasks.js",
-    "localExecution": true
+    "localExecution": true,
+    "metadata": {
+      "description": "Creates repository housekeeping tasks (setup, CI, docs) as tracker tickets for a new or onboarding repository."
+    }
   }
 }

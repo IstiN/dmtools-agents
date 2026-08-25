@@ -74,7 +74,8 @@
         "js/unit-tests/test_pushKnowledgeUpdate.js",
         "js/unit-tests/test_createRepoTasksMulti.js",
         "js/unit-tests/test_writeContentOutput.js",
-        "js/unit-tests/test_fetchConfluenceOutputContext.js"
+        "js/unit-tests/test_fetchConfluenceOutputContext.js",
+        "js/unit-tests/test_agentDocsCoverage.js"
       ]
     }
   }

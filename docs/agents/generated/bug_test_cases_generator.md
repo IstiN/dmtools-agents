@@ -1,5 +1,7 @@
 # TestCasesGenerator (`bug_test_cases_generator.json`)
 
+TestCasesGenerator job that creates manual test cases for a bug and moves the ticket through the testing statuses.
+
 ## Attributes
 
 | Attribute | Value |
@@ -31,6 +33,7 @@ _Move To Done Action (postJSAction for bug_test_cases_generator)_
 - Side effects:
   - remove label "sm_bug_test_cases_triggered"
   - post Jira comment
+
 
 ## LLM step
 

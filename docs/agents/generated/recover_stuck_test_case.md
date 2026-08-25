@@ -1,5 +1,7 @@
 # Teammate (`recover_stuck_test_case.json`)
 
+Recovery job that unsticks a test case left in an intermediate status after a failed or interrupted run.
+
 ## Attributes
 
 | Attribute | Value |
@@ -26,6 +28,7 @@ _recoverStuckTestCase.js_
   - remove label "sm_test_automation_triggered"
   - remove label "sm_test_rework_triggered"
   - post Jira comment
+
 
 ## LLM step
 

@@ -25,6 +25,9 @@
       "./agents/instructions/discovery/formatting_rules.md",
       "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md"
-    ]
+    ],
+    "metadata": {
+      "description": "Runs continuous product discovery for a ticket and publishes the result as a Confluence page tree; on later runs it iterates on the existing pages and answers inline comments."
+    }
   }
 }

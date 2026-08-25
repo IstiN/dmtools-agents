@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "pr_test_automation_review"
+      "contextId": "pr_test_automation_review",
+      "description": "Reviews a test-automation pull request and posts structured review comments on it."
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

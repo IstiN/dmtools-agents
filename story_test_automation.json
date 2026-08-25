@@ -1,8 +1,13 @@
 {
   "name": "Teammate",
   "params": {
-    "metadata": { "contextId": "story_test_automation" },
-    "cliCommands": ["./agents/scripts/run-agent.sh"],
+    "metadata": {
+      "contextId": "story_test_automation",
+      "description": "Writes automated tests for a story: generates test code from the acceptance criteria, runs it, and opens a PR with the new tests."
+    },
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
     "outputType": "none",
     "ticketContextDepth": 1,
     "skipAIProcessing": true,
@@ -33,8 +38,12 @@
       "./agents/instructions/common/dmtools_cli.md"
     ],
     "cliPromptsByTracker": {
-      "jira": ["./agents/instructions/tracker/jira_comment_format.md"],
-      "ado": ["./agents/instructions/tracker/ado_comment_format.md"]
+      "jira": [
+        "./agents/instructions/tracker/jira_comment_format.md"
+      ],
+      "ado": [
+        "./agents/instructions/tracker/ado_comment_format.md"
+      ]
     }
   }
 }

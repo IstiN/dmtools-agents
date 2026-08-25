@@ -221,20 +221,48 @@ function collectSideEffects(src) {
     return effects;
 }
 
+/**
+ * Extract customParams paths used by a JS action source, e.g.
+ *   customParams.foo            → foo
+ *   customParams['bar']         → bar
+ *   customParams.contentOutput.target → contentOutput.target
+ */
+function collectCustomParamsUsage(src) {
+    var found = [];
+    var seen = {};
+    var patterns = [
+        /customParams\.([a-zA-Z_$][\w$]*(?:\.[a-zA-Z_$][\w$]*)*)/g,
+        /customParams\[['"]([\w.]+)['"]\]/g
+    ];
+    patterns.forEach(function(re) {
+        var match;
+        while ((match = re.exec(src)) !== null) {
+            var key = match[1];
+            if (!seen[key]) {
+                seen[key] = true;
+                found.push(key);
+            }
+        }
+    });
+    return found.sort();
+}
+
 function analyzeActionFile(filePath, phase) {
     var src = readSource(filePath);
     if (!src) {
         return {
             description: '',
             artifacts: { reads: [], writes: [] },
-            effects: []
+            effects: [],
+            paramsUsed: []
         };
     }
 
     return {
         description: firstJsDescription(src),
         artifacts: collectArtifacts(src, phase),
-        effects: collectSideEffects(src)
+        effects: collectSideEffects(src),
+        paramsUsed: collectCustomParamsUsage(src)
     };
 }
 
@@ -272,9 +300,17 @@ function renderActionSection(label, filePath, phase) {
         });
     }
 
+    if (analysis.paramsUsed && analysis.paramsUsed.length > 0) {
+        lines.push('- Parameters (customParams):');
+        analysis.paramsUsed.forEach(function(p) {
+            lines.push('  - `' + p + '`');
+        });
+    }
+
     if (analysis.artifacts.reads.length === 0 &&
         analysis.artifacts.writes.length === 0 &&
-        analysis.effects.length === 0) {
+        analysis.effects.length === 0 &&
+        (!analysis.paramsUsed || analysis.paramsUsed.length === 0)) {
         lines.push('- No detected file I/O or side effects.');
     }
 
@@ -321,6 +357,15 @@ function renderAgentDoc(fileName, config) {
     lines.push('# ' + name + ' (`' + fileName + '`)');
     lines.push('');
 
+    // Human-readable description, written by hand in the agent JSON
+    // (params.metadata.description or params.description). Rendered as the
+    // lead paragraph so generated HTML docs stay readable.
+    var description = metadata.description || params.description || '';
+    if (description) {
+        lines.push(escapeMd(description));
+        lines.push('');
+    }
+
     lines.push('## Attributes');
     lines.push('');
     lines.push('| Attribute | Value |');
@@ -344,6 +389,7 @@ function renderAgentDoc(fileName, config) {
     lines.push(renderActionSection('preCliJSAction', params.preCliJSAction, 'pre'));
     lines.push(renderActionSection('postCliJSAction', params.postCliJSAction, 'post'));
     lines.push(renderActionSection('postJSAction', params.postJSAction, 'post'));
+    lines.push(renderActionSection('timerJSAction', params.timerJSAction, 'post'));
 
     lines.push('## LLM step');
     lines.push('');
@@ -358,11 +404,29 @@ function renderAgentDoc(fileName, config) {
         lines.push(schemasMd);
     }
 
-    if (Object.keys(customParams).length > 0) {
+    // Merge customParams declared in the JSON with customParams paths used by
+    // the referenced JS actions, so the doc lists every tunable in one place.
+    var jsParamsUsed = [];
+    var jsParamsSeen = {};
+    [params.preJSAction, params.preCliJSAction, params.postCliJSAction, params.postJSAction, params.timerJSAction]
+        .forEach(function(actionPath) {
+            if (!actionPath) return;
+            analyzeActionFile(actionPath, 'pre').paramsUsed.forEach(function(p) {
+                if (!jsParamsSeen[p]) {
+                    jsParamsSeen[p] = true;
+                    jsParamsUsed.push(p);
+                }
+            });
+        });
+
+    if (Object.keys(customParams).length > 0 || jsParamsUsed.length > 0) {
         lines.push('## Custom params');
         lines.push('');
         Object.keys(customParams).forEach(function(k) {
             lines.push('- `' + k + '`: `' + escapeMd(JSON.stringify(customParams[k])) + '`');
+        });
+        jsParamsUsed.forEach(function(p) {
+            lines.push('- `' + p + '` _(used by JS action)_');
         });
         lines.push('');
     }

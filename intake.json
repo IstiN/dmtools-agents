@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "intake"
+      "contextId": "intake",
+      "description": "Product intake: analyzes a raw request against existing epics and stories, then creates the missing epics/stories and posts an analysis comment."
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

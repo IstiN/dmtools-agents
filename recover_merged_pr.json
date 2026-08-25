@@ -1,6 +1,9 @@
 {
   "name": "JSRunner",
   "params": {
-    "postJSAction": "agents/js/recoverMergedPRTicket.js"
+    "postJSAction": "agents/js/recoverMergedPRTicket.js",
+    "metadata": {
+      "description": "JSRunner recovery job that repairs tickets whose pull request merged but the ticket status was never updated."
+    }
   }
 }

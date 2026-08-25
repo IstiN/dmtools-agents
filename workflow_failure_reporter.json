@@ -1,13 +1,16 @@
 {
-  "name" : "JSRunner",
-  "params" : {
-    "jsPath"    : "agents/js/workflowFailureReporter.js",
-    "jobParams" : {
-      "customParams" : {
-        "workspace"   : "{owner}",
-        "repository"  : "{repo}",
-        "jiraProject" : "{jiraProject}"
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "agents/js/workflowFailureReporter.js",
+    "jobParams": {
+      "customParams": {
+        "workspace": "{owner}",
+        "repository": "{repo}",
+        "jiraProject": "{jiraProject}"
       }
+    },
+    "metadata": {
+      "description": "JSRunner job that reports failed agent workflow runs (with links and error summaries) so failures are visible instead of silent."
     }
   }
 }

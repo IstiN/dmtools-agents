@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "story_ba_check"
+      "contextId": "story_ba_check",
+      "description": "Gate check that verifies all BA sub-tasks of a story are done before the story moves forward."
     },
     "outputType": "none",
     "ticketContextDepth": 1,

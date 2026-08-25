@@ -20,6 +20,9 @@
     "examples": "ql(project = JD AND issuetype = 'Test Case' AND labels = \"ai_example\")",
     "preJSAction": "agents/js/moveToReadyForTesting.js",
     "postJSAction": "agents/js/finishTestCasesGeneration.js",
-    "inputJql": "key = JD-107"
+    "inputJql": "key = JD-107",
+    "metadata": {
+      "description": "TestCasesGenerator job that generates manual test cases for stories and moves the tickets through the testing statuses."
+    }
   }
 }

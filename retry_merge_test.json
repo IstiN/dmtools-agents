@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "retry_merge_test"
+      "contextId": "retry_merge_test",
+      "description": "Test variant of retry_merge used to exercise the retry-merge flow safely."
     },
     "outputType": "none",
     "ticketContextDepth": 1,
@@ -10,7 +11,11 @@
     "alwaysPostComments": true,
     "preJSAction": "agents/js/checkWipLabel.js",
     "postJSAction": "agents/js/retryMergePR.js",
-    "customParams": {"removeLabel": "sm_test_merge_triggered", "testCaseMerge": true, "checkOpenPR": true},
+    "customParams": {
+      "removeLabel": "sm_test_merge_triggered",
+      "testCaseMerge": true,
+      "checkOpenPR": true
+    },
     "inputJql": "key = PROJ-1"
   }
 }

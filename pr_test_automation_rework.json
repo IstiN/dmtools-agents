@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "pr_test_automation_rework"
+      "contextId": "pr_test_automation_rework",
+      "description": "Reworks a test-automation PR after review: applies review feedback to the test code and pushes the fixes."
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

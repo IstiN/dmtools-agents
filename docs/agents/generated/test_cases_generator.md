@@ -1,5 +1,7 @@
 # TestCasesGenerator (`test_cases_generator.json`)
 
+TestCasesGenerator job that generates manual test cases for stories and moves the tickets through the testing statuses.
+
 ## Attributes
 
 | Attribute | Value |
@@ -30,6 +32,7 @@ _Finish Test Cases Generation (postJSAction for test_cases_generator)_
 - Source: `agents/js/finishTestCasesGeneration.js`
 - Side effects:
   - remove label "sm_test_cases_triggered"
+
 
 ## LLM step
 

@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "test_case_automation"
+      "contextId": "test_case_automation",
+      "description": "Automates a single manual test case: converts it into executable test code and opens a PR with the result."
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

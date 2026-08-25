@@ -44,6 +44,9 @@
         "thenAction": "assignForSolutionArchitecture.js",
         "assignForReview": false
       }
+    },
+    "metadata": {
+      "description": "Writes acceptance criteria for a story from its description and design context; output goes to the Acceptance Criteria field by default or to Confluence when contentOutput is configured."
     }
   }
 }

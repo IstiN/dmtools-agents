@@ -32,6 +32,9 @@
       "ado": [
         "./agents/instructions/tracker/ado_markup_transform.md"
       ]
+    },
+    "metadata": {
+      "description": "Collects open business questions for a story and creates them as question sub-tickets assigned for review."
     }
   }
 }
