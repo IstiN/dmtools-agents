@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "bug_creation"
+      "contextId": "bug_creation",
+      "descriptionPath": "agents/docs/agents/bug_creation.md"
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

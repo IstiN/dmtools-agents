@@ -1,6 +1,9 @@
 {
   "name": "JSRunner",
   "params": {
-    "postJSAction": "agents/js/recoverMergedPRTicket.js"
+    "postJSAction": "agents/js/recoverMergedPRTicket.js",
+    "metadata": {
+      "descriptionPath": "agents/docs/agents/recover_merged_pr.md"
+    }
   }
 }

@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "po_refinement"
+      "contextId": "po_refinement",
+      "descriptionPath": "agents/docs/agents/po_refinement.md"
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

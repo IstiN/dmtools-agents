@@ -6,7 +6,8 @@
   },
   "params": {
     "metadata": {
-      "contextId": "pr_review_redirect"
+      "contextId": "pr_review_redirect",
+      "descriptionPath": "agents/docs/agents/pr_review_redirect.md"
     },
     "customParams": {
       "targetAgentName": "pr_review.json"

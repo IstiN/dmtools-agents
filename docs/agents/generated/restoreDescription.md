@@ -1,5 +1,9 @@
 # Teammate (`restoreDescription.json`)
 
+Restores a ticket description from its history when the description was accidentally overwritten or cleared.
+
+_Human doc: [`agents/docs/agents/restoreDescription.md`](agents/docs/agents/restoreDescription.md)_
+
 ## Attributes
 
 | Attribute | Value |
@@ -20,6 +24,7 @@ _Restore Jira ticket description from changelog history._
 
 - Source: `agents/restoreDescription.js`
 - No detected file I/O or side effects.
+
 
 
 

@@ -6,7 +6,8 @@
   },
   "params": {
     "metadata": {
-      "contextId": "poc_development_redirect"
+      "contextId": "poc_development_redirect",
+      "descriptionPath": "agents/docs/agents/poc_development_redirect.md"
     },
     "customParams": {
       "targetAgentName": "poc_development.json"

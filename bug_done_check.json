@@ -2,14 +2,17 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "bug_done_check"
+      "contextId": "bug_done_check",
+      "descriptionPath": "agents/docs/agents/bug_done_check.md"
     },
     "outputType": "none",
     "ticketContextDepth": 1,
     "skipAIProcessing": true,
     "alwaysPostComments": true,
     "postJSAction": "agents/js/checkBugTestsPassed.js",
-    "customParams": {"removeLabel": "sm_bug_done_check_triggered"},
+    "customParams": {
+      "removeLabel": "sm_bug_done_check_triggered"
+    },
     "inputJql": "key = PROJ-1"
   }
 }

@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "test_case_automation"
+      "contextId": "test_case_automation",
+      "descriptionPath": "agents/docs/agents/test_case_automation.md"
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

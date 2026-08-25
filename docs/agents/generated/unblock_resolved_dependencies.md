@@ -1,5 +1,9 @@
 # JSRunner (`unblock_resolved_dependencies.json`)
 
+Finds tickets blocked by dependencies that are already resolved and moves them back to an actionable status.
+
+_Human doc: [`agents/docs/agents/unblock_resolved_dependencies.md`](agents/docs/agents/unblock_resolved_dependencies.md)_
+
 ## Attributes
 
 | Attribute | Value |
@@ -24,6 +28,7 @@ _Unblock Resolved Dependencies — postJSAction for unblock_resolved_dependencie
 - Source: `agents/js/unblockResolvedDependencies.js`
 - Side effects:
   - post Jira comment
+
 
 ## LLM step
 

@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "retry_merge"
+      "contextId": "retry_merge",
+      "descriptionPath": "agents/docs/agents/retry_merge.md"
     },
     "outputType": "none",
     "ticketContextDepth": 1,
@@ -10,7 +11,10 @@
     "alwaysPostComments": true,
     "preJSAction": "agents/js/checkWipLabel.js",
     "postJSAction": "agents/js/retryMergePR.js",
-    "customParams": {"removeLabel": "sm_pr_merge_triggered", "checkOpenPR": true},
+    "customParams": {
+      "removeLabel": "sm_pr_merge_triggered",
+      "checkOpenPR": true
+    },
     "inputJql": "key = PROJ-1"
   }
 }

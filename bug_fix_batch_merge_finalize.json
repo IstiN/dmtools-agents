@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "bug_fix_batch_merge_finalize"
+      "contextId": "bug_fix_batch_merge_finalize",
+      "descriptionPath": "agents/docs/agents/bug_fix_batch_merge_finalize.md"
     },
     "outputType": "none",
     "ticketContextDepth": 1,

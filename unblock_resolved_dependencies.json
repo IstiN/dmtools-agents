@@ -1,6 +1,9 @@
 {
   "name": "JSRunner",
   "params": {
-    "postJSAction": "agents/js/unblockResolvedDependencies.js"
+    "postJSAction": "agents/js/unblockResolvedDependencies.js",
+    "metadata": {
+      "descriptionPath": "agents/docs/agents/unblock_resolved_dependencies.md"
+    }
   }
 }

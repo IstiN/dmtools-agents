@@ -6,7 +6,8 @@
   },
   "params": {
     "metadata": {
-      "contextId": "pr_rework_redirect"
+      "contextId": "pr_rework_redirect",
+      "descriptionPath": "agents/docs/agents/pr_rework_redirect.md"
     },
     "customParams": {
       "targetAgentName": "pr_rework.json"

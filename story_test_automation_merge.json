@@ -1,7 +1,10 @@
 {
   "name": "Teammate",
   "params": {
-    "metadata": { "contextId": "story_test_automation_merge" },
+    "metadata": {
+      "contextId": "story_test_automation_merge",
+      "descriptionPath": "agents/docs/agents/story_test_automation_merge.md"
+    },
     "outputType": "none",
     "ticketContextDepth": 1,
     "skipAIProcessing": true,

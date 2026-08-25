@@ -1,5 +1,9 @@
 # JSRunner (`ai_teammate_token_usage_reporter.json`)
 
+Aggregates AI token usage written by agent runs and posts a summary report comment.
+
+_Human doc: [`agents/docs/agents/ai_teammate_token_usage_reporter.md`](agents/docs/agents/ai_teammate_token_usage_reporter.md)_
+
 ## Attributes
 
 | Attribute | Value |
@@ -13,6 +17,7 @@
 Full prompt / instruction set: [`agents/snapshots/ai_teammate_token_usage_reporter.md`](agents/snapshots/ai_teammate_token_usage_reporter.md)
 
 ## Actions
+
 
 
 

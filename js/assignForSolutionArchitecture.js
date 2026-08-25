@@ -117,3 +117,7 @@ function action(params) {
         };
     }
 }
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { action: action };
+}

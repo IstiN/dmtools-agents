@@ -1,5 +1,9 @@
 # JSRunner (`recover_merged_pr.json`)
 
+Recovery job: repairs tickets whose pull request merged but the ticket status was never updated.
+
+_Human doc: [`agents/docs/agents/recover_merged_pr.md`](agents/docs/agents/recover_merged_pr.md)_
+
 ## Attributes
 
 | Attribute | Value |
@@ -24,6 +28,7 @@ _Recover Jira tickets whose GitHub PR was already merged while Jira stayed in_
 - Source: `agents/js/recoverMergedPRTicket.js`
 - Side effects:
   - post Jira comment
+
 
 ## LLM step
 

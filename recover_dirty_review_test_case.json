@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "recover_dirty_review_test_case"
+      "contextId": "recover_dirty_review_test_case",
+      "descriptionPath": "agents/docs/agents/recover_dirty_review_test_case.md"
     },
     "outputType": "none",
     "ticketContextDepth": 1,

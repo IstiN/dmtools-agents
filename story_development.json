@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "story_development"
+      "contextId": "story_development",
+      "descriptionPath": "agents/docs/agents/story_development.md"
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

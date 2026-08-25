@@ -17,6 +17,9 @@
         "cacheWriteEvery": 25,
         "outputDir": "outputs/token_usage"
       }
+    },
+    "metadata": {
+      "descriptionPath": "agents/docs/agents/ai_teammate_token_usage_reporter.md"
     }
   }
 }

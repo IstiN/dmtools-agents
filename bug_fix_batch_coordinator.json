@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "bug_fix_batch_coordinator"
+      "contextId": "bug_fix_batch_coordinator",
+      "descriptionPath": "agents/docs/agents/bug_fix_batch_coordinator.md"
     },
     "outputType": "none",
     "ticketContextDepth": 1,

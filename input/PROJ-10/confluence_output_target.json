@@ -1,0 +1,7 @@
+{
+  "target": "confluence",
+  "format": "markdown",
+  "pageTitle": "PROJ-10 Some story",
+  "space": "DOC",
+  "parentPageId": "42"
+}

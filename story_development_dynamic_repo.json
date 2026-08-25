@@ -2,11 +2,14 @@
   "name": "Teammate",
   "parent": {
     "path": "story_development.json",
-    "merge": ["params.cliPrompts"]
+    "merge": [
+      "params.cliPrompts"
+    ]
   },
   "params": {
     "metadata": {
-      "contextId": "story_development_dynamic_repo"
+      "contextId": "story_development_dynamic_repo",
+      "descriptionPath": "agents/docs/agents/story_development_dynamic_repo.md"
     },
     "preCliJSAction": "agents/js/preCliDevelopmentSetupDynamicRepo.js",
     "postJSAction": "agents/js/postDevelopTicketDynamicRepo.js"

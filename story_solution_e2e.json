@@ -2,11 +2,14 @@
   "name": "Teammate",
   "parent": {
     "path": "story_solution.json",
-    "merge": ["params.cliPrompts"]
+    "merge": [
+      "params.cliPrompts"
+    ]
   },
   "params": {
     "metadata": {
-      "contextId": "story_solution_e2e"
+      "contextId": "story_solution_e2e",
+      "descriptionPath": "agents/docs/agents/story_solution_e2e.md"
     },
     "postJSAction": "agents/js/writeSolutionAndLabels.js",
     "cliPrompts": [

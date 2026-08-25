@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "bug_fix_batch_development"
+      "contextId": "bug_fix_batch_development",
+      "descriptionPath": "agents/docs/agents/bug_fix_batch_development.md"
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

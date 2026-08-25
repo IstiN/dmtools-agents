@@ -1,8 +1,13 @@
 {
   "name": "Teammate",
   "params": {
-    "metadata": { "contextId": "story_test_automation_rework" },
-    "cliCommands": ["./agents/scripts/run-agent.sh"],
+    "metadata": {
+      "contextId": "story_test_automation_rework",
+      "descriptionPath": "agents/docs/agents/story_test_automation_rework.md"
+    },
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
     "outputType": "none",
     "ticketContextDepth": 0,
     "skipAIProcessing": true,
@@ -29,8 +34,12 @@
       "./agents/instructions/common/dmtools_cli.md"
     ],
     "cliPromptsByTracker": {
-      "jira": ["./agents/instructions/tracker/jira_comment_format.md"],
-      "ado": ["./agents/instructions/tracker/ado_comment_format.md"]
+      "jira": [
+        "./agents/instructions/tracker/jira_comment_format.md"
+      ],
+      "ado": [
+        "./agents/instructions/tracker/ado_comment_format.md"
+      ]
     }
   }
 }

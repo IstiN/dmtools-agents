@@ -32,6 +32,9 @@
       "ado": [
         "./agents/instructions/tracker/ado_markup_transform.md"
       ]
+    },
+    "metadata": {
+      "descriptionPath": "agents/docs/agents/story_questions.md"
     }
   }
 }

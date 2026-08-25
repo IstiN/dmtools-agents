@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "story_development_redirect"
+      "contextId": "story_development_redirect",
+      "descriptionPath": "agents/docs/agents/story_development_redirect.md"
     },
     "skipAIProcessing": true,
     "outputType": "none",

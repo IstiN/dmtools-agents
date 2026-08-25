@@ -1,8 +1,13 @@
 {
   "name": "Teammate",
   "params": {
-    "metadata": { "contextId": "pr_bug_test_automation_review" },
-    "cliCommands": ["./agents/scripts/run-agent.sh"],
+    "metadata": {
+      "contextId": "pr_bug_test_automation_review",
+      "descriptionPath": "agents/docs/agents/pr_bug_test_automation_review.md"
+    },
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
     "outputType": "none",
     "ticketContextDepth": 1,
     "skipAIProcessing": true,
@@ -30,8 +35,12 @@
       "./agents/prompts/bash_tools.md"
     ],
     "cliPromptsByTracker": {
-      "jira": ["./agents/instructions/tracker/jira_comment_format.md"],
-      "ado": ["./agents/instructions/tracker/ado_comment_format.md"]
+      "jira": [
+        "./agents/instructions/tracker/jira_comment_format.md"
+      ],
+      "ado": [
+        "./agents/instructions/tracker/ado_comment_format.md"
+      ]
     }
   }
 }

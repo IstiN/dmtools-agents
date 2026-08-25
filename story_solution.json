@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "story_solution"
+      "contextId": "story_solution",
+      "descriptionPath": "agents/docs/agents/story_solution.md"
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"
@@ -28,6 +29,7 @@
       "./agents/instructions/enhancement/solution_design_formatting_rules.md",
       "./agents/instructions/enhancement/solution_design_few_shots.md",
       "./agents/prompts/story_solution_prompt.md",
+      "./agents/instructions/common/confluence_comments.md",
       "./agents/prompts/bash_tools.md"
     ],
     "cliPromptsByTracker": {

@@ -1,6 +1,9 @@
 {
   "name": "JSRunner",
   "params": {
-    "postJSAction": "agents/js/recoverFailedTCBugStatus.js"
+    "postJSAction": "agents/js/recoverFailedTCBugStatus.js",
+    "metadata": {
+      "descriptionPath": "agents/docs/agents/recover_failed_tc_bug_status.md"
+    }
   }
 }

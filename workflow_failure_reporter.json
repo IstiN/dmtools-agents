@@ -1,13 +1,16 @@
 {
-  "name" : "JSRunner",
-  "params" : {
-    "jsPath"    : "agents/js/workflowFailureReporter.js",
-    "jobParams" : {
-      "customParams" : {
-        "workspace"   : "{owner}",
-        "repository"  : "{repo}",
-        "jiraProject" : "{jiraProject}"
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "agents/js/workflowFailureReporter.js",
+    "jobParams": {
+      "customParams": {
+        "workspace": "{owner}",
+        "repository": "{repo}",
+        "jiraProject": "{jiraProject}"
       }
+    },
+    "metadata": {
+      "descriptionPath": "agents/docs/agents/workflow_failure_reporter.md"
     }
   }
 }

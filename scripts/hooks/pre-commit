@@ -10,7 +10,8 @@ SNAPSHOT_SCRIPT="$REPO_ROOT/generate_agent_snapshots.js"
 SNAPSHOTS_DIR="$REPO_ROOT/snapshots"
 
 # Check if any staged files are JSON configs, MD instructions, or the generator itself
-STAGED_FILES=$(git diff --cached --name-only)
+# (added/copied/modified only — deleted files must not trip the human-doc check)
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
 
 NEEDS_REGEN=false
 for f in $STAGED_FILES; do
@@ -55,6 +56,60 @@ if [ -n "$UPDATED_SNAPSHOTS" ] || [ -n "$UNTRACKED_SNAPSHOTS" ]; then
         echo "   New:"
         echo "$UNTRACKED_SNAPSHOTS" | sed 's/^/      /'
     fi
+fi
+
+# ── Agent docs ────────────────────────────────────────────────────────────────
+# Regenerate docs/agents/generated/* whenever agent configs, JS actions,
+# instructions, prompts, human docs, or the generator itself change.
+
+DOC_GENERATOR="$REPO_ROOT/js/agentDocGenerator.js"
+DOCS_DIR="$REPO_ROOT/docs/agents"
+
+NEEDS_DOC_REGEN=false
+for f in $STAGED_FILES; do
+    case "$f" in
+        *.json|js/*.js|js/common/*.js|instructions/*|prompts/*|docs/agents/*.md|js/agentDocGenerator.js)
+            NEEDS_DOC_REGEN=true
+            break
+            ;;
+    esac
+done
+
+if [ "$NEEDS_DOC_REGEN" = "true" ]; then
+    echo "🔄 Regenerating agent docs..."
+    node "$DOC_GENERATOR"
+    if [ $? -ne 0 ]; then
+        echo "❌ Agent docs generation failed. Fix errors above and retry."
+        exit 1
+    fi
+    UPDATED_DOCS=$(git diff --name-only "$DOCS_DIR" 2>/dev/null)
+    UNTRACKED_DOCS=$(git ls-files --others --exclude-standard "$DOCS_DIR" 2>/dev/null)
+    if [ -n "$UPDATED_DOCS" ] || [ -n "$UNTRACKED_DOCS" ]; then
+        git add "$DOCS_DIR"
+        echo "✅ Agent docs regenerated and staged automatically."
+    fi
+
+    # A changed/new agent config needs a human doc at docs/agents/<name>.md —
+    # the docs coverage unit test enforces this in CI; fail early here.
+    for f in $STAGED_FILES; do
+        case "$f" in
+            *.json)
+                base=$(basename "$f" .json)
+                case "$base" in
+                    sm|sm_merge|run_*|*_lock) continue ;;
+                esac
+                case "$f" in
+                    */*) continue ;;  # only root agent configs
+                esac
+                if [ ! -s "$REPO_ROOT/docs/agents/$base.md" ]; then
+                    echo "❌ Missing human doc: docs/agents/$base.md"
+                    echo "   Add a 1-2 sentence description of what the agent does"
+                    echo "   plus a Parameters section (see other docs/agents/*.md)."
+                    exit 1
+                fi
+                ;;
+        esac
+    done
 fi
 
 exit 0

@@ -4,6 +4,9 @@
     "inputJql": "key = GENSGENP-52851",
     "skipAIProcessing": true,
     "postJSAction": "agents/js/createRepoTasks.js",
-    "localExecution": true
+    "localExecution": true,
+    "metadata": {
+      "descriptionPath": "agents/docs/agents/createRepoTasks.md"
+    }
   }
 }

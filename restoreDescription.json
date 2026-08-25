@@ -3,6 +3,9 @@
   "params": {
     "skipAIProcessing": true,
     "preJSAction": "agents/restoreDescription.js",
-    "inputJql": "key = PROJ-1234"
+    "inputJql": "key = PROJ-1234",
+    "metadata": {
+      "descriptionPath": "agents/docs/agents/restoreDescription.md"
+    }
   }
 }

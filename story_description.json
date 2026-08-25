@@ -4,15 +4,22 @@
     "cliCommands": [
       "./agents/scripts/run-agent.sh"
     ],
-    "outputType": "field",
+    "outputType": "none",
     "fieldName": "Description",
     "operationType": "Replace",
     "ticketContextDepth": 0,
     "attachResponseAsFile": false,
-    "preCliJSAction": "agents/js/fetchQuestionsToInput.js",
+    "preCliJSAction": "agents/js/preCliContentOutputSetup.js",
     "skipAIProcessing": true,
     "alwaysPostComments": true,
-    "postJSAction": "agents/assignForReview.js",
+    "postJSAction": "agents/js/writeContentOutput.js",
+    "customParams": {
+      "contentOutput": {
+        "target": "jira_field",
+        "field": "Description",
+        "operationType": "replace"
+      }
+    },
     "inputJql": "key = TP-397",
     "cliPrompts": [
       "Experienced Business Analyst",
@@ -20,6 +27,7 @@
       "./agents/instructions/story_description/workflow.md",
       "./agents/instructions/common/media_handling.md",
       "./agents/prompts/story_description_prompt.md",
+      "./agents/instructions/common/confluence_comments.md",
       "./agents/prompts/bash_tools.md"
     ],
     "cliPromptsByTracker": {
@@ -29,6 +37,9 @@
       "ado": [
         "./agents/instructions/tracker/ado_markup_transform.md"
       ]
+    },
+    "metadata": {
+      "descriptionPath": "agents/docs/agents/story_description.md"
     }
   }
 }

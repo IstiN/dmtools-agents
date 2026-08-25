@@ -1,4 +1,11 @@
-agents
+/agents
 *.token
 dependencies/
 cacheBasicGithub/
+
+# dmtools local run artifacts
+.dmtools-logs/
+.dmtools-target-workingdir
+cacheBasic*/
+outputs/
+input/

@@ -4,16 +4,16 @@
     "cliCommands": [
       "./agents/scripts/run-agent.sh"
     ],
-    "outputType": "field",
+    "outputType": "none",
     "fieldName": "Acceptance Criteria",
     "operationType": "Replace",
     "ticketContextDepth": 0,
     "attachResponseAsFile": false,
-    "preCliJSAction": "agents/js/fetchQuestionsToInput.js",
+    "preCliJSAction": "agents/js/preCliContentOutputSetup.js",
     "cleanupInputFolder": false,
     "skipAIProcessing": true,
     "alwaysPostComments": true,
-    "postJSAction": "agents/js/assignForSolutionArchitecture.js",
+    "postJSAction": "agents/js/writeContentOutput.js",
     "inputJql": "key = JD-82",
     "cliPrompts": [
       "Experienced Business Analyst",
@@ -22,6 +22,7 @@
       "./agents/instructions/common/media_handling.md",
       "./agents/instructions/story/enhanced_story_content_guidelines.md",
       "./agents/prompts/acceptance_criteria_prompt.md",
+      "./agents/instructions/common/confluence_comments.md",
       "./agents/prompts/bash_tools.md",
       "./agents/instructions/common/acceptance_criteria_quality.md"
     ],
@@ -34,6 +35,18 @@
         "./agents/instructions/story/enhanced_story_formatting.md",
         "./agents/instructions/tracker/ado_markup_transform.md"
       ]
+    },
+    "customParams": {
+      "contentOutput": {
+        "target": "jira_field",
+        "field": "Acceptance Criteria",
+        "operationType": "replace",
+        "thenAction": "assignForSolutionArchitecture.js",
+        "assignForReview": false
+      }
+    },
+    "metadata": {
+      "descriptionPath": "agents/docs/agents/story_acceptance_criteria.md"
     }
   }
 }

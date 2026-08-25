@@ -14,9 +14,32 @@
 var fs = require('fs');
 var path = require('path');
 
-var AGENTS_DIR = 'agents';
+// Layout-adaptive: 'agents' when invoked from a parent repo (submodule mount),
+// '.' when invoked from the dmtools-agents repo root itself. References written
+// into generated docs always keep the canonical 'agents/...' prefix so the docs
+// are identical no matter which layout generated them.
+var PARENT_LAYOUT = fs.existsSync(path.join('agents', 'js', 'agentDocGenerator.js'));
+var AGENTS_DIR = PARENT_LAYOUT ? 'agents' : '.';
 var DOCS_DIR = path.join(AGENTS_DIR, 'docs', 'agents', 'generated');
 var SNAPSHOTS_DIR = path.join(AGENTS_DIR, 'snapshots');
+
+// Resolve a canonical 'agents/...' path to a readable file in either layout.
+function resolveReadPath(filePath) {
+    if (fs.existsSync(filePath)) return filePath;
+    if (!PARENT_LAYOUT && filePath.indexOf('agents/') === 0) {
+        var stripped = filePath.substring('agents/'.length);
+        if (fs.existsSync(stripped)) return stripped;
+    }
+    return filePath;
+}
+
+// Canonical reference (always 'agents/...-prefixed) for docs output.
+function canonicalRef(filePath) {
+    if (!PARENT_LAYOUT && filePath.indexOf('agents/') !== 0) {
+        return 'agents/' + filePath;
+    }
+    return filePath;
+}
 
 function ensureDir(dir) {
     try {
@@ -48,7 +71,7 @@ function readJson(filePath) {
 
 function readSource(filePath) {
     try {
-        return fs.readFileSync(filePath, 'utf8');
+        return fs.readFileSync(resolveReadPath(filePath), 'utf8');
     } catch (e) {
         return '';
     }
@@ -221,20 +244,48 @@ function collectSideEffects(src) {
     return effects;
 }
 
+/**
+ * Extract customParams paths used by a JS action source, e.g.
+ *   customParams.foo            → foo
+ *   customParams['bar']         → bar
+ *   customParams.contentOutput.target → contentOutput.target
+ */
+function collectCustomParamsUsage(src) {
+    var found = [];
+    var seen = {};
+    var patterns = [
+        /customParams\.([a-zA-Z_$][\w$]*(?:\.[a-zA-Z_$][\w$]*)*)/g,
+        /customParams\[['"]([\w.]+)['"]\]/g
+    ];
+    patterns.forEach(function(re) {
+        var match;
+        while ((match = re.exec(src)) !== null) {
+            var key = match[1];
+            if (!seen[key]) {
+                seen[key] = true;
+                found.push(key);
+            }
+        }
+    });
+    return found.sort();
+}
+
 function analyzeActionFile(filePath, phase) {
     var src = readSource(filePath);
     if (!src) {
         return {
             description: '',
             artifacts: { reads: [], writes: [] },
-            effects: []
+            effects: [],
+            paramsUsed: []
         };
     }
 
     return {
         description: firstJsDescription(src),
         artifacts: collectArtifacts(src, phase),
-        effects: collectSideEffects(src)
+        effects: collectSideEffects(src),
+        paramsUsed: collectCustomParamsUsage(src)
     };
 }
 
@@ -249,7 +300,7 @@ function renderActionSection(label, filePath, phase) {
         lines.push('_' + escapeMd(analysis.description) + '_');
         lines.push('');
     }
-    lines.push('- Source: `' + filePath + '`');
+    lines.push('- Source: `' + canonicalRef(filePath) + '`');
 
     if (analysis.artifacts.reads.length > 0) {
         lines.push('- Reads:');
@@ -272,9 +323,17 @@ function renderActionSection(label, filePath, phase) {
         });
     }
 
+    if (analysis.paramsUsed && analysis.paramsUsed.length > 0) {
+        lines.push('- Parameters (customParams):');
+        analysis.paramsUsed.forEach(function(p) {
+            lines.push('  - `' + p + '`');
+        });
+    }
+
     if (analysis.artifacts.reads.length === 0 &&
         analysis.artifacts.writes.length === 0 &&
-        analysis.effects.length === 0) {
+        analysis.effects.length === 0 &&
+        (!analysis.paramsUsed || analysis.paramsUsed.length === 0)) {
         lines.push('- No detected file I/O or side effects.');
     }
 
@@ -301,11 +360,38 @@ function snapshotPath(fileName) {
     var base = fileName.replace(/\.json$/, '.md');
     var p = path.join(SNAPSHOTS_DIR, base);
     try {
-        fs.accessSync(p, fs.constants.F_OK);
-        return p;
+        fs.accessSync(resolveReadPath(p), fs.constants.F_OK);
+        return canonicalRef(p);
     } catch (e) {
         return null;
     }
+}
+
+/**
+ * Human-readable doc for an agent. Location by strict naming convention:
+ * docs/agents/<configName>.md (configName = JSON file name without .json).
+ * metadata.descriptionPath may point to the same file explicitly, but the
+ * convention path is always checked as a fallback.
+ * Returns { ref, content } or null when no human doc exists.
+ */
+function humanDocPath(fileName, params) {
+    var metadata = (params && params.metadata) || {};
+    var base = fileName.replace(/\.json$/, '.md');
+    var candidates = [];
+    if (metadata.descriptionPath) candidates.push(metadata.descriptionPath);
+    candidates.push(path.join(AGENTS_DIR, 'docs', 'agents', base));
+    for (var i = 0; i < candidates.length; i++) {
+        var p = candidates[i];
+        try {
+            var content = fs.readFileSync(resolveReadPath(p), 'utf8');
+            if (content && content.trim()) {
+                return { ref: canonicalRef(path.join(AGENTS_DIR, 'docs', 'agents', base)), content: content };
+            }
+        } catch (e) {
+            // try next candidate
+        }
+    }
+    return null;
 }
 
 function renderAgentDoc(fileName, config) {
@@ -320,6 +406,20 @@ function renderAgentDoc(fileName, config) {
     var lines = [];
     lines.push('# ' + name + ' (`' + fileName + '`)');
     lines.push('');
+
+    // Human-readable description lives in docs/agents/<name>.md (strict naming
+    // convention, see humanDocPath). It is embedded verbatim so the generated
+    // reference stays self-contained and HTML-renderable.
+    var human = humanDocPath(fileName, params);
+    if (human) {
+        var humanBody = human.content.trim()
+            .replace(/^#\s+.*\n/, '')       // drop the human doc's own title
+            .trim();
+        lines.push(humanBody);
+        lines.push('');
+        lines.push('_Human doc: [`' + human.ref + '`](' + human.ref + ')_');
+        lines.push('');
+    }
 
     lines.push('## Attributes');
     lines.push('');
@@ -344,6 +444,7 @@ function renderAgentDoc(fileName, config) {
     lines.push(renderActionSection('preCliJSAction', params.preCliJSAction, 'pre'));
     lines.push(renderActionSection('postCliJSAction', params.postCliJSAction, 'post'));
     lines.push(renderActionSection('postJSAction', params.postJSAction, 'post'));
+    lines.push(renderActionSection('timerJSAction', params.timerJSAction, 'post'));
 
     lines.push('## LLM step');
     lines.push('');
@@ -358,11 +459,29 @@ function renderAgentDoc(fileName, config) {
         lines.push(schemasMd);
     }
 
-    if (Object.keys(customParams).length > 0) {
+    // Merge customParams declared in the JSON with customParams paths used by
+    // the referenced JS actions, so the doc lists every tunable in one place.
+    var jsParamsUsed = [];
+    var jsParamsSeen = {};
+    [params.preJSAction, params.preCliJSAction, params.postCliJSAction, params.postJSAction, params.timerJSAction]
+        .forEach(function(actionPath) {
+            if (!actionPath) return;
+            analyzeActionFile(actionPath, 'pre').paramsUsed.forEach(function(p) {
+                if (!jsParamsSeen[p]) {
+                    jsParamsSeen[p] = true;
+                    jsParamsUsed.push(p);
+                }
+            });
+        });
+
+    if (Object.keys(customParams).length > 0 || jsParamsUsed.length > 0) {
         lines.push('## Custom params');
         lines.push('');
         Object.keys(customParams).forEach(function(k) {
             lines.push('- `' + k + '`: `' + escapeMd(JSON.stringify(customParams[k])) + '`');
+        });
+        jsParamsUsed.forEach(function(p) {
+            lines.push('- `' + p + '` _(used by JS action)_');
         });
         lines.push('');
     }

@@ -2,7 +2,8 @@
   "name": "Teammate",
   "params": {
     "metadata": {
-      "contextId": "pr_rework"
+      "contextId": "pr_rework",
+      "descriptionPath": "agents/docs/agents/pr_rework.md"
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"
