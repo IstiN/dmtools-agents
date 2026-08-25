@@ -340,6 +340,23 @@ suite('writeContentOutput', function() {
         assert.equal(chainedParams.ticket.key, 'PROJ-10');
     });
 
+    test('real assignForSolutionArchitecture.js exports action (thenAction contract)', function() {
+        var mod = loadModule('js/assignForSolutionArchitecture.js', makeRequire({
+            './common/jiraHelpers.js': { extractTicketKey: function(k) { return k; } },
+            './config.js': { LABELS: {} },
+            './configLoader.js': { loadProjectConfig: function() { return { jira: { statuses: {} } }; } },
+            './common/scm.js': { createScm: function() { return {}; } },
+            './common/autoStart.js': {},
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        }), {
+            jira_assign_ticket_to: function() {},
+            jira_move_to_status: function() {},
+            jira_add_label: function() {},
+            jira_remove_label: function() {}
+        });
+        assert.equal(typeof mod.action, 'function', 'assignForSolutionArchitecture must export action for thenAction chaining');
+    });
+
     test('assignForReview runs by default when no thenAction', function() {
         var mocks = {
             __outputs: { 'response.md': 'content' },
