@@ -10,3 +10,5 @@ Use CodeGraph first for source-code investigation (`codegraph context "<solution
 Use `grep`, `find`, `cat`, or `sed` only after CodeGraph when you need literal text, file listing, or a specific file excerpt.
 
 Only propose new components or patterns when the existing codebase genuinely does not satisfy the requirement. Where existing code can be extended or reused, prefer that approach and justify the decision explicitly in the solution.
+
+**Sibling-instance sweep.** When the solution adds a new instance of an extensible category (a new enum value, type, step, processor, plugin, integration), pick the closest existing sibling and enumerate **all of its registration points** in the codebase: grep the sibling's identifier across source and configuration, then for every hit decide explicitly — reuse as-is / add a new entry / extend behavior. A solution that registers the new instance in fewer places than its sibling is incomplete; justify every omission in the solution text. The points this sweep exists to catch are exactly those the requirements text never mentions — discover them from the code, not from the ticket.
