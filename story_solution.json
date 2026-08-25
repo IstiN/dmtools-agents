@@ -28,6 +28,7 @@
       "./agents/instructions/enhancement/solution_design_formatting_rules.md",
       "./agents/instructions/enhancement/solution_design_few_shots.md",
       "./agents/prompts/story_solution_prompt.md",
+      "./agents/instructions/common/confluence_comments.md",
       "./agents/prompts/bash_tools.md"
     ],
     "cliPromptsByTracker": {

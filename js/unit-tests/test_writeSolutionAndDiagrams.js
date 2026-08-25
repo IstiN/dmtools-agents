@@ -14,7 +14,8 @@ suite('writeSolutionAndDiagrams — module export', function() {
                 './common/scm.js': { createScm: function() { return {}; } },
                 './common/autoStart.js': {},
                 './common/outputFiles.js': outputFiles,
-                './common/tokenUsageComment.js': tokenUsageComment
+                './common/tokenUsageComment.js': tokenUsageComment,
+                './common/contentOutput.js': loadModule('js/common/contentOutput.js', makeRequire({ '../configLoader.js': configLoaderModule }), {})
             }),
             {}
         );
@@ -41,7 +42,8 @@ suite('writeSolutionAndDiagrams — required outputs', function() {
                 './common/scm.js': { createScm: function() { return {}; } },
                 './common/autoStart.js': {},
                 './common/outputFiles.js': outputFiles,
-                './common/tokenUsageComment.js': tokenUsageComment
+                './common/tokenUsageComment.js': tokenUsageComment,
+                './common/contentOutput.js': loadModule('js/common/contentOutput.js', makeRequire({ '../configLoader.js': configLoaderModule }), {})
             }),
             {
                 file_read: function(opts) {

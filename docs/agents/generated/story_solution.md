@@ -36,6 +36,7 @@ _Write Solution and Diagrams Post-Action_
 
 - Source: `agents/js/writeSolutionAndDiagrams.js`
 - Side effects:
+  - post Jira comment
   - assign ticket
 
 ## LLM step

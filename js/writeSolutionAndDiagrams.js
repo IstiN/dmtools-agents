@@ -12,6 +12,14 @@
  *   outputType    — "replace" (default): overwrite solutionField with generated content.
  *                   "append": read current value of solutionField, append generated content after a separator.
  *                   Useful for tickets (e.g. bugs) where the field already has content that must be preserved.
+ *
+ * Confluence publishing (customParams.contentOutput, see js/common/contentOutput.js):
+ *   target: 'confluence' — publish solution (+ diagram section) to a Confluence
+ *           page under contentOutput.parentPageId instead of the tracker field;
+ *           the tracker field gets a link to the page (updateTrackerField).
+ *   target: 'both' — tracker fields AND the Confluence page.
+ *   Replies from outputs/confluence_replies.json are posted back to inline
+ *   comments when the Confluence target is active.
  */
 
 const { LABELS, DIAGRAM_FORMAT, JIRA_FIELDS } = require('./config.js');
@@ -20,6 +28,7 @@ const scmModule = require('./common/scm.js');
 const autoStart = require('./common/autoStart.js');
 const outputFiles = require('./common/outputFiles.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+const contentOutput = require('./common/contentOutput.js');
 
 function action(params) {
     try {
@@ -72,44 +81,97 @@ function action(params) {
             diagram = ''; // mark as handled
         }
 
-        // 4. Write to solution field (replace or append)
-        try {
-            var valueToWrite = solution;
-            if (outputType === 'append') {
-                var existing = '';
-                try {
-                    var freshTicket = jira_get_ticket({ key: ticketKey, fields: [solutionField] });
-                    var freshFields = (freshTicket && freshTicket.fields) ? freshTicket.fields : freshTicket;
-                    var rawValue = freshFields ? freshFields[solutionField] : null;
-                    if (rawValue && typeof rawValue === 'object') {
-                        // ADF (Atlassian Document Format) — cannot be reliably converted to wiki markup.
-                        // Fall back to replace behavior to avoid corrupting the field.
-                        console.warn('Existing value of "' + solutionField + '" is in ADF format (Jira v3). Cannot merge with wiki markup — falling back to replace mode for this run.');
-                        rawValue = '';
+        var outputCfg = contentOutput.resolveConfig(params, {
+            target: 'jira_field',
+            field: solutionField,
+            operationType: outputType,
+            pageTitleSuffix: 'Solution Design'
+        });
+
+        // 4. Write to solution field (replace or append) — for jira_field/both targets
+        if (contentOutput.isJiraFieldTarget(outputCfg)) {
+            try {
+                var valueToWrite = solution;
+                if (outputType === 'append') {
+                    var existing = '';
+                    try {
+                        var freshTicket = jira_get_ticket({ key: ticketKey, fields: [solutionField] });
+                        var freshFields = (freshTicket && freshTicket.fields) ? freshTicket.fields : freshTicket;
+                        var rawValue = freshFields ? freshFields[solutionField] : null;
+                        if (rawValue && typeof rawValue === 'object') {
+                            // ADF (Atlassian Document Format) — cannot be reliably converted to wiki markup.
+                            // Fall back to replace behavior to avoid corrupting the field.
+                            console.warn('Existing value of "' + solutionField + '" is in ADF format (Jira v3). Cannot merge with wiki markup — falling back to replace mode for this run.');
+                            rawValue = '';
+                        }
+                        existing = (rawValue || '').toString().trim();
+                    } catch (e) {
+                        console.warn('Could not read existing value of "' + solutionField + '", will append without prefix:', e);
                     }
-                    existing = (rawValue || '').toString().trim();
-                } catch (e) {
-                    console.warn('Could not read existing value of "' + solutionField + '", will append without prefix:', e);
+                    valueToWrite = existing
+                        ? existing + '\n\n----\n\n' + solution
+                        : solution;
+                    console.log('Appending to "' + solutionField + '" (' + (existing ? existing.length : 0) + ' existing chars)');
                 }
-                valueToWrite = existing
-                    ? existing + '\n\n----\n\n' + solution
-                    : solution;
-                console.log('Appending to "' + solutionField + '" (' + (existing ? existing.length : 0) + ' existing chars)');
+                jira_update_field({ key: ticketKey, field: solutionField, value: valueToWrite });
+                console.log('Updated "' + solutionField + '" field for ' + ticketKey + ' (mode: ' + outputType + ')');
+            } catch (e) {
+                console.error('Failed to update solution field "' + solutionField + '":', e);
+                return { success: false, error: 'Solution field update failed: ' + e.toString() };
             }
-            jira_update_field({ key: ticketKey, field: solutionField, value: valueToWrite });
-            console.log('Updated "' + solutionField + '" field for ' + ticketKey + ' (mode: ' + outputType + ')');
-        } catch (e) {
-            console.error('Failed to update solution field "' + solutionField + '":', e);
-            return { success: false, error: 'Solution field update failed: ' + e.toString() };
+
+            // 5. Write to diagram field if configured and diagram exists
+            if (diagram && diagramField) {
+                try {
+                    jira_update_field({ key: ticketKey, field: diagramField, value: diagram });
+                    console.log('Updated "' + diagramField + '" field for ' + ticketKey);
+                } catch (e) {
+                    console.warn('Failed to update diagram field "' + diagramField + '":', e);
+                }
+            }
         }
 
-        // 5. Write to diagram field if configured and diagram exists
-        if (diagram && diagramField) {
+        // 5b. Publish to Confluence — for confluence/both targets
+        if (contentOutput.isConfluenceTarget(outputCfg)) {
             try {
-                jira_update_field({ key: ticketKey, field: diagramField, value: diagram });
-                console.log('Updated "' + diagramField + '" field for ' + ticketKey);
-            } catch (e) {
-                console.warn('Failed to update diagram field "' + diagramField + '":', e);
+                var ticketSummary = (params.ticket.fields && params.ticket.fields.summary) || '';
+                var pageContent = solution;
+                if (diagram) {
+                    pageContent = pageContent + '\n\n## Diagram\n\n```mermaid\n' + diagram + '\n```\n';
+                }
+                var published = contentOutput.publishPage(outputCfg, ticketKey, ticketSummary, pageContent);
+                var pageUrl = published.url;
+                console.log('Published solution to Confluence page ' + (published.page && published.page.id) + ' (' + (pageUrl || 'url unknown') + ')');
+
+                var replyResult = contentOutput.publishCommentReplies(contentOutput.DEFAULT_REPLIES_FILE);
+                if (replyResult.posted > 0 || replyResult.failed > 0) {
+                    console.log('Replied to ' + replyResult.posted + ' inline comment(s)' +
+                        (replyResult.failed > 0 ? ', ' + replyResult.failed + ' failed' : ''));
+                }
+
+                if (outputCfg.target === 'confluence' && outputCfg.updateTrackerField !== false) {
+                    var linkText = pageUrl
+                        ? 'Solution published to Confluence: ' + pageUrl
+                        : 'Solution published to Confluence page ' + (published.page && published.page.id);
+                    try {
+                        jira_update_field({ key: ticketKey, field: solutionField, value: linkText });
+                    } catch (linkError) {
+                        console.warn('Failed to write Confluence link to "' + solutionField + '":', linkError);
+                    }
+                }
+
+                try {
+                    jira_post_comment({
+                        key: ticketKey,
+                        comment: 'h3. 📐 Solution published to Confluence\n\n' +
+                            (pageUrl ? 'Page: ' + pageUrl : 'Page id: ' + (published.page && published.page.id))
+                    });
+                } catch (commentError) {
+                    console.warn('Failed to post Confluence link comment:', commentError);
+                }
+            } catch (confError) {
+                console.error('Failed to publish solution to Confluence:', confError);
+                return { success: false, error: 'Confluence publish failed: ' + confError.toString() };
             }
         }
 

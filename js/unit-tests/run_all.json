@@ -72,7 +72,9 @@
         "js/unit-tests/test_preCliDevelopmentSetup.js",
         "js/unit-tests/test_preCliKnowledgeUpdateSetup.js",
         "js/unit-tests/test_pushKnowledgeUpdate.js",
-        "js/unit-tests/test_createRepoTasksMulti.js"
+        "js/unit-tests/test_createRepoTasksMulti.js",
+        "js/unit-tests/test_writeContentOutput.js",
+        "js/unit-tests/test_fetchConfluenceOutputContext.js"
       ]
     }
   }

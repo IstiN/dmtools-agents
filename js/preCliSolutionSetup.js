@@ -8,6 +8,7 @@
 
 var fetchQuestionsToInput    = require('./fetchQuestionsToInput.js');
 var fetchParentContextToInput = require('./fetchParentContextToInput.js');
+var fetchConfluenceOutputContext = require('./fetchConfluenceOutputContext.js');
 
 function action(params) {
     try {
@@ -22,6 +23,14 @@ function action(params) {
             fetchParentContextToInput.action(actualParams);
         } catch (e) {
             console.warn('fetchParentContextToInput failed (non-fatal):', e);
+        }
+
+        // 3. Fetch existing Confluence solution page + inline comments
+        //    (no-op unless contentOutput targets Confluence)
+        try {
+            fetchConfluenceOutputContext.action(actualParams);
+        } catch (e) {
+            console.warn('fetchConfluenceOutputContext failed (non-fatal):', e);
         }
 
     } catch (error) {
