@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Install codemie-claude CLI.
-# Requires CODEMIE_API_KEY and CODEMIE_BASE_URL to be set at runtime.
+# Install codemie-claude CLI and write ~/.codemie/codemie-cli.config.json.
+# Supports two auth modes at runtime (controlled by env vars):
+#   JWT bearer: set CODEMIE_AUTH_CLIENT_ID + CODEMIE_AUTH_CLIENT_SECRET
+#   API key:    set CODEMIE_API_KEY + CODEMIE_BASE_URL
 #
 # Usage:
 #   codemie.sh [version]
@@ -71,5 +73,39 @@ if is_installed codemie-claude || [ -x "${CODEMIE_BIN_DIR}/codemie-claude" ]; th
   echo "✅ codemie-claude installed"
 else
   echo "⚠️  codemie-claude could not be installed automatically."
-  echo "    Set CODEMIE_API_KEY + CODEMIE_BASE_URL and install manually if needed."
+  echo "    Set CODEMIE_AUTH_CLIENT_ID + CODEMIE_AUTH_CLIENT_SECRET (JWT) or CODEMIE_API_KEY + CODEMIE_BASE_URL and install manually if needed."
 fi
+
+# ── Write ~/.codemie/codemie-cli.config.json ─────────────────────────────────
+CODEMIE_CONFIG_DIR="${HOME}/.codemie"
+CODEMIE_CONFIG_FILE="${CODEMIE_CONFIG_DIR}/codemie-cli.config.json"
+mkdir -p "${CODEMIE_CONFIG_DIR}"
+cat > "${CODEMIE_CONFIG_FILE}" <<CODEMIE_CONFIG_EOF
+{
+  "version": 2,
+  "activeProfile": "jwt-bearer",
+  "profiles": {
+    "default": {
+      "codeMieProject": "${CODEMIE_PROJECT}",
+      "provider": "${CODEMIE_PROVIDER}",
+      "codeMieUrl": "${CODEMIE_URL}",
+      "apiKey": "sso-provided",
+      "baseUrl": "${CODEMIE_BASE_URL}",
+      "model": "claude-sonnet-4-6",
+      "haikuModel": "claude-haiku-4-5-20251001",
+      "sonnetModel": "claude-sonnet-4-6",
+      "opusModel": "claude-opus-5",
+      "name": "default"
+    },
+    "jwt-bearer": {
+      "provider": "bearer-auth",
+      "codeMieUrl": "${CODEMIE_URL}",
+      "baseUrl": "${CODEMIE_BASE_URL}",
+      "model": "claude-sonnet-4-6",
+      "authMethod": "jwt",
+      "jwtConfig": { "tokenEnvVar": "CODEMIE_JWT_TOKEN" }
+    }
+  }
+}
+CODEMIE_CONFIG_EOF
+echo "✅ codemie config written to ${CODEMIE_CONFIG_FILE}"
