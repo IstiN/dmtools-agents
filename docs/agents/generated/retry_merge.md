@@ -1,4 +1,4 @@
-# Teammate (`retry_merge.json`)
+# Retry Merge
 
 Retries a pull request merge that previously failed (for example due to temporary CI flakiness) and reports the outcome.
 
@@ -18,6 +18,8 @@ _Human doc: [`agents/docs/agents/retry_merge.md`](agents/docs/agents/retry_merge
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `retry_merge.json` |
 | ContextId | `retry_merge` |
 | outputType | `none` |
 | skipAIProcessing | `true` |
@@ -63,10 +65,8 @@ _retryMergePR.js_
 
 - `removeLabel`: `"sm_pr_merge_triggered"`
 - `checkOpenPR`: `true`
-- `checkOpenPR` _(used by JS action)_
 - `autoStartRework` _(used by JS action)_
 - `autoStartReworkConfigFile` _(used by JS action)_
-- `removeLabel` _(used by JS action)_
 - `testCaseMerge` _(used by JS action)_
 
 ---

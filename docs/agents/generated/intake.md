@@ -1,4 +1,4 @@
-# Teammate (`intake.json`)
+# Intake
 
 Product intake: analyzes a raw request against existing epics and stories, then creates the missing epics/stories and posts an analysis comment.
 
@@ -14,6 +14,8 @@ _Human doc: [`agents/docs/agents/intake.md`](agents/docs/agents/intake.md)_
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `intake.json` |
 | ContextId | `intake` |
 | outputType | `none` |
 | skipAIProcessing | `true` |

@@ -1,4 +1,4 @@
-# Teammate (`recover_dirty_review_test_case.json`)
+# Recover Dirty Review Test Case
 
 Recovery job: cleans up a test case left in a dirty in-review state (unfinished review bookkeeping) and restores a consistent status.
 
@@ -8,6 +8,8 @@ _Human doc: [`agents/docs/agents/recover_dirty_review_test_case.md`](agents/docs
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `recover_dirty_review_test_case.json` |
 | ContextId | `recover_dirty_review_test_case` |
 | outputType | `none` |
 | skipAIProcessing | `true` |

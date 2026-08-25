@@ -1,4 +1,4 @@
-# Teammate (`story_development_dynamic_repo.json`)
+# Story Development Dynamic Repo
 
 Story development variant that resolves the target repository dynamically from the ticket instead of using a fixed project repository.
 
@@ -14,6 +14,8 @@ _Human doc: [`agents/docs/agents/story_development_dynamic_repo.md`](agents/docs
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `story_development_dynamic_repo.json` |
 | ContextId | `story_development_dynamic_repo` |
 | outputType | `—` |
 | skipAIProcessing | `false` |

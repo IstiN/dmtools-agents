@@ -1,4 +1,4 @@
-# Teammate (`story_development_redirect_test.json`)
+# Story Development Redirect Test
 
 Test variant of story_development_redirect used to exercise the redirect flow safely.
 
@@ -14,6 +14,8 @@ _Human doc: [`agents/docs/agents/story_development_redirect_test.md`](agents/doc
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `story_development_redirect_test.json` |
 | ContextId | `story_development_redirect_test` |
 | outputType | `—` |
 | skipAIProcessing | `false` |

@@ -1,4 +1,4 @@
-# Teammate (`story_solution_e2e.json`)
+# Story Solution E2e
 
 End-to-end variant of story_solution that also labels the ticket according to the solution outcome.
 
@@ -14,6 +14,8 @@ _Human doc: [`agents/docs/agents/story_solution_e2e.md`](agents/docs/agents/stor
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `story_solution_e2e.json` |
 | ContextId | `story_solution_e2e` |
 | outputType | `—` |
 | skipAIProcessing | `false` |

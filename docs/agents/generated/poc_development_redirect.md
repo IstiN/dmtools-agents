@@ -1,4 +1,4 @@
-# Teammate (`poc_development_redirect.json`)
+# Poc Development Redirect
 
 Routes a proof-of-concept development request to the appropriate development agent configuration.
 
@@ -14,6 +14,8 @@ _Human doc: [`agents/docs/agents/poc_development_redirect.md`](agents/docs/agent
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `poc_development_redirect.json` |
 | ContextId | `poc_development_redirect` |
 | outputType | `—` |
 | skipAIProcessing | `false` |

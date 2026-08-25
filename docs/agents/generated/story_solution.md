@@ -1,4 +1,4 @@
-# Teammate (`story_solution.json`)
+# Story Solution
 
 Designs the technical solution for a story: reads the story context, the answered questions, and the BA/SA/VD parent context, then produces the solution write-up and architecture diagrams.
 
@@ -37,6 +37,8 @@ _Human doc: [`agents/docs/agents/story_solution.md`](agents/docs/agents/story_so
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `story_solution.json` |
 | ContextId | `story_solution` |
 | outputType | `none` |
 | skipAIProcessing | `true` |

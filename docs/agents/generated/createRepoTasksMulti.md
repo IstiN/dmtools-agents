@@ -1,4 +1,4 @@
-# Teammate (`createRepoTasksMulti.json`)
+# CreateRepoTasksMulti
 
 Same as createRepoTasks but fans out across multiple repositories in one run.
 
@@ -16,6 +16,8 @@ _Human doc: [`agents/docs/agents/createRepoTasksMulti.md`](agents/docs/agents/cr
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `createRepoTasksMulti.json` |
 | ContextId | `—` |
 | outputType | `—` |
 | skipAIProcessing | `true` |

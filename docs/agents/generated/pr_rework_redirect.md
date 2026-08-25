@@ -1,4 +1,4 @@
-# Teammate (`pr_rework_redirect.json`)
+# Pr Rework Redirect
 
 Routes a rework request to the correct PR rework configuration for the repository.
 
@@ -14,6 +14,8 @@ _Human doc: [`agents/docs/agents/pr_rework_redirect.md`](agents/docs/agents/pr_r
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `pr_rework_redirect.json` |
 | ContextId | `pr_rework_redirect` |
 | outputType | `—` |
 | skipAIProcessing | `false` |

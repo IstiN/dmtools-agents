@@ -1,4 +1,4 @@
-# JSRunner (`workflow_failure_reporter.json`)
+# Workflow Failure Reporter
 
 Reports failed agent workflow runs (with links and error summaries) so failures are visible instead of silent.
 
@@ -8,6 +8,8 @@ _Human doc: [`agents/docs/agents/workflow_failure_reporter.md`](agents/docs/agen
 
 | Attribute | Value |
 |---|---|
+| Job | `JSRunner` |
+| Config | `workflow_failure_reporter.json` |
 | ContextId | `—` |
 | outputType | `—` |
 | skipAIProcessing | `false` |

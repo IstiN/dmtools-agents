@@ -1,4 +1,4 @@
-# Teammate (`test_case_automation.json`)
+# Test Case Automation
 
 Automates a single manual test case: converts it into executable test code and opens a PR with the result.
 
@@ -18,6 +18,8 @@ _Human doc: [`agents/docs/agents/test_case_automation.md`](agents/docs/agents/te
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `test_case_automation.json` |
 | ContextId | `test_case_automation` |
 | outputType | `none` |
 | skipAIProcessing | `true` |
@@ -78,7 +80,6 @@ _Post Test Automation Results Action (postJSAction for test_case_automation)_
 - `checkOpenPR` _(used by JS action)_
 - `autoStartReview` _(used by JS action)_
 - `autoStartReviewConfigFile` _(used by JS action)_
-- `removeLabel` _(used by JS action)_
 - `testFilesGlob` _(used by JS action)_
 
 ---

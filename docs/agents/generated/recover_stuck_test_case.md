@@ -1,4 +1,4 @@
-# Teammate (`recover_stuck_test_case.json`)
+# Recover Stuck Test Case
 
 Recovery job: unsticks a test case left in an intermediate status after a failed or interrupted run.
 
@@ -8,6 +8,8 @@ _Human doc: [`agents/docs/agents/recover_stuck_test_case.md`](agents/docs/agents
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `recover_stuck_test_case.json` |
 | ContextId | `recover_stuck_test_case` |
 | outputType | `none` |
 | skipAIProcessing | `true` |

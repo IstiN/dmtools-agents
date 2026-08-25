@@ -1,4 +1,4 @@
-# Teammate (`pr_review_redirect.json`)
+# Pr Review Redirect
 
 Routes a review request to the correct PR review configuration for the repository.
 
@@ -14,6 +14,8 @@ _Human doc: [`agents/docs/agents/pr_review_redirect.md`](agents/docs/agents/pr_r
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `pr_review_redirect.json` |
 | ContextId | `pr_review_redirect` |
 | outputType | `—` |
 | skipAIProcessing | `false` |

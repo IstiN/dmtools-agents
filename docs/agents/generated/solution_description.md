@@ -1,4 +1,4 @@
-# Teammate (`solution_description.json`)
+# Solution Description
 
 Enhances the solution design description of a ticket with architecture detail and posts an assessment of the result.
 
@@ -19,6 +19,8 @@ _Human doc: [`agents/docs/agents/solution_description.md`](agents/docs/agents/so
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `solution_description.json` |
 | ContextId | `solution_design_description` |
 | outputType | `none` |
 | skipAIProcessing | `true` |
