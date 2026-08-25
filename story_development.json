@@ -3,7 +3,7 @@
   "params": {
     "metadata": {
       "contextId": "story_development",
-      "description": "Implements a story end to end: checks out the repository, writes the code and tests, and opens a pull request linked to the story."
+      "descriptionPath": "agents/docs/agents/story_development.md"
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

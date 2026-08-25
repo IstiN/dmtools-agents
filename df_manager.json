@@ -15,7 +15,7 @@
       }
     },
     "metadata": {
-      "description": "JSRunner job that coordinates dark-factory manager routines (scheduling and housekeeping) without an AI CLI step."
+      "descriptionPath": "agents/docs/agents/df_manager.md"
     }
   }
 }

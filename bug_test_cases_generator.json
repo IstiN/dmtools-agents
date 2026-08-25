@@ -22,7 +22,7 @@
     "postJSAction": "agents/js/moveToDone.js",
     "inputJql": "key = JD-107",
     "metadata": {
-      "description": "TestCasesGenerator job that creates manual test cases for a bug and moves the ticket through the testing statuses."
+      "descriptionPath": "agents/docs/agents/bug_test_cases_generator.md"
     }
   }
 }

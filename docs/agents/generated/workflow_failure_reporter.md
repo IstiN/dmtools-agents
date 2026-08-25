@@ -2,6 +2,8 @@
 
 JSRunner job that reports failed agent workflow runs (with links and error summaries) so failures are visible instead of silent.
 
+_Human doc: [`agents/docs/agents/workflow_failure_reporter.md`](agents/docs/agents/workflow_failure_reporter.md)_
+
 ## Attributes
 
 | Attribute | Value |

@@ -3,7 +3,7 @@
   "params": {
     "metadata": {
       "contextId": "recover_stuck_test_case",
-      "description": "Recovery job that unsticks a test case left in an intermediate status after a failed or interrupted run."
+      "descriptionPath": "agents/docs/agents/recover_stuck_test_case.md"
     },
     "outputType": "none",
     "ticketContextDepth": 1,

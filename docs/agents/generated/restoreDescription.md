@@ -2,6 +2,8 @@
 
 Restores a ticket description from its history when the description was accidentally overwritten or cleared.
 
+_Human doc: [`agents/docs/agents/restoreDescription.md`](agents/docs/agents/restoreDescription.md)_
+
 ## Attributes
 
 | Attribute | Value |

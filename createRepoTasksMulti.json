@@ -6,7 +6,7 @@
     "postJSAction": "agents/js/createRepoTasksMulti.js",
     "localExecution": true,
     "metadata": {
-      "description": "Same as createRepoTasks but fans out across multiple repositories in one run."
+      "descriptionPath": "agents/docs/agents/createRepoTasksMulti.md"
     }
   }
 }

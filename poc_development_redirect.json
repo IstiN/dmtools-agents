@@ -7,7 +7,7 @@
   "params": {
     "metadata": {
       "contextId": "poc_development_redirect",
-      "description": "Redirect helper that routes a proof-of-concept development request to the appropriate development agent configuration."
+      "descriptionPath": "agents/docs/agents/poc_development_redirect.md"
     },
     "customParams": {
       "targetAgentName": "poc_development.json"

@@ -2,6 +2,8 @@
 
 JSRunner job that coordinates dark-factory manager routines (scheduling and housekeeping) without an AI CLI step.
 
+_Human doc: [`agents/docs/agents/df_manager.md`](agents/docs/agents/df_manager.md)_
+
 ## Attributes
 
 | Attribute | Value |

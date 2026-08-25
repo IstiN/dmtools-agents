@@ -2,6 +2,16 @@
 
 Merges an approved bug-test-automation PR and updates the bug ticket with the result.
 
+## Parameters
+
+Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
+
+- `onlyAttemptMerge` — only attempt merge.
+- `removeLabel` — remove label.
+- `storyTestMerge` — story test merge.
+
+_Human doc: [`agents/docs/agents/bug_test_automation_merge.md`](agents/docs/agents/bug_test_automation_merge.md)_
+
 ## Attributes
 
 | Attribute | Value |

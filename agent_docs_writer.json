@@ -1,0 +1,27 @@
+{
+  "name": "CliAgent",
+  "params": {
+    "metadata": {
+      "contextId": "agent_docs_writer",
+      "usage": "dmtools run agents/agent_docs_writer.json --customParams '{\"baseBranch\":\"origin/main\"}'",
+      "descriptionPath": "agents/docs/agents/agent_docs_writer.md"
+    },
+    "cliCommands": [
+      "./agents/scripts/run-agent.sh"
+    ],
+    "outputType": "none",
+    "cleanupInputFolder": false,
+    "envVariables": {
+      "CLI_ALLOWED_COMMANDS": "find,ls,cat,mkdir,bash,run-agent.sh,node,git"
+    },
+    "preCliJSAction": "agents/js/prepareAgentDocsUpdate.js",
+    "postJSAction": "agents/js/applyAgentDocsUpdate.js",
+    "customParams": {},
+    "cliPrompts": [
+      "Senior technical writer maintaining agent documentation",
+      "./agents/instructions/common/agent_task_preamble.md",
+      "./agents/instructions/agent_docs/writer.md",
+      "./agents/prompts/bash_tools.md"
+    ]
+  }
+}

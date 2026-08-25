@@ -4,7 +4,7 @@
     "metadata": {
       "contextId": "pr_knowledge_update",
       "usage": "dmtools run agents/pr_knowledge_update.json --customParams '{\"knowledgeDir\":\"<path>\",\"prNumber\":\"<pr-or-mr-number>\"}'",
-      "description": "CliAgent that curates the review knowledge base: distills merged PR outcomes into reusable review guidance and pushes the update."
+      "descriptionPath": "agents/docs/agents/pr_knowledge_update.md"
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

@@ -3,7 +3,7 @@
   "params": {
     "metadata": {
       "contextId": "bug_merged",
-      "description": "Notifies the team when a bug fix PR is merged and moves the bug ticket to its post-merge status."
+      "descriptionPath": "agents/docs/agents/bug_merged.md"
     },
     "outputType": "none",
     "ticketContextDepth": 1,

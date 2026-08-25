@@ -10,7 +10,7 @@
       }
     },
     "metadata": {
-      "description": "JSRunner job that reports failed agent workflow runs (with links and error summaries) so failures are visible instead of silent."
+      "descriptionPath": "agents/docs/agents/workflow_failure_reporter.md"
     }
   }
 }

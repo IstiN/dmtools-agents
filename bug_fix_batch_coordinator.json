@@ -3,7 +3,7 @@
   "params": {
     "metadata": {
       "contextId": "bug_fix_batch_coordinator",
-      "description": "Collects several related bugs into one batch epic so they can be fixed together in a single development pass."
+      "descriptionPath": "agents/docs/agents/bug_fix_batch_coordinator.md"
     },
     "outputType": "none",
     "ticketContextDepth": 1,

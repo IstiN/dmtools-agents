@@ -2,6 +2,8 @@
 
 JSRunner recovery job that repairs tickets whose pull request merged but the ticket status was never updated.
 
+_Human doc: [`agents/docs/agents/recover_merged_pr.md`](agents/docs/agents/recover_merged_pr.md)_
+
 ## Attributes
 
 | Attribute | Value |

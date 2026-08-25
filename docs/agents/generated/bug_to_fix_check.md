@@ -2,6 +2,14 @@
 
 Gate check that decides whether a bug has everything needed (reproduction details, environment, approval) to be taken into development.
 
+## Parameters
+
+Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
+
+- `removeLabel` — remove label.
+
+_Human doc: [`agents/docs/agents/bug_to_fix_check.md`](agents/docs/agents/bug_to_fix_check.md)_
+
 ## Attributes
 
 | Attribute | Value |

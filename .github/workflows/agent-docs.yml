@@ -1,0 +1,68 @@
+name: Agent Docs
+
+# Mandatory check for PRs that touch agent configs, JS actions, instructions,
+# prompts or human docs:
+#   1. Regenerates docs/agents/generated/* and fails when the committed docs
+#      are stale (git diff non-empty).
+#   2. Runs the docs unit tests (agentDocGenerator + docs coverage) via dmtools.
+
+on:
+  pull_request:
+    paths:
+      - '*.json'
+      - 'js/**'
+      - 'instructions/**'
+      - 'prompts/**'
+      - 'docs/agents/**'
+      - '.github/workflows/agent-docs.yml'
+  push:
+    branches: [main]
+    paths:
+      - '*.json'
+      - 'js/**'
+      - 'instructions/**'
+      - 'prompts/**'
+      - 'docs/agents/**'
+
+permissions:
+  contents: read
+
+jobs:
+  docs-freshness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Regenerate agent docs
+        run: node js/agentDocGenerator.js
+
+      - name: Fail when generated docs are stale
+        run: |
+          if ! git diff --exit-code -- docs/agents/generated; then
+            echo "::error::docs/agents/generated is stale. Run 'node js/agentDocGenerator.js' and commit the result."
+            exit 1
+          fi
+
+  docs-coverage-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install dmtools CLI
+        run: |
+          curl -fsSL https://github.com/epam/dm.ai/releases/latest/download/install.sh | bash
+          echo "$HOME/.dmtools/bin" >> "$GITHUB_PATH"
+
+      - name: Run docs unit tests
+        run: |
+          dmtools run js/unit-tests/run_agentDocsCoverage.json

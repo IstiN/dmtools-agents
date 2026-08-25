@@ -47,6 +47,9 @@ function makeMockFs(initialFiles) {
                     throw new Error('ENOENT: ' + p);
                 }
             },
+            existsSync: function(p) {
+                return files[normalize(p)] !== undefined;
+            },
             constants: { F_OK: 0 }
         }
     };
@@ -83,6 +86,7 @@ suite('agentDocGenerator', function() {
         }, null, 2);
 
         var mock = makeMockFs({
+            'agents/js/agentDocGenerator.js': '// probe',
             'agents/pr_review.json': sampleAgent,
             'agents/sm.json': '{}',
             'agents/sm_merge.json': '{}',
@@ -114,6 +118,7 @@ suite('agentDocGenerator', function() {
 
     test('ignores sm.json, sm_merge.json and run_ files', function() {
         var mock = makeMockFs({
+            'agents/js/agentDocGenerator.js': '// probe',
             'agents/sm.json': '{}',
             'agents/sm_merge.json': '{}',
             'agents/run_foo.json': '{}',

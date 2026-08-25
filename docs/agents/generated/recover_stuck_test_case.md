@@ -2,6 +2,8 @@
 
 Recovery job that unsticks a test case left in an intermediate status after a failed or interrupted run.
 
+_Human doc: [`agents/docs/agents/recover_stuck_test_case.md`](agents/docs/agents/recover_stuck_test_case.md)_
+
 ## Attributes
 
 | Attribute | Value |

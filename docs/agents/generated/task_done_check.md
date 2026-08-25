@@ -2,6 +2,14 @@
 
 Gate check that verifies all stories of a task are done before the task itself moves to Done.
 
+## Parameters
+
+Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
+
+- `removeLabel` — remove label.
+
+_Human doc: [`agents/docs/agents/task_done_check.md`](agents/docs/agents/task_done_check.md)_
+
 ## Attributes
 
 | Attribute | Value |

@@ -3,7 +3,7 @@
   "params": {
     "metadata": {
       "contextId": "bug_test_automation",
-      "description": "Writes automated tests for a bug: generates test code from the bug context, runs it locally, and opens a PR with the new tests."
+      "descriptionPath": "agents/docs/agents/bug_test_automation.md"
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

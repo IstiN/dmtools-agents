@@ -3,7 +3,7 @@
   "params": {
     "metadata": {
       "contextId": "task_done_check",
-      "description": "Gate check that verifies all stories of a task are done before the task itself moves to Done."
+      "descriptionPath": "agents/docs/agents/task_done_check.md"
     },
     "outputType": "none",
     "ticketContextDepth": 1,

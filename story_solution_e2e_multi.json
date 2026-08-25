@@ -9,7 +9,7 @@
   "params": {
     "metadata": {
       "contextId": "story_solution_e2e_multi",
-      "description": "Multi-task variant of story_solution_e2e that splits a large solution into several implementation tasks."
+      "descriptionPath": "agents/docs/agents/story_solution_e2e_multi.md"
     },
     "cliPrompts": [
       "./agents/instructions/story_solution/affected_repos_multi_task_split.md"

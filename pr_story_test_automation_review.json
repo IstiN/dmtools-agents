@@ -3,7 +3,7 @@
   "params": {
     "metadata": {
       "contextId": "pr_story_test_automation_review",
-      "description": "Reviews a story-test-automation pull request: checks test quality against the story acceptance criteria and posts review comments."
+      "descriptionPath": "agents/docs/agents/pr_story_test_automation_review.md"
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

@@ -3,7 +3,7 @@
   "params": {
     "postJSAction": "agents/js/recoverMergedPRTicket.js",
     "metadata": {
-      "description": "JSRunner recovery job that repairs tickets whose pull request merged but the ticket status was never updated."
+      "descriptionPath": "agents/docs/agents/recover_merged_pr.md"
     }
   }
 }

@@ -7,7 +7,7 @@
   "params": {
     "metadata": {
       "contextId": "pr_review_redirect",
-      "description": "Redirect helper that routes a review request to the correct PR review configuration for the repository."
+      "descriptionPath": "agents/docs/agents/pr_review_redirect.md"
     },
     "customParams": {
       "targetAgentName": "pr_review.json"

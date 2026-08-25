@@ -3,7 +3,7 @@
   "params": {
     "metadata": {
       "contextId": "retry_merge_test",
-      "description": "Test variant of retry_merge used to exercise the retry-merge flow safely."
+      "descriptionPath": "agents/docs/agents/retry_merge_test.md"
     },
     "outputType": "none",
     "ticketContextDepth": 1,

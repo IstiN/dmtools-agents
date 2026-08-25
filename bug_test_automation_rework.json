@@ -3,7 +3,7 @@
   "params": {
     "metadata": {
       "contextId": "bug_test_automation_rework",
-      "description": "Reworks a bug-test-automation PR after review: reads review comments, fixes the test code, and pushes the updates."
+      "descriptionPath": "agents/docs/agents/bug_test_automation_rework.md"
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

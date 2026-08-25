@@ -84,14 +84,28 @@ suite('agentDocsCoverage', function() {
             var params = config.params || {};
             var metadata = params.metadata || {};
 
-            // Human-readable description is mandatory — it is what makes the
-            // generated docs (and any future HTML rendering) readable.
-            var description = metadata.description || params.description || '';
-            if (!description || description.trim().length < 20) {
-                failures.push(name + ': missing params.metadata.description ' +
-                    '(add a 1-2 sentence human-readable summary of what the agent does)');
-            } else if (doc.indexOf(description.trim().substring(0, 40)) === -1) {
-                failures.push(name + ': doc does not render the description (regenerate docs)');
+            // Human-readable doc is mandatory at the conventional location
+            // docs/agents/<name>.md; metadata.descriptionPath may reference it
+            // explicitly but must point at the same file when present.
+            var humanDocPath = 'docs/agents/' + name + '.md';
+            var humanDoc = readText(humanDocPath);
+            if (!humanDoc || humanDoc.trim().length < 40) {
+                failures.push(name + ': missing human doc ' + humanDocPath +
+                    ' (add a 1-2 sentence summary plus a Parameters section)');
+            } else {
+                if (metadata.descriptionPath &&
+                    metadata.descriptionPath !== 'agents/' + humanDocPath &&
+                    metadata.descriptionPath !== humanDocPath) {
+                    failures.push(name + ': metadata.descriptionPath "' + metadata.descriptionPath +
+                        '" does not match the convention agents/' + humanDocPath);
+                }
+                // First meaningful paragraph must be rendered in the generated doc
+                var firstParagraph = humanDoc.split('\n')
+                    .filter(function(l) { return l.trim() && l.trim().charAt(0) !== '#'; })[0] || '';
+                if (firstParagraph.trim().length >= 20 &&
+                    doc.indexOf(firstParagraph.trim().substring(0, 40)) === -1) {
+                    failures.push(name + ': generated doc does not embed the human doc (regenerate docs)');
+                }
             }
 
             // Every referenced JS action must be mentioned by basename
@@ -104,11 +118,18 @@ suite('agentDocsCoverage', function() {
                 }
 
                 // customParams paths used by the JS action must be documented
+                // in BOTH the generated reference and the human doc
                 var src = readText(String(actionPath).replace(/^agents\//, ''));
                 if (src) {
                     extractCustomParamsPaths(src).forEach(function(p) {
+                        var rootKey = p.split('.')[0];
                         if (doc.indexOf('`' + p + '`') === -1) {
-                            failures.push(name + ': doc does not document customParams.' + p + ' used by ' + base);
+                            failures.push(name + ': generated doc does not document customParams.' + p + ' used by ' + base);
+                        }
+                        var rootMention = '`' + rootKey + '`';
+                        var rootPrefix = '`' + rootKey + '.';
+                        if (humanDoc && humanDoc.indexOf(rootMention) === -1 && humanDoc.indexOf(rootPrefix) === -1) {
+                            failures.push(name + ': human doc does not describe customParams.' + rootKey + ' used by ' + base);
                         }
                     });
                 }
@@ -118,7 +139,12 @@ suite('agentDocsCoverage', function() {
             var customParams = params.customParams || {};
             Object.keys(customParams).forEach(function(k) {
                 if (doc.indexOf('`' + k + '`') === -1) {
-                    failures.push(name + ': doc does not document customParams key ' + k);
+                    failures.push(name + ': generated doc does not document customParams key ' + k);
+                }
+                var keyMention = '`' + k + '`';
+                var keyPrefix = '`' + k + '.';
+                if (humanDoc && humanDoc.indexOf(keyMention) === -1 && humanDoc.indexOf(keyPrefix) === -1) {
+                    failures.push(name + ': human doc does not describe customParams key ' + k);
                 }
             });
         });

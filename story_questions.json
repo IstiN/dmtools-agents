@@ -34,7 +34,7 @@
       ]
     },
     "metadata": {
-      "description": "Collects open business questions for a story and creates them as question sub-tickets assigned for review."
+      "descriptionPath": "agents/docs/agents/story_questions.md"
     }
   }
 }

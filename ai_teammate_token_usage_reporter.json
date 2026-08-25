@@ -19,7 +19,7 @@
       }
     },
     "metadata": {
-      "description": "JSRunner job that aggregates AI token usage written by agent runs and posts a summary report comment."
+      "descriptionPath": "agents/docs/agents/ai_teammate_token_usage_reporter.md"
     }
   }
 }

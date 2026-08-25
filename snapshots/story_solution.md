@@ -26,11 +26,32 @@ You are an agent triggered to perform a specific task. All required context — 
 **IMPORTANT** If the solution requires new integrations or configuration values, you may set GitHub secrets and variables directly using the CLI: 'gh secret set SECRET_NAME --body "value" --repo OWNER/REPO' and 'gh variable set VAR_NAME --body "value" --repo OWNER/REPO'.
 **IMPORTANT** Write the solution design content to outputs/response.md following the Solution Design template from Confluence.
 **IMPORTANT** Write a valid Mermaid diagram to outputs/diagram.md showing the technical architecture, component relationships, or workflow. Use proper Mermaid syntax: graph TD, flowchart TD, sequenceDiagram, classDiagram, etc.
+**IMPORTANT** Re-run / revision pass: if the ticket description already contains a solution (e.g. a Solution Design section or a previously written architecture), this run is a revision, not a blank-page design. Read `comments.md` (the ticket comment history) in full and treat every reviewer/developer comment on the existing solution as required input: incorporate the feedback into the updated solution, or explicitly explain in the solution why a comment does not apply. Never regenerate the solution from scratch while ignoring the comment history.
 
 
 ---
 
-### [4] `./agents/instructions/common/no_development.md`
+### [4] `./agents/instructions/common/investigate_before_solution.md`
+
+# Investigate Before Proposing a Solution
+
+**Before writing any solution design, investigate the existing codebase.**
+
+Use CodeGraph first for source-code investigation (`codegraph context "<solution area>"`, `codegraph query`, `codegraph callers`, `codegraph impact`) to:
+1. Locate components (classes, services, modules, UI) related to the story domain.
+2. Understand the current data model and integration patterns.
+3. Identify existing automation and test coverage that may be affected.
+
+Use `grep`, `find`, `cat`, or `sed` only after CodeGraph when you need literal text, file listing, or a specific file excerpt.
+
+Only propose new components or patterns when the existing codebase genuinely does not satisfy the requirement. Where existing code can be extended or reused, prefer that approach and justify the decision explicitly in the solution.
+
+**Sibling-instance sweep.** When the solution adds a new instance of an extensible category (a new enum value, type, step, processor, plugin, integration), pick the closest existing sibling and enumerate **all of its registration points** in the codebase: grep the sibling's identifier across source and configuration, then for every hit decide explicitly — reuse as-is / add a new entry / extend behavior. A solution that registers the new instance in fewer places than its sibling is incomplete; justify every omission in the solution text. The points this sweep exists to catch are exactly those the requirements text never mentions — discover them from the code, not from the ticket.
+
+
+---
+
+### [5] `./agents/instructions/common/no_development.md`
 
 ```mermaid
 flowchart TD
@@ -44,7 +65,7 @@ flowchart TD
 
 ---
 
-### [5] `./agents/instructions/common/error_handling.md`
+### [6] `./agents/instructions/common/error_handling.md`
 
 ```mermaid
 flowchart LR
@@ -54,7 +75,7 @@ flowchart LR
 
 ---
 
-### [6] `./agents/instructions/common/media_handling.md`
+### [7] `./agents/instructions/common/media_handling.md`
 
 Images and attachments are pre-downloaded to the input folder. Read them directly — no extra API call is needed.
 
@@ -68,7 +89,7 @@ EOF
 
 ---
 
-### [7] `./agents/instructions/enhancement/solution_design_ac_referencing.md`
+### [8] `./agents/instructions/enhancement/solution_design_ac_referencing.md`
 
 # AC Referencing Rules for Solution Design
 
@@ -102,7 +123,7 @@ All Acceptance Criteria are defined in the source ticket that carries the Accept
 
 ---
 
-### [8] `./agents/instructions/enhancement/solution_design_formatting_rules.md`
+### [9] `./agents/instructions/enhancement/solution_design_formatting_rules.md`
 
 # Solution Design Output Format
 
@@ -137,6 +158,7 @@ The block below is a **structural template / example only**. The tags such as `<
 <bold>API Contracts:</bold>
 <bullet> <code>POST /api/example</code>: [request payload shape] → [response shape].
 <bullet> <code>GET /api/example/{id}</code>: [purpose and return shape].
+<bullet> [If a new/changed enum or literal id value is introduced here and another repository will hardcode it verbatim: call out here that the consuming repo's implementation MUST verify the exact literal against the actual merged source of truth (not just this design doc) before its change merges, and should cover it with a test that fails if the source value ever drifts — not one that only mocks the id locally.]
 
 <bold>AC Coverage:</bold>
 The Acceptance Criteria are defined in the BA ticket (<link>BA-TICKET|https://jira.example.com/browse/BA-TICKET</link>) and are the single source of truth.
@@ -164,7 +186,7 @@ The Acceptance Criteria are defined in the BA ticket (<link>BA-TICKET|https://ji
 
 ---
 
-### [9] `./agents/instructions/enhancement/solution_design_few_shots.md`
+### [10] `./agents/instructions/enhancement/solution_design_few_shots.md`
 
 The examples below use generic XML-style tags (`<bold>`, `<bullet>`, `<code>`, etc.) only to illustrate the required structure. In the final `outputs/response.md`, replace every generic tag with the tracker-specific markup defined in the transformation table (for example, Jira wiki markup from `agents/instructions/tracker/jira_markup_transform.md`). Do not leave literal XML-style tags in the final output.
 
@@ -196,7 +218,7 @@ graph TD
 
 ---
 
-### [10] `./agents/prompts/story_solution_prompt.md`
+### [11] `./agents/prompts/story_solution_prompt.md`
 
 User request is in 'input' folder, read all files there and do what is requested. Follow instructions from input.
 
@@ -214,7 +236,18 @@ List the input folder with `ls -la input/*/` and read every file found:
 
 **IMPORTANT** don't start solution from: Solution Design: ... - start from content.
 **CRITICAL** check existing codebase. Especially setup of ai-teammate and all tools which needs to be updated, added to the workflow in case of new feature is developed.
-**IMPORTANT** Write the solution design to outputs/response.md and the Mermaid diagram to outputs/diagram.md.
+
+**CRITICAL: MANDATORY OUTPUT FILES — YOU MUST CREATE ALL THREE**
+Do NOT print the solution to stdout. Write it to files:
+1. `outputs/response.md` — the full solution design text (REQUIRED — without this file nothing is saved to Jira)
+2. `outputs/diagram.md` — the Mermaid architecture diagram
+3. `outputs/affected_repos.json` — affected repositories JSON array
+
+Run this as your LAST step to verify all files exist:
+```
+ls -la outputs/ && echo "=== response.md ===" && head -5 outputs/response.md
+```
+If `outputs/response.md` is missing or empty — create it before finishing.
 
 **CRITICAL: DO NOT DUPLICATE ACCEPTANCE CRITERIA**
 - Never copy, rewrite, or repeat Acceptance Criteria from parent or BA tickets.
@@ -236,7 +269,51 @@ List the input folder with `ls -la input/*/` and read every file found:
 
 ---
 
-### [11] `./agents/prompts/bash_tools.md`
+### [12] `./agents/instructions/common/confluence_comments.md`
+
+# Confluence output
+
+Active only when the agent is configured to publish its output to Confluence (`contentOutput.target` is `confluence` or `both`). If `input/confluence_output_target.json` is not present, skip this instruction entirely.
+
+## Output format
+
+When `input/confluence_output_target.json` is present, your output is published to a Confluence page:
+
+- Write `outputs/response.md` as **Markdown** — it is converted to Confluence storage format on publish. Do NOT use tracker-specific markup (no Jira `{code}` / `h2.` / ADF), even if other instructions ask for it; Markdown wins for this output.
+- If `input/confluence_output_current.md` exists, it contains the page's current content — iterate on it instead of rewriting from scratch.
+
+## Reading comments
+
+`input/confluence_output_comments.md` lists inline (annotation) comments left on the existing Confluence page for this ticket, and `input/confluence_output_current.md` contains the page's current content.
+
+- Treat **unresolved** comments as review feedback: if a comment points out a mistake, asks a question, or requests a clarification, address it in the updated output.
+- Already **resolved** comments need no action, but may provide useful context.
+
+## Replying to comments
+
+When your update directly answers an unresolved comment, add a reply entry to `outputs/confluence_replies.json`. The file must be a JSON array:
+
+```json
+[
+  {
+    "pageId": "12345678",
+    "commentId": "98765432",
+    "body": "Fixed — the section now covers this case."
+  }
+]
+```
+
+Rules:
+
+- Only reply when the update genuinely addresses the comment.
+- `pageId` and `commentId` must come from `input/confluence_output_comments.md`.
+- Keep replies concise and professional.
+- If no comment needs a reply, omit the file or write an empty array `[]`.
+
+
+---
+
+### [13] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
@@ -263,10 +340,23 @@ flowchart TD
         E3["Complex logic"] --> E3a["Write script file, run script as single command"]
     end
 
+    subgraph CWD["Working directory discipline (persistent shell!)"]
+        C1["Your Bash shell is ONE persistent session for the whole task — a cd in one command carries over to every later command, including Write/Edit"]
+        C2["cd dependencies/&lt;repo&gt; to explore a dependency's source? You are now inside it for every subsequent command until you cd out"]
+        C3["Forgetting to cd back before writing outputs/* silently writes to dependencies/&lt;repo&gt;/outputs/* instead of the job's own outputs/ — the write itself succeeds, so nothing looks wrong, but the file is lost"]
+        C4["Before ANY Write/Edit to outputs/ (response.md, pr_review.json, pr_review_comments/*.md, etc.): run pwd first and confirm you are at the job root, not inside dependencies/"]
+        C5["If unsure or already deep in a dependency checkout: cd to the ABSOLUTE job root path shown in the very first tool result of this session before writing outputs/*"]
+        C6["Do NOT defensively re-cd into a directory you are already in — running cd dependencies/&lt;repo&gt; a second time while already inside it fails with No such file or directory (it looks for a nested dependencies/&lt;repo&gt;/dependencies/&lt;repo&gt;). Run pwd first if unsure; only cd once per direction change"]
+        C7["For one-off commands inside a dependency checkout, prefer git -C dependencies/&lt;repo&gt; &lt;command&gt; over cd dependencies/&lt;repo&gt; then command — the -C form targets that directory without depending on or changing the shell cwd, so there is no cd bookkeeping to get wrong"]
+        C8["Git global flags like --no-pager go BEFORE the subcommand: git --no-pager diff ... is correct, git diff ... --no-pager errors out (git treats the trailing flag as a positional argument)"]
+    end
+
     USE --> SAFETY
     SAFETY --> FORBIDDEN
     SAFETY --> EXAMPLES
+    SAFETY --> CWD
 ```
+
 
 
 ---

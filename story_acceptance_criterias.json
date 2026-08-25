@@ -45,7 +45,7 @@
       }
     },
     "metadata": {
-      "description": "Plural-name variant of story_acceptance_criteria kept for backward compatibility; same behavior."
+      "descriptionPath": "agents/docs/agents/story_acceptance_criterias.md"
     }
   }
 }

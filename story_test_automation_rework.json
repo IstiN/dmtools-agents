@@ -3,7 +3,7 @@
   "params": {
     "metadata": {
       "contextId": "story_test_automation_rework",
-      "description": "Reworks a story-test-automation PR after review: fixes the test code per review comments and pushes the updates."
+      "descriptionPath": "agents/docs/agents/story_test_automation_rework.md"
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

@@ -3,7 +3,7 @@
   "params": {
     "metadata": {
       "contextId": "bug_done_check",
-      "description": "Verifies that a bug really can move to Done: checks linked tests passed and the fix PR merged, then transitions the ticket or reports what is missing."
+      "descriptionPath": "agents/docs/agents/bug_done_check.md"
     },
     "outputType": "none",
     "ticketContextDepth": 1,

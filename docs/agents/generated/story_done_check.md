@@ -2,6 +2,15 @@
 
 Verifies that a story really can move to Done: checks tests passed and PRs merged, then transitions the ticket or reports what is missing.
 
+## Parameters
+
+Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
+
+- `customStatuses` — custom statuses.
+- `removeLabel` — remove label.
+
+_Human doc: [`agents/docs/agents/story_done_check.md`](agents/docs/agents/story_done_check.md)_
+
 ## Attributes
 
 | Attribute | Value |

@@ -3,7 +3,7 @@
   "params": {
     "metadata": {
       "contextId": "bug_to_fix_check",
-      "description": "Gate check that decides whether a bug has everything needed (reproduction details, environment, approval) to be taken into development."
+      "descriptionPath": "agents/docs/agents/bug_to_fix_check.md"
     },
     "outputType": "none",
     "ticketContextDepth": 1,

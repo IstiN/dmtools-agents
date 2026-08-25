@@ -2,6 +2,14 @@
 
 Gate check that verifies all BA sub-tasks of a story are done before the story moves forward.
 
+## Parameters
+
+Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
+
+- `removeLabel` — remove label.
+
+_Human doc: [`agents/docs/agents/story_ba_check.md`](agents/docs/agents/story_ba_check.md)_
+
 ## Attributes
 
 | Attribute | Value |

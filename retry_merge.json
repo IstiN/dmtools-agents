@@ -3,7 +3,7 @@
   "params": {
     "metadata": {
       "contextId": "retry_merge",
-      "description": "Retries a pull request merge that previously failed (for example due to temporary CI flakiness) and reports the outcome."
+      "descriptionPath": "agents/docs/agents/retry_merge.md"
     },
     "outputType": "none",
     "ticketContextDepth": 1,

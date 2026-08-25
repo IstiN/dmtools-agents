@@ -22,7 +22,7 @@
     "postJSAction": "agents/js/finishTestCasesGeneration.js",
     "inputJql": "key = JD-107",
     "metadata": {
-      "description": "TestCasesGenerator job that generates manual test cases for stories and moves the tickets through the testing statuses."
+      "descriptionPath": "agents/docs/agents/test_cases_generator.md"
     }
   }
 }

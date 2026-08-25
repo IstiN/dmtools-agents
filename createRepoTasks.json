@@ -6,7 +6,7 @@
     "postJSAction": "agents/js/createRepoTasks.js",
     "localExecution": true,
     "metadata": {
-      "description": "Creates repository housekeeping tasks (setup, CI, docs) as tracker tickets for a new or onboarding repository."
+      "descriptionPath": "agents/docs/agents/createRepoTasks.md"
     }
   }
 }

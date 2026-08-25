@@ -100,18 +100,66 @@ Always read these files first if present:
 
 Use the configured formatting rules to write the final output to `outputs/response.md`.
 
-**MANDATORY OUTPUT SHAPE:** The response must include `<bold>Story Points:</bold>`, `<bold>Business Context:</bold>`, `<bold>User Story:</bold>`, `<bold>Acceptance Criteria:</bold>`, `<bold>Business Rules:</bold>`, and `<bold>Out of Scope:</bold>` in that order. Do not skip Business Context, Business Rules, or Out of Scope. If a section has no confirmed details, include `<bullet> Not identified from available context.` for that section.
+**MANDATORY OUTPUT SHAPE:** The response must contain the following sections in this order. Do not skip any section. If a section has no confirmed details, include `<bullet> Not identified from available context.`
 
-**UI & visual quality ACs (include whenever the story touches any UI):**
-<bullet> All interactive elements (buttons, links, inputs) must have clearly visible focus and hover states with sufficient contrast.
-<bullet> Text and icon colours must meet WCAG AA contrast ratio (minimum 4.5:1 for normal text, 3:1 for large text/icons) against their background. No grey-on-white or light-on-light combinations unless contrast ratio is verified.
-<bullet> Placeholder text in inputs must be visually distinct from entered text but still readable (minimum 3:1 contrast against input background).
-<bullet> All colour and typography choices must follow the project style guide or design tokens; no ad-hoc hex values.
+<bullet> *Story Points:*
+<bullet> *Business Context:*
+<bullet> *User Story:*
+<bullet> *Design / Mockups:* — link to Figma or attach mockup images. If design is required but unavailable, add `*⚠ BLOCKER:*` with a description of what is missing.
+<bullet> *Acceptance Criteria:* — numbered list. Each AC must be self-contained: include the rule, the trigger, and the expected outcome in the AC text itself. Do not assume the reader will search Confluence or the spec.
+<bullet> *Existing vs New Behavior:* — table with columns `||Behavior||Existing||New / Changed||`. List every behavior touched by this story. Mark unchanged copied behaviors as `Copied as-is from {source}`.
+<bullet> *Business Rules:*
+<bullet> *Out of Scope:*
+<bullet> *Source References:* — list every source read: Jira tickets, Confluence pages, Figma links, attachments. Mark any source that was inaccessible with ⚠.
 
 
 ---
 
-### [7] `./agents/prompts/bash_tools.md`
+### [7] `./agents/instructions/common/confluence_comments.md`
+
+# Confluence output
+
+Active only when the agent is configured to publish its output to Confluence (`contentOutput.target` is `confluence` or `both`). If `input/confluence_output_target.json` is not present, skip this instruction entirely.
+
+## Output format
+
+When `input/confluence_output_target.json` is present, your output is published to a Confluence page:
+
+- Write `outputs/response.md` as **Markdown** — it is converted to Confluence storage format on publish. Do NOT use tracker-specific markup (no Jira `{code}` / `h2.` / ADF), even if other instructions ask for it; Markdown wins for this output.
+- If `input/confluence_output_current.md` exists, it contains the page's current content — iterate on it instead of rewriting from scratch.
+
+## Reading comments
+
+`input/confluence_output_comments.md` lists inline (annotation) comments left on the existing Confluence page for this ticket, and `input/confluence_output_current.md` contains the page's current content.
+
+- Treat **unresolved** comments as review feedback: if a comment points out a mistake, asks a question, or requests a clarification, address it in the updated output.
+- Already **resolved** comments need no action, but may provide useful context.
+
+## Replying to comments
+
+When your update directly answers an unresolved comment, add a reply entry to `outputs/confluence_replies.json`. The file must be a JSON array:
+
+```json
+[
+  {
+    "pageId": "12345678",
+    "commentId": "98765432",
+    "body": "Fixed — the section now covers this case."
+  }
+]
+```
+
+Rules:
+
+- Only reply when the update genuinely addresses the comment.
+- `pageId` and `commentId` must come from `input/confluence_output_comments.md`.
+- Keep replies concise and professional.
+- If no comment needs a reply, omit the file or write an empty array `[]`.
+
+
+---
+
+### [8] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
@@ -138,28 +186,59 @@ flowchart TD
         E3["Complex logic"] --> E3a["Write script file, run script as single command"]
     end
 
+    subgraph CWD["Working directory discipline (persistent shell!)"]
+        C1["Your Bash shell is ONE persistent session for the whole task — a cd in one command carries over to every later command, including Write/Edit"]
+        C2["cd dependencies/&lt;repo&gt; to explore a dependency's source? You are now inside it for every subsequent command until you cd out"]
+        C3["Forgetting to cd back before writing outputs/* silently writes to dependencies/&lt;repo&gt;/outputs/* instead of the job's own outputs/ — the write itself succeeds, so nothing looks wrong, but the file is lost"]
+        C4["Before ANY Write/Edit to outputs/ (response.md, pr_review.json, pr_review_comments/*.md, etc.): run pwd first and confirm you are at the job root, not inside dependencies/"]
+        C5["If unsure or already deep in a dependency checkout: cd to the ABSOLUTE job root path shown in the very first tool result of this session before writing outputs/*"]
+        C6["Do NOT defensively re-cd into a directory you are already in — running cd dependencies/&lt;repo&gt; a second time while already inside it fails with No such file or directory (it looks for a nested dependencies/&lt;repo&gt;/dependencies/&lt;repo&gt;). Run pwd first if unsure; only cd once per direction change"]
+        C7["For one-off commands inside a dependency checkout, prefer git -C dependencies/&lt;repo&gt; &lt;command&gt; over cd dependencies/&lt;repo&gt; then command — the -C form targets that directory without depending on or changing the shell cwd, so there is no cd bookkeeping to get wrong"]
+        C8["Git global flags like --no-pager go BEFORE the subcommand: git --no-pager diff ... is correct, git diff ... --no-pager errors out (git treats the trailing flag as a positional argument)"]
+    end
+
     USE --> SAFETY
     SAFETY --> FORBIDDEN
     SAFETY --> EXAMPLES
+    SAFETY --> CWD
 ```
+
 
 
 ---
 
-### [8] `./agents/instructions/common/acceptance_criteria_quality.md`
+### [9] `./agents/instructions/common/acceptance_criteria_quality.md`
 
 # Acceptance Criteria Quality Rules
 
 ## Prohibited patterns
 
 ### ❌ Never write "follows standard X behavior"
-Instead of writing "follows [Workflow X] behavior" or "same as [Workflow X]",
-you MUST first search the codebase using codegraph_search or codegraph_explore
-for that reference workflow, read its implementation, and describe the actual
-behavior in detail: exact columns, validations, file names, transitions, and
-error messages. A single-sentence reference to another workflow is never
-acceptable as an AC — it is not testable and cannot be implemented or verified
-without additional research.
+Instead of writing "follows [Workflow X] behavior", "same as [Workflow X]",
+"behaves as in [Workflow X]", or "no [story-specific] changes", you MUST first
+search the codebase using codegraph_search or codegraph_explore for that
+reference workflow, read its implementation, and describe the actual behavior
+in detail: exact columns, validations, file names, transitions, and error
+messages. A single-sentence reference to another workflow is never acceptable
+as an AC — it is not testable and cannot be implemented or verified without
+additional research.
+
+This prohibition applies **even when the step is genuinely unchanged**.
+"Unchanged" is a conclusion you reach only *after* verification, never a
+shortcut that lets you skip it — an unverified claim of parity is exactly how
+real, undetected differences slip through review. Concretely:
+- Every sentence that asserts equivalence to another workflow/step MUST be
+  immediately followed by the itemized proof: the actual columns, validations,
+  transitions, or error messages you found, and the exact codegraph
+  symbol/file you found them in (e.g. `[Verified via codegraph:
+  WorkflowXStepHandler.java]`).
+- If you could not verify — the reference workflow is not in the searched
+  codebase, or you ran out of context — do NOT assert equivalence at all.
+  Add an explicit blocker instead: `*⚠ BLOCKER:* behavior of [Workflow X] step
+  [N] could not be verified against the codebase — AC cannot confirm parity.`
+- A bare label such as "Copied as-is from {source}" is only acceptable once
+  the itemized proof (or an explicit blocker) has already been given earlier
+  in the same AC item; it may never *replace* the proof.
 
 ### ❌ Never include generic UI/accessibility AC
 WCAG AA, contrast ratios, focus states, style guide compliance —
@@ -171,7 +250,49 @@ explicitly about a UI component or design system.
 If a rule is stated in the Business Rules section,
 do not restate it in the AC text.
 
+### ❌ Never flatten tables to plain text
+When source material contains a table (columns, file formats, mapping rules,
+validation logic) it must remain a table in the output.
+Use Jira wiki markup table syntax as defined in `jira_wiki_markup.md`:
+`||Header 1||Header 2||` for header rows, `|value 1|value 2|` for data rows.
+Never convert a table to a bullet list or prose.
+
+### ❌ Never silently skip unavailable artifacts
+If a linked artifact is unavailable (Figma file requires login, Confluence page
+is restricted, attachment is missing), do NOT silently omit it.
+Instead, add an explicit blocker entry:
+`*⚠ BLOCKER:* [artifact name] is not accessible — AC for [scope] cannot be
+finalized without this material.`
+
+### ❌ Never use partial detail for copied workflow steps
+Either describe a workflow step fully (all columns, validations, transitions)
+or mark it explicitly as `[Copied as-is from {reference}]`.
+Partial detail — describing some sub-steps but skipping others — is
+indistinguishable from missing requirements and leads to implementation gaps.
+
+### ❌ Never mix inconsistent structures for the same kind of list
+Pick one structure per repeating list (e.g. steps, requirements, criteria) and
+use it for every item in that list — do not alternate between a table and
+free-form bullets/headings for the same kind of content within one output,
+and do not restate the same section twice under different headings.
+When the source items share the same columns (id, description, version,
+dependency, comment, reference), a single numbered table is the default
+choice: one row per item, sub-details as a nested numbered list inside the
+row's cell. Reserve free-form prose/headings for content that genuinely has
+no tabular shape (e.g. Business Context, User Story). Restart numbering only
+when starting a genuinely new list — never renumber or duplicate a list that
+was already presented.
+
 ## Required patterns
+
+### ✅ Separate new behavior from existing behavior
+Every AC output must clearly distinguish:
+- *Existing behavior* — what the system already does today (validated against code)
+- *New behavior* — what changes with this story
+- *Copied as-is* — steps that are identical to an existing workflow (name the source)
+- *Changed behavior* — existing steps that are modified (show before → after)
+
+Do not mix old and new in the same AC item.
 
 ### ✅ "Follows X workflow" → enumerate it
 When an AC references another workflow:
@@ -188,6 +309,24 @@ For any field pre-filled from an upstream source:
 ### ✅ Error messages must be verbatim
 Use exact UI text: Header, Message, and variable placeholders.
 Do not paraphrase.
+
+### ✅ Include a Source References section
+Every AC output must end with a *Source References* section listing:
+- The Jira ticket(s) and Confluence page(s) used as source
+- Any Figma or design files referenced
+- Any specification documents or attachments read
+If a source was attempted but inaccessible, list it with an ⚠ marker.
+
+### ✅ Attribute individual AC items to their source
+A page-level source list at the end is not sufficient on its own — it does
+not tell the reviewer which specific paragraph produced a given AC item.
+For any AC item built from a specific section of a source document (not the
+overall ticket description), name that section inline, e.g. `(source:
+[Confluence page name] § [section heading])`. This lets a reviewer jump
+straight to the exact source passage to confirm or correct it, instead of
+re-reading the whole document, and makes it obvious when two AC items were
+derived from the same section (a signal of a duplicated or ambiguous source
+that should be cleaned up upstream).
 
 
 ---

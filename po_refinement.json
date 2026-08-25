@@ -3,7 +3,7 @@
   "params": {
     "metadata": {
       "contextId": "po_refinement",
-      "description": "Answers a Product Owner refinement question using the parent ticket context ([BA]/[SA]/[VD] siblings), writes the answer to the Answer field, and closes the question."
+      "descriptionPath": "agents/docs/agents/po_refinement.md"
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

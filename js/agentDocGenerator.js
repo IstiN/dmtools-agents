@@ -14,9 +14,32 @@
 var fs = require('fs');
 var path = require('path');
 
-var AGENTS_DIR = 'agents';
+// Layout-adaptive: 'agents' when invoked from a parent repo (submodule mount),
+// '.' when invoked from the dmtools-agents repo root itself. References written
+// into generated docs always keep the canonical 'agents/...' prefix so the docs
+// are identical no matter which layout generated them.
+var PARENT_LAYOUT = fs.existsSync(path.join('agents', 'js', 'agentDocGenerator.js'));
+var AGENTS_DIR = PARENT_LAYOUT ? 'agents' : '.';
 var DOCS_DIR = path.join(AGENTS_DIR, 'docs', 'agents', 'generated');
 var SNAPSHOTS_DIR = path.join(AGENTS_DIR, 'snapshots');
+
+// Resolve a canonical 'agents/...' path to a readable file in either layout.
+function resolveReadPath(filePath) {
+    if (fs.existsSync(filePath)) return filePath;
+    if (!PARENT_LAYOUT && filePath.indexOf('agents/') === 0) {
+        var stripped = filePath.substring('agents/'.length);
+        if (fs.existsSync(stripped)) return stripped;
+    }
+    return filePath;
+}
+
+// Canonical reference (always 'agents/...-prefixed) for docs output.
+function canonicalRef(filePath) {
+    if (!PARENT_LAYOUT && filePath.indexOf('agents/') !== 0) {
+        return 'agents/' + filePath;
+    }
+    return filePath;
+}
 
 function ensureDir(dir) {
     try {
@@ -48,7 +71,7 @@ function readJson(filePath) {
 
 function readSource(filePath) {
     try {
-        return fs.readFileSync(filePath, 'utf8');
+        return fs.readFileSync(resolveReadPath(filePath), 'utf8');
     } catch (e) {
         return '';
     }
@@ -277,7 +300,7 @@ function renderActionSection(label, filePath, phase) {
         lines.push('_' + escapeMd(analysis.description) + '_');
         lines.push('');
     }
-    lines.push('- Source: `' + filePath + '`');
+    lines.push('- Source: `' + canonicalRef(filePath) + '`');
 
     if (analysis.artifacts.reads.length > 0) {
         lines.push('- Reads:');
@@ -337,11 +360,38 @@ function snapshotPath(fileName) {
     var base = fileName.replace(/\.json$/, '.md');
     var p = path.join(SNAPSHOTS_DIR, base);
     try {
-        fs.accessSync(p, fs.constants.F_OK);
-        return p;
+        fs.accessSync(resolveReadPath(p), fs.constants.F_OK);
+        return canonicalRef(p);
     } catch (e) {
         return null;
     }
+}
+
+/**
+ * Human-readable doc for an agent. Location by strict naming convention:
+ * docs/agents/<configName>.md (configName = JSON file name without .json).
+ * metadata.descriptionPath may point to the same file explicitly, but the
+ * convention path is always checked as a fallback.
+ * Returns { ref, content } or null when no human doc exists.
+ */
+function humanDocPath(fileName, params) {
+    var metadata = (params && params.metadata) || {};
+    var base = fileName.replace(/\.json$/, '.md');
+    var candidates = [];
+    if (metadata.descriptionPath) candidates.push(metadata.descriptionPath);
+    candidates.push(path.join(AGENTS_DIR, 'docs', 'agents', base));
+    for (var i = 0; i < candidates.length; i++) {
+        var p = candidates[i];
+        try {
+            var content = fs.readFileSync(resolveReadPath(p), 'utf8');
+            if (content && content.trim()) {
+                return { ref: canonicalRef(path.join(AGENTS_DIR, 'docs', 'agents', base)), content: content };
+            }
+        } catch (e) {
+            // try next candidate
+        }
+    }
+    return null;
 }
 
 function renderAgentDoc(fileName, config) {
@@ -357,12 +407,17 @@ function renderAgentDoc(fileName, config) {
     lines.push('# ' + name + ' (`' + fileName + '`)');
     lines.push('');
 
-    // Human-readable description, written by hand in the agent JSON
-    // (params.metadata.description or params.description). Rendered as the
-    // lead paragraph so generated HTML docs stay readable.
-    var description = metadata.description || params.description || '';
-    if (description) {
-        lines.push(escapeMd(description));
+    // Human-readable description lives in docs/agents/<name>.md (strict naming
+    // convention, see humanDocPath). It is embedded verbatim so the generated
+    // reference stays self-contained and HTML-renderable.
+    var human = humanDocPath(fileName, params);
+    if (human) {
+        var humanBody = human.content.trim()
+            .replace(/^#\s+.*\n/, '')       // drop the human doc's own title
+            .trim();
+        lines.push(humanBody);
+        lines.push('');
+        lines.push('_Human doc: [`' + human.ref + '`](' + human.ref + ')_');
         lines.push('');
     }
 

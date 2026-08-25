@@ -3,7 +3,7 @@
   "params": {
     "metadata": {
       "contextId": "bug_fix_batch_merge_finalize",
-      "description": "Finalizes a merged batch-fix PR: updates the batch epic, links results back to each bug, and moves the batch tickets forward."
+      "descriptionPath": "agents/docs/agents/bug_fix_batch_merge_finalize.md"
     },
     "outputType": "none",
     "ticketContextDepth": 1,

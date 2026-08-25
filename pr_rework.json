@@ -3,7 +3,7 @@
   "params": {
     "metadata": {
       "contextId": "pr_rework",
-      "description": "Reworks a pull request after review: reads review comments, implements the requested fixes, and pushes updates to the PR branch."
+      "descriptionPath": "agents/docs/agents/pr_rework.md"
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

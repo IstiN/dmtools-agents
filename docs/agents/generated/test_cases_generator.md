@@ -2,6 +2,8 @@
 
 TestCasesGenerator job that generates manual test cases for stories and moves the tickets through the testing statuses.
 
+_Human doc: [`agents/docs/agents/test_cases_generator.md`](agents/docs/agents/test_cases_generator.md)_
+
 ## Attributes
 
 | Attribute | Value |

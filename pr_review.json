@@ -3,7 +3,7 @@
   "params": {
     "metadata": {
       "contextId": "pr_review",
-      "description": "Reviews a pull request like a senior reviewer: analyzes the diff, checks conventions and risks, and posts inline review comments plus a verdict."
+      "descriptionPath": "agents/docs/agents/pr_review.md"
     },
     "cliCommands": [
       "./agents/scripts/run-agent.sh"

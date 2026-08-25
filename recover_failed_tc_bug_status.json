@@ -3,7 +3,7 @@
   "params": {
     "postJSAction": "agents/js/recoverFailedTCBugStatus.js",
     "metadata": {
-      "description": "JSRunner recovery job that repairs the status of bugs whose test-case workflow failed mid-transition."
+      "descriptionPath": "agents/docs/agents/recover_failed_tc_bug_status.md"
     }
   }
 }

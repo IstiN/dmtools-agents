@@ -46,7 +46,7 @@
       }
     },
     "metadata": {
-      "description": "Writes acceptance criteria for a story from its description and design context; output goes to the Acceptance Criteria field by default or to Confluence when contentOutput is configured."
+      "descriptionPath": "agents/docs/agents/story_acceptance_criteria.md"
     }
   }
 }
