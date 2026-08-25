@@ -51,7 +51,7 @@ suite('fetchConfluenceOutputContext', function() {
         assert.equal(result.action, 'skipped_not_configured');
     });
 
-    test('first run — no existing page, nothing written', function() {
+    test('first run — no existing page, but target marker is written', function() {
         var writes = {};
         var mod = loadFetchConfluenceContext({
             confluence_get_children_by_id: function() {
@@ -61,11 +61,27 @@ suite('fetchConfluenceOutputContext', function() {
         });
 
         var result = mod.action(makeParams({
-            customParams: { contentOutput: { target: 'confluence', space: 'DOC', parentPageId: '42' } }
+            customParams: { contentOutput: { target: 'confluence', space: 'DOC', parentPageId: '42', pageTitleSuffix: 'Solution Design' } }
         }));
 
         assert.equal(result.action, 'first_run');
         assert.equal(writes['input/PROJ-10/confluence_output_current.md'], undefined);
+        var marker = JSON.parse(writes['input/PROJ-10/confluence_output_target.json']);
+        assert.equal(marker.target, 'confluence');
+        assert.equal(marker.format, 'markdown');
+        assert.equal(marker.pageTitle, 'PROJ-10 Some story — Solution Design');
+    });
+
+    test('no marker written for jira_field target', function() {
+        var writes = {};
+        var mod = loadFetchConfluenceContext({
+            file_write: function(p, c) { writes[p] = c; }
+        });
+
+        var result = mod.action(makeParams());
+
+        assert.equal(result.action, 'skipped_not_confluence_target');
+        assert.equal(writes['input/PROJ-10/confluence_output_target.json'], undefined);
     });
 
     test('existing page — writes current content and inline comments into input', function() {

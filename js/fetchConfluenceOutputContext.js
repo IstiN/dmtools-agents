@@ -12,13 +12,19 @@
  *      the agent can treat them as review feedback and answer them via
  *      outputs/confluence_replies.json (published by writeContentOutput.js).
  *
- * No-op when the target is jira_field, when Confluence is not configured, or
- * when no page exists yet (first run). All errors are non-fatal.
+ * On every Confluence-targeted run (including the first one, when no page
+ * exists yet) it also writes input/confluence_output_target.json — a marker
+ * the CLI agent uses to know the output is headed to a Confluence page and
+ * must be written as Markdown rather than tracker markup.
+ *
+ * No-op when the target is jira_field or Confluence is not configured.
+ * All errors are non-fatal.
  */
 
 var contentOutput = require('./common/contentOutput.js');
 
 var CURRENT_CONTENT_FILE = 'confluence_output_current.md';
+var TARGET_MARKER_FILE = 'confluence_output_target.json';
 
 function action(params) {
     var folder = params.inputFolderPath;
@@ -35,6 +41,25 @@ function action(params) {
             return { success: true, action: 'skipped_not_configured' };
         }
 
+        // Always write the target marker so the CLI agent knows the output is
+        // headed to Confluence (Markdown, not tracker markup) — even on the
+        // first run when no page exists yet.
+        var pageTitle = contentOutput.buildPageTitle(cfg, ticketKey,
+            (ticket.fields && ticket.fields.summary) || '');
+        if (folder) {
+            try {
+                file_write(folder + '/' + TARGET_MARKER_FILE, JSON.stringify({
+                    target: cfg.target,
+                    format: 'markdown',
+                    pageTitle: pageTitle,
+                    space: cfg.space,
+                    parentPageId: cfg.parentPageId
+                }, null, 2));
+            } catch (markerError) {
+                console.warn('fetchConfluenceOutputContext: failed to write target marker:', markerError);
+            }
+        }
+
         var children;
         try {
             children = confluence_get_children_by_id({ contentId: cfg.parentPageId, format: 'md' });
@@ -46,7 +71,7 @@ function action(params) {
         var existing = contentOutput.findTicketPage(children, ticketKey);
         if (!existing) {
             console.log('No existing Confluence page for ' + ticketKey + ' — first run, no context to fetch');
-            return { success: true, action: 'first_run' };
+            return { success: true, action: 'first_run', pageTitle: pageTitle };
         }
 
         var pageTitle = existing.title || ticketKey;
@@ -88,5 +113,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action: action, CURRENT_CONTENT_FILE: CURRENT_CONTENT_FILE };
+    module.exports = { action: action, CURRENT_CONTENT_FILE: CURRENT_CONTENT_FILE, TARGET_MARKER_FILE: TARGET_MARKER_FILE };
 }

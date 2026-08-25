@@ -1,6 +1,13 @@
-# Confluence inline comments
+# Confluence output
 
-Active only when the agent is configured to publish its output to Confluence (`contentOutput.target` is `confluence` or `both`). If `input/confluence_output_comments.md` is not present, skip this instruction entirely.
+Active only when the agent is configured to publish its output to Confluence (`contentOutput.target` is `confluence` or `both`). If `input/confluence_output_target.json` is not present, skip this instruction entirely.
+
+## Output format
+
+When `input/confluence_output_target.json` is present, your output is published to a Confluence page:
+
+- Write `outputs/response.md` as **Markdown** — it is converted to Confluence storage format on publish. Do NOT use tracker-specific markup (no Jira `{code}` / `h2.` / ADF), even if other instructions ask for it; Markdown wins for this output.
+- If `input/confluence_output_current.md` exists, it contains the page's current content — iterate on it instead of rewriting from scratch.
 
 ## Reading comments
 
