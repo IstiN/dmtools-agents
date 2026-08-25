@@ -4,9 +4,9 @@ Test variant of story_development_redirect used to exercise the redirect flow sa
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
+Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
 
-- `targetAgentName` — target agent name.
+- `targetAgentName` — name of the agent configuration this redirect routes to.
 
 _Human doc: [`agents/docs/agents/story_development_redirect_test.md`](agents/docs/agents/story_development_redirect_test.md)_
 

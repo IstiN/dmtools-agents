@@ -1,6 +1,6 @@
 # Teammate (`recover_stuck_test_case.json`)
 
-Recovery job that unsticks a test case left in an intermediate status after a failed or interrupted run.
+Recovery job: unsticks a test case left in an intermediate status after a failed or interrupted run.
 
 _Human doc: [`agents/docs/agents/recover_stuck_test_case.md`](agents/docs/agents/recover_stuck_test_case.md)_
 

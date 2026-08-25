@@ -4,11 +4,11 @@ Same as createRepoTasks but fans out across multiple repositories in one run.
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
+Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
 
-- `blockedStatus` — blocked status.
-- `blocksRelationship` — blocks relationship.
-- `labels` — labels.
+- `blockedStatus` — status name used for blocked tasks.
+- `blocksRelationship` — link type name that marks a blocking relationship between tickets.
+- `labels` — labels applied to created tickets.
 
 _Human doc: [`agents/docs/agents/createRepoTasksMulti.md`](agents/docs/agents/createRepoTasksMulti.md)_
 

@@ -4,10 +4,10 @@ Fixes a whole batch of related bugs in one branch: reads the batch epic context,
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
+Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
 
-- `checkOpenPR` — check open pr.
-- `removeLabel` — remove label.
+- `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
+- `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
 _Human doc: [`agents/docs/agents/bug_fix_batch_development.md`](agents/docs/agents/bug_fix_batch_development.md)_
 

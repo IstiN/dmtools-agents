@@ -1,6 +1,6 @@
 # JSRunner (`recover_failed_tc_bug_status.json`)
 
-JSRunner recovery job that repairs the status of bugs whose test-case workflow failed mid-transition.
+Recovery job: repairs the status of bugs whose test-case workflow failed mid-transition.
 
 _Human doc: [`agents/docs/agents/recover_failed_tc_bug_status.md`](agents/docs/agents/recover_failed_tc_bug_status.md)_
 

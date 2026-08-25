@@ -4,9 +4,9 @@ Product intake: analyzes a raw request against existing epics and stories, then 
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
+Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
 
-- `checkOpenPR` — check open pr.
+- `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
 
 _Human doc: [`agents/docs/agents/intake.md`](agents/docs/agents/intake.md)_
 

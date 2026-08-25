@@ -4,7 +4,7 @@ Collects several related bugs into one batch epic so they can be fixed together 
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
+Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
 
-- `batchSize` — batch size.
-- `removeLabel` — remove label.
+- `batchSize` — maximum number of items processed in one batch.
+- `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).

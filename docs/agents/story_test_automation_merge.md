@@ -4,8 +4,8 @@ Merges an approved story-test-automation PR and updates the story ticket with th
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
+Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
 
-- `onlyAttemptMerge` — only attempt merge.
-- `removeLabel` — remove label.
-- `storyTestMerge` — story test merge.
+- `onlyAttemptMerge` — when `true`, only attempt the merge and report the result without further ticket transitions.
+- `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
+- `storyTestMerge` — merge behavior overrides specific to story test automation PRs.

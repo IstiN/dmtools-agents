@@ -1,12 +1,12 @@
 # Teammate (`story_ba_check.json`)
 
-Gate check that verifies all BA sub-tasks of a story are done before the story moves forward.
+Gate check: verifies that all BA sub-tasks of a story are done before the story moves forward.
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
+Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
 
-- `removeLabel` — remove label.
+- `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
 _Human doc: [`agents/docs/agents/story_ba_check.md`](agents/docs/agents/story_ba_check.md)_
 

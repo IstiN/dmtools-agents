@@ -1,12 +1,12 @@
 # Teammate (`pr_review_redirect.json`)
 
-Redirect helper that routes a review request to the correct PR review configuration for the repository.
+Routes a review request to the correct PR review configuration for the repository.
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
+Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
 
-- `targetAgentName` — target agent name.
+- `targetAgentName` — name of the agent configuration this redirect routes to.
 
 _Human doc: [`agents/docs/agents/pr_review_redirect.md`](agents/docs/agents/pr_review_redirect.md)_
 

@@ -10,7 +10,8 @@ SNAPSHOT_SCRIPT="$REPO_ROOT/generate_agent_snapshots.js"
 SNAPSHOTS_DIR="$REPO_ROOT/snapshots"
 
 # Check if any staged files are JSON configs, MD instructions, or the generator itself
-STAGED_FILES=$(git diff --cached --name-only)
+# (added/copied/modified only — deleted files must not trip the human-doc check)
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
 
 NEEDS_REGEN=false
 for f in $STAGED_FILES; do

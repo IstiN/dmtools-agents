@@ -4,6 +4,6 @@ Finalizes a merged batch-fix PR: updates the batch epic, links results back to e
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
+Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
 
-- `removeLabel` — remove label.
+- `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).

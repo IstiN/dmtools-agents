@@ -1,6 +1,6 @@
 # TestCasesGenerator (`bug_test_cases_generator.json`)
 
-TestCasesGenerator job that creates manual test cases for a bug and moves the ticket through the testing statuses.
+Generates manual test cases for a bug (TestCasesGenerator job) and moves the ticket through the testing statuses.
 
 _Human doc: [`agents/docs/agents/bug_test_cases_generator.md`](agents/docs/agents/bug_test_cases_generator.md)_
 

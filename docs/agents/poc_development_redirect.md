@@ -1,9 +1,9 @@
 # poc development redirect
 
-Redirect helper that routes a proof-of-concept development request to the appropriate development agent configuration.
+Routes a proof-of-concept development request to the appropriate development agent configuration.
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
+Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
 
-- `targetAgentName` — target agent name.
+- `targetAgentName` — name of the agent configuration this redirect routes to.

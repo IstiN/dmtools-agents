@@ -1,6 +1,6 @@
 # JSRunner (`unblock_resolved_dependencies.json`)
 
-JSRunner job that finds tickets blocked by dependencies that are already resolved and moves them back to an actionable status.
+Finds tickets blocked by dependencies that are already resolved and moves them back to an actionable status.
 
 _Human doc: [`agents/docs/agents/unblock_resolved_dependencies.md`](agents/docs/agents/unblock_resolved_dependencies.md)_
 

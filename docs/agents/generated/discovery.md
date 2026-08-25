@@ -1,6 +1,6 @@
 # Teammate (`discovery.json`)
 
-Runs continuous product discovery for a ticket and publishes the result as a Confluence page tree; on later runs it iterates on the existing pages and answers inline comments.
+Runs continuous product discovery for a ticket and publishes the result as a Confluence page tree; on later runs it iterates on the existing pages and answers reviewer inline comments.
 
 _Human doc: [`agents/docs/agents/discovery.md`](agents/docs/agents/discovery.md)_
 

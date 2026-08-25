@@ -4,9 +4,9 @@ End-to-end variant of story_solution that also labels the ticket according to th
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
+Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
 
-- `solutionField` — solution field.
+- `solutionField` — tracker field that receives the solution text. Default: `Solution`.
 
 _Human doc: [`agents/docs/agents/story_solution_e2e.md`](agents/docs/agents/story_solution_e2e.md)_
 

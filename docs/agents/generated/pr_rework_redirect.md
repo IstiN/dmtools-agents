@@ -1,12 +1,12 @@
 # Teammate (`pr_rework_redirect.json`)
 
-Redirect helper that routes a rework request to the correct PR rework configuration for the repository.
+Routes a rework request to the correct PR rework configuration for the repository.
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
+Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
 
-- `targetAgentName` — target agent name.
+- `targetAgentName` — name of the agent configuration this redirect routes to.
 
 _Human doc: [`agents/docs/agents/pr_rework_redirect.md`](agents/docs/agents/pr_rework_redirect.md)_
 

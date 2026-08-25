@@ -1,3 +1,3 @@
 # df manager
 
-JSRunner job that coordinates dark-factory manager routines (scheduling and housekeeping) without an AI CLI step.
+Coordinates dark-factory manager routines (scheduling and housekeeping) as a pure JSRunner job without an AI CLI step.

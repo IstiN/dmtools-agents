@@ -4,13 +4,13 @@ Reworks a story-test-automation PR after review: fixes the test code per review 
 
 ## Parameters
 
-Configured via `customParams` in the agent JSON or the project `.dmtools/config.js`.
+Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
 
-- `autoStartReview` — auto start review.
-- `autoStartReviewConfigFile` — auto start review config file.
-- `checkOpenPR` — check open pr.
-- `removeLabel` — remove label.
-- `testFilesGlob` — test files glob.
+- `autoStartReview` — when `true`, automatically trigger the PR review workflow after this agent finishes.
+- `autoStartReviewConfigFile` — agent config file used for the auto-started review workflow.
+- `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
+- `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
+- `testFilesGlob` — glob that selects which test files belong to this automation scope.
 
 _Human doc: [`agents/docs/agents/story_test_automation_rework.md`](agents/docs/agents/story_test_automation_rework.md)_
 
