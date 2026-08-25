@@ -32,6 +32,28 @@ When in doubt, prefer **not** splitting. Over-splitting creates Jira overhead
 (more tickets to triage, review, and close) without a real parallelization or
 tracking benefit.
 
+### Mandatory self-check before writing the final `reason`
+
+A single "big" `reason` string is a smell, not automatically a valid single
+task. Before finalizing a repository entry, count the distinct new/changed
+classes, modules, endpoints, or components you are about to list for that
+repository (ignore config/wiring one-liners).
+
+- **0–2 distinct items**, or all items are in the same file/class: keep it as
+  one task — write the plain `reason`.
+- **3 or more distinct items** in one repository: do not silently fold them
+  into one `reason` sentence just because they ship for the same feature.
+  Re-apply the split criteria above to each item individually. If at least two
+  of them could realistically be reviewed/merged as separate PRs (even if all
+  are needed before the feature works end-to-end), emit a `tasks` array — one
+  task per independently reviewable item, with `depends_on` capturing the
+  build order. Only keep it as a single task if you can state a concrete
+  reason two of the items cannot be separated (e.g. they are the same class,
+  or one is a one-line call inside the other).
+- A shared theme ("all needed for the same new feature") is **not** by itself
+  a reason to keep items merged — features regularly span multiple
+  independently reviewable pieces within one repository.
+
 ---
 
 ## Schema
@@ -48,14 +70,14 @@ still shown in the Affected Repositories table as a one-line rollup summary).
   "tasks": [
     {
       "id": "schema",
-      "title": "Add Seq Plate schema migration",
-      "reason": "Flyway migration + entity for the new Seq Plate table.",
+      "title": "Add new table migration",
+      "reason": "Migration + entity for the new table.",
       "depends_on": []
     },
     {
       "id": "processor",
-      "title": "Implement AssignPoolsToWellsProcessor",
-      "reason": "Step processor consuming the new schema; depends on the migration landing first.",
+      "title": "Implement OrderStatusProcessor",
+      "reason": "Business logic consuming the new schema; depends on the migration landing first.",
       "depends_on": ["schema"]
     }
   ]
@@ -82,7 +104,7 @@ still shown in the Affected Repositories table as a one-line rollup summary).
 ## Rules
 
 - Every `id` must be unique within its repo's `tasks` array (not globally —
-  `gens-igt:schema` and `lims-ui:schema` can coexist).
+  `repo-a:schema` and `repo-b:schema` can coexist).
 - Do not repeat information between a task's `reason` and its parent repo's
   rollup `reason` — the rollup should read as a one-sentence summary of all
   the repo's tasks combined, not a duplicate of the first task.
