@@ -798,6 +798,72 @@ suite('configLoader.resolveInstructions', function() {
         assert.equal(result.cliPromptsStrategy, 'replace');
     });
 
+    test('trackerOverride switches cliPromptsByTracker selection regardless of DEFAULT_TRACKER', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            cliPrompts: {
+                story_solution: ['./base.md']
+            }
+        });
+        var agentByTracker = {
+            jira: ['./jira-markup.md'],
+            confluence: ['./confluence-markup.md']
+        };
+        var originalGetenv = java.lang.System.getenv;
+        java.lang.System.getenv = function(key) {
+            if (key === 'DEFAULT_TRACKER') return 'jira';
+            return originalGetenv(key);
+        };
+        try {
+            var result = configLoaderModule.resolveInstructions('story_solution', [], config, agentByTracker,
+                { trackerOverride: 'confluence' });
+            assert.deepEqual(result.cliPrompts, ['./base.md', './confluence-markup.md']);
+        } finally {
+            java.lang.System.getenv = originalGetenv;
+        }
+    });
+
+    test('trackerOverride picks confluence prompts from project config when agent JSON lacks them', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {
+            cliPromptsByTracker: {
+                confluence: ['./config-confluence.md']
+            }
+        });
+        var agentByTracker = {
+            jira: ['./jira-markup.md']
+        };
+        var originalGetenv = java.lang.System.getenv;
+        java.lang.System.getenv = function(key) {
+            if (key === 'DEFAULT_TRACKER') return 'jira';
+            return originalGetenv(key);
+        };
+        try {
+            var result = configLoaderModule.resolveInstructions('story_solution', [], config, agentByTracker,
+                { trackerOverride: 'confluence' });
+            assert.deepEqual(result.cliPrompts, ['./config-confluence.md']);
+        } finally {
+            java.lang.System.getenv = originalGetenv;
+        }
+    });
+
+    test('without trackerOverride the configured tracker is used (unchanged behavior)', function() {
+        var config = configLoaderModule.mergeProjectConfig(defaults, {});
+        var agentByTracker = {
+            jira: ['./jira-markup.md'],
+            confluence: ['./confluence-markup.md']
+        };
+        var originalGetenv = java.lang.System.getenv;
+        java.lang.System.getenv = function(key) {
+            if (key === 'DEFAULT_TRACKER') return 'jira';
+            return originalGetenv(key);
+        };
+        try {
+            var result = configLoaderModule.resolveInstructions('story_solution', [], config, agentByTracker);
+            assert.deepEqual(result.cliPrompts, ['./jira-markup.md']);
+        } finally {
+            java.lang.System.getenv = originalGetenv;
+        }
+    });
+
 });
 
 

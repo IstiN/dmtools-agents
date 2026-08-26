@@ -608,9 +608,14 @@ function resolveConfluenceUrls(items, config) {
  * @param {string[]} defaultInstructions - Default instructions from agent JSON
  * @param {Object} config - Loaded project config
  * @param {Object} [agentCliPromptsByTracker] - Optional agent JSON's cliPromptsByTracker so project config extends rather than replaces it
+ * @param {Object} [options] - Optional settings
+ * @param {string} [options.trackerOverride] - Tracker key to use for cliPromptsByTracker
+ *        selection instead of DEFAULT_TRACKER (e.g. 'confluence' when the agent's
+ *        contentOutput routes generated content exclusively to a Confluence page,
+ *        which needs Markdown rather than tracker markup)
  * @returns {Object} { instructions: string[], instructionsOverridden: boolean, additionalInstructions: string[], cliPrompts: string[], cliPrompt: string|null, agentParamPatch: Object|null, jobParamPatch: Object|null }
  */
-function resolveInstructions(agentName, defaultInstructions, config, agentCliPromptsByTracker) {
+function resolveInstructions(agentName, defaultInstructions, config, agentCliPromptsByTracker, options) {
     var instructions = defaultInstructions || [];
     var instructionsOverridden = false;
     var additional = [];
@@ -672,6 +677,11 @@ function resolveInstructions(agentName, defaultInstructions, config, agentCliPro
     }
     if (!trackerType) {
         trackerType = 'jira';
+    }
+    // Content routed exclusively to Confluence must be authored in Markdown,
+    // not in the tracker's markup — switch the tracker-prompt selection key.
+    if (options && options.trackerOverride) {
+        trackerType = options.trackerOverride;
     }
 
     // Helper to extract tracker-specific prompts from a cliPromptsByTracker object
