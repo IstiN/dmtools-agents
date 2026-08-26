@@ -2,11 +2,12 @@
 # Install DMtools CLI from epam/dm.ai.
 #
 # Usage:
-#   dmtools.sh [version]                # positional arg
-#   DMTOOLS_VERSION=v1.7.195 dmtools.sh # env override
+#   dmtools.sh [version]                  # positional arg
+#   DMTOOLS_VERSION=v1.7.195 dmtools.sh   # version env override
+#   DMTOOLS_INSTALL_REPO=owner/repo       # install source repo override
 #
 # Version examples: v1.7.195 (default)
-# Install source: https://raw.githubusercontent.com/epam/dm.ai/main/install
+# Install source: https://raw.githubusercontent.com/{DMTOOLS_INSTALL_REPO}/main/install
 # Cache path: ~/.dmtools
 set -eu
 
@@ -14,6 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"
 
 DMTOOLS_VERSION="${1:-${DMTOOLS_VERSION:-v1.7.232}}"
+DMTOOLS_INSTALL_REPO="${DMTOOLS_INSTALL_REPO:-epam/dm.ai}"
 DMTOOLS_HOME="${HOME}/.dmtools"
 DMTOOLS_BIN="${DMTOOLS_HOME}/bin"
 
@@ -45,7 +47,7 @@ fi
 
 # ── Install ───────────────────────────────────────────────────────────────────
 echo "📥 Installing DMtools ${DMTOOLS_VERSION}..."
-curl -fsSL "https://raw.githubusercontent.com/epam/dm.ai/${DMTOOLS_VERSION}/install.sh" \
+curl -fsSL "https://raw.githubusercontent.com/${DMTOOLS_INSTALL_REPO}/${DMTOOLS_VERSION}/install.sh" \
   | DMTOOLS_VERSION="${DMTOOLS_VERSION}" bash -s -- "${DMTOOLS_VERSION}"
 
 register_path "${DMTOOLS_BIN}"

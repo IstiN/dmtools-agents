@@ -4,7 +4,7 @@
 
 function makeModule(globals) {
     var defaultGlobals = {
-        java: { lang: { System: { getenv: function() { return 'https://jiraeu.epam.com'; } } } },
+        java: { lang: { System: { getenv: function() { return 'https://jira.example.com'; } } } },
         jira_get_ticket: function() { return { fields: {} }; },
         jira_search_by_jql: function() { return []; },
         jira_create_ticket_with_parent: function() { return '{"key":"PROJ-2"}'; },
@@ -74,7 +74,7 @@ suite('createRepoTasks — action', function() {
                 if (opts.key === 'PROJ-100') {
                     return { fields: { description: description, parent: { key: 'PROJ-50' } } };
                 }
-                return { fields: { summary: 'Build PacBio workflow' } };
+                return { fields: { summary: 'Build example workflow' } };
             },
             jira_search_by_jql: function() { return []; },
             jira_create_ticket_with_parent: function(opts) {
@@ -93,7 +93,7 @@ suite('createRepoTasks — action', function() {
         assert.equal(created[0].parentKey, 'PROJ-50', 'parent is story');
         assert.equal(created[0].issueType, 'Sub-task', 'issueType is Sub-task');
         assert.equal(created[0].summary.indexOf('[core-db]') === 0, true, 'summary starts with [repo]');
-        assert.equal(created[0].summary.indexOf('Build PacBio workflow') !== -1, true, 'parent summary in subtask summary');
+        assert.equal(created[0].summary.indexOf('Build example workflow') !== -1, true, 'parent summary in subtask summary');
         assert.equal(created[0].description.indexOf('core-db') !== -1, true, 'repo name in description');
         assert.equal(created[0].description.indexOf('PROJ-100') !== -1, true, 'SA ticket link in description');
         assert.equal(created[0].description.indexOf('PROJ-50') !== -1, true, 'parent link in description');
@@ -109,7 +109,7 @@ suite('createRepoTasks — action', function() {
                 if (opts.key === 'PROJ-100') {
                     return { fields: { description: description, parent: { key: 'PROJ-50' } } };
                 }
-                return { fields: { summary: 'Build PacBio workflow' } };
+                return { fields: { summary: 'Build example workflow' } };
             },
             jira_search_by_jql: function() { return []; },
             jira_create_ticket_with_parent: function() {

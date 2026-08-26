@@ -23,12 +23,12 @@
 #     [--exclude "tool1 tool2 ..."] [--install-args "extra args for install.sh"]
 #
 # Examples:
-#   warmup-session.sh --repo https://github.com/EPAM-DarkFactory/SH_ANDR_WIP.git \
-#     --dir SH_ANDR_WIP --branch master --exclude "cursor codemie kimi maestro playwright"
+#   warmup-session.sh --repo https://github.com/example-org/example-repo.git \
+#     --dir example-repo --branch main --exclude "cursor codemie kimi maestro playwright"
 #
 #   # Re-run against an already-cloned dir (updates + re-installs, idempotent)
-#   warmup-session.sh --repo https://github.com/EPAM-DarkFactory/SH_ANDR_WIP.git \
-#     --dir SH_ANDR_WIP --branch master
+#   warmup-session.sh --repo https://github.com/example-org/example-repo.git \
+#     --dir example-repo --branch main
 set -euo pipefail
 
 REPO_URL=""

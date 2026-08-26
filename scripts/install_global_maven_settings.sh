@@ -22,12 +22,12 @@
 # Usage:
 #   bash install_global_maven_settings.sh <path-to-settings.xml-relative-to-cwd>
 #
-# Example (matches the gens-igt quality gate config, run with workingDir "."
-# from ai-teammate root, after the target repo has already been checked out):
-#   bash agents/scripts/install_global_maven_settings.sh dependencies/gens-igt/mvn/settings.xml
+# Example (run with workingDir "." from ai-teammate root, after the target repo
+# has already been checked out):
+#   bash agents/scripts/install_global_maven_settings.sh dependencies/my-product/mvn/settings.xml
 set -euo pipefail
 
-SOURCE_SETTINGS="${1:?path to settings.xml required, e.g. dependencies/gens-igt/mvn/settings.xml}"
+SOURCE_SETTINGS="${1:?path to settings.xml required, e.g. dependencies/my-product/mvn/settings.xml}"
 
 if [ ! -f "${SOURCE_SETTINGS}" ]; then
   echo "install_global_maven_settings: source file not found: ${SOURCE_SETTINGS} — skipping"

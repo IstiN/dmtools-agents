@@ -19,8 +19,8 @@ function sizeOf(value) {
 
 function action(params) {
     var p = params.jobParams || params || {};
-    var workspace = p.workspace || 'mobile';
-    var repository = p.repository || 'dmtools-epamsample';
+    var workspace = p.workspace || 'example-group';
+    var repository = p.repository || 'example-project';
     var pullRequestId = String(p.pullRequestId || '1');
     var workflowLimit = p.workflowLimit || 5;
 

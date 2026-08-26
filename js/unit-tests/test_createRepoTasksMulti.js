@@ -4,7 +4,7 @@
 
 function makeModule(globals) {
     var defaultGlobals = {
-        java: { lang: { System: { getenv: function() { return 'https://jiraeu.epam.com'; } } } },
+        java: { lang: { System: { getenv: function() { return 'https://jira.example.com'; } } } },
         jira_get_ticket: function() { return { fields: {} }; },
         jira_search_by_jql: function() { return []; },
         jira_create_ticket_with_parent: function() { return '{"key":"PROJ-2"}'; },
@@ -38,58 +38,58 @@ suite('createRepoTasksMulti — flattenTasks', function() {
     test('repo with tasks array produces one task per entry', function() {
         var mod = makeModule();
         var flat = mod.flattenTasks([{
-            name: 'gens-igt',
+            name: 'backend-service',
             tasks: [
                 { id: 'schema', title: 'Add schema migration', reason: 'r1' },
                 { id: 'processor', title: 'Implement processor', reason: 'r2', depends_on: ['schema'] }
             ]
         }]);
         assert.equal(flat.length, 2, 'two tasks');
-        assert.equal(flat[0].key, 'gens-igt:schema', 'first task key');
-        assert.equal(flat[1].key, 'gens-igt:processor', 'second task key');
-        assert.deepEqual(flat[1].depends_on, ['gens-igt:schema'], 'same-repo bare id resolved to qualified key');
+        assert.equal(flat[0].key, 'backend-service:schema', 'first task key');
+        assert.equal(flat[1].key, 'backend-service:processor', 'second task key');
+        assert.deepEqual(flat[1].depends_on, ['backend-service:schema'], 'same-repo bare id resolved to qualified key');
     });
 
     test('bare repo-name dependency expands to all of that repo\'s task keys', function() {
         var mod = makeModule();
         var flat = mod.flattenTasks([
             {
-                name: 'gens-igt',
+                name: 'backend-service',
                 tasks: [
                     { id: 'schema', title: 'Schema' },
                     { id: 'processor', title: 'Processor' }
                 ]
             },
             {
-                name: 'lims-ui',
-                depends_on: ['gens-igt']
+                name: 'frontend-app',
+                depends_on: ['backend-service']
             }
         ]);
-        var limsTask = flat.filter(function(t) { return t.repo === 'lims-ui'; })[0];
-        assert.equal(limsTask.depends_on.length, 2, 'depends on both gens-igt tasks');
-        assert.equal(limsTask.depends_on.indexOf('gens-igt:schema') !== -1, true, 'includes schema task');
-        assert.equal(limsTask.depends_on.indexOf('gens-igt:processor') !== -1, true, 'includes processor task');
+        var frontendTask = flat.filter(function(t) { return t.repo === 'frontend-app'; })[0];
+        assert.equal(frontendTask.depends_on.length, 2, 'depends on both backend-service tasks');
+        assert.equal(frontendTask.depends_on.indexOf('backend-service:schema') !== -1, true, 'includes schema task');
+        assert.equal(frontendTask.depends_on.indexOf('backend-service:processor') !== -1, true, 'includes processor task');
     });
 
     test('fully-qualified "repo:id" cross-repo dependency resolves to exact task', function() {
         var mod = makeModule();
         var flat = mod.flattenTasks([
             {
-                name: 'gens-igt',
+                name: 'backend-service',
                 tasks: [
                     { id: 'schema', title: 'Schema' },
                     { id: 'processor', title: 'Processor' }
                 ]
             },
             {
-                name: 'lims-ui',
+                name: 'frontend-app',
                 tasks: [
-                    { id: 'view', title: 'View', depends_on: ['gens-igt:processor'] }
+                    { id: 'view', title: 'View', depends_on: ['backend-service:processor'] }
                 ]
             }
         ]);
-        var viewTask = flat.filter(function(t) { return t.key === 'lims-ui:view'; })[0];
-        assert.deepEqual(viewTask.depends_on, ['gens-igt:processor'], 'exact cross-repo task dependency resolved');
+        var viewTask = flat.filter(function(t) { return t.key === 'frontend-app:view'; })[0];
+        assert.deepEqual(viewTask.depends_on, ['backend-service:processor'], 'exact cross-repo task dependency resolved');
     });
 
     test('unresolvable dependency reference is silently dropped, not fatal', function() {
@@ -109,7 +109,7 @@ suite('createRepoTasksMulti — topologicalSortTasks', function() {
     test('orders prerequisite tasks before dependents', function() {
         var mod = makeModule();
         var flat = mod.flattenTasks([{
-            name: 'gens-igt',
+            name: 'backend-service',
             tasks: [
                 { id: 'processor', title: 'Processor', depends_on: ['schema'] },
                 { id: 'schema', title: 'Schema' }
@@ -117,7 +117,7 @@ suite('createRepoTasksMulti — topologicalSortTasks', function() {
         }]);
         var sorted = mod.topologicalSortTasks(flat);
         var keys = sorted.map(function(t) { return t.key; });
-        assert.equal(keys.indexOf('gens-igt:schema') < keys.indexOf('gens-igt:processor'), true, 'schema before processor');
+        assert.equal(keys.indexOf('backend-service:schema') < keys.indexOf('backend-service:processor'), true, 'schema before processor');
     });
 });
 
@@ -146,7 +146,7 @@ suite('createRepoTasksMulti — parseAffectedRepos', function() {
 suite('createRepoTasksMulti — action', function() {
     var reposJson = JSON.stringify([
         {
-            name: 'gens-igt',
+            name: 'backend-service',
             reason: 'Schema + processor',
             tasks: [
                 { id: 'schema', title: 'Add schema migration', reason: 'Flyway migration' },
@@ -154,9 +154,9 @@ suite('createRepoTasksMulti — action', function() {
             ]
         },
         {
-            name: 'lims-ui',
+            name: 'frontend-app',
             reason: 'New view',
-            depends_on: ['gens-igt']
+            depends_on: ['backend-service']
         }
     ]);
     var description = 'Solution text\n\n{code:json|title=affected_repos}\n' + reposJson + '\n{code}\n\n----';
@@ -169,7 +169,7 @@ suite('createRepoTasksMulti — action', function() {
                 if (opts.key === 'PROJ-100') {
                     return { fields: { description: description, parent: { key: 'PROJ-50' } } };
                 }
-                return { fields: { summary: 'Build PacBio Seq Run Prep' } };
+                return { fields: { summary: 'Build example feature' } };
             },
             jira_search_by_jql: function() { return []; },
             jira_create_ticket_with_parent: function(opts) {
@@ -185,10 +185,10 @@ suite('createRepoTasksMulti — action', function() {
         var result = mod.action({ ticket: { key: 'PROJ-100' } });
 
         assert.equal(result.success, true, 'succeeds');
-        assert.equal(created.length, 3, 'three sub-tasks: schema, processor, lims-ui view');
-        assert.equal(created[0].summary, '[gens-igt] Add schema migration', 'first task summary');
-        assert.equal(created[1].summary, '[gens-igt] Implement processor', 'second task summary');
-        assert.equal(created[2].summary, '[lims-ui] New view', 'implicit single-task repo summary');
+        assert.equal(created.length, 3, 'three sub-tasks: schema, processor, frontend-app view');
+        assert.equal(created[0].summary, '[backend-service] Add schema migration', 'first task summary');
+        assert.equal(created[1].summary, '[backend-service] Implement processor', 'second task summary');
+        assert.equal(created[2].summary, '[frontend-app] New view', 'implicit single-task repo summary');
     });
 
     test('links cross-task dependencies (same repo and cross repo) and moves dependents to Blocked', function() {
@@ -214,9 +214,9 @@ suite('createRepoTasksMulti — action', function() {
 
         mod.action({ ticket: { key: 'PROJ-100' } });
 
-        // schema(301) blocks processor(302); both schema+processor block lims-ui view(303)
+        // schema(301) blocks processor(302); both schema+processor block frontend-app view(303)
         assert.equal(links.length, 3, 'three Blocks links (1 intra-repo + 2 cross-repo)');
-        assert.equal(moved.length, 2, 'processor and lims-ui view moved to Blocked');
+        assert.equal(moved.length, 2, 'processor and frontend-app view moved to Blocked');
     });
 
     test('repo entry without tasks array still creates exactly one Sub-task (backward compatible)', function() {
@@ -252,7 +252,7 @@ suite('createRepoTasksMulti — action', function() {
                 return { fields: { summary: 'Story' } };
             },
             jira_search_by_jql: function() {
-                return [{ fields: { summary: '[gens-igt] Add schema migration' } }]; // already exists
+                return [{ fields: { summary: '[backend-service] Add schema migration' } }]; // already exists
             },
             jira_create_ticket_with_parent: function(opts) {
                 ticketCounter++;

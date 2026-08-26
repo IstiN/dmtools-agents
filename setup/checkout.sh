@@ -44,9 +44,9 @@
 #         },
 #         {
 #           "provider": "gitlab",
-#           "repo": "dmtools-epamsample",
-#           "gitlabGroup": "mobile",
-#           "gitlabHost": "git.epam.com",
+#           "repo": "example-project",
+#           "gitlabGroup": "example-group",
+#           "gitlabHost": "gitlab.example.com",
 #           "branch": "main",
 #           "envVar": "GITLAB_REPO_DIR"
 #         }

@@ -224,7 +224,7 @@ suite('triggerConfiguredWorkflowForTicket local-execution chaining', function() 
 
         var result = autoStart.triggerConfiguredWorkflowForTicket({
             ticketKey: 'SOHO-132',
-            config: { repository: { owner: 'EPAM-DarkFactory', repo: 'SH_ANDR_WIP' } },
+            config: { repository: { owner: 'example-org', repo: 'example-repo' } },
             customParams: { localTeammate: true },
             configFile: 'agents/pr_rework.json'
         });
@@ -262,7 +262,7 @@ suite('triggerConfiguredWorkflowForTicket local-execution chaining', function() 
 
         var result = autoStart.triggerConfiguredWorkflowForTicket({
             ticketKey: 'SOHO-132',
-            config: { repository: { owner: 'EPAM-DarkFactory', repo: 'SH_ANDR_WIP' } },
+            config: { repository: { owner: 'example-org', repo: 'example-repo' } },
             customParams: {},
             configFile: 'agents/pr_rework.json'
         });
@@ -288,7 +288,7 @@ suite('triggerConfiguredWorkflowForTicket local-execution chaining', function() 
 
         var result = autoStart.triggerConfiguredWorkflowForTicket({
             ticketKey: 'SOHO-132',
-            config: { repository: { owner: 'EPAM-DarkFactory', repo: 'SH_ANDR_WIP' } },
+            config: { repository: { owner: 'example-org', repo: 'example-repo' } },
             customParams: { localTeammate: true },
             configFile: 'agents/pr_rework.json'
         });
@@ -317,7 +317,7 @@ suite('triggerConfiguredWorkflowForTicket local-execution chaining', function() 
 
         var result = autoStart.triggerConfiguredWorkflowForTicket({
             ticketKey: 'SOHO-132',
-            config: { repository: { owner: 'EPAM-DarkFactory', repo: 'SH_ANDR_WIP' } },
+            config: { repository: { owner: 'example-org', repo: 'example-repo' } },
             customParams: { localTeammate: true },
             configFile: 'agents/pr_rework.json'
         });

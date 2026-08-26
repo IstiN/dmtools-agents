@@ -41,7 +41,7 @@ function sanitizeCommitMessage(message) {
 
 function extractPrUrl(output, runCommand, branchName, workingDir) {
     var cleaned = cleanCommandOutput(output);
-    var urlMatch = cleaned.match(/https:\/\/(?:github\.com|[^/\s]*gitlab[^/\s]*|git\.epam\.com)\/[^\s]+/);
+    var urlMatch = cleaned.match(/https:\/\/(?:github\.com|[^/\s]*gitlab[^/\s]*|gitlab\.example\.com)\/[^\s]+/);
     if (urlMatch) return urlMatch[0];
 
     var prNumberMatch = cleaned.match(/#(\d+)/);

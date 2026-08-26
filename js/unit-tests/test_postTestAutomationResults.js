@@ -83,7 +83,7 @@ suite('postTestAutomationResults: PR creation', function() {
                 if (command === 'git diff --cached --stat') return ' testing/tests/DMC-898/test_dmc_898.py | 1 +';
                 if (command.indexOf('git ls-remote --heads origin test/DMC-898') === 0) return 'abc\trefs/heads/test/DMC-898';
                 if (command.indexOf('gh pr list --head test/DMC-898') === 0) return '';
-                if (command.indexOf('gh pr create') === 0) return 'https://github.com/epam/dm.ai/pull/898';
+                if (command.indexOf('gh pr create') === 0) return 'https://github.com/example-org/example.repo/pull/898';
                 return '';
             }
         });
@@ -94,7 +94,7 @@ suite('postTestAutomationResults: PR creation', function() {
         });
 
         assert.equal(result.success, true);
-        assert.equal(result.prUrl, 'https://github.com/epam/dm.ai/pull/898');
+        assert.equal(result.prUrl, 'https://github.com/example-org/example.repo/pull/898');
         assert.ok(writtenFiles.length > 0, 'PR body written to temp file');
         assert.ok(commands.some(function(command) { return command.indexOf('gh pr create') === 0; }), 'gh pr create called');
         assert.notOk(commands.some(function(command) { return command === 'pwd'; }), 'pwd command not used');
@@ -132,8 +132,8 @@ suite('postTestAutomationResults: PR creation', function() {
                 if (command === 'git diff --cached --stat') return ' testing/tests/DMC-909/test_dmc_909.py | 1 +';
                 if (command.indexOf('git ls-remote --heads origin test/DMC-909') === 0) return 'abc\trefs/heads/test/DMC-909';
                 if (command.indexOf('gh pr list --head test/DMC-909') === 0) return '';
-                if (command.indexOf('gh pr create') === 0) return 'https://github.com/epam/dm.ai/pull/909';
-                if (command.indexOf('gh pr view https://github.com/epam/dm.ai/pull/909 --json mergeable') === 0) {
+                if (command.indexOf('gh pr create') === 0) return 'https://github.com/example-org/example.repo/pull/909';
+                if (command.indexOf('gh pr view https://github.com/example-org/example.repo/pull/909 --json mergeable') === 0) {
                     return '{"mergeable":"CONFLICTING"}';
                 }
                 return '';
@@ -149,12 +149,12 @@ suite('postTestAutomationResults: PR creation', function() {
         assert.equal(result.success, true);
         assert.equal(result.status, 'blocked_by_human');
         assert.equal(result.blockedReason, 'pr_conflicts_with_main');
-        assert.equal(result.prUrl, 'https://github.com/epam/dm.ai/pull/909');
+        assert.equal(result.prUrl, 'https://github.com/example-org/example.repo/pull/909');
         assert.ok(statuses.indexOf('Blocked') !== -1, 'moved ticket to Blocked');
         assert.ok(removedLabels.indexOf('sm_test_automation_triggered') !== -1, 'removed SM trigger label');
         assert.ok(removedLabels.indexOf('test_case_automation_wip') !== -1, 'removed WIP label');
         assert.ok(commands.some(function(command) {
-            return command.indexOf('gh pr view https://github.com/epam/dm.ai/pull/909 --json mergeable') === 0;
+            return command.indexOf('gh pr view https://github.com/example-org/example.repo/pull/909 --json mergeable') === 0;
         }), 'checked PR mergeability');
         assert.equal(comments.length, 1);
         assert.contains(comments[0], 'PR Conflicts With Main');
