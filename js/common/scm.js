@@ -240,6 +240,24 @@ function _createGithubProvider(workspace, repository) {
         removeLabel: function(prId, label, labelId) {
             return github_remove_pr_label({ workspace: workspace, repository: repository, pullRequestId: String(prId), label: label });
         },
+        // Formal GitHub PR review (Approve / Request Changes / Comment), separate from
+        // the pr_approved label lifecycle. Opt-in feature — see postPRReviewComments.js.
+        submitReview: function(prId, event, body) {
+            return github_submit_pr_review({
+                workspace: workspace, repository: repository,
+                pullRequestId: String(prId), event: event, body: body || ''
+            });
+        },
+        listReviews: function(prId) {
+            var raw = github_list_pr_reviews({ workspace: workspace, repository: repository, pullRequestId: String(prId) });
+            return _toArray(raw);
+        },
+        dismissReview: function(prId, reviewId, message) {
+            return github_dismiss_pr_review({
+                workspace: workspace, repository: repository,
+                pullRequestId: String(prId), reviewId: String(reviewId), message: message
+            });
+        },
         getPrDiff: function(prId, workingDir) {
             var prIdStr = String(prId);
 

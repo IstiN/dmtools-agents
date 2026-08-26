@@ -421,5 +421,233 @@ suite('postPRReviewComments', function() {
             );
         });
     });
+
+    // ── action(): opt-in formal GitHub PR review (Approve/Request Changes) ────
+    // customParams.formalGithubReview enables a native GitHub review decision via
+    // scm.submitReview/listReviews/dismissReview, entirely additive to — and never
+    // touching — the pr_approved label lifecycle (addLabel/removeLabel).
+    suite('action — formal GitHub PR review (opt-in)', function() {
+
+        function loadPostPRReviewCommentsForFormalReview(opts) {
+            opts = opts || {};
+            var addLabelCalls = [];
+            var submitReviewCalls = [];
+            var dismissReviewCalls = [];
+
+            var scm = {
+                listPrs: function() { return opts.openPrs || []; },
+                getRemoteRepoInfo: function() { return opts.repoInfo !== undefined ? opts.repoInfo : { owner: 'IstiN', repo: 'dmtools-agents' }; },
+                addLabel: function(prId, label) { addLabelCalls.push({ prId: prId, label: label }); },
+                removeLabel: function() {},
+                fetchDiscussions: function() { return { rawThreads: { threads: [] } }; },
+                submitReview: function(prId, event, body) {
+                    submitReviewCalls.push({ prId: prId, event: event, body: body });
+                },
+                listReviews: function() { return opts.existingReviews || []; },
+                dismissReview: function(prId, reviewId, message) {
+                    dismissReviewCalls.push({ prId: prId, reviewId: reviewId, message: message });
+                }
+            };
+
+            var outputFiles = {
+                readOutputFileDetailed: function() {
+                    return { content: JSON.stringify(opts.reviewData), path: 'outputs/pr_review.json' };
+                },
+                readOutputFile: function() { return null; }
+            };
+
+            var mod = loadModule(
+                'js/postPRReviewComments.js',
+                makeRequire({
+                    './config.js': configModule,
+                    './common/scm.js': { createScm: function() { return scm; } },
+                    './common/autoStart.js': {
+                        triggerConfiguredWorkflowForTicket: function() { return false; },
+                        triggerSmIfIdle: function() {}
+                    },
+                    './configLoader.js': {
+                        loadProjectConfig: function() { return opts.config || {}; },
+                        resolveInstructions: function() { return { jobParamPatch: {} }; }
+                    },
+                    './common/outputFiles.js': outputFiles,
+                    './common/githubHelpers.js': githubHelpersStub,
+                    './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+                }),
+                {
+                    file_read: function(args) {
+                        var p = args && (args.path || args);
+                        if (p && p.indexOf('pr_info.md') !== -1) {
+                            return opts.prInfoContent || '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n';
+                        }
+                        return null;
+                    },
+                    jira_add_label: function() {},
+                    jira_move_to_status: function() {},
+                    jira_post_comment: function() {},
+                    jira_remove_label: function() {},
+                    jira_assign_ticket_to: function() {}
+                }
+            );
+
+            return {
+                mod: mod,
+                addLabelCalls: addLabelCalls,
+                submitReviewCalls: submitReviewCalls,
+                dismissReviewCalls: dismissReviewCalls
+            };
+        }
+
+        test('disabled by default: does not submit a formal review when customParams.formalGithubReview is not set', function() {
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                }
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1'
+            });
+
+            assert.equal(loaded.submitReviewCalls.length, 0, 'must not submit a formal review when the opt-in flag is off');
+            assert.equal(loaded.dismissReviewCalls.length, 0, 'must not dismiss a review when the opt-in flag is off');
+        });
+
+        test('enabled + REQUEST_CHANGES: submits a formal Request Changes review, and still adds no pr_approved label', function() {
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    generalComment: 'Blocking issue found in file X.',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                }
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1',
+                customParams: { formalGithubReview: true }
+            });
+
+            assert.equal(loaded.submitReviewCalls.length, 1, 'should submit exactly one formal review');
+            assert.equal(loaded.submitReviewCalls[0].event, 'REQUEST_CHANGES');
+            assert.equal(loaded.submitReviewCalls[0].body, 'Blocking issue found in file X.');
+            assert.equal(loaded.dismissReviewCalls.length, 0);
+            assert.equal(
+                loaded.addLabelCalls.filter(function(c) { return c.label === 'pr_approved'; }).length, 0,
+                'must not touch the pr_approved label logic'
+            );
+        });
+
+        test('enabled + APPROVE: dismisses a prior CHANGES_REQUESTED review, and still adds the pr_approved label as before', function() {
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                reviewData: {
+                    recommendation: 'APPROVE',
+                    issueCounts: { blocking: 0, important: 0, suggestions: 0 },
+                    inlineComments: []
+                },
+                existingReviews: [
+                    { id: 111, state: 'CHANGES_REQUESTED' },
+                    { id: 222, state: 'APPROVED' }
+                ]
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1',
+                customParams: { formalGithubReview: true }
+            });
+
+            assert.equal(loaded.submitReviewCalls.length, 0, 'must not submit a new review when approving');
+            assert.equal(loaded.dismissReviewCalls.length, 1, 'should dismiss exactly the CHANGES_REQUESTED review');
+            assert.equal(loaded.dismissReviewCalls[0].reviewId, 111);
+            assert.equal(
+                loaded.addLabelCalls.filter(function(c) { return c.label === 'pr_approved'; }).length, 1,
+                'pr_approved label lifecycle on approve must be unchanged'
+            );
+        });
+
+        test('enabled + scm without submitReview support (e.g. non-GitHub provider): skips gracefully, no error thrown', function() {
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                }
+            });
+            delete loaded.mod; // not used further
+
+            // Re-load with an scm lacking submitReview entirely.
+            var addLabelCalls = [];
+            var mod2 = loadModule(
+                'js/postPRReviewComments.js',
+                makeRequire({
+                    './config.js': configModule,
+                    './common/scm.js': {
+                        createScm: function() {
+                            return {
+                                listPrs: function() { return []; },
+                                getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; },
+                                addLabel: function(prId, label) { addLabelCalls.push({ prId: prId, label: label }); },
+                                removeLabel: function() {},
+                                fetchDiscussions: function() { return { rawThreads: { threads: [] } }; }
+                            };
+                        }
+                    },
+                    './common/autoStart.js': {
+                        triggerConfiguredWorkflowForTicket: function() { return false; },
+                        triggerSmIfIdle: function() {}
+                    },
+                    './configLoader.js': {
+                        loadProjectConfig: function() { return {}; },
+                        resolveInstructions: function() { return { jobParamPatch: {} }; }
+                    },
+                    './common/outputFiles.js': {
+                        readOutputFileDetailed: function() {
+                            return {
+                                content: JSON.stringify({
+                                    recommendation: 'REQUEST_CHANGES',
+                                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                                    inlineComments: []
+                                }),
+                                path: 'outputs/pr_review.json'
+                            };
+                        },
+                        readOutputFile: function() { return null; }
+                    },
+                    './common/githubHelpers.js': githubHelpersStub,
+                    './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+                }),
+                {
+                    file_read: function(args) {
+                        var p = args && (args.path || args);
+                        if (p && p.indexOf('pr_info.md') !== -1) {
+                            return '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n';
+                        }
+                        return null;
+                    },
+                    jira_add_label: function() {},
+                    jira_move_to_status: function() {},
+                    jira_post_comment: function() {},
+                    jira_remove_label: function() {},
+                    jira_assign_ticket_to: function() {}
+                }
+            );
+
+            var result = mod2.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1',
+                customParams: { formalGithubReview: true }
+            });
+
+            assert.equal(result.success, true, 'action must still succeed when the scm provider lacks submitReview');
+        });
+    });
 });
 

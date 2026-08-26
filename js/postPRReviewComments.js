@@ -610,6 +610,57 @@ function resolveApprovedThreads(scm, pullRequestId, resolvedThreadIds) {
 }
 
 /**
+ * Opt-in native GitHub PR review (formal Approve/Request Changes decision via the
+ * real GitHub Review API), entirely additive to — and independent from — the
+ * pr_approved label lifecycle managed elsewhere in this file. Enabled via
+ * customParams.formalGithubReview = true.
+ *
+ * When AI does not approve (recommendation !== APPROVE, i.e. isApproved === false):
+ *   formally requests changes on the PR (scm.submitReview(..., 'REQUEST_CHANGES', ...)).
+ * When AI approves (isApproved === true):
+ *   dismisses any prior formally-requested-changes review left on the PR so the
+ *   PR is no longer blocked by our own earlier "Request Changes" decision.
+ *
+ * Never touches LABELS.PR_APPROVED or any Jira/GitHub label.
+ */
+function applyFormalGithubReview(scm, pullRequestId, isApproved, recommendation, generalComment) {
+    if (typeof scm.submitReview !== 'function') {
+        console.warn('formalGithubReview: SCM provider does not support submitReview — skipping');
+        return;
+    }
+    try {
+        if (isApproved) {
+            var reviews = [];
+            try {
+                reviews = scm.listReviews(pullRequestId) || [];
+            } catch (listErr) {
+                console.warn('formalGithubReview: failed to list existing reviews:', listErr.message || listErr);
+                return;
+            }
+            var priorChangesRequested = reviews.filter(function(r) {
+                return r && r.state === 'CHANGES_REQUESTED';
+            });
+            priorChangesRequested.forEach(function(r) {
+                try {
+                    scm.dismissReview(pullRequestId, r.id, 'Superseded — issues addressed, AI review now approves.');
+                    console.log('✅ Dismissed prior formal Request Changes review', r.id);
+                } catch (dismissErr) {
+                    console.warn('formalGithubReview: failed to dismiss review ' + r.id + ':', dismissErr.message || dismissErr);
+                }
+            });
+        } else {
+            var body = (generalComment && String(generalComment).trim())
+                ? generalComment
+                : ('AI review returned ' + recommendation + '. See PR comments for details.');
+            scm.submitReview(pullRequestId, 'REQUEST_CHANGES', body);
+            console.log('✅ Submitted formal GitHub Request Changes review');
+        }
+    } catch (e) {
+        console.warn('formalGithubReview: failed to apply formal review:', e.message || e);
+    }
+}
+
+/**
  * Post review results to Jira ticket
  * @param {string} ticketKey - Ticket key
  * @param {string} reviewContent - Review content (from outputs/response.md)
@@ -844,6 +895,12 @@ function action(params) {
             } else {
                 // STATE 2: REQUEST_CHANGES / BLOCK → do NOT merge
                 console.log('PR has issues (' + recommendation + ') - will NOT merge, returning ticket to In Development');
+            }
+
+            // Opt-in: formal GitHub PR review (Approve/Request Changes decision via the
+            // real Review API), independent of the pr_approved label logic above.
+            if (customParams && customParams.formalGithubReview === true) {
+                applyFormalGithubReview(scm, prNumber, isApproved, recommendation, reviewData.generalComment);
             }
 
         } else {

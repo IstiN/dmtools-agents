@@ -12,6 +12,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `autoStartReworkConfigFile` — agent config file used for the auto-started rework workflow.
 - `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
 - `configPath` — path to the project `.dmtools/config.js` to load for this run.
+- `formalGithubReview` — when `true`, in addition to the existing `pr_approved` label, formally submit a native GitHub PR review: `REQUEST_CHANGES` when the AI does not approve, or dismiss any prior `REQUEST_CHANGES` review when the AI approves. Does not change the `pr_approved` label lifecycle.
 - `maxReviewThreadsBeforeForceApprove` — maximum open review threads before the reviewer is forced to an approve/reject verdict.
 - `onApproved` — action to run when the review approves (e.g. trigger merge).
 - `projectKey` — tracker project key override.
