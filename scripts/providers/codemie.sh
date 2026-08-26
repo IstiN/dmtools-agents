@@ -129,11 +129,7 @@ run_codemie() {
       mkdir -p "/home/_aiagent/.codemie"
       cp "${HOME}/.codemie/codemie-cli.config.json" "/home/_aiagent/.codemie/"
       chown -R _aiagent:_aiagent "/home/_aiagent/.codemie"
-      echo "DEBUG: config copied to /home/_aiagent/.codemie/"
-    else
-      echo "DEBUG: config NOT found at ${HOME}/.codemie/codemie-cli.config.json"
     fi
-    echo "DEBUG: CODEMIE_JWT_TOKEN length=${#CODEMIE_JWT_TOKEN}"
     for _bin in codemie-claude node npm npx; do
       _src="$(command -v "$_bin" 2>/dev/null)" || continue
       ln -sf "$_src" "/usr/local/bin/$_bin" 2>/dev/null || true
@@ -149,28 +145,6 @@ run_codemie() {
     printf '%s' "${CODEMIE_JWT_TOKEN:-}" > "$_token_file"
     chmod 600 "$_token_file"
     chown _aiagent "$_token_file" 2>/dev/null || true
-    # Run a quick Node.js probe inside the _aiagent subshell so we can see
-    # what homedir/config/token look like from codemie-claude's perspective.
-    su -m -s /bin/bash _aiagent -c "
-      export CODEMIE_JWT_TOKEN=\$(cat $(printf '%q' "$_token_file") 2>/dev/null)
-      node -e '
-        var os=require(\"os\"), fs=require(\"fs\");
-        var h=os.homedir(), p=h+\"/.codemie/codemie-cli.config.json\";
-        console.log(\"DEBUG node: homedir=\"+h+\" HOME=\"+process.env.HOME);
-        console.log(\"DEBUG node: config exists=\"+fs.existsSync(p));
-        if(fs.existsSync(p)){try{var c=JSON.parse(fs.readFileSync(p,\"utf8\")); console.log(\"DEBUG node: activeProfile=\"+c.activeProfile);}catch(e){console.log(\"DEBUG node: config parse error=\"+e.message);}}
-        var t=process.env.CODEMIE_JWT_TOKEN||\"\";
-        console.log(\"DEBUG node: jwt token present=\"+!!t.length+\" len=\"+t.length);
-        if(t){try{
-          var parts=t.split(\".\");
-          var payload=JSON.parse(Buffer.from(parts[1],\"base64url\").toString());
-          console.log(\"DEBUG jwt: iss=\"+(payload.iss||\"(none)\"));
-          console.log(\"DEBUG jwt: aud=\"+JSON.stringify(payload.aud||\"(none)\"));
-          console.log(\"DEBUG jwt: scope=\"+(payload.scope||\"(none)\"));
-          console.log(\"DEBUG jwt: exp=\"+new Date((payload.exp||0)*1000).toISOString());
-        }catch(e){console.log(\"DEBUG jwt: decode error=\"+e.message);}}
-      ' 2>&1 || echo 'DEBUG node probe failed'
-    " 2>&1 || true
     su -m -s /bin/bash _aiagent -c "
       export CODEMIE_JWT_TOKEN=\$(cat $(printf '%q' "$_token_file") 2>/dev/null)
       rm -f $(printf '%q' "$_token_file")
@@ -183,11 +157,6 @@ run_codemie() {
   set -e
   record_codegraph_usage "$agent_log"
   echo "Full transcript saved to: ${agent_log}"
-
-  echo ""
-  echo "=== Agent Transcript ==="
-  cat "$agent_log" 2>/dev/null || echo "(transcript file not found)"
-  echo "=== End Transcript ==="
 
   echo ""
   echo "=== Agent completed with exit code: $exit_code ==="
