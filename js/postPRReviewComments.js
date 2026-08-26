@@ -842,7 +842,16 @@ function action(params) {
                     console.warn('Failed to add pr_approved label to GitHub PR:', labelErr);
                 }
             } else {
-                // STATE 2: REQUEST_CHANGES / BLOCK → do NOT merge
+                // STATE 2: REQUEST_CHANGES / BLOCK → do NOT merge.
+                // If a previous review cycle already approved this PR (label present),
+                // that approval is now superseded by this negative outcome — clear it so
+                // SM does not attempt to merge a PR that just received new blocking feedback.
+                try {
+                    scm.removeLabel(prNumber, LABELS.PR_APPROVED);
+                    console.log('ℹ️ Removed stale pr_approved label from GitHub PR #' + prNumber + ' (recommendation: ' + recommendation + ')');
+                } catch (labelErr) {
+                    // Label may not have existed — safe to ignore.
+                }
                 console.log('PR has issues (' + recommendation + ') - will NOT merge, returning ticket to In Development');
             }
 
@@ -853,6 +862,11 @@ function action(params) {
         // Step 6: Post review to Jira ticket (merge is handled by SM/required reviewers, not by this agent)
         postReviewToJira(ticketKey, jiraReview, reviewData, prUrl);
 
+        // Tracks whether we successfully cleared a stale pr_approved label from the Jira
+        // ticket in Step 7 below, so Step 12's "merge in progress" guard isn't fooled by
+        // the pre-run ticket snapshot that still shows the (now-removed) label.
+        var staleApprovedLabelCleared = false;
+
         // Step 7: Update ticket status based on outcome
         try {
             if (isApproved) {
@@ -862,28 +876,42 @@ function action(params) {
                     label: LABELS.PR_APPROVED
                 });
                 console.log('✅ Added pr_approved label to Jira ticket — SM will retry merge');
-            } else if (prNumber && repoInfo) {
-                // Has issues, and there is an actual PR to rework → move to In Rework for focused fixes
-                jira_move_to_status({
-                    key: ticketKey,
-                    statusName: statuses.IN_REWORK
-                });
-                console.log('✅ Ticket moved to In Rework');
             } else {
-                // Has issues, but no PR was ever matched to this ticket — moving to In Rework
-                // would start a rework cycle with nothing to rework. Leave the status alone
-                // and surface this explicitly instead of silently transitioning the ticket.
-                try {
-                    jira_post_comment({
-                        key: ticketKey,
-                        comment: 'h3. ⚠️ PR Review Could Not Be Attached\n\n' +
-                            'The review analysis completed, but no open Pull Request could be matched to this ticket. ' +
-                            'The ticket status was left unchanged (not moved to In Rework) since there is no PR to rework.'
-                    });
-                } catch (commentError) {
-                    console.warn('Could not post PR-review-could-not-be-attached comment:', commentError);
+                // Not approved → clear any stale pr_approved label from a previous review cycle
+                // so SM does not attempt to merge a PR that just received new blocking feedback.
+                if (hasPrApprovedLabel(params.ticket)) {
+                    try {
+                        jira_remove_label({ key: ticketKey, label: LABELS.PR_APPROVED });
+                        staleApprovedLabelCleared = true;
+                        console.log('ℹ️ Removed stale pr_approved label from Jira ticket');
+                    } catch (labelErr) {
+                        console.warn('Failed to remove stale pr_approved label from Jira ticket:', labelErr);
+                    }
                 }
-                console.warn('⚠️ No PR found for', ticketKey, '— leaving ticket status unchanged');
+
+                if (prNumber && repoInfo) {
+                    // Has issues, and there is an actual PR to rework → move to In Rework for focused fixes
+                    jira_move_to_status({
+                        key: ticketKey,
+                        statusName: statuses.IN_REWORK
+                    });
+                    console.log('✅ Ticket moved to In Rework');
+                } else {
+                    // Has issues, but no PR was ever matched to this ticket — moving to In Rework
+                    // would start a rework cycle with nothing to rework. Leave the status alone
+                    // and surface this explicitly instead of silently transitioning the ticket.
+                    try {
+                        jira_post_comment({
+                            key: ticketKey,
+                            comment: 'h3. ⚠️ PR Review Could Not Be Attached\n\n' +
+                                'The review analysis completed, but no open Pull Request could be matched to this ticket. ' +
+                                'The ticket status was left unchanged (not moved to In Rework) since there is no PR to rework.'
+                        });
+                    } catch (commentError) {
+                        console.warn('Could not post PR-review-could-not-be-attached comment:', commentError);
+                    }
+                    console.warn('⚠️ No PR found for', ticketKey, '— leaving ticket status unchanged');
+                }
             }
         } catch (statusError) {
             console.warn('Could not update ticket status/label:', statusError);
@@ -944,8 +972,10 @@ function action(params) {
             const autoStartRework = customParams && customParams.autoStartRework;
             const reworkConfigFile = customParams && customParams.autoStartReworkConfigFile;
             if (autoStartRework && reworkConfigFile) {
-                // Skip if ticket already has pr_approved label (merge in progress)
-                if (hasPrApprovedLabel(params.ticket)) {
+                // Skip if ticket still has a pr_approved label we couldn't clear above
+                // (a merge may genuinely be in progress). If we already cleared the stale
+                // label ourselves in Step 7, it's safe to proceed.
+                if (hasPrApprovedLabel(params.ticket) && !staleApprovedLabelCleared) {
                     console.log('ℹ️ autoStartRework: skipped — ticket has pr_approved label');
                 } else {
                     try {

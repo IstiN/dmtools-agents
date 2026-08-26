@@ -277,14 +277,19 @@ suite('postPRReviewComments', function() {
         function loadPostPRReviewCommentsForAction(opts) {
             opts = opts || {};
             var jiraAddLabelCalls = [];
+            var jiraRemoveLabelCalls = [];
             var jiraMoveToStatusCalls = [];
             var jiraPostCommentCalls = [];
             var triggerSmIfIdleCalls = [];
+            var triggerConfiguredWorkflowCalls = [];
+            var scmAddLabelCalls = [];
+            var scmRemoveLabelCalls = [];
 
             var scm = {
                 listPrs: function() { return opts.openPrs || []; },
                 getRemoteRepoInfo: function() { return opts.repoInfo !== undefined ? opts.repoInfo : null; },
-                addLabel: function() {},
+                addLabel: function(prId, label) { scmAddLabelCalls.push({ prId: prId, label: label }); },
+                removeLabel: function(prId, label) { scmRemoveLabelCalls.push({ prId: prId, label: label }); },
                 fetchDiscussions: function() { return { rawThreads: { threads: [] } }; }
             };
 
@@ -304,9 +309,9 @@ suite('postPRReviewComments', function() {
                     return null;
                 },
                 jira_add_label: function(args) { jiraAddLabelCalls.push(args); },
+                jira_remove_label: function(args) { jiraRemoveLabelCalls.push(args); },
                 jira_move_to_status: function(args) { jiraMoveToStatusCalls.push(args); },
                 jira_post_comment: function(args) { jiraPostCommentCalls.push(args); },
-                jira_remove_label: function() {},
                 jira_assign_ticket_to: function() {}
             };
 
@@ -316,7 +321,10 @@ suite('postPRReviewComments', function() {
                     './config.js': configModule,
                     './common/scm.js': { createScm: function() { return scm; } },
                     './common/autoStart.js': {
-                        triggerConfiguredWorkflowForTicket: function() { return false; },
+                        triggerConfiguredWorkflowForTicket: function(args) {
+                            triggerConfiguredWorkflowCalls.push(args);
+                            return opts.reworkStarted === undefined ? false : opts.reworkStarted;
+                        },
                         triggerSmIfIdle: function(args) { triggerSmIfIdleCalls.push(args); }
                     },
                     './configLoader.js': {
@@ -333,9 +341,13 @@ suite('postPRReviewComments', function() {
             return {
                 mod: mod,
                 jiraAddLabelCalls: jiraAddLabelCalls,
+                jiraRemoveLabelCalls: jiraRemoveLabelCalls,
                 jiraMoveToStatusCalls: jiraMoveToStatusCalls,
                 jiraPostCommentCalls: jiraPostCommentCalls,
-                triggerSmIfIdleCalls: triggerSmIfIdleCalls
+                triggerSmIfIdleCalls: triggerSmIfIdleCalls,
+                triggerConfiguredWorkflowCalls: triggerConfiguredWorkflowCalls,
+                scmAddLabelCalls: scmAddLabelCalls,
+                scmRemoveLabelCalls: scmRemoveLabelCalls
             };
         }
 
@@ -418,6 +430,99 @@ suite('postPRReviewComments', function() {
                 }),
                 false,
                 'must not post the "could not attach" comment when a PR was found'
+            );
+        });
+
+        test('REQUEST_CHANGES clears a stale pr_approved label from both the GitHub PR and the Jira ticket', function() {
+            var loaded = loadPostPRReviewCommentsForAction({
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                },
+                repoInfo: { owner: 'IstiN', repo: 'dmtools-agents' },
+                prInfoContent: '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n'
+            });
+
+            var result = loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: ['pr_approved'] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1'
+            });
+
+            assert.equal(result.success, true);
+
+            assert.ok(
+                loaded.scmRemoveLabelCalls.some(function(c) { return String(c.prId) === '42' && c.label === 'pr_approved'; }),
+                'should remove the stale pr_approved label from the GitHub PR'
+            );
+            assert.ok(
+                loaded.jiraRemoveLabelCalls.some(function(c) { return c.label === 'pr_approved'; }),
+                'should remove the stale pr_approved label from the Jira ticket'
+            );
+            assert.equal(
+                loaded.scmAddLabelCalls.filter(function(c) { return c.label === 'pr_approved'; }).length, 0,
+                'must NOT (re-)add the pr_approved label on a REQUEST_CHANGES outcome'
+            );
+        });
+
+        test('APPROVE does not touch pr_approved label removal (only adds it)', function() {
+            var loaded = loadPostPRReviewCommentsForAction({
+                reviewData: {
+                    recommendation: 'APPROVE',
+                    issueCounts: { blocking: 0, important: 0, suggestions: 0 },
+                    inlineComments: []
+                },
+                repoInfo: { owner: 'IstiN', repo: 'dmtools-agents' },
+                prInfoContent: '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n'
+            });
+
+            var result = loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1'
+            });
+
+            assert.equal(result.success, true);
+            assert.equal(loaded.scmRemoveLabelCalls.length, 0, 'must not remove any label on APPROVE');
+            assert.ok(
+                loaded.scmAddLabelCalls.some(function(c) { return c.label === 'pr_approved'; }),
+                'should add the pr_approved label to the GitHub PR'
+            );
+            assert.ok(
+                loaded.jiraAddLabelCalls.some(function(c) { return c.label === 'pr_approved'; }),
+                'should add the pr_approved label to the Jira ticket'
+            );
+        });
+
+        test('autoStartRework proceeds after clearing a stale pr_approved label in the same run', function() {
+            var loaded = loadPostPRReviewCommentsForAction({
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                },
+                repoInfo: { owner: 'IstiN', repo: 'dmtools-agents' },
+                prInfoContent: '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n',
+                reworkStarted: true
+            });
+
+            var result = loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: ['pr_approved'] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1',
+                jobParams: {
+                    customParams: {
+                        autoStartRework: true,
+                        autoStartReworkConfigFile: 'agents/pr_rework.json'
+                    }
+                }
+            });
+
+            assert.equal(result.success, true);
+            assert.equal(
+                loaded.triggerConfiguredWorkflowCalls.length, 1,
+                'should NOT skip autoStartRework just because the pre-run ticket snapshot had the stale pr_approved label'
             );
         });
     });
