@@ -118,14 +118,17 @@ run_codemie() {
     # 'codemie install claude', etc.).
     chmod -R a+rwX "${HOME}" 2>/dev/null || true
     # Mirror codemie config into _aiagent's own home directory.
-    # codemie-claude (Node.js) calls os.homedir() which on Linux resolves via
-    # getpwuid(getuid()) from /etc/passwd — returning /home/_aiagent regardless
-    # of the $HOME env var that su -m preserves as /root.
+    # Node.js os.homedir() on Linux uses getpwuid(getuid()) → /home/_aiagent.
+    # Also copy to root's .codemie (in case HOME env var takes precedence).
     if [ -f "${HOME}/.codemie/codemie-cli.config.json" ]; then
       mkdir -p "/home/_aiagent/.codemie"
       cp "${HOME}/.codemie/codemie-cli.config.json" "/home/_aiagent/.codemie/"
       chown -R _aiagent:_aiagent "/home/_aiagent/.codemie"
+      echo "DEBUG: config copied to /home/_aiagent/.codemie/"
+    else
+      echo "DEBUG: config NOT found at ${HOME}/.codemie/codemie-cli.config.json"
     fi
+    echo "DEBUG: CODEMIE_JWT_TOKEN length=${#CODEMIE_JWT_TOKEN}"
     for _bin in codemie-claude node npm npx; do
       _src="$(command -v "$_bin" 2>/dev/null)" || continue
       ln -sf "$_src" "/usr/local/bin/$_bin" 2>/dev/null || true
@@ -136,14 +139,32 @@ run_codemie() {
     _quoted_cmd=$(printf ' %q' "${cmd[@]}")
     local _work_dir
     _work_dir=$(pwd)
-    # Re-export the JWT token explicitly inside the subshell: some PAM configs
-    # strip non-standard env vars even with su -m. Use bash (not sh/dash)
-    # because printf %q produces bash-quoting that dash cannot parse.
-    local _jwt_export=""
-    if [ -n "${CODEMIE_JWT_TOKEN:-}" ]; then
-      _jwt_export="export CODEMIE_JWT_TOKEN=$(printf '%q' "${CODEMIE_JWT_TOKEN}"); "
-    fi
-    su -m -s /bin/bash _aiagent -c "${_jwt_export}cd $(printf '%q' "$_work_dir") && ${_quoted_cmd}" 2>&1 | tee "$agent_log"
+    # Write the JWT token to a temp file to avoid complex quoting in -c string.
+    local _token_file="/tmp/_codemie_jwt_$$"
+    printf '%s' "${CODEMIE_JWT_TOKEN:-}" > "$_token_file"
+    chmod 600 "$_token_file"
+    chown _aiagent "$_token_file" 2>/dev/null || true
+    # Run a quick Node.js probe inside the _aiagent subshell so we can see
+    # what homedir/config/token look like from codemie-claude's perspective.
+    su -m -s /bin/bash _aiagent -c "
+      export CODEMIE_JWT_TOKEN=\$(cat $(printf '%q' "$_token_file") 2>/dev/null)
+      node -e '
+        var os=require(\"os\"), fs=require(\"fs\");
+        var h=os.homedir(), p=h+\"/.codemie/codemie-cli.config.json\";
+        console.log(\"DEBUG node: homedir=\"+h+\" HOME=\"+process.env.HOME);
+        console.log(\"DEBUG node: config exists=\"+fs.existsSync(p));
+        if(fs.existsSync(p)){try{var c=JSON.parse(fs.readFileSync(p,\"utf8\")); console.log(\"DEBUG node: activeProfile=\"+c.activeProfile);}catch(e){console.log(\"DEBUG node: config parse error=\"+e.message);}}
+        var rp=\"/root/.codemie/codemie-cli.config.json\";
+        console.log(\"DEBUG node: /root config exists=\"+fs.existsSync(rp));
+        var t=process.env.CODEMIE_JWT_TOKEN||\"\";
+        console.log(\"DEBUG node: jwt token present=\"+!!t.length+\" len=\"+t.length);
+      ' 2>&1 || echo 'DEBUG node probe failed'
+    " 2>&1 || true
+    su -m -s /bin/bash _aiagent -c "
+      export CODEMIE_JWT_TOKEN=\$(cat $(printf '%q' "$_token_file") 2>/dev/null)
+      rm -f $(printf '%q' "$_token_file")
+      cd $(printf '%q' "$_work_dir") && ${_quoted_cmd}
+    " 2>&1 | tee "$agent_log"
   else
     "${cmd[@]}" 2>&1 | tee "$agent_log"
   fi
