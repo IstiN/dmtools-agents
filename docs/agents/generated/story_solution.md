@@ -24,6 +24,14 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `contentOutput.includeInlineComments` — fetch the page's inline comments into the input folder before the run and publish `outputs/confluence_replies.json` after it. Default: `true`.
 - `contentOutput.updateTrackerField` — for `target: confluence`, also write the page link into the solution field. Default: `true`.
 
+**Markup for Confluence targets.** With `target: confluence` the tracker-specific CLI
+prompts are selected by the `confluence` key of `cliPromptsByTracker` (see
+`instructions/tracker/confluence_markup_transform.md`) instead of the configured default
+tracker, so the agent authors Markdown that the Confluence sync can render. This selection
+happens in `buildEncodedConfig.js` for encoded-config runs and in the dmtools CLI
+(`CliCommandBuilder`) for direct `dmtools run` invocations. With `target: both` the tracker
+markup is kept because the tracker field still receives the full content.
+
 > **Downstream consumers:** other agents in the pipeline (for example the
 > affected-repos / task-splitting flows that parse the Solution field) read the
 > tracker field, not Confluence. When such a consumer exists, use
