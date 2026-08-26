@@ -45,36 +45,8 @@ fi
 
 # ── Install ───────────────────────────────────────────────────────────────────
 echo "📥 Installing DMtools ${DMTOOLS_VERSION}..."
-
-# Download install script separately so curl failures (e.g. 429 rate-limit)
-# are detectable — piping curl directly to bash masks the curl exit code.
-_DMTOOLS_INSTALL_SCRIPT="$(mktemp)"
-_MAX_ATTEMPTS=3
-_ATTEMPT=0
-while [ "${_ATTEMPT}" -lt "${_MAX_ATTEMPTS}" ]; do
-  _ATTEMPT=$((_ATTEMPT + 1))
-  if curl -fsSL "https://raw.githubusercontent.com/epam/dm.ai/${DMTOOLS_VERSION}/install.sh" \
-       -o "${_DMTOOLS_INSTALL_SCRIPT}"; then
-    break
-  fi
-  if [ "${_ATTEMPT}" -lt "${_MAX_ATTEMPTS}" ]; then
-    _SLEEP=$((_ATTEMPT * 15))
-    echo "⚠️  Download attempt ${_ATTEMPT}/${_MAX_ATTEMPTS} failed — retrying in ${_SLEEP}s..."
-    sleep "${_SLEEP}"
-  else
-    echo "❌ Failed to download DMtools install script after ${_MAX_ATTEMPTS} attempts" >&2
-    rm -f "${_DMTOOLS_INSTALL_SCRIPT}"
-    exit 1
-  fi
-done
-DMTOOLS_VERSION="${DMTOOLS_VERSION}" bash "${_DMTOOLS_INSTALL_SCRIPT}" "${DMTOOLS_VERSION}"
-rm -f "${_DMTOOLS_INSTALL_SCRIPT}"
-
-# Verify the binary is actually present before reporting success
-if [ ! -x "${DMTOOLS_BIN}/dmtools" ]; then
-  echo "❌ DMtools installation failed — binary not found at ${DMTOOLS_BIN}/dmtools" >&2
-  exit 1
-fi
+curl -fsSL "https://raw.githubusercontent.com/epam/dm.ai/${DMTOOLS_VERSION}/install.sh" \
+  | DMTOOLS_VERSION="${DMTOOLS_VERSION}" bash -s -- "${DMTOOLS_VERSION}"
 
 register_path "${DMTOOLS_BIN}"
 export_var "DMTOOLS_HOME" "${DMTOOLS_HOME}"
