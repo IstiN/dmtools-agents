@@ -113,6 +113,49 @@ function resolveParentMerge(agentJson, agentPath, depth) {
 }
 
 /**
+ * Read contentOutput.target from a customParams object, if present.
+ */
+function readContentOutputTarget(customParams) {
+    if (customParams && customParams.contentOutput &&
+            typeof customParams.contentOutput.target === 'string') {
+        return customParams.contentOutput.target;
+    }
+    return null;
+}
+
+/**
+ * Resolve the 'confluence' tracker-prompt override for an agent.
+ *
+ * When the effective customParams (agent JSON customParams, overridable via the project
+ * config's jobParamPatches.<agent>.customParams) route generated content exclusively to
+ * Confluence (contentOutput.target === 'confluence'), tracker-specific CLI prompts must be
+ * selected by the 'confluence' key so the CLI agent authors Markdown instead of tracker
+ * markup (e.g. Jira wiki). Returns 'confluence' only when confluence tracker prompts are
+ * actually declared (agent JSON or project config); otherwise null — callers then keep the
+ * default tracker, matching the runtime fallback in CliCommandBuilder.
+ */
+function resolveConfluenceTrackerOverride(agentParamsRoot, effectiveConfig, agentName) {
+    var target = readContentOutputTarget(agentParamsRoot && agentParamsRoot.customParams);
+    var patchCustomParams = effectiveConfig && effectiveConfig.jobParamPatches &&
+        effectiveConfig.jobParamPatches[agentName] &&
+        effectiveConfig.jobParamPatches[agentName].customParams;
+    var patchedTarget = readContentOutputTarget(patchCustomParams);
+    if (patchedTarget) {
+        target = patchedTarget;
+    }
+    if (target !== 'confluence') {
+        return null;
+    }
+    var agentByTracker = agentParamsRoot && agentParamsRoot.cliPromptsByTracker;
+    var configByTracker = effectiveConfig && effectiveConfig.cliPromptsByTracker;
+    if ((agentByTracker && agentByTracker.confluence) ||
+            (configByTracker && configByTracker.confluence)) {
+        return 'confluence';
+    }
+    return null;
+}
+
+/**
  * Build the encoded config payload for a workflow dispatch.
  *
  * @param {string} ticketKey - Ticket key to process.
@@ -154,7 +197,11 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig, isLocal) {
         var agentJson = tryReadJson(agentJsonPath);
         if (agentJson && agentJson.params) {
             agentParamsRoot = resolveParentMerge(agentJson, agentJsonPath);
-            var skipKeys = { inputJql: true };
+            // cliPromptsByTracker is NOT copied into the encoded params: tracker prompts
+            // are already resolved and flattened into cliPrompts below (resolveInstructions).
+            // Copying the map would make the runtime (CliCommandBuilder) merge them a
+            // second time, duplicating the tracker prompts in the final CLI prompt.
+            var skipKeys = { inputJql: true, cliPromptsByTracker: true };
             Object.keys(agentParamsRoot).forEach(function(paramKey) {
                 if (skipKeys[paramKey]) return;
                 var value = agentParamsRoot[paramKey];
@@ -167,10 +214,6 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig, isLocal) {
                 } else if (typeof value === 'boolean' || typeof value === 'number') {
                     p[paramKey] = value;
                 } else if (Array.isArray(value)) {
-                    if (paramKey === 'cliPromptsByTracker') {
-                        // Tracker prompts are merged into cliPrompts below.
-                        return;
-                    }
                     p[paramKey] = value.slice();
                 } else if (typeof value === 'object' && value !== null) {
                     p[paramKey] = JSON.parse(JSON.stringify(value));
@@ -190,7 +233,9 @@ function buildEncodedConfig(ticketKey, rule, effectiveConfig, isLocal) {
 
     if (effectiveConfig && resolvedCf) {
         var agentName = extractAgentName(resolvedCf);
-        var resolved = configLoader.resolveInstructions(agentName, null, effectiveConfig, agentParamsRoot.cliPromptsByTracker);
+        var trackerOverride = resolveConfluenceTrackerOverride(agentParamsRoot, effectiveConfig, agentName);
+        var resolved = configLoader.resolveInstructions(agentName, null, effectiveConfig, agentParamsRoot.cliPromptsByTracker,
+            trackerOverride ? { trackerOverride: trackerOverride } : undefined);
 
         if (resolved.instructionsOverridden) {
             if (!p.agentParams) p.agentParams = {};
@@ -260,5 +305,6 @@ module.exports = {
     extractAgentName: extractAgentName,
     resolveConfigFile: resolveConfigFile,
     resolveParentMerge: resolveParentMerge,
+    resolveConfluenceTrackerOverride: resolveConfluenceTrackerOverride,
     buildEncodedConfig: buildEncodedConfig
 };

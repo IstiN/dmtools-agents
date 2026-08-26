@@ -301,6 +301,99 @@ suite('buildEncodedConfig payload', function() {
         assert.deepEqual(decoded.params.agentParams, {});
         assert.notOk(decoded.params.customParams);
     });
+
+    test('cliPromptsByTracker is not copied into encoded params (already flattened into cliPrompts)', function() {
+        var builder = loadBuilder({
+            'agents/test.json': JSON.stringify({
+                params: {
+                    cliPrompts: ['./base.md'],
+                    cliPromptsByTracker: { jira: ['./jira.md'] }
+                }
+            })
+        });
+        var encoded = builder.buildEncodedConfig('T-1', { configFile: 'agents/test.json' }, {});
+        var decoded = decode(encoded);
+        assert.notOk(decoded.params.cliPromptsByTracker);
+    });
+
+    test('contentOutput.target=confluence in agent customParams selects confluence tracker prompts', function() {
+        var builder = loadBuilder({
+            'agents/test.json': JSON.stringify({
+                params: {
+                    cliPrompts: ['./base.md'],
+                    cliPromptsByTracker: {
+                        jira: ['./jira-markup.md'],
+                        confluence: ['./confluence-markup.md']
+                    },
+                    customParams: { contentOutput: { target: 'confluence' } }
+                }
+            })
+        });
+        var encoded = builder.buildEncodedConfig('T-1', { configFile: 'agents/test.json' }, {});
+        var decoded = decode(encoded);
+        assert.deepEqual(decoded.params.cliPrompts, ['./base.md', './confluence-markup.md']);
+    });
+
+    test('jobParamPatches customParams.contentOutput.target wins over agent JSON', function() {
+        var builder = loadBuilder({
+            'agents/test.json': JSON.stringify({
+                params: {
+                    cliPrompts: ['./base.md'],
+                    cliPromptsByTracker: {
+                        jira: ['./jira-markup.md'],
+                        confluence: ['./confluence-markup.md']
+                    }
+                }
+            })
+        });
+        var config = {
+            jobParamPatches: {
+                test: { customParams: { contentOutput: { target: 'confluence' } } }
+            }
+        };
+        var encoded = builder.buildEncodedConfig('T-1', { configFile: 'agents/test.json' }, config);
+        var decoded = decode(encoded);
+        assert.deepEqual(decoded.params.cliPrompts, ['./base.md', './confluence-markup.md']);
+    });
+
+    test('confluence target without declared confluence prompts keeps default tracker prompts', function() {
+        var builder = loadBuilder({
+            'agents/test.json': JSON.stringify({
+                params: {
+                    cliPrompts: ['./base.md'],
+                    cliPromptsByTracker: { jira: ['./jira-markup.md'] },
+                    customParams: { contentOutput: { target: 'confluence' } }
+                }
+            })
+        });
+        var encoded = builder.buildEncodedConfig('T-1', { configFile: 'agents/test.json' }, {});
+        var decoded = decode(encoded);
+        assert.deepEqual(decoded.params.cliPrompts, ['./base.md', './jira-markup.md']);
+    });
+
+    test('resolveConfluenceTrackerOverride unit checks', function() {
+        var builder = loadBuilder({});
+        var agentParamsRoot = {
+            cliPromptsByTracker: { confluence: ['./c.md'] },
+            customParams: { contentOutput: { target: 'confluence' } }
+        };
+        assert.equal(builder.resolveConfluenceTrackerOverride(agentParamsRoot, {}, 'test'), 'confluence');
+        // target both → no override (tracker field still needs tracker markup)
+        assert.equal(builder.resolveConfluenceTrackerOverride(
+            { cliPromptsByTracker: { confluence: ['./c.md'] }, customParams: { contentOutput: { target: 'both' } } },
+            {}, 'test'), null);
+        // no confluence prompts declared → no override
+        assert.equal(builder.resolveConfluenceTrackerOverride(
+            { cliPromptsByTracker: { jira: ['./j.md'] }, customParams: { contentOutput: { target: 'confluence' } } },
+            {}, 'test'), null);
+        // no contentOutput → no override
+        assert.equal(builder.resolveConfluenceTrackerOverride(
+            { cliPromptsByTracker: { confluence: ['./c.md'] } }, {}, 'test'), null);
+        // config-level confluence prompts are enough
+        assert.equal(builder.resolveConfluenceTrackerOverride(
+            { customParams: { contentOutput: { target: 'confluence' } } },
+            { cliPromptsByTracker: { confluence: ['./c.md'] } }, 'test'), 'confluence');
+    });
 });
 
 suite('resolveParentMerge — parent inheritance', function() {

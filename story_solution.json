@@ -40,6 +40,9 @@
       "ado": [
         "./agents/instructions/tracker/ado_context.md",
         "./agents/instructions/tracker/ado_markup_transform.md"
+      ],
+      "confluence": [
+        "./agents/instructions/tracker/confluence_markup_transform.md"
       ]
     }
   }
