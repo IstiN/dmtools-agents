@@ -139,15 +139,18 @@ function action(params) {
                 if (diagram) {
                     pageContent = pageContent + '\n\n## Diagram\n\n```mermaid\n' + diagram + '\n```\n';
                 }
-                var published = contentOutput.publishPage(outputCfg, ticketKey, ticketSummary, pageContent);
-                var pageUrl = published.url;
-                console.log('Published solution to Confluence page ' + (published.page && published.page.id) + ' (' + (pageUrl || 'url unknown') + ')');
 
+                // Post replies to inline comments BEFORE the page body is replaced —
+                // while the comment anchors are still alive on the old content.
                 var replyResult = contentOutput.publishCommentReplies(contentOutput.DEFAULT_REPLIES_FILE);
                 if (replyResult.posted > 0 || replyResult.failed > 0) {
                     console.log('Replied to ' + replyResult.posted + ' inline comment(s)' +
                         (replyResult.failed > 0 ? ', ' + replyResult.failed + ' failed' : ''));
                 }
+
+                var published = contentOutput.publishPage(outputCfg, ticketKey, ticketSummary, pageContent);
+                var pageUrl = published.url;
+                console.log('Published solution to Confluence page ' + (published.page && published.page.id) + ' (' + (pageUrl || 'url unknown') + ')');
 
                 if (outputCfg.target === 'confluence' && outputCfg.updateTrackerField !== false) {
                     var linkText = pageUrl

@@ -84,18 +84,20 @@ function action(params) {
     // 2. Confluence page
     if (contentOutput.isConfluenceTarget(cfg)) {
         try {
-            var published = contentOutput.publishPage(cfg, ticketKey, summary, content);
-            result.pageId = published.page && published.page.id;
-            result.pageUrl = published.url;
-            result.pageCreated = published.created;
-            console.log('Published content to Confluence page ' + result.pageId + ' (' + (result.pageUrl || 'url unknown') + ')');
-
+            // Post replies to inline comments BEFORE the page body is replaced —
+            // while the comment anchors are still alive on the old content.
             var replies = contentOutput.publishCommentReplies(contentOutput.DEFAULT_REPLIES_FILE);
             result.replies = replies;
             if (replies.posted > 0 || replies.failed > 0) {
                 console.log('Replied to ' + replies.posted + ' inline comment(s)' +
                     (replies.failed > 0 ? ', ' + replies.failed + ' failed' : ''));
             }
+
+            var published = contentOutput.publishPage(cfg, ticketKey, summary, content);
+            result.pageId = published.page && published.page.id;
+            result.pageUrl = published.url;
+            result.pageCreated = published.created;
+            console.log('Published content to Confluence page ' + result.pageId + ' (' + (result.pageUrl || 'url unknown') + ')');
 
             if (cfg.updateTrackerField !== false && cfg.target === 'confluence') {
                 var linkText = result.pageUrl

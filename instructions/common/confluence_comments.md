@@ -7,7 +7,18 @@ Active only when the agent is configured to publish its output to Confluence (`c
 When `input/confluence_output_target.json` is present, your output is published to a Confluence page:
 
 - Write `outputs/response.md` as **Markdown** — it is converted to Confluence storage format on publish. Do NOT use tracker-specific markup (no Jira `{code}` / `h2.` / ADF), even if other instructions ask for it; Markdown wins for this output.
-- If `input/confluence_output_current.md` exists, it contains the page's current content — iterate on it instead of rewriting from scratch.
+- If `input/confluence_output_current.md` exists, it contains the page's current content — iterate on it instead of rewriting from scratch. The current content may be in legacy tracker markup from earlier runs — still write your output in Markdown.
+
+## Inline comment anchors (`[[ic:...]]` placeholders)
+
+`input/confluence_output_current.md` may contain placeholders like `[[ic:550e8400-e29b-41d4-a716-446655440000]]anchored text[[/ic]]`. Each one marks the text fragment an **inline comment is anchored to** on the published page. The publish step converts these placeholders back into real Confluence anchors; if you drop or mangle them, the comment loses its anchor and disappears from the page.
+
+Rules:
+
+- **Always preserve** every `[[ic:REF]]...[[/ic]]` placeholder, wrapped around the same text it currently marks.
+- If you rephrase the anchored text, **move the placeholder** so it wraps the new equivalent fragment.
+- Remove a placeholder only when you intentionally remove the commented content itself.
+- Never invent new `[[ic:...]]` refs — only the ones already present are valid.
 
 ## Reading comments
 

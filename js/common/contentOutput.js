@@ -206,6 +206,21 @@ function publishPage(cfg, ticketKey, summary, content) {
         deleteOrphans: false
     });
 
+    // The sync replaces the page body wholesale, which destroys inline comment
+    // anchors (ac:inline-comment-marker). Re-anchor the comments that survived
+    // as [[ic:...]] placeholders or whose anchor text is still present.
+    if (cfg.includeInlineComments !== false) {
+        try {
+            var anchoring = restoreInlineCommentAnchors(page, cfg);
+            if (anchoring.restored.length > 0 || anchoring.missed.length > 0) {
+                console.log('Inline comment anchors: ' + anchoring.restored.length +
+                    ' restored, ' + anchoring.missed.length + ' could not be re-anchored');
+            }
+        } catch (anchorError) {
+            console.warn('Failed to restore inline comment anchors (non-fatal):', anchorError);
+        }
+    }
+
     return { page: page, url: resolvePageUrl(page), created: created };
 }
 
@@ -216,7 +231,170 @@ function escapeHtml(text) {
         .replace(/>/g, '&gt;');
 }
 
-// ── Inline comments ──────────────────────────────────────────────────────────
+// ── Inline comment anchors ───────────────────────────────────────────────────
+//
+// Inline comments anchor to page text via <ac:inline-comment-marker ac:ref="GUID">
+// elements in the storage body. Any body update that drops these elements orphans
+// the comments (they stay in the API but disappear from the page UI).
+//
+// Preservation strategy:
+//   1. Pre-CLI (fetchConfluenceOutputContext) rewrites markers found in the current
+//      page into `[[ic:GUID]]anchor text[[/ic]]` placeholders inside
+//      input/confluence_output_current.md, and the agent is instructed
+//      (instructions/common/confluence_comments.md) to keep them around the same or
+//      equivalent text in its Markdown output.
+//   2. Post-sync (restoreInlineCommentAnchors) converts placeholders back into real
+//      markers in the fresh storage body. For open comments whose placeholder was
+//      lost (model non-compliance), falls back to matching the original anchor text.
+
+var IC_OPEN_TAG = '[[ic:';
+var IC_CLOSE_TAG = '[[/ic]]';
+
+function escapeRegExp(text) {
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Extract inline comment anchors from a Confluence storage-format body.
+ * Returns [{ ref: '<marker guid>', text: '<anchored text>' }].
+ */
+function extractInlineCommentMarkers(storageBody) {
+    var anchors = [];
+    if (!storageBody) return anchors;
+    var re = /<ac:inline-comment-marker\s+ac:ref="([^"]+)"[^>]*>([\s\S]*?)<\/ac:inline-comment-marker>/g;
+    var m;
+    while ((m = re.exec(storageBody)) !== null) {
+        // Strip any nested tags from the anchored text — anchors are plain text
+        var text = m[2].replace(/<[^>]+>/g, '');
+        if (m[1] && text.trim()) {
+            anchors.push({ ref: m[1], text: text });
+        }
+    }
+    return anchors;
+}
+
+/**
+ * Wrap the first occurrence of each anchor's text in the Markdown content with
+ * [[ic:REF]]...[[/ic]] placeholders. Anchors already present as placeholders are
+ * skipped. Anchors whose text is not found are skipped (reported in .missed).
+ * Returns { content, injected: [refs], missed: [refs] }.
+ */
+function injectCommentPlaceholders(markdown, anchors) {
+    var result = { content: markdown || '', injected: [], missed: [] };
+    (anchors || []).forEach(function(anchor) {
+        if (!anchor || !anchor.ref || !anchor.text) return;
+        if (result.content.indexOf(IC_OPEN_TAG + anchor.ref + ']]') !== -1) return;
+        var idx = result.content.indexOf(anchor.text);
+        if (idx === -1) {
+            result.missed.push(anchor.ref);
+            return;
+        }
+        result.content = result.content.substring(0, idx) +
+            IC_OPEN_TAG + anchor.ref + ']]' + anchor.text + IC_CLOSE_TAG +
+            result.content.substring(idx + anchor.text.length);
+        result.injected.push(anchor.ref);
+    });
+    return result;
+}
+
+/**
+ * Pure transformation: restore inline comment markers in a fresh storage body.
+ *
+ * For each open comment with a markerRef:
+ *   - if the body contains its [[ic:REF]]...[[/ic]] placeholder → replace with the
+ *     real <ac:inline-comment-marker> element;
+ *   - else if a marker with this ref already exists → leave as-is;
+ *   - else fall back to wrapping the first occurrence of the comment's
+ *     originalSelection text (HTML-escaped and raw variants are tried).
+ *
+ * Any leftover placeholder tags (unknown refs / malformed) are stripped so they
+ * never render as visible garbage on the page.
+ *
+ * Returns { body, restored: [refs], missed: [refs] }.
+ */
+function applyCommentAnchorsToStorageBody(storageBody, comments) {
+    var body = storageBody || '';
+    var restored = [];
+    var missed = [];
+
+    (comments || []).forEach(function(comment) {
+        if (!comment || comment.resolved || !comment.markerRef) return;
+        var ref = comment.markerRef;
+
+        if (body.indexOf('ac:ref="' + ref + '"') !== -1) {
+            restored.push(ref);
+            return;
+        }
+
+        // 1. Placeholder left by the agent
+        var placeholderRe = new RegExp(
+            escapeRegExp(IC_OPEN_TAG + ref + ']]') + '([\\s\\S]*?)' + escapeRegExp(IC_CLOSE_TAG));
+        if (placeholderRe.test(body)) {
+            body = body.replace(placeholderRe,
+                '<ac:inline-comment-marker ac:ref="' + ref + '">$1</ac:inline-comment-marker>');
+            restored.push(ref);
+            return;
+        }
+
+        // 2. Fallback: original anchor text still present in the new body
+        var selection = comment.originalSelection;
+        if (selection) {
+            var variants = [escapeHtml(selection), selection];
+            for (var i = 0; i < variants.length; i++) {
+                var needle = variants[i];
+                if (!needle) continue;
+                var idx = body.indexOf(needle);
+                if (idx !== -1) {
+                    body = body.substring(0, idx) +
+                        '<ac:inline-comment-marker ac:ref="' + ref + '">' + needle + '</ac:inline-comment-marker>' +
+                        body.substring(idx + needle.length);
+                    restored.push(ref);
+                    return;
+                }
+            }
+        }
+
+        missed.push(ref);
+    });
+
+    // Strip any leftover placeholder tags so they never render visibly
+    body = body.replace(/\[\[ic:[0-9a-fA-F-]{36}\]\]/g, '');
+    body = body.replace(/\[\[\/ic\]\]/g, '');
+
+    return { body: body, restored: restored, missed: missed };
+}
+
+/**
+ * Post-sync step: re-anchor inline comments in the freshly published page body.
+ * Fetches the current page storage body and open inline comments, applies
+ * applyCommentAnchorsToStorageBody, and updates the page when anything changed.
+ */
+function restoreInlineCommentAnchors(page, cfg) {
+    var empty = { restored: [], missed: [] };
+    if (!page || !page.id) return empty;
+
+    var comments = fetchPageInlineComments(page.id, page.title, 100);
+    var withAnchors = comments.filter(function(c) { return !c.resolved && c.markerRef; });
+    if (withAnchors.length === 0) return empty;
+
+    var full = confluence_content_by_id({ contentId: String(page.id) });
+    var storageBody = full && full.body && full.body.storage && full.body.storage.value;
+    if (!storageBody) return empty;
+
+    // Comments already carrying a live marker are left untouched by
+    // applyCommentAnchorsToStorageBody (the ac:ref presence check).
+    var result = applyCommentAnchorsToStorageBody(storageBody, comments);
+    if (result.body === storageBody) return { restored: result.restored, missed: result.missed };
+
+    confluence_update_page({
+        contentId: String(page.id),
+        title: page.title,
+        parentId: cfg.parentPageId,
+        body: result.body,
+        space: cfg.space
+    });
+    return { restored: result.restored, missed: result.missed };
+}
 
 function extractCommentBody(comment) {
     if (!comment) return '';
@@ -236,6 +414,8 @@ function fetchPageInlineComments(pageId, pageTitle, limit) {
         var results = parsed.results || parsed.comments || (Array.isArray(parsed) ? parsed : []);
         for (var i = 0; i < results.length; i++) {
             var c = results[i];
+            var props = c.properties || {};
+            var inlineProps = (c.extensions && c.extensions.inlineProperties) || {};
             comments.push({
                 pageId: String(pageId),
                 pageTitle: pageTitle || 'untitled',
@@ -245,6 +425,13 @@ function fetchPageInlineComments(pageId, pageTitle, limit) {
                 created: c.createdDate || (c.version && c.version.createdAt) || c.created || '',
                 resolved: c.resolutionStatus === 'resolved' || c.resolutionStatus === 'closed' ||
                     !!(c.resolvedDate || c.resolved || c.status === 'resolved' || c.status === 'closed'),
+                // Anchor info for inline comment preservation across page rewrites.
+                // v2 API exposes it under properties (camelCase and dash-case variants),
+                // v1 under extensions.inlineProperties.
+                markerRef: props.inlineMarkerRef || props['inline-marker-ref'] ||
+                    inlineProps.markerRef || null,
+                originalSelection: props.inlineOriginalSelection || props['inline-original-selection'] ||
+                    inlineProps.originalSelection || null,
                 body: extractCommentBody(c)
             });
         }
@@ -338,6 +525,10 @@ if (typeof module !== 'undefined' && module.exports) {
         writeCommentsFiles: writeCommentsFiles,
         publishCommentReplies: publishCommentReplies,
         extractCommentBody: extractCommentBody,
+        extractInlineCommentMarkers: extractInlineCommentMarkers,
+        injectCommentPlaceholders: injectCommentPlaceholders,
+        applyCommentAnchorsToStorageBody: applyCommentAnchorsToStorageBody,
+        restoreInlineCommentAnchors: restoreInlineCommentAnchors,
         COMMENTS_BASE_NAME: COMMENTS_BASE_NAME,
         DEFAULT_REPLIES_FILE: DEFAULT_REPLIES_FILE
     };

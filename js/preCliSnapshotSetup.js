@@ -104,7 +104,10 @@ function syncCodegraph(workspace) {
 function action(params) {
     try {
         var actualParams = params.ticket ? params : (params.jobParams || params);
-        var customParams = actualParams.customParams || {};
+        // In the real Teammate execution path customParams live under jobParams
+        // (JavaScriptExecutor.withJobContext puts jobParams/ticket/response at top level);
+        // keep the top-level fallback for direct/JSRunner invocations.
+        var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams || {};
 
         // 1. Preserve existing preCliJSAction behavior by chaining.
         var chained = customParams.chainedPreCliJSAction;
