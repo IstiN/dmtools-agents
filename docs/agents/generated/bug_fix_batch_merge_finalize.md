@@ -1,4 +1,4 @@
-# Teammate (`bug_fix_batch_merge_finalize.json`)
+# Bug Fix Batch Merge Finalize
 
 Finalizes a merged batch-fix PR: updates the batch epic, links results back to each bug, and moves the batch tickets forward.
 
@@ -14,6 +14,8 @@ _Human doc: [`agents/docs/agents/bug_fix_batch_merge_finalize.md`](agents/docs/a
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `bug_fix_batch_merge_finalize.json` |
 | ContextId | `bug_fix_batch_merge_finalize` |
 | outputType | `none` |
 | skipAIProcessing | `true` |

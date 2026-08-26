@@ -400,11 +400,18 @@ function renderAgentDoc(fileName, config) {
     var customParams = params.customParams || {};
     var outputSchemas = params.outputSchemas || null;
 
-    var name = config.name || metadata.contextId || fileName.replace(/\.json$/, '');
+    var jobClass = config.name || '—';
     var contextId = metadata.contextId || '—';
 
+    // Humanized config name as the page title: "story_acceptance_criteria" →
+    // "Story acceptance criteria". The job class and file name stay in the
+    // Attributes table — a title like `Teammate (story_acceptance_criteria.json)`
+    // renders as an unreadable headline in HTML.
+    var displayName = fileName.replace(/\.json$/, '').replace(/_/g, ' ')
+        .replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+
     var lines = [];
-    lines.push('# ' + name + ' (`' + fileName + '`)');
+    lines.push('# ' + displayName);
     lines.push('');
 
     // Human-readable description lives in docs/agents/<name>.md (strict naming
@@ -425,6 +432,8 @@ function renderAgentDoc(fileName, config) {
     lines.push('');
     lines.push('| Attribute | Value |');
     lines.push('|---|---|');
+    lines.push('| Job | `' + jobClass + '` |');
+    lines.push('| Config | `' + fileName + '` |');
     lines.push('| ContextId | `' + contextId + '` |');
     lines.push('| outputType | `' + (params.outputType || '—') + '` |');
     lines.push('| skipAIProcessing | `' + (params.skipAIProcessing || false) + '` |');
@@ -478,9 +487,24 @@ function renderAgentDoc(fileName, config) {
         lines.push('## Custom params');
         lines.push('');
         Object.keys(customParams).forEach(function(k) {
-            lines.push('- `' + k + '`: `' + escapeMd(JSON.stringify(customParams[k])) + '`');
+            var value = customParams[k];
+            if (value !== null && typeof value === 'object') {
+                // Objects/arrays as inline code wrap into unreadable blobs —
+                // give them a fenced block instead.
+                lines.push('- `' + k + '`:\n');
+                lines.push('  ```json');
+                lines.push('  ' + JSON.stringify(value, null, 2).split('\n').join('\n  '));
+                lines.push('  ```');
+            } else {
+                lines.push('- `' + k + '`: `' + escapeMd(JSON.stringify(value)) + '`');
+            }
         });
         jsParamsUsed.forEach(function(p) {
+            // Skip when the JSON already documents the same root key — a
+            // duplicate row ("`contentOutput` (used by JS action)" right after
+            // "`contentOutput`: {...}") reads as noise.
+            var rootKey = p.split('.')[0];
+            if (Object.prototype.hasOwnProperty.call(customParams, rootKey)) return;
             lines.push('- `' + p + '` _(used by JS action)_');
         });
         lines.push('');

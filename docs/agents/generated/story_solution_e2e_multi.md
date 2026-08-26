@@ -1,4 +1,4 @@
-# Teammate (`story_solution_e2e_multi.json`)
+# Story Solution E2e Multi
 
 Multi-task variant of story_solution_e2e that splits a large solution into several implementation tasks.
 
@@ -8,6 +8,8 @@ _Human doc: [`agents/docs/agents/story_solution_e2e_multi.md`](agents/docs/agent
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `story_solution_e2e_multi.json` |
 | ContextId | `story_solution_e2e_multi` |
 | outputType | `—` |
 | skipAIProcessing | `false` |

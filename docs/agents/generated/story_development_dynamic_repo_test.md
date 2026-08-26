@@ -1,4 +1,4 @@
-# Teammate (`story_development_dynamic_repo_test.json`)
+# Story Development Dynamic Repo Test
 
 Test variant of story_development_dynamic_repo used to exercise the dynamic-repo flow safely.
 
@@ -8,6 +8,8 @@ _Human doc: [`agents/docs/agents/story_development_dynamic_repo_test.md`](agents
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `story_development_dynamic_repo_test.json` |
 | ContextId | `story_development_dynamic_repo_test` |
 | outputType | `—` |
 | skipAIProcessing | `false` |

@@ -1,4 +1,4 @@
-# CliAgent (`pr_knowledge_update.json`)
+# Pr Knowledge Update
 
 Distills the outcome of a merged PR into the self-curated review-knowledge base and pushes the update.
 
@@ -20,6 +20,8 @@ _Human doc: [`agents/docs/agents/pr_knowledge_update.md`](agents/docs/agents/pr_
 
 | Attribute | Value |
 |---|---|
+| Job | `CliAgent` |
+| Config | `pr_knowledge_update.json` |
 | ContextId | `pr_knowledge_update` |
 | outputType | `none` |
 | skipAIProcessing | `false` |

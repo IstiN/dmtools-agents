@@ -1,4 +1,4 @@
-# JSRunner (`ai_teammate_token_usage_reporter.json`)
+# Ai Teammate Token Usage Reporter
 
 Aggregates AI token usage written by agent runs and posts a summary report comment.
 
@@ -8,6 +8,8 @@ _Human doc: [`agents/docs/agents/ai_teammate_token_usage_reporter.md`](agents/do
 
 | Attribute | Value |
 |---|---|
+| Job | `JSRunner` |
+| Config | `ai_teammate_token_usage_reporter.json` |
 | ContextId | `—` |
 | outputType | `—` |
 | skipAIProcessing | `false` |

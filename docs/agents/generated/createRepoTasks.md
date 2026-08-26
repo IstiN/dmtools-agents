@@ -1,4 +1,4 @@
-# Teammate (`createRepoTasks.json`)
+# CreateRepoTasks
 
 Creates repository housekeeping tasks (setup, CI, docs) as tracker tickets for a new or onboarding repository.
 
@@ -16,6 +16,8 @@ _Human doc: [`agents/docs/agents/createRepoTasks.md`](agents/docs/agents/createR
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `createRepoTasks.json` |
 | ContextId | `—` |
 | outputType | `—` |
 | skipAIProcessing | `true` |

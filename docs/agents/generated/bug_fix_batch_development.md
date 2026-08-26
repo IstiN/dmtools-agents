@@ -1,4 +1,4 @@
-# Teammate (`bug_fix_batch_development.json`)
+# Bug Fix Batch Development
 
 Fixes a whole batch of related bugs in one branch: reads the batch epic context, implements all fixes with tests, and opens a single pull request.
 
@@ -15,6 +15,8 @@ _Human doc: [`agents/docs/agents/bug_fix_batch_development.md`](agents/docs/agen
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `bug_fix_batch_development.json` |
 | ContextId | `bug_fix_batch_development` |
 | outputType | `none` |
 | skipAIProcessing | `true` |

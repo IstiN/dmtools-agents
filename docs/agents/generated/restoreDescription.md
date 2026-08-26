@@ -1,4 +1,4 @@
-# Teammate (`restoreDescription.json`)
+# RestoreDescription
 
 Restores a ticket description from its history when the description was accidentally overwritten or cleared.
 
@@ -8,6 +8,8 @@ _Human doc: [`agents/docs/agents/restoreDescription.md`](agents/docs/agents/rest
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `restoreDescription.json` |
 | ContextId | `—` |
 | outputType | `—` |
 | skipAIProcessing | `true` |

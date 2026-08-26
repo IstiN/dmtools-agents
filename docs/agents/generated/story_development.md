@@ -1,4 +1,4 @@
-# Teammate (`story_development.json`)
+# Story Development
 
 Implements a story end to end: checks out the repository, writes the code and tests, and opens a pull request linked to the story.
 
@@ -23,6 +23,8 @@ _Human doc: [`agents/docs/agents/story_development.md`](agents/docs/agents/story
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `story_development.json` |
 | ContextId | `story_development` |
 | outputType | `none` |
 | skipAIProcessing | `true` |
@@ -107,7 +109,6 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `autoStartReview` _(used by JS action)_
 - `autoStartReviewConfigFile` _(used by JS action)_
 - `customStatuses` _(used by JS action)_
-- `removeLabel` _(used by JS action)_
 - `removeLabels` _(used by JS action)_
 - `removeLabels.forEach` _(used by JS action)_
 - `cacheToReleases` _(used by JS action)_

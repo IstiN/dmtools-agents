@@ -1,4 +1,4 @@
-# TestCasesGenerator (`test_cases_generator.json`)
+# Test Cases Generator
 
 Generates manual test cases for stories (TestCasesGenerator job) and moves the tickets through the testing statuses.
 
@@ -8,6 +8,8 @@ _Human doc: [`agents/docs/agents/test_cases_generator.md`](agents/docs/agents/te
 
 | Attribute | Value |
 |---|---|
+| Job | `TestCasesGenerator` |
+| Config | `test_cases_generator.json` |
 | ContextId | `—` |
 | outputType | `creation` |
 | skipAIProcessing | `false` |

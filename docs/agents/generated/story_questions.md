@@ -1,4 +1,4 @@
-# Teammate (`story_questions.json`)
+# Story Questions
 
 Collects open business questions for a story and creates them as question sub-tickets assigned for review.
 
@@ -16,6 +16,8 @@ _Human doc: [`agents/docs/agents/story_questions.md`](agents/docs/agents/story_q
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `story_questions.json` |
 | ContextId | `—` |
 | outputType | `none` |
 | skipAIProcessing | `true` |

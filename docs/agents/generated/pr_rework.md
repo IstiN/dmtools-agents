@@ -1,4 +1,4 @@
-# Teammate (`pr_rework.json`)
+# Pr Rework
 
 Reworks a pull request after review: reads review comments, implements the requested fixes, and pushes updates to the PR branch.
 
@@ -23,6 +23,8 @@ _Human doc: [`agents/docs/agents/pr_rework.md`](agents/docs/agents/pr_rework.md)
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `pr_rework.json` |
 | ContextId | `pr_rework` |
 | outputType | `none` |
 | skipAIProcessing | `true` |
@@ -93,15 +95,20 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 
 ## Custom params
 
-- `removeLabels`: `["sm_story_rework_triggered","sm_story_review_triggered"]`
+- `removeLabels`:
+
+  ```json
+  [
+    "sm_story_rework_triggered",
+    "sm_story_review_triggered"
+  ]
+  ```
 - `checkOpenPR`: `true`
-- `checkOpenPR` _(used by JS action)_
 - `branchCreateFnPath` _(used by JS action)_
 - `branchSyncFnPath` _(used by JS action)_
 - `autoStartReview` _(used by JS action)_
 - `autoStartReviewConfigFile` _(used by JS action)_
 - `removeLabel` _(used by JS action)_
-- `removeLabels` _(used by JS action)_
 - `cacheToReleases` _(used by JS action)_
 - `cacheToReleases.releaseNameTemplate` _(used by JS action)_
 - `cacheToReleases.releaseTagTemplate` _(used by JS action)_

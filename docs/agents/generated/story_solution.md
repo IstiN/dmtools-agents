@@ -1,4 +1,4 @@
-# Teammate (`story_solution.json`)
+# Story Solution
 
 Designs the technical solution for a story: reads the story context, the answered questions, and the BA/SA/VD parent context, then produces the solution write-up and architecture diagrams.
 
@@ -24,12 +24,21 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `contentOutput.includeInlineComments` — fetch the page's inline comments into the input folder before the run and publish `outputs/confluence_replies.json` after it. Default: `true`.
 - `contentOutput.updateTrackerField` — for `target: confluence`, also write the page link into the solution field. Default: `true`.
 
+> **Downstream consumers:** other agents in the pipeline (for example the
+> affected-repos / task-splitting flows that parse the Solution field) read the
+> tracker field, not Confluence. When such a consumer exists, use
+> `target: 'both'` — the field keeps the full machine-readable content and the
+> Confluence page becomes the human-facing mirror. `target: 'confluence'`
+> alone would leave only a link in the field and break those agents.
+
 _Human doc: [`agents/docs/agents/story_solution.md`](agents/docs/agents/story_solution.md)_
 
 ## Attributes
 
 | Attribute | Value |
 |---|---|
+| Job | `Teammate` |
+| Config | `story_solution.json` |
 | ContextId | `story_solution` |
 | outputType | `none` |
 | skipAIProcessing | `true` |
