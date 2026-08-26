@@ -117,6 +117,15 @@ run_codemie() {
     # binaries installed under $HOME (codemie-claude, the claude binary from
     # 'codemie install claude', etc.).
     chmod -R a+rwX "${HOME}" 2>/dev/null || true
+    # Mirror codemie config into _aiagent's own home directory.
+    # codemie-claude (Node.js) calls os.homedir() which on Linux resolves via
+    # getpwuid(getuid()) from /etc/passwd — returning /home/_aiagent regardless
+    # of the $HOME env var that su -m preserves as /root.
+    if [ -f "${HOME}/.codemie/codemie-cli.config.json" ]; then
+      mkdir -p "/home/_aiagent/.codemie"
+      cp "${HOME}/.codemie/codemie-cli.config.json" "/home/_aiagent/.codemie/"
+      chown -R _aiagent:_aiagent "/home/_aiagent/.codemie"
+    fi
     for _bin in codemie-claude node npm npx; do
       _src="$(command -v "$_bin" 2>/dev/null)" || continue
       ln -sf "$_src" "/usr/local/bin/$_bin" 2>/dev/null || true
@@ -127,7 +136,14 @@ run_codemie() {
     _quoted_cmd=$(printf ' %q' "${cmd[@]}")
     local _work_dir
     _work_dir=$(pwd)
-    su -m _aiagent -c "cd $(printf '%q' "$_work_dir") && ${_quoted_cmd}" 2>&1 | tee "$agent_log"
+    # Re-export the JWT token explicitly inside the subshell: some PAM configs
+    # strip non-standard env vars even with su -m. Use bash (not sh/dash)
+    # because printf %q produces bash-quoting that dash cannot parse.
+    local _jwt_export=""
+    if [ -n "${CODEMIE_JWT_TOKEN:-}" ]; then
+      _jwt_export="export CODEMIE_JWT_TOKEN=$(printf '%q' "${CODEMIE_JWT_TOKEN}"); "
+    fi
+    su -m -s /bin/bash _aiagent -c "${_jwt_export}cd $(printf '%q' "$_work_dir") && ${_quoted_cmd}" 2>&1 | tee "$agent_log"
   else
     "${cmd[@]}" 2>&1 | tee "$agent_log"
   fi
