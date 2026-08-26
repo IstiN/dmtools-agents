@@ -2,7 +2,10 @@
  * Unit tests for the inline comment anchor helpers in js/common/contentOutput.js:
  *   - extractInlineCommentMarkers
  *   - injectCommentPlaceholders
- *   - applyCommentAnchorsToStorageBody
+ *
+ * Post-sync anchor restoration (placeholder → real marker + text-match fallback)
+ * lives in the dmtools CLI (MarkdownConfluenceSync + InlineCommentAnchorPreserver,
+ * preserveInlineComments default true) and is covered by core tests.
  */
 
 function loadLib() {
@@ -69,88 +72,18 @@ suite('contentOutput.injectCommentPlaceholders', function() {
     });
 });
 
-suite('contentOutput.applyCommentAnchorsToStorageBody', function() {
+suite('contentOutput anchor helpers — sync integration notes', function() {
 
-    test('converts agent placeholder into real marker', function() {
-        var lib = loadLib();
-        var body = '<ul><li>' + '[[ic:' + REF_A + ']]' + 'Item one' + '[[/ic]]' + '</li></ul>';
-        var result = lib.applyCommentAnchorsToStorageBody(body, [
-            { commentId: '1', markerRef: REF_A, originalSelection: 'Item one', resolved: false }
-        ]);
-        assert.deepEqual(result.restored, [REF_A]);
-        assert.ok(result.body.indexOf('<ac:inline-comment-marker ac:ref="' + REF_A + '">Item one</ac:inline-comment-marker>') !== -1);
-        assert.ok(result.body.indexOf('[[ic:') === -1);
-    });
+    // Post-sync anchor restoration (placeholder → real marker + text-match fallback)
+    // lives in the dmtools CLI (MarkdownConfluenceSync + InlineCommentAnchorPreserver,
+    // dmtools ≥ v1.7.249, enabled by default via preserveInlineComments). The JS side
+    // only prepares [[ic:REF]]...[[/ic]] placeholders in input/confluence_output_current.md.
 
-    test('falls back to originalSelection text match when placeholder is lost', function() {
+    test('placeholder format matches the core sync contract', function() {
         var lib = loadLib();
-        var body = '<ul><li>Item one</li><li>Item two</li></ul>';
-        var result = lib.applyCommentAnchorsToStorageBody(body, [
-            { commentId: '1', markerRef: REF_A, originalSelection: 'Item one', resolved: false }
-        ]);
-        assert.deepEqual(result.restored, [REF_A]);
-        assert.ok(result.body.indexOf('<ac:inline-comment-marker ac:ref="' + REF_A + '">Item one</ac:inline-comment-marker>') !== -1);
-    });
-
-    test('matches HTML-escaped anchor text in storage', function() {
-        var lib = loadLib();
-        var body = '<p>Use Foo &amp; Bar here</p>';
-        var result = lib.applyCommentAnchorsToStorageBody(body, [
-            { commentId: '1', markerRef: REF_A, originalSelection: 'Foo & Bar', resolved: false }
-        ]);
-        assert.deepEqual(result.restored, [REF_A]);
-        assert.ok(result.body.indexOf('ac:inline-comment-marker') !== -1);
-    });
-
-    test('skips resolved comments and comments without markerRef', function() {
-        var lib = loadLib();
-        var body = '<ul><li>Item one</li></ul>';
-        var result = lib.applyCommentAnchorsToStorageBody(body, [
-            { commentId: '1', markerRef: REF_A, originalSelection: 'Item one', resolved: true },
-            { commentId: '2', markerRef: null, originalSelection: 'Item one', resolved: false }
-        ]);
-        assert.equal(result.body, body);
-        assert.deepEqual(result.restored, []);
-    });
-
-    test('leaves already-anchored comments untouched', function() {
-        var lib = loadLib();
-        var body = '<ul><li><ac:inline-comment-marker ac:ref="' + REF_A + '">Item one</ac:inline-comment-marker></li></ul>';
-        var result = lib.applyCommentAnchorsToStorageBody(body, [
-            { commentId: '1', markerRef: REF_A, originalSelection: 'Item one', resolved: false }
-        ]);
-        assert.deepEqual(result.restored, [REF_A]);
-        assert.equal(result.body, body);
-    });
-
-    test('reports missed when anchor text is gone', function() {
-        var lib = loadLib();
-        var body = '<p>Completely new content</p>';
-        var result = lib.applyCommentAnchorsToStorageBody(body, [
-            { commentId: '1', markerRef: REF_A, originalSelection: 'Item one', resolved: false }
-        ]);
-        assert.deepEqual(result.missed, [REF_A]);
-        assert.equal(result.body, body);
-    });
-
-    test('strips leftover placeholder tags with unknown refs', function() {
-        var lib = loadLib();
-        var body = '<ul><li>' + '[[ic:' + REF_B + ']]' + 'Some text' + '[[/ic]]' + '</li></ul>';
-        var result = lib.applyCommentAnchorsToStorageBody(body, []);
-        assert.ok(result.body.indexOf('[[ic:') === -1);
-        assert.ok(result.body.indexOf('[[/ic]]') === -1);
-        assert.ok(result.body.indexOf('Some text') !== -1);
-    });
-
-    test('handles multiple comments on the same body', function() {
-        var lib = loadLib();
-        var body = '<ul><li>Item one</li><li>Item two</li></ul>';
-        var result = lib.applyCommentAnchorsToStorageBody(body, [
-            { commentId: '1', markerRef: REF_A, originalSelection: 'Item one', resolved: false },
-            { commentId: '2', markerRef: REF_B, originalSelection: 'Item two', resolved: false }
-        ]);
-        assert.equal(result.restored.length, 2);
-        assert.ok(result.body.indexOf('ac:ref="' + REF_A + '"') !== -1);
-        assert.ok(result.body.indexOf('ac:ref="' + REF_B + '"') !== -1);
+        var md = '- Item one\n';
+        var result = lib.injectCommentPlaceholders(md, [{ ref: REF_A, text: 'Item one' }]);
+        assert.ok(result.content.indexOf('[[ic:' + REF_A + ']]Item one[[/ic]]') !== -1);
     });
 });
+

@@ -11,7 +11,7 @@ When `input/confluence_output_target.json` is present, your output is published 
 
 ## Inline comment anchors (`[[ic:...]]` placeholders)
 
-`input/confluence_output_current.md` may contain placeholders like `[[ic:550e8400-e29b-41d4-a716-446655440000]]anchored text[[/ic]]`. Each one marks the text fragment an **inline comment is anchored to** on the published page. The publish step converts these placeholders back into real Confluence anchors; if you drop or mangle them, the comment loses its anchor and disappears from the page.
+`input/confluence_output_current.md` may contain placeholders like `[[ic:550e8400-e29b-41d4-a716-446655440000]]anchored text[[/ic]]`. Each one marks the text fragment an **inline comment is anchored to** on the published page. On publish, the Confluence Markdown sync converts these placeholders back into real page anchors; if you drop or mangle them, the comment loses its anchor and disappears from the page.
 
 Rules:
 

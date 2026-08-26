@@ -196,7 +196,11 @@ function publishPage(cfg, ticketKey, summary, content) {
         });
     }
 
-    // Publish the Markdown body through the sync tool (proper storage conversion)
+    // Publish the Markdown body through the sync tool (proper storage conversion).
+    // Since dmtools v1.7.249 the sync preserves inline comment anchors natively:
+    // [[ic:REF]]...[[/ic]] placeholders in the Markdown become real
+    // ac:inline-comment-marker elements, and anchors present in the old page body
+    // are re-applied by anchored-text match (preserveInlineComments, default true).
     var syncDir = 'outputs/confluence_sync_' + ticketKey;
     file_write(syncDir + '/index.md', content);
     confluence_sync_markdown_directory({
@@ -205,21 +209,6 @@ function publishPage(cfg, ticketKey, summary, content) {
         space: cfg.space,
         deleteOrphans: false
     });
-
-    // The sync replaces the page body wholesale, which destroys inline comment
-    // anchors (ac:inline-comment-marker). Re-anchor the comments that survived
-    // as [[ic:...]] placeholders or whose anchor text is still present.
-    if (cfg.includeInlineComments !== false) {
-        try {
-            var anchoring = restoreInlineCommentAnchors(page, cfg);
-            if (anchoring.restored.length > 0 || anchoring.missed.length > 0) {
-                console.log('Inline comment anchors: ' + anchoring.restored.length +
-                    ' restored, ' + anchoring.missed.length + ' could not be re-anchored');
-            }
-        } catch (anchorError) {
-            console.warn('Failed to restore inline comment anchors (non-fatal):', anchorError);
-        }
-    }
 
     return { page: page, url: resolvePageUrl(page), created: created };
 }
@@ -243,9 +232,13 @@ function escapeHtml(text) {
 //      input/confluence_output_current.md, and the agent is instructed
 //      (instructions/common/confluence_comments.md) to keep them around the same or
 //      equivalent text in its Markdown output.
-//   2. Post-sync (restoreInlineCommentAnchors) converts placeholders back into real
-//      markers in the fresh storage body. For open comments whose placeholder was
-//      lost (model non-compliance), falls back to matching the original anchor text.
+//   2. The dmtools Confluence Markdown sync (preserveInlineComments, default true
+//      since dmtools v1.7.249) converts placeholders back into real markers and
+//      additionally re-applies old markers by anchored-text match when the
+//      placeholder was lost.
+//
+// extractInlineCommentMarkers / injectCommentPlaceholders below are shared with the
+// pre-CLI side; the post-sync conversion lives in the dmtools CLI.
 
 var IC_OPEN_TAG = '[[ic:';
 var IC_CLOSE_TAG = '[[/ic]]';
@@ -297,104 +290,7 @@ function injectCommentPlaceholders(markdown, anchors) {
     return result;
 }
 
-/**
- * Pure transformation: restore inline comment markers in a fresh storage body.
- *
- * For each open comment with a markerRef:
- *   - if the body contains its [[ic:REF]]...[[/ic]] placeholder → replace with the
- *     real <ac:inline-comment-marker> element;
- *   - else if a marker with this ref already exists → leave as-is;
- *   - else fall back to wrapping the first occurrence of the comment's
- *     originalSelection text (HTML-escaped and raw variants are tried).
- *
- * Any leftover placeholder tags (unknown refs / malformed) are stripped so they
- * never render as visible garbage on the page.
- *
- * Returns { body, restored: [refs], missed: [refs] }.
- */
-function applyCommentAnchorsToStorageBody(storageBody, comments) {
-    var body = storageBody || '';
-    var restored = [];
-    var missed = [];
 
-    (comments || []).forEach(function(comment) {
-        if (!comment || comment.resolved || !comment.markerRef) return;
-        var ref = comment.markerRef;
-
-        if (body.indexOf('ac:ref="' + ref + '"') !== -1) {
-            restored.push(ref);
-            return;
-        }
-
-        // 1. Placeholder left by the agent
-        var placeholderRe = new RegExp(
-            escapeRegExp(IC_OPEN_TAG + ref + ']]') + '([\\s\\S]*?)' + escapeRegExp(IC_CLOSE_TAG));
-        if (placeholderRe.test(body)) {
-            body = body.replace(placeholderRe,
-                '<ac:inline-comment-marker ac:ref="' + ref + '">$1</ac:inline-comment-marker>');
-            restored.push(ref);
-            return;
-        }
-
-        // 2. Fallback: original anchor text still present in the new body
-        var selection = comment.originalSelection;
-        if (selection) {
-            var variants = [escapeHtml(selection), selection];
-            for (var i = 0; i < variants.length; i++) {
-                var needle = variants[i];
-                if (!needle) continue;
-                var idx = body.indexOf(needle);
-                if (idx !== -1) {
-                    body = body.substring(0, idx) +
-                        '<ac:inline-comment-marker ac:ref="' + ref + '">' + needle + '</ac:inline-comment-marker>' +
-                        body.substring(idx + needle.length);
-                    restored.push(ref);
-                    return;
-                }
-            }
-        }
-
-        missed.push(ref);
-    });
-
-    // Strip any leftover placeholder tags so they never render visibly
-    body = body.replace(/\[\[ic:[0-9a-fA-F-]{36}\]\]/g, '');
-    body = body.replace(/\[\[\/ic\]\]/g, '');
-
-    return { body: body, restored: restored, missed: missed };
-}
-
-/**
- * Post-sync step: re-anchor inline comments in the freshly published page body.
- * Fetches the current page storage body and open inline comments, applies
- * applyCommentAnchorsToStorageBody, and updates the page when anything changed.
- */
-function restoreInlineCommentAnchors(page, cfg) {
-    var empty = { restored: [], missed: [] };
-    if (!page || !page.id) return empty;
-
-    var comments = fetchPageInlineComments(page.id, page.title, 100);
-    var withAnchors = comments.filter(function(c) { return !c.resolved && c.markerRef; });
-    if (withAnchors.length === 0) return empty;
-
-    var full = confluence_content_by_id({ contentId: String(page.id) });
-    var storageBody = full && full.body && full.body.storage && full.body.storage.value;
-    if (!storageBody) return empty;
-
-    // Comments already carrying a live marker are left untouched by
-    // applyCommentAnchorsToStorageBody (the ac:ref presence check).
-    var result = applyCommentAnchorsToStorageBody(storageBody, comments);
-    if (result.body === storageBody) return { restored: result.restored, missed: result.missed };
-
-    confluence_update_page({
-        contentId: String(page.id),
-        title: page.title,
-        parentId: cfg.parentPageId,
-        body: result.body,
-        space: cfg.space
-    });
-    return { restored: result.restored, missed: result.missed };
-}
 
 function extractCommentBody(comment) {
     if (!comment) return '';
@@ -527,8 +423,6 @@ if (typeof module !== 'undefined' && module.exports) {
         extractCommentBody: extractCommentBody,
         extractInlineCommentMarkers: extractInlineCommentMarkers,
         injectCommentPlaceholders: injectCommentPlaceholders,
-        applyCommentAnchorsToStorageBody: applyCommentAnchorsToStorageBody,
-        restoreInlineCommentAnchors: restoreInlineCommentAnchors,
         COMMENTS_BASE_NAME: COMMENTS_BASE_NAME,
         DEFAULT_REPLIES_FILE: DEFAULT_REPLIES_FILE
     };
