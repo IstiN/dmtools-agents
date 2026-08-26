@@ -11,7 +11,7 @@ _fetch_codemie_jwt_token() {
     --location "${CODEMIE_AUTH_URL}" \
     --header 'Content-Type: application/x-www-form-urlencoded' \
     --data-urlencode "client_id=${CODEMIE_AUTH_CLIENT_ID}" \
-    --data-urlencode "grant_type=${CODEMIE_AUTH_GRANT_TYPE}" \
+    --data-urlencode "grant_type=${CODEMIE_AUTH_GRANT_TYPE:-client_credentials}" \
     --data-urlencode "client_secret=${CODEMIE_AUTH_CLIENT_SECRET}") || {
     echo "Error: failed to fetch JWT token from codemie auth endpoint" >&2
     return 1
@@ -63,7 +63,7 @@ run_codemie() {
     if [ ${#PASS_ARGS[@]} -eq 0 ]; then
       cmd=(codemie-claude
         --model "${CODEMIE_MODEL:-claude-sonnet-4-6}"
-        -p "$PROMPT"
+        --task "$PROMPT"
         --max-turns "${CODEMIE_MAX_TURNS:-50}"
         --dangerously-skip-permissions
         --allowedTools "Bash(*),Read(*),Curl(*)")
@@ -71,7 +71,7 @@ run_codemie() {
       cmd=(codemie-claude
         --model "${CODEMIE_MODEL:-claude-sonnet-4-6}"
         ${PASS_ARGS[@]+"${PASS_ARGS[@]}"}
-        -p "$PROMPT"
+        --task "$PROMPT"
         --max-turns "${CODEMIE_MAX_TURNS:-50}"
         --dangerously-skip-permissions
         --allowedTools "Bash(*),Read(*),Curl(*)")
@@ -83,7 +83,7 @@ run_codemie() {
         --api-key "${CODEMIE_API_KEY}"
         --model "${CODEMIE_MODEL:-claude-4-5-sonnet}"
         --provider "litellm"
-        -p "$PROMPT"
+        --task "$PROMPT"
         --max-turns "${CODEMIE_MAX_TURNS:-50}"
         --dangerously-skip-permissions
         --allowedTools "Bash(*),Read(*),Curl(*)")
@@ -94,7 +94,7 @@ run_codemie() {
         --model "${CODEMIE_MODEL:-claude-4-5-sonnet}"
         --provider "litellm"
         ${PASS_ARGS[@]+"${PASS_ARGS[@]}"}
-        -p "$PROMPT"
+        --task "$PROMPT"
         --max-turns "${CODEMIE_MAX_TURNS:-50}"
         --dangerously-skip-permissions
         --allowedTools "Bash(*),Read(*),Curl(*)")

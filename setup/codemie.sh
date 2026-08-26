@@ -22,8 +22,7 @@ echo "🧠 codemie-claude ${CODEMIE_VERSION}"
 # ── Already installed? ────────────────────────────────────────────────────────
 if is_installed codemie-claude; then
   echo "✅ codemie-claude already installed: $(codemie-claude --version 2>/dev/null || echo "cached")"
-  exit 0
-fi
+else
 
 # ── Install ───────────────────────────────────────────────────────────────────
 OS="$(detect_os)"
@@ -75,6 +74,8 @@ else
   echo "⚠️  codemie-claude could not be installed automatically."
   echo "    Set CODEMIE_AUTH_CLIENT_ID + CODEMIE_AUTH_CLIENT_SECRET (JWT) or CODEMIE_API_KEY + CODEMIE_BASE_URL and install manually if needed."
 fi
+
+fi # end already-installed check
 
 # ── Write ~/.codemie/codemie-cli.config.json ─────────────────────────────────
 CODEMIE_CONFIG_DIR="${HOME}/.codemie"
