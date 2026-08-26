@@ -74,11 +74,22 @@ function action(params) {
             }
         }
 
-        // 3. If no dedicated diagram field — prepend diagram as Jira code block to solution
-        if (diagram && !diagramField) {
+        // 3. If no dedicated diagram field — prepend diagram to solution.
+        //    Confluence targets get a Markdown "## Diagram" section appended at the
+        //    publish step (below); the Jira wiki {code} block must not leak into
+        //    Confluence-bound content.
+        var confluenceOnlyTarget = false;
+        try {
+            var earlyOutputCfg = contentOutput.resolveConfig(params, { target: 'jira_field' });
+            confluenceOnlyTarget = contentOutput.isConfluenceTarget(earlyOutputCfg) &&
+                !contentOutput.isJiraFieldTarget(earlyOutputCfg);
+        } catch (e) { /* fall through with jira behavior */ }
+        if (diagram && !diagramField && !confluenceOnlyTarget) {
             solution = '{code}\n' + diagram + '\n{code}\n\n' + solution;
             console.log('No diagram field configured — diagram prepended to solution as {code} block');
             diagram = ''; // mark as handled
+        } else if (diagram && !diagramField && confluenceOnlyTarget) {
+            console.log('No diagram field configured, Confluence-only target — diagram will be appended as Markdown "## Diagram" section at publish');
         }
 
         var outputCfg = contentOutput.resolveConfig(params, {
@@ -146,6 +157,28 @@ function action(params) {
                 if (replyResult.posted > 0 || replyResult.failed > 0) {
                     console.log('Replied to ' + replyResult.posted + ' inline comment(s)' +
                         (replyResult.failed > 0 ? ', ' + replyResult.failed + ' failed' : ''));
+                }
+
+                // Confluence-only target: the tracker field gets just a link (+ the
+                // Affected Repositories section appended by writeSolutionAndLabels), so
+                // without this the page would be missing the human-readable summary.
+                // buildMarkdownSection is loaded lazily to avoid a require cycle with
+                // writeSolutionAndLabels.js (which requires this module).
+                if (outputCfg.target === 'confluence') {
+                    try {
+                        var reposJson = readOutput('affected_repos.json');
+                        if (reposJson) {
+                            var reposRaw = JSON.parse(reposJson);
+                            if (Array.isArray(reposRaw) && reposRaw.length > 0) {
+                                var shared = require('./writeSolutionAndLabels.js');
+                                var sortedRepos = shared.topologicalSort(reposRaw);
+                                pageContent = pageContent + '\n\n' + shared.buildMarkdownSection(sortedRepos);
+                                console.log('Appended Affected Repositories section to Confluence page content (' + sortedRepos.length + ' repos)');
+                            }
+                        }
+                    } catch (reposError) {
+                        console.warn('Failed to append affected repos section to Confluence content (non-fatal):', reposError);
+                    }
                 }
 
                 var published = contentOutput.publishPage(outputCfg, ticketKey, ticketSummary, pageContent);
