@@ -196,7 +196,11 @@ function publishPage(cfg, ticketKey, summary, content) {
         });
     }
 
-    // Publish the Markdown body through the sync tool (proper storage conversion)
+    // Publish the Markdown body through the sync tool (proper storage conversion).
+    // Since dmtools v1.7.249 the sync preserves inline comment anchors natively:
+    // [[ic:REF]]...[[/ic]] placeholders in the Markdown become real
+    // ac:inline-comment-marker elements, and anchors present in the old page body
+    // are re-applied by anchored-text match (preserveInlineComments, default true).
     var syncDir = 'outputs/confluence_sync_' + ticketKey;
     file_write(syncDir + '/index.md', content);
     confluence_sync_markdown_directory({
@@ -216,7 +220,77 @@ function escapeHtml(text) {
         .replace(/>/g, '&gt;');
 }
 
-// ── Inline comments ──────────────────────────────────────────────────────────
+// ── Inline comment anchors ───────────────────────────────────────────────────
+//
+// Inline comments anchor to page text via <ac:inline-comment-marker ac:ref="GUID">
+// elements in the storage body. Any body update that drops these elements orphans
+// the comments (they stay in the API but disappear from the page UI).
+//
+// Preservation strategy:
+//   1. Pre-CLI (fetchConfluenceOutputContext) rewrites markers found in the current
+//      page into `[[ic:GUID]]anchor text[[/ic]]` placeholders inside
+//      input/confluence_output_current.md, and the agent is instructed
+//      (instructions/common/confluence_comments.md) to keep them around the same or
+//      equivalent text in its Markdown output.
+//   2. The dmtools Confluence Markdown sync (preserveInlineComments, default true
+//      since dmtools v1.7.249) converts placeholders back into real markers and
+//      additionally re-applies old markers by anchored-text match when the
+//      placeholder was lost.
+//
+// extractInlineCommentMarkers / injectCommentPlaceholders below are shared with the
+// pre-CLI side; the post-sync conversion lives in the dmtools CLI.
+
+var IC_OPEN_TAG = '[[ic:';
+var IC_CLOSE_TAG = '[[/ic]]';
+
+function escapeRegExp(text) {
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Extract inline comment anchors from a Confluence storage-format body.
+ * Returns [{ ref: '<marker guid>', text: '<anchored text>' }].
+ */
+function extractInlineCommentMarkers(storageBody) {
+    var anchors = [];
+    if (!storageBody) return anchors;
+    var re = /<ac:inline-comment-marker\s+ac:ref="([^"]+)"[^>]*>([\s\S]*?)<\/ac:inline-comment-marker>/g;
+    var m;
+    while ((m = re.exec(storageBody)) !== null) {
+        // Strip any nested tags from the anchored text — anchors are plain text
+        var text = m[2].replace(/<[^>]+>/g, '');
+        if (m[1] && text.trim()) {
+            anchors.push({ ref: m[1], text: text });
+        }
+    }
+    return anchors;
+}
+
+/**
+ * Wrap the first occurrence of each anchor's text in the Markdown content with
+ * [[ic:REF]]...[[/ic]] placeholders. Anchors already present as placeholders are
+ * skipped. Anchors whose text is not found are skipped (reported in .missed).
+ * Returns { content, injected: [refs], missed: [refs] }.
+ */
+function injectCommentPlaceholders(markdown, anchors) {
+    var result = { content: markdown || '', injected: [], missed: [] };
+    (anchors || []).forEach(function(anchor) {
+        if (!anchor || !anchor.ref || !anchor.text) return;
+        if (result.content.indexOf(IC_OPEN_TAG + anchor.ref + ']]') !== -1) return;
+        var idx = result.content.indexOf(anchor.text);
+        if (idx === -1) {
+            result.missed.push(anchor.ref);
+            return;
+        }
+        result.content = result.content.substring(0, idx) +
+            IC_OPEN_TAG + anchor.ref + ']]' + anchor.text + IC_CLOSE_TAG +
+            result.content.substring(idx + anchor.text.length);
+        result.injected.push(anchor.ref);
+    });
+    return result;
+}
+
+
 
 function extractCommentBody(comment) {
     if (!comment) return '';
@@ -236,6 +310,8 @@ function fetchPageInlineComments(pageId, pageTitle, limit) {
         var results = parsed.results || parsed.comments || (Array.isArray(parsed) ? parsed : []);
         for (var i = 0; i < results.length; i++) {
             var c = results[i];
+            var props = c.properties || {};
+            var inlineProps = (c.extensions && c.extensions.inlineProperties) || {};
             comments.push({
                 pageId: String(pageId),
                 pageTitle: pageTitle || 'untitled',
@@ -245,6 +321,13 @@ function fetchPageInlineComments(pageId, pageTitle, limit) {
                 created: c.createdDate || (c.version && c.version.createdAt) || c.created || '',
                 resolved: c.resolutionStatus === 'resolved' || c.resolutionStatus === 'closed' ||
                     !!(c.resolvedDate || c.resolved || c.status === 'resolved' || c.status === 'closed'),
+                // Anchor info for inline comment preservation across page rewrites.
+                // v2 API exposes it under properties (camelCase and dash-case variants),
+                // v1 under extensions.inlineProperties.
+                markerRef: props.inlineMarkerRef || props['inline-marker-ref'] ||
+                    inlineProps.markerRef || null,
+                originalSelection: props.inlineOriginalSelection || props['inline-original-selection'] ||
+                    inlineProps.originalSelection || null,
                 body: extractCommentBody(c)
             });
         }
@@ -338,6 +421,8 @@ if (typeof module !== 'undefined' && module.exports) {
         writeCommentsFiles: writeCommentsFiles,
         publishCommentReplies: publishCommentReplies,
         extractCommentBody: extractCommentBody,
+        extractInlineCommentMarkers: extractInlineCommentMarkers,
+        injectCommentPlaceholders: injectCommentPlaceholders,
         COMMENTS_BASE_NAME: COMMENTS_BASE_NAME,
         DEFAULT_REPLIES_FILE: DEFAULT_REPLIES_FILE
     };

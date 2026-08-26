@@ -84,6 +84,25 @@ function action(params) {
                 body = (full && full.body && full.body.storage && full.body.storage.value) || '';
             }
             if (folder && body) {
+                // Preserve inline comment anchors: storage bodies carry them as
+                // <ac:inline-comment-marker> elements which the Markdown conversion
+                // strips. Re-expose them as [[ic:REF]]...[[/ic]] placeholders so the
+                // agent can keep the anchors in its output (publishPage converts them
+                // back after the sync).
+                try {
+                    var storage = confluence_content_by_id({ contentId: existing.id });
+                    var storageBody = storage && storage.body && storage.body.storage && storage.body.storage.value;
+                    var anchors = contentOutput.extractInlineCommentMarkers(storageBody);
+                    if (anchors.length > 0) {
+                        var injected = contentOutput.injectCommentPlaceholders(body, anchors);
+                        body = injected.content;
+                        console.log('fetchConfluenceOutputContext: injected ' + injected.injected.length +
+                            ' inline comment placeholder(s)' +
+                            (injected.missed.length > 0 ? ', ' + injected.missed.length + ' anchor text(s) not found in Markdown' : ''));
+                    }
+                } catch (markerError) {
+                    console.warn('fetchConfluenceOutputContext: marker extraction failed (non-fatal):', markerError);
+                }
                 file_write(folder + '/' + CURRENT_CONTENT_FILE, body);
                 console.log('Wrote current page content to input/' + CURRENT_CONTENT_FILE);
             }

@@ -102,6 +102,32 @@ suite('preCliSnapshotSetup', function() {
         assert.ok(calls.some(function(c) { return c.indexOf('git checkout develop/3.9.0') !== -1; }), 'checkout command present');
     });
 
+    test('chains existing preCliJSAction when customParams are nested under jobParams (real Teammate path)', function() {
+        // JavaScriptExecutor.withJobContext passes { jobParams, ticket, response } —
+        // customParams live inside jobParams, not at the top level.
+        var calls = [];
+        var chainedCalls = [];
+        var mod = loadModule(
+            'js/preCliSnapshotSetup.js',
+            makeRequire({
+                './configLoader.js': makeConfigLoaderStub('develop/3.9.0'),
+                './config.js': NOOP_CONFIG_JS,
+                './fetchQuestionsToInput.js': makeChainedAction(chainedCalls)
+            }),
+            { cli_execute_command: makeCliMock(calls, {}) }
+        );
+        var result = mod.action({
+            ticket: TICKET,
+            jobParams: {
+                customParams: {
+                    chainedPreCliJSAction: 'fetchQuestionsToInput.js'
+                }
+            }
+        });
+        assert.equal(result, true);
+        assert.deepEqual(chainedCalls, ['chained-action'], 'chained action must fire with jobParams-nested customParams');
+    });
+
     test('checks out snapshot branch and syncs codegraph', function() {
         var calls = [];
         var mod = loadPreCliSnapshotSetup(makeConfigLoaderStub('develop/3.9.0'), {
