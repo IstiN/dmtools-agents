@@ -1,33 +1,12 @@
 # Acceptance Criteria Quality Rules
 
+These rules define baseline quality expectations for any acceptance criteria
+output. Project-specific workflow rules (e.g. how to reference existing
+workflows, enumerate copied steps, or handle upstream workflow fields) belong
+in the consuming repository's `.dmtools/instructions/` and are injected via
+`cliPrompts` in `.dmtools/config.js`.
+
 ## Prohibited patterns
-
-### ❌ Never write "follows standard X behavior"
-Instead of writing "follows [Workflow X] behavior", "same as [Workflow X]",
-"behaves as in [Workflow X]", or "no [story-specific] changes", you MUST first
-search the codebase using codegraph_search or codegraph_explore for that
-reference workflow, read its implementation, and describe the actual behavior
-in detail: exact columns, validations, file names, transitions, and error
-messages. A single-sentence reference to another workflow is never acceptable
-as an AC — it is not testable and cannot be implemented or verified without
-additional research.
-
-This prohibition applies **even when the step is genuinely unchanged**.
-"Unchanged" is a conclusion you reach only *after* verification, never a
-shortcut that lets you skip it — an unverified claim of parity is exactly how
-real, undetected differences slip through review. Concretely:
-- Every sentence that asserts equivalence to another workflow/step MUST be
-  immediately followed by the itemized proof: the actual columns, validations,
-  transitions, or error messages you found, and the exact codegraph
-  symbol/file you found them in (e.g. `[Verified via codegraph:
-  WorkflowXStepHandler.java]`).
-- If you could not verify — the reference workflow is not in the searched
-  codebase, or you ran out of context — do NOT assert equivalence at all.
-  Add an explicit blocker instead: `*⚠ BLOCKER:* behavior of [Workflow X] step
-  [N] could not be verified against the codebase — AC cannot confirm parity.`
-- A bare label such as "Copied as-is from {source}" is only acceptable once
-  the itemized proof (or an explicit blocker) has already been given earlier
-  in the same AC item; it may never *replace* the proof.
 
 ### ❌ Never include generic UI/accessibility AC
 WCAG AA, contrast ratios, focus states, style guide compliance —
@@ -53,12 +32,6 @@ Instead, add an explicit blocker entry:
 `*⚠ BLOCKER:* [artifact name] is not accessible — AC for [scope] cannot be
 finalized without this material.`
 
-### ❌ Never use partial detail for copied workflow steps
-Either describe a workflow step fully (all columns, validations, transitions)
-or mark it explicitly as `[Copied as-is from {reference}]`.
-Partial detail — describing some sub-steps but skipping others — is
-indistinguishable from missing requirements and leads to implementation gaps.
-
 ### ❌ Never mix inconsistent structures for the same kind of list
 Pick one structure per repeating list (e.g. steps, requirements, criteria) and
 use it for every item in that list — do not alternate between a table and
@@ -73,27 +46,6 @@ when starting a genuinely new list — never renumber or duplicate a list that
 was already presented.
 
 ## Required patterns
-
-### ✅ Separate new behavior from existing behavior
-Every AC output must clearly distinguish:
-- *Existing behavior* — what the system already does today (validated against code)
-- *New behavior* — what changes with this story
-- *Copied as-is* — steps that are identical to an existing workflow (name the source)
-- *Changed behavior* — existing steps that are modified (show before → after)
-
-Do not mix old and new in the same AC item.
-
-### ✅ "Follows X workflow" → enumerate it
-When an AC references another workflow:
-- Find it in the codebase via codegraph
-- List the actual columns, validations, file names, transitions
-- Only omit details that are genuinely identical AND already
-  documented elsewhere in the same story
-
-### ✅ Always cover the "missing input" case
-For any field pre-filled from an upstream source:
-- Describe what happens when the upstream value is absent
-- Is the field then required? Optional? Blocked?
 
 ### ✅ Error messages must be verbatim
 Use exact UI text: Header, Message, and variable placeholders.

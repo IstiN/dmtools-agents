@@ -351,7 +351,7 @@ suite('fetchParentContextToInput — parentAsContext', function() {
         var writtenFiles = [];
         var m = loadFetchParentContext({
             jira_get_ticket: function(opts) {
-                return makeParentTicket(opts.key || PARENT_KEY, '[LIMS]');
+                return makeParentTicket(opts.key || PARENT_KEY, '[EXAMPLE]');
             },
             jira_search_by_jql: function() { return []; },
             file_write: function(p, c) { writtenFiles.push(p); }
@@ -372,7 +372,7 @@ suite('fetchParentContextToInput — parentAsContext', function() {
         var writtenFiles = [];
         var m = loadFetchParentContext({
             jira_get_ticket: function(opts) {
-                return makeParentTicket(opts.key || PARENT_KEY, '[LIMS]');
+                return makeParentTicket(opts.key || PARENT_KEY, '[EXAMPLE]');
             },
             jira_search_by_jql: function() { return []; },
             file_write: function(p, c) { writtenFiles.push(p); }
@@ -386,7 +386,7 @@ suite('fetchParentContextToInput — parentAsContext', function() {
         var writtenFiles = [];
         var m = loadFetchParentContext({
             jira_get_ticket: function(opts) {
-                return makeParentTicket(opts.key || PARENT_KEY, '[LIMS]');
+                return makeParentTicket(opts.key || PARENT_KEY, '[EXAMPLE]');
             },
             jira_search_by_jql: function() { return []; },
             file_write: function(p, c) { writtenFiles.push(p); }
@@ -406,7 +406,7 @@ suite('fetchParentContextToInput — parentAsContext', function() {
         var writtenContents = {};
         var m = loadFetchParentContext({
             jira_get_ticket: function(opts) {
-                return makeParentTicket(opts.key || PARENT_KEY, '[LIMS]');
+                return makeParentTicket(opts.key || PARENT_KEY, '[EXAMPLE]');
             },
             jira_search_by_jql: function() { return []; },
             file_write: function(p, c) { writtenContents[p] = c; }
@@ -432,7 +432,7 @@ suite('fetchParentContextToInput — parentAsContext', function() {
         var writtenContents = {};
         var m = loadFetchParentContext({
             jira_get_ticket: function(opts) {
-                return makeParentTicket(opts.key || PARENT_KEY, '[LIMS]', {
+                return makeParentTicket(opts.key || PARENT_KEY, '[EXAMPLE]', {
                     'Acceptance Criteria': 'AC 1 - User can login\nAC 2 - User can logout'
                 });
             },
@@ -469,7 +469,7 @@ suite('fetchParentContextToInput — parentAsContext', function() {
         var writtenFiles = [];
         var m = loadFetchParentContext({
             jira_get_ticket: function(opts) {
-                return makeParentTicket(opts.key || PARENT_KEY, '[LIMS]');
+                return makeParentTicket(opts.key || PARENT_KEY, '[EXAMPLE]');
             },
             jira_search_by_jql: function() {
                 return [makeSearchResult('PROJ-300', '[SA]')];

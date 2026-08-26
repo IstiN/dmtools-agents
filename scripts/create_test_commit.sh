@@ -1,6 +1,6 @@
 #!/bin/bash
 # create_test_commit.sh
-# Used by story_development_dynamic_repo_test / gens-igt/story_development_test agents.
+# Used by story_development_dynamic_repo_test agents.
 #
 # Reads the target working directory from .dmtools-target-workingdir written by
 # preCliDevelopmentSetupDynamicRepo.js (which parses [repo] from the ticket summary).

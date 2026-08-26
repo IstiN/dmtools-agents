@@ -446,7 +446,7 @@ suite('configLoader.loadProjectConfig', function() {
     // snapshotBranchResolverFnPath silently never fired in production: real
     // Teammate execution passes preJSAction/postJSAction params as sibling
     // top-level keys { jobParams, ticket, response } (see JavaScriptExecutor.
-    // withJobContext in dm.ai), but every call site read `params.jobParams ||
+    // withJobContext in the tracker), but every call site read `params.jobParams ||
     // params` to reach customParams/configPath, which discarded the sibling
     // `params.ticket`.
 

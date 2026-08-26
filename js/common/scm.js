@@ -1007,7 +1007,7 @@ function _detectRepoFromGitRemote(provider) {
             .filter(function(l) {
                 return l.indexOf('github.com') !== -1 ||
                     l.indexOf('gitlab') !== -1 ||
-                    l.indexOf('git.epam.com') !== -1 ||
+                    l.indexOf('gitlab.example.com') !== -1 ||
                     l.indexOf('dev.azure.com') !== -1 ||
                     l.indexOf('ssh.dev.azure.com') !== -1;
             })[0] || '';

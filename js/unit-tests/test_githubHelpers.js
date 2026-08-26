@@ -236,18 +236,18 @@ suite('github repo remote parsing', function() {
     [
         {
             name: 'https URL with dotted repo',
-            remote: 'https://github.com/epam/dm.ai',
-            expected: { owner: 'epam', repo: 'dm.ai' }
+            remote: 'https://github.com/example-org/example.repo',
+            expected: { owner: 'example-org', repo: 'example.repo' }
         },
         {
             name: 'https URL with dotted repo and .git suffix',
-            remote: 'https://github.com/epam/dm.ai.git',
-            expected: { owner: 'epam', repo: 'dm.ai' }
+            remote: 'https://github.com/example-org/example.repo.git',
+            expected: { owner: 'example-org', repo: 'example.repo' }
         },
         {
             name: 'ssh URL with dotted repo and .git suffix',
-            remote: 'git@github.com:epam/dm.ai.git',
-            expected: { owner: 'epam', repo: 'dm.ai' }
+            remote: 'git@github.com:example-org/example.repo.git',
+            expected: { owner: 'example-org', repo: 'example.repo' }
         }
     ].forEach(function(tc) {
         test('githubHelpers.getGitHubRepoInfo parses ' + tc.name, function() {
@@ -265,7 +265,7 @@ suite('github repo remote parsing', function() {
         var calls = [];
         var scmModule = loadScm({
             cli_execute_command: function() {
-                return 'git@github.com:epam/dm.ai.git\nCOMMAND_EXIT_CODE=0';
+                return 'git@github.com:example-org/example.repo.git\nCOMMAND_EXIT_CODE=0';
             },
             github_list_prs: function(args) {
                 calls.push(args);
@@ -277,8 +277,8 @@ suite('github repo remote parsing', function() {
         scm.listPrs('open');
 
         assert.deepEqual(calls[0], {
-            workspace: 'epam',
-            repository: 'dm.ai',
+            workspace: 'example-org',
+            repository: 'example.repo',
             state: 'open'
         });
     });
@@ -463,7 +463,7 @@ suite('scm GitLab provider', function() {
         var calls = [];
         var scmModule = loadScm({
             cli_execute_command: function() {
-                return 'git@git.epam.com:mobile/dmtools-epamsample.git\nCOMMAND_EXIT_CODE=0';
+                return 'git@gitlab.example.com:example-group/example-project.git\nCOMMAND_EXIT_CODE=0';
             },
             gitlab_list_mrs: function(args) {
                 calls.push(args);
@@ -475,8 +475,8 @@ suite('scm GitLab provider', function() {
         scm.listPrs('open');
 
         assert.deepEqual(calls[0], {
-            workspace: 'mobile',
-            repository: 'dmtools-epamsample',
+            workspace: 'example-group',
+            repository: 'example-project',
             state: 'opened'
         });
     });
@@ -492,7 +492,7 @@ suite('scm GitLab provider', function() {
             }
         });
 
-        var provider = scmModule._createGitLabProvider('mobile', 'dmtools-epamsample');
+        var provider = scmModule._createGitLabProvider('example-group', 'example-project');
         var closed = provider.listPrs('closed');
 
         assert.equal(closed.length, 2);
@@ -507,14 +507,14 @@ suite('scm GitLab provider', function() {
                 call = args;
                 return JSON.stringify({
                     iid: 42,
-                    web_url: 'https://git.epam.com/mobile/dmtools-epamsample/-/merge_requests/42',
+                    web_url: 'https://gitlab.example.com/example-group/example-project/-/merge_requests/42',
                     source_branch: 'feature/ABC-1',
                     target_branch: 'main'
                 });
             }
         });
 
-        var provider = scmModule._createGitLabProvider('mobile', 'dmtools-epamsample');
+        var provider = scmModule._createGitLabProvider('example-group', 'example-project');
         var result = provider.createPr({
             title: 'ABC-1: change',
             branchName: 'feature/ABC-1',
@@ -524,8 +524,8 @@ suite('scm GitLab provider', function() {
         });
 
         assert.deepEqual(call, {
-            workspace: 'mobile',
-            repository: 'dmtools-epamsample',
+            workspace: 'example-group',
+            repository: 'example-project',
             sourceBranch: 'feature/ABC-1',
             targetBranch: 'main',
             title: 'ABC-1: change',
@@ -534,7 +534,7 @@ suite('scm GitLab provider', function() {
         });
         assert.equal(result.success, true);
         assert.equal(result.number, 42);
-        assert.equal(result.prUrl, 'https://git.epam.com/mobile/dmtools-epamsample/-/merge_requests/42');
+        assert.equal(result.prUrl, 'https://gitlab.example.com/example-group/example-project/-/merge_requests/42');
     });
 
     test('_normalizeGitLabCommitStatus maps GitLab commit statuses into check-run shape', function() {
@@ -566,7 +566,7 @@ suite('scm GitLab provider', function() {
                 calledArgs = args;
                 return JSON.stringify([
                     { name: 'sonar-tests/Merge requests check', status: 'failed', target_url: 'https://jenkins.ci.example.com/job/sonar-tests/job/Merge%20requests%20check/23681/' },
-                    { name: 'ai-teammate', status: 'success', target_url: 'https://git.epam.com/acme-org/ai-teammate/-/pipelines/1' }
+                    { name: 'ai-teammate', status: 'success', target_url: 'https://gitlab.example.com/acme-org/ai-teammate/-/pipelines/1' }
                 ]);
             }
         });
@@ -609,7 +609,7 @@ suite('scm GitLab provider', function() {
                 ]);
             }
         });
-        var provider = scmModule._createGitLabProvider('mobile', 'dmtools-epamsample');
+        var provider = scmModule._createGitLabProvider('example-group', 'example-project');
         var raw = provider.listWorkflowRuns('in_progress', null, 20);
         var parsed = JSON.parse(raw);
 
@@ -629,12 +629,12 @@ suite('scm GitLab provider', function() {
             }
         });
 
-        var provider = scmModule._createGitLabProvider('mobile', 'dmtools-epamsample');
-        provider.updateBranch(55, 'mobile', 'dmtools-epamsample');
+        var provider = scmModule._createGitLabProvider('example-group', 'example-project');
+        provider.updateBranch(55, 'example-group', 'example-project');
 
         assert.deepEqual(call, {
-            workspace: 'mobile',
-            repository: 'dmtools-epamsample',
+            workspace: 'example-group',
+            repository: 'example-project',
             pullRequestId: '55'
         });
     });
@@ -1046,7 +1046,7 @@ suite('githubHelpers.detectFailedChecks — Jenkins failed checks', function() {
                     check_runs: [{
                         name: 'Jenkins PR Build',
                         conclusion: 'failure',
-                        details_url: 'https://jenkins.example.com/job/epam/job/dm.ai/job/PR-123/45/'
+                        details_url: 'https://jenkins.example.com/job/example-org/job/example.repo/job/PR-123/45/'
                     }]
                 };
             },
@@ -1064,17 +1064,17 @@ suite('githubHelpers.detectFailedChecks — Jenkins failed checks', function() {
         });
 
         var failed = gh.detectFailedChecks(
-            'epam', 'dm.ai', 'abc123def', '/tmp/input',
+            'example-org', 'example.repo', 'abc123def', '/tmp/input',
             'https://jenkins.example.com/'
         );
 
         assert.equal(failed.length, 1, 'one failed check should be reported');
         assert.equal(failed[0].name, 'Jenkins PR Build');
         assert.equal(jenkinsInfoCalls.length, 1, 'jenkins_get_job_info should be called once');
-        assert.equal(jenkinsInfoCalls[0].jobPath, 'job/epam/job/dm.ai/job/PR-123');
+        assert.equal(jenkinsInfoCalls[0].jobPath, 'job/example-org/job/example.repo/job/PR-123');
         assert.equal(jenkinsInfoCalls[0].buildNumber, 45);
         assert.equal(jenkinsLogCalls.length, 1, 'jenkins_get_build_log should be called once');
-        assert.equal(jenkinsLogCalls[0].jobPath, 'job/epam/job/dm.ai/job/PR-123');
+        assert.equal(jenkinsLogCalls[0].jobPath, 'job/example-org/job/example.repo/job/PR-123');
         assert.equal(jenkinsLogCalls[0].buildNumber, 45);
 
         var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
@@ -1104,7 +1104,7 @@ suite('githubHelpers.detectFailedChecks — Jenkins failed checks', function() {
                     check_runs: [{
                         name: 'Jenkins PR Build',
                         conclusion: 'failure',
-                        details_url: 'https://jenkins.example.com/job/epam/job/dm.ai/job/PR-123/45/'
+                        details_url: 'https://jenkins.example.com/job/example-org/job/example.repo/job/PR-123/45/'
                     }]
                 };
             },
@@ -1117,7 +1117,7 @@ suite('githubHelpers.detectFailedChecks — Jenkins failed checks', function() {
             }
         });
 
-        var failed = gh.detectFailedChecks('epam', 'dm.ai', 'abc123def', '/tmp/input');
+        var failed = gh.detectFailedChecks('example-org', 'example.repo', 'abc123def', '/tmp/input');
 
         assert.equal(failed.length, 1);
         assert.equal(jenkinsLogCalls.length, 0, 'jenkins log should not be fetched without base path');
@@ -1153,7 +1153,7 @@ suite('githubHelpers.detectFailedChecks — Jenkins failed checks', function() {
             }
         });
 
-        gh.detectFailedChecks('epam', 'dm.ai', 'abc123def', '/tmp/input', 'https://jenkins.example.com/');
+        gh.detectFailedChecks('example-org', 'example.repo', 'abc123def', '/tmp/input', 'https://jenkins.example.com/');
 
         assert.equal(jenkinsLogCalls.length, 0, 'different host should be ignored');
         var mdWrite = findWrite(writes, '/tmp/input/ci_failures.md');
@@ -1245,10 +1245,10 @@ suite('scm.getDiffText', function() {
             }
         });
 
-        var provider = scmModule._createGithubProvider('epam', 'dm.ai');
+        var provider = scmModule._createGithubProvider('example-org', 'example.repo');
         var diff = provider.getDiffText(42);
 
-        assert.deepEqual(call, { workspace: 'epam', repository: 'dm.ai', pullRequestID: '42' });
+        assert.deepEqual(call, { workspace: 'example-org', repository: 'example.repo', pullRequestID: '42' });
         assert.equal(diff, 'diff --git a/x b/x');
     });
 
@@ -1257,7 +1257,7 @@ suite('scm.getDiffText', function() {
             github_get_pr_diff_text: function() { throw new Error('IS_READ_PULL_REQUEST_DIFF disabled'); }
         });
 
-        var provider = scmModule._createGithubProvider('epam', 'dm.ai');
+        var provider = scmModule._createGithubProvider('example-org', 'example.repo');
         var diff = provider.getDiffText(42);
 
         assert.ok(diff === null, 'must gracefully return null on failure');
@@ -1272,10 +1272,10 @@ suite('scm.getDiffText', function() {
             }
         });
 
-        var provider = scmModule._createGitLabProvider('mobile', 'dmtools-epamsample');
+        var provider = scmModule._createGitLabProvider('example-group', 'example-project');
         var diff = provider.getDiffText(7);
 
-        assert.deepEqual(call, { workspace: 'mobile', repository: 'dmtools-epamsample', pullRequestId: '7' });
+        assert.deepEqual(call, { workspace: 'example-group', repository: 'example-project', pullRequestId: '7' });
         assert.equal(diff, 'diff --git a/x b/x');
     });
 
@@ -1284,7 +1284,7 @@ suite('scm.getDiffText', function() {
             gitlab_get_mr_diff_text: function() { throw new Error('boom'); }
         });
 
-        var provider = scmModule._createGitLabProvider('mobile', 'dmtools-epamsample');
+        var provider = scmModule._createGitLabProvider('example-group', 'example-project');
         var diff = provider.getDiffText(7);
 
         assert.ok(diff === null, 'must gracefully return null on failure');
@@ -1292,7 +1292,7 @@ suite('scm.getDiffText', function() {
 
     test('ADO provider always returns null (no raw diff-text API available)', function() {
         var scmModule = loadScm({});
-        var provider = scmModule._createAdoProvider('dmtools-epamsample');
+        var provider = scmModule._createAdoProvider('example-project');
 
         assert.ok(provider.getDiffText(7) === null);
     });

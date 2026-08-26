@@ -112,7 +112,7 @@ suite('pullRequest helper', function() {
             bodyContent: 'body',
             runCommand: function(command) {
                 if (command.indexOf('gh pr list --head feature/DMC-3') === 0) return '';
-                if (command === 'git config --get remote.origin.url') return 'git@github.com:epam/dm.ai.git';
+                if (command === 'git config --get remote.origin.url') return 'git@github.com:example-org/example.repo.git';
                 if (command.indexOf('gh pr create') === 0) return 'Created pull request #789';
                 return '';
             },
@@ -120,7 +120,7 @@ suite('pullRequest helper', function() {
         });
 
         assert.equal(result.success, true);
-        assert.equal(result.prUrl, 'https://github.com/epam/dm.ai/pull/789');
+        assert.equal(result.prUrl, 'https://github.com/example-org/example.repo/pull/789');
     });
 
     test('syncs branch with base before publishing when behind', function() {
