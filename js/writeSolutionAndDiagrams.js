@@ -30,6 +30,25 @@ const outputFiles = require('./common/outputFiles.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 const contentOutput = require('./common/contentOutput.js');
 
+// Sections appended by this module when publishing to Confluence (target
+// 'confluence'/'both'). On reruns the model iterates over the previous page content
+// (input/confluence_output_current.md) and may copy these sections into its fresh
+// output — they are stripped here before the publish step re-adds the up-to-date
+// variants, so the page never accumulates duplicates.
+var MANAGED_CONFLUENCE_SECTIONS = ['## Diagram', '## Affected Repositories'];
+
+function stripManagedConfluenceSections(markdown) {
+    if (!markdown) return markdown;
+    var result = markdown;
+    MANAGED_CONFLUENCE_SECTIONS.forEach(function(heading) {
+        // From the heading to the next same-or-higher-level heading (## or #) or EOF.
+        var re = new RegExp('\\n?' + heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+            '\\n[\\s\\S]*?(?=\\n#{1,2} |$)');
+        result = result.replace(re, '\n');
+    });
+    return result.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function action(params) {
     try {
         var ticketKey = params.ticket.key;
@@ -146,7 +165,10 @@ function action(params) {
         if (contentOutput.isConfluenceTarget(outputCfg)) {
             try {
                 var ticketSummary = (params.ticket.fields && params.ticket.fields.summary) || '';
-                var pageContent = solution;
+                // Strip publish-managed sections the model may have copied from the
+                // previous page content (input/confluence_output_current.md) — they are
+                // re-added fresh below, otherwise reruns would duplicate them.
+                var pageContent = stripManagedConfluenceSections(solution);
                 if (diagram) {
                     pageContent = pageContent + '\n\n## Diagram\n\n```mermaid\n' + diagram + '\n```\n';
                 }
@@ -284,5 +306,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action: action };
+    module.exports = { action: action, stripManagedConfluenceSections: stripManagedConfluenceSections };
 }

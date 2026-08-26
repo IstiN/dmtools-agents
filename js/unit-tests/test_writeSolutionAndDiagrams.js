@@ -26,10 +26,10 @@ suite('writeSolutionAndDiagrams — module export', function() {
 
 suite('writeSolutionAndDiagrams — diagram handling for Confluence targets', function() {
 
-    function loadModuleWithDiagramFlow(jiraUpdates, confluenceCalls, repliesFile, affectedRepos) {
+    function loadModuleWithDiagramFlow(jiraUpdates, confluenceCalls, repliesFile, affectedRepos, responseMd) {
         var outputFilesMock = {
             readOutputFile: function(name) {
-                if (name === 'response.md') return '## Solution\nBody text';
+                if (name === 'response.md') return responseMd || '## Solution\nBody text';
                 if (name === 'diagram.md') return 'graph TD\nA --> B';
                 if (name === 'affected_repos.json') return affectedRepos || null;
                 return null;
@@ -140,6 +140,48 @@ suite('writeSolutionAndDiagrams — diagram handling for Confluence targets', fu
         assert.ok(write.content.indexOf('| 1 | backend | API changes |') !== -1, 'topologically sorted rows present');
         assert.ok(write.content.indexOf('```json') !== -1, 'json anchor present');
         assert.ok(write.content.indexOf('{code') === -1, 'no jira wiki table/code in confluence content');
+    });
+
+    test('confluence target rerun: publish-managed sections copied by the model are not duplicated', function() {
+        var jiraUpdates = [];
+        var confluenceCalls = [];
+        // Model iterated over the previous page and kept the old Diagram and
+        // Affected Repositories sections in its fresh response.md
+        var responseWithStaleSections = '## Solution\nUpdated body text\n\n## Diagram\n\n```mermaid\ngraph TD\nOLD --> STALE\n```\n\n## Affected Repositories\n\n| # | Repository | Reason | Depends On |\n|---|---|---|---|\n| 1 | old-repo | stale | — |\n\n```json\n[{"name":"old-repo"}]\n```\n\n---\n';
+        var module = loadModuleWithDiagramFlow(jiraUpdates, confluenceCalls, 'outputs/confluence_replies.json',
+            JSON.stringify([{ name: 'backend', reason: 'API changes' }]),
+            responseWithStaleSections);
+
+        var result = module.action(CONF_PARAMS);
+
+        assert.equal(result.success, true, 'action succeeds: ' + JSON.stringify(result));
+        var write = null;
+        confluenceCalls.forEach(function(c) { if (c.op === 'write') write = c; });
+        assert.ok(write, 'sync content was written');
+        assert.equal(write.content.split('## Diagram').length - 1, 1, 'exactly one Diagram section');
+        assert.equal(write.content.split('## Affected Repositories').length - 1, 1, 'exactly one Affected Repositories section');
+        assert.ok(write.content.indexOf('OLD --> STALE') === -1, 'stale mermaid removed');
+        assert.ok(write.content.indexOf('old-repo') === -1, 'stale repos table removed');
+        assert.ok(write.content.indexOf('graph TD\nA --> B') !== -1, 'fresh diagram present');
+        assert.ok(write.content.indexOf('| 1 | backend | API changes |') !== -1, 'fresh repos table present');
+        assert.ok(write.content.indexOf('Updated body text') !== -1, 'model body kept');
+    });
+
+    test('stripManagedConfluenceSections unit checks', function() {
+        var module = loadModuleWithDiagramFlow([], [], 'outputs/confluence_replies.json');
+        var strip = module.stripManagedConfluenceSections;
+
+        // sections at the end
+        assert.equal(strip('text\n\n## Diagram\n\n```mermaid\nx\n```\n'), 'text');
+        // section followed by another same-level section keeps the tail
+        assert.equal(strip('text\n\n## Affected Repositories\n\nstuff\n\n## Risks\nkeep me'),
+            'text\n\n## Risks\nkeep me');
+        // both managed sections
+        assert.equal(strip('body\n\n## Diagram\nd\n\n## Affected Repositories\nr\n'), 'body');
+        // nothing to strip
+        assert.equal(strip('plain content'), 'plain content');
+        // unrelated headings survive
+        assert.equal(strip('## Solution\n\n## Test Scope\nx'), '## Solution\n\n## Test Scope\nx');
     });
 
     test('confluence target without affected_repos.json: page publishes without the section (non-fatal)', function() {

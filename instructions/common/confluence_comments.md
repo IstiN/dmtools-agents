@@ -8,6 +8,7 @@ When `input/confluence_output_target.json` is present, your output is published 
 
 - Write `outputs/response.md` as **Markdown** — it is converted to Confluence storage format on publish. Do NOT use tracker-specific markup (no Jira `{code}` / `h2.` / ADF), even if other instructions ask for it; Markdown wins for this output.
 - If `input/confluence_output_current.md` exists, it contains the page's current content — iterate on it instead of rewriting from scratch. The current content may be in legacy tracker markup from earlier runs — still write your output in Markdown.
+- The current content may end with `## Diagram` and/or `## Affected Repositories` sections — these are managed by the publish step and refreshed automatically. Do NOT copy them into your output; any copies are stripped to avoid duplicates.
 
 ## Inline comment anchors (`[[ic:...]]` placeholders)
 
