@@ -7,12 +7,17 @@ _fetch_codemie_jwt_token() {
     return 1
   fi
   local response token
+  local _scope_arg=()
+  if [ -n "${CODEMIE_AUTH_SCOPE:-}" ]; then
+    _scope_arg=(--data-urlencode "scope=${CODEMIE_AUTH_SCOPE}")
+  fi
   response=$(curl -fsSL \
     --location "${CODEMIE_AUTH_URL}" \
     --header 'Content-Type: application/x-www-form-urlencoded' \
     --data-urlencode "client_id=${CODEMIE_AUTH_CLIENT_ID}" \
     --data-urlencode "grant_type=${CODEMIE_AUTH_GRANT_TYPE:-client_credentials}" \
-    --data-urlencode "client_secret=${CODEMIE_AUTH_CLIENT_SECRET}") || {
+    --data-urlencode "client_secret=${CODEMIE_AUTH_CLIENT_SECRET}" \
+    ${_scope_arg[@]+"${_scope_arg[@]}"}) || {
     echo "Error: failed to fetch JWT token from codemie auth endpoint" >&2
     return 1
   }
@@ -154,10 +159,16 @@ run_codemie() {
         console.log(\"DEBUG node: homedir=\"+h+\" HOME=\"+process.env.HOME);
         console.log(\"DEBUG node: config exists=\"+fs.existsSync(p));
         if(fs.existsSync(p)){try{var c=JSON.parse(fs.readFileSync(p,\"utf8\")); console.log(\"DEBUG node: activeProfile=\"+c.activeProfile);}catch(e){console.log(\"DEBUG node: config parse error=\"+e.message);}}
-        var rp=\"/root/.codemie/codemie-cli.config.json\";
-        console.log(\"DEBUG node: /root config exists=\"+fs.existsSync(rp));
         var t=process.env.CODEMIE_JWT_TOKEN||\"\";
         console.log(\"DEBUG node: jwt token present=\"+!!t.length+\" len=\"+t.length);
+        if(t){try{
+          var parts=t.split(\".\");
+          var payload=JSON.parse(Buffer.from(parts[1],\"base64url\").toString());
+          console.log(\"DEBUG jwt: iss=\"+(payload.iss||\"(none)\"));
+          console.log(\"DEBUG jwt: aud=\"+JSON.stringify(payload.aud||\"(none)\"));
+          console.log(\"DEBUG jwt: scope=\"+(payload.scope||\"(none)\"));
+          console.log(\"DEBUG jwt: exp=\"+new Date((payload.exp||0)*1000).toISOString());
+        }catch(e){console.log(\"DEBUG jwt: decode error=\"+e.message);}}
       ' 2>&1 || echo 'DEBUG node probe failed'
     " 2>&1 || true
     su -m -s /bin/bash _aiagent -c "
