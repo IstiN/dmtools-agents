@@ -59,24 +59,23 @@ run_claude_code() {
     fi
   fi
 
-  # Force a fresh re-read of input/*.md on resume; see resumed_session_reread_notice()
-  # in _common.sh for why. Only applies when we're actually continuing a prior session.
-  local claude_resume_notice=""
-  if [ "${claude_is_resuming}" = "true" ]; then
-    claude_resume_notice="$(resumed_session_reread_notice)"
-  fi
-
   set +e
-  if [ -f "${PROMPT_ARG}" ]; then
-    echo "Running: claude --allowedTools all --output-format stream-json --verbose --model ${claude_code_model} --max-turns ${claude_code_max_turns} -p (prompt: ${PROMPT_BYTES} bytes via stdin)"
-    echo ""
-    # Use stdin redirect to avoid "Argument list too long" for large prompts (E2BIG).
+  if [ "${claude_is_resuming}" = "true" ]; then
+    # On a genuine resume, don't paste the full prompt back into the message
+    # body — a resumed model can pattern-match repeated text as "already
+    # seen" and skim past it. Instead point it at the actual prompt file on
+    # disk and require it to Read that file fresh. See ensure_prompt_file()
+    # and resumed_session_reread_pointer_notice() in _common.sh.
+    local claude_prompt_file claude_cleanup_prompt_file=false
+    claude_prompt_file="$(ensure_prompt_file)"
+    if [ ! -f "${PROMPT_ARG}" ]; then
+      claude_cleanup_prompt_file=true
+    fi
     local claude_prompt_stdin_file
     claude_prompt_stdin_file="$(mktemp)"
-    if [ -n "${claude_resume_notice}" ]; then
-      printf "%s" "${claude_resume_notice}" > "${claude_prompt_stdin_file}"
-    fi
-    cat "${PROMPT_ARG}" >> "${claude_prompt_stdin_file}"
+    resumed_session_reread_pointer_notice "${claude_prompt_file}" > "${claude_prompt_stdin_file}"
+    echo "Running: claude --allowedTools all --output-format stream-json --verbose --model ${claude_code_model} --max-turns ${claude_code_max_turns} -p (resumed session: pointer to ${claude_prompt_file})"
+    echo ""
     claude --allowedTools all \
       --output-format stream-json \
       --verbose \
@@ -86,7 +85,25 @@ run_claude_code() {
       ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} \
       -p < "${claude_prompt_stdin_file}" \
       2>&1 | tee "${claude_code_log}"
+    claude_code_exit_code=${PIPESTATUS[0]}
     rm -f "${claude_prompt_stdin_file}"
+    if [ "${claude_cleanup_prompt_file}" = "true" ]; then
+      rm -f "${claude_prompt_file}"
+    fi
+  elif [ -f "${PROMPT_ARG}" ]; then
+    echo "Running: claude --allowedTools all --output-format stream-json --verbose --model ${claude_code_model} --max-turns ${claude_code_max_turns} -p (prompt: ${PROMPT_BYTES} bytes via stdin)"
+    echo ""
+    # Use stdin redirect to avoid "Argument list too long" for large prompts (E2BIG).
+    claude --allowedTools all \
+      --output-format stream-json \
+      --verbose \
+      --model "${claude_code_model}" \
+      --max-turns "${claude_code_max_turns}" \
+      ${claude_resume_args[@]+"${claude_resume_args[@]}"} \
+      ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} \
+      -p < "${PROMPT_ARG}" \
+      2>&1 | tee "${claude_code_log}"
+    claude_code_exit_code=${PIPESTATUS[0]}
   else
     echo "Running: claude --allowedTools all --output-format stream-json --verbose --model ${claude_code_model} --max-turns ${claude_code_max_turns} -p (inline prompt: ${PROMPT_BYTES} bytes)"
     echo ""
@@ -97,10 +114,10 @@ run_claude_code() {
       --max-turns "${claude_code_max_turns}" \
       ${claude_resume_args[@]+"${claude_resume_args[@]}"} \
       ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} \
-      -p "${claude_resume_notice}${PROMPT}" \
+      -p "${PROMPT}" \
       2>&1 | tee "${claude_code_log}"
+    claude_code_exit_code=${PIPESTATUS[0]}
   fi
-  claude_code_exit_code=${PIPESTATUS[0]}
   set -e
 
   record_codegraph_usage "${claude_code_log}"

@@ -197,11 +197,19 @@ PY
     fi
   fi
 
-  # Force a fresh re-read of input/*.md on resume; see resumed_session_reread_notice()
-  # in _common.sh for why. Only applies when we're actually continuing a prior session.
-  local kimi_resume_notice=""
+  # On a genuine resume, don't paste the full prompt back into the message —
+  # a resumed model can pattern-match repeated text as "already seen" and
+  # skim past it. Instead point it at the actual prompt file on disk and
+  # require it to Read that file fresh. See ensure_prompt_file() and
+  # resumed_session_reread_pointer_notice() in _common.sh.
+  local kimi_prompt_message="${PROMPT}"
+  local kimi_prompt_file="" kimi_cleanup_prompt_file=false
   if [ "${kimi_is_actual_resume}" = "true" ]; then
-    kimi_resume_notice="$(resumed_session_reread_notice)"
+    kimi_prompt_file="$(ensure_prompt_file)"
+    if [ ! -f "${PROMPT_ARG:-}" ]; then
+      kimi_cleanup_prompt_file=true
+    fi
+    kimi_prompt_message="$(resumed_session_reread_pointer_notice "${kimi_prompt_file}")"
   fi
 
   # Always use -p (non-interactive prompt mode) when stdin is not a TTY (CI).
@@ -212,9 +220,12 @@ PY
   echo "Running: kimi ${kimi_model_args[*]:-} ${kimi_session_args[*]:-} ${kimi_pass_args[*]:-} -p <prompt:${PROMPT_BYTES} bytes>"
   echo ""
   set +e
-  kimi ${kimi_model_args[@]+"${kimi_model_args[@]}"} ${kimi_session_args[@]+"${kimi_session_args[@]}"} ${kimi_pass_args[@]+"${kimi_pass_args[@]}"} --output-format "stream-json" -p "${kimi_resume_notice}${PROMPT}" 2>&1 | tee "$kimi_log"
+  kimi ${kimi_model_args[@]+"${kimi_model_args[@]}"} ${kimi_session_args[@]+"${kimi_session_args[@]}"} ${kimi_pass_args[@]+"${kimi_pass_args[@]}"} --output-format "stream-json" -p "${kimi_prompt_message}" 2>&1 | tee "$kimi_log"
   local exit_code=${PIPESTATUS[0]}
   set -e
+  if [ "${kimi_cleanup_prompt_file}" = "true" ]; then
+    rm -f "${kimi_prompt_file}"
+  fi
 
   record_codegraph_usage "$kimi_log"
 

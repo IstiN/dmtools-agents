@@ -101,13 +101,10 @@ run_copilot() {
   }
 
   # copilot_session_mode can change between attempts (e.g. an unresolved
-  # --resume falls back to a brand-new --name session), so this is
-  # evaluated fresh on every call rather than cached once up front. See
-  # resumed_session_reread_notice() in _common.sh for why this is needed.
-  current_resume_reread_notice() {
-    if [ "${copilot_session_mode}" = "resume-name" ] || [ "${copilot_session_mode}" = "resume-id" ]; then
-      resumed_session_reread_notice
-    fi
+  # --resume falls back to a brand-new --name session), so this is checked
+  # fresh on every call rather than cached once up front.
+  is_actual_copilot_resume() {
+    [ "${copilot_session_mode}" = "resume-name" ] || [ "${copilot_session_mode}" = "resume-id" ]
   }
 
   run_copilot_once() {
@@ -115,20 +112,33 @@ run_copilot() {
     local model="$2"
     local prompt_stdin_file=""
     local cleanup_prompt_stdin_file=0
-    local resume_reread_notice
-    resume_reread_notice="$(current_resume_reread_notice)"
+    local cleanup_prompt_file=0
+    local prompt_file_for_resume=""
 
     set +e
-    if copilot_should_use_stdin_prompt; then
+    if is_actual_copilot_resume; then
+      # See resumed_session_reread_pointer_notice() in _common.sh: on an
+      # actual resume we deliberately do NOT paste the full prompt text into
+      # the message body (a resumed model can skim/ignore it as "already
+      # seen"). Instead we point it at the real prompt file and require an
+      # explicit Read tool call to fetch the current content.
+      prompt_file_for_resume="$(ensure_prompt_file)"
+      if [ ! -f "${PROMPT_ARG}" ]; then
+        cleanup_prompt_file=1
+      fi
       prompt_stdin_file="$(mktemp)"
       cleanup_prompt_stdin_file=1
-      if [ -n "${resume_reread_notice}" ]; then
-        printf "%s" "${resume_reread_notice}" > "${prompt_stdin_file}"
-      fi
+      resumed_session_reread_pointer_notice "${prompt_file_for_resume}" > "${prompt_stdin_file}"
+      echo "Running: ${copilot_cmd[*]} --allow-all --model ${model} ${copilot_session_args[*]:-} ${PASS_ARGS[*]:-} (resume: pointing model at prompt file ${prompt_file_for_resume} instead of inlining it)"
+      echo ""
+      "${copilot_cmd[@]}" --allow-all --model "${model}" ${copilot_session_args[@]+"${copilot_session_args[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${prompt_stdin_file}" 2>&1 | tee "$log_file"
+    elif copilot_should_use_stdin_prompt; then
       if [ -f "${PROMPT_ARG}" ]; then
-        cat "${PROMPT_ARG}" >> "${prompt_stdin_file}"
+        prompt_stdin_file="${PROMPT_ARG}"
       else
-        printf "%s" "${PROMPT}" >> "${prompt_stdin_file}"
+        prompt_stdin_file="$(mktemp)"
+        printf "%s" "${PROMPT}" > "${prompt_stdin_file}"
+        cleanup_prompt_stdin_file=1
       fi
       echo "Running: ${copilot_cmd[*]} --allow-all --model ${model} ${copilot_session_args[*]:-} ${PASS_ARGS[*]:-} (prompt: ${PROMPT_BYTES} bytes via stdin)"
       echo ""
@@ -136,11 +146,14 @@ run_copilot() {
     else
       echo "Running: ${copilot_cmd[*]} --allow-all --model ${model} ${copilot_session_args[*]:-} ${PASS_ARGS[*]:-} -p <inline prompt>"
       echo ""
-      "${copilot_cmd[@]}" --allow-all --model "${model}" ${copilot_session_args[@]+"${copilot_session_args[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${resume_reread_notice}${PROMPT}" 2>&1 | tee "$log_file"
+      "${copilot_cmd[@]}" --allow-all --model "${model}" ${copilot_session_args[@]+"${copilot_session_args[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$log_file"
     fi
     local status=${PIPESTATUS[0]}
     if [ "${cleanup_prompt_stdin_file}" -eq 1 ] && [ -n "${prompt_stdin_file}" ]; then
       rm -f "${prompt_stdin_file}"
+    fi
+    if [ "${cleanup_prompt_file}" -eq 1 ] && [ -n "${prompt_file_for_resume}" ]; then
+      rm -f "${prompt_file_for_resume}"
     fi
     return "$status"
   }

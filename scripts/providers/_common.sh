@@ -31,16 +31,52 @@ agent_full_log_dir() {
 # re-reading them because it "remembers" checking them before — even when
 # the prompt explicitly instructs it to read them.
 #
-# Every provider that supports session resume should prepend this notice to
-# whatever it sends as the prompt, but ONLY when a resume is actually
-# happening (an existing session was found and is being continued) — never
-# for a brand-new session that has no prior-turn memory to distrust.
-resumed_session_reread_notice() {
-  cat <<'EOF'
-**IMPORTANT — resumed session:** this is a re-run of this job for the same ticket. The `input/` folder has been freshly re-downloaded for this run and may contain new or changed content compared to what you saw in a prior turn (ticket description, comments, tracker page content, inline comments). Do NOT rely on memory from a previous turn. Re-read the full prompt below and every file it references (including `request.md`, `comments.md`, and any `confluence_output_comments.md` / `confluence_output_current.md`) from scratch before doing anything else.
+# The fix is deliberately NOT "paste the full prompt text again, with a
+# warning on top": pasting the same (or near-same) content into the
+# conversation body again is exactly the kind of thing a resumed model can
+# pattern-match as "I've already seen this" and skim past. Instead, on an
+# actual resume, the message body sent to the model is kept SHORT and simply
+# points at the real prompt file on disk, instructing the model to open it
+# with its own Read tool right now. Making the model perform a concrete,
+# observable tool call to fetch the current file content is a much stronger
+# guarantee of a fresh read than re-including text it may treat as familiar.
+#
+# Every provider that supports session resume should use this pair of
+# helpers, but ONLY when a resume is actually happening (an existing session
+# was found and is being continued) — never for a brand-new session, which
+# should keep sending the full prompt inline as before (it has no prior-turn
+# memory to distrust, and forcing an extra Read round-trip there would just
+# be wasted latency).
 
----
+# Ensures the full prompt text is available at a stable file path, reusing
+# PROMPT_ARG if DMTools already passed the prompt as a file (the normal CI
+# path), or materializing $PROMPT into a fresh temp file otherwise. Echoes
+# the absolute path on stdout. Callers that receive a freshly created temp
+# file (i.e. PROMPT_ARG was NOT already a file) are responsible for removing
+# it once the CLI invocation that reads it has finished.
+ensure_prompt_file() {
+  if [ -f "${PROMPT_ARG}" ]; then
+    echo "$(cd "$(dirname "${PROMPT_ARG}")" && pwd)/$(basename "${PROMPT_ARG}")"
+    return 0
+  fi
+  local f
+  f="$(mktemp)"
+  printf "%s" "${PROMPT}" > "${f}"
+  echo "${f}"
+}
 
+# The short message body sent to the model on an actual resume. $1: absolute
+# path to the file containing the full, current prompt for this run (see
+# ensure_prompt_file above).
+resumed_session_reread_pointer_notice() {
+  local prompt_file="$1"
+  cat <<EOF
+**IMPORTANT — resumed session:** this is a re-run of this job for the same ticket. Do NOT rely on memory from a previous turn — the \`input/\` folder has been freshly re-downloaded for this run and may contain new or changed content (ticket description, comments, tracker page content, inline comments) compared to what you saw before.
+
+Your full instructions for this run are in this file (they are NOT repeated here on purpose):
+  ${prompt_file}
+
+Use your file-read tool to open and read that file IN FULL right now — do not skip this step just because you resumed this session — then follow it exactly, including re-reading every file it references under \`input/\` (\`request.md\`, \`comments.md\`, \`confluence_output_comments.md\`, \`confluence_output_current.md\`, etc.) from scratch.
 EOF
 }
 

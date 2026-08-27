@@ -188,12 +188,20 @@ run_cursor() {
     fi
   fi
 
-  # Force a fresh re-read of input/*.md on resume; see resumed_session_reread_notice()
-  # in _common.sh for why. Only applies when we're actually continuing a prior
-  # session, never for a chat that was just newly created above.
-  local cursor_resume_notice=""
+  # On a genuine resume, don't paste the full prompt back into the message —
+  # a resumed model can pattern-match repeated text as "already seen" and
+  # skim past it. Instead point it at the actual prompt file on disk and
+  # require it to Read that file fresh. See ensure_prompt_file() and
+  # resumed_session_reread_pointer_notice() in _common.sh. Never applies to a
+  # chat that was just newly created above (no prior-turn memory to distrust).
+  local cursor_prompt_message="${PROMPT}"
+  local cursor_prompt_file="" cursor_cleanup_prompt_file=false
   if [ "${cursor_is_actual_resume}" = "true" ]; then
-    cursor_resume_notice="$(resumed_session_reread_notice)"
+    cursor_prompt_file="$(ensure_prompt_file)"
+    if [ ! -f "${PROMPT_ARG:-}" ]; then
+      cursor_cleanup_prompt_file=true
+    fi
+    cursor_prompt_message="$(resumed_session_reread_pointer_notice "${cursor_prompt_file}")"
   fi
 
   local cursor_output_format="text"
@@ -214,7 +222,7 @@ run_cursor() {
   cmd=(cursor-agent --force --print --model "${cursor_model_value}" \
     ${cursor_session_args[@]+"${cursor_session_args[@]}"} \
     ${cursor_pass_args[@]+"${cursor_pass_args[@]}"} \
-    --output-format="${cursor_output_format}" "${cursor_resume_notice}${PROMPT}")
+    --output-format="${cursor_output_format}" "${cursor_prompt_message}")
 
   echo "Running: cursor-agent --force --print --model ${cursor_model_value} ${cursor_session_args[*]:-} ${cursor_pass_args[*]:-} --output-format=${cursor_output_format} <prompt:${PROMPT_BYTES} bytes>"
   echo ""
@@ -225,6 +233,9 @@ run_cursor() {
   "${cmd[@]}" 2>&1 | tee "$agent_log"
   local exit_code=${PIPESTATUS[0]}
   set -e
+  if [ "${cursor_cleanup_prompt_file}" = "true" ]; then
+    rm -f "${cursor_prompt_file}"
+  fi
   record_codegraph_usage "$agent_log"
 
   if [ "${teammate_session_enabled}" = "true" ] && [ "${cursor_has_explicit_resume_id}" = "false" ]; then
