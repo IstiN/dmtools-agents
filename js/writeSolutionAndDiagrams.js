@@ -49,6 +49,28 @@ function stripManagedConfluenceSections(markdown) {
     return result.replace(/\n{3,}/g, '\n\n').trim();
 }
 
+// Instructions tell the model to write plain Mermaid syntax to outputs/diagram.md
+// with no fences (see instructions/common/diagram_output_contract.md), but models
+// occasionally add their own ```mermaid fence anyway. Strip any such wrapping fence
+// here before we add our own, so the diagram is never double-fenced (which breaks
+// rendering, e.g. showing literal "```mermaid" text inside the Confluence macro).
+function stripMermaidFence(diagram) {
+    if (!diagram) return diagram;
+    var trimmed = diagram.trim();
+    var fenceMatch = trimmed.match(/^```(?:mermaid)?\s*\n([\s\S]*?)\n?```\s*$/);
+    if (fenceMatch) {
+        return fenceMatch[1].trim();
+    }
+    // Defensive: strip any stray/unbalanced ``` fence lines the model may have
+    // left in (e.g. an opening fence with no matching closer, or an extra one
+    // in the middle of the content).
+    return trimmed
+        .split('\n')
+        .filter(function(line) { return line.trim() !== '```' && line.trim() !== '```mermaid'; })
+        .join('\n')
+        .trim();
+}
+
 function action(params) {
     try {
         var ticketKey = params.ticket.key;
@@ -170,7 +192,7 @@ function action(params) {
                 // re-added fresh below, otherwise reruns would duplicate them.
                 var pageContent = stripManagedConfluenceSections(solution);
                 if (diagram) {
-                    pageContent = pageContent + '\n\n## Diagram\n\n```mermaid\n' + diagram + '\n```\n';
+                    pageContent = pageContent + '\n\n## Diagram\n\n```mermaid\n' + stripMermaidFence(diagram) + '\n```\n';
                 }
 
                 // Post replies to inline comments BEFORE the page body is replaced —
@@ -184,8 +206,12 @@ function action(params) {
                 // Confluence-only target: the tracker field gets just a link (+ the
                 // Affected Repositories section appended by writeSolutionAndLabels), so
                 // without this the page would be missing the human-readable summary.
-                // buildMarkdownSection is loaded lazily to avoid a require cycle with
-                // writeSolutionAndLabels.js (which requires this module).
+                // buildConfluenceMarkdownSection is loaded lazily to avoid a require cycle
+                // with writeSolutionAndLabels.js (which requires this module). It is a
+                // Confluence-specific formatter — NOT the ADO buildMarkdownSection, whose
+                // ```json anchor block is meaningless on a Confluence page and whose extra
+                // fences previously combined badly with the diagram fence above, producing
+                // a single garbled code macro once converted to Confluence storage format.
                 if (outputCfg.target === 'confluence') {
                     try {
                         var reposJson = readOutput('affected_repos.json');
@@ -194,7 +220,7 @@ function action(params) {
                             if (Array.isArray(reposRaw) && reposRaw.length > 0) {
                                 var shared = require('./writeSolutionAndLabels.js');
                                 var sortedRepos = shared.topologicalSort(reposRaw);
-                                pageContent = pageContent + '\n\n' + shared.buildMarkdownSection(sortedRepos);
+                                pageContent = pageContent + '\n\n' + shared.buildConfluenceMarkdownSection(sortedRepos);
                                 console.log('Appended Affected Repositories section to Confluence page content (' + sortedRepos.length + ' repos)');
                             }
                         }
