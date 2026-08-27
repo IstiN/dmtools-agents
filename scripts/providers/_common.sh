@@ -21,6 +21,65 @@ agent_full_log_dir() {
   echo "${DMTOOLS_CLI_LOG_DIR:-.dmtools-logs/cli}/agent"
 }
 
+# When a provider resumes a previously cached CLI session (Claude Code
+# --resume, Copilot --resume, Cursor --resume, Kimi --session), the model
+# carries over its full prior conversation history/memory, including
+# assumptions about input/*.md files it already looked at in an earlier run.
+# Those files (comments.md, confluence_output_comments.md, request.md, ...)
+# are regenerated fresh on every job run and can contain materially new
+# content (e.g. new inline comments), but a resumed model can silently skip
+# re-reading them because it "remembers" checking them before — even when
+# the prompt explicitly instructs it to read them.
+#
+# The fix is deliberately NOT "paste the full prompt text again, with a
+# warning on top": pasting the same (or near-same) content into the
+# conversation body again is exactly the kind of thing a resumed model can
+# pattern-match as "I've already seen this" and skim past. Instead, on an
+# actual resume, the message body sent to the model is kept SHORT and simply
+# points at the real prompt file on disk, instructing the model to open it
+# with its own Read tool right now. Making the model perform a concrete,
+# observable tool call to fetch the current file content is a much stronger
+# guarantee of a fresh read than re-including text it may treat as familiar.
+#
+# Every provider that supports session resume should use this pair of
+# helpers, but ONLY when a resume is actually happening (an existing session
+# was found and is being continued) — never for a brand-new session, which
+# should keep sending the full prompt inline as before (it has no prior-turn
+# memory to distrust, and forcing an extra Read round-trip there would just
+# be wasted latency).
+
+# Ensures the full prompt text is available at a stable file path, reusing
+# PROMPT_ARG if DMTools already passed the prompt as a file (the normal CI
+# path), or materializing $PROMPT into a fresh temp file otherwise. Echoes
+# the absolute path on stdout. Callers that receive a freshly created temp
+# file (i.e. PROMPT_ARG was NOT already a file) are responsible for removing
+# it once the CLI invocation that reads it has finished.
+ensure_prompt_file() {
+  if [ -f "${PROMPT_ARG}" ]; then
+    echo "$(cd "$(dirname "${PROMPT_ARG}")" && pwd)/$(basename "${PROMPT_ARG}")"
+    return 0
+  fi
+  local f
+  f="$(mktemp)"
+  printf "%s" "${PROMPT}" > "${f}"
+  echo "${f}"
+}
+
+# The short message body sent to the model on an actual resume. $1: absolute
+# path to the file containing the full, current prompt for this run (see
+# ensure_prompt_file above).
+resumed_session_reread_pointer_notice() {
+  local prompt_file="$1"
+  cat <<EOF
+**IMPORTANT — resumed session:** this is a re-run of this job for the same ticket. Do NOT rely on memory from a previous turn — the \`input/\` folder has been freshly re-downloaded for this run and may contain new or changed content (ticket description, comments, tracker page content, inline comments) compared to what you saw before.
+
+Your full instructions for this run are in this file (they are NOT repeated here on purpose):
+  ${prompt_file}
+
+Use your file-read tool to open and read that file IN FULL right now — do not skip this step just because you resumed this session — then follow it exactly, including re-reading every file it references under \`input/\` (\`request.md\`, \`comments.md\`, \`confluence_output_comments.md\`, \`confluence_output_current.md\`, etc.) from scratch.
+EOF
+}
+
 # Allocates a fresh, unique path under agent_full_log_dir() for a provider to
 # tee its full stdout+stderr to. $1: provider/attempt label (e.g. "copilot",
 # "copilot-attempt2", "claude-code"). The caller is responsible for `tee`-ing

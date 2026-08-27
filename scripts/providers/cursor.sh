@@ -144,12 +144,15 @@ run_cursor() {
     cursor_pass_args=("${PASS_ARGS[@]}")
   fi
 
+  local cursor_is_actual_resume=false
+
   if [ "${cursor_session_enabled}" = "false" ]; then
     :
   elif [ "${cursor_has_explicit_resume_id}" = "true" ]; then
     echo "Resuming Cursor session: ${cursor_explicit_resume_id}"
     cursor_session_args=(--resume "${cursor_explicit_resume_id}")
     cursor_session_id="${cursor_explicit_resume_id}"
+    cursor_is_actual_resume=true
     _cursor_strip_resume_flags
   elif [ "${cursor_has_resume_arg}" = "true" ] && [ "${teammate_session_enabled}" = "true" ]; then
     if [ -z "${cursor_session_id}" ] && [ -f "outputs/cursor_session_id.txt" ]; then
@@ -162,11 +165,13 @@ run_cursor() {
     fi
     echo "Resuming Cursor session: ${cursor_session_id}"
     cursor_session_args=(--resume "${cursor_session_id}")
+    cursor_is_actual_resume=true
     _cursor_strip_resume_flags
   elif [ -n "${cursor_session_id}" ] && [ "${teammate_session_enabled}" = "true" ]; then
     if _cursor_session_exists "${cursor_session_id}"; then
       echo "Resuming Cursor session: ${cursor_session_id}"
       cursor_session_args=(--resume "${cursor_session_id}")
+      cursor_is_actual_resume=true
     else
       echo "Cursor session ${cursor_session_id} not found; creating chat (will normalize to deterministic id)"
       local created_id=""
@@ -181,6 +186,22 @@ run_cursor() {
         cursor_session_id="${created_id}"
       fi
     fi
+  fi
+
+  # On a genuine resume, don't paste the full prompt back into the message —
+  # a resumed model can pattern-match repeated text as "already seen" and
+  # skim past it. Instead point it at the actual prompt file on disk and
+  # require it to Read that file fresh. See ensure_prompt_file() and
+  # resumed_session_reread_pointer_notice() in _common.sh. Never applies to a
+  # chat that was just newly created above (no prior-turn memory to distrust).
+  local cursor_prompt_message="${PROMPT}"
+  local cursor_prompt_file="" cursor_cleanup_prompt_file=false
+  if [ "${cursor_is_actual_resume}" = "true" ]; then
+    cursor_prompt_file="$(ensure_prompt_file)"
+    if [ ! -f "${PROMPT_ARG:-}" ]; then
+      cursor_cleanup_prompt_file=true
+    fi
+    cursor_prompt_message="$(resumed_session_reread_pointer_notice "${cursor_prompt_file}")"
   fi
 
   local cursor_output_format="text"
@@ -201,7 +222,7 @@ run_cursor() {
   cmd=(cursor-agent --force --print --model "${cursor_model_value}" \
     ${cursor_session_args[@]+"${cursor_session_args[@]}"} \
     ${cursor_pass_args[@]+"${cursor_pass_args[@]}"} \
-    --output-format="${cursor_output_format}" "$PROMPT")
+    --output-format="${cursor_output_format}" "${cursor_prompt_message}")
 
   echo "Running: cursor-agent --force --print --model ${cursor_model_value} ${cursor_session_args[*]:-} ${cursor_pass_args[*]:-} --output-format=${cursor_output_format} <prompt:${PROMPT_BYTES} bytes>"
   echo ""
@@ -212,6 +233,9 @@ run_cursor() {
   "${cmd[@]}" 2>&1 | tee "$agent_log"
   local exit_code=${PIPESTATUS[0]}
   set -e
+  if [ "${cursor_cleanup_prompt_file}" = "true" ]; then
+    rm -f "${cursor_prompt_file}"
+  fi
   record_codegraph_usage "$agent_log"
 
   if [ "${teammate_session_enabled}" = "true" ] && [ "${cursor_has_explicit_resume_id}" = "false" ]; then

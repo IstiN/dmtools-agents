@@ -100,14 +100,39 @@ run_copilot() {
     return 1
   }
 
+  # copilot_session_mode can change between attempts (e.g. an unresolved
+  # --resume falls back to a brand-new --name session), so this is checked
+  # fresh on every call rather than cached once up front.
+  is_actual_copilot_resume() {
+    [ "${copilot_session_mode}" = "resume-name" ] || [ "${copilot_session_mode}" = "resume-id" ]
+  }
+
   run_copilot_once() {
     local log_file="$1"
     local model="$2"
     local prompt_stdin_file=""
     local cleanup_prompt_stdin_file=0
+    local cleanup_prompt_file=0
+    local prompt_file_for_resume=""
 
     set +e
-    if copilot_should_use_stdin_prompt; then
+    if is_actual_copilot_resume; then
+      # See resumed_session_reread_pointer_notice() in _common.sh: on an
+      # actual resume we deliberately do NOT paste the full prompt text into
+      # the message body (a resumed model can skim/ignore it as "already
+      # seen"). Instead we point it at the real prompt file and require an
+      # explicit Read tool call to fetch the current content.
+      prompt_file_for_resume="$(ensure_prompt_file)"
+      if [ ! -f "${PROMPT_ARG}" ]; then
+        cleanup_prompt_file=1
+      fi
+      prompt_stdin_file="$(mktemp)"
+      cleanup_prompt_stdin_file=1
+      resumed_session_reread_pointer_notice "${prompt_file_for_resume}" > "${prompt_stdin_file}"
+      echo "Running: ${copilot_cmd[*]} --allow-all --model ${model} ${copilot_session_args[*]:-} ${PASS_ARGS[*]:-} (resume: pointing model at prompt file ${prompt_file_for_resume} instead of inlining it)"
+      echo ""
+      "${copilot_cmd[@]}" --allow-all --model "${model}" ${copilot_session_args[@]+"${copilot_session_args[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} < "${prompt_stdin_file}" 2>&1 | tee "$log_file"
+    elif copilot_should_use_stdin_prompt; then
       if [ -f "${PROMPT_ARG}" ]; then
         prompt_stdin_file="${PROMPT_ARG}"
       else
@@ -126,6 +151,9 @@ run_copilot() {
     local status=${PIPESTATUS[0]}
     if [ "${cleanup_prompt_stdin_file}" -eq 1 ] && [ -n "${prompt_stdin_file}" ]; then
       rm -f "${prompt_stdin_file}"
+    fi
+    if [ "${cleanup_prompt_file}" -eq 1 ] && [ -n "${prompt_file_for_resume}" ]; then
+      rm -f "${prompt_file_for_resume}"
     fi
     return "$status"
   }
