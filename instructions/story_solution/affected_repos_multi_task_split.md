@@ -35,9 +35,27 @@ tracking benefit.
 ### Mandatory self-check before writing the final `reason`
 
 A single "big" `reason` string is a smell, not automatically a valid single
-task. Before finalizing a repository entry, count the distinct new/changed
-classes, modules, endpoints, or components you are about to list for that
-repository (ignore config/wiring one-liners).
+task. Before finalizing a repository entry, **write out (in your reasoning,
+not in the JSON) a numbered list of the distinct new/changed classes, modules,
+endpoints, or components you identified for that repository** (ignore
+config/wiring one-liners), then state the verdict explicitly:
+
+```
+Repo: gens-igt
+Distinct items:
+  1. New workflow type PACBIO_FP_CREATION + WorkflowType enum branch
+  2. New step ID DEFINE_PACBIO_FC_POOL + processor
+  3. PairingService with max-weight matching algorithm
+  4. Dynamic pipetting volume calculator
+  5. File exports (PacBio Pipette Template, Standard Quant)
+  6. DB migrations + ConfigTableName keys
+Self-check: 6 items → split required (criteria: schema/migrations vs business
+logic vs algorithm are independently reviewable PRs)
+```
+
+Only after this written self-check, apply the rules below. Do not skip the
+listing step — if you cannot list the items, you have not analyzed the
+repository's scope.
 
 - **0–2 distinct items**, or all items are in the same file/class: keep it as
   one task — write the plain `reason`.
