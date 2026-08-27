@@ -53,11 +53,13 @@ no code change.
 
 ---
 
-## Dependency chain — Mermaid illustration
+## Dependency chain — auto-rendered, do not draw it yourself
 
 The `depends_on` field expresses a *must complete before* ordering constraint.
 Use it whenever a change in one repo cannot be deployed or tested without a
-prior change in another. The post-action renders the chain as:
+prior change in another. Whenever three or more repositories form a chain,
+the post-action script **automatically renders this exact dependency chain
+as its own Mermaid diagram** from `outputs/affected_repos.json`, for example:
 
 ```mermaid
 flowchart LR
@@ -69,7 +71,13 @@ flowchart LR
     B -->|"prerequisite"| C
 ```
 
-Include this diagram in `outputs/diagram.md` whenever three or more repositories form a chain.
+**Do NOT add this diagram, or any other repository-dependency diagram, to
+`outputs/diagram.md` yourself** — it is generated automatically and adding
+your own copy produces a duplicate. `outputs/diagram.md` must contain only
+the single architecture/workflow diagram described in
+`common/diagram_output_contract.md` (which may include an `Affected
+Repositories` subgraph if your job's instructions ask for one — see rule 3
+there — but never a second full diagram).
 **Do NOT write an "Affected Repositories" section or table to `outputs/response.md`** — the post-action script appends that section automatically after saving the solution to Jira.
 
 ---

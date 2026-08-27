@@ -129,6 +129,44 @@ function buildMarkdownSection(sorted) {
 }
 
 // ---------------------------------------------------------------------------
+// Formatter — Confluence markdown (no JSON anchor; that's tracker-field-only)
+// ---------------------------------------------------------------------------
+
+function buildConfluenceMarkdownSection(sorted) {
+    var lines = [];
+    lines.push('## Affected Repositories');
+    lines.push('');
+    lines.push('| # | Repository | Reason | Depends On |');
+    lines.push('|---|---|---|---|');
+
+    sorted.forEach(function(r, idx) {
+        var deps = (Array.isArray(r.depends_on) && r.depends_on.length > 0)
+            ? r.depends_on.join(', ')
+            : '\u2014';
+        lines.push('| ' + (idx + 1) + ' | ' + r.name + ' | ' + (r.reason || '') + ' | ' + deps + ' |');
+    });
+
+    // Mermaid dependency diagram (only when there are edges) — a single, plain
+    // (unfenced) diagram, consistent with instructions/common/diagram_output_contract.md.
+    // The Confluence markdown→storage converter wraps it with the correct macro itself.
+    var edges = [];
+    sorted.forEach(function(r) {
+        if (Array.isArray(r.depends_on)) {
+            r.depends_on.forEach(function(dep) { edges.push('    ' + dep + ' --> ' + r.name); });
+        }
+    });
+    if (edges.length > 0) {
+        lines.push('');
+        lines.push('```mermaid');
+        lines.push('graph LR');
+        edges.forEach(function(e) { lines.push(e); });
+        lines.push('```');
+    }
+
+    return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
 // Tracker detection
 // ---------------------------------------------------------------------------
 
@@ -227,6 +265,7 @@ if (typeof module !== 'undefined' && module.exports) {
         action: action,
         topologicalSort: topologicalSort,
         buildJiraSection: buildJiraSection,
-        buildMarkdownSection: buildMarkdownSection
+        buildMarkdownSection: buildMarkdownSection,
+        buildConfluenceMarkdownSection: buildConfluenceMarkdownSection
     };
 }

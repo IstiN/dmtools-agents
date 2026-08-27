@@ -54,4 +54,4 @@ The Acceptance Criteria are defined in the BA ticket (<link>BA-TICKET|https://ji
 - Do NOT leave literal XML-style tags such as `<bold>` or `<code>` in the final `outputs/response.md`.
 - Do NOT use Markdown syntax in Jira output: no `**bold**`, no `- item` bullets, no `# headings`, no triple backticks.
 - Use the tracker-specific link format when referencing tickets or URLs.
-- Write the Mermaid diagram to `outputs/diagram.md` using plain Mermaid syntax — do not wrap it in markup tags.
+- Write the Mermaid diagram to `outputs/diagram.md` following `common/diagram_output_contract.md` exactly (plain Mermaid syntax, no fences, no markup tags).

@@ -26,11 +26,11 @@ suite('writeSolutionAndDiagrams — module export', function() {
 
 suite('writeSolutionAndDiagrams — diagram handling for Confluence targets', function() {
 
-    function loadModuleWithDiagramFlow(jiraUpdates, confluenceCalls, repliesFile, affectedRepos, responseMd) {
+    function loadModuleWithDiagramFlow(jiraUpdates, confluenceCalls, repliesFile, affectedRepos, responseMd, diagramMd) {
         var outputFilesMock = {
             readOutputFile: function(name) {
                 if (name === 'response.md') return responseMd || '## Solution\nBody text';
-                if (name === 'diagram.md') return 'graph TD\nA --> B';
+                if (name === 'diagram.md') return diagramMd || 'graph TD\nA --> B';
                 if (name === 'affected_repos.json') return affectedRepos || null;
                 return null;
             }
@@ -123,6 +123,22 @@ suite('writeSolutionAndDiagrams — diagram handling for Confluence targets', fu
         assert.ok(write.content.indexOf('## Solution') !== -1, 'solution body present');
     });
 
+    test('confluence target: model-supplied ```mermaid fence in diagram.md is stripped, not double-wrapped', function() {
+        var jiraUpdates = [];
+        var confluenceCalls = [];
+        var module = loadModuleWithDiagramFlow(jiraUpdates, confluenceCalls, 'outputs/confluence_replies.json',
+            null, null, '```mermaid\ngraph TD\nA --> B\n```');
+
+        var result = module.action(CONF_PARAMS);
+
+        assert.equal(result.success, true, 'action succeeds: ' + JSON.stringify(result));
+        var write = null;
+        confluenceCalls.forEach(function(c) { if (c.op === 'write') write = c; });
+        assert.ok(write, 'sync content was written');
+        assert.equal((write.content.match(/```mermaid/g) || []).length, 1, 'exactly one opening mermaid fence — not double-wrapped');
+        assert.ok(write.content.indexOf('```mermaid\ngraph TD\nA --> B\n```') !== -1, 'clean single-fenced diagram content');
+    });
+
     test('confluence target: human-readable Affected Repositories section appended to page content', function() {
         var jiraUpdates = [];
         var confluenceCalls = [];
@@ -138,7 +154,12 @@ suite('writeSolutionAndDiagrams — diagram handling for Confluence targets', fu
         assert.ok(write.content.indexOf('## Affected Repositories') !== -1, 'Affected Repositories heading present');
         assert.ok(write.content.indexOf('| # | Repository | Reason | Depends On |') !== -1, 'markdown table present');
         assert.ok(write.content.indexOf('| 1 | backend | API changes |') !== -1, 'topologically sorted rows present');
-        assert.ok(write.content.indexOf('```json') !== -1, 'json anchor present');
+        // The Confluence formatter is dedicated (buildConfluenceMarkdownSection) and
+        // intentionally omits the ```json anchor block — that anchor is only meaningful
+        // on the tracker field for createRepoTasks to parse, not on a Confluence page,
+        // and mixing it in here previously produced a garbled trailing code macro.
+        assert.ok(write.content.indexOf('```json') === -1, 'no json anchor on confluence page');
+        assert.ok(write.content.indexOf('```mermaid\ngraph LR') !== -1, 'dependency mermaid diagram present');
         assert.ok(write.content.indexOf('{code') === -1, 'no jira wiki table/code in confluence content');
     });
 

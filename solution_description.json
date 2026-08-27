@@ -28,6 +28,7 @@
       "./agents/instructions/common/preserve_references.md",
       "./agents/instructions/common/media_handling.md",
       "./agents/instructions/enhancement/solution_design_formatting_rules.md",
+      "./agents/instructions/common/diagram_output_contract.md",
       "./agents/instructions/enhancement/solution_design_few_shots.md",
       "./agents/prompts/bash_tools.md"
     ],
