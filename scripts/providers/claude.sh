@@ -48,13 +48,22 @@ run_claude_code() {
   claude_code_log="$(new_agent_log_file "claude-code")"
   # Session resume: if .claude-session-id exists from a previous run, continue that session.
   local claude_resume_args=()
+  local claude_is_resuming=false
   if [ -f ".claude-session-id" ]; then
     local prev_session_id
     prev_session_id="$(cat .claude-session-id | tr -d '[:space:]')"
     if [ -n "${prev_session_id}" ]; then
       claude_resume_args=(--resume "${prev_session_id}")
+      claude_is_resuming=true
       echo "♻️  Resuming Claude session: ${prev_session_id}"
     fi
+  fi
+
+  # Force a fresh re-read of input/*.md on resume; see resumed_session_reread_notice()
+  # in _common.sh for why. Only applies when we're actually continuing a prior session.
+  local claude_resume_notice=""
+  if [ "${claude_is_resuming}" = "true" ]; then
+    claude_resume_notice="$(resumed_session_reread_notice)"
   fi
 
   set +e
@@ -62,6 +71,12 @@ run_claude_code() {
     echo "Running: claude --allowedTools all --output-format stream-json --verbose --model ${claude_code_model} --max-turns ${claude_code_max_turns} -p (prompt: ${PROMPT_BYTES} bytes via stdin)"
     echo ""
     # Use stdin redirect to avoid "Argument list too long" for large prompts (E2BIG).
+    local claude_prompt_stdin_file
+    claude_prompt_stdin_file="$(mktemp)"
+    if [ -n "${claude_resume_notice}" ]; then
+      printf "%s" "${claude_resume_notice}" > "${claude_prompt_stdin_file}"
+    fi
+    cat "${PROMPT_ARG}" >> "${claude_prompt_stdin_file}"
     claude --allowedTools all \
       --output-format stream-json \
       --verbose \
@@ -69,8 +84,9 @@ run_claude_code() {
       --max-turns "${claude_code_max_turns}" \
       ${claude_resume_args[@]+"${claude_resume_args[@]}"} \
       ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} \
-      -p < "${PROMPT_ARG}" \
+      -p < "${claude_prompt_stdin_file}" \
       2>&1 | tee "${claude_code_log}"
+    rm -f "${claude_prompt_stdin_file}"
   else
     echo "Running: claude --allowedTools all --output-format stream-json --verbose --model ${claude_code_model} --max-turns ${claude_code_max_turns} -p (inline prompt: ${PROMPT_BYTES} bytes)"
     echo ""
@@ -81,7 +97,7 @@ run_claude_code() {
       --max-turns "${claude_code_max_turns}" \
       ${claude_resume_args[@]+"${claude_resume_args[@]}"} \
       ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} \
-      -p "${PROMPT}" \
+      -p "${claude_resume_notice}${PROMPT}" \
       2>&1 | tee "${claude_code_log}"
   fi
   claude_code_exit_code=${PIPESTATUS[0]}

@@ -100,27 +100,13 @@ run_copilot() {
     return 1
   }
 
-  # When Copilot resumes a previously cached session (--resume), the model
-  # carries over its full prior conversation history/memory, including
-  # assumptions about input/*.md files it already looked at in an earlier
-  # run. Those files (comments.md, confluence_output_comments.md,
-  # confluence_output_current.md, request.md, ...) are regenerated fresh on
-  # every job run and can contain materially new content (e.g. new inline
-  # comments), but a resumed model can silently skip re-reading them because
-  # it "remembers" checking them before. Force a fresh, full re-read by
-  # prepending a short notice ahead of the real prompt whenever we are
-  # actually resuming (not just starting a freshly named session).
-  #
   # copilot_session_mode can change between attempts (e.g. an unresolved
   # --resume falls back to a brand-new --name session), so this is
-  # evaluated fresh on every call rather than cached once up front.
+  # evaluated fresh on every call rather than cached once up front. See
+  # resumed_session_reread_notice() in _common.sh for why this is needed.
   current_resume_reread_notice() {
     if [ "${copilot_session_mode}" = "resume-name" ] || [ "${copilot_session_mode}" = "resume-id" ]; then
-      printf '%s' "**IMPORTANT — resumed session:** this is a re-run of this job for the same ticket. The \`input/\` folder has been freshly re-downloaded for this run and may contain new or changed content compared to what you saw in a prior turn (ticket description, comments, tracker page content, inline comments). Do NOT rely on memory from a previous turn. Re-read the full prompt below and every file it references (including \`request.md\`, \`comments.md\`, and any \`confluence_output_comments.md\` / \`confluence_output_current.md\`) from scratch before doing anything else.
-
----
-
-"
+      resumed_session_reread_notice
     fi
   }
 

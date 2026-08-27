@@ -152,6 +152,8 @@ PY
     _kimi_update_session_index "${home}" "${work_dir}" "session_${sid}" "${session_dir}"
   }
 
+  local kimi_is_actual_resume=false
+
   if [ "${kimi_has_resume_arg}" = "true" ] && [ "${kimi_has_session_arg}" = "false" ]; then
     if [ -z "${kimi_session_id}" ] && [ -f "outputs/kimi_session_id.txt" ]; then
       kimi_session_id="$(tr -d '[:space:]' < outputs/kimi_session_id.txt || true)"
@@ -167,6 +169,7 @@ PY
     _kimi_ensure_session_index "${kimi_session_id}"
     echo "Resuming Kimi session: ${kimi_session_id}"
     kimi_session_args=(--session "session_${kimi_session_id}")
+    kimi_is_actual_resume=true
     # Drop --continue/--resume flags; keep any other pass-through args.
     kimi_pass_args=()
     if [ "${#PASS_ARGS[@]}" -gt 0 ]; then
@@ -188,9 +191,17 @@ PY
       _kimi_ensure_session_index "${kimi_session_id}"
       echo "Resuming Kimi session: ${kimi_session_id}"
       kimi_session_args=(--session "session_${kimi_session_id}")
+      kimi_is_actual_resume=true
     else
       echo "Kimi session ${kimi_session_id} not found; starting new session (will normalize to deterministic id after run)"
     fi
+  fi
+
+  # Force a fresh re-read of input/*.md on resume; see resumed_session_reread_notice()
+  # in _common.sh for why. Only applies when we're actually continuing a prior session.
+  local kimi_resume_notice=""
+  if [ "${kimi_is_actual_resume}" = "true" ]; then
+    kimi_resume_notice="$(resumed_session_reread_notice)"
   fi
 
   # Always use -p (non-interactive prompt mode) when stdin is not a TTY (CI).
@@ -201,7 +212,7 @@ PY
   echo "Running: kimi ${kimi_model_args[*]:-} ${kimi_session_args[*]:-} ${kimi_pass_args[*]:-} -p <prompt:${PROMPT_BYTES} bytes>"
   echo ""
   set +e
-  kimi ${kimi_model_args[@]+"${kimi_model_args[@]}"} ${kimi_session_args[@]+"${kimi_session_args[@]}"} ${kimi_pass_args[@]+"${kimi_pass_args[@]}"} --output-format "stream-json" -p "${PROMPT}" 2>&1 | tee "$kimi_log"
+  kimi ${kimi_model_args[@]+"${kimi_model_args[@]}"} ${kimi_session_args[@]+"${kimi_session_args[@]}"} ${kimi_pass_args[@]+"${kimi_pass_args[@]}"} --output-format "stream-json" -p "${kimi_resume_notice}${PROMPT}" 2>&1 | tee "$kimi_log"
   local exit_code=${PIPESTATUS[0]}
   set -e
 

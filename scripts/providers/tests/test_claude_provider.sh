@@ -65,4 +65,58 @@ run_provider_case "usage-on-failure" 7 "${VALID_RESULT}" usage-and-manifest
 run_provider_case "manifest-failure" 11 "${VALID_RESULT}" usage-only
 run_provider_case "missing-usage" 9 '{"type":"result","modelUsage":{}}' none
 
+# A resumed session (.claude-session-id present from a prior run) must be told
+# to re-read input/*.md fresh instead of relying on memory from a prior turn;
+# a first-ever run with no saved session id must not carry that notice.
+run_resume_notice_case() {
+  local case_name="$1"
+  local seed_session_file="$2"
+  local expect_notice="$3"
+  local case_dir="${TEST_ROOT}/${case_name}"
+  local fake_bin="${case_dir}/bin"
+  mkdir -p "${fake_bin}" "${case_dir}/outputs"
+
+  cat > "${fake_bin}/claude" << 'BINEOF'
+#!/bin/bash
+: > "${CAPTURED_STDIN_FILE}"
+printf '%s\n' "$*" >> "${CAPTURED_STDIN_FILE}"
+if [ ! -t 0 ]; then cat >> "${CAPTURED_STDIN_FILE}"; fi
+echo '{"type":"result","session_id":"abc-123"}'
+exit 0
+BINEOF
+  chmod +x "${fake_bin}/claude"
+
+  (
+    cd "${case_dir}"
+    export PATH="${fake_bin}:${PATH}"
+    export CLAUDE_CODE_API_KEY="test-key"
+    export CLAUDE_CODE_BASE_URL="https://example.com"
+    export CAPTURED_STDIN_FILE="${case_dir}/captured.txt"
+    export DMTOOLS_CLI_LOG_DIR="${case_dir}/logs"
+    if [ "${seed_session_file}" = "yes" ]; then
+      echo "prev-session-id" > .claude-session-id
+    fi
+    PROMPT_ARG="nonexistent-file"
+    PROMPT="test prompt marker for resume notice test"
+    PROMPT_BYTES=11
+    PASS_ARGS=()
+
+    run_claude_code >/dev/null 2>&1 || true
+
+    if [ "${expect_notice}" = "yes" ]; then
+      grep -q "resumed session" "${CAPTURED_STDIN_FILE}" \
+        || { echo "[${case_name}] expected resume re-read notice, none found" >&2; exit 1; }
+    else
+      if grep -q "resumed session" "${CAPTURED_STDIN_FILE}"; then
+        echo "[${case_name}] resume re-read notice must not appear for a first-ever run" >&2
+        exit 1
+      fi
+    fi
+    grep -q "test prompt marker for resume notice test" "${CAPTURED_STDIN_FILE}" \
+      || { echo "[${case_name}] original prompt content missing" >&2; exit 1; }
+  )
+}
+run_resume_notice_case "resume-gets-notice" "yes" "yes"
+run_resume_notice_case "first-run-no-notice" "no" "no"
+
 echo "Claude provider integration tests passed"

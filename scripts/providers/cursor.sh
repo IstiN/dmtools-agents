@@ -144,12 +144,15 @@ run_cursor() {
     cursor_pass_args=("${PASS_ARGS[@]}")
   fi
 
+  local cursor_is_actual_resume=false
+
   if [ "${cursor_session_enabled}" = "false" ]; then
     :
   elif [ "${cursor_has_explicit_resume_id}" = "true" ]; then
     echo "Resuming Cursor session: ${cursor_explicit_resume_id}"
     cursor_session_args=(--resume "${cursor_explicit_resume_id}")
     cursor_session_id="${cursor_explicit_resume_id}"
+    cursor_is_actual_resume=true
     _cursor_strip_resume_flags
   elif [ "${cursor_has_resume_arg}" = "true" ] && [ "${teammate_session_enabled}" = "true" ]; then
     if [ -z "${cursor_session_id}" ] && [ -f "outputs/cursor_session_id.txt" ]; then
@@ -162,11 +165,13 @@ run_cursor() {
     fi
     echo "Resuming Cursor session: ${cursor_session_id}"
     cursor_session_args=(--resume "${cursor_session_id}")
+    cursor_is_actual_resume=true
     _cursor_strip_resume_flags
   elif [ -n "${cursor_session_id}" ] && [ "${teammate_session_enabled}" = "true" ]; then
     if _cursor_session_exists "${cursor_session_id}"; then
       echo "Resuming Cursor session: ${cursor_session_id}"
       cursor_session_args=(--resume "${cursor_session_id}")
+      cursor_is_actual_resume=true
     else
       echo "Cursor session ${cursor_session_id} not found; creating chat (will normalize to deterministic id)"
       local created_id=""
@@ -181,6 +186,14 @@ run_cursor() {
         cursor_session_id="${created_id}"
       fi
     fi
+  fi
+
+  # Force a fresh re-read of input/*.md on resume; see resumed_session_reread_notice()
+  # in _common.sh for why. Only applies when we're actually continuing a prior
+  # session, never for a chat that was just newly created above.
+  local cursor_resume_notice=""
+  if [ "${cursor_is_actual_resume}" = "true" ]; then
+    cursor_resume_notice="$(resumed_session_reread_notice)"
   fi
 
   local cursor_output_format="text"
@@ -201,7 +214,7 @@ run_cursor() {
   cmd=(cursor-agent --force --print --model "${cursor_model_value}" \
     ${cursor_session_args[@]+"${cursor_session_args[@]}"} \
     ${cursor_pass_args[@]+"${cursor_pass_args[@]}"} \
-    --output-format="${cursor_output_format}" "$PROMPT")
+    --output-format="${cursor_output_format}" "${cursor_resume_notice}${PROMPT}")
 
   echo "Running: cursor-agent --force --print --model ${cursor_model_value} ${cursor_session_args[*]:-} ${cursor_pass_args[*]:-} --output-format=${cursor_output_format} <prompt:${PROMPT_BYTES} bytes>"
   echo ""
