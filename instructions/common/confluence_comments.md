@@ -18,6 +18,8 @@ Rules:
 
 - **Always preserve** every `[[ic:REF]]...[[/ic]]` placeholder, wrapped around the same text it currently marks.
 - If you rephrase the anchored text, **move the placeholder** so it wraps the new equivalent fragment.
+- On headings, place the placeholder **inside** the heading, after the `#` markers — `## [[ic:REF]]Purpose[[/ic]]`, never `[[ic:REF]]## Purpose[[/ic]]` (wrapping the `#` prefix breaks heading rendering).
+- The same applies to list items and quotes: keep `-`, `1.`, `>` outside the placeholder.
 - Remove a placeholder only when you intentionally remove the commented content itself.
 - Never invent new `[[ic:...]]` refs — only the ones already present are valid.
 
