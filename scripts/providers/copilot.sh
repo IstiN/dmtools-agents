@@ -100,20 +100,49 @@ run_copilot() {
     return 1
   }
 
+  # When Copilot resumes a previously cached session (--resume), the model
+  # carries over its full prior conversation history/memory, including
+  # assumptions about input/*.md files it already looked at in an earlier
+  # run. Those files (comments.md, confluence_output_comments.md,
+  # confluence_output_current.md, request.md, ...) are regenerated fresh on
+  # every job run and can contain materially new content (e.g. new inline
+  # comments), but a resumed model can silently skip re-reading them because
+  # it "remembers" checking them before. Force a fresh, full re-read by
+  # prepending a short notice ahead of the real prompt whenever we are
+  # actually resuming (not just starting a freshly named session).
+  #
+  # copilot_session_mode can change between attempts (e.g. an unresolved
+  # --resume falls back to a brand-new --name session), so this is
+  # evaluated fresh on every call rather than cached once up front.
+  current_resume_reread_notice() {
+    if [ "${copilot_session_mode}" = "resume-name" ] || [ "${copilot_session_mode}" = "resume-id" ]; then
+      printf '%s' "**IMPORTANT — resumed session:** this is a re-run of this job for the same ticket. The \`input/\` folder has been freshly re-downloaded for this run and may contain new or changed content compared to what you saw in a prior turn (ticket description, comments, tracker page content, inline comments). Do NOT rely on memory from a previous turn. Re-read the full prompt below and every file it references (including \`request.md\`, \`comments.md\`, and any \`confluence_output_comments.md\` / \`confluence_output_current.md\`) from scratch before doing anything else.
+
+---
+
+"
+    fi
+  }
+
   run_copilot_once() {
     local log_file="$1"
     local model="$2"
     local prompt_stdin_file=""
     local cleanup_prompt_stdin_file=0
+    local resume_reread_notice
+    resume_reread_notice="$(current_resume_reread_notice)"
 
     set +e
     if copilot_should_use_stdin_prompt; then
+      prompt_stdin_file="$(mktemp)"
+      cleanup_prompt_stdin_file=1
+      if [ -n "${resume_reread_notice}" ]; then
+        printf "%s" "${resume_reread_notice}" > "${prompt_stdin_file}"
+      fi
       if [ -f "${PROMPT_ARG}" ]; then
-        prompt_stdin_file="${PROMPT_ARG}"
+        cat "${PROMPT_ARG}" >> "${prompt_stdin_file}"
       else
-        prompt_stdin_file="$(mktemp)"
-        printf "%s" "${PROMPT}" > "${prompt_stdin_file}"
-        cleanup_prompt_stdin_file=1
+        printf "%s" "${PROMPT}" >> "${prompt_stdin_file}"
       fi
       echo "Running: ${copilot_cmd[*]} --allow-all --model ${model} ${copilot_session_args[*]:-} ${PASS_ARGS[*]:-} (prompt: ${PROMPT_BYTES} bytes via stdin)"
       echo ""
@@ -121,7 +150,7 @@ run_copilot() {
     else
       echo "Running: ${copilot_cmd[*]} --allow-all --model ${model} ${copilot_session_args[*]:-} ${PASS_ARGS[*]:-} -p <inline prompt>"
       echo ""
-      "${copilot_cmd[@]}" --allow-all --model "${model}" ${copilot_session_args[@]+"${copilot_session_args[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${PROMPT}" 2>&1 | tee "$log_file"
+      "${copilot_cmd[@]}" --allow-all --model "${model}" ${copilot_session_args[@]+"${copilot_session_args[@]}"} ${PASS_ARGS[@]+"${PASS_ARGS[@]}"} -p "${resume_reread_notice}${PROMPT}" 2>&1 | tee "$log_file"
     fi
     local status=${PIPESTATUS[0]}
     if [ "${cleanup_prompt_stdin_file}" -eq 1 ] && [ -n "${prompt_stdin_file}" ]; then

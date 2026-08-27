@@ -162,4 +162,82 @@ run_provider_case "transcript-fallback" 0 "${FOOTER}" transcript-fallback none
 # Nothing to report: no store, no footer.
 run_provider_case "missing-usage" 9 "agent ran but printed no summary" none none
 
+# A resumed session must be told to re-read input/*.md fresh instead of relying
+# on memory from a prior turn; a freshly named (non-resumed) session — including
+# a resume attempt that falls back to starting brand new because no matching
+# session existed — must not carry that notice (there is no prior-turn memory
+# to distrust). Note: setup/copilot-session.sh always auto-derives
+# COPILOT_SESSION_NAME once COPILOT_SESSION_ENABLED=true (it overrides any
+# value the caller pre-exports), so the very first attempt is always
+# resume-name mode; whether it stays that way depends on whether the fake
+# copilot binary reports the session as found (real "●" tool-call activity)
+# or not-found ("No session, task, or name matched", triggering the existing
+# fallback to a brand-new --name session).
+run_resume_notice_case() {
+  local case_name="$1"
+  local simulate_not_found="$2"
+  local expect_notice="$3"
+  local case_dir="${TEST_ROOT}/${case_name}"
+  local fake_bin="${case_dir}/bin"
+  mkdir -p "${fake_bin}" "${case_dir}/outputs"
+
+  cat > "${fake_bin}/copilot" << BINEOF
+#!/bin/bash
+if [ "\${1:-}" = "--help" ]; then
+  echo "  --session-id"
+  exit 0
+fi
+: > "\${CAPTURED_STDIN_FILE}"
+printf '%s\n' "\$*" >> "\${CAPTURED_STDIN_FILE}"
+if [ ! -t 0 ]; then cat >> "\${CAPTURED_STDIN_FILE}"; fi
+if [ "${simulate_not_found}" = "yes" ] && [ ! -f "\${case_dir}/.retried" ]; then
+  touch "\${case_dir}/.retried"
+  echo "No session, task, or name matched"
+  exit 0
+fi
+echo "● Read some_file.java"
+printf 'Changes    +0 -0\nAI Credits 0 (1s)\nTokens     \u2191 0 (0 cached) \u2022 \u2193 0 (0 reasoning)\n'
+exit 0
+BINEOF
+  chmod +x "${fake_bin}/copilot"
+
+  (
+    cd "${case_dir}"
+    export HOME="${case_dir}"
+    export PATH="${fake_bin}:${PATH}"
+    export COPILOT_HOME="${case_dir}/copilot-home"
+    export COPILOT_GITHUB_TOKEN="test-token"
+    export COPILOT_SESSION_ENABLED="true"
+    export COPILOT_SESSION_ID="${SESSION_ID}"
+    export AI_AGENT_USAGE_NAME="story_development"
+    export DMTOOLS_CLI_LOG_DIR="${case_dir}/logs"
+    export CAPTURED_STDIN_FILE="${case_dir}/captured_stdin.txt"
+    unset COPILOT_USD_PER_CREDIT
+    PROMPT_ARG="test prompt"
+    PROMPT="test prompt marker for resume notice test"
+    PROMPT_BYTES=11
+    PASS_ARGS=()
+
+    run_copilot < /dev/null >/dev/null 2>&1
+
+    if [ "${expect_notice}" = "yes" ]; then
+      grep -q "resumed session" "${CAPTURED_STDIN_FILE}" \
+        || { echo "[${case_name}] expected resume re-read notice on stdin, none found" >&2; exit 1; }
+    else
+      if grep -q "resumed session" "${CAPTURED_STDIN_FILE}"; then
+        echo "[${case_name}] resume re-read notice must not appear for a non-resumed run" >&2
+        exit 1
+      fi
+    fi
+    grep -q "test prompt marker for resume notice test" "${CAPTURED_STDIN_FILE}" \
+      || { echo "[${case_name}] original prompt content missing from stdin" >&2; exit 1; }
+  )
+}
+
+# A session that Copilot actually resumes (real tool-call activity found) gets the notice.
+run_resume_notice_case "resume-name-gets-notice" "no" "yes"
+# A resume attempt for a session that doesn't exist yet falls back to a brand-new
+# named session (existing self-heal path) — that fresh session must NOT get the notice.
+run_resume_notice_case "fallback-fresh-name-no-notice" "yes" "no"
+
 echo "Copilot provider integration tests passed"
