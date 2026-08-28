@@ -18,6 +18,18 @@ var NOOP_CONFIG_JS = { GIT_CONFIG: {}, STATUSES: {}, resolveStatuses: function()
 var DEFAULT_PR_HELPER_STUB = {
     buildOriginFetchCommand: function(refSpec) {
         return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+    },
+    ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
+        if (!branchName) return false;
+        try {
+            runCommand(
+                'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName,
+                workingDir
+            );
+            return true;
+        } catch (e) {
+            return false;
+        }
     }
 };
 
@@ -218,7 +230,7 @@ suite('preCliDevelopmentSetup.checkoutBranch — generated .codegraph index guar
 
         var stashRmIdx = calls.indexOf(STASH_RM_CMD);
         var stashMvIdx = calls.indexOf(STASH_MV_CMD);
-        var checkoutIdx = calls.indexOf('git checkout master');
+        var checkoutIdx = calls.indexOf('git checkout -B master origin/master');
         var restoreMvIdx = calls.lastIndexOf(RESTORE_MV_CMD);
 
         assert.ok(stashRmIdx !== -1, 'unstages .codegraph before branch setup');
@@ -305,12 +317,12 @@ suite('preCliDevelopmentSetup.checkoutBranch — base branch fetch before checko
             if (calls[i] && calls[i].indexOf('fetch origin') !== -1 && calls[i].indexOf('master') !== -1) {
                 fetchIdx = i;
             }
-            if (calls[i] === 'git checkout master') {
+            if (calls[i] === 'git checkout -B master origin/master') {
                 checkoutIdx = i;
             }
         }
         assert.ok(fetchIdx !== -1, 'git fetch origin master must run before checkout');
-        assert.ok(checkoutIdx !== -1, 'git checkout master must run');
+        assert.ok(checkoutIdx !== -1, 'git checkout -B master origin/master must run');
         assert.ok(fetchIdx < checkoutIdx, 'fetch must come before checkout (fetchIdx=' + fetchIdx + ', checkoutIdx=' + checkoutIdx + ')');
     });
 
@@ -338,12 +350,12 @@ suite('preCliDevelopmentSetup.checkoutBranch — base branch fetch before checko
             if (calls[i] && calls[i].indexOf('fetch origin') !== -1 && calls[i].indexOf('release/rc_mobile_proj-1') !== -1) {
                 fetchIdx = i;
             }
-            if (calls[i] === 'git checkout release/rc_mobile_proj-1') {
+            if (calls[i] === 'git checkout -B release/rc_mobile_proj-1 origin/release/rc_mobile_proj-1') {
                 checkoutIdx = i;
             }
         }
         assert.ok(fetchIdx !== -1, 'git fetch origin release/rc_mobile_proj-1 must run before checkout');
-        assert.ok(checkoutIdx !== -1, 'git checkout release/rc_mobile_proj-1 must run');
+        assert.ok(checkoutIdx !== -1, 'git checkout -B release/rc_mobile_proj-1 origin/release/rc_mobile_proj-1 must run');
         assert.ok(fetchIdx < checkoutIdx, 'fetch must come before checkout');
     });
 

@@ -51,6 +51,15 @@ function loadPreCli(workingDir) {
             './common/pullRequest.js': {
                 buildOriginFetchCommand: function(refSpec) {
                     return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+                },
+                ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
+                    if (!branchName) return false;
+                    try {
+                        runCommand('git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName, workingDir);
+                        return true;
+                    } catch (e) {
+                        return false;
+                    }
                 }
             },
             './fetchParentContextToInput.js': { action: function() {} },
@@ -161,6 +170,15 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 './common/pullRequest.js': {
                     buildOriginFetchCommand: function(refSpec) {
                         return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+                    },
+                    ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
+                        if (!branchName) return false;
+                        try {
+                            runCommand('git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName, workingDir);
+                            return true;
+                        } catch (e) {
+                            return false;
+                        }
                     }
                 },
                 './fetchParentContextToInput.js': { action: function() {} },
@@ -225,6 +243,15 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 './common/pullRequest.js': {
                     buildOriginFetchCommand: function(refSpec) {
                         return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+                    },
+                    ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
+                        if (!branchName) return false;
+                        try {
+                            runCommand('git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName, workingDir);
+                            return true;
+                        } catch (e) {
+                            return false;
+                        }
                     }
                 },
                 './fetchParentContextToInput.js': { action: function() {} },
@@ -293,6 +320,15 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 './common/pullRequest.js': {
                     buildOriginFetchCommand: function(refSpec) {
                         return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+                    },
+                    ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
+                        if (!branchName) return false;
+                        try {
+                            runCommand('git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName, workingDir);
+                            return true;
+                        } catch (e) {
+                            return false;
+                        }
                     }
                 },
                 './fetchParentContextToInput.js': { action: function() {} },
@@ -360,6 +396,15 @@ function loadPreCliTestAutomation(workingDir) {
             './common/pullRequest.js': {
                 buildOriginFetchCommand: function(refSpec) {
                     return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+                },
+                ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
+                    if (!branchName) return false;
+                    try {
+                        runCommand('git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName, workingDir);
+                        return true;
+                    } catch (e) {
+                        return false;
+                    }
                 }
             },
             './fetchLinkedBugsToInput.js': { action: function() {} }
@@ -443,6 +488,15 @@ suite('preCliTestAutomationSetup > workingDir', function() {
                 './common/pullRequest.js': {
                     buildOriginFetchCommand: function(refSpec) {
                         return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+                    },
+                    ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
+                        if (!branchName) return false;
+                        try {
+                            runCommand('git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName, workingDir);
+                            return true;
+                        } catch (e) {
+                            return false;
+                        }
                     }
                 },
                 './fetchLinkedBugsToInput.js': { action: function() {} }
@@ -503,6 +557,15 @@ suite('preCliTestAutomationSetup > workingDir', function() {
                 './common/pullRequest.js': {
                     buildOriginFetchCommand: function(refSpec) {
                         return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+                    },
+                    ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
+                        if (!branchName) return false;
+                        try {
+                            runCommand('git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName, workingDir);
+                            return true;
+                        } catch (e) {
+                            return false;
+                        }
                     }
                 },
                 './fetchLinkedBugsToInput.js': { action: function() {} }

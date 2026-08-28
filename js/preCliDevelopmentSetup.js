@@ -26,6 +26,14 @@ function runCmd(args) {
     return cli_execute_command(args);
 }
 
+// Adapter matching the (command, workingDir) signature expected by
+// common/pullRequest.js helpers (e.g. ensureRemoteBranchRef) — workingDir is
+// captured via the module-level _workingDir closure by runCmd already, so the
+// second argument here is accepted but unused.
+function runCommandStr(command) {
+    return runCmd({ command: command });
+}
+
 /**
  * Clean command output from script wrapper artifacts
  * @param {string} output - Raw command output
@@ -218,7 +226,7 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
                 runCmd({ command: 'git checkout ' + branchName });
             } catch (fetchCheckoutErr) {
                 console.warn('fetch+checkout failed, resetting local branch from origin:', fetchCheckoutErr);
-                runCmd({ command: prHelper.buildOriginFetchCommand(branchName) });
+                prHelper.ensureRemoteBranchRef(runCommandStr, _workingDir, branchName);
                 runCmd({ command: 'git checkout -B ' + branchName + ' origin/' + branchName });
             }
             alignBranchWithBase(ticketKey, branchName, rebaseBase);
@@ -255,8 +263,14 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
                         runCmd({ command: 'git checkout -b ' + featureBranchName + ' origin/' + featureBranchName });
                     } else {
                         console.log('Two-branch mode: creating feature branch from', config.git.baseBranch + ':', featureBranchName);
-                        runCmd({ command: 'git checkout ' + config.git.baseBranch });
-                        runCmd({ command: 'git pull origin ' + config.git.baseBranch });
+                        // ensureRemoteBranchRef fetches with an explicit destination refspec
+                        // (+refs/heads/<b>:refs/remotes/origin/<b>) so origin/<baseBranch> exists
+                        // even in a shallow/single-branch CI clone that never checked this branch
+                        // out before (e.g. a fixVersion-derived "develop/3.9.0") — a plain
+                        // `git checkout <baseBranch>` would otherwise fail with "pathspec ...
+                        // did not match any file(s) known to git".
+                        prHelper.ensureRemoteBranchRef(runCommandStr, _workingDir, config.git.baseBranch);
+                        runCmd({ command: 'git checkout -B ' + config.git.baseBranch + ' origin/' + config.git.baseBranch });
                         runCmd({ command: 'git checkout -b ' + featureBranchName });
                         runCmd({ command: 'git push -u origin ' + featureBranchName });
                     }
@@ -269,12 +283,16 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
                 console.log('Two-branch mode: dev branch will be created from feature branch:', featureBranchName);
             }
             console.log('Creating new branch from', branchBase + ':', branchName);
-            // Explicitly fetch the base branch so origin/<branchBase> is available locally.
-            // git fetch origin --prune (done earlier) may not populate it in a shallow clone
-            // (e.g. cloned with --depth 1 --branch main, so only refs/heads/main exists locally).
-            runCmd({ command: prHelper.buildOriginFetchCommand(branchBase) });
-            runCmd({ command: 'git checkout ' + branchBase });
-            runCmd({ command: 'git pull origin ' + branchBase });
+            // ensureRemoteBranchRef fetches with an explicit destination refspec so
+            // origin/<branchBase> actually exists locally before checkout — a plain
+            // `git fetch origin <branchBase>` (no destination refspec) only updates
+            // FETCH_HEAD, so a subsequent `git checkout <branchBase>` fails with
+            // "pathspec ... did not match any file(s) known to git" whenever branchBase
+            // was never checked out in this clone before (e.g. a fresh/shallow CI clone,
+            // or a fixVersion-derived base branch like "develop/3.9.0" seen for the first
+            // time on this runner/cache).
+            prHelper.ensureRemoteBranchRef(runCommandStr, _workingDir, branchBase);
+            runCmd({ command: 'git checkout -B ' + branchBase + ' origin/' + branchBase });
             runCmd({ command: 'git checkout -b ' + branchName });
         }
     }
