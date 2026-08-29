@@ -17,7 +17,8 @@ flowchart TD
         R2["❌ NEVER write more production code than needed to pass the test"]
         R3["✅ Tests must be fast, isolated, and deterministic"]
         R4["✅ Aim for 100% unit test coverage on new and modified code"]
-        R5["✅ Run the full test suite before finishing — no regressions allowed"]
+        R5["✅ When behavior involves a loop/collection, add a case with 2+ items, not only a single-item happy path — a single-item test can pass while multi-item logic is still wrong"]
+        R6["✅ Run the full test suite before finishing — no regressions allowed"]
     end
 
     TDD --> RULES
