@@ -17,7 +17,7 @@ flowchart TD
     BLOCKING -->|No| IMPORTANT[Fix IMPORTANT issues]
     IMPORTANT --> SUGGESTIONS{Minor suggestions?}
     SUGGESTIONS -->|Yes| SKIP["Skip if time-consuming — note in response.md"]
-    SUGGESTIONS -->|No| TEST[Run tests and verify]
+    SUGGESTIONS -->|No| TEST["Follow TDD approach for every fix — see tdd_approach.md — then run tests and verify"]
     SKIP --> TEST
     TEST --> OUTPUT[Write outputs/response.md]
     OUTPUT --> REPLIES{Open review threads?}

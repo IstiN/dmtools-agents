@@ -35,6 +35,7 @@
       "./agents/instructions/common/agent_task_preamble.md",
       "./agents/instructions/common/coding_guidelines.md",
       "./agents/instructions/pr_rework/general_guidelines.md",
+      "./agents/instructions/pr_rework/tdd_approach.md",
       "./agents/instructions/pr_rework/formatting_rules.md",
       "./agents/instructions/pr_rework/output_rules.md",
       "./agents/instructions/common/dmtools_cli.md",

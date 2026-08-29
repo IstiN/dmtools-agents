@@ -16,7 +16,8 @@ flowchart TD
         R1["❌ NEVER fix code without a failing reproduction test first"]
         R2["❌ NEVER write more code than needed to fix the bug"]
         R3["✅ Returned bugs: your fix must differ from the previous attempt"]
-        R4["✅ Run the FULL test suite before finishing — no regressions allowed"]
+        R4["✅ If the bug involves a loop/collection, add a reproduction case with 2+ items, not only a single-item scenario — a single-item test can pass while multi-item logic is still broken"]
+        R5["✅ Run the FULL test suite before finishing — no regressions allowed"]
     end
 
     TDD --> RULES
