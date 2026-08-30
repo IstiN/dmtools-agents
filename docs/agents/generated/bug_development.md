@@ -76,7 +76,7 @@ _Develop Bug and Create PR Post-Action_
 
 ## Custom params
 
-- `removeLabel`: `"sm_bug_dev_triggered"`
+- `removeLabel`: `"sm_bug_development_triggered"`
 - `checkOpenPR` _(used by JS action)_
 - `branchCreateFnPath` _(used by JS action)_
 - `targetRepository.workingDir` _(used by JS action)_

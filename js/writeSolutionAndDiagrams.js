@@ -292,6 +292,17 @@ function action(params) {
             }
         }
 
+        // 10. Remove SM trigger label so a crash-recovered ticket can be re-triggered
+        var smTriggerLabel = customParams.removeLabel;
+        if (smTriggerLabel) {
+            try {
+                jira_remove_label({ key: ticketKey, label: smTriggerLabel });
+                console.log('Removed SM trigger label "' + smTriggerLabel + '" from ' + ticketKey);
+            } catch (e) {
+                console.warn('Failed to remove SM trigger label:', e);
+            }
+        }
+
         var autoStartDevelopment = customParams.autoStartDevelopment === true ||
             customParams.autoStartDevelopment === 'true';
         var developmentConfigFile = customParams.autoStartDevelopmentConfigFile;

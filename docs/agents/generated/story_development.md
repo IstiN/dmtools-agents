@@ -102,7 +102,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 
 ## Custom params
 
-- `removeLabel`: `"sm_story_dev_triggered"`
+- `removeLabel`: `"sm_story_development_triggered"`
 - `checkOpenPR` _(used by JS action)_
 - `branchCreateFnPath` _(used by JS action)_
 - `targetRepository.workingDir` _(used by JS action)_

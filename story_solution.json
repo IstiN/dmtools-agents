@@ -16,6 +16,9 @@
     "preJSAction": "agents/js/checkWipLabel.js",
     "preCliJSAction": "agents/js/preCliSolutionSetup.js",
     "postJSAction": "agents/js/writeSolutionAndDiagrams.js",
+    "customParams": {
+      "removeLabel": "sm_story_solution_triggered"
+    },
     "inputJql": "key = JD-82",
     "cliPrompts": [
       "Senior Software Architect",
