@@ -555,7 +555,7 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
         tickets = jira_search_by_jql({ jql: interpolatedJql, fields: ['key', 'labels'] }) || [];
     } catch (e) {
         console.error('  ❌ Jira query failed: ' + (e.message || e));
-        return { processedKeys: [], skippedKeys: [] };
+        throw e;
     }
 
     if (typeof rule.limit === 'number' && tickets.length > rule.limit) {
@@ -665,7 +665,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         tickets = jira_search_by_jql({ jql: interpolatedJql, fields: ['key', 'labels'] }) || [];
     } catch (e) {
         console.error('  ❌ Jira query failed: ' + (e.message || e));
-        return { processedKeys: [], skippedKeys: [] };
+        throw e;
     }
 
     // Computed once per rule (not per ticket) — see ruleTargetSelfManagesLabel() and its
