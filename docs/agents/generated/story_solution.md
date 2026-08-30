@@ -89,6 +89,7 @@ _Write Solution and Diagrams Post-Action_
   - `contentOutput`
   - `diagramField`
   - `outputType`
+  - `removeLabel`
   - `requireDiagram`
   - `solutionField`
 
@@ -100,6 +101,7 @@ _Write Solution and Diagrams Post-Action_
 
 ## Custom params
 
+- `removeLabel`: `"sm_story_solution_triggered"`
 - `checkOpenPR` _(used by JS action)_
 - `autoStartDevelopment` _(used by JS action)_
 - `autoStartDevelopmentConfigFile` _(used by JS action)_
