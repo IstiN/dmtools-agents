@@ -22,7 +22,7 @@
     "preCliJSAction": "agents/js/preCliDevelopmentSetup.js",
     "postJSAction": "agents/js/developTicketAndCreatePR.js",
     "customParams": {
-      "removeLabel": "sm_story_dev_triggered"
+      "removeLabel": "sm_story_development_triggered"
     },
     "inputJql": "key in (JD-82)",
     "cliPrompts": [
