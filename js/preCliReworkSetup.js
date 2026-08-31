@@ -54,6 +54,14 @@ function syncBaseBranchIfConfigured(baseBranch, customParams, config) {
     }
 }
 
+// Defensive cap on Jira/tracker comment length for any failSetup() caller. The
+// setupCommands module already truncates its own embedded command output at the
+// source (see truncateSetupError), but other failure messages here (e.g. branch
+// checkout errors) could still, in principle, be arbitrarily long — Jira rejects
+// comments over ~350000 characters, and previously that rejection was silently
+// swallowed, leaving the ticket with no visible failure reason at all.
+var truncateForComment = setupCommands.truncateSetupError;
+
 function failSetup(ticketKey, inputFolder, message) {
     try {
         file_write({
@@ -66,9 +74,11 @@ function failSetup(ticketKey, inputFolder, message) {
     try {
         jira_post_comment({
             key: ticketKey,
-            comment: 'h3. ❌ Rework Setup Failed\n\n' + message
+            comment: 'h3. ❌ Rework Setup Failed\n\n' + truncateForComment(message)
         });
-    } catch (e) {}
+    } catch (e) {
+        console.error('Failed to post rework setup failure comment to ' + ticketKey + ':', e && e.toString ? e.toString() : String(e));
+    }
     throw new Error(message);
 }
 
@@ -225,14 +235,16 @@ function action(params) {
             if (ticketKey) {
                 jira_post_comment({
                     key: ticketKey,
-                    comment: 'h3. ❌ Rework Setup Error\n\n{code}' + error.toString() + '{code}'
+                    comment: 'h3. ❌ Rework Setup Error\n\n{code}' + truncateForComment(error.toString()) + '{code}'
                 });
             }
-        } catch (e) {}
+        } catch (e) {
+            console.error('Failed to post rework setup error comment:', e && e.toString ? e.toString() : String(e));
+        }
         return { success: false, error: error.toString() };
     }
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, syncBaseBranchIfConfigured };
+    module.exports = { action, syncBaseBranchIfConfigured, truncateForComment };
 }

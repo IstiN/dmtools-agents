@@ -37,7 +37,10 @@ function loadPreCliReworkSetup(configLoaderStub, mocks) {
             './fetchQuestionsToInput.js': NOOP_MODULE,
             './fetchParentContextToInput.js': NOOP_MODULE,
             './restoreFromReleases.js': NOOP_MODULE,
-            './common/setupCommands.js': NOOP_MODULE
+            // Real module (not a no-op stub): preCliReworkSetup.js reads
+            // setupCommands.truncateSetupError at load time to build its own
+            // truncateForComment() helper, so the stub must actually export it.
+            './common/setupCommands.js': loadModule('js/common/setupCommands.js')
         }),
         mocks || {}
     );
@@ -155,6 +158,22 @@ suite('preCliReworkSetup.syncBaseBranchIfConfigured', function() {
 
         assert.equal(hookLoadCalls.length, 1, 'loadHookFn is still consulted');
         assert.equal(cliCalls.length, 0, 'nothing runs when loadHookFn returns null');
+    });
+
+});
+
+suite('preCliReworkSetup.truncateForComment', function() {
+
+    test('is wired to setupCommands.truncateSetupError so failSetup() reuses the same bound', function() {
+        var mod = loadPreCliReworkSetup(makeConfigLoaderStub(null, []), { __ghStub: makeGhStub() });
+
+        assert.equal(mod.truncateForComment('short'), 'short');
+
+        var huge = 'Y'.repeat(500000);
+        var truncated = mod.truncateForComment(huge);
+        assert.ok(truncated.length < 10000,
+            'huge setup-failure output must be bounded before being embedded in a Jira comment, got ' + truncated.length);
+        assert.ok(truncated.indexOf('truncated') !== -1, 'truncated message should say so');
     });
 
 });

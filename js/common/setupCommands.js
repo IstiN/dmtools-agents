@@ -32,6 +32,29 @@
  *    cli_execute_command, not the contents of a script it runs.
  */
 
+// Required setup command failures embed the raw tool output (e.g. full `mvn`/`gradle`
+// console output, which can run into megabytes) in the thrown Error's message. Callers
+// (preCliDevelopmentSetup.js, preCliReworkSetup.js) post that message straight into a
+// Jira/tracker comment; trackers reject oversized comments (e.g. Jira's ~350000 char
+// limit) and the resulting post failure can end up silently swallowed, leaving the
+// ticket with zero visibility into why setup failed. Cap the embedded output here, at
+// the source, so every consumer of this error automatically gets a bounded message.
+var MAX_SETUP_ERROR_CHARS = 8000;
+
+function truncateSetupError(text) {
+    if (typeof text !== 'string' || text.length <= MAX_SETUP_ERROR_CHARS) {
+        return text;
+    }
+    // Keep the head (command/context) and tail (usually the actual failure/exception)
+    // since Maven/Gradle failures are typically reported at the very end of the output.
+    var headLen = Math.floor(MAX_SETUP_ERROR_CHARS * 0.4);
+    var tailLen = MAX_SETUP_ERROR_CHARS - headLen;
+    var omitted = text.length - headLen - tailLen;
+    return text.slice(0, headLen) +
+        '\n... [truncated ' + omitted + ' char(s) — see CLI logs for full output] ...\n' +
+        text.slice(text.length - tailLen);
+}
+
 function runSetupCommands(customParams, defaultWorkingDir) {
     var commands = (customParams && customParams.setupCommands) || [];
     if (!Array.isArray(commands) || commands.length === 0) {
@@ -60,7 +83,7 @@ function runSetupCommands(customParams, defaultWorkingDir) {
             console.warn('Setup command "' + name + '" failed:', errorText);
             results.push({ name: name, success: false, error: errorText });
             if (allowFailure === false) {
-                throw new Error('Required setup command failed: ' + name + ' — ' + errorText);
+                throw new Error('Required setup command failed: ' + name + ' — ' + truncateSetupError(errorText));
             }
         }
     }
@@ -68,5 +91,6 @@ function runSetupCommands(customParams, defaultWorkingDir) {
 }
 
 module.exports = {
-    runSetupCommands: runSetupCommands
+    runSetupCommands: runSetupCommands,
+    truncateSetupError: truncateSetupError
 };

@@ -117,4 +117,40 @@ suite('setupCommands helper', function() {
         assert.equal(result.ran, 0);
         assert.deepEqual(loaded.commands, []);
     });
+
+    test('required setup command failure with huge output is truncated in the thrown message', function() {
+        // Regression test: a required setup command (e.g. `mvn clean verify`) can fail
+        // with megabytes of console output embedded in the error message. That message
+        // is later posted verbatim as a Jira/tracker comment by callers of
+        // runSetupCommands (preCliDevelopmentSetup.js, preCliReworkSetup.js); trackers
+        // reject oversized comments (e.g. Jira's ~350000 char limit), and previously
+        // that posting failure was silently swallowed — leaving the ticket with zero
+        // visibility into why setup failed. The thrown error must stay bounded.
+        var hugeOutput = 'X'.repeat(500000);
+        var loaded = loadSetupCommands({
+            cli_execute_command: function() { throw new Error(hugeOutput); }
+        });
+
+        var threw = false;
+        try {
+            loaded.mod.runSetupCommands({
+                setupCommands: [
+                    { name: 'build-test-database-image', command: 'mvn clean verify', allowFailure: false }
+                ]
+            }, './dependencies/repo');
+        } catch (e) {
+            threw = true;
+            assert.ok(e.message.length < 10000, 'thrown message must be bounded, got ' + e.message.length + ' chars');
+            assert.ok(e.message.indexOf('build-test-database-image') !== -1, 'error should mention the failing step name');
+            assert.ok(e.message.indexOf('truncated') !== -1, 'truncated message should say so');
+        }
+
+        assert.equal(threw, true, 'should throw when a required setup command fails');
+    });
+
+    test('short error messages pass through truncateSetupError unchanged', function() {
+        var loaded = loadSetupCommands();
+        assert.equal(loaded.mod.truncateSetupError('short message'), 'short message');
+        assert.equal(loaded.mod.truncateSetupError(undefined), undefined);
+    });
 });
