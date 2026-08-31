@@ -303,13 +303,18 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
     }
 }
 
+// Defensive cap on Jira/tracker comment length — see setupCommands.truncateSetupError
+// for rationale (Jira rejects comments over ~350000 chars; unbounded error messages
+// here could silently fail to post, leaving the ticket with no failure visibility).
+var truncateForComment = setupCommands.truncateSetupError;
+
 function postSetupErrorToJira(ticketKey, stage, errorMessage) {
     try {
         jira_post_comment({
             key: ticketKey,
             comment: 'h3. *Development Setup Error*\n\n' +
                 '*Stage:* ' + stage + '\n' +
-                '*Error:* {code}' + errorMessage + '{code}\n\n' +
+                '*Error:* {code}' + truncateForComment(errorMessage) + '{code}\n\n' +
                 'Development was stopped before code generation because the target git branch could not be prepared.'
         });
     } catch (commentError) {
