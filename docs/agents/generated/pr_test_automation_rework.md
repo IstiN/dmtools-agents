@@ -11,7 +11,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
-_Human doc: [`agents/docs/agents/pr_test_automation_rework.md`](agents/docs/agents/pr_test_automation_rework.md)_
+_Human doc: [`agents/docs\agents\pr_test_automation_rework.md`](agents/docs\agents\pr_test_automation_rework.md)_
 
 ## Attributes
 
@@ -25,7 +25,7 @@ _Human doc: [`agents/docs/agents/pr_test_automation_rework.md`](agents/docs/agen
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots/pr_test_automation_rework.md`](agents/snapshots/pr_test_automation_rework.md)
+Full prompt / instruction set: [`agents/snapshots\pr_test_automation_rework.md`](agents/snapshots\pr_test_automation_rework.md)
 
 ## Actions
 
@@ -68,7 +68,7 @@ _Post Test Rework Results Action (postJSAction for pr_test_automation_rework)_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots/pr_test_automation_rework.md`
+- Prompt snapshot: `agents/snapshots\pr_test_automation_rework.md`
 
 ## Custom params
 

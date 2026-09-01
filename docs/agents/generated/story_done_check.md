@@ -9,7 +9,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `customStatuses` — status name overrides for this workflow (maps logical statuses to project-specific names).
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
-_Human doc: [`agents/docs/agents/story_done_check.md`](agents/docs/agents/story_done_check.md)_
+_Human doc: [`agents/docs\agents\story_done_check.md`](agents/docs\agents\story_done_check.md)_
 
 ## Attributes
 
@@ -23,7 +23,7 @@ _Human doc: [`agents/docs/agents/story_done_check.md`](agents/docs/agents/story_
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots/story_done_check.md`](agents/snapshots/story_done_check.md)
+Full prompt / instruction set: [`agents/snapshots\story_done_check.md`](agents/snapshots\story_done_check.md)
 
 ## Actions
 
@@ -45,7 +45,7 @@ _Check Story Tests Passed — postJSAction for story_done_check agent._
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots/story_done_check.md`
+- Prompt snapshot: `agents/snapshots\story_done_check.md`
 
 ## Custom params
 

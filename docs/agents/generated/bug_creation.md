@@ -10,7 +10,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `openBugsJql` — JQL selecting the open bugs to include.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
-_Human doc: [`agents/docs/agents/bug_creation.md`](agents/docs/agents/bug_creation.md)_
+_Human doc: [`agents/docs\agents\bug_creation.md`](agents/docs\agents\bug_creation.md)_
 
 ## Attributes
 
@@ -24,7 +24,7 @@ _Human doc: [`agents/docs/agents/bug_creation.md`](agents/docs/agents/bug_creati
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots/bug_creation.md`](agents/snapshots/bug_creation.md)
+Full prompt / instruction set: [`agents/snapshots\bug_creation.md`](agents/snapshots\bug_creation.md)
 
 ## Actions
 
@@ -70,7 +70,7 @@ _Post Bug Creation Action (postJSAction for bug_creation agent)_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots/bug_creation.md`
+- Prompt snapshot: `agents/snapshots\bug_creation.md`
 
 ## Custom params
 

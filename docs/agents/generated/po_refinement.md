@@ -12,7 +12,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `jql` — JQL override for selecting context tickets.
 - `parentContextFetch` — enables and configures fetching the parent ticket context ([BA]/[SA]/[VD] sibling tickets).
 
-_Human doc: [`agents/docs/agents/po_refinement.md`](agents/docs/agents/po_refinement.md)_
+_Human doc: [`agents/docs\agents\po_refinement.md`](agents/docs\agents\po_refinement.md)_
 
 ## Attributes
 
@@ -26,7 +26,7 @@ _Human doc: [`agents/docs/agents/po_refinement.md`](agents/docs/agents/po_refine
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots/po_refinement.md`](agents/snapshots/po_refinement.md)
+Full prompt / instruction set: [`agents/snapshots\po_refinement.md`](agents/snapshots\po_refinement.md)
 
 ## Actions
 
@@ -55,7 +55,7 @@ _Close Question Ticket Post-Action_
 ## LLM step
 
 - outputType: `field`
-- Prompt snapshot: `agents/snapshots/po_refinement.md`
+- Prompt snapshot: `agents/snapshots\po_refinement.md`
 
 ## Custom params
 

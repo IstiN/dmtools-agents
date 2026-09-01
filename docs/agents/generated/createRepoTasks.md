@@ -10,7 +10,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `blocksRelationship` — link type name that marks a blocking relationship between tickets.
 - `labels` — labels applied to created tickets.
 
-_Human doc: [`agents/docs/agents/createRepoTasks.md`](agents/docs/agents/createRepoTasks.md)_
+_Human doc: [`agents/docs\agents\createRepoTasks.md`](agents/docs\agents\createRepoTasks.md)_
 
 ## Attributes
 
@@ -24,7 +24,7 @@ _Human doc: [`agents/docs/agents/createRepoTasks.md`](agents/docs/agents/createR
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots/createRepoTasks.md`](agents/snapshots/createRepoTasks.md)
+Full prompt / instruction set: [`agents/snapshots\createRepoTasks.md`](agents/snapshots\createRepoTasks.md)
 
 ## Actions
 
@@ -48,7 +48,7 @@ _Create Repository Development Sub-tasks_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots/createRepoTasks.md`
+- Prompt snapshot: `agents/snapshots\createRepoTasks.md`
 
 ## Custom params
 

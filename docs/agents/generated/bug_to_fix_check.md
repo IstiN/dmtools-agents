@@ -8,7 +8,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
-_Human doc: [`agents/docs/agents/bug_to_fix_check.md`](agents/docs/agents/bug_to_fix_check.md)_
+_Human doc: [`agents/docs\agents\bug_to_fix_check.md`](agents/docs\agents\bug_to_fix_check.md)_
 
 ## Attributes
 
@@ -22,7 +22,7 @@ _Human doc: [`agents/docs/agents/bug_to_fix_check.md`](agents/docs/agents/bug_to
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots/bug_to_fix_check.md`](agents/snapshots/bug_to_fix_check.md)
+Full prompt / instruction set: [`agents/snapshots\bug_to_fix_check.md`](agents/snapshots\bug_to_fix_check.md)
 
 ## Actions
 
@@ -45,7 +45,7 @@ _Check Bug To Fix Ready — postJSAction for bug_to_fix_check agent._
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots/bug_to_fix_check.md`
+- Prompt snapshot: `agents/snapshots\bug_to_fix_check.md`
 
 ## Custom params
 

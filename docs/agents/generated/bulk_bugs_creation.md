@@ -14,7 +14,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 - `smTriggerLabel` — label that marks the ticket as triggered by the SM rule.
 
-_Human doc: [`agents/docs/agents/bulk_bugs_creation.md`](agents/docs/agents/bulk_bugs_creation.md)_
+_Human doc: [`agents/docs\agents\bulk_bugs_creation.md`](agents/docs\agents\bulk_bugs_creation.md)_
 
 ## Attributes
 
@@ -28,7 +28,7 @@ _Human doc: [`agents/docs/agents/bulk_bugs_creation.md`](agents/docs/agents/bulk
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots/bulk_bugs_creation.md`](agents/snapshots/bulk_bugs_creation.md)
+Full prompt / instruction set: [`agents/snapshots\bulk_bugs_creation.md`](agents/snapshots\bulk_bugs_creation.md)
 
 ## Actions
 
@@ -69,7 +69,7 @@ _Post Bulk Bugs Creation Action (postJSAction for bulk_bugs_creation agent)_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots/bulk_bugs_creation.md`
+- Prompt snapshot: `agents/snapshots\bulk_bugs_creation.md`
 
 ## Custom params
 

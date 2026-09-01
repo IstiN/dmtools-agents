@@ -29,7 +29,7 @@ happens in `buildEncodedConfig.js` for encoded-config runs and in the dmtools CL
 markup is kept because the tracker field still receives the full content.
 - `contentOutput.assignForReview` — assign the ticket back to the initiator and move it to the review status after writing. Default: `true`.
 
-_Human doc: [`agents/docs/agents/story_description.md`](agents/docs/agents/story_description.md)_
+_Human doc: [`agents/docs\agents\story_description.md`](agents/docs\agents\story_description.md)_
 
 ## Attributes
 
@@ -43,7 +43,7 @@ _Human doc: [`agents/docs/agents/story_description.md`](agents/docs/agents/story
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots/story_description.md`](agents/snapshots/story_description.md)
+Full prompt / instruction set: [`agents/snapshots\story_description.md`](agents/snapshots\story_description.md)
 
 ## Actions
 
@@ -70,7 +70,7 @@ _Write Content Output — unified post-action for content-generating agents_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots/story_description.md`
+- Prompt snapshot: `agents/snapshots\story_description.md`
 
 ## Custom params
 

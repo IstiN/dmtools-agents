@@ -29,7 +29,7 @@ happens in `buildEncodedConfig.js` for encoded-config runs and in the dmtools CL
 (`CliCommandBuilder`) for direct `dmtools run` invocations. With `target: both` the tracker
 markup is kept because the tracker field still receives the full content.
 
-_Human doc: [`agents/docs/agents/story_acceptance_criterias.md`](agents/docs/agents/story_acceptance_criterias.md)_
+_Human doc: [`agents/docs\agents\story_acceptance_criterias.md`](agents/docs\agents\story_acceptance_criterias.md)_
 
 ## Attributes
 
@@ -43,10 +43,16 @@ _Human doc: [`agents/docs/agents/story_acceptance_criterias.md`](agents/docs/age
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots/story_acceptance_criterias.md`](agents/snapshots/story_acceptance_criterias.md)
+Full prompt / instruction set: [`agents/snapshots\story_acceptance_criterias.md`](agents/snapshots\story_acceptance_criterias.md)
 
 ## Actions
 
+### preJSAction: `requireTicket.js`
+
+_Require Ticket Pre-Action_
+
+- Source: `agents/js/requireTicket.js`
+- No detected file I/O or side effects.
 
 ### preCliJSAction: `preCliContentOutputSetup.js`
 
@@ -70,7 +76,7 @@ _Write Content Output — unified post-action for content-generating agents_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots/story_acceptance_criterias.md`
+- Prompt snapshot: `agents/snapshots\story_acceptance_criterias.md`
 
 ## Custom params
 

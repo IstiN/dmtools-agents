@@ -12,7 +12,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 - `testCaseMerge` — merge behavior overrides specific to test-case automation PRs.
 
-_Human doc: [`agents/docs/agents/retry_merge_test.md`](agents/docs/agents/retry_merge_test.md)_
+_Human doc: [`agents/docs\agents\retry_merge_test.md`](agents/docs\agents\retry_merge_test.md)_
 
 ## Attributes
 
@@ -26,7 +26,7 @@ _Human doc: [`agents/docs/agents/retry_merge_test.md`](agents/docs/agents/retry_
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots/retry_merge_test.md`](agents/snapshots/retry_merge_test.md)
+Full prompt / instruction set: [`agents/snapshots\retry_merge_test.md`](agents/snapshots\retry_merge_test.md)
 
 ## Actions
 
@@ -59,7 +59,7 @@ _retryMergePR.js_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots/retry_merge_test.md`
+- Prompt snapshot: `agents/snapshots\retry_merge_test.md`
 
 ## Custom params
 

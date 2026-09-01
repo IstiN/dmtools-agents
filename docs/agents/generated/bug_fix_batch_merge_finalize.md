@@ -8,7 +8,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
-_Human doc: [`agents/docs/agents/bug_fix_batch_merge_finalize.md`](agents/docs/agents/bug_fix_batch_merge_finalize.md)_
+_Human doc: [`agents/docs\agents\bug_fix_batch_merge_finalize.md`](agents/docs\agents\bug_fix_batch_merge_finalize.md)_
 
 ## Attributes
 
@@ -22,7 +22,7 @@ _Human doc: [`agents/docs/agents/bug_fix_batch_merge_finalize.md`](agents/docs/a
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots/bug_fix_batch_merge_finalize.md`](agents/snapshots/bug_fix_batch_merge_finalize.md)
+Full prompt / instruction set: [`agents/snapshots\bug_fix_batch_merge_finalize.md`](agents/snapshots\bug_fix_batch_merge_finalize.md)
 
 ## Actions
 
@@ -41,7 +41,7 @@ _Finalize Bug-fix Batch Merge_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots/bug_fix_batch_merge_finalize.md`
+- Prompt snapshot: `agents/snapshots\bug_fix_batch_merge_finalize.md`
 
 ## Custom params
 

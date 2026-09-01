@@ -8,7 +8,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
-_Human doc: [`agents/docs/agents/task_done_check.md`](agents/docs/agents/task_done_check.md)_
+_Human doc: [`agents/docs\agents\task_done_check.md`](agents/docs\agents\task_done_check.md)_
 
 ## Attributes
 
@@ -22,7 +22,7 @@ _Human doc: [`agents/docs/agents/task_done_check.md`](agents/docs/agents/task_do
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots/task_done_check.md`](agents/snapshots/task_done_check.md)
+Full prompt / instruction set: [`agents/snapshots\task_done_check.md`](agents/snapshots\task_done_check.md)
 
 ## Actions
 
@@ -43,7 +43,7 @@ _Check Task Stories Done — postJSAction for task_done_check agent._
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots/task_done_check.md`
+- Prompt snapshot: `agents/snapshots\task_done_check.md`
 
 ## Custom params
 

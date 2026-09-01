@@ -39,7 +39,7 @@ markup is kept because the tracker field still receives the full content.
 > Confluence page becomes the human-facing mirror. `target: 'confluence'`
 > alone would leave only a link in the field and break those agents.
 
-_Human doc: [`agents/docs/agents/story_solution.md`](agents/docs/agents/story_solution.md)_
+_Human doc: [`agents/docs\agents\story_solution.md`](agents/docs\agents\story_solution.md)_
 
 ## Attributes
 
@@ -53,7 +53,7 @@ _Human doc: [`agents/docs/agents/story_solution.md`](agents/docs/agents/story_so
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots/story_solution.md`](agents/snapshots/story_solution.md)
+Full prompt / instruction set: [`agents/snapshots\story_solution.md`](agents/snapshots\story_solution.md)
 
 ## Actions
 
@@ -97,7 +97,7 @@ _Write Solution and Diagrams Post-Action_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots/story_solution.md`
+- Prompt snapshot: `agents/snapshots\story_solution.md`
 
 ## Custom params
 

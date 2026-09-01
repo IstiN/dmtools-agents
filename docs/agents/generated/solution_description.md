@@ -13,7 +13,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `jql` — JQL override for selecting context tickets.
 - `parentContextFetch` — enables fetching the parent ticket context so the solution description can reference BA/SA/VD decisions.
 
-_Human doc: [`agents/docs/agents/solution_description.md`](agents/docs/agents/solution_description.md)_
+_Human doc: [`agents/docs\agents\solution_description.md`](agents/docs\agents\solution_description.md)_
 
 ## Attributes
 
@@ -27,7 +27,7 @@ _Human doc: [`agents/docs/agents/solution_description.md`](agents/docs/agents/so
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots/solution_description.md`](agents/snapshots/solution_description.md)
+Full prompt / instruction set: [`agents/snapshots\solution_description.md`](agents/snapshots\solution_description.md)
 
 ## Actions
 
@@ -65,7 +65,7 @@ _Enhance SD CORE Description and Assess Action_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots/solution_description.md`
+- Prompt snapshot: `agents/snapshots\solution_description.md`
 
 ## Custom params
 

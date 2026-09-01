@@ -17,7 +17,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `scmProvider` — SCM provider override (`github`, `gitlab`, …) for this run.
 - `targetRepository` — repository override block (`owner`, `repo`, `baseBranch`, `workingDir`) — run the work against this repository instead of the project default.
 
-_Human doc: [`agents/docs/agents/story_development.md`](agents/docs/agents/story_development.md)_
+_Human doc: [`agents/docs\agents\story_development.md`](agents/docs\agents\story_development.md)_
 
 ## Attributes
 
@@ -31,7 +31,7 @@ _Human doc: [`agents/docs/agents/story_development.md`](agents/docs/agents/story
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots/story_development.md`](agents/snapshots/story_development.md)
+Full prompt / instruction set: [`agents/snapshots\story_development.md`](agents/snapshots\story_development.md)
 
 ## Actions
 
@@ -98,7 +98,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots/story_development.md`
+- Prompt snapshot: `agents/snapshots\story_development.md`
 
 ## Custom params
 

@@ -17,7 +17,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `scmProvider` — SCM provider override (`github`, `gitlab`, …) for this run.
 - `targetRepository` — repository override block (`owner`, `repo`, `baseBranch`, `workingDir`) — run the work against this repository instead of the project default.
 
-_Human doc: [`agents/docs/agents/pr_rework.md`](agents/docs/agents/pr_rework.md)_
+_Human doc: [`agents/docs\agents\pr_rework.md`](agents/docs\agents\pr_rework.md)_
 
 ## Attributes
 
@@ -31,7 +31,7 @@ _Human doc: [`agents/docs/agents/pr_rework.md`](agents/docs/agents/pr_rework.md)
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots/pr_rework.md`](agents/snapshots/pr_rework.md)
+Full prompt / instruction set: [`agents/snapshots\pr_rework.md`](agents/snapshots\pr_rework.md)
 
 ## Actions
 
@@ -91,7 +91,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots/pr_rework.md`
+- Prompt snapshot: `agents/snapshots\pr_rework.md`
 
 ## Custom params
 
