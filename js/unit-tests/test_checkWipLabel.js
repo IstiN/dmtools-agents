@@ -116,3 +116,34 @@ suite('checkWipLabel', function() {
     });
 
 });
+
+suite('checkWipLabel: ticket not found guard', function() {
+
+    test('throws when params.ticket is null (ticket not found by inputJql)', function() {
+        var wipLabel = loadCheckWipLabel({});
+        assert.throws(function() {
+            wipLabel.action({ ticket: null, metadata: { contextId: 'story_development' }, jobParams: {} });
+        }, /Ticket not found/);
+    });
+
+    test('throws when params.ticket is undefined', function() {
+        var wipLabel = loadCheckWipLabel({});
+        assert.throws(function() {
+            wipLabel.action({ metadata: { contextId: 'story_development' }, jobParams: {} });
+        }, /Ticket not found/);
+    });
+
+    test('throws when params.ticket has no key', function() {
+        var wipLabel = loadCheckWipLabel({});
+        assert.throws(function() {
+            wipLabel.action({ ticket: { fields: {} }, metadata: { contextId: 'story_development' }, jobParams: {} });
+        }, /Ticket not found/);
+    });
+
+    test('still continues when ticket is present but contextId is missing', function() {
+        var wipLabel = loadCheckWipLabel({});
+        var result = wipLabel.action({ ticket: makeTicket('PROJ-1', []), metadata: {}, jobParams: {} });
+        assert.equal(result, true);
+    });
+
+});

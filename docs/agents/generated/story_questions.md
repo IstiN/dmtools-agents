@@ -28,6 +28,12 @@ Full prompt / instruction set: [`agents/snapshots/story_questions.md`](agents/sn
 
 ## Actions
 
+### preJSAction: `requireTicket.js`
+
+_Require Ticket Pre-Action_
+
+- Source: `agents/js/requireTicket.js`
+- No detected file I/O or side effects.
 
 ### preCliJSAction: `fetchQuestionsToInput.js`
 

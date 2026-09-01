@@ -9,6 +9,7 @@
     "attachResponseAsFile": false,
     "skipAIProcessing": true,
     "alwaysPostComments": true,
+    "preJSAction": "agents/js/requireTicket.js",
     "preCliJSAction": "agents/js/fetchQuestionsToInput.js",
     "postJSAction": "agents/js/createQuestionsAndAssignForReview.js",
     "inputJql": "key = JD-82",

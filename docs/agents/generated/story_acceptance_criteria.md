@@ -47,6 +47,12 @@ Full prompt / instruction set: [`agents/snapshots/story_acceptance_criteria.md`]
 
 ## Actions
 
+### preJSAction: `requireTicket.js`
+
+_Require Ticket Pre-Action_
+
+- Source: `agents/js/requireTicket.js`
+- No detected file I/O or side effects.
 
 ### preCliJSAction: `preCliContentOutputSetup.js`
 

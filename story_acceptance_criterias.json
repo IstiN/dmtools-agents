@@ -9,6 +9,7 @@
     "operationType": "Replace",
     "ticketContextDepth": 0,
     "attachResponseAsFile": false,
+    "preJSAction": "agents/js/requireTicket.js",
     "preCliJSAction": "agents/js/preCliContentOutputSetup.js",
     "cleanupInputFolder": false,
     "skipAIProcessing": true,

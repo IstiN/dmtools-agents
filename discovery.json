@@ -9,6 +9,7 @@
     "attachResponseAsFile": false,
     "skipAIProcessing": true,
     "alwaysPostComments": true,
+    "preJSAction": "agents/js/requireTicket.js",
     "preCliJSAction": "agents/js/prepareDiscoveryContext.js",
     "postJSAction": "agents/js/publishDiscoveryToConfluence.js",
     "inputJql": "key = JD-82",
