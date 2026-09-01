@@ -16,12 +16,18 @@
  *  3. Sync outputs/discovery/ under that page via
  *     confluence_sync_markdown_directory (index.md becomes the page's own
  *     body; every other .md file becomes a child page).
- *  4. Post a Jira comment linking to the page, plus the usual token-usage
+ *  4. Post replies to any inline comments the CLI agent directly addressed
+ *     (outputs/confluence_replies.json — same mechanism as
+ *     story_solution/story_description, see contentOutput.js), using
+ *     confluence_reply_to_inline_comment via
+ *     contentOutput.publishCommentReplies().
+ *  5. Post a Jira comment linking to the page, plus the usual token-usage
  *     comment.
  */
 
 var configLoader = require('./configLoader.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
+var contentOutput = require('./common/contentOutput.js');
 
 var DISCOVERY_OUTPUT_DIR = 'outputs/discovery';
 
@@ -143,9 +149,24 @@ function action(params) {
         var pageUrl = resolvePageUrl(page);
         var syncedCount = (syncSummary.syncedPages && syncSummary.syncedPages.length) || 0;
 
+        // Same principle as story_solution/story_description (contentOutput.js):
+        // the CLI agent may have written outputs/confluence_replies.json when it
+        // directly addressed one of the inline comments collected by
+        // prepareDiscoveryContext.js (discovery_comments.md/json). Post those
+        // replies now that the sync has happened, so pageId/commentId still
+        // point at pages the sync just (re)published.
+        var replyResult = { posted: 0, failed: 0 };
+        try {
+            replyResult = contentOutput.publishCommentReplies();
+        } catch (replyError) {
+            console.warn('Failed to publish inline comment replies:', replyError);
+        }
+
         var comment = 'h3. 📚 Discovery published to Confluence\n\n' +
             (pageUrl ? 'Page: ' + pageUrl + '\n\n' : '') +
-            'Synced *' + syncedCount + '* page(s) from `' + DISCOVERY_OUTPUT_DIR + '`.';
+            'Synced *' + syncedCount + '* page(s) from `' + DISCOVERY_OUTPUT_DIR + '`.' +
+            (replyResult.posted > 0 ? '\n\nReplied to *' + replyResult.posted + '* inline comment(s).' : '') +
+            (replyResult.failed > 0 ? ' (' + replyResult.failed + ' reply attempt(s) failed — see job log.)' : '');
         try {
             jira_post_comment({ key: ticketKey, comment: comment });
         } catch (commentError) {
@@ -158,14 +179,17 @@ function action(params) {
             console.warn('Failed to post token usage comments:', e);
         }
 
-        console.log('✅ Published discovery for ' + ticketKey + ' to Confluence page ' + page.id);
+        console.log('✅ Published discovery for ' + ticketKey + ' to Confluence page ' + page.id +
+            (replyResult.posted > 0 ? ' (' + replyResult.posted + ' comment repl(y/ies) posted)' : ''));
         return {
             success: true,
             action: 'published',
             ticketKey: ticketKey,
             pageId: page.id,
             pageUrl: pageUrl,
-            syncedPages: syncedCount
+            syncedPages: syncedCount,
+            commentRepliesPosted: replyResult.posted,
+            commentRepliesFailed: replyResult.failed
         };
     } catch (error) {
         console.error('Error in publishDiscoveryToConfluence:', error);

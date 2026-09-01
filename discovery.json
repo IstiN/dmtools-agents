@@ -23,6 +23,7 @@
       "./agents/instructions/discovery/modes.md",
       "./agents/instructions/discovery/output_rules.md",
       "./agents/instructions/discovery/formatting_rules.md",
+      "./agents/instructions/discovery/confluence_comments.md",
       "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md"
     ],
