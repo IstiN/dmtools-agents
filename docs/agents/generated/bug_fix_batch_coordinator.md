@@ -9,7 +9,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `batchSize` — maximum number of items processed in one batch.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
-_Human doc: [`agents/docs\agents\bug_fix_batch_coordinator.md`](agents/docs\agents\bug_fix_batch_coordinator.md)_
+_Human doc: [`agents/docs/agents/bug_fix_batch_coordinator.md`](agents/docs/agents/bug_fix_batch_coordinator.md)_
 
 ## Attributes
 
@@ -23,7 +23,7 @@ _Human doc: [`agents/docs\agents\bug_fix_batch_coordinator.md`](agents/docs\agen
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots\bug_fix_batch_coordinator.md`](agents/snapshots\bug_fix_batch_coordinator.md)
+Full prompt / instruction set: [`agents/snapshots/bug_fix_batch_coordinator.md`](agents/snapshots/bug_fix_batch_coordinator.md)
 
 ## Actions
 
@@ -47,7 +47,7 @@ _Bug-Fix Batch Coordinator — postJSAction for bug_fix_batch_coordinator._
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots\bug_fix_batch_coordinator.md`
+- Prompt snapshot: `agents/snapshots/bug_fix_batch_coordinator.md`
 
 ## Custom params
 

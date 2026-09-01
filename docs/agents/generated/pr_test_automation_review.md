@@ -10,7 +10,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `autoStartReworkConfigFile` — agent config file used for the auto-started rework workflow.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
-_Human doc: [`agents/docs\agents\pr_test_automation_review.md`](agents/docs\agents\pr_test_automation_review.md)_
+_Human doc: [`agents/docs/agents/pr_test_automation_review.md`](agents/docs/agents/pr_test_automation_review.md)_
 
 ## Attributes
 
@@ -24,7 +24,7 @@ _Human doc: [`agents/docs\agents\pr_test_automation_review.md`](agents/docs\agen
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots\pr_test_automation_review.md`](agents/snapshots\pr_test_automation_review.md)
+Full prompt / instruction set: [`agents/snapshots/pr_test_automation_review.md`](agents/snapshots/pr_test_automation_review.md)
 
 ## Actions
 
@@ -57,7 +57,7 @@ _Post Test Automation Review Comments Action (postJSAction for pr_test_automatio
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots\pr_test_automation_review.md`
+- Prompt snapshot: `agents/snapshots/pr_test_automation_review.md`
 
 ## Custom params
 

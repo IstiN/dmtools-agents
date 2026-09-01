@@ -8,7 +8,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 
 - `targetAgentName` — name of the agent configuration this redirect routes to.
 
-_Human doc: [`agents/docs\agents\poc_development_redirect.md`](agents/docs\agents\poc_development_redirect.md)_
+_Human doc: [`agents/docs/agents/poc_development_redirect.md`](agents/docs/agents/poc_development_redirect.md)_
 
 ## Attributes
 
@@ -22,7 +22,7 @@ _Human doc: [`agents/docs\agents\poc_development_redirect.md`](agents/docs\agent
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots\poc_development_redirect.md`](agents/snapshots\poc_development_redirect.md)
+Full prompt / instruction set: [`agents/snapshots/poc_development_redirect.md`](agents/snapshots/poc_development_redirect.md)
 
 ## Actions
 
@@ -34,7 +34,7 @@ Full prompt / instruction set: [`agents/snapshots\poc_development_redirect.md`](
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots\poc_development_redirect.md`
+- Prompt snapshot: `agents/snapshots/poc_development_redirect.md`
 
 ## Custom params
 

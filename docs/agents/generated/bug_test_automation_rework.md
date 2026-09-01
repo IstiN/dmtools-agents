@@ -12,7 +12,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 - `testFilesGlob` — glob that selects which test files belong to this automation scope.
 
-_Human doc: [`agents/docs\agents\bug_test_automation_rework.md`](agents/docs\agents\bug_test_automation_rework.md)_
+_Human doc: [`agents/docs/agents/bug_test_automation_rework.md`](agents/docs/agents/bug_test_automation_rework.md)_
 
 ## Attributes
 
@@ -26,7 +26,7 @@ _Human doc: [`agents/docs\agents\bug_test_automation_rework.md`](agents/docs\age
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots\bug_test_automation_rework.md`](agents/snapshots\bug_test_automation_rework.md)
+Full prompt / instruction set: [`agents/snapshots/bug_test_automation_rework.md`](agents/snapshots/bug_test_automation_rework.md)
 
 ## Actions
 
@@ -76,7 +76,7 @@ _Story Test Automation Rework Action_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots\bug_test_automation_rework.md`
+- Prompt snapshot: `agents/snapshots/bug_test_automation_rework.md`
 
 ## Custom params
 

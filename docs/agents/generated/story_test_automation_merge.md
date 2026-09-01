@@ -10,7 +10,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 - `storyTestMerge` — merge behavior overrides specific to story test automation PRs.
 
-_Human doc: [`agents/docs\agents\story_test_automation_merge.md`](agents/docs\agents\story_test_automation_merge.md)_
+_Human doc: [`agents/docs/agents/story_test_automation_merge.md`](agents/docs/agents/story_test_automation_merge.md)_
 
 ## Attributes
 
@@ -24,7 +24,7 @@ _Human doc: [`agents/docs\agents\story_test_automation_merge.md`](agents/docs\ag
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots\story_test_automation_merge.md`](agents/snapshots\story_test_automation_merge.md)
+Full prompt / instruction set: [`agents/snapshots/story_test_automation_merge.md`](agents/snapshots/story_test_automation_merge.md)
 
 ## Actions
 
@@ -46,7 +46,7 @@ _Merge Story/Bug Test Automation PR_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots\story_test_automation_merge.md`
+- Prompt snapshot: `agents/snapshots/story_test_automation_merge.md`
 
 ## Custom params
 

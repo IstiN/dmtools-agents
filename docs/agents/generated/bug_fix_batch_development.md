@@ -9,7 +9,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
-_Human doc: [`agents/docs\agents\bug_fix_batch_development.md`](agents/docs\agents\bug_fix_batch_development.md)_
+_Human doc: [`agents/docs/agents/bug_fix_batch_development.md`](agents/docs/agents/bug_fix_batch_development.md)_
 
 ## Attributes
 
@@ -23,7 +23,7 @@ _Human doc: [`agents/docs\agents\bug_fix_batch_development.md`](agents/docs\agen
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots\bug_fix_batch_development.md`](agents/snapshots\bug_fix_batch_development.md)
+Full prompt / instruction set: [`agents/snapshots/bug_fix_batch_development.md`](agents/snapshots/bug_fix_batch_development.md)
 
 ## Actions
 
@@ -57,7 +57,7 @@ _Post-CLI Bug-fix Batch Development Action_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots\bug_fix_batch_development.md`
+- Prompt snapshot: `agents/snapshots/bug_fix_batch_development.md`
 
 ## Custom params
 

@@ -8,7 +8,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 
 - `targetAgentName` — name of the agent configuration this redirect routes to.
 
-_Human doc: [`agents/docs\agents\story_development_redirect_test.md`](agents/docs\agents\story_development_redirect_test.md)_
+_Human doc: [`agents/docs/agents/story_development_redirect_test.md`](agents/docs/agents/story_development_redirect_test.md)_
 
 ## Attributes
 
@@ -22,7 +22,7 @@ _Human doc: [`agents/docs\agents\story_development_redirect_test.md`](agents/doc
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots\story_development_redirect_test.md`](agents/snapshots\story_development_redirect_test.md)
+Full prompt / instruction set: [`agents/snapshots/story_development_redirect_test.md`](agents/snapshots/story_development_redirect_test.md)
 
 ## Actions
 
@@ -34,7 +34,7 @@ Full prompt / instruction set: [`agents/snapshots\story_development_redirect_tes
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots\story_development_redirect_test.md`
+- Prompt snapshot: `agents/snapshots/story_development_redirect_test.md`
 
 ## Custom params
 

@@ -29,7 +29,7 @@ happens in `buildEncodedConfig.js` for encoded-config runs and in the dmtools CL
 (`CliCommandBuilder`) for direct `dmtools run` invocations. With `target: both` the tracker
 markup is kept because the tracker field still receives the full content.
 
-_Human doc: [`agents/docs\agents\story_acceptance_criteria.md`](agents/docs\agents\story_acceptance_criteria.md)_
+_Human doc: [`agents/docs/agents/story_acceptance_criteria.md`](agents/docs/agents/story_acceptance_criteria.md)_
 
 ## Attributes
 
@@ -43,7 +43,7 @@ _Human doc: [`agents/docs\agents\story_acceptance_criteria.md`](agents/docs\agen
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots\story_acceptance_criteria.md`](agents/snapshots\story_acceptance_criteria.md)
+Full prompt / instruction set: [`agents/snapshots/story_acceptance_criteria.md`](agents/snapshots/story_acceptance_criteria.md)
 
 ## Actions
 
@@ -76,7 +76,7 @@ _Write Content Output — unified post-action for content-generating agents_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots\story_acceptance_criteria.md`
+- Prompt snapshot: `agents/snapshots/story_acceptance_criteria.md`
 
 ## Custom params
 

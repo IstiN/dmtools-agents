@@ -18,7 +18,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `projectKey` — tracker project key override.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
-_Human doc: [`agents/docs\agents\pr_review.md`](agents/docs\agents\pr_review.md)_
+_Human doc: [`agents/docs/agents/pr_review.md`](agents/docs/agents/pr_review.md)_
 
 ## Attributes
 
@@ -32,7 +32,7 @@ _Human doc: [`agents/docs\agents\pr_review.md`](agents/docs\agents\pr_review.md)
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots\pr_review.md`](agents/snapshots\pr_review.md)
+Full prompt / instruction set: [`agents/snapshots/pr_review.md`](agents/snapshots/pr_review.md)
 
 ## Actions
 
@@ -80,7 +80,7 @@ _Post PR Review Comments Action_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots\pr_review.md`
+- Prompt snapshot: `agents/snapshots/pr_review.md`
 
 ### Output schemas
 

@@ -8,7 +8,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 
 - `targetRepository` — repository override block (`owner`, `repo`, `baseBranch`, `workingDir`) — run the work against this repository instead of the project default.
 
-_Human doc: [`agents/docs\agents\story_development_dynamic_repo.md`](agents/docs\agents\story_development_dynamic_repo.md)_
+_Human doc: [`agents/docs/agents/story_development_dynamic_repo.md`](agents/docs/agents/story_development_dynamic_repo.md)_
 
 ## Attributes
 
@@ -22,7 +22,7 @@ _Human doc: [`agents/docs\agents\story_development_dynamic_repo.md`](agents/docs
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots\story_development_dynamic_repo.md`](agents/snapshots\story_development_dynamic_repo.md)
+Full prompt / instruction set: [`agents/snapshots/story_development_dynamic_repo.md`](agents/snapshots/story_development_dynamic_repo.md)
 
 ## Actions
 
@@ -50,7 +50,7 @@ _Post-Action Development — Dynamic Repository variant_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots\story_development_dynamic_repo.md`
+- Prompt snapshot: `agents/snapshots/story_development_dynamic_repo.md`
 
 ## Custom params
 

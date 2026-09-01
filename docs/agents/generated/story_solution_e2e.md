@@ -8,7 +8,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 
 - `solutionField` — tracker field that receives the solution text. Default: `Solution`.
 
-_Human doc: [`agents/docs\agents\story_solution_e2e.md`](agents/docs\agents\story_solution_e2e.md)_
+_Human doc: [`agents/docs/agents/story_solution_e2e.md`](agents/docs/agents/story_solution_e2e.md)_
 
 ## Attributes
 
@@ -22,7 +22,7 @@ _Human doc: [`agents/docs\agents\story_solution_e2e.md`](agents/docs\agents\stor
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots\story_solution_e2e.md`](agents/snapshots\story_solution_e2e.md)
+Full prompt / instruction set: [`agents/snapshots/story_solution_e2e.md`](agents/snapshots/story_solution_e2e.md)
 
 ## Actions
 
@@ -41,7 +41,7 @@ _E2E Post-Action: Write Solution + Affected Repositories Section + Labels_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots\story_solution_e2e.md`
+- Prompt snapshot: `agents/snapshots/story_solution_e2e.md`
 
 ## Custom params
 

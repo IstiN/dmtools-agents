@@ -13,7 +13,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
-_Human doc: [`agents/docs\agents\pr_story_test_automation_review.md`](agents/docs\agents\pr_story_test_automation_review.md)_
+_Human doc: [`agents/docs/agents/pr_story_test_automation_review.md`](agents/docs/agents/pr_story_test_automation_review.md)_
 
 ## Attributes
 
@@ -27,7 +27,7 @@ _Human doc: [`agents/docs\agents\pr_story_test_automation_review.md`](agents/doc
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots\pr_story_test_automation_review.md`](agents/snapshots\pr_story_test_automation_review.md)
+Full prompt / instruction set: [`agents/snapshots/pr_story_test_automation_review.md`](agents/snapshots/pr_story_test_automation_review.md)
 
 ## Actions
 
@@ -70,7 +70,7 @@ _Post Story Test Automation Review Comments Action_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots\pr_story_test_automation_review.md`
+- Prompt snapshot: `agents/snapshots/pr_story_test_automation_review.md`
 
 ## Custom params
 

@@ -8,7 +8,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 
 - `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
 
-_Human doc: [`agents/docs\agents\intake.md`](agents/docs\agents\intake.md)_
+_Human doc: [`agents/docs/agents/intake.md`](agents/docs/agents/intake.md)_
 
 ## Attributes
 
@@ -22,7 +22,7 @@ _Human doc: [`agents/docs\agents\intake.md`](agents/docs\agents\intake.md)_
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots\intake.md`](agents/snapshots\intake.md)
+Full prompt / instruction set: [`agents/snapshots/intake.md`](agents/snapshots/intake.md)
 
 ## Actions
 
@@ -66,7 +66,7 @@ _Create Intake Tickets Post-Action_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots\intake.md`
+- Prompt snapshot: `agents/snapshots/intake.md`
 
 ## Custom params
 

@@ -35,10 +35,12 @@ function resolveReadPath(filePath) {
 
 // Canonical reference (always 'agents/...-prefixed) for docs output.
 function canonicalRef(filePath) {
-    if (!PARENT_LAYOUT && filePath.indexOf('agents/') !== 0) {
-        return 'agents/' + filePath;
+    // normalize to forward slashes so docs are identical on Windows and Linux
+    var normalized = filePath.replace(/\\/g, '/');
+    if (!PARENT_LAYOUT && normalized.indexOf('agents/') !== 0) {
+        return 'agents/' + normalized;
     }
-    return filePath;
+    return normalized;
 }
 
 function ensureDir(dir) {

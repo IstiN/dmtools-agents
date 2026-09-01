@@ -11,7 +11,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 - `targetRepository` — repository override block (`owner`, `repo`, `baseBranch`, `workingDir`) — run the work against this repository instead of the project default.
 
-_Human doc: [`agents/docs\agents\bug_development.md`](agents/docs\agents\bug_development.md)_
+_Human doc: [`agents/docs/agents/bug_development.md`](agents/docs/agents/bug_development.md)_
 
 ## Attributes
 
@@ -25,7 +25,7 @@ _Human doc: [`agents/docs\agents\bug_development.md`](agents/docs\agents\bug_dev
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots\bug_development.md`](agents/snapshots\bug_development.md)
+Full prompt / instruction set: [`agents/snapshots/bug_development.md`](agents/snapshots/bug_development.md)
 
 ## Actions
 
@@ -72,7 +72,7 @@ _Develop Bug and Create PR Post-Action_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots\bug_development.md`
+- Prompt snapshot: `agents/snapshots/bug_development.md`
 
 ## Custom params
 

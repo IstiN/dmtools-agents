@@ -8,7 +8,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
 
-_Human doc: [`agents/docs\agents\story_ba_check.md`](agents/docs\agents\story_ba_check.md)_
+_Human doc: [`agents/docs/agents/story_ba_check.md`](agents/docs/agents/story_ba_check.md)_
 
 ## Attributes
 
@@ -22,7 +22,7 @@ _Human doc: [`agents/docs\agents\story_ba_check.md`](agents/docs\agents\story_ba
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots\story_ba_check.md`](agents/snapshots\story_ba_check.md)
+Full prompt / instruction set: [`agents/snapshots/story_ba_check.md`](agents/snapshots/story_ba_check.md)
 
 ## Actions
 
@@ -43,7 +43,7 @@ _Check Subtasks Done For BA — postJSAction for story_ba_check agent._
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots\story_ba_check.md`
+- Prompt snapshot: `agents/snapshots/story_ba_check.md`
 
 ## Custom params
 

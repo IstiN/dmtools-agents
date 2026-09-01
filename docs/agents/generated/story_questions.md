@@ -10,7 +10,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `autoStartQuestionAnswerConfigFile` — agent config file used for the auto-started question-answering workflow.
 - `priorityMap` — maps question priorities to tracker priority names.
 
-_Human doc: [`agents/docs\agents\story_questions.md`](agents/docs\agents\story_questions.md)_
+_Human doc: [`agents/docs/agents/story_questions.md`](agents/docs/agents/story_questions.md)_
 
 ## Attributes
 
@@ -24,7 +24,7 @@ _Human doc: [`agents/docs\agents\story_questions.md`](agents/docs\agents\story_q
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots\story_questions.md`](agents/snapshots\story_questions.md)
+Full prompt / instruction set: [`agents/snapshots/story_questions.md`](agents/snapshots/story_questions.md)
 
 ## Actions
 
@@ -64,7 +64,7 @@ _Create Questions and Assign For Review Post-Action_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots\story_questions.md`
+- Prompt snapshot: `agents/snapshots/story_questions.md`
 
 ## Custom params
 

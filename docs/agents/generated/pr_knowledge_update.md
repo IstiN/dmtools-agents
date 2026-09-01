@@ -14,7 +14,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `prUrl` — URL of the PR being distilled.
 - `ticket` — ticket key override for the knowledge update.
 
-_Human doc: [`agents/docs\agents\pr_knowledge_update.md`](agents/docs\agents\pr_knowledge_update.md)_
+_Human doc: [`agents/docs/agents/pr_knowledge_update.md`](agents/docs/agents/pr_knowledge_update.md)_
 
 ## Attributes
 
@@ -28,7 +28,7 @@ _Human doc: [`agents/docs\agents\pr_knowledge_update.md`](agents/docs\agents\pr_
 
 ## Prompt snapshot
 
-Full prompt / instruction set: [`agents/snapshots\pr_knowledge_update.md`](agents/snapshots\pr_knowledge_update.md)
+Full prompt / instruction set: [`agents/snapshots/pr_knowledge_update.md`](agents/snapshots/pr_knowledge_update.md)
 
 ## Actions
 
@@ -64,7 +64,7 @@ _Push Knowledge Update Post-Action (postJSAction for pr_knowledge_update agent)_
 ## LLM step
 
 - outputType: `none`
-- Prompt snapshot: `agents/snapshots\pr_knowledge_update.md`
+- Prompt snapshot: `agents/snapshots/pr_knowledge_update.md`
 
 ## Custom params
 
