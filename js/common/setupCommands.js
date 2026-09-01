@@ -90,7 +90,49 @@ function runSetupCommands(customParams, defaultWorkingDir) {
     return { ran: results.length, results: results };
 }
 
+/**
+ * Builds a markdown summary of any non-fatal ("allowFailure" — the default) setup
+ * command failures from a runSetupCommands() result, or null if none failed.
+ *
+ * Non-fatal failures are, by design, only logged to the CI console (see
+ * runSetupCommands() above) — the CLI coding agent never sees them unless the caller
+ * writes this out to an input file. Without that, a step like "build the project's
+ * Docker test image" can fail for a genuine, agent-fixable content reason (e.g. a bad
+ * migration file) and the agent will start working on the ticket with zero awareness
+ * that anything is wrong, only to hit a confusing downstream failure later (or worse,
+ * silently ship a broken fix). Callers should write this to e.g. `setup_warnings.md` in
+ * the input folder whenever it returns non-null, so the CLI agent can read it as context
+ * and attempt a fix, the same way it already does for merge_conflicts.md.
+ */
+function buildSetupWarningsMarkdown(runResult) {
+    var results = (runResult && runResult.results) || [];
+    var failures = results.filter(function(r) { return r && r.success === false; });
+    if (failures.length === 0) {
+        return null;
+    }
+    var lines = [
+        '# Setup Command Warnings',
+        '',
+        'The following setup command(s) failed but were configured as non-fatal ' +
+            '(allowFailure is not set to false), so environment setup continued. ' +
+            'If this failure is caused by a fixable issue in the code (e.g. a bad ' +
+            'migration, a broken test, a compile error), please investigate and fix it ' +
+            'as part of this task.',
+        ''
+    ];
+    for (var i = 0; i < failures.length; i++) {
+        lines.push('## ' + failures[i].name);
+        lines.push('');
+        lines.push('```');
+        lines.push(truncateSetupError(failures[i].error || ''));
+        lines.push('```');
+        lines.push('');
+    }
+    return lines.join('\n');
+}
+
 module.exports = {
     runSetupCommands: runSetupCommands,
-    truncateSetupError: truncateSetupError
+    truncateSetupError: truncateSetupError,
+    buildSetupWarningsMarkdown: buildSetupWarningsMarkdown
 };

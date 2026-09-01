@@ -154,3 +154,92 @@ suite('setupCommands helper', function() {
         assert.equal(loaded.mod.truncateSetupError(undefined), undefined);
     });
 });
+
+suite('setupCommands buildSetupWarningsMarkdown', function() {
+
+    test('returns null when there are no failures', function() {
+        var loaded = loadSetupCommands();
+        var result = loaded.mod.runSetupCommands({
+            setupCommands: ['bash agents/setup/java.sh 25']
+        }, './dependencies/repo');
+
+        assert.equal(loaded.mod.buildSetupWarningsMarkdown(result), null);
+    });
+
+    test('returns null for an empty/undefined result', function() {
+        var loaded = loadSetupCommands();
+        assert.equal(loaded.mod.buildSetupWarningsMarkdown(undefined), null);
+        assert.equal(loaded.mod.buildSetupWarningsMarkdown({}), null);
+    });
+
+    test('summarizes a non-fatal (default allowFailure) command failure', function() {
+        // Regression test for: a setup command like "build-test-database-image" can be
+        // downgraded from allowFailure:false (hard job-stopping) to the default
+        // non-fatal behavior once its underlying infra prerequisite (e.g. Docker/
+        // Testcontainers reachability) is already verified by an earlier, separate
+        // required step. Non-fatal failures are otherwise only logged to the CI
+        // console (see runSetupCommands) — the CLI coding agent never sees them unless
+        // the caller writes this markdown out to an input file (e.g.
+        // setup_warnings.md), so the agent can notice and attempt a fix instead of
+        // working on the ticket with zero awareness that setup found a real problem.
+        var loaded = loadSetupCommands({
+            cli_execute_command: function(args) {
+                if (args.command === 'mvn clean verify') {
+                    throw new Error('Found more than one migration with version 2026.08.31.11.00');
+                }
+                return 'ok';
+            }
+        });
+
+        var result = loaded.mod.runSetupCommands({
+            setupCommands: [
+                { name: 'build-test-database-image', command: 'mvn clean verify' }
+            ]
+        }, './dependencies/repo');
+
+        var markdown = loaded.mod.buildSetupWarningsMarkdown(result);
+        assert.ok(markdown, 'should produce a markdown summary');
+        assert.ok(markdown.indexOf('build-test-database-image') !== -1, 'should mention the failing step name');
+        assert.ok(markdown.indexOf('Found more than one migration') !== -1, 'should include the underlying error');
+    });
+
+    test('summarizes multiple non-fatal failures and skips successful commands', function() {
+        var loaded = loadSetupCommands({
+            cli_execute_command: function(args) {
+                if (args.command === 'fails-one') throw new Error('error one');
+                if (args.command === 'fails-two') throw new Error('error two');
+                return 'ok';
+            }
+        });
+
+        var result = loaded.mod.runSetupCommands({
+            setupCommands: [
+                { name: 'step-ok', command: 'succeeds' },
+                { name: 'step-one', command: 'fails-one' },
+                { name: 'step-two', command: 'fails-two' }
+            ]
+        }, './dependencies/repo');
+
+        var markdown = loaded.mod.buildSetupWarningsMarkdown(result);
+        assert.ok(markdown.indexOf('step-one') !== -1);
+        assert.ok(markdown.indexOf('error one') !== -1);
+        assert.ok(markdown.indexOf('step-two') !== -1);
+        assert.ok(markdown.indexOf('error two') !== -1);
+        assert.equal(markdown.indexOf('step-ok'), -1, 'should not mention successful commands');
+    });
+
+    test('truncates huge error output embedded in the markdown', function() {
+        var hugeOutput = 'Y'.repeat(500000);
+        var loaded = loadSetupCommands({
+            cli_execute_command: function() { throw new Error(hugeOutput); }
+        });
+
+        var result = loaded.mod.runSetupCommands({
+            setupCommands: [{ name: 'flaky-step', command: 'flaky' }]
+        }, './dependencies/repo');
+
+        var markdown = loaded.mod.buildSetupWarningsMarkdown(result);
+        assert.ok(markdown.length < 10000, 'markdown must stay bounded, got ' + markdown.length + ' chars');
+        assert.ok(markdown.indexOf('truncated') !== -1);
+    });
+});
