@@ -9,6 +9,8 @@ function loadPublishDiscovery(mocks, discoveryConfig) {
         confluence_update_page: function(args) { return { id: args.contentId, title: args.title, _links: { webui: '/wiki/spaces/DISC/pages/1', base: 'https://confluence.example.com' } }; },
         confluence_content_by_id: function(args) { return { id: args.contentId, _links: { webui: '/wiki/spaces/DISC/pages/1', base: 'https://confluence.example.com' } }; },
         confluence_sync_markdown_directory: function() { return JSON.stringify({ syncedPages: ['index', 'prd'] }); },
+        confluence_reply_to_inline_comment: function() {},
+        file_read: function() { throw new Error('no replies file'); },
         jira_post_comment: function() {}
     };
 
@@ -17,14 +19,18 @@ function loadPublishDiscovery(mocks, discoveryConfig) {
             return { discovery: discoveryConfig || {} };
         }
     };
+    var globals = Object.assign({}, defaults, mocks || {});
 
     return loadModule(
         'js/publishDiscoveryToConfluence.js',
         makeRequire({
             './configLoader.js': configLoaderMock,
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/contentOutput.js': loadModule('js/common/contentOutput.js',
+                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } } }),
+                globals)
         }),
-        Object.assign({}, defaults, mocks || {})
+        globals
     );
 }
 
@@ -203,6 +209,49 @@ suite('publishDiscoveryToConfluence', function() {
         assert.equal(result.action, 'error');
         assert.equal(comments.length, 1);
         assert.contains(comments[0].comment, 'publish failed');
+    });
+
+    test('posts replies from outputs/confluence_replies.json after sync (same principle as story_solution)', function() {
+        var comments = [];
+        var replies = [];
+        var mod = loadPublishDiscovery({
+            confluence_get_children_by_id: function() {
+                return [{ id: '456', title: 'PROJ-2 Some feature', body: { storage: { value: '' } } }];
+            },
+            file_read: function(opts) {
+                var path = opts && (opts.path || opts);
+                if (path === 'outputs/confluence_replies.json') {
+                    return JSON.stringify([
+                        { pageId: '457', commentId: 'c2', body: 'Addressed in the PRD update.' }
+                    ]);
+                }
+                throw new Error('not found: ' + path);
+            },
+            confluence_reply_to_inline_comment: function(args) { replies.push(args); },
+            jira_post_comment: function(args) { comments.push(args); }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        var result = mod.action(makeParams());
+
+        assert.equal(result.success, true);
+        assert.equal(result.commentRepliesPosted, 1);
+        assert.equal(replies.length, 1);
+        assert.equal(replies[0].pageId, '457');
+        assert.equal(replies[0].commentId, 'c2');
+        assert.contains(comments[0].comment, 'Replied to *1* inline comment');
+    });
+
+    test('no replies file — publishes normally with commentRepliesPosted 0', function() {
+        var mod = loadPublishDiscovery({
+            confluence_get_children_by_id: function() {
+                return [{ id: '456', title: 'PROJ-2 Some feature', body: { storage: { value: '' } } }];
+            }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        var result = mod.action(makeParams());
+
+        assert.equal(result.success, true);
+        assert.equal(result.commentRepliesPosted, 0);
     });
 
 });

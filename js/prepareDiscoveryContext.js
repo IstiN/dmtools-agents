@@ -28,11 +28,24 @@
  *     and the existing page id (if found) — read by the matching postJSAction
  *     (publishDiscoveryToConfluence.js) so both steps agree on where to publish
  *     without re-resolving config or re-querying Confluence twice.
+ *  4. Same principle as the story_solution/story_description agents' Confluence
+ *     output flow (see js/common/contentOutput.js): while snapshotting each page
+ *     in the tree, also (a) re-expose that page's inline comment anchors as
+ *     [[ic:REF]]...[[/ic]] placeholders directly inside its snapshotted
+ *     Markdown file, and (b) collect that page's inline comments into a single
+ *     input/<ticket>/discovery_comments.md + .json across the WHOLE tree (not
+ *     just the ticket's own root page) — the discovery agent instructions
+ *     (instructions/discovery/confluence_comments.md) tell the CLI agent to
+ *     treat these as review feedback and reply via
+ *     outputs/confluence_replies.json, which publishDiscoveryToConfluence.js
+ *     then posts back with contentOutput.publishCommentReplies() after sync.
  */
 
 var configLoader = require('./configLoader.js');
+var contentOutput = require('./common/contentOutput.js');
 
 var DISCOVERY_OUTPUT_DIR = 'outputs/discovery';
+var COMMENTS_BASE_NAME = 'discovery_comments';
 
 function sanitizeFileName(title) {
     return String(title || 'untitled').replace(/[\\/:*?"<>|]/g, '-').trim();
@@ -54,6 +67,43 @@ function findTicketPage(children, ticketKey) {
 }
 
 /**
+ * Re-expose a page's inline comment anchors as [[ic:REF]]...[[/ic]]
+ * placeholders inside its Markdown body (same mechanism as
+ * fetchConfluenceOutputContext.js for story_solution/story_description — see
+ * contentOutput.js's "Inline comment anchors" section). Storage-format markers
+ * are stripped by the Markdown conversion, so this re-derives them from a
+ * separate storage-format fetch. Non-fatal: returns the body unchanged on any
+ * failure (e.g. page has no comments, or the lookup itself fails).
+ */
+function injectCommentAnchors(pageId, body) {
+    try {
+        var storage = confluence_content_by_id({ contentId: pageId });
+        var storageBody = storage && storage.body && storage.body.storage && storage.body.storage.value;
+        var anchors = contentOutput.extractInlineCommentMarkers(storageBody);
+        if (anchors.length === 0) return body;
+        var injected = contentOutput.injectCommentPlaceholders(body, anchors);
+        return injected.content;
+    } catch (e) {
+        console.warn('prepareDiscoveryContext: inline comment anchor extraction failed for page ' + pageId + ' (non-fatal):', e);
+        return body;
+    }
+}
+
+/**
+ * Fetch a page's inline comments and append them to the shared accumulator
+ * (see snapshotPageTree). Non-fatal: logs and leaves the accumulator
+ * untouched on failure.
+ */
+function collectPageComments(pageId, pageTitle, allComments) {
+    try {
+        var comments = contentOutput.fetchPageInlineComments(pageId, pageTitle, 100);
+        Array.prototype.push.apply(allComments, comments);
+    } catch (e) {
+        console.warn('prepareDiscoveryContext: failed to fetch inline comments for page ' + pageId + ' (non-fatal):', e);
+    }
+}
+
+/**
  * Recursively snapshot an existing discovery page + all of its descendants
  * (any depth) as Markdown files directly into outputs/discovery/ (see module
  * docstring): index.md for a page's own body at each level, one file (or, if
@@ -62,17 +112,27 @@ function findTicketPage(children, ticketKey) {
  * itself produces when publishing (see output_rules.md), so a round-trip
  * (publish → seed next run → publish again) is lossless.
  *
+ * Also, for every page visited (root + every descendant, any depth): injects
+ * [[ic:REF]]...[[/ic]] inline comment anchor placeholders into its snapshotted
+ * body, and appends its inline comments to allComments — see module docstring
+ * point 4 and instructions/discovery/confluence_comments.md.
+ *
  * @param {Object} page - Confluence content object (needs .id)
  * @param {string} targetDir - local directory to write this page's own
  *     index.md into (its children go into named subfolders/files here)
+ * @param {Array} allComments - shared accumulator; every visited page's
+ *     inline comments are appended here (pageId/pageTitle-tagged, see
+ *     contentOutput.fetchPageInlineComments)
  * @returns {number} total number of descendant pages snapshotted (all depths)
  */
-function snapshotPageTree(page, targetDir) {
+function snapshotPageTree(page, targetDir, allComments) {
     var total = 0;
     try {
         var rootMd = confluence_content_by_id({ contentId: page.id, format: 'md' });
         var rootBody = (rootMd && rootMd.body && rootMd.body.storage && rootMd.body.storage.value) || '';
+        rootBody = injectCommentAnchors(page.id, rootBody);
         file_write(targetDir + '/index.md', rootBody || '_(existing page had no body)_');
+        collectPageComments(page.id, page.title, allComments);
 
         var children = confluence_get_children_by_id({ contentId: page.id, format: 'md' }) || [];
         children.forEach(function(child) {
@@ -90,11 +150,13 @@ function snapshotPageTree(page, targetDir) {
                 // This child has its own descendants — recurse into a subfolder
                 // named after it, matching the sync tool's folder-with-index.md
                 // convention for a page that itself has children.
-                total += snapshotPageTree(child, targetDir + '/' + fileName);
+                total += snapshotPageTree(child, targetDir + '/' + fileName, allComments);
             } else {
                 // Leaf page — a single Markdown file is enough.
                 var childBody = (child.body && child.body.storage && child.body.storage.value) || '';
+                childBody = injectCommentAnchors(child.id, childBody);
                 file_write(targetDir + '/' + fileName + '.md', childBody || '_(existing page had no body)_');
+                collectPageComments(child.id, child.title, allComments);
             }
         });
 
@@ -146,10 +208,24 @@ function action(params) {
 
         meta.existingPageId = existing.id;
         console.log('Found existing discovery page for ' + ticketKey + ': ' + existing.id + ' ("' + existing.title + '") — seeding ' + DISCOVERY_OUTPUT_DIR + ' with its current content (full tree, recursively) for in-place editing.');
-        var snapshotted = snapshotPageTree(existing, DISCOVERY_OUTPUT_DIR);
+        var allComments = [];
+        var snapshotted = snapshotPageTree(existing, DISCOVERY_OUTPUT_DIR, allComments);
         file_write(folder + '/discovery_meta.json', JSON.stringify(meta, null, 2));
 
-        return { success: true, action: 'iteration', ticketKey: ticketKey, existingPageId: existing.id, snapshottedPages: snapshotted };
+        if (folder && allComments.length > 0) {
+            contentOutput.writeCommentsFiles(folder, allComments, COMMENTS_BASE_NAME);
+            console.log('Collected ' + allComments.length + ' inline comment(s) across the discovery page tree (' +
+                (snapshotted + 1) + ' page(s)) into input/' + ticketKey + '/' + COMMENTS_BASE_NAME + '.md');
+        }
+
+        return {
+            success: true,
+            action: 'iteration',
+            ticketKey: ticketKey,
+            existingPageId: existing.id,
+            snapshottedPages: snapshotted,
+            commentsCount: allComments.length
+        };
     } catch (error) {
         console.error('Error in prepareDiscoveryContext:', error);
         try {
@@ -162,5 +238,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, findTicketPage, sanitizeFileName, snapshotPageTree, DISCOVERY_OUTPUT_DIR };
+    module.exports = { action, findTicketPage, sanitizeFileName, snapshotPageTree, injectCommentAnchors, collectPageComments, DISCOVERY_OUTPUT_DIR, COMMENTS_BASE_NAME };
 }
