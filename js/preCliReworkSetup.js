@@ -2,9 +2,12 @@
  * Pre-CLI Rework Setup Action (preCliJSAction for pr_rework agent)
  * 1. Finds the existing PR for the ticket
  * 2. Checks out the PR branch
- * 3. Writes input folder: pr_info.md, pr_diff.txt, pr_discussions.md, pr_discussions_raw.json
- * 4. Fetches question subtasks with answers (extra context)
- * 5. Posts "Rework Started" comment to Jira
+ * 3. Merges origin/{baseBranch} into the PR branch (auto-update, before setup commands run —
+ *    see the comment above the detectMergeConflicts() call for why the order matters)
+ * 4. Runs project-specific setup commands (build/verify) against the now-updated branch
+ * 5. Writes input folder: pr_info.md, pr_diff.txt, pr_discussions.md, pr_discussions_raw.json
+ * 6. Fetches question subtasks with answers (extra context)
+ * 7. Posts "Rework Started" comment to Jira
  */
 
 var configLoader = require('./configLoader.js');
@@ -141,7 +144,29 @@ function action(params) {
             failSetup(ticketKey, inputFolder, 'Failed to checkout branch: ' + e.toString());
         }
 
-        // Step 4.5: Run project-specific prerequisite/setup commands (e.g. install
+        const baseBranch = prDetails.base ? prDetails.base.ref : config.git.baseBranch;
+
+        // Step 4.4: Optionally sync the PR's base branch with its own upstream — see
+        // syncBaseBranchIfConfigured() docblock for the rationale.
+        syncBaseBranchIfConfigured(baseBranch, customParams, config);
+
+        // Step 4.5: Merge base branch and detect conflicts.
+        // Always merges origin/{baseBranch} so the branch stays up to date.
+        // If conflicts exist, writes merge_conflicts.md to the input folder.
+        //
+        // This MUST run before Step 4.6 (setup commands): setupCommands typically builds
+        // and tests the repo (e.g. `mvn clean verify`), and the PR branch itself can be
+        // arbitrarily stale relative to baseBranch — including fixes to the very tests
+        // setupCommands runs (a flaky/broken test fixed on baseBranch stays broken on any
+        // PR branch forked before that fix, until the PR branch is brought up to date).
+        // Running the merge first means setup commands validate the code the CLI agent is
+        // about to work on top of (merged, even if only staged/uncommitted), not a stale
+        // pre-merge snapshot — this is the "auto-update the branch on every rework run"
+        // behavior that should hold out of the box, not depend on someone remembering to
+        // rebase the PR branch manually.
+        const conflictFiles = gitOps.detectMergeConflicts(baseBranch, inputFolder, config.workingDir);
+
+        // Step 4.6: Run project-specific prerequisite/setup commands (e.g. install
         // JDK/Maven, verify build credentials) before the CLI agent starts fixing code.
         try {
             setupCommands.runSetupCommands(customParams, config.workingDir);
@@ -149,22 +174,11 @@ function action(params) {
             failSetup(ticketKey, inputFolder, 'Environment setup failed: ' + (e && e.toString ? e.toString() : String(e)));
         }
 
-        // Step 5: Diff + discussions (human-readable + raw with IDs)
-        const baseBranch = prDetails.base ? prDetails.base.ref : config.git.baseBranch;
-
-        // Step 4.4: Optionally sync the PR's base branch with its own upstream — see
-        // syncBaseBranchIfConfigured() docblock for the rationale.
-        syncBaseBranchIfConfigured(baseBranch, customParams, config);
-
-        // Step 4.5: Merge base branch and detect conflicts
-        // Always merges origin/{baseBranch} so the branch stays up to date.
-        // If conflicts exist, writes merge_conflicts.md to the input folder.
-        const conflictFiles = gitOps.detectMergeConflicts(baseBranch, inputFolder, config.workingDir);
-
-        // Step 4.6: Detect failed CI checks — writes ci_failures.md if any failed
+        // Step 4.7: Detect failed CI checks — writes ci_failures.md if any failed
         const headSha = prDetails.head ? prDetails.head.sha : null;
         const failedChecks = gh.detectFailedChecks(scm, headSha, inputFolder, config.scm && config.scm.jenkinsBasePath);
 
+        // Step 5: Diff + discussions (human-readable + raw with IDs)
         const diff = gitOps.getPRDiff(baseBranch, branchName, config.workingDir);
 
         console.log('Fetching PR discussions...');
