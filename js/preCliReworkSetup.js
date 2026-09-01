@@ -169,7 +169,16 @@ function action(params) {
         // Step 4.6: Run project-specific prerequisite/setup commands (e.g. install
         // JDK/Maven, verify build credentials) before the CLI agent starts fixing code.
         try {
-            setupCommands.runSetupCommands(customParams, config.workingDir);
+            var setupResult = setupCommands.runSetupCommands(customParams, config.workingDir);
+            var setupWarnings = setupCommands.buildSetupWarningsMarkdown(setupResult);
+            if (setupWarnings) {
+                try {
+                    file_write({ path: inputFolder + '/setup_warnings.md', content: setupWarnings });
+                    console.log('⚠️ Wrote setup_warnings.md (non-fatal setup command failure(s))');
+                } catch (writeErr) {
+                    console.warn('Failed to write setup_warnings.md:', writeErr);
+                }
+            }
         } catch (e) {
             failSetup(ticketKey, inputFolder, 'Environment setup failed: ' + (e && e.toString ? e.toString() : String(e)));
         }
