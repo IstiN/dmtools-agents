@@ -171,6 +171,9 @@ function resolveConfluenceTrackerOverride(agentParamsRoot, effectiveConfig, agen
  * @returns {string} URL-encoded JSON string for workflow_dispatch `encoded_config`.
  */
 function buildEncodedConfig(ticketKey, rule, effectiveConfig, isLocal) {
+    if (!ticketKey || !/^[A-Z][A-Z0-9_]*-\d+$/.test(ticketKey)) {
+        throw new Error('Invalid ticket key: "' + ticketKey + '". Expected format: PROJECT-123');
+    }
     var p = { inputJql: 'key = ' + ticketKey };
     var resolvedCf = resolveConfigFile(rule, effectiveConfig);
 

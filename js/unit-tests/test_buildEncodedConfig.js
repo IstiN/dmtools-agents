@@ -492,3 +492,42 @@ suite('resolveParentMerge — parent inheritance', function() {
 });
 
 
+
+suite('buildEncodedConfig: ticket key format validation', function() {
+
+    test('throws for an invalid ticket key format', function() {
+        var builder = loadBuilder({});
+        assert.throws(function() {
+            builder.buildEncodedConfig('not-a-key', 'agents/story_questions.json', null);
+        }, /Invalid ticket key/);
+    });
+
+    test('throws for an empty ticket key', function() {
+        var builder = loadBuilder({});
+        assert.throws(function() {
+            builder.buildEncodedConfig('', 'agents/story_questions.json', null);
+        }, /Invalid ticket key/);
+    });
+
+    test('throws for null ticket key', function() {
+        var builder = loadBuilder({});
+        assert.throws(function() {
+            builder.buildEncodedConfig(null, 'agents/story_questions.json', null);
+        }, /Invalid ticket key/);
+    });
+
+    test('throws for a key containing JQL injection characters', function() {
+        var builder = loadBuilder({});
+        assert.throws(function() {
+            builder.buildEncodedConfig('PROJ-1 OR project = OTHER', 'agents/story_questions.json', null);
+        }, /Invalid ticket key/);
+    });
+
+    test('accepts a valid ticket key and builds the config', function() {
+        var builder = loadBuilder({});
+        var encoded = builder.buildEncodedConfig('PROJ-42', 'agents/story_questions.json', null);
+        var decoded = JSON.parse(decodeURIComponent(encoded));
+        assert.equal(decoded.params.inputJql, 'key = PROJ-42');
+    });
+
+});

@@ -25,6 +25,9 @@ function action(params) {
         console.log('Ticket key:', ticket && ticket.key ? ticket.key : '(missing)');
         console.log('Context ID:', metadata && metadata.contextId ? metadata.contextId : '(missing)');
         
+        if (!ticket || !ticket.key) {
+            throw new Error('Ticket not found or not provided: ensure inputJql targets a valid, existing Jira ticket');
+        }
         if (!ticket || !metadata || !metadata.contextId) {
             console.log('No contextId in metadata, continuing with processing');
             return true;
