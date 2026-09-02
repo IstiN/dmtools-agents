@@ -37,6 +37,8 @@ source "${SCRIPT_DIR}/providers/codemie.sh"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/providers/copilot.sh"
 # shellcheck source=/dev/null
+source "${SCRIPT_DIR}/providers/fa.sh"
+# shellcheck source=/dev/null
 source "${SCRIPT_DIR}/providers/kimi.sh"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/providers/cursor.sh"
@@ -53,6 +55,9 @@ Providers:
   claude-code  - Uses Claude Code CLI via Bedrock proxy (ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY)
   codemie      - Uses codemie-claude
   copilot      - Uses GitHub Copilot CLI (npx @github/copilot)
+  fa           - Uses the Fa CLI (fa); requires FA_PROVIDER_TYPE and
+                 FA_PROVIDER_MODEL, optional FA_PROVIDER_BASE_URL and
+                 FA_PROVIDER_API_KEY
   kimi         - Uses Kimi Code CLI (kimi)
 
 Example:
@@ -176,6 +181,9 @@ case "$PROVIDER" in
     ;;
   copilot)
     run_copilot || exit_code=$?
+    ;;
+  fa)
+    run_fa || exit_code=$?
     ;;
   kimi)
     run_kimi || exit_code=$?
