@@ -97,3 +97,16 @@ This applies equally to `index.md`'s own "pages produced this run" table (see th
 ⚠️ **On an iteration run, `outputs/discovery/` is NOT empty when you start** — the pre-CLI step seeds it with the last published Confluence content, recursively at every depth of the existing page tree (same file/subfolder naming as the table above), before you run. **Read what's already there first, including any nested subfolders.** Then **edit the same file in place** with the merged result (old content + this run's delta) rather than deleting it and starting fresh — this keeps the same Confluence page updated instead of creating a duplicate tree, and guarantees nothing you didn't intend to touch gets silently dropped. This applies to `recommendations.md` too: re-affirm, sharpen, or revise the recommendation based on any new artefact — don't leave a stale recommendation unexamined.
 
 **Exception — append-only files:** `decisions-log.md` and `references.md` are never rewritten wholesale on iteration, even though they're seeded the same way as everything else. Read their existing rows, then only **append** new rows for what this run actually added — see their own sections above for why (they're a historical record, not current-state).
+
+## Before you finish — mandatory final checklist
+
+A long discovery session can run out of time/turns right before these last, cheap steps — do them **as your very last actions**, even if you are running low on budget, since skipping them silently discards work you already did:
+
+1. **`outputs/response.md`** — write a short (a few sentences) summary of what you did this run (which mode(s) ran, the headline recommendation, whether any inline comments were addressed). This file is required by the runner framework regardless of `outputType` — if it is missing, the ticket update is skipped and an error is posted instead, even when every `outputs/discovery/*` file above is correct.
+2. **`outputs/confluence_replies.json`** — if you addressed (or explicitly declined to address) any unresolved comment from `input/<ticket>/discovery_comments.json`, this file must list a reply for it (see `confluence_comments.md`). A missing file is silently treated as "no replies to post" — it will NOT surface as an error, so double-check it yourself before finishing.
+
+Verify both before finishing:
+```bash
+ls -la outputs/ outputs/discovery/ && head -3 outputs/response.md && echo "OK: response.md exists"
+```
+If either file is missing, create it now — do not leave it for a future run.

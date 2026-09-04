@@ -28,8 +28,62 @@
 var configLoader = require('./configLoader.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 var contentOutput = require('./common/contentOutput.js');
+var feedbackLoop = require('./common/feedbackLoop.js');
 
 var DISCOVERY_OUTPUT_DIR = 'outputs/discovery';
+var RESPONSE_FILE = 'outputs/response.md';
+
+/**
+ * On a very long/near-budget-limit discovery run, the CLI agent can do all the
+ * substantive work (address every inline comment, update every page) and still
+ * skip its last, cheapest steps: writing outputs/response.md and/or
+ * outputs/confluence_replies.json (see instructions/discovery/output_rules.md's
+ * "Before you finish" checklist). A missing outputs/response.md is a strong,
+ * low-noise signal for this specific failure mode — after the prompt fix above,
+ * a well-behaved run always writes it, so its absence is not a normal "nothing
+ * to report" outcome. Give the agent one more chance to finish those steps by
+ * resuming the SAME session (feedbackLoop.resumeAgent()) rather than publishing
+ * whatever partial bookkeeping exists and moving on.
+ */
+function isResponseFileMissing() {
+    try {
+        var raw = file_read({ path: RESPONSE_FILE });
+        return !raw || !raw.trim();
+    } catch (e) {
+        return true;
+    }
+}
+
+function tryResumeForMissingFinalOutput(params, ticketKey, customParams) {
+    try {
+        return feedbackLoop.resumeAgent({
+            ticketKey: ticketKey,
+            customParams: customParams,
+            section: 'postAction',
+            stage: 'discovery_final_output',
+            error: '`' + RESPONSE_FILE + '` is missing or empty after the CLI run finished. ' +
+                'This usually means the run ran out of turns/budget right before its last steps.',
+            promptOverride: [
+                'Your previous discovery run for ' + ticketKey + ' finished without writing two required bookkeeping files.',
+                '',
+                'Do the following now, in the SAME repository/session, before anything else:',
+                '1. Write `' + RESPONSE_FILE + '` — a short (a few sentences) summary of what you did last run ' +
+                    '(which mode(s) ran, the headline recommendation, whether any inline comments were addressed).',
+                '2. If you addressed (or explicitly declined to address) any unresolved inline comment last run, ' +
+                    'make sure `outputs/confluence_replies.json` lists a reply for it — see ' +
+                    'instructions/discovery/confluence_comments.md for the exact format. If nothing needs a reply, ' +
+                    'it is fine to omit this file or leave it as an empty array `[]`.',
+                '3. Do not redo work that is already correctly reflected in `outputs/discovery/` — only fill in the ' +
+                    'missing bookkeeping above.',
+                '',
+                'Do not push or run any git commands; this is a documentation-only publishing step with no repository changes to commit.'
+            ].join('\n')
+        }).attempted;
+    } catch (resumeError) {
+        console.error('tryResumeForMissingFinalOutput: feedbackLoop.resumeAgent failed unexpectedly — publishing with whatever output exists:', resumeError);
+        return false;
+    }
+}
 
 function findTicketPage(children, ticketKey) {
     if (!children || !Array.isArray(children)) return null;
@@ -160,6 +214,21 @@ function action(params) {
             replyResult = contentOutput.publishCommentReplies();
         } catch (replyError) {
             console.warn('Failed to publish inline comment replies:', replyError);
+        }
+
+        if (isResponseFileMissing()) {
+            var _customParams = (params.jobParams && params.jobParams.customParams) || params.customParams;
+            console.warn('publishDiscoveryToConfluence: ' + RESPONSE_FILE + ' is missing/empty for ' + ticketKey +
+                ' — attempting to resume the CLI session to finish the run\'s final bookkeeping steps.');
+            if (tryResumeForMissingFinalOutput(params, ticketKey, _customParams)) {
+                // Resumed successfully — the agent should now have written the missing
+                // file(s). Re-run this whole post-action from the top so the freshly
+                // written outputs/discovery/ and outputs/confluence_replies.json get
+                // (re-)synced/posted, same recursive-retry pattern as
+                // developTicketAndCreatePR.js's resumeDevelopmentAgent() call sites.
+                return action(params);
+            }
+            console.warn('publishDiscoveryToConfluence: resume not attempted/available (disabled, exhausted, or non-recoverable) — publishing with whatever output exists.');
         }
 
         var comment = 'h3. 📚 Discovery published to Confluence\n\n' +

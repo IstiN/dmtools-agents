@@ -10,7 +10,15 @@ function loadPublishDiscovery(mocks, discoveryConfig) {
         confluence_content_by_id: function(args) { return { id: args.contentId, _links: { webui: '/wiki/spaces/DISC/pages/1', base: 'https://confluence.example.com' } }; },
         confluence_sync_markdown_directory: function() { return JSON.stringify({ syncedPages: ['index', 'prd'] }); },
         confluence_reply_to_inline_comment: function() {},
-        file_read: function() { throw new Error('no replies file'); },
+        file_read: function(args) {
+            var path = (args && args.path) || args;
+            // Default to "well-behaved run": response.md exists (so tests unrelated to the
+            // new resume-on-missing-response.md check don't trigger it); everything else
+            // (e.g. outputs/confluence_replies.json, called as a bare string by
+            // contentOutput.js) still behaves like "file not found".
+            if (path === 'outputs/response.md') return 'Discovery run summary.';
+            throw new Error('no replies file');
+        },
         jira_post_comment: function() {}
     };
 
@@ -26,6 +34,7 @@ function loadPublishDiscovery(mocks, discoveryConfig) {
         makeRequire({
             './configLoader.js': configLoaderMock,
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/feedbackLoop.js': (mocks && mocks.__feedbackLoop) || { resumeAgent: function() { return { attempted: false, reason: 'disabled' }; } },
             './common/contentOutput.js': loadModule('js/common/contentOutput.js',
                 makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } } }),
                 globals)
@@ -254,4 +263,70 @@ suite('publishDiscoveryToConfluence', function() {
         assert.equal(result.commentRepliesPosted, 0);
     });
 
+    test('outputs/response.md missing — resumes the CLI session and re-publishes once the retry succeeds', function() {
+        var resumeCalls = [];
+        var syncCalls = 0;
+        var responseWritten = false;
+        var mod = loadPublishDiscovery({
+            confluence_get_children_by_id: function() {
+                return [{ id: '456', title: 'PROJ-2 Some feature', body: { storage: { value: '' } } }];
+            },
+            confluence_sync_markdown_directory: function() {
+                syncCalls += 1;
+                return JSON.stringify({ syncedPages: ['index'] });
+            },
+            file_read: function(opts) {
+                var path = opts && (opts.path || opts);
+                if (path === 'outputs/response.md') {
+                    return responseWritten ? 'Discovery run summary.' : '';
+                }
+                throw new Error('not found: ' + path);
+            },
+            __feedbackLoop: {
+                resumeAgent: function(options) {
+                    resumeCalls.push(options);
+                    responseWritten = true; // simulate the resumed CLI run writing the missing file
+                    return { attempted: true, attempts: 1 };
+                }
+            }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        var result = mod.action(makeParams());
+
+        assert.equal(resumeCalls.length, 1);
+        assert.equal(resumeCalls[0].stage, 'discovery_final_output');
+        assert.equal(resumeCalls[0].ticketKey, 'PROJ-2');
+        assert.contains(resumeCalls[0].promptOverride, 'outputs/response.md');
+        assert.contains(resumeCalls[0].promptOverride, 'confluence_replies.json');
+        assert.equal(syncCalls, 2); // once before resume, once on the recursive retry
+        assert.equal(result.success, true);
+    });
+
+    test('outputs/response.md missing but resume not attempted (disabled/exhausted) — still publishes with what exists', function() {
+        var syncCalls = 0;
+        var mod = loadPublishDiscovery({
+            confluence_get_children_by_id: function() {
+                return [{ id: '456', title: 'PROJ-2 Some feature', body: { storage: { value: '' } } }];
+            },
+            confluence_sync_markdown_directory: function() {
+                syncCalls += 1;
+                return JSON.stringify({ syncedPages: ['index'] });
+            },
+            file_read: function(opts) {
+                var path = opts && (opts.path || opts);
+                throw new Error('not found: ' + path);
+            },
+            __feedbackLoop: {
+                resumeAgent: function() { return { attempted: false, reason: 'disabled' }; }
+            }
+        }, { space: 'DISC', parentPageId: '123' });
+
+        var result = mod.action(makeParams());
+
+        assert.equal(syncCalls, 1); // no recursive retry
+        assert.equal(result.success, true);
+        assert.equal(result.commentRepliesPosted, 0);
+    });
+
 });
+
