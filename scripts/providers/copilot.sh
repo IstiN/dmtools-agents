@@ -158,6 +158,103 @@ run_copilot() {
     return "$status"
   }
 
+  # Runs `run_copilot_once` watched by scripts/loop_guard.py, which detects a
+  # stuck agent — the exact same tool call repeated over and over in the
+  # transcript (observed in real CI runs: the model can even self-label each
+  # repeat with an incrementing ordinal — "again", "third time", ... — aware
+  # it kept repeating, but never breaking out on its own). If detected,
+  # terminates the agent gracefully (SIGTERM, not SIGKILL, to preserve a
+  # resumable session) and retries a bounded number of times WITHOUT
+  # switching models: a stuck model is not assumed to be a *bad* model, just
+  # one that needs an explicit nudge that it repeated itself, and
+  # COPILOT_SESSION_NAME's own --resume logic (see setup/copilot-session.sh)
+  # means simply re-invoking transparently picks the same session back up.
+  #
+  # `set -m` gives the backgrounded subshell its own process group using
+  # nothing but standard bash job control — no external `setsid` binary
+  # needed — and, unlike re-invoking a fresh `bash -c '...'`, a plain
+  # subshell preserves this function's full variable/array state
+  # (copilot_cmd, copilot_session_args, PROMPT, ...), so run_copilot_once
+  # itself needs no changes at all.
+  #
+  # Creates its own transcript log file(s) (one per internal retry) via
+  # new_agent_log_file and appends each to the caller's copilot_log_files
+  # array, and updates $copilot_log to point at the LAST one used — relying
+  # on the same dynamic scoping retry_copilot_session_selection below
+  # already uses to mutate the caller's locals (copilot_log_files/exit_code
+  # are `local` to run_copilot(), and any function called while those locals
+  # are in scope sees and can assign them, same as any other bash function).
+  run_copilot_once_guarded() {
+    local label="$1"
+    local model="$2"
+
+    copilot_log="$(new_agent_log_file "${label}")"
+    copilot_log_files+=("$copilot_log")
+
+    if [ "${COPILOT_LOOP_GUARD_ENABLED:-true}" = "false" ] || ! command -v python3 >/dev/null 2>&1; then
+      run_copilot_once "$copilot_log" "$model"
+      return $?
+    fi
+
+    local guard_max_retries="${COPILOT_LOOP_GUARD_MAX_RETRIES:-2}"
+    local guard_attempt=0
+    local guard_status=1
+
+    while :; do
+      local marker
+      marker="$(mktemp)"
+      rm -f "${marker}"
+
+      # Preserve/restore whatever monitor-mode state this shell already had
+      # (run-agent.sh runs everything under `set -euo pipefail`, without
+      # `-m`) rather than assuming it was off.
+      local was_monitor_mode=0
+      case $- in *m*) was_monitor_mode=1 ;; esac
+      set -m
+      ( run_copilot_once "${copilot_log}" "${model}" ) &
+      local run_pid=$!
+      [ "${was_monitor_mode}" -eq 1 ] || set +m
+
+      python3 "${script_dir}/../loop_guard.py" \
+        --log-file "${copilot_log}" \
+        --pid "${run_pid}" \
+        --marker-file "${marker}" \
+        --threshold "${COPILOT_LOOP_GUARD_THRESHOLD:-5}" \
+        --poll-interval "${COPILOT_LOOP_GUARD_POLL_SECONDS:-20}" \
+        --ignore-types "${COPILOT_LOOP_GUARD_IGNORE_TYPES:-}" \
+        >/dev/null 2>&1 &
+      local guard_pid=$!
+
+      set +e
+      wait "${run_pid}"
+      guard_status=$?
+      set -e
+      kill "${guard_pid}" 2>/dev/null || true
+      wait "${guard_pid}" 2>/dev/null || true
+
+      if [ ! -s "${marker}" ]; then
+        rm -f "${marker}"
+        break
+      fi
+
+      echo ""
+      echo "🔁 loop-guard: $(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(f\"detected {d['repeat_count']} consecutive identical {d['tool_type']} calls (threshold {d['threshold']}): {d['command'][:200]}\")" "${marker}" 2>/dev/null || echo "detected a stuck repeat")"
+      rm -f "${marker}"
+
+      if [ "${guard_attempt}" -ge "${guard_max_retries}" ]; then
+        echo "🔁 loop-guard: repeat limit (${guard_max_retries} retries) exhausted without breaking the loop; giving up on this attempt so it fails visibly instead of running until the CI timeout" >&2
+        break
+      fi
+
+      guard_attempt=$((guard_attempt + 1))
+      echo "🔁 loop-guard: terminated the agent gracefully; retrying ${guard_attempt}/${guard_max_retries} on the SAME model/session (no fallback model — the CLI's own session-resume will pick this up automatically)"
+      copilot_log="$(new_agent_log_file "${label}-loopguard${guard_attempt}")"
+      copilot_log_files+=("$copilot_log")
+    done
+
+    return "${guard_status}"
+  }
+
   retry_copilot_session_selection() {
     local log_file="$1"
     local model="$2"
@@ -216,10 +313,8 @@ run_copilot() {
 
   while [ "$attempt" -le "$max_attempts" ]; do
     local copilot_log
-    copilot_log="$(new_agent_log_file "copilot-attempt${attempt}")"
-    copilot_log_files+=("$copilot_log")
     set +e
-    run_copilot_once "$copilot_log" "$copilot_model_value"
+    run_copilot_once_guarded "copilot-attempt${attempt}" "$copilot_model_value"
     exit_code=$?
     set -e
 
@@ -240,10 +335,8 @@ run_copilot() {
         COPILOT_SESSION_NAME="${COPILOT_SESSION_NAME}-r$(date +%s)"
         copilot_session_args=(--name "${COPILOT_SESSION_NAME}")
         copilot_session_mode="name"
-        copilot_log="$(new_agent_log_file "copilot-attempt${attempt}-fresh")"
-        copilot_log_files+=("$copilot_log")
         set +e
-        run_copilot_once "$copilot_log" "$copilot_model_value"
+        run_copilot_once_guarded "copilot-attempt${attempt}-fresh" "$copilot_model_value"
         exit_code=$?
         set -e
       fi
@@ -258,10 +351,8 @@ run_copilot() {
       echo ""
       echo "Copilot model ${copilot_model_value} is unavailable; retrying with ${copilot_default_model}"
       record_codegraph_usage "$copilot_log"
-      copilot_log="$(new_agent_log_file "copilot-attempt${attempt}-fallback")"
-      copilot_log_files+=("$copilot_log")
       set +e
-      run_copilot_once "$copilot_log" "$copilot_default_model"
+      run_copilot_once_guarded "copilot-attempt${attempt}-fallback" "$copilot_default_model"
       exit_code=$?
       set -e
       copilot_model_value="$copilot_default_model"
