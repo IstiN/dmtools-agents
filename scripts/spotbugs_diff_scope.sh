@@ -15,8 +15,10 @@
 # instead, so pre-existing findings elsewhere in the module no longer block the gate.
 #
 # How it works:
-#   1. Diff HEAD against a base ref (arg 3, or auto-detected origin/master / origin/main)
-#      to find changed *.java files.
+#   1. Diff HEAD against a base ref (arg 3; or, if omitted, the branch named in
+#      ../../outputs/pr_base_branch.txt — see js/common/baseBranchMarker.js — used as
+#      "origin/<that branch>" if it resolves; or auto-detected origin/master /
+#      origin/main as a last resort) to find changed *.java files.
 #   2. Map each changed file to its Maven module (nearest ancestor pom.xml).
 #   3. Run `mvn spotbugs:spotbugs` (report-only — does NOT fail the build) scoped to
 #      those modules (NOT -am, matching the compile gate's convention of installing
@@ -53,6 +55,21 @@ set -euo pipefail
 MAVEN_ROOT="${1:?maven root required, e.g. tools-app}"
 SETTINGS_PATH="${2:?settings path (relative to the working directory, e.g. mvn/settings.xml) required}"
 BASE_REF="${3:-}"
+
+# If no explicit base ref was passed, check the marker file written by
+# js/common/baseBranchMarker.js (via preCliReworkSetup.js / preCliDevelopmentSetup.js)
+# before falling back to the origin/master / origin/main auto-detect below. This lets
+# repos/tickets that release via a non-default branch (e.g. a versioned
+# "develop/{version}" branch) get scoped correctly instead of silently diffing against
+# the wrong ref. Path is relative to this script's cwd (the target repo checkout root,
+# conventionally 2 directory levels below the job root — same convention already used
+# to invoke this very script, e.g. "../../agents/scripts/spotbugs_diff_scope.sh").
+if [ -z "${BASE_REF}" ] && [ -f "../../outputs/pr_base_branch.txt" ]; then
+  MARKER_BRANCH="$(tr -d '[:space:]' < "../../outputs/pr_base_branch.txt")"
+  if [ -n "${MARKER_BRANCH}" ] && git rev-parse --verify "origin/${MARKER_BRANCH}" >/dev/null 2>&1; then
+    BASE_REF="origin/${MARKER_BRANCH}"
+  fi
+fi
 
 if [ -z "${BASE_REF}" ]; then
   for candidate in origin/master origin/main; do

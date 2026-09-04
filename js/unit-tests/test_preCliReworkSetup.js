@@ -40,7 +40,8 @@ function loadPreCliReworkSetup(configLoaderStub, mocks) {
             // Real module (not a no-op stub): preCliReworkSetup.js reads
             // setupCommands.truncateSetupError at load time to build its own
             // truncateForComment() helper, so the stub must actually export it.
-            './common/setupCommands.js': loadModule('js/common/setupCommands.js')
+            './common/setupCommands.js': loadModule('js/common/setupCommands.js'),
+            './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} }
         }),
         mocks || {}
     );

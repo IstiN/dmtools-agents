@@ -17,6 +17,7 @@ const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 var restoreFromReleases = require('./restoreFromReleases.js');
 var setupCommands = require('./common/setupCommands.js');
+var baseBranchMarker = require('./common/baseBranchMarker.js');
 
 /**
  * Optionally syncs the PR's base branch with its own upstream (config.git.baseBranch)
@@ -145,6 +146,13 @@ function action(params) {
         }
 
         const baseBranch = prDetails.base ? prDetails.base.ref : config.git.baseBranch;
+
+        // Persist the PR's real base branch to outputs/pr_base_branch.txt so that
+        // quality-gate shell commands (static strings in the job's JSON config, unable
+        // to reference config.git.baseBranch at runtime) can read the actual target
+        // branch instead of relying on a hardcoded literal like "origin/master" — see
+        // js/common/baseBranchMarker.js docblock for the full rationale.
+        baseBranchMarker.writeBaseBranchMarker(baseBranch);
 
         // Step 4.4: Optionally sync the PR's base branch with its own upstream — see
         // syncBaseBranchIfConfigured() docblock for the rationale.

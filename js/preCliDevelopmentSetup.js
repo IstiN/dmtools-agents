@@ -16,6 +16,7 @@ const fetchLinkedTestsToInput = require('./fetchLinkedTestsToInput.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 var restoreFromReleases = require('./restoreFromReleases.js');
 var setupCommands = require('./common/setupCommands.js');
+var baseBranchMarker = require('./common/baseBranchMarker.js');
 
 // Universal working-directory-aware wrapper for cli_execute_command.
 // When config.workingDir is set (via customParams.targetRepository.workingDir),
@@ -334,6 +335,13 @@ function action(params) {
         var config = configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params));
         var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
         var statuses = resolveStatuses(customParams);
+
+        // Persist the resolved base branch to outputs/pr_base_branch.txt so that
+        // quality-gate shell commands (static strings in the job's JSON config, unable
+        // to reference config.git.baseBranch at runtime) can read the actual branch
+        // this ticket develops against instead of relying on a hardcoded literal like
+        // "origin/master" — see js/common/baseBranchMarker.js docblock for the rationale.
+        baseBranchMarker.writeBaseBranchMarker(config.git.baseBranch);
 
         // Restore configured artefacts (e.g. cosmo test reports) from GitHub Release — non-fatal
         try { restoreFromReleases.action(params); } catch (e) { console.warn('⚠️ restoreFromReleases failed (non-fatal):', e); }

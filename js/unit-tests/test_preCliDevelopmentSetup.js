@@ -44,7 +44,8 @@ function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
             './fetchLinkedTestsToInput.js': NOOP_MODULE,
             './fetchParentContextToInput.js': NOOP_MODULE,
             './restoreFromReleases.js': NOOP_MODULE,
-            './common/setupCommands.js': NOOP_MODULE
+            './common/setupCommands.js': NOOP_MODULE,
+            './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} }
         }),
         mocks || {}
     );
