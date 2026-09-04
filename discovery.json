@@ -5,6 +5,9 @@
       "./agents/scripts/run-agent.sh"
     ],
     "outputType": "none",
+    "envVariables": {
+      "CLI_ALLOWED_COMMANDS": "bash"
+    },
     "ticketContextDepth": 1,
     "attachResponseAsFile": false,
     "skipAIProcessing": true,
