@@ -120,7 +120,13 @@ function resumeAgent(options) {
     attempt += 1;
     setAttempt(markerPath, attempt);
 
-    var prompt = buildFeedbackPrompt({
+    // `buildFeedbackPrompt()` bakes in dev-flow assumptions ("do not push; the
+    // post-action will commit and push after you finish") that don't apply to
+    // every caller (e.g. a publish-only post-action that never pushes code).
+    // Callers with a different resume flow can pass `promptOverride` with the
+    // full prompt text instead — attempt tracking / non-recoverable-error
+    // detection / the `--continue` resume mechanics stay identical either way.
+    var prompt = options.promptOverride || buildFeedbackPrompt({
         ticketKey: options.ticketKey,
         stage: options.stage,
         attempt: attempt,
