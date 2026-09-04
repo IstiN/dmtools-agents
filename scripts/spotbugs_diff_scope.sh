@@ -122,13 +122,65 @@ if [ -z "${MODULE_LIST}" ]; then
 fi
 
 echo "spotbugs_diff_scope: scoping spotbugs to changed module(s): ${MODULE_LIST}"
-# Report-only (spotbugs:spotbugs), NOT spotbugs:check — the module may have
-# pre-existing findings we intentionally do not want to fail the build on; the
-# actual pass/fail decision happens below, after filtering to new-code findings.
-mvn --batch-mode -f "${MAVEN_ROOT}/pom.xml" -s "${SETTINGS_PATH}" -T 1C -pl "${MODULE_LIST}" compile spotbugs:spotbugs -q
+
+# A module directory containing a pom.xml (mapped above) is not necessarily part of
+# the CURRENT Maven reactor: some modules are only wired into the aggregator's
+# <modules> list when a specific profile is active (e.g. a CI-only profile), so a
+# plain checkout without that profile fails `-pl <module>` outright with
+# "Could not find the selected project in the reactor: <module>" — a hard Maven
+# reactor-resolution error, thrown before any code is even compiled, which looks
+# identical to a real gate failure but isn't fixable by changing the diff at all.
+# Rather than trying to independently reconstruct Maven's own profile-dependent
+# module-activation logic (fragile, and would drift from whatever profiles this
+# checkout/CI actually runs with), retry with each module Maven itself reports as
+# missing from the reactor removed from the -pl list, until either the reactor
+# resolves cleanly or every changed module has been excluded (in which case there
+# is nothing left to scope spotbugs to, so the check trivially passes).
+MVN_OUTPUT_FILE="$(mktemp)"
+# shellcheck disable=SC2064 # intentionally expand MVN_OUTPUT_FILE now, not at EXIT
+trap "rm -f '${MVN_OUTPUT_FILE}'" EXIT
+REMAINING_MODULES="${MODULE_LIST}"
+while :; do
+  if [ -z "${REMAINING_MODULES}" ]; then
+    echo "spotbugs_diff_scope: every changed module is profile-activated/not in the current reactor — skipping spotbugs check"
+    exit 0
+  fi
+
+  # Report-only (spotbugs:spotbugs), NOT spotbugs:check — the module may have
+  # pre-existing findings we intentionally do not want to fail the build on; the
+  # actual pass/fail decision happens below, after filtering to new-code findings.
+  if mvn --batch-mode -f "${MAVEN_ROOT}/pom.xml" -s "${SETTINGS_PATH}" -T 1C -pl "${REMAINING_MODULES}" compile spotbugs:spotbugs -q >"${MVN_OUTPUT_FILE}" 2>&1; then
+    break
+  fi
+
+  MISSING_MODULES="$(grep -o "Could not find the selected project in the reactor: [^ ]*" "${MVN_OUTPUT_FILE}" | sed 's/^Could not find the selected project in the reactor: //' | sort -u)"
+  if [ -z "${MISSING_MODULES}" ]; then
+    # A real build/compile failure, not a reactor-resolution issue — surface it as-is.
+    cat "${MVN_OUTPUT_FILE}"
+    exit 1
+  fi
+
+  while IFS= read -r missing; do
+    [ -z "${missing}" ] && continue
+    echo "spotbugs_diff_scope: warning: module '${missing}' is not in the current Maven reactor (likely profile-activated); skipping it"
+    # Rebuild the comma-separated list via a bash array (not sed) — module paths
+    # contain '/', which would collide with a '/'-delimited sed substitution.
+    IFS=',' read -r -a _remaining_arr <<< "${REMAINING_MODULES}"
+    NEW_REMAINING=""
+    for m in "${_remaining_arr[@]}"; do
+      [ "${m}" = "${missing}" ] && continue
+      if [ -z "${NEW_REMAINING}" ]; then
+        NEW_REMAINING="${m}"
+      else
+        NEW_REMAINING="${NEW_REMAINING},${m}"
+      fi
+    done
+    REMAINING_MODULES="${NEW_REMAINING}"
+  done <<< "${MISSING_MODULES}"
+done
 
 DIFF_DATA_FILE="$(mktemp)"
-trap 'rm -f "${DIFF_DATA_FILE}"' EXIT
+trap 'rm -f "${DIFF_DATA_FILE}" "${MVN_OUTPUT_FILE}"' EXIT
 
 : > "${DIFF_DATA_FILE}"
 while IFS= read -r file; do
