@@ -13,6 +13,14 @@
     "preCliJSAction": "agents/js/prepareDiscoveryContext.js",
     "postJSAction": "agents/js/publishDiscoveryToConfluence.js",
     "inputJql": "key = JD-82",
+    "customParams": {
+      "feedbackLoop": {
+        "postAction": {
+          "enabled": true,
+          "maxAttempts": 1
+        }
+      }
+    },
     "cliPrompts": [
       "Experienced Product Discovery Lead / Business Analyst",
       "./agents/instructions/common/agent_task_preamble.md",
