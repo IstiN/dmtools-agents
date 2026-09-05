@@ -54,7 +54,7 @@ flowchart TD
     BLOCKING -->|No| IMPORTANT[Fix IMPORTANT issues]
     IMPORTANT --> SUGGESTIONS{Minor suggestions?}
     SUGGESTIONS -->|Yes| SKIP["Skip if time-consuming — note in response.md"]
-    SUGGESTIONS -->|No| TEST[Run tests and verify]
+    SUGGESTIONS -->|No| TEST["Follow TDD approach for every fix — see tdd_approach.md — then run tests and verify"]
     SKIP --> TEST
     TEST --> OUTPUT[Write outputs/response.md]
     OUTPUT --> REPLIES{Open review threads?}
@@ -98,7 +98,36 @@ Read PR files to understand WHAT changed. Read ticket files to understand WHY it
 
 ---
 
-### [5] `./agents/instructions/pr_rework/formatting_rules.md`
+### [5] `./agents/instructions/pr_rework/tdd_approach.md`
+
+```mermaid
+flowchart TD
+    subgraph TDD["TDD for PR Rework — RED-GREEN-REFACTOR"]
+        T0["Start from the concrete issue: a CI failure, a review thread, or a BLOCKING/IMPORTANT finding"]
+        T1["RED: Write or extend a test that REPRODUCES the reported issue<br/>— must fail before the fix<br/>— cover the exact scenario called out (including boundary/multi-item cases, not just the happy path)"]
+        T2["GREEN: Make the minimum code change to turn the test PASS<br/>— do not expand scope beyond the reported issue"]
+        T3["REFACTOR: Clean up while keeping tests GREEN<br/>— run the full test suite after every change"]
+        T4{"More findings to address?"}
+        T5["Repeat RED-GREEN-REFACTOR for the next finding"]
+        T0 --> T1 --> T2 --> T3 --> T4
+        T4 -->|Yes| T5 --> T1
+        T4 -->|No| DONE([All findings fixed with regression tests])
+    end
+
+    subgraph RULES["PR Rework TDD Rules"]
+        R1["❌ NEVER change production code in response to a review comment or CI failure without a test that first reproduces it"]
+        R2["✅ If the existing tests only cover a single-item/simple case, add a test for the multi-item/edge case the finding points at — a fix without a test for that exact case is not verified"]
+        R3["✅ Returned findings: your fix must differ from the previous attempt and the new/updated test must prove it"]
+        R4["✅ Run the FULL test suite before finishing — no regressions allowed"]
+    end
+
+    TDD --> RULES
+```
+
+
+---
+
+### [6] `./agents/instructions/pr_rework/formatting_rules.md`
 
 ```mermaid
 flowchart TD
@@ -117,7 +146,7 @@ flowchart TD
 
 ---
 
-### [6] `./agents/instructions/pr_rework/output_rules.md`
+### [7] `./agents/instructions/pr_rework/output_rules.md`
 
 ## PR Rework — Output Rules
 
@@ -126,7 +155,7 @@ Rework posts **only** to the Pull Request. All output must be Markdown.
 ### Required files
 
 1. `outputs/response.md`
-   - GitHub Markdown fix summary for the top-level PR comment.
+   - Markdown fix summary for the top-level PR comment.
    - Use `#`/`##` headings, ` ``` ` code fences, `-` bullets.
    - Required sections: `## Issues/Notes`, `## Approach`, `## Files Modified`, `## Test Coverage`.
 
@@ -140,7 +169,7 @@ Rework posts **only** to the Pull Request. All output must be Markdown.
   "replies": [
     {
       "inReplyToId": 1234567890,
-      "threadId": "PRRT_<graphQL_id>",
+      "threadId": "<copied verbatim from pr_discussions_raw.json>",
       "reply": "outputs/review_replies/thread_1.md"
     }
   ]
@@ -155,14 +184,15 @@ Rework posts **only** to the Pull Request. All output must be Markdown.
 Rules for review replies:
 - Read `input/<TICKET>/pr_discussions_raw.json` to obtain each open thread's `threadId` and `rootCommentId` (`inReplyToId`).
 - Create one reply entry and one `.md` file for **every** open review thread — do not skip any unresolved conversation.
-- `threadId` is required for GitHub to resolve/close the conversation; `inReplyToId` is required to post the reply in the correct thread.
+- `threadId` is required to resolve/close the conversation; `inReplyToId` is required to post the reply in the correct thread.
+- ⚠️ **Copy `threadId` verbatim, character-for-character, from `pr_discussions_raw.json`.** Its format depends on which SCM the PR lives on (a GitHub GraphQL node ID, a GitLab discussion hash, an ADO thread number, etc.) and is opaque — never invent, prefix, reformat, or pattern-match it against an example. The value above is a placeholder showing *where* the field goes, not what it should look like.
 - Do **not** put the reply body inline in the JSON; use the `reply` field only as a file path reference.
 - ⚠️ **Common mistake**: `pr_discussions_raw.json` uses the field names `rootCommentId` and `body`. When writing `review_replies.json`, you MUST rename these to `inReplyToId` and `reply` respectively — do NOT copy the input field names as-is into the output JSON, or the reply will silently post as an untargeted top-level comment instead of a threaded reply.
 
 
 ---
 
-### [7] `./agents/instructions/common/dmtools_cli.md`
+### [8] `./agents/instructions/common/dmtools_cli.md`
 
 ## DMTools CLI — External Data Access
 
@@ -200,7 +230,7 @@ flowchart TD
 
 ---
 
-### [8] `./agents/prompts/bash_tools.md`
+### [9] `./agents/prompts/bash_tools.md`
 
 ```mermaid
 flowchart TD
