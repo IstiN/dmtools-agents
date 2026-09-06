@@ -467,6 +467,47 @@ function postErrorCommentToJira(ticketKey, stage, errorMessage) {
     }
 }
 
+/**
+ * Detects CLI/environment failures that a retry can never fix — e.g. the configured
+ * AI_AGENT_PROVIDER binary (cursor-agent, kimi, claude, ...) is missing from the
+ * runner's PATH, or AI_AGENT_PROVIDER names an unknown provider. run-agent.sh surfaces
+ * these as "Command failed (exit code 127)" (127 = shell "command not found"), unlike
+ * transient failures (rate limits, timeouts = exit code 124) that a resume/retry can
+ * plausibly resolve. Silently resetting the ticket for retry on this class of error
+ * just loops forever, since the missing tool never appears on its own.
+ */
+function isFatalCliEnvironmentError(responseText) {
+    var text = String(responseText || '');
+    return /exit code 127\)/.test(text) ||
+        /not found in PATH/i.test(text) ||
+        /Error: unknown provider/i.test(text);
+}
+
+function postFatalCliEnvironmentErrorToJira(ticketKey, errorMessage) {
+    try {
+        jira_post_comment({
+            key: ticketKey,
+            comment: 'h3. ❌ AI CLI Environment Failure\n\n' +
+                'The configured AI CLI tool could not run on the runner (e.g. missing binary or misconfigured provider):\n\n{code}' + errorMessage + '{code}\n\n' +
+                'This is an infrastructure/setup problem, not a normal work-item issue — retrying will fail the same way until the runner environment is fixed. The job has been failed explicitly instead of silently looping on retry.'
+        });
+    } catch (e) {
+        console.error('Failed to post fatal CLI environment error comment:', e);
+    }
+}
+
+/**
+ * Posts the fatal-error comment and throws a marked Error so it propagates out of
+ * action() uncaught (see the outer catch below) instead of being swallowed into the
+ * usual "reset for retry" recovery path.
+ */
+function throwFatalCliEnvironmentError(ticketKey, errorMessage) {
+    postFatalCliEnvironmentErrorToJira(ticketKey, errorMessage);
+    var err = new Error('Fatal CLI/environment failure: ' + errorMessage);
+    err.fatalCliEnvironment = true;
+    throw err;
+}
+
 function labelsToRemove(customParams, metadata) {
     var labels = [];
     if (customParams && customParams.removeLabel) labels.push(customParams.removeLabel);
@@ -779,7 +820,12 @@ function action(params) {
                     return { success: true, path: 'no-changes-needed', ticketKey: ticketKey };
                 }
 
-                // Case B: agent was genuinely interrupted — retry.
+                // Case B: agent was genuinely interrupted, OR the CLI/environment itself is
+                // broken (e.g. missing AI CLI binary) — the latter can never self-resolve via retry.
+                if (isFatalCliEnvironmentError(developmentSummary)) {
+                    console.error('CLI/environment failure detected (e.g. AI CLI binary missing from PATH) — failing the job explicitly instead of resetting for retry.');
+                    throwFatalCliEnvironmentError(ticketKey, developmentSummary);
+                }
                 console.log('No git changes detected AND no response.md — CLI agent was interrupted. Resetting ticket for retry.');
                 try {
                     jira_post_comment({
@@ -879,6 +925,12 @@ function action(params) {
             responseContent = null;
         }
         if (!responseContent || !responseContent.trim()) {
+            // Same distinction as above: an unrecoverable CLI/environment failure must fail
+            // the job explicitly rather than reset for an endless retry loop.
+            if (isFatalCliEnvironmentError(developmentSummary)) {
+                console.error('CLI/environment failure detected (e.g. AI CLI binary missing from PATH) — failing the job explicitly instead of resetting for retry.');
+                throwFatalCliEnvironmentError(ticketKey, developmentSummary);
+            }
             // Agent was interrupted after committing partial work (e.g. outputs/rca.md) but
             // before writing response.md. Reset ticket for retry rather than posting an error.
             console.log('outputs/response.md missing after commit — CLI agent was interrupted mid-way. Resetting for retry.');
@@ -1027,6 +1079,13 @@ function action(params) {
 
     } catch (error) {
         console.error('❌ Error in development workflow:', error);
+
+        if (error && error.fatalCliEnvironment) {
+            // Retrying can never fix a broken CLI/tooling setup (missing binary, bad
+            // provider config, ...) — let the exception propagate so the job fails
+            // loudly and visibly instead of silently looping via resume/reset-for-retry.
+            throw error;
+        }
 
         // Try to reset ticket for retry instead of leaving it stuck In Development.
         try {
