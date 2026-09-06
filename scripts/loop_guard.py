@@ -11,33 +11,41 @@ SAME tool call over and over — e.g. hundreds of identical `grep` calls
 returning "No matches found", or hundreds of identical shell calls
 re-running the same command. The model can even self-label each repeat with
 an incrementing ordinal ("again", "third time", ...) — aware it kept
-repeating, but never breaking out on its own. A subtler variant has also
-been observed: the model embeds a fresh throwaway word *inside* the command
-text itself on every repeat (not just the free-text label), which defeats
-naive exact-match detection since every repeat's signature is technically
-unique. Left unchecked, the job just burns CI minutes until someone notices
-the log and cancels it by hand (CI job timeouts are typically hours, not
-minutes).
+repeating, but never breaking out on its own. Two subtler variants have also
+been observed: (a) the model embeds a fresh throwaway word *inside* the
+command text itself on every repeat (not just the free-text label), which
+defeats naive exact-match detection since every repeat's signature is
+technically unique; (b) the model interleaves one genuinely different call
+between each repeat of an otherwise byte-identical command, so the repeat is
+never adjacent to itself and defeats any check that only looks at a
+consecutive run. Left unchecked, the job just burns CI minutes until someone
+notices the log and cancels it by hand (CI job timeouts are typically hours,
+not minutes).
 
 What this script does
 ----------------------
 Polls a live transcript log file, parses it into an ordered list of tool-call
 "signatures" (tool type + normalized command/args — deliberately NOT
 including the bullet's free-text label, since that's exactly the part the
-model varies on every repeat with its ordinal counting), and checks two
-things at the tail of the transcript:
+model varies on every repeat with its ordinal counting), and checks three
+things, falling through in order of strictness:
 
 1. trailing_repeat(): does the exact same signature appear >= --threshold
    times consecutively? (the classic case — byte-identical repeated calls)
 2. trailing_near_repeat(): do the last >= --near-threshold calls share the
    same tool_type and token count, differing from the newest one by only a
-   handful of whitespace-split tokens? (catches a model that embeds a new
-   throwaway word *inside* the command on every repeat specifically to dodge
-   check 1 — near-threshold is deliberately much higher than --threshold to
-   avoid flagging legitimate repetitive-looking exploration such as reading
-   several different files with the same templated command)
+   handful of whitespace-split tokens? (catches variant (a) above —
+   near-threshold is deliberately much higher than --threshold to avoid
+   flagging legitimate repetitive-looking exploration such as reading several
+   different files with the same templated command)
+3. windowed_repeat(): does the exact same signature appear >= --window-threshold
+   times within the last --window-size calls, WITHOUT requiring adjacency?
+   (catches variant (b) above — window-threshold is deliberately much higher
+   still, since counting non-adjacent occurrences is the most prone to
+   false-positiving on a legitimately-common single command re-run a handful
+   of times across a long session)
 
-If either check fires, it sends SIGTERM to the given pid (graceful, so a
+If any check fires, it sends SIGTERM to the given pid (graceful, so a
 resumable CLI session/state is preserved) and writes a small JSON marker
 describing what was detected (including which check fired, via
 `detection_kind`), for the caller to react to (see
@@ -179,6 +187,42 @@ def trailing_near_repeat(blocks, ignore_types=frozenset(), max_diff_tokens=3, ma
     return count, last
 
 
+def windowed_repeat(blocks, ignore_types=frozenset(), window=200):
+    """Return (repeat_count, (tool_type, signature)) for the signature that
+    repeats most often within the last `window` blocks — WITHOUT requiring
+    those repeats to be consecutive.
+
+    This exists because both trailing_repeat() and trailing_near_repeat()
+    only ever look at a contiguous run at the very END of the transcript. A
+    model can defeat that by repeating the exact same byte-identical call
+    over and over while interleaving one *different*, genuinely-distinct call
+    in between each repeat (e.g. re-running the same
+    `git diff ... SomeFile.java | head -50` ~2000 times across a long
+    transcript, each time preceded by a different one-off `git log`/`git
+    diff` investigating a different file) — the repeated call is never
+    adjacent to another copy of itself, so it never forms a "trailing run"
+    and both of the above checks stay silent no matter how many times it
+    repeats.
+
+    Only the single most-repeated signature in the window is reported (the
+    one most likely to be an actual stuck loop); legitimate exploration
+    naturally spreads calls across many distinct signatures instead of
+    concentrating on one.
+    """
+    filtered = [b for b in blocks if b[0] not in ignore_types and b[1]]
+    if not filtered:
+        return 0, None
+    recent = filtered[-window:]
+    counts = {}
+    for b in recent:
+        counts[b] = counts.get(b, 0) + 1
+    best_signature, best_count = None, 0
+    for signature, count in counts.items():
+        if count > best_count:
+            best_signature, best_count = signature, count
+    return best_count, best_signature
+
+
 def _pid_alive(pid):
     try:
         os.kill(pid, 0)
@@ -218,6 +262,22 @@ def main(argv=None):
             "and more prone to false positives on legitimate repetitive-looking exploration"
         ),
     )
+    parser.add_argument(
+        "--window-threshold",
+        type=int,
+        default=int(os.environ.get("COPILOT_LOOP_GUARD_WINDOW_THRESHOLD", "40")),
+        help=(
+            "occurrences of the SAME exact signature required within the last --window-size calls to "
+            "trigger windowed_repeat(), regardless of adjacency; catches a model that interleaves one "
+            "distinct call between each repeat specifically to dodge the trailing-run checks above"
+        ),
+    )
+    parser.add_argument(
+        "--window-size",
+        type=int,
+        default=int(os.environ.get("COPILOT_LOOP_GUARD_WINDOW_SIZE", "200")),
+        help="how many of the most recent calls windowed_repeat() considers",
+    )
     parser.add_argument("--poll-interval", type=float, default=float(os.environ.get("COPILOT_LOOP_GUARD_POLL_SECONDS", "20")))
     parser.add_argument(
         "--ignore-types",
@@ -251,6 +311,17 @@ def main(argv=None):
             count, signature = trailing_near_repeat(blocks, ignore_types=ignore_types)
             detection_kind = "near_duplicate"
             detection_threshold = args.near_threshold
+        if not (signature is not None and count >= detection_threshold):
+            # Fall back further to the windowed check: the same exact call
+            # repeating many times within a recent window even if it's never
+            # adjacent to itself (a model interleaving one distinct call
+            # between each repeat specifically to dodge the two trailing-run
+            # checks above).
+            count, signature = windowed_repeat(
+                blocks, ignore_types=ignore_types, window=args.window_size
+            )
+            detection_kind = "windowed_duplicate"
+            detection_threshold = args.window_threshold
         if signature is not None and count >= detection_threshold:
             tool_type, normalized = signature
             detail = {

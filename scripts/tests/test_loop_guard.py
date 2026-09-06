@@ -169,5 +169,51 @@ class TrailingNearRepeatTests(unittest.TestCase):
         self.assertIsNone(sig)
 
 
+class WindowedRepeatTests(unittest.TestCase):
+    def test_no_blocks_returns_zero(self):
+        count, sig = loop_guard.windowed_repeat([])
+        self.assertEqual(count, 0)
+        self.assertIsNone(sig)
+
+    def test_counts_non_adjacent_occurrences_within_the_window(self):
+        blocks = [("shell", "cmd A"), ("shell", "cmd B"), ("shell", "cmd A"), ("shell", "cmd C"), ("shell", "cmd A")]
+        count, sig = loop_guard.windowed_repeat(blocks)
+        self.assertEqual(count, 3)
+        self.assertEqual(sig, ("shell", "cmd A"))
+
+    def test_interleaved_identical_call_is_caught_even_though_never_adjacent(self):
+        # A model can repeat the exact same byte-identical command many times
+        # while interleaving one genuinely different investigative call
+        # between each repeat, so the repeat is never adjacent to itself and
+        # both trailing_repeat() and trailing_near_repeat() see count=1
+        # forever no matter how many times it repeats.
+        blocks = []
+        for i in range(50):
+            blocks.append(("shell", "git diff -- SomeFile.java | head -50"))
+            blocks.append(("shell", "git log --grep=TICKET -- File{0}.java | head -20".format(i)))
+
+        exact_count, _ = loop_guard.trailing_repeat(blocks)
+        self.assertEqual(exact_count, 1, "interleaving defeats the trailing exact-match check")
+
+        near_count, _ = loop_guard.trailing_near_repeat(blocks)
+        self.assertEqual(near_count, 1, "interleaving defeats the trailing near-match check too")
+
+        window_count, sig = loop_guard.windowed_repeat(blocks, window=200)
+        self.assertEqual(window_count, 50)
+        self.assertEqual(sig, ("shell", "git diff -- SomeFile.java | head -50"))
+
+    def test_only_considers_the_last_window_blocks(self):
+        blocks = [("shell", "cmd A")] * 3 + [("shell", "cmd B")] * 2
+        count, sig = loop_guard.windowed_repeat(blocks, window=2)
+        self.assertEqual(count, 2)
+        self.assertEqual(sig, ("shell", "cmd B"))
+
+    def test_ignore_types_excludes_matching_blocks(self):
+        blocks = [("wait", "poll")] * 10 + [("shell", "cmd A")] * 2
+        count, sig = loop_guard.windowed_repeat(blocks, ignore_types=frozenset({"wait"}))
+        self.assertEqual(count, 2)
+        self.assertEqual(sig, ("shell", "cmd A"))
+
+
 if __name__ == "__main__":
     unittest.main()
