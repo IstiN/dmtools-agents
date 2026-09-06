@@ -209,8 +209,10 @@ suite('preCliDevelopmentSetup.checkoutBranch — two-branch mode feature branch 
 suite('preCliDevelopmentSetup.checkoutBranch — generated .codegraph index guard', function() {
 
     var STASH_RM_CMD = 'git rm -r --cached --ignore-unmatch .codegraph';
-    var STASH_MV_CMD = 'bash -c "if [ -d .codegraph ]; then rm -rf .codegraph.branch-setup-bak && mv .codegraph .codegraph.branch-setup-bak; fi"';
-    var RESTORE_MV_CMD = 'bash -c "if [ -d .codegraph.branch-setup-bak ]; then rm -rf .codegraph && mv .codegraph.branch-setup-bak .codegraph; fi"';
+    var STASH_TEST_CMD = 'bash -c "test -d .codegraph"';
+    var STASH_MV_CMD = 'bash -c "mv .codegraph .codegraph.branch-setup-bak"';
+    var RESTORE_TEST_CMD = 'bash -c "test -d .codegraph.branch-setup-bak"';
+    var RESTORE_MV_CMD = 'bash -c "mv .codegraph.branch-setup-bak .codegraph"';
 
     function loadForGuard(calls, responses) {
         var config = makeConfig({ git: { featureBranch: { enabled: false } } });
@@ -230,15 +232,22 @@ suite('preCliDevelopmentSetup.checkoutBranch — generated .codegraph index guar
         ctx.mod.checkoutBranch('PROJ-1', ctx.config, TICKET, {});
 
         var stashRmIdx = calls.indexOf(STASH_RM_CMD);
+        var stashTestIdx = calls.indexOf(STASH_TEST_CMD);
         var stashMvIdx = calls.indexOf(STASH_MV_CMD);
         var checkoutIdx = calls.indexOf('git checkout -B master origin/master');
+        var restoreTestIdx = calls.lastIndexOf(RESTORE_TEST_CMD);
         var restoreMvIdx = calls.lastIndexOf(RESTORE_MV_CMD);
 
         assert.ok(stashRmIdx !== -1, 'unstages .codegraph before branch setup');
+        assert.ok(stashTestIdx !== -1, 'checks whether .codegraph exists before moving it aside');
         assert.ok(stashMvIdx !== -1, 'moves .codegraph aside before branch setup');
+        assert.ok(restoreTestIdx !== -1, 'checks whether the backup exists before restoring it');
         assert.ok(restoreMvIdx !== -1, 'restores .codegraph after branch setup');
         assert.ok(stashMvIdx < checkoutIdx, 'stash happens before checkout');
         assert.ok(restoreMvIdx > calls.lastIndexOf('git checkout -b ai/PROJ-1'), 'restore happens after checkout');
+        for (var i = 0; i < calls.length; i++) {
+            assert.equal(/[;`]|&&|\|\||[<>]/.test(calls[i]), false, 'command must not contain disallowed shell metacharacters: ' + calls[i]);
+        }
     });
 
     test('restores .codegraph even when checkout fails', function() {

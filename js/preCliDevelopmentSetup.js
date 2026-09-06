@@ -143,26 +143,64 @@ function alignBranchWithBase(ticketKey, branchName, baseBranch) {
 // overwritten". Move the index aside for the duration of branch setup and
 // restore it afterwards; if the checked-out branch still tracks .codegraph,
 // untrack it so the next auto-commit removes it (self-healing).
-// Shell builtins (if/mv/rm/grep/printf) are not in the cli_execute_command
-// whitelist — wrap them in `bash -c` (whitelisted), like other JS helpers do.
+// Shell builtins (if/mv/rm/test) are not in the cli_execute_command
+// whitelist — wrap them in `bash -c` (whitelisted). IMPORTANT: dmtools'
+// shell-metacharacter guard scans the whole string passed to cli_execute_command,
+// including the text quoted inside `bash -c "..."` — it does NOT parse quoting,
+// so a single `bash -c` call can never contain `;`, `&&`, `||`, `>`/`>>`, etc.,
+// even safely inside its own quotes. Every previous attempt at chaining
+// if/then/&&/>> inside one bash -c call was silently rejected with
+// "disallowed shell metacharacters" on every run, making this guard a no-op.
+// Do branching/sequencing in JS instead, and use file_read/file_write (not
+// shell grep/printf/>>) for the .gitignore edit.
+function commandSucceeds(command) {
+    try {
+        runCmd({ command: command });
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
 function stashGeneratedIndex() {
     try { runCmd({ command: 'git rm -r --cached --ignore-unmatch .codegraph' }); } catch (e) {}
+    if (!commandSucceeds('bash -c "test -d .codegraph"')) return;
     try {
-        runCmd({ command: 'bash -c "if [ -d .codegraph ]; then rm -rf .codegraph.branch-setup-bak && mv .codegraph .codegraph.branch-setup-bak; fi"' });
+        try { runCmd({ command: 'bash -c "rm -rf .codegraph.branch-setup-bak"' }); } catch (e) {}
+        runCmd({ command: 'bash -c "mv .codegraph .codegraph.branch-setup-bak"' });
     } catch (e) {
         console.warn('Could not move .codegraph aside before branch setup:', e);
     }
 }
 
-function restoreGeneratedIndex() {
-    try { runCmd({ command: 'git rm -r --cached --ignore-unmatch .codegraph' }); } catch (e) {}
+function ensureCodegraphGitignoreEntry() {
     try {
-        runCmd({ command: 'bash -c "grep -qxF \'.codegraph/\' .gitignore 2>/dev/null || printf \'\\n# CodeGraph generated index - regenerated per-run, must never be committed\\n.codegraph/\\n\' >> .gitignore"' });
+        var content = '';
+        try { content = file_read({ path: '.gitignore' }) || ''; } catch (e) { content = ''; }
+        var lines = content.split('\n');
+        var alreadyPresent = false;
+        for (var i = 0; i < lines.length; i++) {
+            if (lines[i].trim() === '.codegraph/') { alreadyPresent = true; break; }
+        }
+        if (!alreadyPresent) {
+            var sep = content && content.charAt(content.length - 1) !== '\n' ? '\n' : '';
+            file_write({
+                path: '.gitignore',
+                content: content + sep + '\n# CodeGraph generated index - regenerated per-run, must never be committed\n.codegraph/\n'
+            });
+        }
     } catch (e) {
         console.warn('Could not add .codegraph/ to .gitignore:', e);
     }
+}
+
+function restoreGeneratedIndex() {
+    try { runCmd({ command: 'git rm -r --cached --ignore-unmatch .codegraph' }); } catch (e) {}
+    ensureCodegraphGitignoreEntry();
+    if (!commandSucceeds('bash -c "test -d .codegraph.branch-setup-bak"')) return;
     try {
-        runCmd({ command: 'bash -c "if [ -d .codegraph.branch-setup-bak ]; then rm -rf .codegraph && mv .codegraph.branch-setup-bak .codegraph; fi"' });
+        try { runCmd({ command: 'bash -c "rm -rf .codegraph"' }); } catch (e) {}
+        runCmd({ command: 'bash -c "mv .codegraph.branch-setup-bak .codegraph"' });
     } catch (e) {
         console.warn('Could not restore .codegraph after branch setup:', e);
     }
