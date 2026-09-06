@@ -31,6 +31,55 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
     );
 }
 
+// Loads developTicketAndCreatePR.js with the REAL common/pullRequest.js and
+// common/submodules.js helpers (instead of the bare stubs above) so tests can
+// drive performGitOperations() all the way to its "No changes were made" path,
+// which the bare stubs can't reach (they lack readStagedDiffStat/buildOriginFetchCommand).
+function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks) {
+    var realPrHelper = loadModule('js/common/pullRequest.js', makeRequire({}), {});
+    return loadModule(
+        'js/developTicketAndCreatePR.js',
+        makeRequire({
+            './common/jiraHelpers.js': { extractTicketKey: function(key) { return key; } },
+            './common/pullRequest.js': realPrHelper,
+            './common/submodules.js': { pushManagedSubmodules: function() {} },
+            './common/feedbackLoop.js': {
+                runQualityGates: function() { return { success: true }; },
+                runPolicyGates: function() { return { success: true }; },
+                runPostPublishGates: function() { return { success: true }; },
+                resumeAgent: function() { return { attempted: false }; }
+            },
+            './common/autoStart.js': { triggerSmIfIdle: function() {} },
+            './common/outputFiles.js': { readOutputFile: function() { return null; } },
+            './cacheToReleases.js': {},
+            './configLoader.js': configLoaderModule,
+            './config.js': configModule,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        }),
+        Object.assign({
+            cli_execute_command: function() { return ''; },
+            jira_post_comment: function() {},
+            jira_move_to_status: function() {},
+            jira_remove_label: function() {}
+        }, mocks || {})
+    );
+}
+
+// Common git-command mock shared by the two tests below: simulates a ticket
+// branch with no staged/committed/pushed changes at all — i.e. the CLI agent
+// never actually ran (which is exactly what happens when the AI CLI binary is
+// missing from the runner, exit code 127).
+function noChangesGitCommandMock(ticketKey, branchName) {
+    return function(args) {
+        var command = args.command;
+        if (command.indexOf('gh pr list --head ' + branchName) === 0) return '';
+        if (command === 'git branch --show-current') return branchName;
+        if (command === 'git diff --cached --stat') return '';
+        if (command.indexOf('git rev-list --count') === 0) return '0';
+        return '';
+    };
+}
+
 suite('developTicketAndCreatePR > failure recovery', function() {
 
     test('resets ticket and removes retry-blocking labels when git configuration fails', function() {
@@ -118,6 +167,63 @@ suite('developTicketAndCreatePR > failure recovery', function() {
         assert.deepEqual(movedTo, ['Ready For Development']);
         assert.equal(comments.length, 1);
         assert.contains(comments[0].comment, 'Development Workflow Error');
+    });
+
+    test('fails the job explicitly (throws) instead of resetting for retry when the AI CLI binary is missing from the runner (exit code 127)', function() {
+        var movedTo = [];
+        var removedLabels = [];
+        var comments = [];
+        // Mirrors the real dmtools "response" text observed when run-agent.sh can't
+        // find the configured provider's CLI binary (e.g. cursor-agent not installed).
+        var fatalResponse = 'CLI command executed but did not produce output file:\n' +
+            'CLI Command: ./agents/scripts/run-agent.sh "prompt"\n' +
+            "Error: Failed to execute CLI command './agents/scripts/run-agent.sh \"prompt\"': " +
+            'Command failed (exit code 127): ./agents/scripts/run-agent.sh "prompt"\n' +
+            'Output:\nAI Agent Provider: cursor\nError: cursor-agent not found in PATH\n';
+
+        var mod = loadDevelopTicketAndCreatePRWithRealGitHelpers({
+            cli_execute_command: noChangesGitCommandMock('TS-3', 'ai/TS-3'),
+            jira_post_comment: function(args) { comments.push(args); },
+            jira_move_to_status: function(args) { movedTo.push(args.statusName); },
+            jira_remove_label: function(args) { removedLabels.push(args.label); }
+        });
+
+        assert.throws(function() {
+            mod.action({
+                ticket: { key: 'TS-3', fields: { summary: 'Broken CLI', description: '', labels: [] } },
+                metadata: { contextId: 'story_development' },
+                customParams: {},
+                response: fatalResponse
+            });
+        }, 'expected action() to throw so the CI job fails explicitly instead of silently continuing');
+
+        assert.equal(movedTo.length, 0, 'ticket must not be silently reset to Ready For Development');
+        assert.equal(removedLabels.length, 0, 'retry-blocking labels must not be removed on a fatal environment error');
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'AI CLI Environment Failure');
+    });
+
+    test('still resets ticket for retry (does not throw) on an ordinary interrupted response with no fatal environment signature', function() {
+        var movedTo = [];
+        var comments = [];
+        var mod = loadDevelopTicketAndCreatePRWithRealGitHelpers({
+            cli_execute_command: noChangesGitCommandMock('TS-4', 'ai/TS-4'),
+            jira_post_comment: function(args) { comments.push(args); },
+            jira_move_to_status: function(args) { movedTo.push(args.statusName); }
+        });
+
+        var result = mod.action({
+            ticket: { key: 'TS-4', fields: { summary: 'Rate limited', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: 'Agent hit a rate limit and stopped mid-analysis.'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'interrupted');
+        assert.deepEqual(movedTo, ['Ready For Development']);
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'Development Interrupted');
     });
 
 });
