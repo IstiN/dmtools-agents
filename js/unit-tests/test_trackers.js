@@ -356,6 +356,96 @@ suite('trackers.js github provider', function () {
         var t = trackers.createTracker({ tracker: { provider: 'github' } });
         assert.throws(function () { t.moveToStatus('acme/widgets#7', ''); });
     });
+
+    test('addLabel / removeLabel use the canonical issue label tools', function () {
+        var ghAdd = recorder('github_add_labels', '{}');
+        var ghRemove = recorder('github_remove_label', '{}');
+        var trackers = loadTrackers({
+            github_add_labels: ghAdd,
+            github_remove_label: ghRemove
+        });
+        var t = trackers.createTracker({
+            tracker: { provider: 'github' },
+            repository: { owner: 'acme', repo: 'widgets' }
+        });
+        t.addLabel('acme/widgets#7', 'ai-generated');
+        t.removeLabel('acme/widgets#7', 'wip');
+        assert.deepEqual(ghAdd.calls[0], {
+            owner: 'acme',
+            repo: 'widgets',
+            number: 7,
+            labels: ['ai-generated']
+        });
+        assert.deepEqual(ghRemove.calls[0], {
+            owner: 'acme',
+            repo: 'widgets',
+            number: 7,
+            label: 'wip'
+        });
+    });
+
+    test('postComment / getComments use the issue comment surface', function () {
+        var ghPost = recorder('github_create_comment', '{}');
+        var ghList = recorder('github_get_pr_comments', [
+            { user: { login: 'A' }, body: 'n1' },
+            { user: { login: 'B' }, body: 'n2' }
+        ]);
+        var trackers = loadTrackers({
+            github_create_comment: ghPost,
+            github_get_pr_comments: ghList
+        });
+        var t = trackers.createTracker({
+            tracker: { provider: 'github' },
+            repository: { owner: 'acme', repo: 'widgets' }
+        });
+        t.postComment('acme/widgets#7', 'hello');
+        var comments = t.getComments('acme/widgets#7');
+        // github_create_comment / github_get_pr_comments hit the
+        // issues/{n}/comments endpoint (PRs are issues upstream); the
+        // number argument keeps the tools' canonical pullRequestId name.
+        assert.deepEqual(ghPost.calls[0], {
+            workspace: 'acme',
+            repository: 'widgets',
+            pullRequestId: 7,
+            text: 'hello'
+        });
+        assert.deepEqual(ghList.calls[0], {
+            workspace: 'acme',
+            repository: 'widgets',
+            pullRequestId: 7
+        });
+        assert.equal(comments.length, 2);
+        assert.equal(comments[0].author, 'A');
+        assert.equal(comments[1].body, 'n2');
+    });
+
+    test('createTicket opens an issue and returns owner/repo#N', function () {
+        var ghCreate = recorder('github_create_issue', {
+            number: 42,
+            title: 'New bug',
+            state: 'open',
+            html_url: 'https://github.com/acme/widgets/issues/42'
+        });
+        var trackers = loadTrackers({ github_create_issue: ghCreate });
+        var key = trackers.createTracker({
+            tracker: { provider: 'github' },
+            repository: { owner: 'acme', repo: 'widgets' }
+        }).createTicket(null, 'bug', 'New bug', 'It broke');
+        assert.deepEqual(ghCreate.calls[0], {
+            owner: 'acme',
+            repo: 'widgets',
+            title: 'New bug',
+            body: 'It broke'
+        });
+        assert.equal(key, 'acme/widgets#42');
+    });
+
+    test('search and assignTo stay explicit gaps (no canonical tool)', function () {
+        var trackers = loadTrackers({});
+        var t = trackers.createTracker({ tracker: { provider: 'github' } });
+        assert.throws(function () { t.search('is:open'); });
+        assert.throws(function () { t.assignTo('acme/widgets#7', 'jane'); });
+    });
 });
 
 suite('trackers.js normalizeTicket', function () {

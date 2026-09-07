@@ -20,10 +20,10 @@
  *
  * Provider capabilities: jira supports every operation; ado covers
  * tickets/search/comments/status/assign/create (labels are not exposed by
- * the ado toolset); github covers get/status/close — moveToStatus closes
- * on done/closed and carries any other status as an issue label (issue
- * tools are a Dart runtime extension); unsupported operations throw a
- * clear error.
+ * the ado toolset); github covers everything except search and assignTo —
+ * moveToStatus closes on done/closed and carries any other status as an
+ * issue label (issue tools are a Dart runtime extension); the remaining
+ * gaps throw a clear error.
  */
 
 const { STATUSES, LABELS } = require('../config.js');
@@ -255,6 +255,59 @@ function createTracker(config) {
         });
     }
 
+    function githubAddLabel(key, label) {
+        return github_add_labels({
+            owner: owner,
+            repo: repo,
+            number: githubIssueNumber(key),
+            labels: [label]
+        });
+    }
+
+    function githubRemoveLabel(key, label) {
+        return github_remove_label({
+            owner: owner,
+            repo: repo,
+            number: githubIssueNumber(key),
+            label: label
+        });
+    }
+
+    function githubPostComment(key, comment) {
+        // github_create_comment POSTs to issues/{n}/comments (PRs are
+        // issues upstream), so it serves plain-issue comments too; the
+        // number argument keeps the tool's canonical pullRequestId name.
+        return github_create_comment({
+            workspace: owner,
+            repository: repo,
+            pullRequestId: githubIssueNumber(key),
+            text: comment
+        });
+    }
+
+    function githubGetComments(key) {
+        // github_get_pr_comments merges the review-comments page (empty
+        // for plain issues — the runtime tolerates its 404) with the
+        // issue discussion page and returns a flat array.
+        return _commentPage(github_get_pr_comments({
+            workspace: owner,
+            repository: repo,
+            pullRequestId: githubIssueNumber(key)
+        }));
+    }
+
+    function githubCreateTicket(project, type, title, description) {
+        // project/type are Jira/ADO concepts — GitHub issues only have a
+        // title and a markdown body.
+        var t = normalizeTicket(github_create_issue({
+            owner: owner,
+            repo: repo,
+            title: title,
+            body: description
+        }));
+        return t ? t.key : null;
+    }
+
     // ── dispatch tables ───────────────────────────────────────────────────
 
     var impls = {
@@ -287,13 +340,13 @@ function createTracker(config) {
         github: {
             getTicket: githubGetTicket,
             search: function () { unsupported('search'); },
-            postComment: function () { unsupported('postComment'); },
-            getComments: function () { unsupported('getComments'); },
-            addLabel: function () { unsupported('addLabel'); },
-            removeLabel: function () { unsupported('removeLabel'); },
+            postComment: githubPostComment,
+            getComments: githubGetComments,
+            addLabel: githubAddLabel,
+            removeLabel: githubRemoveLabel,
             moveToStatus: githubMoveToStatus,
             assignTo: function () { unsupported('assignTo'); },
-            createTicket: function () { unsupported('createTicket'); }
+            createTicket: githubCreateTicket
         }
     };
     var impl = impls[providerName];
