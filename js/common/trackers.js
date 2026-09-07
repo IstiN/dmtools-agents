@@ -20,8 +20,10 @@
  *
  * Provider capabilities: jira supports every operation; ado covers
  * tickets/search/comments/status/assign/create (labels are not exposed by
- * the ado toolset); github is read/close-oriented (issue tools are a Dart
- * runtime extension) — unsupported operations throw a clear error.
+ * the ado toolset); github covers get/status/close — moveToStatus closes
+ * on done/closed and carries any other status as an issue label (issue
+ * tools are a Dart runtime extension); unsupported operations throw a
+ * clear error.
  */
 
 const { STATUSES, LABELS } = require('../config.js');
@@ -224,22 +226,32 @@ function createTracker(config) {
     // ── github provider (canonical github_* issue tools; Dart runtime) ────
 
     function githubGetTicket(key) {
+        // github_get_issue schema (Dart catalog): workspace/repository/
+        // issueNumber — not the REST-style owner/repo/issue_number.
         return normalizeTicket(github_get_issue({
-            owner: owner,
-            repo: repo,
-            issue_number: githubIssueNumber(key)
+            workspace: owner,
+            repository: repo,
+            issueNumber: githubIssueNumber(key)
         }));
     }
 
     function githubMoveToStatus(key, status) {
-        var s = String(status || '').toLowerCase();
-        if (s !== 'done' && s !== 'closed') {
+        // GitHub issues have no status field: done/closed close the issue,
+        // any other status is carried as an issue label (github_add_labels
+        // schema: owner/repo/number + labels array).
+        var s = String(status || '').trim().toLowerCase();
+        if (!s) {
             throw new Error('trackers: cannot map GitHub status: ' + status);
         }
-        return github_close_issue({
+        var n = githubIssueNumber(key);
+        if (s === 'done' || s === 'closed') {
+            return github_close_issue({ owner: owner, repo: repo, number: n });
+        }
+        return github_add_labels({
             owner: owner,
             repo: repo,
-            issue_number: githubIssueNumber(key)
+            number: n,
+            labels: [String(status).trim()]
         });
     }
 

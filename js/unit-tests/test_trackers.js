@@ -301,13 +301,18 @@ suite('trackers.js github provider', function () {
             tracker: { provider: 'github' },
             repository: { owner: 'acme', repo: 'widgets' }
         }).getTicket('41');
-        assert.deepEqual(ghGet.calls[0], { owner: 'acme', repo: 'widgets', issue_number: 41 });
+        // Dart tool schema (github_get_issue): workspace/repository/issueNumber.
+        assert.deepEqual(ghGet.calls[0], {
+            workspace: 'acme',
+            repository: 'widgets',
+            issueNumber: 41
+        });
         assert.equal(ticket.key, 'acme/widgets#41');
         assert.equal(ticket.status, 'open');
         assert.deepEqual(ticket.labels, ['bug', 'wip']);
     });
 
-    test('moveToStatus maps Done → close and Reopened → reopen', function () {
+    test('moveToStatus maps done/closed (any case) onto close_issue', function () {
         var ghClose = recorder('github_close_issue', '{}');
         var trackers = loadTrackers({ github_close_issue: ghClose });
         var t = trackers.createTracker({
@@ -315,13 +320,41 @@ suite('trackers.js github provider', function () {
             repository: { owner: 'acme', repo: 'widgets' }
         });
         t.moveToStatus('acme/widgets#7', 'Done');
-        assert.deepEqual(ghClose.calls[0], { owner: 'acme', repo: 'widgets', issue_number: 7 });
+        t.moveToStatus('acme/widgets#8', 'CLOSED');
+        // github_close_issue schema: owner/repo/number.
+        assert.deepEqual(ghClose.calls[0], { owner: 'acme', repo: 'widgets', number: 7 });
+        assert.deepEqual(ghClose.calls[1], { owner: 'acme', repo: 'widgets', number: 8 });
     });
 
-    test('unmappable statuses fail without an HTTP call', function () {
+    test('moveToStatus carries any other status as an issue label', function () {
+        var ghClose = recorder('github_close_issue', '{}');
+        var ghLabels = recorder('github_add_labels', '{}');
+        var trackers = loadTrackers({
+            github_close_issue: ghClose,
+            github_add_labels: ghLabels
+        });
+        var t = trackers.createTracker({
+            tracker: { provider: 'github' },
+            repository: { owner: 'acme', repo: 'widgets' }
+        });
+        t.moveToStatus('acme/widgets#7', 'In Review');
+        assert.deepEqual(ghLabels.calls[0], {
+            owner: 'acme',
+            repo: 'widgets',
+            number: 7,
+            labels: ['In Review']
+        });
+        assert.equal(ghClose.calls.length, 0);
+        // Lowercase statuses that are not done/closed are labels too.
+        t.moveToStatus('acme/widgets#8', 'reopened');
+        assert.deepEqual(ghLabels.calls[1].labels, ['reopened']);
+        assert.equal(ghClose.calls.length, 0);
+    });
+
+    test('empty status fails without an HTTP call', function () {
         var trackers = loadTrackers({});
         var t = trackers.createTracker({ tracker: { provider: 'github' } });
-        assert.throws(function () { t.moveToStatus('acme/widgets#7', 'In Review'); });
+        assert.throws(function () { t.moveToStatus('acme/widgets#7', ''); });
     });
 });
 
