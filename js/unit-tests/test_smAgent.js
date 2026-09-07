@@ -725,7 +725,15 @@ suite('smAgent: localTeammate execution mode', function() {
 
     test('adds rule labels after a successful local run', function() {
         var sm = makeSmAgent({
-            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };',
+                // Stub the target config without a matching removeLabel so
+                // ruleTargetSelfManagesLabel() is false and the label IS
+                // re-added after the local run (hermetic — no disk read).
+                'agents/story_development.json': JSON.stringify({
+                    params: { customParams: {} }
+                })
+            },
             tickets: [{ key: 'P-1', fields: { labels: [] } }]
         });
 
@@ -1133,9 +1141,9 @@ suite('smAgent: skipIfLabel', function() {
         var sm = makeSmAgent({
             fileMap: {},
             tickets: [
-                { key: 'T-old', fields: { labels: ['sm_story_acceptance_criterias_triggered'] } },
-                { key: 'T-new', fields: { labels: ['sm_story_acceptance_criteria_triggered'] } },
-                { key: 'T-open', fields: { labels: [] } }
+                { key: 'TOLD-1', fields: { labels: ['sm_story_acceptance_criterias_triggered'] } },
+                { key: 'TNEW-2', fields: { labels: ['sm_story_acceptance_criteria_triggered'] } },
+                { key: 'TOPEN-3', fields: { labels: [] } }
             ]
         });
 
@@ -1150,7 +1158,7 @@ suite('smAgent: skipIfLabel', function() {
 
         assert.equal(sm.capturedTriggers.length, 1, 'only unlabeled ticket triggered');
         var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
-        assert.contains(inputs.encoded_config, 'T-open', 'T-open was triggered');
+        assert.contains(inputs.encoded_config, 'TOPEN-3', 'TOPEN-3 was triggered');
     });
 
     test('adds all configured addLabels after successful trigger', function() {
@@ -1251,8 +1259,8 @@ suite('smAgent: rule enabled flag', function() {
         var sm = makeSmAgent({
             fileMap: {},
             tickets: [
-                { key: 'T-skipped', fields: { labels: ['sm_triggered'] } },
-                { key: 'T-open', fields: { labels: [] } }
+                { key: 'TSKIP-1', fields: { labels: ['sm_triggered'] } },
+                { key: 'TOPEN-2', fields: { labels: [] } }
             ]
         });
 
@@ -1262,7 +1270,7 @@ suite('smAgent: rule enabled flag', function() {
 
         assert.equal(sm.capturedTriggers.length, 1, 'one non-skipped ticket should be triggered');
         var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
-        assert.contains(inputs.encoded_config, 'T-open', 'limit should not be consumed by skipped ticket');
+        assert.contains(inputs.encoded_config, 'TOPEN-2', 'limit should not be consumed by skipped ticket');
     });
 
 });

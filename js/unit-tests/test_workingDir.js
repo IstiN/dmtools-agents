@@ -66,7 +66,8 @@ function loadPreCli(workingDir) {
             './fetchQuestionsToInput.js': { action: function() {} },
             './fetchLinkedTestsToInput.js': { action: function() {} },
             './restoreFromReleases.js': { action: function() {} },
-            './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; }, buildSetupWarningsMarkdown: function() { return null; } }
+            './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; }, buildSetupWarningsMarkdown: function() { return null; } },
+            './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} }
         }),
         {
             cli_execute_command: mockCli,
@@ -185,7 +186,8 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 './fetchQuestionsToInput.js': { action: function() {} },
                 './fetchLinkedTestsToInput.js': { action: function() {} },
                 './restoreFromReleases.js': { action: function() {} },
-                './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; }, buildSetupWarningsMarkdown: function() { return null; } }
+                './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; }, buildSetupWarningsMarkdown: function() { return null; } },
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} }
             }),
             {
                 cli_execute_command: mockCli,
@@ -258,7 +260,8 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 './fetchQuestionsToInput.js': { action: function() {} },
                 './fetchLinkedTestsToInput.js': { action: function() {} },
                 './restoreFromReleases.js': { action: function() {} },
-                './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; }, buildSetupWarningsMarkdown: function() { return null; } }
+                './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; }, buildSetupWarningsMarkdown: function() { return null; } },
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} }
             }),
             {
                 cli_execute_command: mockCli,
@@ -335,7 +338,8 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 './fetchQuestionsToInput.js': { action: function() {} },
                 './fetchLinkedTestsToInput.js': { action: function() {} },
                 './restoreFromReleases.js': { action: function() {} },
-                './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; }, buildSetupWarningsMarkdown: function() { return null; } }
+                './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; }, buildSetupWarningsMarkdown: function() { return null; } },
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} }
             }),
             {
                 cli_execute_command: mockCli,

@@ -124,6 +124,17 @@ var assert = {
         if (!threw) {
             throw new Error(msg || 'expected function to throw but it did not');
         }
+    },
+
+    doesNotThrow: function(fn, msg) {
+        try {
+            fn();
+        } catch (e) {
+            throw new Error(
+                (msg ? msg + ': ' : '') +
+                'expected function not to throw but it threw: ' + (e && e.message ? e.message : e)
+            );
+        }
     }
 };
 

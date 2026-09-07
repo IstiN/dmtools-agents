@@ -14,6 +14,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `requireDiagram` — when `true`, the run fails if the agent did not produce `outputs/diagram.md`. Default: `false`.
 - `checkOpenPR` — when `true`, skip tickets that already have an open solution PR. Default: `false`.
 - `autoStartDevelopment` / `autoStartDevelopmentConfigFile` — after a successful solution, automatically trigger the development workflow for the ticket using the given agent config file.
+- `removeLabel` — SM trigger label removed from the ticket after the solution is published (e.g. `sm_story_solution_triggered`), so a crash-recovered ticket can be re-triggered instead of staying stuck with a stale in-flight label.
 - `contentOutput` — output routing block; see below.
 
 ### contentOutput
