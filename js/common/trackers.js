@@ -1,21 +1,27 @@
 /**
  * Tracker-agnostic ticket helpers — the scm.js analog for trackers.
  *
- * Every operation goes through the generic tracker_* tool family; the
- * runtime routes to whichever tracker backend is configured
- * (Jira | ADO | GitHub issues). Agent code written against this module
- * no longer depends on jiraHelpers or the jira_* globals directly.
+ * Maps generic ticket operations onto CANONICAL tracker tools per
+ * configured provider — jira_* (default), ado_*, github_* — exactly like
+ * scm.js maps SCM operations onto providers.
  *
- * On runtimes that do not expose the tracker_* family (legacy Java
- * DMTools), every operation transparently falls back to its native
- * jira_* twin, so scripts stay portable during the migration.
+ * Why canonical tools and not the tracker_* family: on the Java runtime
+ * tracker_* exists solely as a CLI alias (resolved via DEFAULT_TRACKER in
+ * McpCliHandler); the JS surface exposes canonical names only. Provider
+ * mapping therefore lives in this layer, in JS.
  *
  * Factory: createTracker(config)
- *   config.repository: { owner, repo }  // expands bare GitHub issue numbers
+ *   config.tracker.provider: 'jira' (default) | 'ado' | 'github'
+ *   config.repository: { owner, repo }  // GitHub issue key expansion
  *   config.labels: { aiGenerated }      // overrides LABELS.AI_GENERATED
  *
  * Per-agent override via JSON customParams:
- *   { "customParams": { "targetRepository": { "owner": "MyOrg", "repo": "my-repo" } } }
+ *   { "customParams": { "trackerProvider": "ado" } }
+ *
+ * Provider capabilities: jira supports every operation; ado covers
+ * tickets/search/comments/status/assign/create (labels are not exposed by
+ * the ado toolset); github is read/close-oriented (issue tools are a Dart
+ * runtime extension) — unsupported operations throw a clear error.
  */
 
 const { STATUSES, LABELS } = require('../config.js');
@@ -77,7 +83,7 @@ function _normalizeComment(raw) {
 }
 
 /**
- * Read a ticket author out of backend-specific assignee shapes.
+ * Read a ticket assignee out of backend-specific shapes.
  */
 function _assigneeName(fields) {
     var candidates = [
@@ -96,15 +102,30 @@ function _assigneeName(fields) {
 }
 
 function createTracker(config) {
+    var VALID = ['jira', 'ado', 'github'];
+    var raw = config && config.tracker && config.tracker.provider;
+    var providerName = VALID.indexOf(String(raw || '').toLowerCase()) !== -1
+        ? String(raw).toLowerCase()
+        : 'jira';
     var owner = (config && config.repository && config.repository.owner) || '';
     var repo  = (config && config.repository && config.repository.repo)  || '';
     var aiLabel = (config && config.labels && config.labels.aiGenerated)
         || LABELS.AI_GENERATED;
 
+    function provider() {
+        return providerName;
+    }
+
+    function unsupported(op) {
+        throw new Error(
+            'trackers: operation "' + op + '" is not supported by the ' +
+            providerName + ' provider'
+        );
+    }
+
     /**
-     * Expand a bare numeric issue number into "owner/repo#N" when the
-     * repository is configured. Every other key shape passes through
-     * untouched ("PROJ-123", "acme/widgets#7", ADO work-item ids).
+     * Expand a bare numeric issue number into "owner/repo#N" (GitHub
+     * keys) when the repository is configured. Other keys pass through.
      */
     function expandKey(key) {
         var k = String(key == null ? '' : key).trim();
@@ -114,17 +135,167 @@ function createTracker(config) {
         return k;
     }
 
+    function githubIssueNumber(key) {
+        var k = expandKey(key);
+        var m = /^[\w.-]+\/[\w.-]+#(\d+)$/.exec(k) || /^(\d+)$/.exec(k);
+        if (!m) {
+            throw new Error('trackers: cannot parse GitHub issue key: ' + key);
+        }
+        return parseInt(m[1], 10);
+    }
+
+    // ── jira provider (canonical jira_* tools) ────────────────────────────
+
+    function jiraGetTicket(key) {
+        return normalizeTicket(jira_get_ticket({ key: key }));
+    }
+
+    function jiraSearch(query) {
+        return _ticketPage(jira_search_by_jql({ jql: query }), 'issues');
+    }
+
+    function jiraPostComment(key, comment) {
+        return jira_post_comment({ key: key, comment: comment });
+    }
+
+    function jiraGetComments(key) {
+        return _commentPage(jira_get_comments({ key: key }), 'comments');
+    }
+
+    function jiraMoveToStatus(key, status) {
+        return jira_move_to_status({ key: key, statusName: status });
+    }
+
+    function jiraAssignTo(key, user) {
+        return jira_assign_ticket_to({ key: key, accountId: user });
+    }
+
+    function jiraCreateTicket(project, type, title, description) {
+        return extractTicketKey(jira_create_ticket_basic({
+            project: project,
+            issueType: type,
+            summary: title,
+            description: description
+        }));
+    }
+
+    // ── ado provider (canonical ado_* tools) ──────────────────────────────
+
+    function adoGetTicket(key) {
+        return normalizeTicket(ado_get_work_item({ id: String(key) }));
+    }
+
+    function adoSearch(query) {
+        return _ticketPage(ado_search_by_wiql({ wiql: query }), 'value');
+    }
+
+    function adoPostComment(key, comment) {
+        return ado_add_work_item_comment({ id: String(key), comment: comment });
+    }
+
+    function adoGetComments(key) {
+        return _commentPage(ado_get_work_item_comments({ id: String(key) }), 'value');
+    }
+
+    function adoMoveToStatus(key, status) {
+        return ado_move_to_state({ id: String(key), state: status });
+    }
+
+    function adoAssignTo(key, user) {
+        return ado_assign_work_item({ id: String(key), userEmail: user });
+    }
+
+    function adoCreateTicket(project, type, title, description) {
+        var raw = ado_create_work_item({
+            project: project,
+            workItemType: type,
+            title: title,
+            description: description
+        });
+        // ADO work items identify by numeric id, not by key.
+        var parsed = _parseJson(raw);
+        if (parsed && typeof parsed === 'object') {
+            if (typeof parsed.key === 'string') return parsed.key;
+            if (parsed.id != null) return String(parsed.id);
+        }
+        return extractTicketKey(raw);
+    }
+
+    // ── github provider (canonical github_* issue tools; Dart runtime) ────
+
+    function githubGetTicket(key) {
+        return normalizeTicket(github_get_issue({
+            owner: owner,
+            repo: repo,
+            issue_number: githubIssueNumber(key)
+        }));
+    }
+
+    function githubMoveToStatus(key, status) {
+        var s = String(status || '').toLowerCase();
+        if (s !== 'done' && s !== 'closed') {
+            throw new Error('trackers: cannot map GitHub status: ' + status);
+        }
+        return github_close_issue({
+            owner: owner,
+            repo: repo,
+            issue_number: githubIssueNumber(key)
+        });
+    }
+
+    // ── dispatch tables ───────────────────────────────────────────────────
+
+    var impls = {
+        jira: {
+            getTicket: jiraGetTicket,
+            search: jiraSearch,
+            postComment: jiraPostComment,
+            getComments: jiraGetComments,
+            addLabel: function (key, label) {
+                return jira_add_label({ key: key, label: label });
+            },
+            removeLabel: function (key, label) {
+                return jira_remove_label({ key: key, label: label });
+            },
+            moveToStatus: jiraMoveToStatus,
+            assignTo: jiraAssignTo,
+            createTicket: jiraCreateTicket
+        },
+        ado: {
+            getTicket: adoGetTicket,
+            search: adoSearch,
+            postComment: adoPostComment,
+            getComments: adoGetComments,
+            addLabel: function () { unsupported('addLabel'); },
+            removeLabel: function () { unsupported('removeLabel'); },
+            moveToStatus: adoMoveToStatus,
+            assignTo: adoAssignTo,
+            createTicket: adoCreateTicket
+        },
+        github: {
+            getTicket: githubGetTicket,
+            search: function () { unsupported('search'); },
+            postComment: function () { unsupported('postComment'); },
+            getComments: function () { unsupported('getComments'); },
+            addLabel: function () { unsupported('addLabel'); },
+            removeLabel: function () { unsupported('removeLabel'); },
+            moveToStatus: githubMoveToStatus,
+            assignTo: function () { unsupported('assignTo'); },
+            createTicket: function () { unsupported('createTicket'); }
+        }
+    };
+    var impl = impls[providerName];
+
     /**
      * Normalize any backend's ticket payload into a flat view:
      * { key, id, title, status, assignee, labels, description, url, raw: null }
      * Returns null for empty/unparseable input. The raw payload is
      * deliberately not embedded — agents needing backend specifics should
-     * call the tracker_* tools directly.
+     * call the provider tools directly.
      */
-    function normalizeTicket(raw) {
-        var t = _parseJson(raw);
-        if (!t || typeof t !== 'object') return null;
-        if (typeof t === 'string') return null;
+    function normalizeTicket(rawTicket) {
+        var t = _parseJson(rawTicket);
+        if (!t || typeof t !== 'object' || typeof t === 'string') return null;
 
         // Already flat / previously normalized.
         if (typeof t.key === 'string' && !t.fields) {
@@ -133,7 +304,7 @@ function createTracker(config) {
         }
 
         // Jira: { key, id, fields: { summary, status: { name }, ... } }
-        if (t.fields && typeof t.fields === 'object' && !t.fields['System.Title']) {
+        if (t.fields && typeof t.fields === 'object' && t.fields.summary !== undefined) {
             var f = t.fields;
             return _flatTicket(
                 t.key || (t.id != null ? String(t.id) : null),
@@ -196,32 +367,11 @@ function createTracker(config) {
         };
     }
 
-    // ── tool dispatch ──────────────────────────────────────────────────────
-    //
-    // Each operation probes its own tracker_* tool: runtimes expose the
-    // family as a whole, but probing per operation keeps the fallback
-    // correct even if a future runtime ships the family incrementally.
-
-    function getTicket(key) {
-        var k = expandKey(key);
-        if (typeof tracker_get_ticket !== 'undefined') {
-            return normalizeTicket(tracker_get_ticket({ key: k }));
-        }
-        return normalizeTicket(jira_get_ticket({ key: k }));
-    }
-
-    function search(query) {
-        var page;
-        if (typeof tracker_search !== 'undefined') {
-            page = _parseJson(tracker_search({ query: query }));
-        } else {
-            page = _parseJson(jira_search_by_jql({ jql: query }));
-        }
-        var list = page;
-        if (page && typeof page === 'object' && !Array.isArray(page)) {
-            list = page.issues || page.value || page.workItems || [];
-        }
-        if (!Array.isArray(list)) return [];
+    function _ticketPage(rawPage, listField) {
+        var page = _parseJson(rawPage);
+        var list = page && typeof page === 'object' && !Array.isArray(page)
+            ? (page[listField] || [])
+            : (Array.isArray(page) ? page : []);
         var out = [];
         for (var i = 0; i < list.length; i++) {
             var n = normalizeTicket(list[i]);
@@ -230,85 +380,17 @@ function createTracker(config) {
         return out;
     }
 
-    function postComment(key, comment) {
-        var k = expandKey(key);
-        if (typeof tracker_post_comment !== 'undefined') {
-            return tracker_post_comment({ key: k, comment: comment });
-        }
-        return jira_post_comment({ key: k, comment: comment });
-    }
-
-    function getComments(key) {
-        var k = expandKey(key);
-        var page;
-        if (typeof tracker_get_comments !== 'undefined') {
-            page = _parseJson(tracker_get_comments({ key: k }));
-        } else {
-            page = _parseJson(jira_get_comments({ key: k }));
-        }
-        var list = page;
-        if (page && typeof page === 'object' && !Array.isArray(page)) {
-            list = page.comments || page.value || [];
-        }
-        if (!Array.isArray(list)) return [];
+    function _commentPage(rawPage, listField) {
+        var page = _parseJson(rawPage);
+        var list = page && typeof page === 'object' && !Array.isArray(page)
+            ? (page[listField] || [])
+            : (Array.isArray(page) ? page : []);
         var out = [];
         for (var i = 0; i < list.length; i++) {
             var c = _normalizeComment(list[i]);
             if (c) out.push(c);
         }
         return out;
-    }
-
-    function addLabel(key, label) {
-        var k = expandKey(key);
-        if (typeof tracker_add_label !== 'undefined') {
-            return tracker_add_label({ key: k, label: label });
-        }
-        return jira_add_label({ key: k, label: label });
-    }
-
-    function removeLabel(key, label) {
-        var k = expandKey(key);
-        if (typeof tracker_remove_label !== 'undefined') {
-            return tracker_remove_label({ key: k, label: label });
-        }
-        return jira_remove_label({ key: k, label: label });
-    }
-
-    function moveToStatus(key, status) {
-        var k = expandKey(key);
-        if (typeof tracker_move_to_status !== 'undefined') {
-            return tracker_move_to_status({ key: k, status: status });
-        }
-        return jira_move_to_status({ key: k, statusName: status });
-    }
-
-    function assignTo(key, user) {
-        var k = expandKey(key);
-        if (typeof tracker_assign_to !== 'undefined') {
-            return tracker_assign_to({ key: k, user: user });
-        }
-        return jira_assign_ticket_to({ key: k, accountId: user });
-    }
-
-    function createTicket(project, type, title, description) {
-        var raw;
-        if (typeof tracker_create_ticket !== 'undefined') {
-            raw = tracker_create_ticket({
-                project: project,
-                type: type,
-                title: title,
-                description: description
-            });
-        } else {
-            raw = jira_create_ticket({
-                project: project,
-                issueType: type,
-                summary: title,
-                description: description
-            });
-        }
-        return extractTicketKey(raw);
     }
 
     /**
@@ -321,12 +403,12 @@ function createTracker(config) {
         var statusName = targetStatus || STATUSES.IN_REVIEW;
         try {
             console.log('Processing ticket:', ticketKey);
-            assignTo(ticketKey, initiatorId);
-            moveToStatus(ticketKey, statusName);
-            addLabel(ticketKey, aiLabel);
+            impl.assignTo(ticketKey, initiatorId);
+            impl.moveToStatus(ticketKey, statusName);
+            impl.addLabel(ticketKey, aiLabel);
             if (wipLabel) {
                 try {
-                    removeLabel(ticketKey, wipLabel);
+                    impl.removeLabel(ticketKey, wipLabel);
                     console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
                 } catch (labelError) {
                     console.warn('Failed to remove WIP label "' + wipLabel + '":', labelError);
@@ -344,16 +426,16 @@ function createTracker(config) {
     }
 
     return {
-        provider: function () { return 'tracker'; },
-        getTicket: getTicket,
-        search: search,
-        postComment: postComment,
-        getComments: getComments,
-        addLabel: addLabel,
-        removeLabel: removeLabel,
-        moveToStatus: moveToStatus,
-        assignTo: assignTo,
-        createTicket: createTicket,
+        provider: provider,
+        getTicket: function (k) { return impl.getTicket(k); },
+        search: function (q) { return impl.search(q); },
+        postComment: function (k, c) { return impl.postComment(k, c); },
+        getComments: function (k) { return impl.getComments(k); },
+        addLabel: function (k, l) { return impl.addLabel(k, l); },
+        removeLabel: function (k, l) { return impl.removeLabel(k, l); },
+        moveToStatus: function (k, s) { return impl.moveToStatus(k, s); },
+        assignTo: function (k, u) { return impl.assignTo(k, u); },
+        createTicket: function (p, t, ti, d) { return impl.createTicket(p, t, ti, d); },
         normalizeTicket: normalizeTicket,
         extractTicketKey: extractTicketKey,
         assignForReview: assignForReview
