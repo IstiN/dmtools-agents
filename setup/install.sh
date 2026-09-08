@@ -18,7 +18,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"
 
 # Canonical order for "all" (node before copilot, java before dmtools)
-ALL_TOOLS="java maven node dmtools maestro copilot codemie cursor codegraph playwright kimi gradle android emulator konan"
+ALL_TOOLS="java maven node dmtools maestro copilot codemie cursor codegraph playwright kimi fa gradle android emulator konan"
+# Opt-in tools: installable by explicit name only, never part of "all"
+# (e.g. dmtools-dart — the Dart port, while dmtools Java stays the default).
+OPT_IN_TOOLS="dmtools-dart"
 
 if [ $# -eq 0 ]; then
   echo "Usage: install.sh tool1[:version] tool2[:version] ..."
@@ -30,12 +33,15 @@ if [ $# -eq 0 ]; then
   echo "  node      — Node.js via nvm.         Default version: 20"
   echo "  dmtools   — DMtools CLI.             Default version: v1.7.256"
   echo "  maestro   — Maestro mobile testing.  Default version: latest"
+  echo "  dmtools-dart — dmtools Dart port (epam/dmtools-dart). OPT-IN:"
+  echo "               install.sh dmtools-dart (never installed by 'all')"
   echo "  copilot   — @github/copilot npm CLI. Default version: latest  (needs node)"
   echo "  codemie   — codemie-claude CLI.      Default version: latest"
   echo "  cursor    — Cursor Agent CLI (via https://cursor.com/install)"
   echo "  codegraph — CodeGraph CLI (npm).     Default version: latest"
   echo "  playwright — Playwright + Chromium.  Default version: latest"
   echo "  kimi      — Kimi Code CLI.           Default version: latest"
+  echo "  fa        — Fa CLI (Dart agent).     Default version: latest"
   echo "  gradle    — Gradle wrapper pre-warm. Default version: (wrapper version)"
   echo "  android   — Android SDK cmdline.     Default compileSdk: 36"
   echo "  emulator  — Android AVD create+boot. Default: agent_avd, API 35, arch-matched ABI (needs android)"
@@ -139,8 +145,8 @@ for tool in ${TOOL_LIST}; do
     continue
   fi
 
-  if ! echo "${ALL_TOOLS}" | grep -qw "${tool}"; then
-    echo "❌ Unknown tool: '${tool}'. Supported: ${ALL_TOOLS}" >&2
+  if ! echo "${ALL_TOOLS} ${OPT_IN_TOOLS}" | grep -qw "${tool}"; then
+    echo "❌ Unknown tool: '${tool}'. Supported: ${ALL_TOOLS} (opt-in: ${OPT_IN_TOOLS})" >&2
     exit 1
   fi
 
@@ -197,6 +203,8 @@ for tool in ${TOOL_LIST}; do
     maven)   BIN="mvn" ;;
     node)    BIN="node" ;;
     dmtools) BIN="dmtools" ;;
+    dmtools-dart) BIN="dmtools" ;;  # side-by-side install (~/.dmtools-dart/bin)
+
     maestro) BIN="maestro" ;;
     copilot) BIN="copilot" ;;
     codemie) BIN="codemie-claude" ;;
@@ -205,6 +213,8 @@ for tool in ${TOOL_LIST}; do
     playwright) BIN="playwright" ;;
     kimi)    BIN="kimi" ;;
     gradle)  BIN="./gradlew" ;;  # project-local wrapper, never on PATH — see below
+
+    fa)      BIN="fa" ;;
     android) BIN="sdkmanager" ;;
     emulator) BIN="emulator" ;;
     konan)   continue ;;  # no standalone binary — toolchain lives in ~/.konan

@@ -728,7 +728,7 @@ ai-teammate.yml (GitHub Actions)
 │     └─ If wip label found → abort early, release lock
 ├─ 5. Run preCliJSAction (optional, e.g., fetchQuestionsToInput.js)
 │     └─ Fetches extra context and injects into prompt variables
-├─ 6. Invoke CLI Agent (Cursor / GitHub Copilot / Codemie)
+├─ 6. Invoke CLI Agent (Cursor / GitHub Copilot / Codemie / Fa)
 │     └─ Uses cliPrompt markdown file as the task specification
 │     └─ CLI agent reads Jira ticket, writes code, runs commands
 ├─ 7. Run postJSAction (e.g., developTicketAndCreatePR.js)
@@ -1101,3 +1101,74 @@ SM rules in `sm.json` use `{jiraProject}` and `{parentTicket}` placeholders:
 ```
 
 These are resolved at runtime from the project config. To fully replace all SM rules for a project with a completely different workflow, set `smRules` in the config to an array of rule objects.
+
+---
+
+## Fa Provider (`AI_AGENT_PROVIDER=fa`)
+
+Runs the [Fa CLI](https://fa1.dev) — a Dart-based AI agent harness (`fa`
+binary). Select with `AI_AGENT_PROVIDER=fa`; per-agent overrides work via the
+config's `envVariables` like for any other provider.
+
+### Environment variables
+
+fa is driven by its **env preconfig** (headless/Docker contract): the
+declaration is self-contained and pins every model role — fa never guesses
+catalog defaults.
+
+| Variable | Required | Meaning |
+|----------|----------|---------|
+| `FA_PROVIDER_TYPE` | yes | catalog provider kind: `anthropic`, `google`, `dial`, `openai-completions`, `zai`, `aiin`, `minimax`, `chatgpt-codex`, `copilot`, `codemie`, `ollama`, `openai`, `openrouter`, `kimi`, … |
+| `FA_PROVIDER_CONFIG` | yes | JSON `{"baseUrl": …, "model": …, "apiKeyEnvVar": …}` — `baseUrl` and `model` are mandatory (boot fails without them); `apiKeyEnvVar` names the env var carrying the key (its `_BASE64` twin also accepted) |
+| `FA_PROVIDER_NAME` | no | unique entry name override |
+| `FA_PROVIDER_API_KEY` | no | convenience key mapped into the config's `apiKeyEnvVar` var — only inside the `fa` subprocess scope |
+
+Example (DIAL):
+
+```
+FA_PROVIDER_TYPE=dial
+FA_PROVIDER_CONFIG='{"baseUrl":"https://ai-proxy.lab.epam.com","model":"gpt-4o","apiKeyEnvVar":"DIAL_API_KEY"}'
+DIAL_API_KEY=sk-...
+```
+
+`DIAL_API_VERSION` (optional, `dial` type only) appends the `?api-version=`
+query parameter to DIAL chat requests — pass it through the job env when the
+DIAL Core deployment requires Azure-style versioning.
+
+### Sessions and CI cache
+
+fa resumes named sessions natively (`--session <name>` resumes when the name
+exists for the cwd, creates it otherwise), so — unlike kimi — no post-run
+session-directory rewrite is needed. `setup/fa.sh` (and
+`scripts/providers/fa.sh`) source `setup/fa-session.sh`, which derives a
+deterministic session name from `repo:ticket:group` (same seed and group
+mapping as kimi) and exports:
+
+- `FA_SESSION_NAME` / `FA_SESSION_ROOT` — the session name and its isolated
+  root `<workspace>/.dmtools/fa-sessions/<repo>/<key>/<group>` (git-excluded)
+- `FA_SESSION_CACHE_PATH` / `FA_SESSION_CACHE_KEY` /
+  `FA_SESSION_CACHE_RESTORE_KEY` — wire these into the workflow's
+  cache-restore/save steps (`actions/cache` or equivalent) exactly like
+  `KIMI_SESSION_CACHE_*`; the cache key format is
+  `fa-session-<repo>-<key>-<group>-v1-<run id>`.
+
+`setup/cache.sh fa-session` re-exports the cache vars for downstream repos.
+
+### Installation
+
+> **dmtools runtimes:** the default `install.sh all` / `install.sh dmtools`
+> installs the **Java DMTools CLI** (epam/dm.ai) — it stays the primary
+> orchestrator. The **Dart port** (epam/dmtools-dart) is opt-in only:
+> `install.sh dmtools-dart` or `setup/dmtools-dart.sh`. It installs
+> side-by-side under `~/.dmtools-dart/bin` (both ship a `dmtools` binary —
+> PATH order decides which wins when both are on PATH) and is never pulled
+> in by `install.sh all`.
+
+
+`setup/install.sh fa` installs from the GitHub Releases of
+[IstiN/flutter_agent_harness](https://github.com/IstiN/flutter_agent_harness/releases)
+— the platform bundle (`fa-<os>-<arch>.tar.gz`: `bin/fa` + `lib/`, same
+layout `install_local.sh` produces) lands in `~/.local/bin` + `~/.local/lib`
+(override with `FA_INSTALL_DIR`), pin a release with `fa.sh v0.1.324` /
+`FA_VERSION`. Fallback: the fa1.dev upstream installer. The bin dir is
+registered on PATH for subsequent CI steps.

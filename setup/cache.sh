@@ -110,7 +110,9 @@ _cache_kimi_session() {
 _cache_cursor_session() {
   # shellcheck source=/dev/null
   source "${SCRIPT_DIR}/cursor-session.sh" env
-}
+
+_cache_fa_session() {
+  source "${SCRIPT_DIR}/fa-session.sh" env}
 
 _cache_gradle() {
   # Gradle wrapper distribution (~/.gradle/wrapper) and dependency cache (~/.gradle/caches).
@@ -178,6 +180,8 @@ _dispatch_tool() {
     copilot-session) _cache_copilot_session ;;
     kimi-session) _cache_kimi_session ;;
     cursor-session) _cache_cursor_session ;;
+
+    fa-session) _cache_fa_session ;;
     codegraph) _cache_codegraph "${version}" ;;
     playwright) _cache_playwright "${version}" ;;
     codemie)  _cache_codemie  "${version}" ;;
@@ -225,8 +229,7 @@ _print_info() {
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-ALL_TOOLS="java node dmtools maestro copilot copilot-session kimi-session cursor-session codemie cursor codegraph playwright kimi"
-
+ALL_TOOLS="java node dmtools maestro copilot copilot-session kimi-session fa-session cursor-session codemie cursor codegraph playwright kimi"  # cursor has no cache
 MODE="${1:-info}"
 shift || true
 
