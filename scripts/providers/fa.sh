@@ -139,7 +139,7 @@ run_fa() {
 # vars into unrelated shells.
 _fa_configure_session() {
   local setup_dir
-  setup_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../setup" && pwd)"
+  setup_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../setup" 2>/dev/null && pwd || true)"
   if [ -z "${FA_SESSION_NAME:-}" ] && [ -f "${setup_dir}/fa-session.sh" ]; then
     # shellcheck source=/dev/null
     source "${setup_dir}/fa-session.sh" env
