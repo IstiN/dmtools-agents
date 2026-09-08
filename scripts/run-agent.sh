@@ -55,7 +55,7 @@ Providers:
   claude-code  - Uses Claude Code CLI via Bedrock proxy (ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY)
   codemie      - Uses codemie-claude
   copilot      - Uses GitHub Copilot CLI (npx @github/copilot)
-  fa           - Uses the Fa CLI (fa); requires FA_PROVIDER_TYPE and
+  fa           - Uses the Fa CLI (fa); requires FA_PROVIDER_TYPE +
                  FA_PROVIDER_MODEL, optional FA_PROVIDER_BASE_URL and
                  FA_PROVIDER_API_KEY
   kimi         - Uses Kimi Code CLI (kimi)

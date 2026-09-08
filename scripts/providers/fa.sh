@@ -1,20 +1,36 @@
 #!/bin/bash
 # Fa provider for run-agent.sh
 #
-# Env contract:
-#   FA_PROVIDER_TYPE     (required) fa provider kind: dial | anthropic |
-#                         google | openai-completions
-#   FA_PROVIDER_MODEL    (required) model id / deployment name (--model)
-#   FA_PROVIDER_BASE_URL (optional) endpoint override (--base-url)
-#   FA_PROVIDER_API_KEY  (optional) API key; mapped per kind to the env var
-#                         fa itself reads (DIAL_API_KEY, ANTHROPIC_API_KEY,
-#                         GOOGLE_API_KEY, OPENROUTER_API_KEY) and exported
-#                         ONLY into the fa subprocess scope
+# Current fa contract (env preconfig, fa ≥ 0.1.32x — the declaration is
+# machine-written and self-contained; fa never guesses catalog defaults):
+#   FA_PROVIDER_TYPE     (required) catalog provider kind: anthropic,
+#                        google, dial, openai-completions, zai, aiin,
+#                        minimax, chatgpt-codex, copilot, codemie,
+#                        ollama, openai, openrouter, kimi, …
+#   FA_PROVIDER_CONFIG   (required, JSON) {"baseUrl": …, "model": …,
+#                        "apiKeyEnvVar": …} — baseUrl and model are
+#                        mandatory (fa fails the boot without them),
+#                        apiKeyEnvVar names the env var that carries the
+#                        API key (its _BASE64 twin also accepted)
+#   FA_PROVIDER_NAME     (optional) unique entry name override
+#   FA_PROVIDER_API_KEY  (optional) convenience: mapped into the env var
+#                        the config's apiKeyEnvVar names — ONLY inside
+#                        the fa subprocess scope
+#
+# Legacy shim (pre-2026-09 contract, kept for old job definitions):
+#   FA_PROVIDER_MODEL    model id
+#   FA_PROVIDER_BASE_URL endpoint (optional — kind default used)
+#   FA_PROVIDER_API_KEY  key
+# When FA_PROVIDER_CONFIG is unset, the script composes it from these
+# legacy vars (apiKeyEnvVar defaults to the kind's conventional name) —
+# so old job env blocks keep working unmodified.
 #
 # Sessions (when agents/setup/fa-session.sh is present, e.g. AI Teammate
 # runs): --session "$FA_SESSION_NAME" --session-root "$FA_SESSION_ROOT"
 # resume-or-create the deterministic named session for repo:ticket:group.
 
+# Legacy kind → conventional API-key env name (used only to compose
+# FA_PROVIDER_CONFIG from the legacy vars).
 _fa_key_env_for_type() {
   case "$1" in
     dial)               echo "DIAL_API_KEY" ;;
@@ -25,36 +41,46 @@ _fa_key_env_for_type() {
   esac
 }
 
-run_fa() {
+_fa_resolve_env() {
   if [ -z "${FA_PROVIDER_TYPE:-}" ]; then
     echo "Error: FA_PROVIDER_TYPE environment variable is required for fa provider" >&2
     return 1
   fi
 
-  local key_env
-  key_env="$(_fa_key_env_for_type "${FA_PROVIDER_TYPE}")"
-  if [ -z "$key_env" ]; then
-    echo "Error: unsupported FA_PROVIDER_TYPE '${FA_PROVIDER_TYPE}' (expected dial, anthropic, google, or openai-completions)" >&2
-    return 1
+  if [ -n "${FA_PROVIDER_CONFIG:-}" ]; then
+    # Current contract: the declaration is authoritative. Surface the
+    # config's key env var name so the runner can map FA_PROVIDER_API_KEY
+    # into it for the subprocess when the var itself is unset.
+    FA_KEY_ENV_VAR="$(printf '%s' "${FA_PROVIDER_CONFIG}" | sed -n 's/.*"apiKeyEnvVar"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    return 0
   fi
 
+  # Legacy shim: compose FA_PROVIDER_CONFIG from the old flat vars.
   if [ -z "${FA_PROVIDER_MODEL:-}" ]; then
-    echo "Error: FA_PROVIDER_MODEL environment variable is required for fa provider" >&2
+    echo "Error: FA_PROVIDER_CONFIG (or legacy FA_PROVIDER_MODEL) is required for fa provider" >&2
     return 1
   fi
+  local key_env
+  key_env="$(_fa_key_env_for_type "${FA_PROVIDER_TYPE}")"
+  if [ -z "${FA_PROVIDER_BASE_URL:-}" ]; then
+    echo "Error: FA_PROVIDER_BASE_URL is required with the legacy FA_PROVIDER_MODEL contract (fa no longer guesses catalog defaults)" >&2
+    return 1
+  fi
+  echo "⚠️  Legacy fa provider env detected (FA_PROVIDER_MODEL/BASE_URL) — composing FA_PROVIDER_CONFIG" >&2
+  FA_PROVIDER_CONFIG="$(printf '{"baseUrl":"%s","model":"%s","apiKeyEnvVar":"%s"}' \
+    "${FA_PROVIDER_BASE_URL}" "${FA_PROVIDER_MODEL}" "${key_env}")"
+  FA_KEY_ENV_VAR="${key_env}"
+}
+
+run_fa() {
+  _fa_resolve_env || return 1
 
   _fa_configure_session
 
   echo "Fa Configuration:"
   echo "  Provider Type: ${FA_PROVIDER_TYPE}"
-  echo "  Base URL: ${FA_PROVIDER_BASE_URL:-<provider default>}"
-  echo "  Model: ${FA_PROVIDER_MODEL}"
-  if [ -n "${FA_SESSION_NAME:-}" ]; then
-    echo "  Session: ${FA_SESSION_NAME}"
-  fi
-
-  # fa has no --continue/--resume flags: the named session resumes natively.
-  # Drop them from the pass-through args (kimi.sh rewrites them the same way).
+  [ -n "${FA_PROVIDER_NAME:-}" ] && echo "  Entry Name: ${FA_PROVIDER_NAME}"
+  echo "  Config: ${FA_PROVIDER_CONFIG}"
   local pass_args=()
   local arg
   for arg in ${PASS_ARGS[@]+"${PASS_ARGS[@]}"}; do
@@ -64,13 +90,12 @@ run_fa() {
     esac
   done
 
+  # Provider selection is driven entirely by the FA_PROVIDER_* env
+  # preconfig (fa precedence: explicit flags > preconfig > saved config).
+  # No --provider/--model/--base-url flags here — the env declaration is
+  # the single source of truth and pins every model role.
   local cmd
-  cmd=(fa
-    --provider "${FA_PROVIDER_TYPE}"
-    --model "${FA_PROVIDER_MODEL}")
-  if [ -n "${FA_PROVIDER_BASE_URL:-}" ]; then
-    cmd+=(--base-url "${FA_PROVIDER_BASE_URL}")
-  fi
+  cmd=(fa)
   if [ -n "${FA_SESSION_NAME:-}" ] && [ -n "${FA_SESSION_ROOT:-}" ]; then
     cmd+=(--session "${FA_SESSION_NAME}" --session-root "${FA_SESSION_ROOT}")
   fi
@@ -84,12 +109,15 @@ run_fa() {
   local agent_log
   agent_log="$(mktemp)"
 
-  # Export the mapped key env var ONLY for the fa subprocess (claude.sh maps
-  # CLAUDE_CODE_* → ANTHROPIC_* the same way) so it never leaks into the
-  # surrounding job environment.
+  # Map FA_PROVIDER_API_KEY into the env var the config's apiKeyEnvVar
+  # names — ONLY for the fa subprocess (claude.sh maps CLAUDE_CODE_* →
+  # ANTHROPIC_* the same way) so it never leaks into the surrounding job
+  # environment. When the caller already exported the named var, fa reads
+  # it directly and nothing is injected.
   set +e
-  if [ -n "${FA_PROVIDER_API_KEY:-}" ]; then
-    env "${key_env}=${FA_PROVIDER_API_KEY}" "${cmd[@]}" 2>&1 | tee "$agent_log"
+  if [ -n "${FA_PROVIDER_API_KEY:-}" ] && [ -n "${FA_KEY_ENV_VAR:-}" ] \
+     && [ -z "$(eval "echo \${${FA_KEY_ENV_VAR}:-}")" ]; then
+    env "${FA_KEY_ENV_VAR}=${FA_PROVIDER_API_KEY}" "${cmd[@]}" 2>&1 | tee "$agent_log"
   else
     "${cmd[@]}" 2>&1 | tee "$agent_log"
   fi

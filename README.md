@@ -1112,16 +1112,35 @@ config's `envVariables` like for any other provider.
 
 ### Environment variables
 
+fa is driven by its **env preconfig** (headless/Docker contract): the
+declaration is self-contained and pins every model role — fa never guesses
+catalog defaults.
+
 | Variable | Required | Meaning |
 |----------|----------|---------|
-| `FA_PROVIDER_TYPE` | yes | fa provider kind: `dial`, `anthropic`, `google`, or `openai-completions` |
-| `FA_PROVIDER_MODEL` | yes | model id / deployment name (`--model`) |
-| `FA_PROVIDER_BASE_URL` | no | endpoint override (`--base-url`) |
-| `FA_PROVIDER_API_KEY` | no | API key; mapped to the env var the chosen kind reads (`DIAL_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `OPENROUTER_API_KEY`) and exported only into the `fa` subprocess |
+| `FA_PROVIDER_TYPE` | yes | catalog provider kind: `anthropic`, `google`, `dial`, `openai-completions`, `zai`, `aiin`, `minimax`, `chatgpt-codex`, `copilot`, `codemie`, `ollama`, `openai`, `openrouter`, `kimi`, … |
+| `FA_PROVIDER_CONFIG` | yes | JSON `{"baseUrl": …, "model": …, "apiKeyEnvVar": …}` — `baseUrl` and `model` are mandatory (boot fails without them); `apiKeyEnvVar` names the env var carrying the key (its `_BASE64` twin also accepted) |
+| `FA_PROVIDER_NAME` | no | unique entry name override |
+| `FA_PROVIDER_API_KEY` | no | convenience key mapped into the config's `apiKeyEnvVar` var — only inside the `fa` subprocess scope |
+
+Example (DIAL):
+
+```
+FA_PROVIDER_TYPE=dial
+FA_PROVIDER_CONFIG='{"baseUrl":"https://ai-proxy.lab.epam.com","model":"gpt-4o","apiKeyEnvVar":"DIAL_API_KEY"}'
+DIAL_API_KEY=sk-...
+```
 
 `DIAL_API_VERSION` (optional, `dial` type only) appends the `?api-version=`
 query parameter to DIAL chat requests — pass it through the job env when the
 DIAL Core deployment requires Azure-style versioning.
+
+Legacy job env blocks that predate the preconfig (`FA_PROVIDER_MODEL` +
+`FA_PROVIDER_BASE_URL` + `FA_PROVIDER_API_KEY`) keep working: the provider
+script composes `FA_PROVIDER_CONFIG` from them and maps the key to the
+kind's conventional env name (`DIAL_API_KEY`, `ANTHROPIC_API_KEY`,
+`GOOGLE_API_KEY`, `OPENROUTER_API_KEY`). New definitions should use
+`FA_PROVIDER_CONFIG` directly.
 
 ### Sessions and CI cache
 
@@ -1144,6 +1163,10 @@ mapping as kimi) and exports:
 
 ### Installation
 
-`setup/install.sh fa` runs `curl -fsSL "https://fa1.dev/install.sh?v=2" | sh`
-(binary `fa` → `~/.local/bin`, override with `FA_INSTALL_DIR`) and registers
-the bin dir on PATH for subsequent CI steps.
+`setup/install.sh fa` installs from the GitHub Releases of
+[IstiN/flutter_agent_harness](https://github.com/IstiN/flutter_agent_harness/releases)
+— the platform bundle (`fa-<os>-<arch>.tar.gz`: `bin/fa` + `lib/`, same
+layout `install_local.sh` produces) lands in `~/.local/bin` + `~/.local/lib`
+(override with `FA_INSTALL_DIR`), pin a release with `fa.sh v0.1.324` /
+`FA_VERSION`. Fallback: the fa1.dev upstream installer. The bin dir is
+registered on PATH for subsequent CI steps.
