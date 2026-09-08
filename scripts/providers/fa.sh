@@ -1,8 +1,8 @@
 #!/bin/bash
 # Fa provider for run-agent.sh
 #
-# Current fa contract (env preconfig, fa ≥ 0.1.32x — the declaration is
-# machine-written and self-contained; fa never guesses catalog defaults):
+# fa headless contract (env preconfig — the declaration is machine-written
+# and self-contained; fa never guesses catalog defaults):
 #   FA_PROVIDER_TYPE     (required) catalog provider kind: anthropic,
 #                        google, dial, openai-completions, zai, aiin,
 #                        minimax, chatgpt-codex, copilot, codemie,
@@ -17,29 +17,9 @@
 #                        the config's apiKeyEnvVar names — ONLY inside
 #                        the fa subprocess scope
 #
-# Legacy shim (pre-2026-09 contract, kept for old job definitions):
-#   FA_PROVIDER_MODEL    model id
-#   FA_PROVIDER_BASE_URL endpoint (optional — kind default used)
-#   FA_PROVIDER_API_KEY  key
-# When FA_PROVIDER_CONFIG is unset, the script composes it from these
-# legacy vars (apiKeyEnvVar defaults to the kind's conventional name) —
-# so old job env blocks keep working unmodified.
-#
 # Sessions (when agents/setup/fa-session.sh is present, e.g. AI Teammate
 # runs): --session "$FA_SESSION_NAME" --session-root "$FA_SESSION_ROOT"
 # resume-or-create the deterministic named session for repo:ticket:group.
-
-# Legacy kind → conventional API-key env name (used only to compose
-# FA_PROVIDER_CONFIG from the legacy vars).
-_fa_key_env_for_type() {
-  case "$1" in
-    dial)               echo "DIAL_API_KEY" ;;
-    anthropic)          echo "ANTHROPIC_API_KEY" ;;
-    google)             echo "GOOGLE_API_KEY" ;;
-    openai-completions) echo "OPENROUTER_API_KEY" ;;
-    *)                  echo "" ;;
-  esac
-}
 
 _fa_resolve_env() {
   if [ -z "${FA_PROVIDER_TYPE:-}" ]; then
@@ -47,29 +27,16 @@ _fa_resolve_env() {
     return 1
   fi
 
-  if [ -n "${FA_PROVIDER_CONFIG:-}" ]; then
-    # Current contract: the declaration is authoritative. Surface the
-    # config's key env var name so the runner can map FA_PROVIDER_API_KEY
-    # into it for the subprocess when the var itself is unset.
-    FA_KEY_ENV_VAR="$(printf '%s' "${FA_PROVIDER_CONFIG}" | sed -n 's/.*"apiKeyEnvVar"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-    return 0
+  if [ -z "${FA_PROVIDER_CONFIG:-}" ]; then
+    echo "Error: FA_PROVIDER_CONFIG is required for fa provider — a JSON object with at least {\"baseUrl\", \"model\"} (fa never guesses catalog defaults), e.g." >&2
+    echo "  FA_PROVIDER_CONFIG='{\"baseUrl\":\"https://ai-proxy.lab.epam.com\",\"model\":\"gpt-4o\",\"apiKeyEnvVar\":\"DIAL_API_KEY\"}'" >&2
+    return 1
   fi
 
-  # Legacy shim: compose FA_PROVIDER_CONFIG from the old flat vars.
-  if [ -z "${FA_PROVIDER_MODEL:-}" ]; then
-    echo "Error: FA_PROVIDER_CONFIG (or legacy FA_PROVIDER_MODEL) is required for fa provider" >&2
-    return 1
-  fi
-  local key_env
-  key_env="$(_fa_key_env_for_type "${FA_PROVIDER_TYPE}")"
-  if [ -z "${FA_PROVIDER_BASE_URL:-}" ]; then
-    echo "Error: FA_PROVIDER_BASE_URL is required with the legacy FA_PROVIDER_MODEL contract (fa no longer guesses catalog defaults)" >&2
-    return 1
-  fi
-  echo "⚠️  Legacy fa provider env detected (FA_PROVIDER_MODEL/BASE_URL) — composing FA_PROVIDER_CONFIG" >&2
-  FA_PROVIDER_CONFIG="$(printf '{"baseUrl":"%s","model":"%s","apiKeyEnvVar":"%s"}' \
-    "${FA_PROVIDER_BASE_URL}" "${FA_PROVIDER_MODEL}" "${key_env}")"
-  FA_KEY_ENV_VAR="${key_env}"
+  # Surface the config's key env var name so the runner can map
+  # FA_PROVIDER_API_KEY into it for the subprocess when the var itself
+  # is unset.
+  FA_KEY_ENV_VAR="$(printf '%s' "${FA_PROVIDER_CONFIG}" | sed -n 's/.*"apiKeyEnvVar"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 }
 
 run_fa() {
@@ -81,6 +48,7 @@ run_fa() {
   echo "  Provider Type: ${FA_PROVIDER_TYPE}"
   [ -n "${FA_PROVIDER_NAME:-}" ] && echo "  Entry Name: ${FA_PROVIDER_NAME}"
   echo "  Config: ${FA_PROVIDER_CONFIG}"
+
   local pass_args=()
   local arg
   for arg in ${PASS_ARGS[@]+"${PASS_ARGS[@]}"}; do

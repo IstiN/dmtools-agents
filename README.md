@@ -1135,13 +1135,6 @@ DIAL_API_KEY=sk-...
 query parameter to DIAL chat requests — pass it through the job env when the
 DIAL Core deployment requires Azure-style versioning.
 
-Legacy job env blocks that predate the preconfig (`FA_PROVIDER_MODEL` +
-`FA_PROVIDER_BASE_URL` + `FA_PROVIDER_API_KEY`) keep working: the provider
-script composes `FA_PROVIDER_CONFIG` from them and maps the key to the
-kind's conventional env name (`DIAL_API_KEY`, `ANTHROPIC_API_KEY`,
-`GOOGLE_API_KEY`, `OPENROUTER_API_KEY`). New definitions should use
-`FA_PROVIDER_CONFIG` directly.
-
 ### Sessions and CI cache
 
 fa resumes named sessions natively (`--session <name>` resumes when the name
@@ -1162,6 +1155,15 @@ mapping as kimi) and exports:
 `setup/cache.sh fa-session` re-exports the cache vars for downstream repos.
 
 ### Installation
+
+> **dmtools runtimes:** the default `install.sh all` / `install.sh dmtools`
+> installs the **Java DMTools CLI** (epam/dm.ai) — it stays the primary
+> orchestrator. The **Dart port** (epam/dmtools-dart) is opt-in only:
+> `install.sh dmtools-dart` or `setup/dmtools-dart.sh`. It installs
+> side-by-side under `~/.dmtools-dart/bin` (both ship a `dmtools` binary —
+> PATH order decides which wins when both are on PATH) and is never pulled
+> in by `install.sh all`.
+
 
 `setup/install.sh fa` installs from the GitHub Releases of
 [IstiN/flutter_agent_harness](https://github.com/IstiN/flutter_agent_harness/releases)

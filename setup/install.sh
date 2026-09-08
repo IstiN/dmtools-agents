@@ -19,6 +19,10 @@ source "${SCRIPT_DIR}/_common.sh"
 
 # Canonical order for "all" (node before copilot, java before dmtools)
 ALL_TOOLS="java maven node dmtools maestro copilot codemie cursor codegraph playwright kimi fa gradle android emulator konan"
+# Opt-in tools: installable by explicit name only, never part of "all"
+# (e.g. dmtools-dart — the Dart port, while dmtools Java stays the default).
+OPT_IN_TOOLS="dmtools-dart"
+
 if [ $# -eq 0 ]; then
   echo "Usage: install.sh tool1[:version] tool2[:version] ..."
   echo "       install.sh all [-tool ...]"
@@ -27,8 +31,10 @@ if [ $# -eq 0 ]; then
   echo "  java      — Java (Temurin/OpenJDK). Default version: 17"
   echo "  maven     — Apache Maven.            Default version: 3.9.9"
   echo "  node      — Node.js via nvm.         Default version: 20"
-  echo "  dmtools   — dmtools CLI (Dart, epam/dmtools-dart). Default: latest"
+  echo "  dmtools   — DMtools CLI.             Default version: v1.7.232"
   echo "  maestro   — Maestro mobile testing.  Default version: latest"
+  echo "  dmtools-dart — dmtools Dart port (epam/dmtools-dart). OPT-IN:"
+  echo "               install.sh dmtools-dart (never installed by 'all')"
   echo "  copilot   — @github/copilot npm CLI. Default version: latest  (needs node)"
   echo "  codemie   — codemie-claude CLI.      Default version: latest"
   echo "  cursor    — Cursor Agent CLI (via https://cursor.com/install)"
@@ -139,8 +145,8 @@ for tool in ${TOOL_LIST}; do
     continue
   fi
 
-  if ! echo "${ALL_TOOLS}" | grep -qw "${tool}"; then
-    echo "❌ Unknown tool: '${tool}'. Supported: ${ALL_TOOLS}" >&2
+  if ! echo "${ALL_TOOLS} ${OPT_IN_TOOLS}" | grep -qw "${tool}"; then
+    echo "❌ Unknown tool: '${tool}'. Supported: ${ALL_TOOLS} (opt-in: ${OPT_IN_TOOLS})" >&2
     exit 1
   fi
 
@@ -197,6 +203,8 @@ for tool in ${TOOL_LIST}; do
     maven)   BIN="mvn" ;;
     node)    BIN="node" ;;
     dmtools) BIN="dmtools" ;;
+    dmtools-dart) BIN="dmtools" ;;  # side-by-side install (~/.dmtools-dart/bin)
+
     maestro) BIN="maestro" ;;
     copilot) BIN="copilot" ;;
     codemie) BIN="codemie-claude" ;;
