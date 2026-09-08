@@ -9,3 +9,6 @@ cacheBasicGithub/
 cacheBasic*/
 outputs/
 input/
+
+# CodeGraph generated index - regenerated per-run, must never be committed
+.codegraph/

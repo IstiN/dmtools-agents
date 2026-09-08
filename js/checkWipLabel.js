@@ -97,6 +97,13 @@ function action(params) {
         return true; // Continue processing
         
     } catch (error) {
+        // The ticket-not-found guard is a job-configuration error (inputJql
+        // matched nothing), not a transient tool failure — rethrow it so the
+        // job aborts instead of silently processing without a ticket. Every
+        // other error keeps the continue-processing contract below.
+        if (error && error.message && error.message.indexOf('Ticket not found') === 0) {
+            throw error;
+        }
         console.error('❌ Error in WIP label check:', error);
         // On error, continue processing to avoid blocking legitimate workflows
         console.warn('Continuing with processing despite error in WIP check');
