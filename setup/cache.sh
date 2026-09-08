@@ -110,9 +110,11 @@ _cache_kimi_session() {
 _cache_cursor_session() {
   # shellcheck source=/dev/null
   source "${SCRIPT_DIR}/cursor-session.sh" env
+}
 
 _cache_fa_session() {
-  source "${SCRIPT_DIR}/fa-session.sh" env}
+  source "${SCRIPT_DIR}/fa-session.sh" env
+}
 
 _cache_gradle() {
   # Gradle wrapper distribution (~/.gradle/wrapper) and dependency cache (~/.gradle/caches).
