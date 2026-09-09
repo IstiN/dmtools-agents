@@ -37,7 +37,7 @@ var baseBranchMarker = require('./common/baseBranchMarker.js');
  * @param {Object} config        - resolved project config (config.git.baseBranch, workingDir)
  */
 function syncBaseBranchIfConfigured(baseBranch, customParams, config) {
-    if (!customParams.branchSyncFnPath || !baseBranch || baseBranch === config.git.baseBranch) {
+    if (!customParams || !customParams.branchSyncFnPath || !baseBranch || baseBranch === config.git.baseBranch) {
         return;
     }
     var branchSyncFn = configLoader.loadHookFn(customParams.branchSyncFnPath, 'branchSyncFnPath');
