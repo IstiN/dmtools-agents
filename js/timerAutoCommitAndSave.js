@@ -38,6 +38,13 @@ function resolveCustomParams(params) {
 function getTicketKey(params) {
     if (params.ticket && params.ticket.key) return params.ticket.key;
     if (params.ticketKey) return params.ticketKey;
+    // GitHub-issue flow: the ticket key travels as contextId
+    // (--metadata '{"contextId":"gh-21"}' → params.jobParams.metadata / jobParams).
+    var jobParams = params.jobParams || {};
+    if (jobParams.contextId) return jobParams.contextId;
+    if (jobParams.metadata && jobParams.metadata.contextId) return jobParams.metadata.contextId;
+    if (params.metadata && params.metadata.contextId) return params.metadata.contextId;
+    if (params.contextId) return params.contextId;
     return null;
 }
 
