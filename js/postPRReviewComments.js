@@ -320,6 +320,12 @@ function parseDiffLineInfo(diffText, filePath, targetLine) {
     var oldLine = null;
     var newLine = null;
     var lines = String(diffText).split(/\r?\n/);
+    // Deferred LEFT match: a removed line ('-') at the target line number.
+    // We don't return immediately on a LEFT match because a same-numbered
+    // added line ('+') can appear later in the same replace block (the
+    // common "-old\n+new" single-line replacement pattern) and RIGHT should
+    // win — the finding is about the current/new code, not the removed one.
+    var pendingLeftMatch = null;
 
     for (var i = 0; i < lines.length; i++) {
         var line = lines[i];
@@ -329,6 +335,7 @@ function parseDiffLineInfo(diffText, filePath, targetLine) {
             oldFile = null;
             oldLine = null;
             newLine = null;
+            pendingLeftMatch = null;
             continue;
         }
 
@@ -363,7 +370,9 @@ function parseDiffLineInfo(diffText, filePath, targetLine) {
             if (newLine === lineNumber) return { present: true, side: 'RIGHT' };
             newLine++;
         } else if (line.indexOf('-') === 0) {
-            if (oldLine === lineNumber) return { present: true, side: 'LEFT' };
+            if (oldLine === lineNumber && !pendingLeftMatch) {
+                pendingLeftMatch = { present: true, side: 'LEFT' };
+            }
             oldLine++;
         } else if (line.indexOf(' ') === 0) {
             // Context lines exist on both sides; prefer RIGHT (new version).
@@ -379,6 +388,7 @@ function parseDiffLineInfo(diffText, filePath, targetLine) {
         }
     }
 
+    if (pendingLeftMatch) return pendingLeftMatch;
     return { present: false, side: null };
 }
 
