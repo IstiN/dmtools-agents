@@ -649,5 +649,53 @@ suite('postPRReviewComments', function() {
             assert.equal(result.success, true, 'action must still succeed when the scm provider lacks submitReview');
         });
     });
+
+    suite('parseDiffLineInfo', function() {
+        test('prefers RIGHT over LEFT for a single-line replacement at the same line number', function() {
+            var mod = loadPostPRReviewComments();
+
+            // Classic single-line replacement: old and new content share the
+            // same line number (5) inside the hunk. A finding about the
+            // current code must anchor on RIGHT (the new line), not LEFT
+            // (the removed line), even though the '-' line is encountered
+            // first while scanning the diff.
+            var diffText =
+                'diff --git a/foo.js b/foo.js\n' +
+                'index e96d9d1..988d518 100644\n' +
+                '--- a/foo.js\n' +
+                '+++ b/foo.js\n' +
+                '@@ -2,7 +2,7 @@ function greet() {\n' +
+                ' \tconst a = 1;\n' +
+                ' \tconst b = 2;\n' +
+                ' \tconst label = "before";\n' +
+                '-\tconst greeting = "helo";\n' +
+                '+\tconst greeting = "hello";\n' +
+                ' \n' +
+                ' \treturn greeting;\n';
+
+            var info = mod.parseDiffLineInfo(diffText, 'foo.js', 5);
+
+            assert.equal(info.present, true);
+            assert.equal(info.side, 'RIGHT', 'a same-numbered replacement must resolve to RIGHT, not LEFT');
+        });
+
+        test('still resolves LEFT for a pure removal (no matching + at the same line)', function() {
+            var mod = loadPostPRReviewComments();
+
+            var diffText =
+                'diff --git a/foo.js b/foo.js\n' +
+                'index e96d9d1..988d518 100644\n' +
+                '--- a/foo.js\n' +
+                '+++ b/foo.js\n' +
+                '@@ -2,2 +2,1 @@ function greet() {\n' +
+                ' \tconst a = 1;\n' +
+                '-\tconst unused = 2;\n';
+
+            var info = mod.parseDiffLineInfo(diffText, 'foo.js', 3);
+
+            assert.equal(info.present, true);
+            assert.equal(info.side, 'LEFT', 'a pure removal with no matching added line must still resolve to LEFT');
+        });
+    });
 });
 
