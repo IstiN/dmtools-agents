@@ -5,11 +5,12 @@
  * 2. Posts replies to each open PR review thread and resolves the threads
  * 3. Posts the fix summary (outputs/response.md) as a top-level PR comment
  * 4. Moves ticket to "In Review"
- * 5. Posts completion comment to Jira
+ * 5. Posts completion comment to the ticket (Jira/ADO/GitHub via common/trackers.js)
  */
 
 var configLoader = require('./configLoader.js');
 var scmModule = require('./common/scm.js');
+var trackersModule = require('./common/trackers.js');
 var submoduleHelper = require('./common/submodules.js');
 var prHelper = require('./common/pullRequest.js');
 var feedbackLoop = require('./common/feedbackLoop.js');
@@ -55,11 +56,11 @@ function normalizeLabels(singleLabel, labelList) {
     return labels;
 }
 
-function removeConfiguredLabels(ticketKey, customParams) {
+function removeConfiguredLabels(tracker, ticketKey, customParams) {
     normalizeLabels(customParams && customParams.removeLabel, customParams && customParams.removeLabels)
         .forEach(function(label) {
             try {
-                jira_remove_label({ key: ticketKey, label: label });
+                tracker.removeLabel(ticketKey, label);
                 console.log('✅ Removed SM label:', label);
             } catch (e) {
                 console.warn('Failed to remove SM label ' + label + ':', e);
@@ -401,7 +402,7 @@ function postPRComment(scm, pullRequestId, fixSummary, ticketKey, repliesPosted)
     }
 }
 
-function postJiraComment(ticketKey, prUrl, branchName, prCommentPosted, codeChangesCommitted, fixSummary) {
+function postJiraComment(tracker, ticketKey, prUrl, branchName, prCommentPosted, codeChangesCommitted, fixSummary) {
     try {
         let comment;
         if (codeChangesCommitted) {
@@ -422,10 +423,10 @@ function postJiraComment(ticketKey, prUrl, branchName, prCommentPosted, codeChan
             comment += 'A fix summary has been posted as a comment on the Pull Request.';
         }
 
-        jira_post_comment({ key: ticketKey, comment: comment });
-        console.log('✅ Posted completion comment to Jira:', ticketKey);
+        tracker.postComment(ticketKey, comment);
+        console.log('✅ Posted completion comment to ticket:', ticketKey);
     } catch (error) {
-        console.error('Failed to post Jira comment:', error);
+        console.error('Failed to post tracker comment:', error);
     }
 }
 
@@ -462,7 +463,7 @@ function readReworkSetupFailure(ticketKey) {
  * commit on base branch" guard. Skip commitAndPush() and the resumeAgent retry
  * entirely, and just make sure Jira reflects what happened.
  */
-function handleReworkSetupAlreadyFailed(ticketKey, customParams, failureContent) {
+function handleReworkSetupAlreadyFailed(tracker, ticketKey, customParams, failureContent) {
     console.warn('⚠️ Rework setup already failed (no PR found) for', ticketKey, '— skipping commit/push and CLI retry.');
     try {
         var comment = 'h3. ❌ Rework Push Skipped — Setup Already Failed\n\n' +
@@ -474,12 +475,12 @@ function handleReworkSetupAlreadyFailed(ticketKey, customParams, failureContent)
         } else {
             comment += 'See {code}input/' + ticketKey + '/rework_setup_failed.md{code} for details.';
         }
-        jira_post_comment({ key: ticketKey, comment: comment });
-        console.log('✅ Posted rework-setup-already-failed comment to Jira:', ticketKey);
+        tracker.postComment(ticketKey, comment);
+        console.log('✅ Posted rework-setup-already-failed comment to ticket:', ticketKey);
     } catch (e) {
-        console.warn('Failed to post rework-setup-already-failed Jira comment:', e.message || e);
+        console.warn('Failed to post rework-setup-already-failed comment:', e.message || e);
     }
-    removeConfiguredLabels(ticketKey, customParams || {});
+    removeConfiguredLabels(tracker, ticketKey, customParams || {});
     return {
         success: true,
         path: 'rework-setup-already-failed',
@@ -488,23 +489,23 @@ function handleReworkSetupAlreadyFailed(ticketKey, customParams, failureContent)
     };
 }
 
-function handleInterruptedRework(ticketKey, branchName, customParams, statuses) {
+function handleInterruptedRework(tracker, ticketKey, branchName, customParams, statuses) {
     console.warn('Rework CLI was interrupted before writing required outputs; leaving PR conversations open and resetting ticket for retry.');
     try {
-        jira_post_comment({
-            key: ticketKey,
-            comment: 'h3. ⏸️ Rework Interrupted\n\nThe AI agent pushed any staged partial changes, but it was interrupted before writing {code}outputs/response.md{code} and {code}outputs/review_replies.json{code}. PR conversations were left open. The ticket was moved back to *' + statuses.IN_REWORK + '* for retry.\n\n*Branch*: {code}' + branchName + '{code}'
-        });
+        tracker.postComment(
+            ticketKey,
+            'h3. ⏸️ Rework Interrupted\n\nThe AI agent pushed any staged partial changes, but it was interrupted before writing {code}outputs/response.md{code} and {code}outputs/review_replies.json{code}. PR conversations were left open. The ticket was moved back to *' + statuses.IN_REWORK + '* for retry.\n\n*Branch*: {code}' + branchName + '{code}'
+        );
     } catch (e) {
-        console.warn('Failed to post interrupted rework Jira comment:', e.message || e);
+        console.warn('Failed to post interrupted rework comment:', e.message || e);
     }
     try {
-        jira_move_to_status({ key: ticketKey, statusName: statuses.IN_REWORK });
+        tracker.moveToStatus(ticketKey, statuses.IN_REWORK);
         console.log('✅ Moved', ticketKey, 'back to', statuses.IN_REWORK, 'for retry');
     } catch (e) {
         console.warn('Failed to move ticket back to ' + statuses.IN_REWORK + ':', e.message || e);
     }
-    removeConfiguredLabels(ticketKey, customParams || {});
+    removeConfiguredLabels(tracker, ticketKey, customParams || {});
     return {
         success: true,
         path: 'rework-interrupted',
@@ -522,6 +523,9 @@ function action(params) {
         var scm = scmModule.createScm(config);
         const _customParams = resolveCustomParams(params, actualParams, config);
         const statuses = resolveStatuses(_customParams);
+        // Probe the tracker provider once — the same script then runs unchanged
+        // on Jira / ADO / GitHub deployments.
+        var tracker = trackersModule.createTracker(config, _customParams);
 
         console.log('=== Push rework changes for:', ticketKey, '===');
 
@@ -567,7 +571,7 @@ function action(params) {
         // Bail out here, before touching git at all.
         var reworkSetupFailure = readReworkSetupFailure(ticketKey);
         if (reworkSetupFailure !== null) {
-            return handleReworkSetupAlreadyFailed(ticketKey, _customParams, reworkSetupFailure);
+            return handleReworkSetupAlreadyFailed(tracker, ticketKey, _customParams, reworkSetupFailure);
         }
 
         // Commit and push
@@ -590,10 +594,10 @@ function action(params) {
                 return action(params);
             }
             try {
-                jira_post_comment({
-                    key: ticketKey,
-                    comment: 'h3. ❌ Rework Push Failed\n\n{code}' + gitError.toString() + '{code}\n\nPlease check the logs and retry.'
-                });
+                tracker.postComment(
+                    ticketKey,
+                    'h3. ❌ Rework Push Failed\n\n{code}' + gitError.toString() + '{code}\n\nPlease check the logs and retry.'
+                );
             } catch (e) {}
             return { success: false, error: gitError.toString() };
         }
@@ -611,10 +615,10 @@ function action(params) {
                 return action(params);
             }
             try {
-                jira_post_comment({
-                    key: ticketKey,
-                    comment: 'h3. ❌ Rework Quality Gate Failed\n\n{code}' + gateError + '{code}\n\nThe branch was pushed before running this gate. Please check the logs and retry.'
-                });
+                tracker.postComment(
+                    ticketKey,
+                    'h3. ❌ Rework Quality Gate Failed\n\n{code}' + gateError + '{code}\n\nThe branch was pushed before running this gate. Please check the logs and retry.'
+                );
             } catch (e) {}
             return { success: false, error: gateError };
         }
@@ -630,7 +634,7 @@ function action(params) {
             if (interruptedResume.attempted) {
                 return action(params);
             }
-            return handleInterruptedRework(ticketKey, branchName, _customParams, statuses);
+            return handleInterruptedRework(tracker, ticketKey, branchName, _customParams, statuses);
         }
 
         // Find PR to post comment — prefer targetRepository from config over git remote
@@ -679,7 +683,7 @@ function action(params) {
 
         // Move ticket to In Review
         try {
-            jira_move_to_status({ key: ticketKey, statusName: statuses.IN_REVIEW });
+            tracker.moveToStatus(ticketKey, statuses.IN_REVIEW);
             console.log('✅ Moved', ticketKey, 'to', statuses.IN_REVIEW);
         } catch (statusError) {
             console.warn('Failed to move ticket to In Review:', statusError);
@@ -689,16 +693,16 @@ function action(params) {
         try {
             const initiatorId = actualParams.initiator;
             if (initiatorId) {
-                jira_assign_ticket_to({ key: ticketKey, accountId: initiatorId });
+                tracker.assignTo(ticketKey, initiatorId);
                 console.log('✅ Assigned ticket back to initiator');
             }
         } catch (e) {
             console.warn('Failed to assign ticket:', e);
         }
 
-        // Post Jira completion comment
+        // Post completion comment to the ticket
         const prUrl = pr ? pr.html_url : null;
-        postJiraComment(ticketKey, prUrl, branchName, prCommentPosted, codeChangesCommitted, fixSummaryWithWarnings);
+        postJiraComment(tracker, ticketKey, prUrl, branchName, prCommentPosted, codeChangesCommitted, fixSummaryWithWarnings);
 
         // Remove WIP label if present
         const wipLabel = actualParams.metadata && actualParams.metadata.contextId
@@ -706,7 +710,7 @@ function action(params) {
             : null;
         if (wipLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: wipLabel });
+                tracker.removeLabel(ticketKey, wipLabel);
                 console.log('Removed WIP label:', wipLabel);
             } catch (e) {
                 console.warn('Failed to remove WIP label:', e);
@@ -714,7 +718,7 @@ function action(params) {
         }
 
         // Remove SM idempotency label so the ticket can be re-triggered next cycle
-        removeConfiguredLabels(ticketKey, _customParams);
+        removeConfiguredLabels(tracker, ticketKey, _customParams);
 
         // Auto-start pr_review after rework is pushed to In Review (opt-in via customParams)
         var reviewStarted = false;
@@ -786,10 +790,22 @@ function action(params) {
                 if (resume.attempted) {
                     return action(params);
                 }
-                jira_post_comment({
-                    key: actualParams.ticket.key,
-                    comment: 'h3. ❌ Rework Workflow Error\n\n{code}' + error.toString() + '{code}'
-                });
+                // Post the error to the ticket via the probed tracker provider
+                var errorTracker = (typeof tracker !== 'undefined' && tracker) ? tracker : null;
+                if (!errorTracker) {
+                    try {
+                        errorTracker = trackersModule.createTracker(
+                            configLoader.loadProjectConfig(params.jobParams || params), customParams);
+                    } catch (trackerError) {
+                        console.error('Failed to create tracker for error comment:', trackerError);
+                    }
+                }
+                if (errorTracker) {
+                    errorTracker.postComment(
+                        actualParams.ticket.key,
+                        'h3. ❌ Rework Workflow Error\n\n{code}' + error.toString() + '{code}'
+                    );
+                }
             }
         } catch (e) {}
         return { success: false, error: error.toString() };

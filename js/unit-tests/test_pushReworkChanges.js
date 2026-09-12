@@ -22,6 +22,30 @@ function makeOutputFiles(fileMap) {
     });
 }
 
+/**
+ * Load the real js/common/trackers.js with tool mocks, pinning the provider via
+ * customParams so tests stay deterministic even when the runner process has
+ * DEFAULT_TRACKER set (env probing would otherwise outrank a silent config).
+ * A customParams.trackerProvider in the tested params still wins, so provider
+ * dispatch itself remains testable.
+ */
+function makeTrackersModule(toolMocks) {
+    var realTrackers = loadModule(
+        'js/common/trackers.js',
+        makeRequire({ '../config.js': configModule }),
+        toolMocks || {}
+    );
+    return {
+        createTracker: function(config, customParams) {
+            return realTrackers.createTracker(
+                config,
+                Object.assign({ trackerProvider: 'jira' }, customParams || {})
+            );
+        },
+        extractTicketKey: realTrackers.extractTicketKey
+    };
+}
+
 function loadPushReworkChangesModule(fileMap) {
     var outputFiles = makeOutputFiles(fileMap);
     var replyCalls = [];
@@ -52,6 +76,7 @@ function loadPushReworkChangesModule(fileMap) {
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: noop },
             './common/outputFiles.js': outputFiles,
             './config.js': configModule,
+            './common/trackers.js': makeTrackersModule({}),
             './cacheToReleases.js': { cacheSessionLog: noop },
             './common/tokenUsageComment.js': { postTokenUsageComments: noop }
         }),
@@ -215,6 +240,7 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
             },
             './common/autoStart.js': { triggerSmIfIdle: function() {} },
             './common/outputFiles.js': { readOutputFile: function() { return null; } },
+            './common/trackers.js': makeTrackersModule({}),
             './cacheToReleases.js': {},
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
@@ -316,7 +342,7 @@ suite('pushReworkChanges.commitAndPush — base-branch safety invariant', functi
 // in the observed incident retrying instead led the CLI agent to fabricate a
 // fake pr_info.md just to slip past the "refuse to commit on base branch" guard.
 
-function loadPushReworkChangesForAction(mocks) {
+function loadPushReworkChangesForAction(mocks, opts) {
     var jiraPostCommentCalls = [];
     var jiraMoveToStatusCalls = [];
     var resumeAgentCalls = [];
@@ -352,11 +378,13 @@ function loadPushReworkChangesForAction(mocks) {
         jira_assign_ticket_to: function() {}
     };
 
+    var mergedMocks = Object.assign({}, defaultMocks, mocks || {});
+
     var mod = loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
             './configLoader.js': {
-                loadProjectConfig: function() { return baseConfig(); },
+                loadProjectConfig: function() { return baseConfig(opts && opts.config); },
                 resolveInstructions: function() { return { jobParamPatch: {} }; },
                 formatTemplate: function(template, vars) {
                     return template.replace(/\{(\w+)\}/g, function(m, key) {
@@ -382,10 +410,11 @@ function loadPushReworkChangesForAction(mocks) {
             },
             './common/outputFiles.js': { readOutputFile: function() { return null; } },
             './config.js': configModule,
+            './common/trackers.js': makeTrackersModule(mergedMocks),
             './cacheToReleases.js': { action: function() {} },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
-        Object.assign({}, defaultMocks, mocks || {})
+        mergedMocks
     );
 
     return {
@@ -464,6 +493,65 @@ suite('pushReworkChanges.action — rework_setup_failed.md guard (#310)', functi
     });
 });
 
+suite('pushReworkChanges.action — tracker provider dispatch (#414)', function() {
+
+    test('github provider: ticket operations dispatch to github_* tools, jira_* stay untouched', function() {
+        var ghCommentCalls = [];
+        var ghRemoveLabelCalls = [];
+        var jiraPostCommentCalls = [];
+
+        var loaded = loadPushReworkChangesForAction(
+            {
+                file_read: function(args) {
+                    var p = args && (args.path || args);
+                    if (p && p.indexOf('rework_setup_failed.md') !== -1) {
+                        return '# Rework Setup Failed\n\nNo Pull Request found for ticket.';
+                    }
+                    return null;
+                },
+                github_create_comment: function(args) { ghCommentCalls.push(args); return '{}'; },
+                github_remove_label: function(args) { ghRemoveLabelCalls.push(args); return '{}'; },
+                jira_post_comment: function(args) { jiraPostCommentCalls.push(args); }
+            },
+            {
+                config: {
+                    repository: { owner: 'IstiN', repo: 'fah-git-test' }
+                }
+            }
+        );
+
+        var result = loaded.mod.action({
+            ticket: { key: 'IstiN/fah-git-test#42', fields: { labels: [] } },
+            response: 'Fix summary',
+            customParams: {
+                trackerProvider: 'github',
+                removeLabel: 'sm_rework_triggered'
+            }
+        });
+
+        assert.equal(result.success, true, 'should be a handled outcome, not a hard failure');
+        assert.equal(result.path, 'rework-setup-already-failed');
+
+        assert.equal(jiraPostCommentCalls.length, 0, 'no jira_* tool must be called on a github deployment');
+        assert.ok(
+            ghCommentCalls.some(function(c) { return c.pullRequestId === 42; }),
+            'expected github_create_comment with the issue number, got: ' + JSON.stringify(ghCommentCalls)
+        );
+        assert.ok(
+            ghCommentCalls.some(function(c) {
+                return typeof c.text === 'string' && c.text.indexOf('Rework Push Skipped') !== -1;
+            }),
+            'the setup-failed comment should be posted through the github provider'
+        );
+        assert.deepEqual(ghRemoveLabelCalls[0], {
+            owner: 'IstiN',
+            repo: 'fah-git-test',
+            number: 42,
+            label: 'sm_rework_triggered'
+        });
+    });
+});
+
 // ── action(): resumeAgent exception safety ───────────────────────────────────
 // feedbackLoop.resumeAgent() shells out (mkdir/bash/run-agent.sh --continue) and
 // can itself throw (e.g. blocked by a misconfigured CLI_ALLOWED_COMMANDS whitelist). Every
@@ -471,6 +559,15 @@ suite('pushReworkChanges.action — rework_setup_failed.md guard (#310)', functi
 // { attempted: false } instead of propagating and skipping the honest error-comment fallback.
 
 function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
+    var mergedMocks = Object.assign({
+        cli_execute_command: function() { return ''; },
+        file_read: function() { return null; },
+        jira_post_comment: function() {},
+        jira_move_to_status: function() {},
+        jira_remove_label: function() {},
+        jira_assign_ticket_to: function() {}
+    }, mocks || {});
+
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
@@ -487,17 +584,11 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
             './common/autoStart.js': { triggerSmIfIdle: function() {}, triggerConfiguredWorkflowForTicket: function() {} },
             './common/outputFiles.js': { readOutputFile: function() { return null; } },
             './config.js': configModule,
+            './common/trackers.js': makeTrackersModule(mergedMocks),
             './cacheToReleases.js': { action: function() {} },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
-        Object.assign({
-            cli_execute_command: function() { return ''; },
-            file_read: function() { return null; },
-            jira_post_comment: function() {},
-            jira_move_to_status: function() {},
-            jira_remove_label: function() {},
-            jira_assign_ticket_to: function() {}
-        }, mocks || {})
+        mergedMocks
     );
 }
 

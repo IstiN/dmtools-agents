@@ -7,6 +7,30 @@ var githubHelpersStub = {
     findMergedPRForTicket: function() { return null; }
 };
 
+/**
+ * Load the real js/common/trackers.js with tool mocks, pinning the provider via
+ * customParams so tests stay deterministic even when the runner process has
+ * DEFAULT_TRACKER set (env probing would otherwise outrank a silent config).
+ * A customParams.trackerProvider in the tested params still wins, so provider
+ * dispatch itself remains testable.
+ */
+function makeTrackersModule(toolMocks) {
+    var realTrackers = loadModule(
+        'js/common/trackers.js',
+        makeRequire({ '../config.js': configModule }),
+        toolMocks || {}
+    );
+    return {
+        createTracker: function(config, customParams) {
+            return realTrackers.createTracker(
+                config,
+                Object.assign({ trackerProvider: 'jira' }, customParams || {})
+            );
+        },
+        extractTicketKey: realTrackers.extractTicketKey
+    };
+}
+
 function loadPostPRReviewComments(mocks) {
     var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({}), {
         file_read: (mocks && mocks.file_read) || function() { return null; }
@@ -20,6 +44,7 @@ function loadPostPRReviewComments(mocks) {
             './configLoader.js': configLoaderModule,
             './common/outputFiles.js': outputFiles,
             './common/githubHelpers.js': githubHelpersStub,
+            './common/trackers.js': makeTrackersModule({}),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
         {
@@ -310,6 +335,8 @@ suite('postPRReviewComments', function() {
                 jira_assign_ticket_to: function() {}
             };
 
+            var mergedMocks = Object.assign({}, defaultMocks, opts.mocks || {});
+
             var mod = loadModule(
                 'js/postPRReviewComments.js',
                 makeRequire({
@@ -325,9 +352,10 @@ suite('postPRReviewComments', function() {
                     },
                     './common/outputFiles.js': outputFiles,
                     './common/githubHelpers.js': githubHelpersStub,
+                    './common/trackers.js': makeTrackersModule(mergedMocks),
                     './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
                 }),
-                defaultMocks
+                mergedMocks
             );
 
             return {
@@ -420,6 +448,66 @@ suite('postPRReviewComments', function() {
                 'must not post the "could not attach" comment when a PR was found'
             );
         });
+
+        test('github provider: ticket operations dispatch to github_* tools, jira_* stay untouched (#414)', function() {
+            var ghCommentCalls = [];
+            var ghAddLabelCalls = [];
+            var ghRemoveLabelCalls = [];
+            var jiraCalls = [];
+
+            var loaded = loadPostPRReviewCommentsForAction({
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                },
+                repoInfo: null,
+                openPrs: [],
+                mocks: {
+                    github_create_comment: function(args) { ghCommentCalls.push(args); return '{}'; },
+                    github_add_labels: function(args) { ghAddLabelCalls.push(args); return '{}'; },
+                    github_remove_label: function(args) { ghRemoveLabelCalls.push(args); return '{}'; },
+                    jira_post_comment: function(args) { jiraCalls.push(args); },
+                    jira_add_label: function(args) { jiraCalls.push(args); },
+                    jira_move_to_status: function(args) { jiraCalls.push(args); },
+                    jira_remove_label: function(args) { jiraCalls.push(args); },
+                    jira_assign_ticket_to: function(args) { jiraCalls.push(args); }
+                }
+            });
+
+            var result = loaded.mod.action({
+                ticket: { key: 'IstiN/fah-git-test#7', fields: { labels: [] } },
+                response: 'Review content',
+                inputFolderPath: 'input/IstiN/fah-git-test#7',
+                customParams: { trackerProvider: 'github' }
+            });
+
+            assert.equal(result.success, true);
+            assert.equal(jiraCalls.length, 0, 'no jira_* tool must be called on a github deployment: ' + JSON.stringify(jiraCalls));
+
+            assert.ok(
+                ghCommentCalls.some(function(c) {
+                    return c.pullRequestId === 7 && c.text.indexOf('Automated PR Review Completed') !== -1;
+                }),
+                'review summary should be posted via github_create_comment: ' + JSON.stringify(ghCommentCalls)
+            );
+            assert.ok(
+                ghCommentCalls.some(function(c) {
+                    return c.pullRequestId === 7 && c.text.indexOf('PR Review Could Not Be Attached') !== -1;
+                }),
+                'the could-not-attach comment should be posted via github_create_comment'
+            );
+            assert.ok(
+                ghAddLabelCalls.some(function(c) {
+                    return c.number === 7 && c.labels && c.labels.indexOf('ai_pr_reviewed') !== -1;
+                }),
+                'ai_pr_reviewed should be added via github_add_labels: ' + JSON.stringify(ghAddLabelCalls)
+            );
+            assert.ok(
+                ghRemoveLabelCalls.some(function(c) { return c.number === 7 && c.label === 'pr_review_wip'; }),
+                'the WIP label should be removed via github_remove_label: ' + JSON.stringify(ghRemoveLabelCalls)
+            );
+        });
     });
 
     // ── action(): opt-in formal GitHub PR review (Approve/Request Changes) ────
@@ -456,6 +544,21 @@ suite('postPRReviewComments', function() {
                 readOutputFile: function() { return null; }
             };
 
+            var formalMocks = {
+                file_read: function(args) {
+                    var p = args && (args.path || args);
+                    if (p && p.indexOf('pr_info.md') !== -1) {
+                        return opts.prInfoContent || '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n';
+                    }
+                    return null;
+                },
+                jira_add_label: function() {},
+                jira_move_to_status: function() {},
+                jira_post_comment: function() {},
+                jira_remove_label: function() {},
+                jira_assign_ticket_to: function() {}
+            };
+
             var mod = loadModule(
                 'js/postPRReviewComments.js',
                 makeRequire({
@@ -471,22 +574,10 @@ suite('postPRReviewComments', function() {
                     },
                     './common/outputFiles.js': outputFiles,
                     './common/githubHelpers.js': githubHelpersStub,
+                    './common/trackers.js': makeTrackersModule(formalMocks),
                     './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
                 }),
-                {
-                    file_read: function(args) {
-                        var p = args && (args.path || args);
-                        if (p && p.indexOf('pr_info.md') !== -1) {
-                            return opts.prInfoContent || '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n';
-                        }
-                        return null;
-                    },
-                    jira_add_label: function() {},
-                    jira_move_to_status: function() {},
-                    jira_post_comment: function() {},
-                    jira_remove_label: function() {},
-                    jira_assign_ticket_to: function() {}
-                }
+                formalMocks
             );
 
             return {
@@ -621,6 +712,13 @@ suite('postPRReviewComments', function() {
                         readOutputFile: function() { return null; }
                     },
                     './common/githubHelpers.js': githubHelpersStub,
+                    './common/trackers.js': makeTrackersModule({
+                        jira_add_label: function() {},
+                        jira_move_to_status: function() {},
+                        jira_post_comment: function() {},
+                        jira_remove_label: function() {},
+                        jira_assign_ticket_to: function() {}
+                    }),
                     './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
                 }),
                 {
