@@ -2,7 +2,7 @@
  * Unit tests for js/common/trackers.js
  *
  * The tracker-agnostic ticket layer (the scm.js analog for trackers):
- * a createTracker(config) factory that maps generic ticket operations
+ * a createTracker(config, customParams) factory that maps generic ticket operations
  * onto CANONICAL tracker tools per configured provider — jira_* / ado_* /
  * github_* — exactly like scm.js maps SCM operations onto providers.
  *
@@ -108,7 +108,7 @@ suite('trackers.js factory', function () {
     test('exports a createTracker factory', function () {
         var trackers = loadTrackers({});
         assert.ok(trackers.createTracker, 'createTracker export missing');
-        var t = trackers.createTracker({});
+        var t = trackers.createTracker({}, { trackerProvider: 'jira' });
         assert.ok(t.getTicket, 'getTicket missing');
         assert.ok(t.search, 'search missing');
         assert.ok(t.postComment, 'postComment missing');
@@ -125,7 +125,6 @@ suite('trackers.js factory', function () {
 
     test('provider defaults to jira and honors config.tracker.provider', function () {
         var trackers = loadTrackers({});
-        assert.equal(trackers.createTracker({}).provider(), 'jira');
         assert.equal(
             trackers.createTracker({ tracker: { provider: 'ADO' } }).provider(),
             'ado',
@@ -135,13 +134,62 @@ suite('trackers.js factory', function () {
             trackers.createTracker({ tracker: { provider: 'github' } }).provider(),
             'github'
         );
+
+        var env = null;
+        try { env = java.lang.System.getenv('DEFAULT_TRACKER'); } catch (e) {}
+        if (env) {
+            // DEFAULT_TRACKER outranks the built-in fallback — the plain default
+            // is covered by the dedicated env-probing test below.
+            return;
+        }
+        assert.equal(trackers.createTracker({}).provider(), 'jira');
     });
 
     test('unknown provider falls back to jira', function () {
         var trackers = loadTrackers({});
         assert.equal(
-            trackers.createTracker({ tracker: { provider: 'trello' } }).provider(),
+            trackers.createTracker({}, { trackerProvider: 'trello' }).provider(),
             'jira'
+        );
+    });
+
+    test('customParams.trackerProvider overrides config.tracker.provider', function () {
+        var trackers = loadTrackers({});
+        assert.equal(
+            trackers.createTracker(
+                { tracker: { provider: 'ado' } },
+                { trackerProvider: 'github' }
+            ).provider(),
+            'github',
+            'per-agent customParams override must win over project config'
+        );
+    });
+
+    test('config.defaultTracker is honored when no stronger signal exists', function () {
+        var env = null;
+        try { env = java.lang.System.getenv('DEFAULT_TRACKER'); } catch (e) {}
+        if (env) {
+            // DEFAULT_TRACKER env probing outranks config.defaultTracker —
+            // nothing deterministic to assert while it is set.
+            return;
+        }
+        var trackers = loadTrackers({});
+        assert.equal(trackers.createTracker({ defaultTracker: 'ado' }).provider(), 'ado');
+    });
+
+    test('DEFAULT_TRACKER env is probed when config is silent', function () {
+        var env = null;
+        try { env = java.lang.System.getenv('DEFAULT_TRACKER'); } catch (e) {}
+        if (!env) {
+            // Nothing to assert without the env var — the probing layer is
+            // exercised in production GraalJS runs only.
+            return;
+        }
+        var trackers = loadTrackers({});
+        assert.equal(
+            trackers.createTracker({}).provider(),
+            String(env).toLowerCase().trim(),
+            'DEFAULT_TRACKER must drive the provider when the config never mentions a tracker'
         );
     });
 });
@@ -150,7 +198,7 @@ suite('trackers.js jira provider (default)', function () {
     test('getTicket calls jira_get_ticket with the key', function () {
         var mocks = jiraMocks();
         var trackers = loadTrackers(mocks);
-        var ticket = trackers.createTracker({}).getTicket('PROJ-123');
+        var ticket = trackers.createTracker({}, { trackerProvider: 'jira' }).getTicket('PROJ-123');
         assert.deepEqual(mocks.jira_get_ticket.calls[0], { key: 'PROJ-123' });
         assert.equal(ticket.key, 'PROJ-123');
         assert.equal(ticket.title, 'Fix the login flow');
@@ -162,7 +210,7 @@ suite('trackers.js jira provider (default)', function () {
     test('search maps to jira_search_by_jql and normalizes the issues page', function () {
         var mocks = jiraMocks();
         var trackers = loadTrackers(mocks);
-        var results = trackers.createTracker({}).search('labels = wip');
+        var results = trackers.createTracker({}, { trackerProvider: 'jira' }).search('labels = wip');
         assert.deepEqual(mocks.jira_search_by_jql.calls[0], { jql: 'labels = wip' });
         assert.equal(results.length, 1);
         assert.equal(results[0].key, 'PROJ-123');
@@ -171,7 +219,7 @@ suite('trackers.js jira provider (default)', function () {
     test('postComment / getComments use the canonical jira tools', function () {
         var mocks = jiraMocks();
         var trackers = loadTrackers(mocks);
-        var t = trackers.createTracker({});
+        var t = trackers.createTracker({}, { trackerProvider: 'jira' });
         t.postComment('PROJ-123', 'looks good');
         var comments = t.getComments('PROJ-123');
         assert.deepEqual(mocks.jira_post_comment.calls[0], { key: 'PROJ-123', comment: 'looks good' });
@@ -184,7 +232,7 @@ suite('trackers.js jira provider (default)', function () {
     test('labels, status and assign use canonical jira args', function () {
         var mocks = jiraMocks();
         var trackers = loadTrackers(mocks);
-        var t = trackers.createTracker({});
+        var t = trackers.createTracker({}, { trackerProvider: 'jira' });
         t.addLabel('PROJ-123', 'ai-generated');
         t.removeLabel('PROJ-123', 'wip');
         t.moveToStatus('PROJ-123', 'In Review');
@@ -198,7 +246,7 @@ suite('trackers.js jira provider (default)', function () {
     test('createTicket maps onto jira_create_ticket_basic and extracts the key', function () {
         var mocks = jiraMocks();
         var trackers = loadTrackers(mocks);
-        var key = trackers.createTracker({}).createTicket('PROJ', 'Bug', 'It breaks', 'details');
+        var key = trackers.createTracker({}, { trackerProvider: 'jira' }).createTicket('PROJ', 'Bug', 'It breaks', 'details');
         assert.deepEqual(mocks.jira_create_ticket_basic.calls[0], {
             project: 'PROJ',
             issueType: 'Bug',
@@ -212,7 +260,7 @@ suite('trackers.js jira provider (default)', function () {
         var mocks = jiraMocks();
         mocks.jira_search_by_jql = recorder('jira_search_by_jql', JSON.stringify({ issues: [] }));
         var trackers = loadTrackers(mocks);
-        assert.deepEqual(trackers.createTracker({}).search('nope'), []);
+        assert.deepEqual(trackers.createTracker({}, { trackerProvider: 'jira' }).search('nope'), []);
     });
 });
 
@@ -451,13 +499,13 @@ suite('trackers.js github provider', function () {
 suite('trackers.js normalizeTicket', function () {
     test('returns null for falsy input', function () {
         var trackers = loadTrackers({});
-        assert.equal(trackers.createTracker({}).normalizeTicket(null), null);
-        assert.equal(trackers.createTracker({}).normalizeTicket(''), null);
+        assert.equal(trackers.createTracker({}, { trackerProvider: 'jira' }).normalizeTicket(null), null);
+        assert.equal(trackers.createTracker({}, { trackerProvider: 'jira' }).normalizeTicket(''), null);
     });
 
     test('passes an already-normalized ticket through', function () {
         var trackers = loadTrackers({});
-        var normalized = trackers.createTracker({}).normalizeTicket({
+        var normalized = trackers.createTracker({}, { trackerProvider: 'jira' }).normalizeTicket({
             key: 'PROJ-1',
             title: 'Already flat'
         });
@@ -481,7 +529,7 @@ suite('trackers.js assignForReview', function () {
     test('assigns, moves, and adds the AI label, then reports success', function () {
         var mocks = jiraMocks();
         var trackers = loadTrackers(mocks);
-        var result = trackers.createTracker({}).assignForReview('PROJ-123', 'acc-1');
+        var result = trackers.createTracker({}, { trackerProvider: 'jira' }).assignForReview('PROJ-123', 'acc-1');
         assert.ok(result.success, 'expected success: ' + JSON.stringify(result));
         assert.deepEqual(mocks.jira_assign_ticket_to.calls[0], { key: 'PROJ-123', accountId: 'acc-1' });
         assert.equal(mocks.jira_move_to_status.calls[0].key, 'PROJ-123');
@@ -491,7 +539,7 @@ suite('trackers.js assignForReview', function () {
     test('moves to the configured In Review status by default', function () {
         var mocks = jiraMocks();
         var trackers = loadTrackers(mocks);
-        trackers.createTracker({}).assignForReview('PROJ-123', 'acc-1');
+        trackers.createTracker({}, { trackerProvider: 'jira' }).assignForReview('PROJ-123', 'acc-1');
         assert.equal(
             mocks.jira_move_to_status.calls[0].statusName,
             configModule.STATUSES.IN_REVIEW
@@ -501,21 +549,21 @@ suite('trackers.js assignForReview', function () {
     test('honors an explicit target status', function () {
         var mocks = jiraMocks();
         var trackers = loadTrackers(mocks);
-        trackers.createTracker({}).assignForReview('PROJ-123', 'acc-1', null, 'Done');
+        trackers.createTracker({}, { trackerProvider: 'jira' }).assignForReview('PROJ-123', 'acc-1', null, 'Done');
         assert.equal(mocks.jira_move_to_status.calls[0].statusName, 'Done');
     });
 
     test('removes the WIP label when provided', function () {
         var mocks = jiraMocks();
         var trackers = loadTrackers(mocks);
-        trackers.createTracker({}).assignForReview('PROJ-123', 'acc-1', 'wip');
+        trackers.createTracker({}, { trackerProvider: 'jira' }).assignForReview('PROJ-123', 'acc-1', 'wip');
         assert.deepEqual(mocks.jira_remove_label.calls[0], { key: 'PROJ-123', label: 'wip' });
     });
 
     test('a WIP removal failure does not fail the whole operation', function () {
         var mocks = jiraMocks({ removeLabelFails: true });
         var trackers = loadTrackers(mocks);
-        var result = trackers.createTracker({}).assignForReview('PROJ-123', 'acc-1', 'wip');
+        var result = trackers.createTracker({}, { trackerProvider: 'jira' }).assignForReview('PROJ-123', 'acc-1', 'wip');
         assert.ok(result.success, 'WIP cleanup failure must not fail the flow');
     });
 
@@ -526,7 +574,7 @@ suite('trackers.js assignForReview', function () {
             jira_add_label: recorder('jira_add_label', '{}'),
             jira_remove_label: recorder('jira_remove_label', '{}')
         });
-        var result = trackers.createTracker({}).assignForReview('PROJ-123', 'acc-1');
+        var result = trackers.createTracker({}, { trackerProvider: 'jira' }).assignForReview('PROJ-123', 'acc-1');
         assert.notOk(result.success);
         assert.contains(result.error, 'boom');
     });
@@ -535,20 +583,20 @@ suite('trackers.js assignForReview', function () {
 suite('trackers.js extractTicketKey', function () {
     test('reads the key from an object', function () {
         var trackers = loadTrackers({});
-        assert.equal(trackers.createTracker({}).extractTicketKey({ key: 'PROJ-1' }), 'PROJ-1');
+        assert.equal(trackers.createTracker({}, { trackerProvider: 'jira' }).extractTicketKey({ key: 'PROJ-1' }), 'PROJ-1');
     });
 
     test('reads the key from a JSON string', function () {
         var trackers = loadTrackers({});
         assert.equal(
-            trackers.createTracker({}).extractTicketKey('{"key":"PROJ-2"}'),
+            trackers.createTracker({}, { trackerProvider: 'jira' }).extractTicketKey('{"key":"PROJ-2"}'),
             'PROJ-2'
         );
     });
 
     test('returns null for empty and unparseable input', function () {
         var trackers = loadTrackers({});
-        var t = trackers.createTracker({});
+        var t = trackers.createTracker({}, { trackerProvider: 'jira' });
         assert.equal(t.extractTicketKey(null), null);
         assert.equal(t.extractTicketKey(''), null);
         assert.equal(t.extractTicketKey('not json'), null);

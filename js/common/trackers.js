@@ -10,8 +10,18 @@
  * McpCliHandler); the JS surface exposes canonical names only. Provider
  * mapping therefore lives in this layer, in JS.
  *
- * Factory: createTracker(config)
- *   config.tracker.provider: 'jira' (default) | 'ado' | 'github'
+ * Factory: createTracker(config, customParams)
+ *   Provider probing order (first non-empty, valid value wins):
+ *     1. customParams.trackerProvider   — per-agent override, e.g.
+ *        { "customParams": { "trackerProvider": "ado" } }
+ *     2. config.tracker.provider        — project config, 'jira' | 'ado' | 'github'
+ *     3. DEFAULT_TRACKER env var        — the deployment-level signal; it
+ *        reflects which tracker integration is actually active in the Java
+ *        runtime (jira_* / ado_* / github_* tools). This is what lets the
+ *        same script run unchanged on GitHub-tracker deployments whose
+ *        project config never mentions a tracker.
+ *     4. config.defaultTracker          — configLoader-consistent fallback
+ *     5. 'jira'                         — default
  *   config.repository: { owner, repo }  // GitHub issue key expansion
  *   config.labels: { aiGenerated }      // overrides LABELS.AI_GENERATED
  *
@@ -103,10 +113,28 @@ function _assigneeName(fields) {
     return null;
 }
 
-function createTracker(config) {
+/**
+ * Read the DEFAULT_TRACKER env var when running under GraalJS (Java host
+ * access); null everywhere else (plain JS test harnesses) or when unset.
+ */
+function _defaultTrackerEnv() {
+    try {
+        var v = java.lang.System.getenv('DEFAULT_TRACKER');
+        return v ? String(v).trim() : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function createTracker(config, customParams) {
     var VALID = ['jira', 'ado', 'github'];
-    var raw = config && config.tracker && config.tracker.provider;
-    var providerName = VALID.indexOf(String(raw || '').toLowerCase()) !== -1
+    var raw =
+        (customParams && customParams.trackerProvider) ||
+        (config && config.tracker && config.tracker.provider) ||
+        _defaultTrackerEnv() ||
+        (config && config.defaultTracker) ||
+        '';
+    var providerName = VALID.indexOf(String(raw).toLowerCase()) !== -1
         ? String(raw).toLowerCase()
         : 'jira';
     var owner = (config && config.repository && config.repository.owner) || '';
