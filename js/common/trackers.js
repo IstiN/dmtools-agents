@@ -176,6 +176,28 @@ function createTracker(config, customParams) {
         return parseInt(m[1], 10);
     }
 
+    /**
+     * Build the argument bag for the dedicated GitHub issue tools
+     * (github_assign_issue / github_move_issue_to_status). Carries BOTH the
+     * composite key and the explicit owner/repo/number parts so the call
+     * works against runtimes whose tool schema accepts only one of the two
+     * shapes: the Java tools resolve either (explicit parts win over key),
+     * the Dart issue family speaks owner/repo/number. For composite keys the
+     * parts are parsed FROM THE KEY (the key is authoritative); for bare
+     * numbers the configured repository fills in.
+     */
+    function githubIssueArgs(key) {
+        var k = expandKey(key);
+        var m = /^([\w.-]+)\/([\w.-]+)#(\d+)$/.exec(k);
+        if (m) {
+            return { key: k, owner: m[1], repo: m[2], number: parseInt(m[3], 10) };
+        }
+        var args = { key: k, number: githubIssueNumber(k) };
+        if (owner) args.owner = owner;
+        if (repo) args.repo = repo;
+        return args;
+    }
+
     // ── jira provider (canonical jira_* tools) ────────────────────────────
 
     function jiraGetTicket(key) {
@@ -275,7 +297,9 @@ function createTracker(config, customParams) {
         // open/reopened/todo/backlog/in progress → reopen, with any other
         // status applied as an issue label.
         if (typeof github_move_issue_to_status === 'function') {
-            return github_move_issue_to_status({ statusName: s, key: expandKey(key) });
+            return github_move_issue_to_status(
+                Object.assign({ statusName: s }, githubIssueArgs(key))
+            );
         }
         // Fallback for runtimes without the dedicated tool (Dart catalog):
         // GitHub issues have no status field — done/closed close the issue,
@@ -307,10 +331,12 @@ function createTracker(config, customParams) {
     }
 
     function githubAssignTo(key, user) {
-        // github_assign_issue (Java runtime) accepts the composite key
-        // directly and resolves owner/repo/number from it.
+        // github_assign_issue (Java runtime) accepts both the composite key
+        // and explicit owner/repo/number parts (see githubIssueArgs).
         if (typeof github_assign_issue === 'function') {
-            return github_assign_issue({ user: user, key: expandKey(key) });
+            return github_assign_issue(
+                Object.assign({ user: user }, githubIssueArgs(key))
+            );
         }
         unsupported('assignTo');
     }

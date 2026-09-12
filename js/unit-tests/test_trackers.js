@@ -534,7 +534,13 @@ suite('trackers.js github provider', function () {
             tracker: { provider: 'github' },
             repository: { owner: 'acme', repo: 'widgets' }
         }).assignTo('acme/widgets#7', 'jane');
-        assert.deepEqual(ghAssign.calls[0], { user: 'jane', key: 'acme/widgets#7' });
+        assert.deepEqual(ghAssign.calls[0], {
+            user: 'jane',
+            key: 'acme/widgets#7',
+            owner: 'acme',
+            repo: 'widgets',
+            number: 7
+        });
     });
 
     test('assignTo expands a bare number into the composite key', function () {
@@ -544,7 +550,26 @@ suite('trackers.js github provider', function () {
             tracker: { provider: 'github' },
             repository: { owner: 'acme', repo: 'widgets' }
         }).assignTo('7', 'jane');
-        assert.deepEqual(ghAssign.calls[0], { user: 'jane', key: 'acme/widgets#7' });
+        assert.deepEqual(ghAssign.calls[0], {
+            user: 'jane',
+            key: 'acme/widgets#7',
+            owner: 'acme',
+            repo: 'widgets',
+            number: 7
+        });
+    });
+
+    test('assignTo with a bare number and no repository config omits owner/repo', function () {
+        var ghAssign = recorder('github_assign_issue', '{}');
+        var trackers = loadTrackers({ github_assign_issue: ghAssign });
+        trackers.createTracker({ tracker: { provider: 'github' } })
+            .assignTo('7', 'jane');
+        var call = ghAssign.calls[0];
+        assert.equal(call.user, 'jane');
+        assert.equal(call.key, '7');
+        assert.equal(call.number, 7);
+        assert.equal(call.owner, undefined, 'owner must be absent so the tool can apply its own defaults');
+        assert.equal(call.repo, undefined, 'repo must be absent so the tool can apply its own defaults');
     });
 
     test('moveToStatus prefers github_move_issue_to_status when the runtime exposes it', function () {
@@ -560,8 +585,20 @@ suite('trackers.js github provider', function () {
         });
         t.moveToStatus('acme/widgets#7', 'Done');
         t.moveToStatus('8', 'In Review');
-        assert.deepEqual(ghMove.calls[0], { statusName: 'Done', key: 'acme/widgets#7' });
-        assert.deepEqual(ghMove.calls[1], { statusName: 'In Review', key: 'acme/widgets#8' });
+        assert.deepEqual(ghMove.calls[0], {
+            statusName: 'Done',
+            key: 'acme/widgets#7',
+            owner: 'acme',
+            repo: 'widgets',
+            number: 7
+        });
+        assert.deepEqual(ghMove.calls[1], {
+            statusName: 'In Review',
+            key: 'acme/widgets#8',
+            owner: 'acme',
+            repo: 'widgets',
+            number: 8
+        });
         assert.equal(ghClose.calls.length, 0, 'close/label fallback must not run when the dedicated tool exists');
     });
 });
