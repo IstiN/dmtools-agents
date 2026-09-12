@@ -362,7 +362,13 @@ suite('trackers.js github provider', function () {
 
     test('moveToStatus maps done/closed (any case) onto close_issue', function () {
         var ghClose = recorder('github_close_issue', '{}');
-        var trackers = loadTrackers({ github_close_issue: ghClose });
+        var trackers = loadTrackers({
+            github_close_issue: ghClose,
+            // Simulate a runtime without the dedicated tool (Dart catalog);
+            // in GraalJS every configured tool exists as a real global and
+            // would otherwise win over the fallback this test targets.
+            github_move_issue_to_status: null
+        });
         var t = trackers.createTracker({
             tracker: { provider: 'github' },
             repository: { owner: 'acme', repo: 'widgets' }
@@ -379,7 +385,9 @@ suite('trackers.js github provider', function () {
         var ghLabels = recorder('github_add_labels', '{}');
         var trackers = loadTrackers({
             github_close_issue: ghClose,
-            github_add_labels: ghLabels
+            github_add_labels: ghLabels,
+            // Simulate a runtime without the dedicated tool (see above).
+            github_move_issue_to_status: null
         });
         var t = trackers.createTracker({
             tracker: { provider: 'github' },
@@ -488,11 +496,73 @@ suite('trackers.js github provider', function () {
         assert.equal(key, 'acme/widgets#42');
     });
 
-    test('search and assignTo stay explicit gaps (no canonical tool)', function () {
-        var trackers = loadTrackers({});
+    test('search and assignTo fail with a clear error when the runtime lacks the dedicated tools', function () {
+        // Explicit nulls simulate a runtime without the dedicated issue tools;
+        // in GraalJS they exist as real globals and would make (real!) API
+        // calls instead of throwing the unsupported-operation error.
+        var trackers = loadTrackers({
+            github_search_issues: null,
+            github_assign_issue: null
+        });
         var t = trackers.createTracker({ tracker: { provider: 'github' } });
         assert.throws(function () { t.search('is:open'); });
         assert.throws(function () { t.assignTo('acme/widgets#7', 'jane'); });
+    });
+
+    test('search dispatches to github_search_issues when the runtime exposes it', function () {
+        var ghSearch = recorder('github_search_issues', JSON.stringify({
+            items: [GITHUB_TICKET]
+        }));
+        var trackers = loadTrackers({ github_search_issues: ghSearch });
+        var results = trackers.createTracker({
+            tracker: { provider: 'github' },
+            repository: { owner: 'acme', repo: 'widgets' }
+        }).search('is:open label:bug');
+        assert.deepEqual(ghSearch.calls[0], {
+            query: 'is:open label:bug',
+            workspace: 'acme',
+            repository: 'widgets'
+        });
+        assert.equal(results.length, 1);
+        assert.equal(results[0].key, 'acme/widgets#41');
+    });
+
+    test('assignTo dispatches to github_assign_issue with the composite key', function () {
+        var ghAssign = recorder('github_assign_issue', '{}');
+        var trackers = loadTrackers({ github_assign_issue: ghAssign });
+        trackers.createTracker({
+            tracker: { provider: 'github' },
+            repository: { owner: 'acme', repo: 'widgets' }
+        }).assignTo('acme/widgets#7', 'jane');
+        assert.deepEqual(ghAssign.calls[0], { user: 'jane', key: 'acme/widgets#7' });
+    });
+
+    test('assignTo expands a bare number into the composite key', function () {
+        var ghAssign = recorder('github_assign_issue', '{}');
+        var trackers = loadTrackers({ github_assign_issue: ghAssign });
+        trackers.createTracker({
+            tracker: { provider: 'github' },
+            repository: { owner: 'acme', repo: 'widgets' }
+        }).assignTo('7', 'jane');
+        assert.deepEqual(ghAssign.calls[0], { user: 'jane', key: 'acme/widgets#7' });
+    });
+
+    test('moveToStatus prefers github_move_issue_to_status when the runtime exposes it', function () {
+        var ghMove = recorder('github_move_issue_to_status', '{}');
+        var ghClose = recorder('github_close_issue', '{}');
+        var trackers = loadTrackers({
+            github_move_issue_to_status: ghMove,
+            github_close_issue: ghClose
+        });
+        var t = trackers.createTracker({
+            tracker: { provider: 'github' },
+            repository: { owner: 'acme', repo: 'widgets' }
+        });
+        t.moveToStatus('acme/widgets#7', 'Done');
+        t.moveToStatus('8', 'In Review');
+        assert.deepEqual(ghMove.calls[0], { statusName: 'Done', key: 'acme/widgets#7' });
+        assert.deepEqual(ghMove.calls[1], { statusName: 'In Review', key: 'acme/widgets#8' });
+        assert.equal(ghClose.calls.length, 0, 'close/label fallback must not run when the dedicated tool exists');
     });
 });
 

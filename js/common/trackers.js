@@ -30,10 +30,12 @@
  *
  * Provider capabilities: jira supports every operation; ado covers
  * tickets/search/comments/status/assign/create (labels are not exposed by
- * the ado toolset); github covers everything except search and assignTo —
- * moveToStatus closes on done/closed and carries any other status as an
- * issue label (issue tools are a Dart runtime extension); the remaining
- * gaps throw a clear error.
+ * the ado toolset); github covers everything — search/assignTo/moveToStatus
+ * prefer the dedicated issue tools (github_search_issues, github_assign_issue,
+ * github_move_issue_to_status) when the runtime exposes them (Java runtime),
+ * with graceful degradation where it does not (Dart catalog): moveToStatus
+ * falls back to close-on-done + status-as-label over the basic issue tools,
+ * while search/assignTo throw a clear error.
  */
 
 const { STATUSES, LABELS } = require('../config.js');
@@ -264,23 +266,53 @@ function createTracker(config, customParams) {
     }
 
     function githubMoveToStatus(key, status) {
-        // GitHub issues have no status field: done/closed close the issue,
-        // any other status is carried as an issue label (github_add_labels
-        // schema: owner/repo/number + labels array).
-        var s = String(status || '').trim().toLowerCase();
+        var s = String(status || '').trim();
         if (!s) {
             throw new Error('trackers: cannot map GitHub status: ' + status);
         }
+        // Prefer the dedicated issue tool when the runtime exposes it (Java
+        // runtime): it also maps done/closed/completed/resolved → close and
+        // open/reopened/todo/backlog/in progress → reopen, with any other
+        // status applied as an issue label.
+        if (typeof github_move_issue_to_status === 'function') {
+            return github_move_issue_to_status({ statusName: s, key: expandKey(key) });
+        }
+        // Fallback for runtimes without the dedicated tool (Dart catalog):
+        // GitHub issues have no status field — done/closed close the issue,
+        // any other status is carried as an issue label.
         var n = githubIssueNumber(key);
-        if (s === 'done' || s === 'closed') {
+        var sl = s.toLowerCase();
+        if (sl === 'done' || sl === 'closed') {
             return github_close_issue({ owner: owner, repo: repo, number: n });
         }
         return github_add_labels({
             owner: owner,
             repo: repo,
             number: n,
-            labels: [String(status).trim()]
+            labels: [s]
         });
+    }
+
+    function githubSearch(query) {
+        // github_search_issues (Java runtime) scopes the query to the
+        // configured repo automatically when it lacks a repo: qualifier.
+        if (typeof github_search_issues === 'function') {
+            return _ticketPage(github_search_issues({
+                query: query,
+                workspace: owner || undefined,
+                repository: repo || undefined
+            }), 'items');
+        }
+        unsupported('search');
+    }
+
+    function githubAssignTo(key, user) {
+        // github_assign_issue (Java runtime) accepts the composite key
+        // directly and resolves owner/repo/number from it.
+        if (typeof github_assign_issue === 'function') {
+            return github_assign_issue({ user: user, key: expandKey(key) });
+        }
+        unsupported('assignTo');
     }
 
     function githubAddLabel(key, label) {
@@ -367,13 +399,13 @@ function createTracker(config, customParams) {
         },
         github: {
             getTicket: githubGetTicket,
-            search: function () { unsupported('search'); },
+            search: githubSearch,
             postComment: githubPostComment,
             getComments: githubGetComments,
             addLabel: githubAddLabel,
             removeLabel: githubRemoveLabel,
             moveToStatus: githubMoveToStatus,
-            assignTo: function () { unsupported('assignTo'); },
+            assignTo: githubAssignTo,
             createTicket: githubCreateTicket
         }
     };
