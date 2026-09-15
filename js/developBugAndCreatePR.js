@@ -21,6 +21,7 @@
 var configLoader = require('./configLoader.js');
 const { LABELS, resolveStatuses } = require('./config.js');
 const developTicket = require('./developTicketAndCreatePR.js');
+const commentMarkup = require('./common/commentMarkup.js');
 const outputFiles = require('./common/outputFiles.js');
 
 function cleanCliOutput(output) {
@@ -95,9 +96,9 @@ function action(params) {
                     try {
                         jira_post_comment({
                             key: ticketKey,
-                            comment: 'h3. ℹ️ PR Already Open\n\n' +
+                            comment: commentMarkup.forTicket(ticketKey).h(3, 'ℹ️ PR Already Open') + '\n\n' +
                                 'A pull/merge request already exists for this ticket: ' + existingUrl + '\n\n' +
-                                'Moved ticket to *In Review* for review.'
+                                'Moved ticket to ' + commentMarkup.forTicket(ticketKey).bold('In Review') + ' for review.'
                         });
                     } catch (e) {}
                     try {
@@ -121,10 +122,10 @@ function action(params) {
                 try {
                     jira_post_comment({
                         key: ticketKey,
-                        comment: 'h3. ⚠️ Blocked Claim Needs CodeGraph Verification\n\n' +
+                        comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ Blocked Claim Needs CodeGraph Verification') + '\n\n' +
                             'The agent wrote `outputs/blocked.json`, but no CodeGraph usage was recorded. ' +
                             'Source-code bugs must use CodeGraph before declaring the work blocked.\n\n' +
-                            'Resetting to *Ready For Development* for an automatic retry.'
+                            'Resetting to ' + commentMarkup.forTicket(ticketKey).bold('Ready For Development') + ' for an automatic retry.'
                     });
                 } catch (e) {}
                 try {
@@ -137,15 +138,16 @@ function action(params) {
                 return { success: true, path: 'blocked_without_codegraph', ticketKey };
             }
 
-            let comment = 'h3. 🚫 Bug Cannot Be Fixed Automatically\n\n';
-            comment += '*Reason*: ' + (blocked.reason || '(see details below)') + '\n\n';
+            const m = commentMarkup.forTicket(ticketKey);
+            let comment = m.h(3, '🚫 Bug Cannot Be Fixed Automatically') + '\n\n';
+            comment += m.bold('Reason') + ': ' + (blocked.reason || '(see details below)') + '\n\n';
             if (blocked.tried && blocked.tried.length > 0) {
-                comment += '*Attempted*:\n';
+                comment += m.bold('Attempted') + ':\n';
                 blocked.tried.forEach(function(t) { comment += '- ' + t + '\n'; });
                 comment += '\n';
             }
             if (blocked.needs) {
-                comment += '*Needs from human*: ' + blocked.needs + '\n';
+                comment += m.bold('Needs from human') + ': ' + blocked.needs + '\n';
             }
 
             try { jira_post_comment({ key: ticketKey, comment: comment }); } catch (e) {}
@@ -166,12 +168,13 @@ function action(params) {
         if (alreadyFixed) {
             console.log('outputs/already_fixed.json found — bug already resolved in codebase');
 
-            let comment = 'h3. ✅ Bug Already Fixed\n\n';
+            const mFixed = commentMarkup.forTicket(ticketKey);
+            let comment = mFixed.h(3, '✅ Bug Already Fixed') + '\n\n';
             if (alreadyFixed.rca) {
-                comment += '*Root Cause*: ' + alreadyFixed.rca + '\n\n';
+                comment += mFixed.bold('Root Cause') + ': ' + alreadyFixed.rca + '\n\n';
             }
             if (alreadyFixed.commit) {
-                comment += '*Fixed in commit*: {code}' + alreadyFixed.commit + '{code}\n\n';
+                comment += mFixed.bold('Fixed in commit') + ': ' + mFixed.code(alreadyFixed.commit) + '\n\n';
             }
             if (alreadyFixed.description) {
                 comment += alreadyFixed.description + '\n\n';
@@ -276,7 +279,7 @@ function action(params) {
             try {
                 jira_post_comment({
                     key: ticketKeyForCheck,
-                    comment: 'h3. ⏸️ Development Interrupted\n\nThe AI agent was interrupted (likely hit a rate limit) before completing the implementation. The ticket has been reset to *Ready For Development* and will be automatically retried.\n\n' +
+                    comment: commentMarkup.forTicket(ticketKeyForCheck).h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted (likely hit a rate limit) before completing the implementation. The ticket has been reset to ' + commentMarkup.forTicket(ticketKeyForCheck).bold('Ready For Development') + ' and will be automatically retried.\n\n' +
                         (hasGitChanges ? 'Partial analysis work was saved to the branch.' : 'No partial work was produced.')
                 });
             } catch (e) {}
@@ -308,7 +311,7 @@ function action(params) {
             if (key) {
                 jira_post_comment({
                     key: key,
-                    comment: 'h3. ❌ Bug Development Error\n\n{code}' + error.toString() + '{code}'
+                    comment: commentMarkup.forTicket(key).h(3, '❌ Bug Development Error') + '\n\n' + commentMarkup.forTicket(key).code(error.toString())
                 });
             }
         } catch (e) {}

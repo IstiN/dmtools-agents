@@ -9,6 +9,7 @@
 var configLoader = require('./configLoader.js');
 const gh = require('./common/githubHelpers.js');
 const gitOps = require('./common/gitOps.js');
+const commentMarkup = require('./common/commentMarkup.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 
 function action(params) {
@@ -38,7 +39,7 @@ function action(params) {
         if (!repoInfo) {
             const err = 'Could not determine GitHub repository from git remote';
             console.error('PR review setup failed at repository resolution:', err);
-            try { jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ PR Review Setup Failed\n\n' + err + '\n\n_Review cancelled — no PR to review._' }); } catch (e) {}
+            try { jira_post_comment({ key: ticketKey, comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Setup Failed') + '\n\n' + err + '\n\n_Review cancelled — no PR to review._' }); } catch (e) {}
             return false;
         }
         console.log('Resolved repository:', repoInfo.owner + '/' + repoInfo.repo);
@@ -52,8 +53,8 @@ function action(params) {
             try {
                 jira_post_comment({
                     key: ticketKey,
-                    comment: 'h3. ⚠️ PR Review Setup Failed\n\n' +
-                        'Could not find an open Pull Request associated with *' + ticketKey + '*.\n\n' +
+                    comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Setup Failed') + '\n\n' +
+                        'Could not find an open Pull Request associated with ' + commentMarkup.forTicket(ticketKey).bold(ticketKey) + '.\n\n' +
                         'Please ensure:\n' +
                         '* A PR has been created with the ticket key in the title or branch name\n' +
                         '* The PR is open and accessible\n\n' +
@@ -73,7 +74,7 @@ function action(params) {
             try {
                 jira_post_comment({
                     key: ticketKey,
-                    comment: 'h3. ⚠️ PR Review Setup Failed\n\nCould not fetch details for PR #' + pr.number + '.\n\n_Review cancelled._'
+                    comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Setup Failed') + '\n\nCould not fetch details for PR #' + pr.number + '.\n\n_Review cancelled._'
                 });
             } catch (e) {}
             return false;
@@ -121,17 +122,18 @@ function action(params) {
 
         // Step 7: Jira comment
         try {
-            var jiraComment = 'h3. 🔍 Automated PR Review Started\n\n' +
-                '*Pull Request*: [PR #' + prDetails.number + '|' + prDetails.html_url + ']\n' +
-                '*Branch*: {code}' + (branchName || 'unknown') + '{code}\n' +
-                '*Files Changed*: ' + (prDetails.changed_files || 0) + '\n\n';
+            var m = commentMarkup.forTicket(ticketKey);
+            var jiraComment = m.h(3, '🔍 Automated PR Review Started') + '\n\n' +
+                m.bold('Pull Request') + ': ' + m.link('PR #' + prDetails.number, prDetails.html_url) + '\n' +
+                m.bold('Branch') + ': ' + m.code(branchName || 'unknown') + '\n' +
+                m.bold('Files Changed') + ': ' + (prDetails.changed_files || 0) + '\n\n';
 
             if (failedChecks.length > 0) {
-                jiraComment += '{panel:bgColor=#FFEBE6|borderColor=#DE350B}' +
-                    '⚠️ *CI checks failing* — ' + failedChecks.length + ' check(s) did not pass:\n' +
-                    failedChecks.map(function(c) { return '* {code}' + c.name + '{code}'; }).join('\n') +
-                    '\nError logs: {code}ci_failures.md{code} (summary) and {code}ci_failures_full.log{code} (full logs).' +
-                    '{panel}\n\n';
+                jiraComment += m.panel(null,
+                    '⚠️ ' + m.bold('CI checks failing') + ' — ' + failedChecks.length + ' check(s) did not pass:\n' +
+                    failedChecks.map(function(c) { return '* ' + m.code(c.name); }).join('\n') +
+                    '\nError logs: ' + m.code('ci_failures.md') + ' (summary) and ' + m.code('ci_failures_full.log') + ' (full logs).',
+                    'bgColor=#FFEBE6|borderColor=#DE350B') + '\n\n';
             }
 
             jiraComment += 'AI Code Reviewer is analyzing the pull request for:\n' +
@@ -171,7 +173,7 @@ function action(params) {
             const ticketKey = params.inputFolderPath.split('/').pop();
             jira_post_comment({
                 key: ticketKey,
-                comment: 'h3. ❌ PR Review Setup Error\n\n{code}' + error.toString() + '{code}'
+                comment: commentMarkup.forTicket(ticketKey).h(3, '❌ PR Review Setup Error') + '\n\n' + commentMarkup.forTicket(ticketKey).code(error.toString())
             });
         } catch (e) {}
         return false;

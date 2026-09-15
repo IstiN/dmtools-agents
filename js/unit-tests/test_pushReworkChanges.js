@@ -14,9 +14,12 @@
  */
 
 function makeOutputFiles(fileMap) {
-    return loadModule('js/common/outputFiles.js', makeRequire({}), {
+    return loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule,
+        }), {
         file_read: function(opts) {
             var path = opts && (opts.path || opts);
+var commentMarkupModule = loadModule('js/common/commentMarkup.js');
             return fileMap[path] !== undefined ? fileMap[path] : null;
         }
     });
@@ -79,6 +82,8 @@ function loadPushReworkChangesModule(fileMap) {
             './common/trackers.js': makeTrackersModule({}),
             './cacheToReleases.js': { cacheSessionLog: noop },
             './common/tokenUsageComment.js': { postTokenUsageComments: noop }
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         {
             file_read: function(opts) {
@@ -243,6 +248,8 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
             './common/trackers.js': makeTrackersModule({}),
             './cacheToReleases.js': {},
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         Object.assign({
             cli_execute_command: function() { return ''; },
@@ -413,6 +420,8 @@ function loadPushReworkChangesForAction(mocks, opts) {
             './common/trackers.js': makeTrackersModule(mergedMocks),
             './cacheToReleases.js': { action: function() {} },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         mergedMocks
     );
@@ -587,6 +596,8 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
             './common/trackers.js': makeTrackersModule(mergedMocks),
             './cacheToReleases.js': { action: function() {} },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         mergedMocks
     );

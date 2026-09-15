@@ -1,6 +1,8 @@
 /**
  * Unit tests for js/postPRReviewComments.js.
  */
+var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+
 
 var githubHelpersStub = {
     findPRForTicket: function() { return null; },
@@ -32,7 +34,9 @@ function makeTrackersModule(toolMocks) {
 }
 
 function loadPostPRReviewComments(mocks) {
-    var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({}), {
+    var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule
+        }), {
         file_read: (mocks && mocks.file_read) || function() { return null; }
     });
     return loadModule(
@@ -46,6 +50,8 @@ function loadPostPRReviewComments(mocks) {
             './common/githubHelpers.js': githubHelpersStub,
             './common/trackers.js': makeTrackersModule({}),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        ,
+            './common/commentMarkup.js': commentMarkupModule
         }),
         {
             file_read: (mocks && mocks.file_read) || function() { return null; }
@@ -353,7 +359,8 @@ suite('postPRReviewComments', function() {
                     './common/outputFiles.js': outputFiles,
                     './common/githubHelpers.js': githubHelpersStub,
                     './common/trackers.js': makeTrackersModule(mergedMocks),
-                    './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+                    './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+                    './common/commentMarkup.js': commentMarkupModule
                 }),
                 mergedMocks
             );
@@ -575,7 +582,8 @@ suite('postPRReviewComments', function() {
                     './common/outputFiles.js': outputFiles,
                     './common/githubHelpers.js': githubHelpersStub,
                     './common/trackers.js': makeTrackersModule(formalMocks),
-                    './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+                    './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+                    './common/commentMarkup.js': commentMarkupModule
                 }),
                 formalMocks
             );
@@ -720,7 +728,9 @@ suite('postPRReviewComments', function() {
                         jira_assign_ticket_to: function() {}
                     }),
                     './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
-                }),
+                ,
+            './common/commentMarkup.js': commentMarkupModule
+        }),
                 {
                     file_read: function(args) {
                         var p = args && (args.path || args);

@@ -27,9 +27,12 @@ function loadDevelopBugAndCreatePR(mocks) {
     }, mocks);
     var outputFiles = loadModule(
         'js/common/outputFiles.js',
-        makeRequire({}),
+        makeRequire({
+            './common/commentMarkup.js': commentMarkupModule,
+        }),
         allMocks
     );
+var commentMarkupModule = loadModule('js/common/commentMarkup.js');
 
     var mod = loadModule(
         'js/developBugAndCreatePR.js',
@@ -38,6 +41,8 @@ function loadDevelopBugAndCreatePR(mocks) {
             './configLoader.js': configLoaderModule,
             './common/outputFiles.js': outputFiles,
             './developTicketAndCreatePR.js': { action: function() { return { success: true, path: 'delegated' }; } }
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         allMocks
     );

@@ -14,6 +14,7 @@ var outputFiles = require('./common/outputFiles.js');
 const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js');
 var cacheToReleases = require('./cacheToReleases.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+const commentMarkup = require('./common/commentMarkup.js');
 
 function hasPrApprovedLabel(ticket) {
     var labels = (ticket && ticket.fields && ticket.fields.labels) ? ticket.fields.labels : [];
@@ -418,13 +419,14 @@ function createPullRequest(title, branchName, baseBranch) {
  */
 function postPRCommentToJira(ticketKey, prUrl, branchName) {
     try {
-        let comment = 'h3. *Development Completed*\n\n';
-        comment += '*Branch:* {code}' + branchName + '{code}\n';
+        const m = commentMarkup.forTicket(ticketKey);
+        let comment = m.h(3, m.bold('Development Completed')) + '\n\n';
+        comment += m.bold('Branch:') + ' ' + m.code(branchName) + '\n';
 
         if (prUrl) {
-            comment += '*Pull Request:* ' + prUrl + '\n';
+            comment += m.bold('Pull Request:') + ' ' + prUrl + '\n';
         } else {
-            comment += '*Pull Request:* Created (check GitHub for URL)\n';
+            comment += m.bold('Pull Request:') + ' Created (check GitHub for URL)\n';
         }
 
         comment += '\nAI Teammate has completed the implementation and created a pull request for review.';
@@ -450,9 +452,10 @@ function postPRCommentToJira(ticketKey, prUrl, branchName) {
  */
 function postErrorCommentToJira(ticketKey, stage, errorMessage) {
     try {
-        let comment = 'h3. *Development Workflow Error*\n\n';
-        comment += '*Stage:* ' + stage + '\n';
-        comment += '*Error:* {code}' + errorMessage + '{code}\n\n';
+        const m = commentMarkup.forTicket(ticketKey);
+        let comment = m.h(3, m.bold('Development Workflow Error')) + '\n\n';
+        comment += m.bold('Stage:') + ' ' + stage + '\n';
+        comment += m.bold('Error:') + ' ' + m.code(errorMessage) + '\n\n';
         comment += 'Please check the logs for more details and retry the workflow if needed.';
 
         jira_post_comment({
@@ -485,10 +488,11 @@ function isFatalCliEnvironmentError(responseText) {
 
 function postFatalCliEnvironmentErrorToJira(ticketKey, errorMessage) {
     try {
+        const m = commentMarkup.forTicket(ticketKey);
         jira_post_comment({
             key: ticketKey,
-            comment: 'h3. ❌ AI CLI Environment Failure\n\n' +
-                'The configured AI CLI tool could not run on the runner (e.g. missing binary or misconfigured provider):\n\n{code}' + errorMessage + '{code}\n\n' +
+            comment: m.h(3, '❌ AI CLI Environment Failure') + '\n\n' +
+                'The configured AI CLI tool could not run on the runner (e.g. missing binary or misconfigured provider):\n\n' + m.code(errorMessage) + '\n\n' +
                 'This is an infrastructure/setup problem, not a normal work-item issue — retrying will fail the same way until the runner environment is fixed. The job has been failed explicitly instead of silently looping on retry.'
         });
     } catch (e) {
@@ -676,9 +680,9 @@ function action(params) {
                     try {
                         jira_post_comment({
                             key: ticketKey,
-                            comment: 'h3. ℹ️ PR Already Open\n\n' +
+                            comment: commentMarkup.forTicket(ticketKey).h(3, 'ℹ️ PR Already Open') + '\n\n' +
                                 'A pull/merge request already exists for this ticket: ' + (existingUrl || ('#' + existingPr.number)) + '\n\n' +
-                                'Moved ticket to *In Review* for review.'
+                                'Moved ticket to ' + commentMarkup.forTicket(ticketKey).bold('In Review') + ' for review.'
                         });
                     } catch (e) {}
                     try {
@@ -803,7 +807,7 @@ function action(params) {
                     try {
                         jira_post_comment({
                             key: ticketKey,
-                            comment: 'h3. ℹ️ No Code Changes Needed\n\nThe AI agent completed its analysis and determined no code changes are required (e.g. the fix is already present in the target branch, or the ticket was resolved by a previous change).\n\n*Agent analysis:*\n\n' + agentResponse
+                            comment: commentMarkup.forTicket(ticketKey).h(3, 'ℹ️ No Code Changes Needed') + '\n\nThe AI agent completed its analysis and determined no code changes are required (e.g. the fix is already present in the target branch, or the ticket was resolved by a previous change).\n\n' + commentMarkup.forTicket(ticketKey).bold('Agent analysis:') + '\n\n' + agentResponse
                         });
                     } catch (e) {
                         console.warn('Failed to post agent analysis comment:', e);
@@ -830,7 +834,7 @@ function action(params) {
                 try {
                     jira_post_comment({
                         key: ticketKey,
-                        comment: 'h3. ⏸️ Development Interrupted\n\nThe AI agent was interrupted (likely hit a rate limit) before completing the implementation. The ticket has been reset to *Ready For Development* and will be automatically retried.'
+                        comment: commentMarkup.forTicket(ticketKey).h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted (likely hit a rate limit) before completing the implementation. The ticket has been reset to ' + commentMarkup.forTicket(ticketKey).bold('Ready For Development') + ' and will be automatically retried.'
                     });
                 } catch (e) {}
                 try {
@@ -937,7 +941,7 @@ function action(params) {
             try {
                 jira_post_comment({
                     key: ticketKey,
-                    comment: 'h3. ⏸️ Development Interrupted\n\nThe AI agent was interrupted before completing the implementation (partial work was pushed to branch *' + branchName + '*). The ticket has been reset to *Ready For Development* and will be automatically retried.\n\nThe agent can resume from the existing branch.'
+                    comment: commentMarkup.forTicket(ticketKey).h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted before completing the implementation (partial work was pushed to branch ' + commentMarkup.forTicket(ticketKey).bold(branchName) + '). The ticket has been reset to ' + commentMarkup.forTicket(ticketKey).bold('Ready For Development') + ' and will be automatically retried.\n\nThe agent can resume from the existing branch.'
                 });
             } catch (e) {}
             try {

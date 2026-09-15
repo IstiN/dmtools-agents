@@ -1,6 +1,8 @@
 /**
  * Unit tests for rework post-actions merging project jobParamPatches.
  */
+var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+
 
 /**
  * Load the real js/common/trackers.js with tool mocks, pinning the provider via
@@ -46,6 +48,8 @@ function loadPushReworkChanges() {
             },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './cacheToReleases.js': {}
+        ,
+            './common/commentMarkup.js': commentMarkupModule
         }),
         {}
     );
@@ -125,6 +129,8 @@ function loadPushReworkChangesForAction(mocks) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/trackers.js': makeTrackersModule(toolMocks),
             './cacheToReleases.js': { action: function() {} }
+        ,
+            './common/commentMarkup.js': commentMarkupModule
         }),
         toolMocks
     );
@@ -140,6 +146,8 @@ function loadPostTestReworkResults() {
             './common/feedbackLoop.js': {},
             './common/pullRequest.js': {},
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        ,
+            './common/commentMarkup.js': commentMarkupModule
         }),
         {}
     );

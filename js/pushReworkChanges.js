@@ -10,6 +10,7 @@
 
 var configLoader = require('./configLoader.js');
 var scmModule = require('./common/scm.js');
+const commentMarkup = require('./common/commentMarkup.js');
 var trackersModule = require('./common/trackers.js');
 var submoduleHelper = require('./common/submodules.js');
 var prHelper = require('./common/pullRequest.js');
@@ -404,18 +405,19 @@ function postPRComment(scm, pullRequestId, fixSummary, ticketKey, repliesPosted)
 
 function postJiraComment(tracker, ticketKey, prUrl, branchName, prCommentPosted, codeChangesCommitted, fixSummary) {
     try {
+        const m = commentMarkup.forTicket(ticketKey);
         let comment;
         if (codeChangesCommitted) {
-            comment = 'h3. ✅ Rework Completed\n\n';
-            comment += '*Branch*: {code}' + branchName + '{code}\n';
+            comment = m.h(3, '✅ Rework Completed') + '\n\n';
+            comment += m.bold('Branch') + ': ' + m.code(branchName) + '\n';
             if (prUrl) {
-                comment += '*Pull Request*: ' + prUrl + '\n';
+                comment += m.bold('Pull Request') + ': ' + prUrl + '\n';
             }
             comment += '\nAI Teammate has addressed all PR review comments and pushed the fixes.\n';
         } else {
-            comment = 'h3. ✅ Rework Analysis Completed\n\n';
+            comment = m.h(3, '✅ Rework Analysis Completed') + '\n\n';
             if (prUrl) {
-                comment += '*Pull Request*: ' + prUrl + '\n';
+                comment += m.bold('Pull Request') + ': ' + prUrl + '\n';
             }
             comment += '\nAI Teammate analyzed all PR review comments and determined no code changes are required.\n';
         }
@@ -466,14 +468,15 @@ function readReworkSetupFailure(ticketKey) {
 function handleReworkSetupAlreadyFailed(tracker, ticketKey, customParams, failureContent) {
     console.warn('⚠️ Rework setup already failed (no PR found) for', ticketKey, '— skipping commit/push and CLI retry.');
     try {
-        var comment = 'h3. ❌ Rework Push Skipped — Setup Already Failed\n\n' +
+        var m = commentMarkup.forTicket(ticketKey);
+        var comment = m.h(3, '❌ Rework Push Skipped — Setup Already Failed') + '\n\n' +
             'Rework setup did not find (or could not check out) a Pull Request for this ticket, ' +
             'so there is no branch to push changes to. Retrying the CLI agent cannot fix a missing PR, ' +
             'so the push step was skipped rather than retried.\n\n';
         if (failureContent) {
-            comment += '{code}' + failureContent.trim() + '{code}';
+            comment += m.code(failureContent.trim());
         } else {
-            comment += 'See {code}input/' + ticketKey + '/rework_setup_failed.md{code} for details.';
+            comment += 'See ' + m.code('input/' + ticketKey + '/rework_setup_failed.md') + ' for details.';
         }
         tracker.postComment(ticketKey, comment);
         console.log('✅ Posted rework-setup-already-failed comment to ticket:', ticketKey);
@@ -492,9 +495,10 @@ function handleReworkSetupAlreadyFailed(tracker, ticketKey, customParams, failur
 function handleInterruptedRework(tracker, ticketKey, branchName, customParams, statuses) {
     console.warn('Rework CLI was interrupted before writing required outputs; leaving PR conversations open and resetting ticket for retry.');
     try {
+        const mi = commentMarkup.forTicket(ticketKey);
         tracker.postComment(
             ticketKey,
-            'h3. ⏸️ Rework Interrupted\n\nThe AI agent pushed any staged partial changes, but it was interrupted before writing {code}outputs/response.md{code} and {code}outputs/review_replies.json{code}. PR conversations were left open. The ticket was moved back to *' + statuses.IN_REWORK + '* for retry.\n\n*Branch*: {code}' + branchName + '{code}'
+            mi.h(3, '⏸️ Rework Interrupted') + '\n\nThe AI agent pushed any staged partial changes, but it was interrupted before writing ' + mi.code('outputs/response.md') + ' and ' + mi.code('outputs/review_replies.json') + '. PR conversations were left open. The ticket was moved back to ' + mi.bold(statuses.IN_REWORK) + ' for retry.\n\n' + mi.bold('Branch') + ': ' + mi.code(branchName)
         );
     } catch (e) {
         console.warn('Failed to post interrupted rework comment:', e.message || e);
@@ -594,9 +598,10 @@ function action(params) {
                 return action(params);
             }
             try {
+                var pm = commentMarkup.forTicket(ticketKey);
                 tracker.postComment(
                     ticketKey,
-                    'h3. ❌ Rework Push Failed\n\n{code}' + gitError.toString() + '{code}\n\nPlease check the logs and retry.'
+                    pm.h(3, '❌ Rework Push Failed') + '\n\n' + pm.code(gitError.toString()) + '\n\nPlease check the logs and retry.'
                 );
             } catch (e) {}
             return { success: false, error: gitError.toString() };
@@ -615,9 +620,10 @@ function action(params) {
                 return action(params);
             }
             try {
+                var qm = commentMarkup.forTicket(ticketKey);
                 tracker.postComment(
                     ticketKey,
-                    'h3. ❌ Rework Quality Gate Failed\n\n{code}' + gateError + '{code}\n\nThe branch was pushed before running this gate. Please check the logs and retry.'
+                    qm.h(3, '❌ Rework Quality Gate Failed') + '\n\n' + qm.code(gateError) + '\n\nThe branch was pushed before running this gate. Please check the logs and retry.'
                 );
             } catch (e) {}
             return { success: false, error: gateError };
@@ -801,9 +807,10 @@ function action(params) {
                     }
                 }
                 if (errorTracker) {
+                    var em = commentMarkup.forTicket(actualParams.ticket.key);
                     errorTracker.postComment(
                         actualParams.ticket.key,
-                        'h3. ❌ Rework Workflow Error\n\n{code}' + error.toString() + '{code}'
+                        em.h(3, '❌ Rework Workflow Error') + '\n\n' + em.code(error.toString())
                     );
                 }
             }
