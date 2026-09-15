@@ -632,7 +632,10 @@ function resolveApprovedThreads(scm, pullRequestId, resolvedThreadIds) {
  *   formally requests changes on the PR (scm.submitReview(..., 'REQUEST_CHANGES', ...)).
  * When AI approves (isApproved === true):
  *   dismisses any prior formally-requested-changes review left on the PR so the
- *   PR is no longer blocked by our own earlier "Request Changes" decision.
+ *   PR is no longer blocked by our own earlier "Request Changes" decision, then
+ *   submits a formal APPROVE review (providers may reject approvals from the
+ *   PR author — that rejection is logged, never fatal: the label lifecycle
+ *   stays the source of truth in that case).
  *
  * Never touches LABELS.PR_APPROVED or any Jira/GitHub label.
  */
@@ -641,32 +644,50 @@ function applyFormalGithubReview(scm, pullRequestId, isApproved, recommendation,
         console.warn('formalGithubReview: SCM provider does not support submitReview — skipping');
         return;
     }
+    var approveBody = (generalComment && String(generalComment).trim())
+        ? generalComment
+        : 'AI review approves this pull request.';
     try {
         if (isApproved) {
-            var reviews = [];
-            try {
-                reviews = scm.listReviews(pullRequestId) || [];
-            } catch (listErr) {
-                console.warn('formalGithubReview: failed to list existing reviews:', listErr.message || listErr);
-                return;
-            }
-            var priorChangesRequested = reviews.filter(function(r) {
-                return r && r.state === 'CHANGES_REQUESTED';
-            });
-            priorChangesRequested.forEach(function(r) {
+            // Dismiss our own earlier "Request Changes" first (GitHub keeps
+            // blocking the PR until it is dismissed). Providers without a
+            // review listing (GitLab) skip the pass — approving over a stale
+            // requested-changes comment is still a net approval.
+            if (typeof scm.listReviews === 'function') {
+                var reviews = [];
                 try {
-                    scm.dismissReview(pullRequestId, r.id, 'Superseded — issues addressed, AI review now approves.');
-                    console.log('✅ Dismissed prior formal Request Changes review', r.id);
-                } catch (dismissErr) {
-                    console.warn('formalGithubReview: failed to dismiss review ' + r.id + ':', dismissErr.message || dismissErr);
+                    reviews = scm.listReviews(pullRequestId) || [];
+                } catch (listErr) {
+                    console.warn('formalGithubReview: failed to list existing reviews:', listErr.message || listErr);
                 }
-            });
+                var priorChangesRequested = reviews.filter(function(r) {
+                    return r && r.state === 'CHANGES_REQUESTED';
+                });
+                priorChangesRequested.forEach(function(r) {
+                    try {
+                        scm.dismissReview(pullRequestId, r.id, 'Superseded — issues addressed, AI review now approves.');
+                        console.log('✅ Dismissed prior formal Request Changes review', r.id);
+                    } catch (dismissErr) {
+                        console.warn('formalGithubReview: failed to dismiss review ' + r.id + ':', dismissErr.message || dismissErr);
+                    }
+                });
+            }
+            try {
+                scm.submitReview(pullRequestId, 'APPROVE', approveBody);
+                console.log('✅ Submitted formal APPROVE review');
+            } catch (approveErr) {
+                // GitHub/GitLab refuse approvals from the PR/MR AUTHOR. When
+                // the reviewing identity is the same bot that opened the PR,
+                // the label lifecycle stays the source of truth — do not fail
+                // the whole review action over it.
+                console.warn('formalGithubReview: formal APPROVE rejected (own-PR restriction?):', approveErr.message || approveErr);
+            }
         } else {
             var body = (generalComment && String(generalComment).trim())
                 ? generalComment
                 : ('AI review returned ' + recommendation + '. See PR comments for details.');
             scm.submitReview(pullRequestId, 'REQUEST_CHANGES', body);
-            console.log('✅ Submitted formal GitHub Request Changes review');
+            console.log('✅ Submitted formal Request Changes review');
         }
     } catch (e) {
         console.warn('formalGithubReview: failed to apply formal review:', e.message || e);
@@ -912,9 +933,17 @@ function action(params) {
                 console.log('PR has issues (' + recommendation + ') - will NOT merge, returning ticket to In Development');
             }
 
-            // Opt-in: formal GitHub PR review (Approve/Request Changes decision via the
+            // Opt-in: formal review decision (Approve / Request Changes via the
             // real Review API), independent of the pr_approved label logic above.
-            if (customParams && customParams.formalGithubReview === true) {
+            // Resolution chain (first explicit win):
+            //   1. agent customParams.formalGithubReview (true/false, per run)
+            //   2. project .dmtools/config.js formalGithubReview (project default)
+            //   3. false (off — historical behavior)
+            var formalReviewEnabled =
+                (customParams && typeof customParams.formalGithubReview === 'boolean')
+                    ? customParams.formalGithubReview
+                    : !!(config && config.formalGithubReview === true);
+            if (formalReviewEnabled) {
                 applyFormalGithubReview(scm, prNumber, isApproved, recommendation, reviewData.generalComment);
             }
 

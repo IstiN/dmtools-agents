@@ -572,6 +572,25 @@ function _createGitLabProvider(workspace, repository) {
         addComment: function(prId, text) {
             return gitlab_add_mr_comment({ workspace: workspace, repository: repository, pullRequestId: String(prId), text: text });
         },
+        // Formal review decision, provider-agnostic surface (see the github
+        // provider's submitReview). GitLab has no REQUEST_CHANGES event: the
+        // native mapping is APPROVE -> gitlab_approve_mr, REQUEST_CHANGES ->
+        // revoke our approval (gitlab_unapprove_mr) with the explanation left
+        // as a plain MR comment, COMMENT -> plain MR comment. GitLab (like
+        // GitHub) refuses approvals from the MR author unless the instance
+        // allows self-approval — callers must tolerate that error.
+        submitReview: function(prId, event, body) {
+            var normalized = String(event || '').toUpperCase();
+            if (normalized === 'APPROVE') {
+                return gitlab_approve_mr({ workspace: workspace, repository: repository, pullRequestId: String(prId) });
+            }
+            if (normalized === 'REQUEST_CHANGES') {
+                var result = gitlab_unapprove_mr({ workspace: workspace, repository: repository, pullRequestId: String(prId) });
+                this.addComment(prId, body || 'AI review requested changes on this merge request.');
+                return result;
+            }
+            return this.addComment(prId, body || '');
+        },
         replyToThread: function(prId, thread, text) {
             var threadId = thread.threadId || thread.rootCommentId || thread.discussionId;
             if (threadId) {
