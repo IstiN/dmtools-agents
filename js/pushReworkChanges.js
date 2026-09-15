@@ -598,17 +598,11 @@ function action(params) {
                 return action(params);
             }
             try {
-<<<<<<< HEAD
-                jira_post_comment({
-                    key: ticketKey,
-                    comment: commentMarkup.forTicket(ticketKey).h(3, '❌ Rework Push Failed') + '\n\n' + commentMarkup.forTicket(ticketKey).code(gitError.toString()) + '\n\nPlease check the logs and retry.'
-                });
-=======
+                var pm = commentMarkup.forTicket(ticketKey);
                 tracker.postComment(
                     ticketKey,
-                    'h3. ❌ Rework Push Failed\n\n{code}' + gitError.toString() + '{code}\n\nPlease check the logs and retry.'
+                    pm.h(3, '❌ Rework Push Failed') + '\n\n' + pm.code(gitError.toString()) + '\n\nPlease check the logs and retry.'
                 );
->>>>>>> origin/main
             } catch (e) {}
             return { success: false, error: gitError.toString() };
         }
@@ -626,17 +620,11 @@ function action(params) {
                 return action(params);
             }
             try {
-<<<<<<< HEAD
-                jira_post_comment({
-                    key: ticketKey,
-                    comment: commentMarkup.forTicket(ticketKey).h(3, '❌ Rework Quality Gate Failed') + '\n\n' + commentMarkup.forTicket(ticketKey).code(gateError) + '\n\nThe branch was pushed before running this gate. Please check the logs and retry.'
-                });
-=======
+                var qm = commentMarkup.forTicket(ticketKey);
                 tracker.postComment(
                     ticketKey,
-                    'h3. ❌ Rework Quality Gate Failed\n\n{code}' + gateError + '{code}\n\nThe branch was pushed before running this gate. Please check the logs and retry.'
+                    qm.h(3, '❌ Rework Quality Gate Failed') + '\n\n' + qm.code(gateError) + '\n\nThe branch was pushed before running this gate. Please check the logs and retry.'
                 );
->>>>>>> origin/main
             } catch (e) {}
             return { success: false, error: gateError };
         }
@@ -808,12 +796,6 @@ function action(params) {
                 if (resume.attempted) {
                     return action(params);
                 }
-<<<<<<< HEAD
-                jira_post_comment({
-                    key: actualParams.ticket.key,
-                    comment: commentMarkup.forTicket(actualParams.ticket.key).h(3, '❌ Rework Workflow Error') + '\n\n' + commentMarkup.forTicket(actualParams.ticket.key).code(error.toString())
-                });
-=======
                 // Post the error to the ticket via the probed tracker provider
                 var errorTracker = (typeof tracker !== 'undefined' && tracker) ? tracker : null;
                 if (!errorTracker) {
@@ -825,12 +807,12 @@ function action(params) {
                     }
                 }
                 if (errorTracker) {
+                    var em = commentMarkup.forTicket(actualParams.ticket.key);
                     errorTracker.postComment(
                         actualParams.ticket.key,
-                        'h3. ❌ Rework Workflow Error\n\n{code}' + error.toString() + '{code}'
+                        em.h(3, '❌ Rework Workflow Error') + '\n\n' + em.code(error.toString())
                     );
                 }
->>>>>>> origin/main
             }
         } catch (e) {}
         return { success: false, error: error.toString() };

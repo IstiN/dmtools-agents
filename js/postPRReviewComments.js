@@ -1129,14 +1129,6 @@ function action(params) {
         // Try to post the error to the ticket via the probed tracker provider
         try {
             if (params && params.ticket && params.ticket.key) {
-<<<<<<< HEAD
-                jira_post_comment({
-                    key: params.ticket.key,
-                    comment: commentMarkup.forTicket(params.ticket.key).h(3, '❌ PR Review Error') + '\n\n' +
-                        commentMarkup.forTicket(params.ticket.key).code(error.toString()) + '\n\n' +
-                        'Please check the workflow logs for details.'
-                });
-=======
                 var errorTracker = (typeof tracker !== 'undefined' && tracker) ? tracker : null;
                 if (!errorTracker) {
                     try {
@@ -1147,14 +1139,14 @@ function action(params) {
                     }
                 }
                 if (errorTracker) {
+                    var em = commentMarkup.forTicket(params.ticket.key);
                     errorTracker.postComment(
                         params.ticket.key,
-                        'h3. ❌ PR Review Error\n\n' +
-                            '{code}' + error.toString() + '{code}\n\n' +
+                        em.h(3, '❌ PR Review Error') + '\n\n' +
+                            em.code(error.toString()) + '\n\n' +
                             'Please check the workflow logs for details.'
                     );
                 }
->>>>>>> origin/main
             }
         } catch (commentError) {
             console.error('Failed to post error comment:', commentError);
