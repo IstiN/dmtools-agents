@@ -1,6 +1,6 @@
 # Recover Stuck Development
 
-Recovery job: unsticks a Story/Bug ticket left in "Development in Progress" after a failed or interrupted development/rework run.
+Recovery job: unsticks a Story/Bug ticket left in the configured "actively being developed" status (statuses.IN_DEVELOPMENT) after a failed or interrupted development/rework run.
 
 _Human doc: [`agents/docs/agents/recover_stuck_development.md`](agents/docs/agents/recover_stuck_development.md)_
 

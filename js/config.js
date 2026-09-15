@@ -15,27 +15,17 @@ const ISSUE_TYPES = {
 
 // Jira Statuses
 const STATUSES = {
-    IN_REVIEW: 'Ready for Review',                  // ticket handed off for code review (was 'In Review' — renamed 2026-09)
+    IN_REVIEW: 'In Review',                         // ticket handed off for code review
     PO_REVIEW: 'PO REVIEW',                         // transition name → reaches "PO Review" status
     SOLUTION_ARCHITECTURE: 'SOLUTION ARCHITECTURE', // transition name → reaches "Solution Architecture" status
     READY_FOR_DEVELOPMENT: 'Ready For Development',
-    DEVELOPMENT_IN_PROGRESS: 'Development in Progress', // set while an agent is actively developing/reworking the ticket
     IN_DEVELOPMENT: 'In Development',               // transition name → reaches "In Development" status
     IN_PROGRESS: 'In Progress',                     // transition name → reaches "In Development" on Task/SD tickets
     BLOCKED: 'Blocked',
     TODO: 'To Do',
     DONE: 'Done',
     MERGED: 'Merged',                               // PR merged and ticket complete
-    // NOTE: 'In Rework' is NOT a valid status in this Jira project (confirmed via Jira API: "The
-    // value 'In Rework' does not exist for the field 'status'"). Story/Bug rework now bounces back to
-    // READY_FOR_DEVELOPMENT (see postPRReviewComments.js / pushReworkChanges.js) instead. This
-    // constant is kept only because several Test Case automation scripts still reference it
-    // (checkBugTestsPassed.js, mergeStoryTestAutomationPR.js, postBugCreation.js,
-    // postTestReviewComments.js, prepareTestPRForReview.js, recoverDirtyReviewTestCase.js,
-    // recoverStuckTestCase.js, retryMergePR.js) — those calls are pre-existing dead/no-op
-    // transitions and are out of scope for this change; fix them separately if Test Case rework
-    // needs to actually work.
-    IN_REWORK: 'In Rework',
+    IN_REWORK: 'In Rework',                         // PR review failed, focused fixes needed
     READY_FOR_TESTING: 'Ready For Testing',          // Test cases generated, ready for QA
     FAILED: 'Failed',                                // Test automation passed review
     PASSED: 'Passed',                                // Test automation passed review
@@ -126,25 +116,42 @@ const JIRA_FIELDS = {
 const SUMMARY_MAX_LENGTH = 120;
 
 /**
- * Merge default STATUSES with project-specific overrides from customParams.
- * Allows each project to remap status names without changing agent JS code.
+ * Merge default STATUSES with project-specific overrides.
+ * Allows each project to remap status names (e.g. use different Story/Bug workflow
+ * status names than the generic defaults) without changing agent JS code.
+ *
+ * Two override channels are supported, applied in this precedence order (later wins):
+ *   1. projectStatuses — from .dmtools/config.js's `jira.statuses` block, loaded via
+ *      configLoader.loadProjectConfig(params).jira.statuses. This is the recommended
+ *      channel: it applies project-wide to every agent invocation automatically.
+ *   2. customParams.customStatuses — a legacy, per-agent-invocation override channel
+ *      (set directly in an individual agent JSON's customParams). Still supported for
+ *      backward compatibility / one-off overrides that shouldn't apply project-wide.
  *
  * Usage in JS actions:
- *   const statuses = resolveStatuses(customParams);
+ *   var config = configLoader.loadProjectConfig(params);
+ *   const statuses = resolveStatuses(customParams, config.jira && config.jira.statuses);
  *   jira_move_to_status({ key, statusName: statuses.IN_REVIEW });
  *
- * Config JSON example (customParams.customStatuses):
+ * .dmtools/config.js example (project-wide, recommended):
+ *   jira: { statuses: { IN_REVIEW: 'Ready for Review', IN_DEVELOPMENT: 'Development in Progress' } }
+ *
+ * Config JSON example (customParams.customStatuses, legacy/per-invocation):
  *   "customStatuses": {
  *     "IN_DEVELOPMENT": "In Progress",
  *     "IN_REVIEW": "Ready For Review"
  *   }
  *
  * @param {Object} customParams - customParams from agent config
- * @returns {Object} STATUSES merged with customStatuses overrides
+ * @param {Object} [projectStatuses] - project-wide status overrides (config.jira.statuses)
+ * @returns {Object} STATUSES merged with project and customParams overrides
  */
-function resolveStatuses(customParams) {
-    if (!customParams || !customParams.customStatuses) return STATUSES;
-    return Object.assign({}, STATUSES, customParams.customStatuses);
+function resolveStatuses(customParams, projectStatuses) {
+    var merged = (projectStatuses && typeof projectStatuses === 'object')
+        ? Object.assign({}, STATUSES, projectStatuses)
+        : STATUSES;
+    if (!customParams || !customParams.customStatuses) return merged;
+    return Object.assign({}, merged, customParams.customStatuses);
 }
 
 // ── Default Confluence URLs ──────────────────────────────────────────────────

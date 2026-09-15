@@ -40,6 +40,11 @@ var DEFAULTS = {
         parentTicket: '',
         statuses: DEFAULT_CONFIG.STATUSES,
         issueTypes: DEFAULT_CONFIG.ISSUE_TYPES,
+        // Opt-in: also transition the ticket to statuses.IN_DEVELOPMENT when rework setup
+        // begins (see preCliReworkSetup.js). Off by default so the generic rework flow
+        // (bounce back to IN_REWORK, an already-"actively worked" status) is unchanged;
+        // enable for projects whose rework bounce-back target is a "queued" status instead.
+        markReworkInDevelopment: false,
         questions: {
             // JQL to fetch question subtasks. {ticketKey} is replaced at runtime.
             fetchJql: 'parent = {ticketKey} AND issuetype = Subtask ORDER BY created ASC',
