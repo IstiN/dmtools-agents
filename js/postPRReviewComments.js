@@ -16,6 +16,7 @@ var configLoader = require('./configLoader.js');
 var outputFiles = require('./common/outputFiles.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 var gh = require('./common/githubHelpers.js');
+const commentMarkup = require('./common/commentMarkup.js');
 
 var RESUME_MARKER = 'outputs/.pr-review-missing-output-resume-attempted';
 
@@ -223,8 +224,8 @@ function handleMissingReviewData(params, config, customParams) {
     try {
         jira_post_comment({
             key: ticketKey,
-            comment: 'h3. ⚠️ PR Review Output Missing\n\n' +
-                'The PR review agent completed without writing {code}outputs/pr_review.json{code}. ' +
+            comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Output Missing') + '\n\n' +
+                'The PR review agent completed without writing ' + commentMarkup.forTicket(ticketKey).code('outputs/pr_review.json') + '. ' +
                 'A resume was attempted once, but mandatory outputs are still missing. ' +
                 'The SM trigger label was cleared so the review can retry.'
         });
@@ -670,29 +671,30 @@ function applyFormalGithubReview(scm, pullRequestId, isApproved, recommendation,
  */
 function postReviewToJira(ticketKey, reviewContent, reviewData, prUrl) {
     try {
-        let comment = 'h2. 🔍 Automated PR Review Completed\n\n';
+        const m = commentMarkup.forTicket(ticketKey);
+        let comment = m.h(2, '🔍 Automated PR Review Completed') + '\n\n';
 
         // Add outcome badge
         // Normalize: LLM sometimes returns "APPROVED" instead of "APPROVE"
         const recommendation = (reviewData.recommendation || reviewData.verdict || 'REQUEST_CHANGES').replace(/^APPROVED$/, 'APPROVE');
         if (recommendation === 'APPROVE') {
-            comment += '{panel:bgColor=#E3FCEF|borderColor=#00875A}✅ *APPROVED* - AI review passed. Awaiting required reviewer approval to merge.{panel}\n\n';
+            comment += m.panel(null, '✅ ' + m.bold('APPROVED') + ' - AI review passed. Awaiting required reviewer approval to merge.', 'bgColor=#E3FCEF|borderColor=#00875A') + '\n\n';
         } else if (recommendation === 'BLOCK') {
-            comment += '{panel:bgColor=#FFEBE6|borderColor=#DE350B}🚨 *BLOCKED* - Critical issues must be fixed before merge{panel}\n\n';
+            comment += m.panel(null, '🚨 ' + m.bold('BLOCKED') + ' - Critical issues must be fixed before merge', 'bgColor=#FFEBE6|borderColor=#DE350B') + '\n\n';
         } else {
-            comment += '{panel:bgColor=#FFF7E6|borderColor=#FF991F}⚠️ *CHANGES REQUESTED* - Issues found, ticket returned to In Rework{panel}\n\n';
+            comment += m.panel(null, '⚠️ ' + m.bold('CHANGES REQUESTED') + ' - Issues found, ticket returned to In Rework', 'bgColor=#FFF7E6|borderColor=#FF991F') + '\n\n';
         }
 
         // Add issue summary
         const issueCounts = reviewData.issueCounts || { blocking: 0, important: 0, suggestions: 0 };
-        comment += 'h3. Issue Summary\n';
-        comment += '* 🚨 Blocking Issues: *' + issueCounts.blocking + '*\n';
-        comment += '* ⚠️ Important Issues: *' + issueCounts.important + '*\n';
-        comment += '* 💡 Suggestions: *' + issueCounts.suggestions + '*\n\n';
+        comment += m.h(3, 'Issue Summary') + '\n';
+        comment += '* 🚨 Blocking Issues: ' + m.bold(String(issueCounts.blocking)) + '\n';
+        comment += '* ⚠️ Important Issues: ' + m.bold(String(issueCounts.important)) + '\n';
+        comment += '* 💡 Suggestions: ' + m.bold(String(issueCounts.suggestions)) + '\n\n';
 
         if (prUrl) {
-            comment += 'h3. Pull Request\n';
-            comment += '[View PR on GitHub|' + prUrl + ']\n\n';
+            comment += m.h(3, 'Pull Request') + '\n';
+            comment += m.link('View PR on GitHub', prUrl) + '\n\n';
         }
 
         comment += '----\n';
@@ -933,7 +935,7 @@ function action(params) {
                 try {
                     jira_post_comment({
                         key: ticketKey,
-                        comment: 'h3. ⚠️ PR Review Could Not Be Attached\n\n' +
+                        comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Could Not Be Attached') + '\n\n' +
                             'The review analysis completed, but no open Pull Request could be matched to this ticket. ' +
                             'The ticket status was left unchanged (not moved to In Rework) since there is no PR to rework.'
                     });
@@ -1131,8 +1133,8 @@ function action(params) {
             if (params && params.ticket && params.ticket.key) {
                 jira_post_comment({
                     key: params.ticket.key,
-                    comment: 'h3. ❌ PR Review Error\n\n' +
-                        '{code}' + error.toString() + '{code}\n\n' +
+                    comment: commentMarkup.forTicket(params.ticket.key).h(3, '❌ PR Review Error') + '\n\n' +
+                        commentMarkup.forTicket(params.ticket.key).code(error.toString()) + '\n\n' +
                         'Please check the workflow logs for details.'
                 });
             }

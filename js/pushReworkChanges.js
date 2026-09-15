@@ -10,6 +10,7 @@
 
 var configLoader = require('./configLoader.js');
 var scmModule = require('./common/scm.js');
+const commentMarkup = require('./common/commentMarkup.js');
 var submoduleHelper = require('./common/submodules.js');
 var prHelper = require('./common/pullRequest.js');
 var feedbackLoop = require('./common/feedbackLoop.js');
@@ -403,18 +404,19 @@ function postPRComment(scm, pullRequestId, fixSummary, ticketKey, repliesPosted)
 
 function postJiraComment(ticketKey, prUrl, branchName, prCommentPosted, codeChangesCommitted, fixSummary) {
     try {
+        const m = commentMarkup.forTicket(ticketKey);
         let comment;
         if (codeChangesCommitted) {
-            comment = 'h3. ✅ Rework Completed\n\n';
-            comment += '*Branch*: {code}' + branchName + '{code}\n';
+            comment = m.h(3, '✅ Rework Completed') + '\n\n';
+            comment += m.bold('Branch') + ': ' + m.code(branchName) + '\n';
             if (prUrl) {
-                comment += '*Pull Request*: ' + prUrl + '\n';
+                comment += m.bold('Pull Request') + ': ' + prUrl + '\n';
             }
             comment += '\nAI Teammate has addressed all PR review comments and pushed the fixes.\n';
         } else {
-            comment = 'h3. ✅ Rework Analysis Completed\n\n';
+            comment = m.h(3, '✅ Rework Analysis Completed') + '\n\n';
             if (prUrl) {
-                comment += '*Pull Request*: ' + prUrl + '\n';
+                comment += m.bold('Pull Request') + ': ' + prUrl + '\n';
             }
             comment += '\nAI Teammate analyzed all PR review comments and determined no code changes are required.\n';
         }
@@ -465,14 +467,15 @@ function readReworkSetupFailure(ticketKey) {
 function handleReworkSetupAlreadyFailed(ticketKey, customParams, failureContent) {
     console.warn('⚠️ Rework setup already failed (no PR found) for', ticketKey, '— skipping commit/push and CLI retry.');
     try {
-        var comment = 'h3. ❌ Rework Push Skipped — Setup Already Failed\n\n' +
+        var m = commentMarkup.forTicket(ticketKey);
+        var comment = m.h(3, '❌ Rework Push Skipped — Setup Already Failed') + '\n\n' +
             'Rework setup did not find (or could not check out) a Pull Request for this ticket, ' +
             'so there is no branch to push changes to. Retrying the CLI agent cannot fix a missing PR, ' +
             'so the push step was skipped rather than retried.\n\n';
         if (failureContent) {
-            comment += '{code}' + failureContent.trim() + '{code}';
+            comment += m.code(failureContent.trim());
         } else {
-            comment += 'See {code}input/' + ticketKey + '/rework_setup_failed.md{code} for details.';
+            comment += 'See ' + m.code('input/' + ticketKey + '/rework_setup_failed.md') + ' for details.';
         }
         jira_post_comment({ key: ticketKey, comment: comment });
         console.log('✅ Posted rework-setup-already-failed comment to Jira:', ticketKey);
@@ -491,9 +494,10 @@ function handleReworkSetupAlreadyFailed(ticketKey, customParams, failureContent)
 function handleInterruptedRework(ticketKey, branchName, customParams, statuses) {
     console.warn('Rework CLI was interrupted before writing required outputs; leaving PR conversations open and resetting ticket for retry.');
     try {
+        const mi = commentMarkup.forTicket(ticketKey);
         jira_post_comment({
             key: ticketKey,
-            comment: 'h3. ⏸️ Rework Interrupted\n\nThe AI agent pushed any staged partial changes, but it was interrupted before writing {code}outputs/response.md{code} and {code}outputs/review_replies.json{code}. PR conversations were left open. The ticket was moved back to *' + statuses.IN_REWORK + '* for retry.\n\n*Branch*: {code}' + branchName + '{code}'
+            comment: mi.h(3, '⏸️ Rework Interrupted') + '\n\nThe AI agent pushed any staged partial changes, but it was interrupted before writing ' + mi.code('outputs/response.md') + ' and ' + mi.code('outputs/review_replies.json') + '. PR conversations were left open. The ticket was moved back to ' + mi.bold(statuses.IN_REWORK) + ' for retry.\n\n' + mi.bold('Branch') + ': ' + mi.code(branchName)
         });
     } catch (e) {
         console.warn('Failed to post interrupted rework Jira comment:', e.message || e);
@@ -592,7 +596,7 @@ function action(params) {
             try {
                 jira_post_comment({
                     key: ticketKey,
-                    comment: 'h3. ❌ Rework Push Failed\n\n{code}' + gitError.toString() + '{code}\n\nPlease check the logs and retry.'
+                    comment: commentMarkup.forTicket(ticketKey).h(3, '❌ Rework Push Failed') + '\n\n' + commentMarkup.forTicket(ticketKey).code(gitError.toString()) + '\n\nPlease check the logs and retry.'
                 });
             } catch (e) {}
             return { success: false, error: gitError.toString() };
@@ -613,7 +617,7 @@ function action(params) {
             try {
                 jira_post_comment({
                     key: ticketKey,
-                    comment: 'h3. ❌ Rework Quality Gate Failed\n\n{code}' + gateError + '{code}\n\nThe branch was pushed before running this gate. Please check the logs and retry.'
+                    comment: commentMarkup.forTicket(ticketKey).h(3, '❌ Rework Quality Gate Failed') + '\n\n' + commentMarkup.forTicket(ticketKey).code(gateError) + '\n\nThe branch was pushed before running this gate. Please check the logs and retry.'
                 });
             } catch (e) {}
             return { success: false, error: gateError };
@@ -788,7 +792,7 @@ function action(params) {
                 }
                 jira_post_comment({
                     key: actualParams.ticket.key,
-                    comment: 'h3. ❌ Rework Workflow Error\n\n{code}' + error.toString() + '{code}'
+                    comment: commentMarkup.forTicket(ticketKey).h(3, '❌ Rework Workflow Error') + '\n\n' + commentMarkup.forTicket(ticketKey).code(error.toString())
                 });
             }
         } catch (e) {}
