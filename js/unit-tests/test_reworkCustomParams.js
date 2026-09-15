@@ -2,6 +2,28 @@
  * Unit tests for rework post-actions merging project jobParamPatches.
  */
 
+/**
+ * Load the real js/common/trackers.js with tool mocks, pinning the provider via
+ * customParams so tests stay deterministic even when the runner process has
+ * DEFAULT_TRACKER set (env probing would otherwise outrank a silent config).
+ */
+function makeTrackersModule(toolMocks) {
+    var realTrackers = loadModule(
+        'js/common/trackers.js',
+        makeRequire({ '../config.js': configModule }),
+        toolMocks || {}
+    );
+    return {
+        createTracker: function(config, customParams) {
+            return realTrackers.createTracker(
+                config,
+                Object.assign({ trackerProvider: 'jira' }, customParams || {})
+            );
+        },
+        extractTicketKey: realTrackers.extractTicketKey
+    };
+}
+
 function loadPushReworkChanges() {
     return loadModule(
         'js/pushReworkChanges.js',
@@ -13,6 +35,7 @@ function loadPushReworkChanges() {
             './common/pullRequest.js': {},
             './common/feedbackLoop.js': {},
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
+            './common/trackers.js': makeTrackersModule({}),
             './common/outputFiles.js': {
                 readOutputFile: function(path) {
                     if (mocks.outputFiles && mocks.outputFiles[path] !== undefined) {
@@ -30,6 +53,29 @@ function loadPushReworkChanges() {
 
 function loadPushReworkChangesForAction(mocks) {
     mocks = mocks || {};
+    var toolMocks = {
+        file_read: function(args) {
+            if (args.path === 'input/TS-1293/pr_info.md') {
+                return '**Branch**: `ai/TS-1293` → `main`';
+            }
+            throw new Error('missing ' + args.path);
+        },
+        cli_execute_command: function(args) {
+            mocks.commands = mocks.commands || [];
+            mocks.commands.push(args.command);
+            if (args.command === 'git branch --show-current') return 'ai/TS-1293';
+            if (args.command === 'git push -u origin ai/TS-1293' && mocks.failFirstPush) {
+                mocks.failFirstPush = false;
+                throw new Error('rejected non-fast-forward');
+            }
+            if (args.command.indexOf('git ls-remote --heads origin ai/TS-1293') === 0) return 'abc123\trefs/heads/ai/TS-1293';
+            return '';
+        },
+        jira_post_comment: function(args) { mocks.jiraComments = (mocks.jiraComments || []).concat([args.comment]); },
+        jira_move_to_status: function(args) { mocks.moves = (mocks.moves || []).concat([args.statusName]); },
+        jira_remove_label: function(args) { mocks.removedLabels = (mocks.removedLabels || []).concat([args.label]); },
+        jira_assign_ticket_to: function() {}
+    };
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
@@ -77,31 +123,10 @@ function loadPushReworkChangesForAction(mocks) {
                 }
             },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/trackers.js': makeTrackersModule(toolMocks),
             './cacheToReleases.js': { action: function() {} }
         }),
-        {
-            file_read: function(args) {
-                if (args.path === 'input/TS-1293/pr_info.md') {
-                    return '**Branch**: `ai/TS-1293` → `main`';
-                }
-                throw new Error('missing ' + args.path);
-            },
-            cli_execute_command: function(args) {
-                mocks.commands = mocks.commands || [];
-                mocks.commands.push(args.command);
-                if (args.command === 'git branch --show-current') return 'ai/TS-1293';
-                if (args.command === 'git push -u origin ai/TS-1293' && mocks.failFirstPush) {
-                    mocks.failFirstPush = false;
-                    throw new Error('rejected non-fast-forward');
-                }
-                if (args.command.indexOf('git ls-remote --heads origin ai/TS-1293') === 0) return 'abc123\trefs/heads/ai/TS-1293';
-                return '';
-            },
-            jira_post_comment: function(args) { mocks.jiraComments = (mocks.jiraComments || []).concat([args.comment]); },
-            jira_move_to_status: function(args) { mocks.moves = (mocks.moves || []).concat([args.statusName]); },
-            jira_remove_label: function(args) { mocks.removedLabels = (mocks.removedLabels || []).concat([args.label]); },
-            jira_assign_ticket_to: function() {}
-        }
+        toolMocks
     );
 }
 

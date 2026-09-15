@@ -61,9 +61,10 @@ _Post PR Review Comments Action_
 
 - Source: `agents/js/postPRReviewComments.js`
 - Side effects:
-  - add label "sm_story_rework_triggered"
-  - post Jira comment
-  - assign ticket
+  - add label "sm_story_rework_triggered" (via tracker)
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
+  - assign ticket (via tracker)
 - Parameters (customParams):
   - `aiRepository`
   - `allowApproveWithSuggestions`

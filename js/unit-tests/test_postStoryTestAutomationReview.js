@@ -63,6 +63,24 @@ function loadPostStoryTestAutomationReview(mocks) {
                 findPRForTicket: function() { return null; },
                 findMergedPRForTicket: function() { return null; }
             },
+            // Real trackers module (pinned to jira via customParams) so the
+            // migrated ticket operations flow through the provider layer.
+            './common/trackers.js': (function() {
+                var realTrackers = loadModule(
+                    'js/common/trackers.js',
+                    makeRequire({ '../config.js': configModule }),
+                    allMocks
+                );
+                return {
+                    createTracker: function(config, customParams) {
+                        return realTrackers.createTracker(
+                            config,
+                            Object.assign({ trackerProvider: 'jira' }, customParams || {})
+                        );
+                    },
+                    extractTicketKey: realTrackers.extractTicketKey
+                };
+            })(),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
         allMocks

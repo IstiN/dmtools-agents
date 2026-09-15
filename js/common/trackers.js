@@ -10,8 +10,18 @@
  * McpCliHandler); the JS surface exposes canonical names only. Provider
  * mapping therefore lives in this layer, in JS.
  *
- * Factory: createTracker(config)
- *   config.tracker.provider: 'jira' (default) | 'ado' | 'github'
+ * Factory: createTracker(config, customParams)
+ *   Provider probing order (first non-empty, valid value wins):
+ *     1. customParams.trackerProvider   — per-agent override, e.g.
+ *        { "customParams": { "trackerProvider": "ado" } }
+ *     2. config.tracker.provider        — project config, 'jira' | 'ado' | 'github'
+ *     3. DEFAULT_TRACKER env var        — the deployment-level signal; it
+ *        reflects which tracker integration is actually active in the Java
+ *        runtime (jira_* / ado_* / github_* tools). This is what lets the
+ *        same script run unchanged on GitHub-tracker deployments whose
+ *        project config never mentions a tracker.
+ *     4. config.defaultTracker          — configLoader-consistent fallback
+ *     5. 'jira'                         — default
  *   config.repository: { owner, repo }  // GitHub issue key expansion
  *   config.labels: { aiGenerated }      // overrides LABELS.AI_GENERATED
  *
@@ -20,10 +30,12 @@
  *
  * Provider capabilities: jira supports every operation; ado covers
  * tickets/search/comments/status/assign/create (labels are not exposed by
- * the ado toolset); github covers everything except search and assignTo —
- * moveToStatus closes on done/closed and carries any other status as an
- * issue label (issue tools are a Dart runtime extension); the remaining
- * gaps throw a clear error.
+ * the ado toolset); github covers everything — search/assignTo/moveToStatus
+ * prefer the dedicated issue tools (github_search_issues, github_assign_issue,
+ * github_move_issue_to_status) when the runtime exposes them (Java runtime),
+ * with graceful degradation where it does not (Dart catalog): moveToStatus
+ * falls back to close-on-done + status-as-label over the basic issue tools,
+ * while search/assignTo throw a clear error.
  */
 
 const { STATUSES, LABELS } = require('../config.js');
@@ -103,10 +115,28 @@ function _assigneeName(fields) {
     return null;
 }
 
-function createTracker(config) {
+/**
+ * Read the DEFAULT_TRACKER env var when running under GraalJS (Java host
+ * access); null everywhere else (plain JS test harnesses) or when unset.
+ */
+function _defaultTrackerEnv() {
+    try {
+        var v = java.lang.System.getenv('DEFAULT_TRACKER');
+        return v ? String(v).trim() : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function createTracker(config, customParams) {
     var VALID = ['jira', 'ado', 'github'];
-    var raw = config && config.tracker && config.tracker.provider;
-    var providerName = VALID.indexOf(String(raw || '').toLowerCase()) !== -1
+    var raw =
+        (customParams && customParams.trackerProvider) ||
+        (config && config.tracker && config.tracker.provider) ||
+        _defaultTrackerEnv() ||
+        (config && config.defaultTracker) ||
+        '';
+    var providerName = VALID.indexOf(String(raw).toLowerCase()) !== -1
         ? String(raw).toLowerCase()
         : 'jira';
     var owner = (config && config.repository && config.repository.owner) || '';
@@ -144,6 +174,28 @@ function createTracker(config) {
             throw new Error('trackers: cannot parse GitHub issue key: ' + key);
         }
         return parseInt(m[1], 10);
+    }
+
+    /**
+     * Build the argument bag for the dedicated GitHub issue tools
+     * (github_assign_issue / github_move_issue_to_status). Carries BOTH the
+     * composite key and the explicit owner/repo/number parts so the call
+     * works against runtimes whose tool schema accepts only one of the two
+     * shapes: the Java tools resolve either (explicit parts win over key),
+     * the Dart issue family speaks owner/repo/number. For composite keys the
+     * parts are parsed FROM THE KEY (the key is authoritative); for bare
+     * numbers the configured repository fills in.
+     */
+    function githubIssueArgs(key) {
+        var k = expandKey(key);
+        var m = /^([\w.-]+)\/([\w.-]+)#(\d+)$/.exec(k);
+        if (m) {
+            return { key: k, owner: m[1], repo: m[2], number: parseInt(m[3], 10) };
+        }
+        var args = { key: k, number: githubIssueNumber(k) };
+        if (owner) args.owner = owner;
+        if (repo) args.repo = repo;
+        return args;
     }
 
     // ── jira provider (canonical jira_* tools) ────────────────────────────
@@ -236,23 +288,57 @@ function createTracker(config) {
     }
 
     function githubMoveToStatus(key, status) {
-        // GitHub issues have no status field: done/closed close the issue,
-        // any other status is carried as an issue label (github_add_labels
-        // schema: owner/repo/number + labels array).
-        var s = String(status || '').trim().toLowerCase();
+        var s = String(status || '').trim();
         if (!s) {
             throw new Error('trackers: cannot map GitHub status: ' + status);
         }
+        // Prefer the dedicated issue tool when the runtime exposes it (Java
+        // runtime): it also maps done/closed/completed/resolved → close and
+        // open/reopened/todo/backlog/in progress → reopen, with any other
+        // status applied as an issue label.
+        if (typeof github_move_issue_to_status === 'function') {
+            return github_move_issue_to_status(
+                Object.assign({ statusName: s }, githubIssueArgs(key))
+            );
+        }
+        // Fallback for runtimes without the dedicated tool (Dart catalog):
+        // GitHub issues have no status field — done/closed close the issue,
+        // any other status is carried as an issue label.
         var n = githubIssueNumber(key);
-        if (s === 'done' || s === 'closed') {
+        var sl = s.toLowerCase();
+        if (sl === 'done' || sl === 'closed') {
             return github_close_issue({ owner: owner, repo: repo, number: n });
         }
         return github_add_labels({
             owner: owner,
             repo: repo,
             number: n,
-            labels: [String(status).trim()]
+            labels: [s]
         });
+    }
+
+    function githubSearch(query) {
+        // github_search_issues (Java runtime) scopes the query to the
+        // configured repo automatically when it lacks a repo: qualifier.
+        if (typeof github_search_issues === 'function') {
+            return _ticketPage(github_search_issues({
+                query: query,
+                workspace: owner || undefined,
+                repository: repo || undefined
+            }), 'items');
+        }
+        unsupported('search');
+    }
+
+    function githubAssignTo(key, user) {
+        // github_assign_issue (Java runtime) accepts both the composite key
+        // and explicit owner/repo/number parts (see githubIssueArgs).
+        if (typeof github_assign_issue === 'function') {
+            return github_assign_issue(
+                Object.assign({ user: user }, githubIssueArgs(key))
+            );
+        }
+        unsupported('assignTo');
     }
 
     function githubAddLabel(key, label) {
@@ -339,13 +425,13 @@ function createTracker(config) {
         },
         github: {
             getTicket: githubGetTicket,
-            search: function () { unsupported('search'); },
+            search: githubSearch,
             postComment: githubPostComment,
             getComments: githubGetComments,
             addLabel: githubAddLabel,
             removeLabel: githubRemoveLabel,
             moveToStatus: githubMoveToStatus,
-            assignTo: function () { unsupported('assignTo'); },
+            assignTo: githubAssignTo,
             createTicket: githubCreateTicket
         }
     };
