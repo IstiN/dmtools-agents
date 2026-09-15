@@ -67,12 +67,13 @@ run_fa() {
   if [ -n "${FA_SESSION_NAME:-}" ] && [ -n "${FA_SESSION_ROOT:-}" ]; then
     cmd+=(--session "${FA_SESSION_NAME}" --session-root "${FA_SESSION_ROOT}")
   fi
-  # Tee fa's full transcript (assistant text + tool calls, untruncated)
-  # to FA_LOG_FILE when the caller provides it — the AI Teammate workflow
-  # tails this file into the run log as [fa]-prefixed lines for live
-  # observability (flutter_agent_harness#91, fa >= v0.1.335). Without
-  # this flag the file stays empty and the agent is a blind spot in CI.
-  if [ -n "${FA_LOG_FILE:-}" ]; then
+  # FA_LOG_FILE (optional): tee fa's full stdout trace (assistant text, tool
+  # calls) to this file — untruncated, unlike the terminal-width trajectory
+  # rows. CI tails/uploads it; requires fa >= v0.1.335 (--log-file).
+  # Callers can still pass --log-file explicitly via PASS_ARGS.
+  if [ -n "${FA_LOG_FILE:-}" ] \
+    && ! printf '%s\n' ${pass_args[@]+"${pass_args[@]}"} | grep -qx -- '--log-file'; then
+    mkdir -p "$(dirname "${FA_LOG_FILE}")"
     cmd+=(--log-file "${FA_LOG_FILE}")
   fi
   cmd+=(${pass_args[@]+"${pass_args[@]}"} -p "$PROMPT")

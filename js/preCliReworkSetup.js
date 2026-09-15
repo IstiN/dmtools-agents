@@ -7,12 +7,14 @@
  * 4. Runs project-specific setup commands (build/verify) against the now-updated branch
  * 5. Writes input folder: pr_info.md, pr_diff.txt, pr_discussions.md, pr_discussions_raw.json
  * 6. Fetches question subtasks with answers (extra context)
- * 7. Posts "Rework Started" comment to Jira
+ * 7. Posts "Rework Started" comment to the ticket (Jira/ADO/GitHub via common/trackers.js)
  */
 
 var configLoader = require('./configLoader.js');
+var trackersModule = require('./common/trackers.js');
 const gh = require('./common/githubHelpers.js');
 const gitOps = require('./common/gitOps.js');
+const { resolveStatuses } = require('./config.js');
 const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 var restoreFromReleases = require('./restoreFromReleases.js');
@@ -66,7 +68,7 @@ function syncBaseBranchIfConfigured(baseBranch, customParams, config) {
 // swallowed, leaving the ticket with no visible failure reason at all.
 var truncateForComment = setupCommands.truncateSetupError;
 
-function failSetup(ticketKey, inputFolder, message) {
+function failSetup(tracker, ticketKey, inputFolder, message) {
     try {
         file_write({
             path: inputFolder + '/rework_setup_failed.md',
@@ -76,10 +78,10 @@ function failSetup(ticketKey, inputFolder, message) {
         console.warn('Failed to write rework setup failure marker:', e);
     }
     try {
-        jira_post_comment({
-            key: ticketKey,
-            comment: 'h3. ❌ Rework Setup Failed\n\n' + truncateForComment(message)
-        });
+        tracker.postComment(
+            ticketKey,
+            'h3. ❌ Rework Setup Failed\n\n' + truncateForComment(message)
+        );
     } catch (e) {
         console.error('Failed to post rework setup failure comment to ' + ticketKey + ':', e && e.toString ? e.toString() : String(e));
     }
@@ -97,11 +99,30 @@ function action(params) {
         var config = configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params));
         var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
         var scm = configLoader.createScm(config);
+        var statuses = resolveStatuses(customParams, config.jira && config.jira.statuses);
+        // Probe the tracker provider once — the same script then runs unchanged
+        // on Jira / ADO / GitHub deployments.
+        var tracker = trackersModule.createTracker(config, customParams);
 
         // Restore configured artefacts (e.g. cosmo test reports) from GitHub Release — non-fatal
         try { restoreFromReleases.action(params); } catch (e) { console.warn('⚠️ restoreFromReleases failed (non-fatal):', e); }
 
         console.log('=== Rework setup for:', ticketKey, '===');
+
+        // Move ticket to In Development (visible "actively being worked" marker, mirrors the
+        // same transition in preCliDevelopmentSetup.js for fresh development). Opt-in only
+        // (config.jira.markReworkInDevelopment) — projects whose rework bounce-back target
+        // already IS an "actively being worked" status (e.g. the default IN_REWORK) don't need
+        // this extra transition; enable it for projects that bounce back to a "queued" status
+        // instead (e.g. READY_FOR_DEVELOPMENT) so there is still a visible marker once work starts.
+        if (config.jira && config.jira.markReworkInDevelopment) {
+            try {
+                tracker.moveToStatus(ticketKey, statuses.IN_DEVELOPMENT);
+                console.log('Moved ' + ticketKey + ' to ' + statuses.IN_DEVELOPMENT);
+            } catch (e) {
+                console.warn('Failed to move ticket to ' + statuses.IN_DEVELOPMENT + ':', e);
+            }
+        }
 
         // Step 1: GitHub repo info — prefer targetRepository from config over git remote
         var repoInfo = null;
@@ -113,7 +134,7 @@ function action(params) {
         }
         if (!repoInfo) {
             const err = 'Could not determine GitHub repository from git remote';
-            try { jira_post_comment({ key: ticketKey, comment: 'h3. ❌ Rework Setup Failed\n\n' + err }); } catch (e) {}
+            try { tracker.postComment(ticketKey, 'h3. ❌ Rework Setup Failed\n\n' + err); } catch (e) {}
             return { success: false, error: err };
         }
 
@@ -122,6 +143,7 @@ function action(params) {
         const pr = gh.findPRForTicket(scm, ticketKey, prSearchOptions);
         if (!pr) {
             failSetup(
+                tracker,
                 ticketKey,
                 inputFolder,
                 'No Pull Request found for ticket ' + ticketKey + '. Cannot start rework without an existing PR.'
@@ -131,18 +153,18 @@ function action(params) {
         // Step 3: PR details
         const prDetails = gh.getPRDetails(scm, pr.number);
         if (!prDetails) {
-            failSetup(ticketKey, inputFolder, 'Failed to fetch PR details for PR #' + pr.number);
+            failSetup(tracker, ticketKey, inputFolder, 'Failed to fetch PR details for PR #' + pr.number);
         }
 
         // Step 4: Checkout PR branch
         const branchName = prDetails.head ? prDetails.head.ref : null;
         if (!branchName) {
-            failSetup(ticketKey, inputFolder, 'Could not determine branch from PR details');
+            failSetup(tracker, ticketKey, inputFolder, 'Could not determine branch from PR details');
         }
         try {
             gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
         } catch (e) {
-            failSetup(ticketKey, inputFolder, 'Failed to checkout branch: ' + e.toString());
+            failSetup(tracker, ticketKey, inputFolder, 'Failed to checkout branch: ' + e.toString());
         }
 
         const baseBranch = prDetails.base ? prDetails.base.ref : config.git.baseBranch;
@@ -188,7 +210,7 @@ function action(params) {
                 }
             }
         } catch (e) {
-            failSetup(ticketKey, inputFolder, 'Environment setup failed: ' + (e && e.toString ? e.toString() : String(e)));
+            failSetup(tracker, ticketKey, inputFolder, 'Environment setup failed: ' + (e && e.toString ? e.toString() : String(e)));
         }
 
         // Step 4.7: Detect failed CI checks — writes ci_failures.md if any failed
@@ -235,9 +257,9 @@ function action(params) {
             jiraComment += 'AI Teammate is fixing issues raised in the code review.\n\n' +
                 '_Fix results will be posted shortly..._';
 
-            jira_post_comment({ key: ticketKey, comment: jiraComment });
+            tracker.postComment(ticketKey, jiraComment);
         } catch (e) {
-            console.warn('Failed to post Jira comment:', e);
+            console.warn('Failed to post tracker comment:', e);
         }
 
         console.log('✅ Rework setup complete — branch:', branchName, '| PR #' + prDetails.number);
@@ -264,10 +286,23 @@ function action(params) {
             const ticketKey = (params.inputFolderPath ||
                 (params.jobParams && params.jobParams.inputFolderPath) || '').split('/').pop();
             if (ticketKey) {
-                jira_post_comment({
-                    key: ticketKey,
-                    comment: 'h3. ❌ Rework Setup Error\n\n{code}' + truncateForComment(error.toString()) + '{code}'
-                });
+                // Post the error to the ticket via the probed tracker provider
+                var errorTracker = (typeof tracker !== 'undefined' && tracker) ? tracker : null;
+                if (!errorTracker) {
+                    try {
+                        errorTracker = trackersModule.createTracker(
+                            configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params)),
+                            (params.jobParams && params.jobParams.customParams) || params.customParams);
+                    } catch (trackerError) {
+                        console.error('Failed to create tracker for error comment:', trackerError);
+                    }
+                }
+                if (errorTracker) {
+                    errorTracker.postComment(
+                        ticketKey,
+                        'h3. ❌ Rework Setup Error\n\n{code}' + truncateForComment(error.toString()) + '{code}'
+                    );
+                }
             }
         } catch (e) {
             console.error('Failed to post rework setup error comment:', e && e.toString ? e.toString() : String(e));

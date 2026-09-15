@@ -77,7 +77,7 @@ function action(params) {
         var jiraConfig = config.jira;
         var scm = configLoader.createScm(config);
         const _customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
-        const statuses = resolveStatuses(_customParams);
+        const statuses = resolveStatuses(_customParams, jiraConfig && jiraConfig.statuses);
 
         console.log('=== Bug development post-action for', ticketKey, '===');
 

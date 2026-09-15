@@ -4,13 +4,14 @@
  * 1. Reads outputs/pr_review.json with structured review data
  * 2. Posts general review comment to GitHub PR using github_add_pr_comment
  * 3. Posts inline code comments to GitHub PR using github_add_inline_comment
- * 4. Posts a formatted review summary to the Jira ticket
+ * 4. Posts a formatted review summary to the ticket (Jira/ADO/GitHub via common/trackers.js)
  * 5. Updates ticket status based on review outcome
  * 6. Adds labels to indicate review completion
  */
 
 const { LABELS, STATUSES, resolveStatuses } = require('./config.js');
 var scmModule = require('./common/scm.js');
+var trackersModule = require('./common/trackers.js');
 var autoStart = require('./common/autoStart.js');
 var configLoader = require('./configLoader.js');
 var outputFiles = require('./common/outputFiles.js');
@@ -59,9 +60,9 @@ function countReviewThreads(scm, pullRequestId) {
     return count;
 }
 
-function markForSmStoryRework(ticketKey) {
+function markForSmStoryRework(tracker, ticketKey) {
     try {
-        jira_add_label({ key: ticketKey, label: 'sm_story_rework_triggered' });
+        tracker.addLabel(ticketKey, 'sm_story_rework_triggered');
         console.log('✅ Added SM rework label: sm_story_rework_triggered');
         return true;
     } catch (e) {
@@ -217,18 +218,19 @@ function attemptResumeIfReviewOutputsMissing(ticketKey) {
     }
 }
 
-function handleMissingReviewData(params, config, customParams) {
+function handleMissingReviewData(params, config, customParams, tracker) {
     var ticketKey = params.ticket.key;
     console.error('Failed to read pr_review.json after resume attempt');
 
     try {
-        jira_post_comment({
-            key: ticketKey,
-            comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Output Missing') + '\n\n' +
-                'The PR review agent completed without writing ' + commentMarkup.forTicket(ticketKey).code('outputs/pr_review.json') + '. ' +
+        const mm = commentMarkup.forTicket(ticketKey);
+        tracker.postComment(
+            ticketKey,
+            mm.h(3, '⚠️ PR Review Output Missing') + '\n\n' +
+                'The PR review agent completed without writing ' + mm.code('outputs/pr_review.json') + '. ' +
                 'A resume was attempted once, but mandatory outputs are still missing. ' +
                 'The SM trigger label was cleared so the review can retry.'
-        });
+        );
     } catch (e) {
         console.warn('Could not post missing review output comment:', e);
     }
@@ -236,7 +238,7 @@ function handleMissingReviewData(params, config, customParams) {
     var removeLabel = customParams && customParams.removeLabel;
     if (removeLabel) {
         try {
-            jira_remove_label({ key: ticketKey, label: removeLabel });
+            tracker.removeLabel(ticketKey, removeLabel);
             console.log('Removed SM label after missing review output:', removeLabel);
         } catch (e) {
             console.warn('Could not remove SM label after missing review output:', e);
@@ -321,6 +323,12 @@ function parseDiffLineInfo(diffText, filePath, targetLine) {
     var oldLine = null;
     var newLine = null;
     var lines = String(diffText).split(/\r?\n/);
+    // Deferred LEFT match: a removed line ('-') at the target line number.
+    // We don't return immediately on a LEFT match because a same-numbered
+    // added line ('+') can appear later in the same replace block (the
+    // common "-old\n+new" single-line replacement pattern) and RIGHT should
+    // win — the finding is about the current/new code, not the removed one.
+    var pendingLeftMatch = null;
 
     for (var i = 0; i < lines.length; i++) {
         var line = lines[i];
@@ -330,6 +338,7 @@ function parseDiffLineInfo(diffText, filePath, targetLine) {
             oldFile = null;
             oldLine = null;
             newLine = null;
+            pendingLeftMatch = null;
             continue;
         }
 
@@ -364,7 +373,9 @@ function parseDiffLineInfo(diffText, filePath, targetLine) {
             if (newLine === lineNumber) return { present: true, side: 'RIGHT' };
             newLine++;
         } else if (line.indexOf('-') === 0) {
-            if (oldLine === lineNumber) return { present: true, side: 'LEFT' };
+            if (oldLine === lineNumber && !pendingLeftMatch) {
+                pendingLeftMatch = { present: true, side: 'LEFT' };
+            }
             oldLine++;
         } else if (line.indexOf(' ') === 0) {
             // Context lines exist on both sides; prefer RIGHT (new version).
@@ -380,6 +391,7 @@ function parseDiffLineInfo(diffText, filePath, targetLine) {
         }
     }
 
+    if (pendingLeftMatch) return pendingLeftMatch;
     return { present: false, side: null };
 }
 
@@ -662,14 +674,14 @@ function applyFormalGithubReview(scm, pullRequestId, isApproved, recommendation,
 }
 
 /**
- * Post review results to Jira ticket
+ * Post review results to the ticket (Jira/ADO/GitHub depending on the probed provider)
+ * @param {Object} tracker - trackers.js provider instance
  * @param {string} ticketKey - Ticket key
  * @param {string} reviewContent - Review content (from outputs/response.md)
  * @param {Object} reviewData - Parsed pr_review.json data
- * @param {string} prUrl - PR URL
  * @param {string} prUrl - PR URL for linking
  */
-function postReviewToJira(ticketKey, reviewContent, reviewData, prUrl) {
+function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl) {
     try {
         const m = commentMarkup.forTicket(ticketKey);
         let comment = m.h(2, '🔍 Automated PR Review Completed') + '\n\n';
@@ -700,15 +712,12 @@ function postReviewToJira(ticketKey, reviewContent, reviewData, prUrl) {
         comment += '----\n';
         comment += '_Generated by AI Code Reviewer with focus on security, code quality, and OOP principles_';
 
-        jira_post_comment({
-            key: ticketKey,
-            comment: comment
-        });
+        tracker.postComment(ticketKey, comment);
 
-        console.log('✅ Posted review results to Jira ticket', ticketKey);
+        console.log('✅ Posted review results to ticket', ticketKey);
 
     } catch (error) {
-        console.error('Failed to post review to Jira:', error);
+        console.error('Failed to post review to tracker:', error);
     }
 }
 
@@ -733,6 +742,11 @@ function action(params) {
 
         console.log('=== Processing PR review results for', ticketKey, '===');
 
+        // Resolve customParams and probe the tracker provider once for the whole run:
+        // the same script then works unchanged on Jira / ADO / GitHub deployments.
+        const customParams = resolveCustomParams(params, config);
+        var tracker = trackersModule.createTracker(config, customParams);
+
         // Step 1: Read structured review data
         let reviewData = readReviewJson(ticketKey, workingDir);
         if (!reviewData) {
@@ -740,16 +754,15 @@ function action(params) {
             reviewData = readReviewJson(ticketKey, workingDir);
         }
         if (!reviewData) {
-            const customParams = resolveCustomParams(params, config);
-            return handleMissingReviewData(params, config, customParams);
+            return handleMissingReviewData(params, config, customParams, tracker);
         }
 
         console.log('Review recommendation:', reviewData.recommendation);
         console.log('Issue counts:', JSON.stringify(reviewData.issueCounts));
 
-        // Resolve statuses and customParams
-        const customParams = resolveCustomParams(params, config);
-        const statuses = resolveStatuses(customParams);
+        // Resolve statuses — project-wide overrides via .dmtools/config.js's jira.statuses,
+        // plus legacy per-invocation overrides via customParams.customStatuses
+        const statuses = resolveStatuses(customParams, config.jira && config.jira.statuses);
 
         // Step 2: Extract PR info from input folder or find PR using MCP
         let prNumber = null;
@@ -909,36 +922,30 @@ function action(params) {
             console.warn('No PR number or repo info - skipping GitHub comments and merge');
         }
 
-        // Step 6: Post review to Jira ticket (merge is handled by SM/required reviewers, not by this agent)
-        postReviewToJira(ticketKey, jiraReview, reviewData, prUrl);
+        // Step 6: Post review to the ticket (merge is handled by SM/required reviewers, not by this agent)
+        postReviewToJira(tracker, ticketKey, jiraReview, reviewData, prUrl);
 
         // Step 7: Update ticket status based on outcome
         try {
             if (isApproved) {
-                // Approved → add pr_approved label to Jira and stay in In Review for SM retry-merge
-                jira_add_label({
-                    key: ticketKey,
-                    label: LABELS.PR_APPROVED
-                });
-                console.log('✅ Added pr_approved label to Jira ticket — SM will retry merge');
+                // Approved → add pr_approved label to the ticket and stay in In Review for SM retry-merge
+                tracker.addLabel(ticketKey, LABELS.PR_APPROVED);
+                console.log('✅ Added pr_approved label to ticket — SM will retry merge');
             } else if (prNumber && repoInfo) {
                 // Has issues, and there is an actual PR to rework → move to In Rework for focused fixes
-                jira_move_to_status({
-                    key: ticketKey,
-                    statusName: statuses.IN_REWORK
-                });
-                console.log('✅ Ticket moved to In Rework');
+                tracker.moveToStatus(ticketKey, statuses.IN_REWORK);
+                console.log('✅ Ticket moved to', statuses.IN_REWORK);
             } else {
                 // Has issues, but no PR was ever matched to this ticket — moving to In Rework
                 // would start a rework cycle with nothing to rework. Leave the status alone
                 // and surface this explicitly instead of silently transitioning the ticket.
                 try {
-                    jira_post_comment({
-                        key: ticketKey,
-                        comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Could Not Be Attached') + '\n\n' +
+                    tracker.postComment(
+                        ticketKey,
+                        commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Could Not Be Attached') + '\n\n' +
                             'The review analysis completed, but no open Pull Request could be matched to this ticket. ' +
-                            'The ticket status was left unchanged (not moved to In Rework) since there is no PR to rework.'
-                    });
+                            'The ticket status was left unchanged (not moved to ' + statuses.IN_REWORK + ') since there is no PR to rework.'
+                    );
                 } catch (commentError) {
                     console.warn('Could not post PR-review-could-not-be-attached comment:', commentError);
                 }
@@ -950,10 +957,7 @@ function action(params) {
 
         // Step 8: Add review label
         try {
-            jira_add_label({
-                key: ticketKey,
-                label: LABELS.AI_PR_REVIEWED
-            });
+            tracker.addLabel(ticketKey, LABELS.AI_PR_REVIEWED);
         } catch (error) {
             console.warn('Failed to add ai_pr_reviewed label:', error);
         }
@@ -964,10 +968,7 @@ function action(params) {
             : 'pr_review_wip';
 
         try {
-            jira_remove_label({
-                key: ticketKey,
-                label: wipLabel
-            });
+            tracker.removeLabel(ticketKey, wipLabel);
             console.log('Removed WIP label:', wipLabel);
         } catch (error) {
             console.warn('Failed to remove WIP label:', error);
@@ -977,7 +978,7 @@ function action(params) {
         const removeLabel = customParams && customParams.removeLabel;
         if (removeLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: removeLabel });
+                tracker.removeLabel(ticketKey, removeLabel);
                 console.log('✅ Removed SM label:', removeLabel);
             } catch (e) {}
         }
@@ -985,10 +986,7 @@ function action(params) {
         // Step 11: Assign back to initiator
         try {
             if (params.initiator) {
-                jira_assign_ticket_to({
-                    key: ticketKey,
-                    accountId: params.initiator
-                });
+                tracker.assignTo(ticketKey, params.initiator);
                 console.log('✅ Assigned ticket back to initiator');
             }
         } catch (error) {
@@ -1027,7 +1025,7 @@ function action(params) {
                 }
             }
             if (!reworkStarted) {
-                markForSmStoryRework(ticketKey);
+                markForSmStoryRework(tracker, ticketKey);
                 autoStart.triggerSmIfIdle({ config: config, customParams: customParams, scm: scm });
             }
         }
@@ -1087,7 +1085,7 @@ function action(params) {
                         } else {
                             // Mark ticket so subsequent approvals skip re-generation
                             try {
-                                jira_add_label({ key: ticketKey, label: LABELS.AI_TESTS_GENERATED });
+                                tracker.addLabel(ticketKey, LABELS.AI_TESTS_GENERATED);
                                 console.log('✅ Added label "' + LABELS.AI_TESTS_GENERATED + '" to ' + ticketKey);
                             } catch (labelErr) {
                                 console.warn('⚠️ Could not add ai_tests_generated label:', labelErr.message || labelErr);
@@ -1128,15 +1126,35 @@ function action(params) {
     } catch (error) {
         console.error('❌ Error in postPRReviewComments:', error);
 
-        // Try to post error to Jira
+        // Try to post the error to the ticket via the probed tracker provider
         try {
             if (params && params.ticket && params.ticket.key) {
+<<<<<<< HEAD
                 jira_post_comment({
                     key: params.ticket.key,
                     comment: commentMarkup.forTicket(params.ticket.key).h(3, '❌ PR Review Error') + '\n\n' +
                         commentMarkup.forTicket(params.ticket.key).code(error.toString()) + '\n\n' +
                         'Please check the workflow logs for details.'
                 });
+=======
+                var errorTracker = (typeof tracker !== 'undefined' && tracker) ? tracker : null;
+                if (!errorTracker) {
+                    try {
+                        errorTracker = trackersModule.createTracker(
+                            configLoader.loadProjectConfig(params.jobParams || params));
+                    } catch (trackerError) {
+                        console.error('Failed to create tracker for error comment:', trackerError);
+                    }
+                }
+                if (errorTracker) {
+                    errorTracker.postComment(
+                        params.ticket.key,
+                        'h3. ❌ PR Review Error\n\n' +
+                            '{code}' + error.toString() + '{code}\n\n' +
+                            'Please check the workflow logs for details.'
+                    );
+                }
+>>>>>>> origin/main
             }
         } catch (commentError) {
             console.error('Failed to post error comment:', commentError);

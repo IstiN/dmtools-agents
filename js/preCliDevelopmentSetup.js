@@ -372,7 +372,7 @@ function action(params) {
         // can key off the ticket's fixVersion — see configLoader.js for details.
         var config = configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params));
         var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
-        var statuses = resolveStatuses(customParams);
+        var statuses = resolveStatuses(customParams, config.jira && config.jira.statuses);
 
         // Persist the resolved base branch to outputs/pr_base_branch.txt so that
         // quality-gate shell commands (static strings in the job's JSON config, unable
@@ -392,7 +392,7 @@ function action(params) {
             jira_move_to_status({ key: ticketKey, statusName: statuses.IN_DEVELOPMENT });
             console.log('Moved ' + ticketKey + ' to ' + statuses.IN_DEVELOPMENT);
         } catch (e) {
-            console.warn('Failed to move ticket to In Development:', e);
+            console.warn('Failed to move ticket to ' + statuses.IN_DEVELOPMENT + ':', e);
         }
 
         // 2. Checkout or create feature branch

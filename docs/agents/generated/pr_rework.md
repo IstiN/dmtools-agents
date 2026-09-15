@@ -51,7 +51,8 @@ _Pre-CLI Rework Setup Action (preCliJSAction for pr_rework agent)_
 
 - Source: `agents/js/preCliReworkSetup.js`
 - Side effects:
-  - post Jira comment
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
 - Parameters (customParams):
   - `branchCreateFnPath`
   - `branchSyncFnPath`
@@ -63,8 +64,9 @@ _Push Rework Changes Post-Action_
 
 - Source: `agents/js/pushReworkChanges.js`
 - Side effects:
-  - post Jira comment
-  - assign ticket
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
+  - assign ticket (via tracker)
   - git push
   - git checkout
   - git merge

@@ -37,11 +37,26 @@ function loadPreCliReworkSetup(configLoaderStub, mocks) {
             './fetchQuestionsToInput.js': NOOP_MODULE,
             './fetchParentContextToInput.js': NOOP_MODULE,
             './restoreFromReleases.js': NOOP_MODULE,
+            // The tracker provider is only exercised inside action(); these tests
+            // cover syncBaseBranchIfConfigured() which never touches it.
+            './common/trackers.js': {
+                createTracker: function() {
+                    return {
+                        provider: function() { return 'jira'; },
+                        postComment: function() {},
+                        addLabel: function() {},
+                        removeLabel: function() {},
+                        moveToStatus: function() {},
+                        assignTo: function() {}
+                    };
+                }
+            },
             // Real module (not a no-op stub): preCliReworkSetup.js reads
             // setupCommands.truncateSetupError at load time to build its own
             // truncateForComment() helper, so the stub must actually export it.
             './common/setupCommands.js': loadModule('js/common/setupCommands.js'),
-            './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} }
+            './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
+            './config.js': { resolveStatuses: function() { return { IN_DEVELOPMENT: 'In Development' }; } }
         }),
         mocks || {}
     );
