@@ -757,8 +757,9 @@ function action(params) {
         console.log('Review recommendation:', reviewData.recommendation);
         console.log('Issue counts:', JSON.stringify(reviewData.issueCounts));
 
-        // Resolve statuses
-        const statuses = resolveStatuses(customParams);
+        // Resolve statuses — project-wide overrides via .dmtools/config.js's jira.statuses,
+        // plus legacy per-invocation overrides via customParams.customStatuses
+        const statuses = resolveStatuses(customParams, config.jira && config.jira.statuses);
 
         // Step 2: Extract PR info from input folder or find PR using MCP
         let prNumber = null;
@@ -928,21 +929,19 @@ function action(params) {
                 tracker.addLabel(ticketKey, LABELS.PR_APPROVED);
                 console.log('✅ Added pr_approved label to ticket — SM will retry merge');
             } else if (prNumber && repoInfo) {
-                // Has issues, and there is an actual PR to rework → bounce back to Ready For
-                // Development (labels.AI_DEVELOPED is already set from PR creation, so SM routes
-                // this back to pr_rework.json — not story_development.json — on next pickup).
-                tracker.moveToStatus(ticketKey, statuses.READY_FOR_DEVELOPMENT);
-                console.log('✅ Ticket moved back to', statuses.READY_FOR_DEVELOPMENT, 'for rework');
+                // Has issues, and there is an actual PR to rework → move to In Rework for focused fixes
+                tracker.moveToStatus(ticketKey, statuses.IN_REWORK);
+                console.log('✅ Ticket moved to', statuses.IN_REWORK);
             } else {
-                // Has issues, but no PR was ever matched to this ticket — moving back to Ready
-                // For Development would start a rework cycle with nothing to rework. Leave the
-                // status alone and surface this explicitly instead of silently transitioning it.
+                // Has issues, but no PR was ever matched to this ticket — moving to In Rework
+                // would start a rework cycle with nothing to rework. Leave the status alone
+                // and surface this explicitly instead of silently transitioning the ticket.
                 try {
                     tracker.postComment(
                         ticketKey,
                         'h3. ⚠️ PR Review Could Not Be Attached\n\n' +
                             'The review analysis completed, but no open Pull Request could be matched to this ticket. ' +
-                            'The ticket status was left unchanged (not moved back to ' + statuses.READY_FOR_DEVELOPMENT + ') since there is no PR to rework.'
+                            'The ticket status was left unchanged (not moved to ' + statuses.IN_REWORK + ') since there is no PR to rework.'
                     );
                 } catch (commentError) {
                     console.warn('Could not post PR-review-could-not-be-attached comment:', commentError);

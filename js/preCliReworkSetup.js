@@ -99,7 +99,7 @@ function action(params) {
         var config = configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params));
         var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
         var scm = configLoader.createScm(config);
-        var statuses = resolveStatuses(customParams);
+        var statuses = resolveStatuses(customParams, config.jira && config.jira.statuses);
         // Probe the tracker provider once — the same script then runs unchanged
         // on Jira / ADO / GitHub deployments.
         var tracker = trackersModule.createTracker(config, customParams);
@@ -109,13 +109,19 @@ function action(params) {
 
         console.log('=== Rework setup for:', ticketKey, '===');
 
-        // Move ticket to Development in Progress (visible "actively being worked" marker,
-        // mirrors the same transition in preCliDevelopmentSetup.js for fresh development)
-        try {
-            tracker.moveToStatus(ticketKey, statuses.DEVELOPMENT_IN_PROGRESS);
-            console.log('Moved ' + ticketKey + ' to ' + statuses.DEVELOPMENT_IN_PROGRESS);
-        } catch (e) {
-            console.warn('Failed to move ticket to ' + statuses.DEVELOPMENT_IN_PROGRESS + ':', e);
+        // Move ticket to In Development (visible "actively being worked" marker, mirrors the
+        // same transition in preCliDevelopmentSetup.js for fresh development). Opt-in only
+        // (config.jira.markReworkInDevelopment) — projects whose rework bounce-back target
+        // already IS an "actively being worked" status (e.g. the default IN_REWORK) don't need
+        // this extra transition; enable it for projects that bounce back to a "queued" status
+        // instead (e.g. READY_FOR_DEVELOPMENT) so there is still a visible marker once work starts.
+        if (config.jira && config.jira.markReworkInDevelopment) {
+            try {
+                tracker.moveToStatus(ticketKey, statuses.IN_DEVELOPMENT);
+                console.log('Moved ' + ticketKey + ' to ' + statuses.IN_DEVELOPMENT);
+            } catch (e) {
+                console.warn('Failed to move ticket to ' + statuses.IN_DEVELOPMENT + ':', e);
+            }
         }
 
         // Step 1: GitHub repo info — prefer targetRepository from config over git remote

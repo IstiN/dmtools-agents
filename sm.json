@@ -64,8 +64,8 @@
           "enabled": true
         },
         {
-          "description": "Ready For Development Stories (fresh) → trigger story_development",
-          "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('Ready For Development') AND (labels is EMPTY OR labels NOT IN ('ai_developed'))",
+          "description": "Ready For Development Stories → trigger story_development",
+          "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('Ready For Development')",
           "configFile": "agents/story_development.json",
           "skipIfLabel": "sm_story_development_triggered",
           "addLabel": "sm_story_development_triggered",
@@ -90,8 +90,8 @@
           "enabled": true
         },
         {
-          "description": "Backlog / To Do / Ready For Development / In Development Bugs → trigger bug_development",
-          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('Backlog', 'To Do', 'Ready For Development', 'In Development', 'In Progress') AND updated <= -15m ORDER BY updated ASC",
+          "description": "Backlog / To Do / Ready For Development / In Development / In Rework Bugs → trigger bug_development",
+          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('Backlog', 'To Do', 'Ready For Development', 'In Development', 'In Progress', 'In Rework') AND updated <= -15m ORDER BY updated ASC",
           "configFile": "agents/bug_development.json",
           "concurrencyKey": "bug_development",
           "skipIfLabel": "sm_bug_development_triggered",
@@ -101,23 +101,8 @@
         },
         {
           "description": "Review/Rework/Blocked Stories & Bugs with already merged PR → recover Merged status",
-          "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND (status in ('Ready for Review', 'Blocked') OR (status = 'Ready For Development' AND labels = 'ai_developed')) ORDER BY updated ASC",
+          "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('In Review', 'In Rework', 'Blocked') ORDER BY updated ASC",
           "configFile": "agents/recover_merged_pr.json",
-          "localExecution": true,
-          "enabled": true
-        },
-        {
-          "description": "Ready For Development Stories (bounced back after rework) → trigger pr_rework",
-          "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('Ready For Development') AND labels = 'ai_developed'",
-          "configFile": "agents/pr_rework.json",
-          "skipIfLabel": "sm_story_rework_triggered",
-          "addLabel": "sm_story_rework_triggered",
-          "enabled": true
-        },
-        {
-          "description": "Stuck Development in Progress Stories & Bugs → recover (check PR, route to Review/Ready For Development)",
-          "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('Development in Progress') AND updated <= -15m",
-          "configFile": "agents/recover_stuck_development.json",
           "localExecution": true,
           "enabled": true
         },
@@ -129,18 +114,26 @@
           "enabled": true
         },
         {
-          "description": "Ready for Review Stories & Bugs → trigger pr_review",
-          "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('Ready for Review') AND (labels is EMPTY OR labels NOT IN ('pr_approved'))",
+          "description": "In Review Stories & Bugs → trigger pr_review",
+          "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('In Review') AND (labels is EMPTY OR labels NOT IN ('pr_approved'))",
           "configFile": "agents/pr_review.json",
           "skipIfLabel": "sm_story_review_triggered",
           "addLabel": "sm_story_review_triggered",
           "enabled": true
         },
         {
-          "description": "Ready for Review Stories & Bugs (pr_approved) → retry merge",
-          "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('Ready for Review') AND labels = 'pr_approved' ORDER BY created ASC",
+          "description": "In Review Stories & Bugs (pr_approved) → retry merge",
+          "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('In Review') AND labels = 'pr_approved' ORDER BY created ASC",
           "configFile": "agents/retry_merge.json",
           "localExecution": true,
+          "enabled": true
+        },
+        {
+          "description": "In Rework Stories & Bugs → trigger pr_rework",
+          "jql": "project = {jiraProject} AND issuetype in ('Story', 'Bug') AND status in ('In Rework')",
+          "configFile": "agents/pr_rework.json",
+          "skipIfLabel": "sm_story_rework_triggered",
+          "addLabel": "sm_story_rework_triggered",
           "enabled": true
         },
         {

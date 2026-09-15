@@ -656,7 +656,7 @@ function action(params) {
 
         // Resolve statuses — allows per-project overrides via customParams.customStatuses
         const _customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
-        const statuses = resolveStatuses(_customParams);
+        const statuses = resolveStatuses(_customParams, config.jira && config.jira.statuses);
 
         console.log('Processing development workflow for ticket:', ticketKey);
         console.log('Ticket summary:', ticketSummary);
@@ -1092,7 +1092,8 @@ function action(params) {
             const actualParams = params.ticket ? params : (params.jobParams || params);
             if (actualParams && actualParams.ticket && actualParams.ticket.key) {
                 const customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
-                const statuses = resolveStatuses(customParams);
+                const errConfig = configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params));
+                const statuses = resolveStatuses(customParams, errConfig.jira && errConfig.jira.statuses);
                 if (resumeDevelopmentAgent(
                     params,
                     actualParams.ticket.key,

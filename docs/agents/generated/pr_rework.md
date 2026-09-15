@@ -52,6 +52,7 @@ _Pre-CLI Rework Setup Action (preCliJSAction for pr_rework agent)_
 - Source: `agents/js/preCliReworkSetup.js`
 - Side effects:
   - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
 - Parameters (customParams):
   - `branchCreateFnPath`
   - `branchSyncFnPath`

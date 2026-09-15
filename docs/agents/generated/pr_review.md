@@ -71,6 +71,7 @@ _Post PR Review Comments Action_
   - `autoStartRework`
   - `autoStartReworkConfigFile`
   - `configPath`
+  - `customStatuses`
   - `formalGithubReview`
   - `maxReviewThreadsBeforeForceApprove`
   - `onApproved`
@@ -98,6 +99,7 @@ _Post PR Review Comments Action_
 - `autoStartRework` _(used by JS action)_
 - `autoStartReworkConfigFile` _(used by JS action)_
 - `configPath` _(used by JS action)_
+- `customStatuses` _(used by JS action)_
 - `formalGithubReview` _(used by JS action)_
 - `maxReviewThreadsBeforeForceApprove` _(used by JS action)_
 - `onApproved` _(used by JS action)_
