@@ -387,12 +387,13 @@ function action(params) {
         var folder = actualParams.inputFolderPath;
         var ticketKey = folder.split('/').pop();
 
-        // 1. Move ticket to In Development
+        // 1. Move ticket to Development in Progress (visible "actively being worked" marker;
+        // was 'In Development' which is not part of the Story/Bug workflow — see config.js note)
         try {
-            jira_move_to_status({ key: ticketKey, statusName: statuses.IN_DEVELOPMENT });
-            console.log('Moved ' + ticketKey + ' to ' + statuses.IN_DEVELOPMENT);
+            jira_move_to_status({ key: ticketKey, statusName: statuses.DEVELOPMENT_IN_PROGRESS });
+            console.log('Moved ' + ticketKey + ' to ' + statuses.DEVELOPMENT_IN_PROGRESS);
         } catch (e) {
-            console.warn('Failed to move ticket to In Development:', e);
+            console.warn('Failed to move ticket to ' + statuses.DEVELOPMENT_IN_PROGRESS + ':', e);
         }
 
         // 2. Checkout or create feature branch

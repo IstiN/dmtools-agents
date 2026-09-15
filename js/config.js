@@ -15,17 +15,27 @@ const ISSUE_TYPES = {
 
 // Jira Statuses
 const STATUSES = {
-    IN_REVIEW: 'In Review',
+    IN_REVIEW: 'Ready for Review',                  // ticket handed off for code review (was 'In Review' — renamed 2026-09)
     PO_REVIEW: 'PO REVIEW',                         // transition name → reaches "PO Review" status
     SOLUTION_ARCHITECTURE: 'SOLUTION ARCHITECTURE', // transition name → reaches "Solution Architecture" status
     READY_FOR_DEVELOPMENT: 'Ready For Development',
+    DEVELOPMENT_IN_PROGRESS: 'Development in Progress', // set while an agent is actively developing/reworking the ticket
     IN_DEVELOPMENT: 'In Development',               // transition name → reaches "In Development" status
     IN_PROGRESS: 'In Progress',                     // transition name → reaches "In Development" on Task/SD tickets
     BLOCKED: 'Blocked',
     TODO: 'To Do',
     DONE: 'Done',
     MERGED: 'Merged',                               // PR merged and ticket complete
-    IN_REWORK: 'In Rework',                         // PR review failed, focused fixes needed
+    // NOTE: 'In Rework' is NOT a valid status in this Jira project (confirmed via Jira API: "The
+    // value 'In Rework' does not exist for the field 'status'"). Story/Bug rework now bounces back to
+    // READY_FOR_DEVELOPMENT (see postPRReviewComments.js / pushReworkChanges.js) instead. This
+    // constant is kept only because several Test Case automation scripts still reference it
+    // (checkBugTestsPassed.js, mergeStoryTestAutomationPR.js, postBugCreation.js,
+    // postTestReviewComments.js, prepareTestPRForReview.js, recoverDirtyReviewTestCase.js,
+    // recoverStuckTestCase.js, retryMergePR.js) — those calls are pre-existing dead/no-op
+    // transitions and are out of scope for this change; fix them separately if Test Case rework
+    // needs to actually work.
+    IN_REWORK: 'In Rework',
     READY_FOR_TESTING: 'Ready For Testing',          // Test cases generated, ready for QA
     FAILED: 'Failed',                                // Test automation passed review
     PASSED: 'Passed',                                // Test automation passed review

@@ -1,0 +1,16 @@
+{
+    "name": "Teammate",
+    "params": {
+        "metadata": {
+            "contextId": "recover_stuck_development",
+            "descriptionPath": "agents/docs/agents/recover_stuck_development.md"
+        },
+        "outputType": "none",
+        "ticketContextDepth": 1,
+        "skipAIProcessing": true,
+        "alwaysPostComments": true,
+        "postJSAction": "agents/js/recoverStuckDevelopment.js",
+        "customParams": {},
+        "inputJql": "key = PROJ-111"
+    }
+}
