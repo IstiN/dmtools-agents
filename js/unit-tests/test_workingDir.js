@@ -39,6 +39,8 @@ function loadPreCli(workingDir) {
         makeRequire({
             './config.js': configModule,
             './common/scm.js': { createScm: function() { return {}; } }
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         { file_read: fileReadMock }
     );
@@ -51,6 +53,7 @@ function loadPreCli(workingDir) {
             './common/pullRequest.js': {
                 buildOriginFetchCommand: function(refSpec) {
                     return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
+var commentMarkupModule = loadModule('js/common/commentMarkup.js');
                 },
                 ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
                     if (!branchName) return false;
@@ -155,7 +158,9 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
 
         var freshConfigLoader = loadModule(
             'js/configLoader.js',
-            makeRequire({ './config.js': configModule }),
+            makeRequire({ './config.js': configModule ,
+            './common/commentMarkup.js': commentMarkupModule,
+        }),
             { file_read: function(opts) {
                 var p = opts && (opts.path || opts);
                 if (p && p.indexOf('.dmtools/config') !== -1) return null;
@@ -188,7 +193,9 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 './restoreFromReleases.js': { action: function() {} },
                 './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; }, buildSetupWarningsMarkdown: function() { return null; } },
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} }
-            }),
+            ,
+            './common/commentMarkup.js': commentMarkupModule,
+        }),
             {
                 cli_execute_command: mockCli,
                 file_read: function(opts) {
@@ -229,7 +236,9 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
 
         var freshConfigLoader = loadModule(
             'js/configLoader.js',
-            makeRequire({ './config.js': configModule }),
+            makeRequire({ './config.js': configModule ,
+            './common/commentMarkup.js': commentMarkupModule,
+        }),
             { file_read: function(opts) {
                 var p = opts && (opts.path || opts);
                 if (p && p.indexOf('.dmtools/config') !== -1) return null;
@@ -262,7 +271,9 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 './restoreFromReleases.js': { action: function() {} },
                 './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; }, buildSetupWarningsMarkdown: function() { return null; } },
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} }
-            }),
+            ,
+            './common/commentMarkup.js': commentMarkupModule,
+        }),
             {
                 cli_execute_command: mockCli,
                 file_read: function(opts) {
@@ -307,7 +318,9 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
 
         var freshConfigLoader = loadModule(
             'js/configLoader.js',
-            makeRequire({ './config.js': configModule }),
+            makeRequire({ './config.js': configModule ,
+            './common/commentMarkup.js': commentMarkupModule,
+        }),
             { file_read: function(opts) {
                 var p = opts && (opts.path || opts);
                 if (p && p.indexOf('.dmtools/config') !== -1) return null;
@@ -340,7 +353,9 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 './restoreFromReleases.js': { action: function() {} },
                 './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; }, buildSetupWarningsMarkdown: function() { return null; } },
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} }
-            }),
+            ,
+            './common/commentMarkup.js': commentMarkupModule,
+        }),
             {
                 cli_execute_command: mockCli,
                 file_read: function(opts) {
@@ -388,6 +403,8 @@ function loadPreCliTestAutomation(workingDir) {
         makeRequire({
             './config.js': configModule,
             './common/scm.js': { createScm: function() { return {}; } }
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         { file_read: fileReadMock }
     );
@@ -412,6 +429,8 @@ function loadPreCliTestAutomation(workingDir) {
                 }
             },
             './fetchLinkedBugsToInput.js': { action: function() {} }
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         {
             cli_execute_command: mockCli,
@@ -478,7 +497,9 @@ suite('preCliTestAutomationSetup > workingDir', function() {
 
         var freshConfigLoader = loadModule(
             'js/configLoader.js',
-            makeRequire({ './config.js': configModule }),
+            makeRequire({ './config.js': configModule ,
+            './common/commentMarkup.js': commentMarkupModule,
+        }),
             { file_read: function(opts) {
                 try { return file_read(opts); } catch (e) { return null; }
             } }
@@ -504,7 +525,9 @@ suite('preCliTestAutomationSetup > workingDir', function() {
                     }
                 },
                 './fetchLinkedBugsToInput.js': { action: function() {} }
-            }),
+            ,
+            './common/commentMarkup.js': commentMarkupModule,
+        }),
             {
                 cli_execute_command: mockCli,
                 file_read: function(opts) {
@@ -547,7 +570,9 @@ suite('preCliTestAutomationSetup > workingDir', function() {
 
         var freshConfigLoader = loadModule(
             'js/configLoader.js',
-            makeRequire({ './config.js': configModule }),
+            makeRequire({ './config.js': configModule ,
+            './common/commentMarkup.js': commentMarkupModule,
+        }),
             { file_read: function(opts) {
                 try { return file_read(opts); } catch (e) { return null; }
             } }
@@ -573,7 +598,9 @@ suite('preCliTestAutomationSetup > workingDir', function() {
                     }
                 },
                 './fetchLinkedBugsToInput.js': { action: function() {} }
-            }),
+            ,
+            './common/commentMarkup.js': commentMarkupModule,
+        }),
             {
                 cli_execute_command: mockCli,
                 file_read: function(opts) {
@@ -639,6 +666,8 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
         makeRequire({
             './config.js': configModule,
             './common/scm.js': { createScm: function() { return {}; } }
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         { file_read: fileReadMock }
     );
@@ -660,7 +689,9 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
     );
     var outputFiles = loadModule(
         'js/common/outputFiles.js',
-        makeRequire({}),
+        makeRequire({
+            './common/commentMarkup.js': commentMarkupModule,
+        }),
         allMocks
     );
 
@@ -675,6 +706,8 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
             },
             './common/outputFiles.js': outputFiles,
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         allMocks
     );
@@ -774,7 +807,9 @@ function makeIsolatedConfigLoader(fileMap) {
         if (p && p.indexOf('.dmtools/config') !== -1) return null;
         try { return file_read(opts); } catch (e) { return null; }
     };
-    return loadModule('js/configLoader.js', makeRequire({ './config.js': configModule }), { file_read: fr });
+    return loadModule('js/configLoader.js', makeRequire({ './config.js': configModule ,
+            './common/commentMarkup.js': commentMarkupModule,
+        }), { file_read: fr });
 }
 
 suite('configLoader > targetRepository.workingDir', function() {

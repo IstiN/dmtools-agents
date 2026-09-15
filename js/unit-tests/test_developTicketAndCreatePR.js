@@ -21,6 +21,8 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         Object.assign({
             cli_execute_command: function() { return ''; },
@@ -36,7 +38,10 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
 // drive performGitOperations() all the way to its "No changes were made" path,
 // which the bare stubs can't reach (they lack readStagedDiffStat/buildOriginFetchCommand).
 function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks) {
-    var realPrHelper = loadModule('js/common/pullRequest.js', makeRequire({}), {});
+    var realPrHelper = loadModule('js/common/pullRequest.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule,
+        }), {});
+var commentMarkupModule = loadModule('js/common/commentMarkup.js');
     return loadModule(
         'js/developTicketAndCreatePR.js',
         makeRequire({
@@ -55,6 +60,8 @@ function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks) {
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         Object.assign({
             cli_execute_command: function() { return ''; },

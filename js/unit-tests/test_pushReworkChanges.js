@@ -14,9 +14,12 @@
  */
 
 function makeOutputFiles(fileMap) {
-    return loadModule('js/common/outputFiles.js', makeRequire({}), {
+    return loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule,
+        }), {
         file_read: function(opts) {
             var path = opts && (opts.path || opts);
+var commentMarkupModule = loadModule('js/common/commentMarkup.js');
             return fileMap[path] !== undefined ? fileMap[path] : null;
         }
     });
@@ -54,6 +57,8 @@ function loadPushReworkChangesModule(fileMap) {
             './config.js': configModule,
             './cacheToReleases.js': { cacheSessionLog: noop },
             './common/tokenUsageComment.js': { postTokenUsageComments: noop }
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         {
             file_read: function(opts) {
@@ -217,6 +222,8 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
             './common/outputFiles.js': { readOutputFile: function() { return null; } },
             './cacheToReleases.js': {},
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         Object.assign({
             cli_execute_command: function() { return ''; },
@@ -384,6 +391,8 @@ function loadPushReworkChangesForAction(mocks) {
             './config.js': configModule,
             './cacheToReleases.js': { action: function() {} },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         Object.assign({}, defaultMocks, mocks || {})
     );
@@ -489,6 +498,8 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
             './config.js': configModule,
             './cacheToReleases.js': { action: function() {} },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         Object.assign({
             cli_execute_command: function() { return ''; },

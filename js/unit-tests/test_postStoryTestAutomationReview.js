@@ -42,11 +42,16 @@ function loadPostStoryTestAutomationReview(mocks) {
         makeRequire({
             './config.js': configModule,
             './common/scm.js': { createScm: function() { return scmMock; } }
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         { file_read: function() { return null; } }
     );
 
-    var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({}), allMocks);
+    var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule,
+        }), allMocks);
+var commentMarkupModule = loadModule('js/common/commentMarkup.js');
 
     var prReviewComments = loadModule(
         'js/postPRReviewComments.js',
@@ -64,6 +69,8 @@ function loadPostStoryTestAutomationReview(mocks) {
                 findMergedPRForTicket: function() { return null; }
             },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         allMocks
     );
@@ -89,6 +96,8 @@ function loadPostStoryTestAutomationReview(mocks) {
             },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './postPRReviewComments.js': prReviewComments
+        ,
+            './common/commentMarkup.js': commentMarkupModule,
         }),
         allMocks
     );

@@ -1,6 +1,8 @@
 /**
  * Unit tests for js/postPRReviewComments.js.
  */
+var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+
 
 var githubHelpersStub = {
     findPRForTicket: function() { return null; },
@@ -8,7 +10,9 @@ var githubHelpersStub = {
 };
 
 function loadPostPRReviewComments(mocks) {
-    var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({}), {
+    var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule
+        }), {
         file_read: (mocks && mocks.file_read) || function() { return null; }
     });
     return loadModule(
@@ -21,6 +25,8 @@ function loadPostPRReviewComments(mocks) {
             './common/outputFiles.js': outputFiles,
             './common/githubHelpers.js': githubHelpersStub,
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        ,
+            './common/commentMarkup.js': commentMarkupModule
         }),
         {
             file_read: (mocks && mocks.file_read) || function() { return null; }
@@ -326,7 +332,9 @@ suite('postPRReviewComments', function() {
                     './common/outputFiles.js': outputFiles,
                     './common/githubHelpers.js': githubHelpersStub,
                     './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
-                }),
+                ,
+            './common/commentMarkup.js': commentMarkupModule
+        }),
                 defaultMocks
             );
 
@@ -472,7 +480,9 @@ suite('postPRReviewComments', function() {
                     './common/outputFiles.js': outputFiles,
                     './common/githubHelpers.js': githubHelpersStub,
                     './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
-                }),
+                ,
+            './common/commentMarkup.js': commentMarkupModule
+        }),
                 {
                     file_read: function(args) {
                         var p = args && (args.path || args);
@@ -622,7 +632,9 @@ suite('postPRReviewComments', function() {
                     },
                     './common/githubHelpers.js': githubHelpersStub,
                     './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
-                }),
+                ,
+            './common/commentMarkup.js': commentMarkupModule
+        }),
                 {
                     file_read: function(args) {
                         var p = args && (args.path || args);

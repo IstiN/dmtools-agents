@@ -792,7 +792,7 @@ function action(params) {
                 }
                 jira_post_comment({
                     key: actualParams.ticket.key,
-                    comment: commentMarkup.forTicket(ticketKey).h(3, '❌ Rework Workflow Error') + '\n\n' + commentMarkup.forTicket(ticketKey).code(error.toString())
+                    comment: commentMarkup.forTicket(actualParams.ticket.key).h(3, '❌ Rework Workflow Error') + '\n\n' + commentMarkup.forTicket(actualParams.ticket.key).code(error.toString())
                 });
             }
         } catch (e) {}

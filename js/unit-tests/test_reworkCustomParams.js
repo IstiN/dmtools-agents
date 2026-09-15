@@ -1,6 +1,8 @@
 /**
  * Unit tests for rework post-actions merging project jobParamPatches.
  */
+var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+
 
 function loadPushReworkChanges() {
     return loadModule(
@@ -23,6 +25,8 @@ function loadPushReworkChanges() {
             },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './cacheToReleases.js': {}
+        ,
+            './common/commentMarkup.js': commentMarkupModule
         }),
         {}
     );
@@ -78,6 +82,8 @@ function loadPushReworkChangesForAction(mocks) {
             },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './cacheToReleases.js': { action: function() {} }
+        ,
+            './common/commentMarkup.js': commentMarkupModule
         }),
         {
             file_read: function(args) {
@@ -115,6 +121,8 @@ function loadPostTestReworkResults() {
             './common/feedbackLoop.js': {},
             './common/pullRequest.js': {},
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        ,
+            './common/commentMarkup.js': commentMarkupModule
         }),
         {}
     );
