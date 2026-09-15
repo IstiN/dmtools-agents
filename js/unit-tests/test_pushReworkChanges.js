@@ -458,8 +458,8 @@ suite('pushReworkChanges.action — rework_setup_failed.md guard (#310)', functi
         assert.equal(loaded.resumeAgentCalls.length, 0);
 
         assert.ok(
-            loaded.jiraMoveToStatusCalls.some(function(c) { return c.statusName === 'In Review'; }),
-            'should still move the ticket to In Review as before'
+            loaded.jiraMoveToStatusCalls.some(function(c) { return c.statusName === 'Ready for Review'; }),
+            'should still move the ticket to Ready for Review as before'
         );
     });
 });

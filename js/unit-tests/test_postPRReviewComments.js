@@ -380,7 +380,7 @@ suite('postPRReviewComments', function() {
             );
         });
 
-        test('regression: !isApproved WITH a PR found still moves to In Rework and triggers SM rework as before', function() {
+        test('regression: !isApproved WITH a PR found still moves to Ready For Development and triggers SM rework as before', function() {
             var loaded = loadPostPRReviewCommentsForAction({
                 reviewData: {
                     recommendation: 'REQUEST_CHANGES',
@@ -401,8 +401,8 @@ suite('postPRReviewComments', function() {
             assert.equal(result.githubCommentsPosted, true);
 
             assert.ok(
-                loaded.jiraMoveToStatusCalls.some(function(c) { return c.statusName === 'In Rework'; }),
-                'should still move the ticket to In Rework when a PR was found'
+                loaded.jiraMoveToStatusCalls.some(function(c) { return c.statusName === 'Ready For Development'; }),
+                'should still move the ticket to Ready For Development when a PR was found'
             );
             assert.equal(
                 loaded.jiraAddLabelCalls.filter(function(c) { return c.label === 'sm_story_rework_triggered'; }).length, 1,

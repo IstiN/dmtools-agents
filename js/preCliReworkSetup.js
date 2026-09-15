@@ -13,6 +13,7 @@
 var configLoader = require('./configLoader.js');
 const gh = require('./common/githubHelpers.js');
 const gitOps = require('./common/gitOps.js');
+const { resolveStatuses } = require('./config.js');
 const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 var restoreFromReleases = require('./restoreFromReleases.js');
@@ -97,11 +98,21 @@ function action(params) {
         var config = configLoader.loadProjectConfig(configLoader.paramsForConfigLoad(params));
         var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
         var scm = configLoader.createScm(config);
+        var statuses = resolveStatuses(customParams);
 
         // Restore configured artefacts (e.g. cosmo test reports) from GitHub Release — non-fatal
         try { restoreFromReleases.action(params); } catch (e) { console.warn('⚠️ restoreFromReleases failed (non-fatal):', e); }
 
         console.log('=== Rework setup for:', ticketKey, '===');
+
+        // Move ticket to Development in Progress (visible "actively being worked" marker,
+        // mirrors the same transition in preCliDevelopmentSetup.js for fresh development)
+        try {
+            jira_move_to_status({ key: ticketKey, statusName: statuses.DEVELOPMENT_IN_PROGRESS });
+            console.log('Moved ' + ticketKey + ' to ' + statuses.DEVELOPMENT_IN_PROGRESS);
+        } catch (e) {
+            console.warn('Failed to move ticket to ' + statuses.DEVELOPMENT_IN_PROGRESS + ':', e);
+        }
 
         // Step 1: GitHub repo info — prefer targetRepository from config over git remote
         var repoInfo = null;

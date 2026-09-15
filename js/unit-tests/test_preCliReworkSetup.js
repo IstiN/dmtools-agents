@@ -41,7 +41,8 @@ function loadPreCliReworkSetup(configLoaderStub, mocks) {
             // setupCommands.truncateSetupError at load time to build its own
             // truncateForComment() helper, so the stub must actually export it.
             './common/setupCommands.js': loadModule('js/common/setupCommands.js'),
-            './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} }
+            './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
+            './config.js': { resolveStatuses: function() { return { DEVELOPMENT_IN_PROGRESS: 'Development in Progress' }; } }
         }),
         mocks || {}
     );

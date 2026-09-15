@@ -179,7 +179,7 @@ suite('rework custom params', function() {
 
         assert.equal(result.success, true);
         assert.equal(result.path, 'rework-interrupted');
-        assert.deepEqual(mocks.moves, ['In Rework']);
+        assert.deepEqual(mocks.moves, ['Ready For Development']);
         assert.deepEqual(mocks.removedLabels, ['sm_story_rework_triggered']);
         assert.equal(mocks.prComments || 0, 0, 'must not post Rework Complete PR comment');
         assert.equal(mocks.threadReplies || 0, 0, 'must not reply to conversations without review_replies.json');
@@ -211,8 +211,8 @@ suite('rework custom params', function() {
 
         assert.deepEqual(mocks.resumeCalls, ['rework_missing_outputs']);
         assert.equal(result.success, true);
-        assert.equal(result.message, 'TS-1293 rework pushed, PR commented, moved to In Review');
-        assert.deepEqual(mocks.moves, ['In Review']);
+        assert.equal(result.message, 'TS-1293 rework pushed, PR commented, moved to Ready for Review');
+        assert.deepEqual(mocks.moves, ['Ready for Review']);
     });
 
     test('pr_rework syncs remote branch before retrying a rejected push', function() {

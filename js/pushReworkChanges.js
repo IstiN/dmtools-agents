@@ -493,16 +493,16 @@ function handleInterruptedRework(ticketKey, branchName, customParams, statuses) 
     try {
         jira_post_comment({
             key: ticketKey,
-            comment: 'h3. ⏸️ Rework Interrupted\n\nThe AI agent pushed any staged partial changes, but it was interrupted before writing {code}outputs/response.md{code} and {code}outputs/review_replies.json{code}. PR conversations were left open. The ticket was moved back to *' + statuses.IN_REWORK + '* for retry.\n\n*Branch*: {code}' + branchName + '{code}'
+            comment: 'h3. ⏸️ Rework Interrupted\n\nThe AI agent pushed any staged partial changes, but it was interrupted before writing {code}outputs/response.md{code} and {code}outputs/review_replies.json{code}. PR conversations were left open. The ticket was moved back to *' + statuses.READY_FOR_DEVELOPMENT + '* for retry.\n\n*Branch*: {code}' + branchName + '{code}'
         });
     } catch (e) {
         console.warn('Failed to post interrupted rework Jira comment:', e.message || e);
     }
     try {
-        jira_move_to_status({ key: ticketKey, statusName: statuses.IN_REWORK });
-        console.log('✅ Moved', ticketKey, 'back to', statuses.IN_REWORK, 'for retry');
+        jira_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
+        console.log('✅ Moved', ticketKey, 'back to', statuses.READY_FOR_DEVELOPMENT, 'for retry');
     } catch (e) {
-        console.warn('Failed to move ticket back to ' + statuses.IN_REWORK + ':', e.message || e);
+        console.warn('Failed to move ticket back to ' + statuses.READY_FOR_DEVELOPMENT + ':', e.message || e);
     }
     removeConfiguredLabels(ticketKey, customParams || {});
     return {
@@ -764,7 +764,7 @@ function action(params) {
 
         return {
             success: true,
-            message: ticketKey + ' rework pushed, PR commented, moved to In Review',
+            message: ticketKey + ' rework pushed, PR commented, moved to Ready for Review',
             branchName: branchName,
             prUrl: prUrl,
             prCommentPosted: prCommentPosted
