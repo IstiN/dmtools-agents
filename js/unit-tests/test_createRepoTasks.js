@@ -16,7 +16,7 @@ function makeModule(globals) {
 
     return loadModule(
         'js/createRepoTasks.js',
-        makeRequire({}),
+        makeRequire({ './config.js': configModule }),
         defaultGlobals
     );
 }
@@ -98,6 +98,31 @@ suite('createRepoTasks — action', function() {
         assert.equal(created[0].description.indexOf('PROJ-100') !== -1, true, 'SA ticket link in description');
         assert.equal(created[0].description.indexOf('PROJ-50') !== -1, true, 'parent link in description');
         assert.deepEqual(created[0].labels, ['development'], 'default development label set');
+    });
+
+    test('truncates summary when the parent summary is long enough to exceed 255 chars', function() {
+        var longParentSummary = 'B'.repeat(300);
+        var created = [];
+        var mod = makeModule({
+            jira_get_ticket: function(opts) {
+                if (opts.key === 'PROJ-100') {
+                    return { fields: { description: description, parent: { key: 'PROJ-50' } } };
+                }
+                return { fields: { summary: longParentSummary } };
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_create_ticket_with_parent: function(opts) {
+                created.push(opts);
+                return '{"key":"PROJ-' + (200 + created.length) + '"}';
+            },
+            jira_post_comment: function() {}
+        });
+
+        var result = mod.action({ ticket: { key: 'PROJ-100' } });
+
+        assert.equal(result.success, true, 'succeeds');
+        assert.equal(created[0].summary.length <= 255, true, 'summary truncated to Jira limit');
+        assert.equal(created[0].summary.slice(-3), '...', 'truncated summary ends with ellipsis');
     });
 
     test('links blocker→dependent and moves dependent to Blocked', function() {
