@@ -57,3 +57,34 @@ suite('config.resolveStatuses', function() {
         assert.equal(statuses.IN_REVIEW, 'In Review');
     });
 });
+
+suite('config.truncateSummary', function() {
+    test('returns the summary unchanged when at or under the limit', function() {
+        var summary = 'a'.repeat(255);
+        assert.equal(config.truncateSummary(summary, 255), summary);
+        assert.equal(config.truncateSummary('short summary', 255), 'short summary');
+    });
+
+    test('truncates and appends ellipsis when over the limit', function() {
+        var summary = 'a'.repeat(300);
+        var result = config.truncateSummary(summary, 255);
+        assert.equal(result.length, 255);
+        assert.equal(result.slice(-3), '...');
+        assert.equal(result.slice(0, 252), 'a'.repeat(252));
+    });
+
+    test('defaults maxLength to JIRA_SUMMARY_MAX_LENGTH (255) when not provided', function() {
+        var summary = 'a'.repeat(300);
+        var result = config.truncateSummary(summary);
+        assert.equal(result.length, config.JIRA_SUMMARY_MAX_LENGTH);
+    });
+
+    test('handles null/undefined summary safely', function() {
+        assert.equal(config.truncateSummary(null, 255), '');
+        assert.equal(config.truncateSummary(undefined, 255), '');
+    });
+
+    test('JIRA_SUMMARY_MAX_LENGTH is 255 (Jira API hard limit)', function() {
+        assert.equal(config.JIRA_SUMMARY_MAX_LENGTH, 255);
+    });
+});

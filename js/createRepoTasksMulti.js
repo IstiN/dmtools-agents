@@ -19,6 +19,10 @@
  * Sub-task under the parent.
  */
 
+var configModule = require('./config.js');
+var truncateSummary = configModule.truncateSummary;
+var JIRA_SUMMARY_MAX_LENGTH = configModule.JIRA_SUMMARY_MAX_LENGTH;
+
 function getJiraBaseUrl() {
     try {
         var url = java.lang.System.getenv('JIRA_BASE_PATH');
@@ -225,7 +229,10 @@ function action(params) {
         var taskKeyMap = {};
 
         tasks.forEach(function(t) {
-            var summary = '[' + t.repo + '] ' + t.title;
+            // AI-authored task titles are free text and can exceed Jira's 255-char
+            // summary limit (the API rejects ticket creation outright if they do) —
+            // truncate defensively so a single overlong title can't sink the whole run.
+            var summary = truncateSummary('[' + t.repo + '] ' + t.title, JIRA_SUMMARY_MAX_LENGTH);
 
             var duplicate = existingSummaries.indexOf(summary) !== -1;
             if (duplicate) {

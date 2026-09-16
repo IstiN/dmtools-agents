@@ -12,6 +12,10 @@
  * Duplicate-safe: skips repos that already have a matching Sub-task under the parent.
  */
 
+var configModule = require('./config.js');
+var truncateSummary = configModule.truncateSummary;
+var JIRA_SUMMARY_MAX_LENGTH = configModule.JIRA_SUMMARY_MAX_LENGTH;
+
 function getJiraBaseUrl() {
     try {
         var url = java.lang.System.getenv('JIRA_BASE_PATH');
@@ -119,7 +123,10 @@ function action(params) {
             var repoName = typeof repo === 'string' ? repo : repo.name;
             if (!repoName) return;
 
-            var summary = '[' + repoName + '] ' + parentSummary;
+            // Parent summary is Jira-controlled and usually short, but a "[repo] "
+            // prefix plus a long parent summary could still exceed the 255-char
+            // hard limit — truncate defensively (see createRepoTasksMulti.js).
+            var summary = truncateSummary('[' + repoName + '] ' + parentSummary, JIRA_SUMMARY_MAX_LENGTH);
 
             // Skip if a sub-task with this repo tag already exists
             var duplicate = existingSummaries.some(function(s) {

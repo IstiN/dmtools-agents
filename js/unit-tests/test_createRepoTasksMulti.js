@@ -16,7 +16,7 @@ function makeModule(globals) {
 
     return loadModule(
         'js/createRepoTasksMulti.js',
-        makeRequire({}),
+        makeRequire({ './config.js': configModule }),
         defaultGlobals
     );
 }
@@ -266,6 +266,31 @@ suite('createRepoTasksMulti — action', function() {
         assert.equal(result.success, true, 'succeeds');
         assert.equal(created.length, 2, 'schema task skipped, other two created');
         assert.equal(result.skipped, 1, 'one skipped');
+    });
+
+    test('truncates an overlong AI-generated task title so the Jira summary stays under 255 chars', function() {
+        var longTitle = 'A'.repeat(300); // realistic case: GENSGENP-53750 saw a 319-char summary rejected by Jira
+        var created = [];
+        var longDescription = 'Solution\n\n{code:json|title=affected_repos}\n' +
+            JSON.stringify([{ name: 'lims-ui', reason: 'x', tasks: [{ id: 't1', title: longTitle }] }]) +
+            '\n{code}';
+        var mod = makeModule({
+            jira_get_ticket: function(opts) {
+                if (opts.key === 'PROJ-100') {
+                    return { fields: { description: longDescription, parent: { key: 'PROJ-50' } } };
+                }
+                return { fields: { summary: 'Story' } };
+            },
+            jira_search_by_jql: function() { return []; },
+            jira_create_ticket_with_parent: function(opts) { created.push(opts); return '{"key":"PROJ-601"}'; },
+            jira_post_comment: function() {}
+        });
+
+        var result = mod.action({ ticket: { key: 'PROJ-100' } });
+        assert.equal(result.success, true, 'succeeds');
+        assert.equal(created.length, 1, 'one sub-task created');
+        assert.equal(created[0].summary.length <= 255, true, 'summary truncated to Jira limit');
+        assert.equal(created[0].summary.slice(-3), '...', 'truncated summary ends with ellipsis');
     });
 
     test('returns error when SA ticket has no parent', function() {

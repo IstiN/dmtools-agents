@@ -115,6 +115,29 @@ const JIRA_FIELDS = {
 // Summary Length Constraints
 const SUMMARY_MAX_LENGTH = 120;
 
+// Jira's actual hard limit on the summary field — creating a ticket with a longer
+// summary is rejected by the API ("Summary must be less than 255 characters").
+// Distinct from SUMMARY_MAX_LENGTH above (a stricter style guideline for
+// AI-authored summaries); this is the hard ceiling any summary must respect.
+const JIRA_SUMMARY_MAX_LENGTH = 255;
+
+/**
+ * Truncate a ticket summary to fit within Jira's hard summary length limit,
+ * appending an ellipsis when truncation actually occurs so the cut is visible.
+ * Safe to call on any summary — a no-op when it's already short enough.
+ *
+ * @param {string} summary - full summary text (may include a "[repo] " prefix, etc.)
+ * @param {number} [maxLength] - defaults to JIRA_SUMMARY_MAX_LENGTH
+ * @returns {string} summary, truncated to maxLength characters if needed
+ */
+function truncateSummary(summary, maxLength) {
+    var limit = maxLength || JIRA_SUMMARY_MAX_LENGTH;
+    var text = (summary || '').toString();
+    if (text.length <= limit) return text;
+    var ellipsis = '...';
+    return text.substring(0, Math.max(0, limit - ellipsis.length)) + ellipsis;
+}
+
 /**
  * Merge default STATUSES with project-specific overrides.
  * Allows each project to remap status names (e.g. use different Story/Bug workflow
@@ -191,6 +214,8 @@ module.exports = {
     DIAGRAM_FORMAT,
     JIRA_FIELDS,
     SUMMARY_MAX_LENGTH,
+    JIRA_SUMMARY_MAX_LENGTH,
+    truncateSummary,
     DEFAULT_CONFLUENCE,
     DEFAULT_FORMATS,
     resolveStatuses
