@@ -1,0 +1,19 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "agents/js/machineSmAgent.js",
+    "jobParams": {
+      "repo": "epam/dmtools-dart",
+      "scm": {
+        "provider": "github"
+      },
+      "dryRun": false,
+      "maxConcurrentRuns": 1,
+      "maxReworkRounds": 2,
+      "workflowFile": "ai-teammate.yml",
+      "branchPrefix": "ai/gh-",
+      "agentHandle": "ai-teammate",
+      "issueLimit": 50
+    }
+  }
+}

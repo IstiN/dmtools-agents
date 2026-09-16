@@ -83,7 +83,9 @@
         "js/unit-tests/test_fetchConfluenceOutputContext.js",
         "js/unit-tests/test_preCliSnapshotSetup.js",
         "js/unit-tests/test_contentOutput.js",
-        "js/unit-tests/test_agentDocsCoverage.js"
+        "js/unit-tests/test_agentDocsCoverage.js",
+        "js/unit-tests/test_machineSmAgent.js",
+        "js/unit-tests/test_smProvider.js"
       ]
     }
   }
