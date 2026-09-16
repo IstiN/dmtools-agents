@@ -615,6 +615,48 @@ suite('postPRReviewComments', function() {
             assert.equal(loaded.dismissReviewCalls.length, 0, 'must not dismiss a review when the opt-in flag is off');
         });
 
+        test('project config.js formalGithubReview=true enables it without customParams', function() {
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                config: { formalGithubReview: true },
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    generalComment: 'Config-driven blocking issue.',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                }
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1'
+            });
+
+            assert.equal(loaded.submitReviewCalls.length, 1, 'project config default must enable the formal review');
+            assert.equal(loaded.submitReviewCalls[0].event, 'REQUEST_CHANGES');
+        });
+
+        test('customParams.formalGithubReview=false overrides config.js true', function() {
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                config: { formalGithubReview: true },
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    generalComment: 'Should never be submitted.',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                }
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1',
+                customParams: { formalGithubReview: false }
+            });
+
+            assert.equal(loaded.submitReviewCalls.length, 0, 'explicit per-run false must beat the project default');
+        });
+
         test('enabled + REQUEST_CHANGES: submits a formal Request Changes review, and still adds no pr_approved label', function() {
             var loaded = loadPostPRReviewCommentsForFormalReview({
                 reviewData: {
@@ -642,7 +684,7 @@ suite('postPRReviewComments', function() {
             );
         });
 
-        test('enabled + APPROVE: dismisses a prior CHANGES_REQUESTED review, and still adds the pr_approved label as before', function() {
+        test('enabled + APPROVE: dismisses prior CHANGES_REQUESTED, submits a formal APPROVE review, and still adds the pr_approved label', function() {
             var loaded = loadPostPRReviewCommentsForFormalReview({
                 reviewData: {
                     recommendation: 'APPROVE',
@@ -662,9 +704,14 @@ suite('postPRReviewComments', function() {
                 customParams: { formalGithubReview: true }
             });
 
-            assert.equal(loaded.submitReviewCalls.length, 0, 'must not submit a new review when approving');
             assert.equal(loaded.dismissReviewCalls.length, 1, 'should dismiss exactly the CHANGES_REQUESTED review');
             assert.equal(loaded.dismissReviewCalls[0].reviewId, 111);
+            assert.equal(loaded.submitReviewCalls.length, 1, 'must submit a formal APPROVE review when approving');
+            assert.equal(loaded.submitReviewCalls[0].event, 'APPROVE');
+            assert.ok(
+                loaded.submitReviewCalls[0].body && String(loaded.submitReviewCalls[0].body).length > 0,
+                'APPROVE review carries a body'
+            );
             assert.equal(
                 loaded.addLabelCalls.filter(function(c) { return c.label === 'pr_approved'; }).length, 1,
                 'pr_approved label lifecycle on approve must be unchanged'
