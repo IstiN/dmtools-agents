@@ -170,119 +170,30 @@ function decideActions(state, cfg) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GitHub I/O — everything through `gh` (JSON mode), injectable for tests.
+// Forge I/O — delegated to the SCM-agnostic provider (common/smProvider.js);
+// github and gitlab both speak the same contract.
 // ─────────────────────────────────────────────────────────────────────────────
-function defaultGhRunner(cmd) {
-    var res = cli_execute_command({ command: cmd });
-    if (typeof res !== 'string') res = (res && res.output) || '';
-    return String(res || '').trim();
-}
+var smProviderModule = require('./common/smProvider.js');
 
-function makeGh(ghRunner) {
-    return { raw: ghRunner || defaultGhRunner };
-}
-
-// Parse "gh-<n>" out of an AI Teammate run display title.
+// Parse "gh-<n>" out of a machine run display title (kept here: the pure
+// core tests pin it).
 function issueFromRunTitle(title) {
     var m = /gh-(\d+)/.exec(String(title || ''));
     return m ? parseInt(m[1], 10) : null;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// State collection
-// ─────────────────────────────────────────────────────────────────────────────
-function activeMachineRuns(gh, repo, workflowFile) {
-    var out = gh.raw('gh run list --repo ' + repo + ' --workflow ' + workflowFile +
-        ' --limit 30 --status in_progress --json status,displayTitle') || '[]';
-    var runs = [];
-    try { runs = JSON.parse(out) || []; } catch (e) { runs = []; }
-    var out2 = gh.raw('gh run list --repo ' + repo + ' --workflow ' + workflowFile +
-        ' --limit 30 --status queued --json status,displayTitle') || '[]';
-    try { runs = runs.concat(JSON.parse(out2) || []); } catch (e) { /* keep */ }
-    return runs.map(issueFromRunTitle).filter(function (n) { return n !== null; });
-}
-
-function collectIssues(gh, repo, agentHandle, issueLimit) {
-    var out = gh.raw('gh issue list --repo ' + repo + ' --state open --limit ' + issueLimit +
-        ' --json number,title,labels,assignees') || '[]';
-    var issues;
-    try { issues = JSON.parse(out) || []; } catch (e) { return []; }
-    var machineLabels = ['agent:dev', 'agent:rework', 'agent:review',
-        'ai_developed', 'ai_pr_reviewed', 'pr_approved', 'needs-human'];
-    return issues.filter(function (it) {
-        var labels = (it.labels || []).map(function (l) { return l.name || l; });
-        var assignees = (it.assignees || []).map(function (a) { return a.login || a; });
-        if (assignees.indexOf(agentHandle) !== -1) return true;
-        return machineLabels.some(function (ml) { return labels.indexOf(ml) !== -1; });
-    }).map(function (it) {
-        return {
-            number: it.number,
-            title: it.title,
-            labels: (it.labels || []).map(function (l) { return l.name || l; }),
-            assignees: (it.assignees || []).map(function (a) { return a.login || a; })
-        };
-    });
-}
-
-// Find the machine PR for an issue: open PR on branch <prefix><n>, or any
-// open PR whose body references #n; fall back to the merged PR on the
-// branch (close-issue safety net).
-function findPr(gh, repo, openPrs, issueNumber, branchPrefix) {
-    var branch = branchPrefix + issueNumber;
-    var bodyRe = new RegExp('(^|[^0-9])#' + issueNumber + '([^0-9]|$)');
-    var open = openPrs.filter(function (p) {
-        return p.headRefName === branch || bodyRe.test(String(p.body || ''));
-    });
-    if (open.length) {
-        return { number: open[0].number, state: 'OPEN', _raw: open[0] };
-    }
-    var mergedOut = gh.raw('gh pr list --repo ' + repo + ' --state merged --head ' + branch +
-        ' --limit 1 --json number') || '[]';
-    var merged;
-    try { merged = JSON.parse(mergedOut) || []; } catch (e) { merged = []; }
-    if (merged.length) {
-        return { number: merged[0].number, state: 'MERGED' };
-    }
-    return null;
-}
-
-// Summarize the check rollup for the PR head: red / green / pending / none.
-function checkConclusion(rollup) {
-    var entries = rollup || [];
-    if (!entries.length) return 'none';
-    var red = false, pending = false;
-    entries.forEach(function (c) {
-        var concl = c.conclusion;
-        var status = c.status;
-        if (concl === 'FAILURE' || concl === 'TIMED_OUT' || concl === 'CANCELLED') red = true;
-        else if (!concl || status === 'QUEUED' || status === 'IN_PROGRESS' || status === 'WAITING' ||
-                 status === 'PENDING') pending = true;
-    });
-    if (red) return 'red';
-    if (pending) return 'pending';
-    return 'green';
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Action execution
-// ─────────────────────────────────────────────────────────────────────────────
-function executeAction(gh, repo, action, issue, cfg) {
+function executeAction(provider, action, issue, cfg) {
     switch (action.type) {
         case 'dispatch':
-            return gh.raw('gh workflow run ' + cfg.workflowFile + ' --repo ' + repo +
-                ' -f issue=' + issue.number + ' -f leg=' + action.leg +
-                ' -f reason="' + String(action.reason).replace(/"/g, "'") + '"');
+            return provider.dispatchLeg(issue.number, action.leg, action.reason, cfg.workflowFile);
         case 'label':
-            return gh.raw('gh issue edit ' + issue.number + ' --repo ' + repo +
-                ' --add-label "' + action.label + '"');
+            return provider.addIssueLabel(issue.number, action.label);
         case 'updateBranch':
-            return gh.raw('gh pr update-branch ' + action.prNumber + ' --repo ' + repo);
+            return provider.updateBranch(action.prNumber);
         case 'merge':
-            // Squash only — merge-trigger.yml parity.
-            return gh.raw('gh pr merge ' + action.prNumber + ' --repo ' + repo + ' --squash');
+            return provider.merge(action.prNumber);
         case 'closeIssue':
-            return gh.raw('gh issue close ' + issue.number + ' --repo ' + repo +
-                ' --comment "' + String(cfg.closeComment || 'Machine SM: linked PR merged — closing.').replace(/"/g, "'") + '"');
+            return provider.closeIssue(issue.number, cfg.closeComment);
         default:
             return null;
     }
@@ -309,61 +220,58 @@ function action(params) {
         issueLimit:        override.issueLimit        || p.issueLimit     || 50,
         closeComment:      override.closeComment      || p.closeComment   || 'Machine SM: linked PR merged — closing the loop.'
     };
-    var cfgRepo = (projectConfig.repository && projectConfig.repository.owner &&
-        projectConfig.repository.repo &&
-        projectConfig.repository.owner + '/' + projectConfig.repository.repo) || '';
-    var repo = cfgRepo || p.repo || '';
+    var repoCfg = (projectConfig.repository && projectConfig.repository.owner &&
+        projectConfig.repository.repo && projectConfig.repository) ||
+        (p.repository || (p.repo ? { owner: String(p.repo).split('/')[0], repo: String(p.repo).split('/')[1] } : null));
 
-    if (!repo) {
-        console.error('❌ machineSm: repository required (.dmtools/config.js repository or jobParams.repo)');
+    if (!repoCfg || !repoCfg.owner || !repoCfg.repo) {
+        console.error('❌ machineSm: repository required (.dmtools/config.js repository or jobParams.repo owner/repo)');
         return { success: false, error: 'Missing repo' };
     }
 
-    var gh = makeGh(p.ghRunner);
+    // Forge selection: scm.provider (github | gitlab) — scm.js contract.
+    var scmCfg = (projectConfig.scm && projectConfig.scm.provider)
+        ? projectConfig.scm
+        : (p.scm || { provider: 'github' });
+    var provider;
+    try {
+        provider = smProviderModule.createSmProvider({
+            scm: scmCfg, repository: repoCfg
+        });
+    } catch (e) {
+        console.error('❌ machineSm: ' + (e.message || e));
+        return { success: false, error: String(e.message || e) };
+    }
 
-    console.log('Machine SM — ' + repo + (cfg.dryRun ? ' [DRY RUN]' : '') +
-        ' (cap ' + cfg.maxConcurrentRuns + ', rounds ' + cfg.maxReworkRounds + ')');
+    console.log('Machine SM — ' + repoCfg.owner + '/' + repoCfg.repo + ' [' + provider.provider + ']' +
+        (cfg.dryRun ? ' [DRY RUN]' : '') + ' (cap ' + cfg.maxConcurrentRuns + ', rounds ' + cfg.maxReworkRounds + ')');
 
     // 1. Global concurrency gate — the user contract: with parallel runs
     //    in flight, wait them out; the cron tick re-fires soon.
-    var activeIssues = activeMachineRuns(gh, repo, cfg.workflowFile);
+    var activeIssues = provider.activeMachineRuns(cfg.workflowFile);
     if (activeIssues.length >= cfg.maxConcurrentRuns) {
-        console.log('  ⏳ idle — active AI Teammate run(s) for issue(s) ' +
-            activeIssues.join(', ') + '; waiting for the next tick');
+        console.log('  ⏳ idle — active machine run(s) for ' +
+            (activeIssues.join(', ') === 'unknown' ? 'this project' : 'issue(s) ' + activeIssues.join(', ')) +
+            '; waiting for the next tick');
         return { success: true, idle: true, waitingFor: activeIssues };
     }
 
-    // 2. Snapshot open PRs once (branch/body matching per issue).
-    var openPrsOut = gh.raw('gh pr list --repo ' + repo + ' --state open --limit 100' +
-        ' --json number,body,headRefName') || '[]';
-    var openPrs;
-    try { openPrs = JSON.parse(openPrsOut) || []; } catch (e) { openPrs = []; }
+    // 2. Reconcile every machine-managed issue through the provider.
+    var machineLabels = ['agent:dev', 'agent:rework', 'agent:review',
+        'ai_developed', 'ai_pr_reviewed', 'pr_approved', 'needs-human'];
+    var issues = provider.listMachineIssues(machineLabels, cfg.agentHandle, cfg.issueLimit);
 
-    // 3. Reconcile every machine-managed issue.
-    var issues = collectIssues(gh, repo, cfg.agentHandle, cfg.issueLimit);
     var dispatched = 0, acted = 0, skipped = 0, failures = 0;
     var activeSet = {};
     activeIssues.forEach(function (n) { activeSet[n] = true; });
 
     issues.forEach(function (issue) {
-        var pr = findPr(gh, repo, openPrs, issue.number, cfg.branchPrefix);
-        var prState = pr && pr.state === 'OPEN' ? null : pr;
-        if (pr && pr.state === 'OPEN') {
-            var viewOut = gh.raw('gh pr view ' + pr.number + ' --repo ' + repo +
-                ' --json statusCheckRollup,mergeStateStatus,mergeable,state') || '{}';
-            try { prState = JSON.parse(viewOut); } catch (e) { prState = {}; }
-            prState = {
-                number: pr.number,
-                state: prState.state || 'OPEN',
-                checkConclusion: checkConclusion(prState.statusCheckRollup),
-                mergeState: prState.mergeStateStatus || 'UNKNOWN',
-                mergeable: prState.mergeable
-            };
-        }
+        var prRef = provider.findPr(issue.number, cfg.branchPrefix);
+        var pr = prRef && prRef.state === 'OPEN' ? provider.prStatus(prRef.number) : prRef;
         var state = {
             issue: issue,
-            pr: prState,
-            activeRunForIssue: !!activeSet[issue.number]
+            pr: pr,
+            activeRunForIssue: !!activeSet[issue.number] || !!activeSet['unknown']
         };
         var acts = decideActions(state, cfg);
         acts.forEach(function (a) {
@@ -372,12 +280,12 @@ function action(params) {
                 console.log('  ⏭️  gh-' + issue.number + ': ' + a.reason);
                 return;
             }
-            a.prNumber = pr ? pr.number : null;
+            a.prNumber = prRef ? prRef.number : null;
             console.log('  ' + (cfg.dryRun ? '[dry] ' : '') + '▶️  gh-' + issue.number + ' ' +
                 a.type + (a.leg ? ':' + a.leg : '') + ' — ' + a.reason);
             if (cfg.dryRun) { acted++; if (a.type === 'dispatch') dispatched++; return; }
             try {
-                executeAction(gh, repo, a, issue, cfg);
+                executeAction(provider, a, issue, cfg);
                 acted++;
                 if (a.type === 'dispatch') dispatched++;
             } catch (e) {
@@ -396,7 +304,6 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action: action,
         decideActions: decideActions,
-        issueFromRunTitle: issueFromRunTitle,
-        checkConclusion: checkConclusion
+        issueFromRunTitle: issueFromRunTitle
     };
 }

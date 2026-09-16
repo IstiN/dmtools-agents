@@ -4,6 +4,9 @@
     "jsPath": "agents/js/machineSmAgent.js",
     "jobParams": {
       "repo": "epam/dmtools-dart",
+      "scm": {
+        "provider": "github"
+      },
       "dryRun": false,
       "maxConcurrentRuns": 1,
       "maxReworkRounds": 2,

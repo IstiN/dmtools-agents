@@ -1,0 +1,356 @@
+/**
+ * SM Provider — SCM-agnostic I/O for the machine-loop watchdog
+ * (machineSmAgent.js).
+ *
+ * The watchdog's decision core is pure state → actions; this module is the
+ * only place that talks to a forge. Provider selection mirrors scm.js:
+ *
+ *     var provider = createSmProvider({
+ *         scm:    { provider: 'github' },           // 'github' | 'gitlab'
+ *         repository: { owner: 'epam', repo: 'dmtools-dart' }
+ *     });
+ *
+ * Everything goes through the unified snake_case tool surface (github_* /
+ * gitlab_* MCP tools via the dmtools JS bridge) — the same abstraction the
+ * rest of the agent ecosystem uses — so the watchdog runs unchanged on any
+ * forge the bridge supports. The one exception today is GitHub's
+ * update-branch (no native tool yet) which falls back to the gh CLI.
+ *
+ * Provider contract (all methods):
+ *   listMachineIssues(machineLabels, agentHandle, limit) → [{number, title, labels, assignees}]
+ *       Open issues carrying any machine label or the agent assignee.
+ *   findPr(issueNumber, branchPrefix) → null | {number, state, branch}
+ *       OPEN first (branch match <prefix><n> or body references #n), then
+ *       MERGED on the branch (close-issue safety net).
+ *   prStatus(prNumber) → {state, checkConclusion, mergeState, mergeable}
+ *       checkConclusion: 'red' | 'green' | 'pending' | 'none'.
+ *   activeMachineRuns() → [issueNumber, …]
+ *       Issues with a queued/in_progress machine run right now.
+ *   dispatchLeg(issueNumber, leg, reason)
+ *       Fire the machine runner for that issue (leg: dev/review/rework).
+ *   updateBranch(prNumber) / merge(prNumber) / closeIssue(n, comment)
+ *   addIssueLabel(issueNumber, label)
+ *
+ * Known gaps (documented, non-fatal):
+ *   - gitlab has no close-issue tool — closeIssue warns and no-ops.
+ *   - gitlab activeMachineRuns cannot map a pipeline to an issue number
+ *     (pipelines do not expose trigger variables) — any running API-sourced
+ *     pipeline counts as "machine busy" (conservative: fewer parallel legs).
+ */
+'use strict';
+
+// Ecosystem-standard MCP result parsing (see parseMcpResult in the agent
+// scripts): bridge tools may return decoded objects, JSON strings, or
+// {data: …} envelopes.
+function parseMcp(result) {
+    if (!result) return null;
+    if (typeof result === 'string') {
+        try { return JSON.parse(result); } catch (e) { return null; }
+    }
+    return result;
+}
+
+function asList(parsed) {
+    if (!parsed) return [];
+    if (Array.isArray(parsed)) return parsed;
+    if (Array.isArray(parsed.data)) return parsed.data;
+    if (Array.isArray(parsed.pullRequests)) return parsed.pullRequests;
+    if (Array.isArray(parsed.items)) return parsed.items;
+    if (Array.isArray(parsed.issues)) return parsed.issues;
+    return [];
+}
+
+function githubProvider(cfg) {
+    var owner = cfg.repository.owner;
+    var repo = cfg.repository.repo;
+    var full = owner + '/' + repo;
+
+    function ghIssueToState(it) {
+        return {
+            number: it.number,
+            title: it.title,
+            labels: (it.labels || []).map(function (l) { return l.name || l; }),
+            assignees: (it.assignees || []).map(function (a) { return a.login || a; })
+        };
+    }
+
+    return {
+        provider: 'github',
+
+        listMachineIssues: function (machineLabels, agentHandle, limit) {
+            // GitHub search ANDs multiple label: qualifiers — run one
+            // search per label (OR semantics), merge unique by number.
+            var seen = {};
+            var out = [];
+            machineLabels.forEach(function (ml) {
+                var res = parseMcp(github_search_issues({
+                    query: 'repo:' + full + ' is:issue is:open label:"' + ml + '"'
+                }));
+                asList(res).forEach(function (it) {
+                    if (seen[it.number]) return;
+                    seen[it.number] = true;
+                    out.push(ghIssueToState(it));
+                });
+                if (out.length >= (limit || 50)) return; // forEach: enough
+            });
+            var extra = parseMcp(github_search_issues({
+                query: 'repo:' + full + ' is:issue is:open assignee:' + agentHandle
+            }));
+            asList(extra).forEach(function (it) {
+                if (seen[it.number]) return;
+                seen[it.number] = true;
+                out.push(ghIssueToState(it));
+            });
+            return out.slice(0, limit || 50);
+        },
+
+        findPr: function (issueNumber, branchPrefix) {
+            var branch = branchPrefix + issueNumber;
+            var headFilter = owner + ':' + branch;
+            var list = asList(parseMcp(github_list_prs({
+                workspace: owner, repository: repo, state: 'open'
+            })));
+            var open = list.filter(function (p) {
+                return (p.head && p.head.label) === headFilter;
+            });
+            var bodyRe = new RegExp('(^|[^0-9])#' + issueNumber + '([^0-9]|$)');
+            if (!open.length) {
+                open = list.filter(function (p) {
+                    return bodyRe.test(String(p.body || ''));
+                });
+            }
+            if (open.length) {
+                return { number: open[0].number, state: 'OPEN',
+                         branch: (open[0].head && open[0].head.ref) || branch };
+            }
+            var merged = asList(parseMcp(github_list_prs({
+                workspace: owner, repository: repo, state: 'merged'
+            }))).filter(function (p) {
+                return (p.head && p.head.label) === headFilter;
+            });
+            if (merged.length) {
+                return { number: merged[0].number, state: 'MERGED', branch: branch };
+            }
+            return null;
+        },
+
+        prStatus: function (prNumber) {
+            var pr = parseMcp(github_get_pr({
+                workspace: owner, repository: repo, number: prNumber
+            })) || {};
+            var rollup = pr.statusCheckRollup || [];
+            var red = false, pending = false;
+            rollup.forEach(function (c) {
+                var concl = c.conclusion;
+                var status = c.status;
+                if (concl === 'FAILURE' || concl === 'TIMED_OUT' || concl === 'CANCELLED') red = true;
+                else if (!concl || status === 'QUEUED' || status === 'IN_PROGRESS' ||
+                         status === 'WAITING' || status === 'PENDING') pending = true;
+            });
+            return {
+                state: pr.state || 'OPEN',
+                checkConclusion: rollup.length === 0 ? 'none' : (red ? 'red' : (pending ? 'pending' : 'green')),
+                mergeState: pr.mergeStateStatus || (pr.mergeable === true ? 'CLEAN' : 'UNKNOWN'),
+                mergeable: pr.mergeable
+            };
+        },
+
+        activeMachineRuns: function (workflowFile) {
+            var runs = parseMcp(github_list_workflow_runs({
+                workflowId: workflowFile, status: 'in_progress', perPage: 30
+            })) || {};
+            var queued = parseMcp(github_list_workflow_runs({
+                workflowId: workflowFile, status: 'queued', perPage: 30
+            })) || {};
+            var all = (runs.workflow_runs || runs.workflowRuns || [])
+                .concat(queued.workflow_runs || queued.workflowRuns || []);
+            var issues = [];
+            all.forEach(function (r) {
+                var m = /gh-(\d+)/.exec(String(r.display_title || r.displayTitle || r.name || ''));
+                if (m) issues.push(parseInt(m[1], 10));
+            });
+            return issues;
+        },
+
+        dispatchLeg: function (issueNumber, leg, reason, workflowFile) {
+            // The bridge tool takes inputs as a JSON string (Java parity).
+            return github_trigger_workflow({
+                workflowId: workflowFile,
+                ref: 'main',
+                inputs: JSON.stringify({
+                    issue: String(issueNumber), leg: leg, reason: reason || ''
+                })
+            });
+        },
+
+        updateBranch: function (prNumber) {
+            // No native tool for the update-branch API yet — gh CLI fallback
+            // (whitelisted: gh).
+            return cli_execute_command({
+                command: 'gh pr update-branch ' + prNumber + ' --repo ' + full
+            });
+        },
+
+        merge: function (prNumber) {
+            return github_merge_pr({
+                workspace: owner, repository: repo, number: prNumber, mergeMethod: 'squash'
+            });
+        },
+
+        closeIssue: function (issueNumber, comment) {
+            if (comment) {
+                try { github_create_comment({ workspace: owner, repository: repo, number: issueNumber, body: comment }); }
+                catch (e) { console.warn('  ⚠️ close-issue comment failed: ' + (e.message || e)); }
+            }
+            return github_close_issue({ workspace: owner, repository: repo, number: issueNumber });
+        },
+
+        addIssueLabel: function (issueNumber, label) {
+            return github_add_labels({ workspace: owner, repository: repo, number: issueNumber, labels: [label] });
+        }
+    };
+}
+
+function gitlabProvider(cfg) {
+    var owner = cfg.repository.owner;   // group or user namespace
+    var repo = cfg.repository.repo;
+
+    function projectPath() { return owner + '/' + repo; }
+
+    function glIssueToState(it) {
+        return {
+            number: it.iid,
+            title: it.title,
+            labels: it.labels || [],
+            assignees: (it.assignees || []).map(function (a) { return a.username || a; })
+        };
+    }
+
+    return {
+        provider: 'gitlab',
+
+        listMachineIssues: function (machineLabels, agentHandle, limit) {
+            // gitlab_list_issues accepts comma-separated labels (AND on
+            // GitLab); machine labels are OR semantics, so list open issues
+            // once and filter client-side.
+            var res = gitlab_list_issues({ state: 'opened', perPage: limit || 50 }) || [];
+            return (res.issues || res || []).filter(function (it) {
+                var labels = it.labels || [];
+                var assignees = (it.assignees || []).map(function (a) { return a.username || a; });
+                if (assignees.indexOf(agentHandle) !== -1) return true;
+                return machineLabels.some(function (ml) { return labels.indexOf(ml) !== -1; });
+            }).map(glIssueToState);
+        },
+
+        findPr: function (issueNumber, branchPrefix) {
+            var branch = branchPrefix + issueNumber;
+            var bodyRe = new RegExp('(^|[^0-9])#' + issueNumber + '([^0-9]|$)');
+            var open = (gitlab_list_mrs({ state: 'opened' }) || []).filter(function (mr) {
+                return mr.source_branch === branch || bodyRe.test(String(mr.description || ''));
+            });
+            if (open.length) {
+                return { number: open[0].iid, state: 'OPEN', branch: open[0].source_branch || branch };
+            }
+            var merged = (gitlab_list_mrs({ state: 'merged' }) || []).filter(function (mr) {
+                return mr.source_branch === branch;
+            });
+            if (merged.length) {
+                return { number: merged[0].iid, state: 'MERGED', branch: branch };
+            }
+            return null;
+        },
+
+        prStatus: function (mrNumber) {
+            var mr = gitlab_get_mr({ mergeRequestId: mrNumber }) || {};
+            // Pipelines for the MR head — the CI verdict.
+            var pipes = (gitlab_get_mr_pipelines({ mergeRequestId: mrNumber }) || {});
+            var list = pipes.pipelines || pipes || [];
+            var red = false, pending = false, any = false;
+            list.forEach(function (p) {
+                any = true;
+                var st = p.status || p.detailed_status;
+                if (st === 'failed' || st === 'canceled') red = true;
+                else if (st === 'running' || st === 'pending' || st === 'created' || st === 'waiting_for_resource') pending = true;
+            });
+            var mergeState = 'UNKNOWN';
+            if (mr.merge_status === 'can_be_merged' && !mr.has_conflicts) mergeState = 'CLEAN';
+            else if (mr.has_conflicts) mergeState = 'BEHIND'; // conflicts ⇒ needs rebase
+            else if (mr.merge_status === 'checking') mergeState = 'UNKNOWN';
+            return {
+                state: mr.state ? String(mr.state).toUpperCase() : 'OPEN',
+                checkConclusion: any ? (red ? 'red' : (pending ? 'pending' : 'green')) : 'none',
+                mergeState: mergeState,
+                mergeable: mr.merge_status === 'can_be_merged' && !mr.has_conflicts
+            };
+        },
+
+        activeMachineRuns: function () {
+            // Pipelines do not expose trigger variables, so an API-sourced
+            // running pipeline is conservatively "the machine is busy".
+            var res = gitlab_list_pipeline_runs({ status: 'running' }) || [];
+            var runs = res.pipelines || res || [];
+            var api = runs.filter(function (p) { return p.source === 'api' || p.source === 'trigger'; });
+            return api.length ? ['unknown'] : [];
+        },
+
+        dispatchLeg: function (issueNumber, leg, reason, workflowFile) {
+            // The GitLab machine runner pipeline receives the leg the same
+            // way ai-teammate.yml does on GitHub: variables.
+            return gitlab_trigger_pipeline({
+                ref: 'main',
+                variables: {
+                    issue: String(issueNumber),
+                    leg: leg,
+                    reason: reason || ''
+                }
+            });
+        },
+
+        updateBranch: function (mrNumber) {
+            return gitlab_rebase_mr({ mergeRequestId: mrNumber });
+        },
+
+        merge: function (mrNumber) {
+            return gitlab_merge_mr({ mergeRequestId: mrNumber });
+        },
+
+        closeIssue: function (issueNumber, comment) {
+            // No native close-issue tool in the GitLab catalog yet —
+            // document the gap, stay non-fatal.
+            console.warn('  ⚠️ gitlab close-issue tool not available — issue !' +
+                issueNumber + ' left open (comment-only).');
+            if (comment) {
+                // Issue notes ride the generic note path when present.
+                try { gitlab_create_mr_note({ mergeRequestId: issueNumber, note: comment }); }
+                catch (e) { console.warn('  ⚠️ close-issue comment failed: ' + (e.message || e)); }
+            }
+            return null;
+        },
+
+        addIssueLabel: function (issueNumber, label) {
+            // Issue-level labels ride the MR label tool shape; where the
+            // project uses MR labels for machine state this is exact.
+            return gitlab_add_mr_label({ mergeRequestId: issueNumber, labels: [label] });
+        }
+    };
+}
+
+/**
+ * Creates the SM provider for the configured forge.
+ * @param {Object} config - { scm: { provider }, repository: { owner, repo } }
+ * @returns {Object} provider implementing the contract above
+ */
+function createSmProvider(config) {
+    var cfg = config || {};
+    var provider = (cfg.scm && cfg.scm.provider) || 'github';
+    if (!cfg.repository || !cfg.repository.owner || !cfg.repository.repo) {
+        throw new Error('smProvider: repository.owner and repository.repo are required');
+    }
+    if (provider === 'gitlab') return gitlabProvider(cfg);
+    if (provider === 'github') return githubProvider(cfg);
+    throw new Error('smProvider: unknown provider "' + provider + '" (github | gitlab)');
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { createSmProvider: createSmProvider };
+}

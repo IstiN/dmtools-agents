@@ -1,0 +1,29 @@
+# machine_sm.json
+
+Deterministic machine-loop watchdog (JSRunner): a 10-minute cron tick
+reconciles every machine-managed GitHub/GitLab issue — red CI dispatches
+rework (dead-letter re-fire), green dispatches review, approved PRs get
+branch updates and squash merges, merged PRs close their issues, and the
+rework round cap escalates to `needs-human`. Pure JS, no LLM — this is the
+safety net for labels the machine adds itself (they never fire `labeled`
+events under GITHUB_TOKEN).
+
+## Parameters
+
+- `repo` — `owner/repo` of the target project (also resolved from
+  `.dmtools/config.js` `repository`).
+- `scm.provider` — `github` (default) or `gitlab`; selects the forge I/O
+  provider (see `js/common/smProvider.js`).
+- `dryRun` — log the plan, perform no action.
+- `maxConcurrentRuns` — idle while active machine runs ≥ this (default 1).
+- `maxReworkRounds` — rework rounds before `needs-human` escalation
+  (mirrors ai-teammate MAX_AUTO_REWORK_ROUNDS, default 2).
+- `workflowFile` — the machine runner workflow to dispatch
+  (default `ai-teammate.yml`).
+- `branchPrefix` — machine dev-branch prefix (default `ai/gh-`).
+- `agentHandle` — assignee marking an issue machine-managed
+  (default `ai-teammate`).
+- `issueLimit` — open issues scanned per tick (default 50).
+
+All parameters can be overridden per project via the `.dmtools/config.js`
+`machineSm` section.

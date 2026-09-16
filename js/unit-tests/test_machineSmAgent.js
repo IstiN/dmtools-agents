@@ -10,7 +10,8 @@
 suite('machineSm decision core', function () {
 
     var agent = loadModule('js/machineSmAgent.js', makeRequire({
-        './configLoader.js': { loadProjectConfig: function () { return {}; } }
+        './configLoader.js': { loadProjectConfig: function () { return {}; } },
+        './common/smProvider.js': { createSmProvider: function () { return {}; } }
     }), {
         cli_execute_command: function () { return '{}'; }
     });
@@ -150,10 +151,4 @@ suite('machineSm decision core', function () {
         assert.equal(agent.issueFromRunTitle('no issue here'), null);
     });
 
-    test('checkConclusion: red beats pending beats green', function () {
-        assert.equal(agent.checkConclusion([{ conclusion: 'FAILURE' }, { conclusion: 'SUCCESS' }]), 'red');
-        assert.equal(agent.checkConclusion([{ conclusion: null, status: 'IN_PROGRESS' }]), 'pending');
-        assert.equal(agent.checkConclusion([{ conclusion: 'SUCCESS' }, { conclusion: 'SKIPPED' }]), 'green');
-        assert.equal(agent.checkConclusion([]), 'none');
-    });
 });
