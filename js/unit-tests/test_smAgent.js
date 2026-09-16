@@ -135,12 +135,28 @@ function makeSmAgent(opts) {
         { file_read: fileReadMock, encodeURIComponent: encodeURIComponent, JSON: JSON }
     );
 
+    // The jira state source, stubbed to the mocked jira_search_by_jql
+    // (mirrors js/sm/sources/jiraSource.js against the same global mock).
+    // NOTE: the stub closes over jiraSearchMock (makeSmAgent's scope) —
+    // the test file's own jira_search_by_jql global is the REAL bridge tool
+    // (mocks only shadow globals inside loadModule'd modules).
+    var jiraSourceStub = {
+        query: function (rule, ctx) {
+            var tickets = jiraSearchMock({ jql: (ctx && ctx.jql) || rule.jql, fields: ['key', 'labels'] }) || [];
+            return (Array.isArray(tickets) ? tickets : []).map(function (t) {
+                return { key: t.key,
+                         labels: (t.fields && t.fields.labels) || t.labels || [],
+                         pr: null, issueNumber: null, prNumber: null };
+            });
+        }
+    };
     var sm = loadModule(
         'js/smAgent.js',
         makeRequire({
             './configLoader.js': freshConfigLoader,
+            './sm/sourceResolver.js': { resolve: function () { return jiraSourceStub; } },
             './common/scm.js': mockScmModule,
-            './common/buildEncodedConfig.js': buildEncodedConfigModule
+            './common/buildEncodedConfig.js': buildEncodedConfigModule,
         }),
         smMocks
     );

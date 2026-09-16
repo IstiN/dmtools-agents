@@ -1,0 +1,68 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "js/smAgent.js",
+    "jobParams": {
+      "repo": "epam/dmtools-dart",
+      "maxTriggeredWorkflows": 1,
+      "rules": [
+        {
+          "description": "GitHub: red CI on linked PR \u2192 rework (dead-letter re-fire)",
+          "source": "github",
+          "query": {
+            "type": "issue",
+            "labels": [
+              "agent:rework"
+            ],
+            "prChecks": "red"
+          },
+          "workflowFile": "ai-teammate.yml",
+          "inputs": {
+            "issue": "{issueNumber}",
+            "leg": "rework",
+            "reason": "sm: red CI on linked PR"
+          },
+          "limit": 1
+        },
+        {
+          "description": "GitHub: green PR after dev \u2192 machine review",
+          "source": "github",
+          "query": {
+            "type": "issue",
+            "labels": [
+              "ai_developed"
+            ],
+            "notLabels": [
+              "ai_pr_reviewed",
+              "agent:rework"
+            ],
+            "prChecks": "green"
+          },
+          "workflowFile": "ai-teammate.yml",
+          "inputs": {
+            "issue": "{issueNumber}",
+            "leg": "review",
+            "reason": "sm: green PR awaits review"
+          },
+          "limit": 1
+        },
+        {
+          "description": "GitHub: approved \u2192 merge/cleanup (1 per tick)",
+          "source": "github",
+          "query": {
+            "type": "issue",
+            "labels": [
+              "pr_approved"
+            ]
+          },
+          "configFile": "agents/retry_merge_github.json",
+          "localExecution": true,
+          "addLabel": "sm_pr_merge_triggered",
+          "recoverStaleTriggerLabel": true,
+          "limit": 1,
+          "skipIfLabel": "sm_pr_merge_triggered"
+        }
+      ]
+    }
+  }
+}

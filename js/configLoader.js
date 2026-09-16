@@ -396,6 +396,13 @@ function loadProjectConfig(params) {
     // Store resolved config path so callers can propagate it downstream
     if (resolvedPath) config._configPath = resolvedPath;
 
+    // Explicit repository from the job params (SM passes the rule's target
+    // repo) — wins over remote-derived defaults.
+    if (params && params.repository && params.repository.owner && params.repository.repo) {
+        config.repository.owner = params.repository.owner;
+        config.repository.repo = params.repository.repo;
+    }
+
     // Apply targetRepository override from customParams
     if (customParams.targetRepository) {
         var tr = customParams.targetRepository;

@@ -1,0 +1,141 @@
+# AI Teammate — GitHub-issues machine runner (TEMPLATE).
+#
+# Copy into the TARGET repository (.github/workflows/ai-teammate.yml) and
+# adapt the RUNNER_* entries. This is the trimmed generic variant of the
+# battle-tested machine-kit workflow (see epam/dmtools-dart
+# .github/workflows/ai-teammate.yml for the full reference with comments).
+#
+# Two entry paths, and BOTH must survive for the loop to be self-healing:
+#   1. issues: [assigned, labeled] — the fast path (labels added with a
+#      real PAT fire events; GITHUB_TOKEN-added labels do NOT — that is
+#      exactly what the SM cron covers)
+#   2. workflow_dispatch (issue / leg / reason) — the SM dispatch path:
+#      the reconciler fires this directly, so mute labels cannot stall the
+#      loop
+#
+# The guard derives the leg: dispatch input leg > label agent:rework >
+# label agent:review > assignee/agent:dev (dev). Each leg runs the dmtools
+# agent config named by RUNNER_*: dev (story/bug) develops from the issue
+# body, review produces a machine PR review verdict, rework fixes the
+# linked PR by the review threads.
+name: 'AI Teammate'
+
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch' &&
+      format('▶ {0} (SM) · gh-{1}', github.event.inputs.leg, github.event.inputs.issue) ||
+      github.event.label.name == 'agent:rework' && '🔧 rework' ||
+      github.event.label.name == 'agent:review' && '🔍 review' ||
+      '⚒️ dev' }}
+  · gh-${{ github.event.issue.number || github.event.inputs.issue }}: ${{ github.event.issue.title }}
+
+on:
+  issues:
+    types: [assigned, labeled]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: 'Issue number to run the agent on'
+        required: true
+        type: number
+      leg:
+        description: 'Which leg to run'
+        required: true
+        type: choice
+        options: [dev, review, rework]
+      reason:
+        description: 'Why this dispatch (audit trail)'
+        required: false
+        type: string
+
+concurrency:
+  group: ai-teammate-issue-${{ github.event.issue.number || github.event.inputs.issue }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+
+env:
+  AGENT_HANDLE: ai-teammate
+  # ── adapt per target repo ───────────────────────────────────────────────
+  RUNNER_STORY: dmtools-agents/story_development.json
+  RUNNER_BUG: dmtools-agents/bug_development.json
+  RUNNER_REVIEW: dmtools-agents/pr_review.json
+  RUNNER_REWORK: dmtools-agents/pr_rework.json
+  DMTOOLS_AGENTS_REF: main
+  DMTOOLS_VERSION: v0.1.5
+  FA_VERSION: latest
+  # ─────────────────────────────────────────────────────────────────────────
+  # Secrets expected: SOURCE_GITHUB_TOKEN (PAT), plus the AI provider key
+  # referenced by the runner configs (e.g. ZAI_CODE_KEY / KIMI_REVIEW_KEY).
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+      runner: ${{ steps.check.outputs.runner }}
+      kind: ${{ steps.check.outputs.kind }}
+    steps:
+      - name: Decide whether this event is for the agent
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.issue.number || github.event.inputs.issue }}
+          ASSIGNEES: ${{ join(github.event.issue.assignees.*.login, ' ') }}
+          LABELS: ${{ join(github.event.issue.labels.*.name, ' ') }}
+          INPUT_LEG: ${{ github.event.inputs.leg }}
+        run: |
+          if [ -n "$INPUT_LEG" ]; then
+            LABELS="$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json labels -q '[.labels[].name] | join(" ")')"
+            ASSIGNEES="$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json assignees -q '[.assignees[].login] | join(" ")')"
+          fi
+          state="$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json state -q .state)"
+          if [ "$state" != "OPEN" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if echo "$LABELS" | grep -qw "agent:skip"; then
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          runner=""
+          if [ "$INPUT_LEG" = "rework" ]; then runner="$RUNNER_REWORK";
+          elif [ "$INPUT_LEG" = "review" ]; then runner="$RUNNER_REVIEW";
+          elif [ "$INPUT_LEG" = "dev" ]; then
+            title="$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json title -q .title)"
+            if echo "$title" | grep -qiE '^\[?bug\]' || echo "$LABELS" | grep -qwi "bug"; then
+              runner="$RUNNER_BUG"
+            else
+              runner="$RUNNER_STORY"
+            fi
+          elif echo "$LABELS" | grep -qw "agent:rework"; then runner="$RUNNER_REWORK";
+          elif echo "$LABELS" | grep -qw "agent:review"; then runner="$RUNNER_REVIEW";
+          elif echo "$ASSIGNEES" | grep -qw "$AGENT_HANDLE" || echo "$LABELS" | grep -qw "agent:dev"; then
+            title="$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json title -q .title)"
+            if echo "$title" | grep -qiE '^\[?bug\]' || echo "$LABELS" | grep -qwi "bug"; then
+              runner="$RUNNER_BUG"
+            else
+              runner="$RUNNER_STORY"
+            fi
+          fi
+          if [ -n "$runner" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "runner=$runner" >> "$GITHUB_OUTPUT"
+            echo "kind=$(echo "$runner" | grep -q review && echo review || (echo "$runner" | grep -q rework && echo rework || echo dev))" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  teammate:
+    needs: guard
+    if: needs.guard.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      # Adapt the runner steps from the machine-kit reference workflow:
+      # checkout (target + dmtools-agents), install dmtools + fa, write the
+      # issue body to input/ticket.md, then:
+      #   dmtools run "$RUNNER" '{"params":{"ticketKey":"gh-<n>"}}'
+      # Full working reference: epam/dmtools-dart .github/workflows/ai-teammate.yml
+      - run: echo "Adapt runner steps from the machine-kit reference (see header comment)"

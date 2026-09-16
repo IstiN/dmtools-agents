@@ -1,0 +1,20 @@
+{
+  "name": "Teammate",
+  "params": {
+    "metadata": {
+      "contextId": "retry_merge_github",
+      "descriptionPath": "agents/docs/agents/retry_merge_github.md"
+    },
+    "outputType": "none",
+    "skipAIProcessing": true,
+    "alwaysPostComments": false,
+    "postJSAction": "agents/js/retryMergeGithubPR.js",
+    "customParams": {
+      "removeLabel": "sm_pr_merge_triggered",
+      "branchPrefix": "ai/gh-",
+      "approvedLabel": "pr_approved",
+      "reworkLabel": "agent:rework"
+    },
+    "inputJql": "key = gh-1"
+  }
+}

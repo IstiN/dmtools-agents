@@ -68,7 +68,12 @@
  *                               (default: agents/scripts/run-teammate-local.sh)
  */
 
+// Dry-run mode: log every side effect instead of performing it (dispatches,
+// label moves, status moves, local executions). Set from jobParams.dryRun.
+var DRY = false;
+
 var configLoader = require('./configLoader.js');
+var smSource = require('./sm/sourceResolver.js');
 var scmModule = require('./common/scm.js');
 var buildEncodedConfigModule = require('./common/buildEncodedConfig.js');
 
@@ -268,7 +273,7 @@ function isWorkflowBudgetExhausted(rule, effectiveConfig, workflowBudget) {
     return workflowBudget.remaining <= 0;
 }
 
-function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBudget) {
+function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBudget, item) {
     var workflowFile = rule.workflowFile || 'ai-teammate.yml';
     var workflowRef  = rule.workflowRef  || 'main';
     var resolvedCf   = buildEncodedConfigModule.resolveConfigFile(rule, effectiveConfig);
@@ -294,18 +299,38 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
         if (hasActiveTargetWorkflowRun(scm, workflowFile, resolvedCf, concurrencyKey)) {
             return false;
         }
-        scm.triggerWorkflow(
-            repoInfo.owner,
-            repoInfo.repo,
-            workflowFile,
-            JSON.stringify({
+        var inputs;
+        if (rule.inputs) {
+            // Rule-declared dispatch inputs (github-source rules): values may
+            // reference the matched item via '{key}' / '{issueNumber}' /
+            // '{prNumber}' placeholders.
+            inputs = {};
+            Object.keys(rule.inputs).forEach(function (k) {
+                var it = item || {};
+                inputs[k] = String(rule.inputs[k])
+                    .replace(/\{key\}/g, String(ticketKey))
+                    .replace(/\{issueNumber\}/g, String(it.issueNumber !== undefined && it.issueNumber !== null ? it.issueNumber : ticketKey))
+                    .replace(/\{prNumber\}/g, String(it.prNumber || ''));
+            });
+        } else {
+            inputs = {
                 concurrency_key: concurrencyKey,
                 display_key:     ticketKey,
                 input_jql:       'key = ' + ticketKey,
                 config_file:     resolvedCf,
                 encoded_config:  buildEncodedConfigModule.buildEncodedConfig(ticketKey, rule, effectiveConfig),
                 project_key:     projectKey
-            }),
+            };
+        }
+        if (DRY) {
+            console.log('  [dry] ▶️ ' + ticketKey + ' dispatch:' + workflowFile + ' inputs=' + JSON.stringify(inputs));
+            return;
+        }
+        scm.triggerWorkflow(
+            repoInfo.owner,
+            repoInfo.repo,
+            workflowFile,
+            JSON.stringify(inputs),
             workflowRef
         );
         console.log('  ✅ Triggered ' + workflowFile + '@' + workflowRef + ' for ' + ticketKey +
@@ -396,7 +421,8 @@ function runTeammateLocally(ticketKey, rule, effectiveConfig) {
 
 function moveStatus(ticketKey, targetStatus) {
     try {
-        jira_move_to_status({ key: ticketKey, statusName: targetStatus });
+        if (DRY) { console.log('  [dry] 🔀 ' + ticketKey + ' → ' + targetStatus); }
+        else { jira_move_to_status({ key: ticketKey, statusName: targetStatus }); }
         console.log('  ✅ ' + ticketKey + ' → ' + targetStatus);
     } catch (e) {
         console.warn('  ⚠️  Status transition failed for ' + ticketKey + ': ' + (e.message || e));
@@ -405,7 +431,10 @@ function moveStatus(ticketKey, targetStatus) {
 
 function hasLabel(ticket, label) {
     if (!label) return false;
-    var labels = (ticket.fields && ticket.fields.labels) ? ticket.fields.labels : [];
+    // State items from the sources are flattened ({labels: [...]}); raw Jira
+    // ticket objects keep them under fields.labels.
+    var labels = ticket.labels ||
+        ((ticket.fields && ticket.fields.labels) ? ticket.fields.labels : []);
     return labels.indexOf(label) !== -1;
 }
 
@@ -429,7 +458,15 @@ function firstMatchingLabel(ticket, labels) {
 
 function addRuleLabels(ticketKey, rule) {
     normalizeLabels(rule.addLabel, rule.addLabels).forEach(function(label) {
-        try { jira_add_label({ key: ticketKey, label: label }); } catch (e) {}
+        try {
+            if (rule.source === 'github') {
+                var n = /(\d+)$/.exec(String(ticketKey));
+                if (n) github_add_labels({ number: parseInt(n[1], 10), labels: [label] });
+            } else {
+                if (DRY) { console.log('  [dry] 🏷️ ' + ticketKey + ' +' + label); }
+                else { jira_add_label({ key: ticketKey, label: label }); }
+            }
+        } catch (e) {}
     });
 }
 
@@ -452,10 +489,16 @@ function ruleTargetSelfManagesLabel(rule) {
     }
 }
 
-function removeRuleLabel(ticketKey, label) {
+function removeRuleLabel(ticketKey, label, rule) {
     if (!ticketKey || !label) return;
     try {
-        jira_remove_label({ key: ticketKey, label: label });
+        if (rule && rule.source === 'github') {
+            var n = /(\d+)$/.exec(String(ticketKey));
+            if (n) github_remove_label({ number: parseInt(n[1], 10), labels: [label] });
+        } else {
+            if (DRY) { console.log('  [dry] 🏷️ ' + ticketKey + ' -' + label); }
+            else { jira_remove_label({ key: ticketKey, label: label }); }
+        }
         console.log('  🏷️  Removed stale trigger label "' + label + '" from ' + ticketKey);
     } catch (e) {
         console.warn('  ⚠️  Could not remove stale trigger label "' + label + '" from ' + ticketKey + ': ' + (e.message || e));
@@ -471,7 +514,15 @@ function normalizePositiveInt(value) {
 // ─── Local execution ──────────────────────────────────────────────────────────
 
 function runLocalAction(jsPath, ticket, agentParams) {
+    // CWD portability: agents/ prefix present when running from the parent
+    // repo, absent when running from the agents checkout root — try both.
     var actionCode = file_read({ path: jsPath });
+    if ((!actionCode || !actionCode.trim()) && jsPath.indexOf('agents/') === 0) {
+        actionCode = file_read({ path: jsPath.substring('agents/'.length) });
+    }
+    if ((!actionCode || !actionCode.trim()) && jsPath.indexOf('agents/') !== 0) {
+        actionCode = file_read({ path: 'agents/' + jsPath });
+    }
     if (!actionCode || !actionCode.trim()) throw new Error('Cannot read: ' + jsPath);
 
     var configCode = file_read({ path: 'agents/js/config.js' });
@@ -515,35 +566,64 @@ function runLocalAction(jsPath, ticket, agentParams) {
 }
 
 function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
+    if (DRY) {
+        console.log('\n══ [LOCAL·DRY] ' + (rule.description || ('Rule #' + (ruleIndex + 1))) + ' ══');
+        console.log('  [dry] local execution skipped');
+        return { processedKeys: [], skippedKeys: [] };
+    }
     var effectiveConfig = loadRuleConfig(rule);
     var interpolatedJql = configLoader.interpolateJql(rule.jql, effectiveConfig);
+    var effectiveRepoInfo = globalRepoInfo || {};
 
     var label = rule.description || ('Rule #' + (ruleIndex + 1));
     console.log('\n══ [LOCAL] ' + label + ' ══');
-    console.log('   JQL: ' + interpolatedJql + (rule.limit ? ' (limit: ' + rule.limit + ')' : ''));
+    if (rule.source && rule.source !== 'jira') {
+        console.log('   Query[' + rule.source + ']: ' + JSON.stringify(rule.query || {}) +
+            (rule.limit ? ' (limit: ' + rule.limit + ')' : ''));
+    } else {
+        console.log('   JQL: ' + interpolatedJql + (rule.limit ? ' (limit: ' + rule.limit + ')' : ''));
+    }
 
     if (rule.enabled === false) {
         console.log('  ⏸️  Rule disabled — skipping');
         return { processedKeys: [], skippedKeys: [] };
     }
 
-    if (!rule.jql || !rule.configFile) {
-        console.warn('  ⚠️  Skipping rule — jql and configFile are required');
+    var needsJqlLocal = !rule.source || rule.source === 'jira';
+    if ((needsJqlLocal ? !rule.jql : !rule.query) || !rule.configFile) {
+        console.warn('  ⚠️  Skipping rule — ' + (needsJqlLocal ? 'jql' : 'query') +
+            ' and configFile are required');
         return { processedKeys: [], skippedKeys: [] };
     }
 
     var resolvedCf = buildEncodedConfigModule.resolveConfigFile(rule, effectiveConfig);
-    var agentConfig;
-    try {
-        var raw = file_read({ path: resolvedCf });
-        agentConfig = JSON.parse(raw);
-    } catch (e) {
-        console.error('  ❌ Cannot read/parse configFile: ' + resolvedCf + ' — ' + e);
+    var agentConfig = null;
+    var cfCandidates = [resolvedCf];
+    // CWD portability: the config may sit in an agents/ checkout root while
+    // we run from the parent repo (or vice versa) — try both layouts.
+    if (resolvedCf.indexOf('agents/') === 0) cfCandidates.push(resolvedCf.substring('agents/'.length));
+    else cfCandidates.push('agents/' + resolvedCf.replace(/^agents\//, ''));
+    for (var ci = 0; ci < cfCandidates.length && !agentConfig; ci++) {
+        try {
+            var raw = file_read({ path: cfCandidates[ci] });
+            if (raw && raw.trim()) agentConfig = JSON.parse(raw);
+        } catch (e) { /* try next layout */ }
+    }
+    if (!agentConfig) {
+        console.error('  ❌ Cannot read/parse configFile: ' + resolvedCf);
         return { processedKeys: [], skippedKeys: [] };
     }
 
     var agentParams = agentConfig.params || {};
     var postJSActionPath = agentParams.postJSAction;
+    // The rule's target repo rides the job params (config.repository wins over
+    // any value in the agent JSON) — local actions must never fall back to the
+    // git remote of this checkout (dmtools-agents when SM runs from it).
+    agentParams = Object.assign({}, agentParams, {
+        repository: (effectiveConfig.repository && effectiveConfig.repository.owner)
+            ? effectiveConfig.repository
+            : { owner: effectiveRepoInfo.owner, repo: effectiveRepoInfo.repo }
+    });
 
     if (!postJSActionPath) {
         console.warn('  ⚠️  No postJSAction in ' + resolvedCf + ' — cannot run locally');
@@ -552,9 +632,12 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
 
     var tickets = [];
     try {
-        tickets = jira_search_by_jql({ jql: interpolatedJql, fields: ['key', 'labels'] }) || [];
+        var sourceMod = smSource.resolve(rule);
+        tickets = sourceMod.query(rule, {
+            config: effectiveConfig, repoInfo: effectiveRepoInfo, jql: interpolatedJql
+        }) || [];
     } catch (e) {
-        console.error('  ❌ Jira query failed: ' + (e.message || e));
+        console.error('  ❌ state query failed: ' + (e.message || e));
         throw e;
     }
 
@@ -578,9 +661,17 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
 
         var skipLabel = firstMatchingLabel(ticket, normalizeLabels(rule.skipIfLabel, rule.skipIfLabels));
         if (skipLabel) {
-            console.log('  ⏭️  ' + key + ' skipped (label: ' + skipLabel + ')');
-            skippedKeys.push(key);
-            return;
+            // Local execution is synchronous — there is never an in-flight
+            // workflow run between ticks, so a surviving lock label means the
+            // previous local action crashed: recover and retry.
+            if (shouldRecoverStaleTriggerLabel(rule, skipLabel)) {
+                console.log('  ♻️  ' + key + ' has stale lock ' + skipLabel + ' (local run finished) — recovering');
+                removeRuleLabel(key, skipLabel, rule);
+            } else {
+                console.log('  ⏭️  ' + key + ' skipped (label: ' + skipLabel + ')');
+                skippedKeys.push(key);
+                return;
+            }
         }
 
         if (rule.targetStatus) {
@@ -648,23 +739,38 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
 
     var label = rule.description || ('Rule #' + (ruleIndex + 1));
     console.log('\n══ ' + label + ' ══');
-    console.log('   JQL: ' + interpolatedJql + (rule.limit ? ' (limit: ' + rule.limit + ')' : ''));
+    if (rule.source && rule.source !== 'jira') {
+        var qdesc = JSON.stringify(rule.query || {});
+        console.log('   Query[' + rule.source + ']: ' + qdesc + (rule.limit ? ' (limit: ' + rule.limit + ')' : ''));
+    } else {
+        console.log('   JQL: ' + interpolatedJql + (rule.limit ? ' (limit: ' + rule.limit + ')' : ''));
+    }
 
     if (rule.enabled === false) {
         console.log('  ⏸️  Rule disabled — skipping');
         return { processedKeys: [], skippedKeys: [] };
     }
 
-    if (!rule.jql || !rule.configFile) {
-        console.warn('  ⚠️  Skipping rule — jql and configFile are required');
+    // Source-aware requirement check: classic rules need jql; github rules
+    // need a query object. configFile is required by both.
+    var needsJql = !rule.source || rule.source === 'jira';
+    // GitHub rules with explicit rule.inputs pin the runner via workflow
+    // inputs (issue/leg) — configFile is only mandatory for the classic
+    // config_file dispatch shape.
+    if ((needsJql ? !rule.jql : !rule.query) || (!rule.configFile && !rule.inputs)) {
+        console.warn('  ⚠️  Skipping rule — ' + (needsJql ? 'jql' : 'query') +
+            ' and configFile (or inputs) are required');
         return { processedKeys: [], skippedKeys: [] };
     }
 
     var tickets = [];
     try {
-        tickets = jira_search_by_jql({ jql: interpolatedJql, fields: ['key', 'labels'] }) || [];
+        var sourceMod = smSource.resolve(rule);
+        tickets = sourceMod.query(rule, {
+            config: effectiveConfig, repoInfo: effectiveRepoInfo, jql: interpolatedJql
+        }) || [];
     } catch (e) {
-        console.error('  ❌ Jira query failed: ' + (e.message || e));
+        console.error('  ❌ state query failed: ' + (e.message || e));
         throw e;
     }
 
@@ -722,7 +828,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     continue;
                 }
                 console.log('  ♻️  ' + key + ' has ' + skipLabel + ' but no active workflow — recovering stale trigger label');
-                removeRuleLabel(key, skipLabel);
+                removeRuleLabel(key, skipLabel, rule);
             } else {
                 console.log('  ⏭️  ' + key + ' skipped (label: ' + skipLabel + ')');
                 skippedKeys.push(key);
@@ -748,7 +854,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // stale-label recovery. Only add it when the target job does *not* already self-manage it.
         var triggered = rule.localTeammate
             ? runTeammateLocally(key, rule, effectiveConfig)
-            : triggerWorkflow(effectiveRepoInfo, key, rule, effectiveConfig, workflowBudget);
+            : triggerWorkflow(effectiveRepoInfo, key, rule, effectiveConfig, workflowBudget, ticket);
 
         if (triggered && !ruleSelfManagesLabel) addRuleLabels(key, rule);
 
@@ -774,6 +880,8 @@ function resolveWorkflowCap(jsonCap, projectCfg) {
 
 function action(params) {
     var p     = params.jobParams || params;
+    DRY = p.dryRun === true;
+    if (DRY) console.log('🧪 DRY RUN — no side effects will be performed');
     var rules = p.rules;
 
     // Load global project configuration (used as default when rules have no configPath)
@@ -907,9 +1015,16 @@ function action(params) {
         return { success: false, error: 'No rules defined' };
     }
 
-    // Global repo fallback: used by rules that don't specify their own configPath
+    // Global repo fallback: used by rules that don't specify their own configPath.
+    // Accepts split owner/repo fields or a combined "owner/repo" string (the
+    // SM_REPO=github.repository shape used by the sm.yml template).
     var owner = (projectConfig.repository.owner) || p.owner;
     var repo  = (projectConfig.repository.repo)  || p.repo;
+    if ((!owner || !repo) && typeof repo === 'string' && repo.indexOf('/') !== -1) {
+        var seg = repo.split('/');
+        owner = owner || seg[0];
+        repo = seg[1];
+    }
 
     if (!owner || !repo) {
         console.error('❌ Repository owner and repo are required (set in .dmtools/config.js or jobParams)');
