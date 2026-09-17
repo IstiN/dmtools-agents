@@ -1,5 +1,5 @@
-name: 'Factory · Probe (bisect)'
-on:
+name: Factory · Probe (bisect)
+true:
   workflow_call:
     inputs:
       issue:
@@ -14,15 +14,49 @@ on:
 concurrency:
   group: probe-issue-${{ inputs.issue }}
   cancel-in-progress: false
-
 jobs:
   guard:
     runs-on: ubuntu-latest
     outputs:
       run: ${{ steps.check.outputs.run }}
+      runner: ${{ steps.check.outputs.runner }}
+      config: ${{ steps.check.outputs.config }}
+      kind: ${{ steps.check.outputs.kind }}
     steps:
-      - id: check
-        run: echo "run=true" >> "$GITHUB_OUTPUT"
+    - name: Decide whether this event is for the agent
+      id: check
+      env:
+        GH_TOKEN: ${{ github.token }}
+        NUMBER: ${{ inputs.issue }}
+        ASSIGNEES: ${{ join(github.event.issue.assignees.*.login, ' ') }}
+        LABELS: ${{ join(github.event.issue.labels.*.name, ' ') }}
+        ACTOR: ${{ github.event.action || github.event_name }}
+        INPUT_LEG: ${{ inputs.leg }}
+        INPUT_REASON: ${{ inputs.reason }}
+      run: "# SM dispatch (or a bare dispatch with no event payload): refresh\n# labels/assignees from the API and log the audit reason.\nif [ -n \"$INPUT_LEG\" ] || [ -z \"$LABELS\" ]; then\n  echo \"\
+        → dispatch: leg=${INPUT_LEG:-<derive>} reason=${INPUT_REASON:-<none>}\"\n  LABELS=\"$(gh issue view \"$NUMBER\" --repo \"$GITHUB_REPOSITORY\" --json labels -q '[.labels[].name] | join(\" \")')\"\
+        \n  ASSIGNEES=\"$(gh issue view \"$NUMBER\" --repo \"$GITHUB_REPOSITORY\" --json assignees -q '[.assignees[].login] | join(\" \")')\"\nfi\n# Closed issues are terminal: no agent runs on them.\n\
+        state=\"$(gh issue view \"$NUMBER\" --repo \"$GITHUB_REPOSITORY\" --json state -q .state)\"\nif [ \"$state\" != \"OPEN\" ]; then\n  echo \"run=false\" >> \"$GITHUB_OUTPUT\"\n  echo \"→ issue #$NUMBER\
+        \ is ${state} — not for the agent\"\n  exit 0\nfi\n# agent:skip — hard opt-out for smoke/verification tickets.\nif echo \"$LABELS\" | grep -qw \"agent:skip\"; then\n  echo \"run=false\" >> \"$GITHUB_OUTPUT\"\
+        \n  echo \"→ issue #$NUMBER carries agent:skip — agent bypassed\"\n  exit 0\nfi\nrunner=\"\"\n# ── runners come from the TARGET repo (.dmtools/config.js) ──\n# The factory ships no repo-specific\
+        \ runners: sm.runners maps\n# legs to configs in this repository (see the integration guide,\n# \"Overriding agents per repository\"). dev covers bug and story.\nif [ ! -f .dmtools/config.js ];\
+        \ then\n  echo \"::error::.dmtools/config.js not found — the factory needs sm.runners to know this repo's agents (docs/machine-factory-integration.md §5a)\"\n  exit 1\nfi\novr=\"$(node -e \"try{const\
+        \ c=require('./.dmtools/config.js');const r=(c.sm&&c.sm.runners)||{};console.log([r.bug||r.dev||'',r.story||r.dev||'',r.review||'',r.rework||''].join('\\t'))}catch(e){}\" 2>/dev/null || true)\"\n\
+        if [ -z \"$ovr\" ]; then\n  echo \"::error::sm.runners missing in .dmtools/config.js (bug/story[/dev], review, rework → runner config paths)\"\n  exit 1\nfi\nRUNNER_BUG=\"$(echo \"$ovr\" | cut -f1)\"\
+        \nRUNNER_STORY=\"$(echo \"$ovr\" | cut -f2)\"\nRUNNER_REVIEW=\"$(echo \"$ovr\" | cut -f3)\"\nRUNNER_REWORK=\"$(echo \"$ovr\" | cut -f4)\"\necho \"→ runners (from .dmtools/config.js): bug=${RUNNER_BUG:--}\
+        \ story=${RUNNER_STORY:--} review=${RUNNER_REVIEW:--} rework=${RUNNER_REWORK:--}\"\nslot=\"\"\nif [ -n \"$INPUT_LEG\" ]; then\n  case \"$INPUT_LEG\" in\n    rework) runner=\"$RUNNER_REWORK\"; slot=\"\
+        rework\" ;;\n    review) runner=\"$RUNNER_REVIEW\"; slot=\"review\" ;;\n    dev)\n      title=\"$(gh issue view \"$NUMBER\" --repo \"$GITHUB_REPOSITORY\" --json title -q .title)\"\n      if echo\
+        \ \"$title\" | grep -qiE '^\\[?bug\\]' \\\n        || echo \"$LABELS\" | grep -qwi \"bug\"; then\n        runner=\"$RUNNER_BUG\"; slot=\"bug\"\n      else\n        runner=\"$RUNNER_STORY\"; slot=\"\
+        story\"\n      fi\n      ;;\n  esac\nelif echo \"$LABELS\" | grep -qw \"agent:rework\"; then\n  runner=\"$RUNNER_REWORK\"\nelif echo \"$LABELS\" | grep -qw \"agent:review\"; then\n  runner=\"$RUNNER_REVIEW\"\
+        ; slot=\"review\"\nelif echo \"$ASSIGNEES\" | grep -qw \"$AGENT_HANDLE\" \\\n  || echo \"$LABELS\" | grep -qw \"agent:dev\"; then\n  title=\"$(gh issue view \"$NUMBER\" --repo \"$GITHUB_REPOSITORY\"\
+        \ --json title -q .title)\"\n  if echo \"$title\" | grep -qiE '^\\[?bug\\]' \\\n    || echo \"$LABELS\" | grep -qwi \"bug\"; then\n    runner=\"$RUNNER_BUG\"; slot=\"bug\"\n  else\n    runner=\"\
+        $RUNNER_STORY\"; slot=\"story\"\n  fi\nfi\nif [ -n \"$runner\" ]; then\n  # Parent agent config — fa-session.sh derives the session group\n  # from its basename (dev-write vs dev-review).\n  # Parent\
+        \ pipeline by SLOT — custom runners (config overrides)\n  # inherit the leg's pipeline, so a repo can swap the agent\n  # without losing session/verdict semantics.\n  case \"$slot\" in\n    bug)\
+        \     config=\"factory-agents/bug_development.json\"; kind=\"dev\" ;;\n    story)   config=\"factory-agents/story_development.json\"; kind=\"dev\" ;;\n    review)  config=\"factory-agents/pr_review.json\"\
+        ;        kind=\"review\" ;;\n    rework)  config=\"factory-agents/pr_rework.json\";        kind=\"dev\" ;;\n    *)       config=\"factory-agents/story_development.json\"; kind=\"dev\" ;;\n  esac\n\
+        \  echo \"run=true\" >> \"$GITHUB_OUTPUT\"\n  echo \"runner=$runner\" >> \"$GITHUB_OUTPUT\"\n  echo \"config=$config\" >> \"$GITHUB_OUTPUT\"\n  echo \"kind=$kind\" >> \"$GITHUB_OUTPUT\"\n  echo\
+        \ \"→ agent run: $runner (event=$ACTOR, labels=$LABELS, assignees=$ASSIGNEES)\"\nelse\n  echo \"run=false\" >> \"$GITHUB_OUTPUT\"\n  echo \"→ not for the agent (event=$ACTOR, labels=$LABELS, assignees=$ASSIGNEES)\"\
+        \nfi\n"
   teammate:
     needs: guard
     if: needs.guard.outputs.run == 'true'
@@ -30,8 +64,9 @@ jobs:
     env:
       AGENT_HANDLE: ai-teammate
     steps:
-      - name: Probe step
-        env:
-          GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
-        run: |
-          echo "issue=${{ inputs.issue }} ref=${{ inputs.factory_ref }} handle=$AGENT_HANDLE token=${#GH_TOKEN} chars"
+    - name: Probe step
+      env:
+        GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+      run: 'echo "issue=${{ inputs.issue }} ref=${{ inputs.factory_ref }} handle=$AGENT_HANDLE token=${#GH_TOKEN} chars"
+
+        '
