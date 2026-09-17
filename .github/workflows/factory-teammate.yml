@@ -49,9 +49,9 @@ on:
   workflow_call:
     inputs:
       issue:
-        description: 'Issue number to run the agent on'
+        description: 'Issue number (string: number-typed reusable inputs cannot take expressions)'
         required: true
-        type: number
+        type: string
       leg:
         description: "Which leg to run: dev | review | rework (empty = derive from labels/assignees)"
         required: false
