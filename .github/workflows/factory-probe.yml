@@ -3,14 +3,31 @@ name: Factory · Probe (bisect)
   workflow_call:
     inputs:
       issue:
+        description: Issue number to run the agent on
         required: true
         type: number
+      leg:
+        description: 'Which leg to run: dev | review | rework (empty = derive from labels/assignees)'
+        required: false
+        type: string
+      reason:
+        description: Why this dispatch (audit trail, shown in logs)
+        required: false
+        type: string
       factory_ref:
+        description: The ref this workflow was invoked with (same literal as the stub uses-ref; GitHub exposes no context for the called-workflow ref).
         required: true
         type: string
     secrets:
       SOURCE_GITHUB_TOKEN:
+        description: 'PAT with repo scope — machine labels, pushes, PR/issue API (secrets: inherit does not cross repository boundaries).'
         required: true
+      ZAI_CODE_KEY:
+        description: z.ai API key (dev/rework provider + review queue fallback)
+        required: false
+      KIMI_REVIEW_KEY:
+        description: kimi API key (review provider, first in the queue)
+        required: false
 concurrency:
   group: probe-issue-${{ inputs.issue }}
   cancel-in-progress: false
@@ -278,32 +295,3 @@ jobs:
         OUTCOME: ${{ job.status }}
         CI_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: "gh issue comment \"$NUMBER\" --body \\\n  \"\U0001F916 AI Teammate run ${OUTCOME}: ${CI_RUN_URL:-$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID}\"\n"
-'on':
-  workflow_call:
-    inputs:
-      issue:
-        description: Issue number to run the agent on
-        required: true
-        type: number
-      leg:
-        description: 'Which leg to run: dev | review | rework (empty = derive from labels/assignees)'
-        required: false
-        type: string
-      reason:
-        description: Why this dispatch (audit trail, shown in logs)
-        required: false
-        type: string
-      factory_ref:
-        description: The ref this workflow was invoked with (same literal as the stub uses-ref; GitHub exposes no context for the called-workflow ref).
-        required: true
-        type: string
-    secrets:
-      SOURCE_GITHUB_TOKEN:
-        description: 'PAT with repo scope — machine labels, pushes, PR/issue API (secrets: inherit does not cross repository boundaries).'
-        required: true
-      ZAI_CODE_KEY:
-        description: z.ai API key (dev/rework provider + review queue fallback)
-        required: false
-      KIMI_REVIEW_KEY:
-        description: kimi API key (review provider, first in the queue)
-        required: false
