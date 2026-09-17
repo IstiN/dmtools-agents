@@ -233,7 +233,16 @@ jobs:
         # github.workflow_ref = "<owner>/<repo>/.github/workflows/factory-teammate.yml@<ref>"
         # — runners, scripts and workflow are checked out at EXACTLY the ref
         # the caller invoked: engine and factory can never skew apart.
-        run: echo "FACTORY_REF=${{ inputs.factory_ref }}" >> "$GITHUB_ENV"
+        env:
+          # github.workflow_ref = "<owner>/<repo>/.github/workflows/factory-teammate.yml@<ref>"
+          WF_REF: ${{ github.workflow_ref }}
+        run: |
+          # self-pin: strip everything before '@' → the ref the caller invoked.
+          # inputs.factory_ref stays as an explicit override; default is the
+          # invocation ref itself (empty only when GitHub omits the context).
+          ref="${WF_REF##*@}"
+          if [ -n "${{ inputs.factory_ref }}" ]; then ref="${{ inputs.factory_ref }}"; fi
+          echo "FACTORY_REF=$ref" >> "$GITHUB_ENV"
 
       - name: "Checkout factory (dmtools-agents: runners + scripts)"
         uses: actions/checkout@v4
