@@ -135,18 +135,35 @@ function makeSmAgent(opts) {
         { file_read: fileReadMock, encodeURIComponent: encodeURIComponent, JSON: JSON }
     );
 
+    // The jira state source, stubbed to the mocked jira_search_by_jql
+    // (mirrors js/sm/sources/jiraSource.js against the same global mock).
+    // NOTE: the stub closes over jiraSearchMock (makeSmAgent's scope) —
+    // the test file's own jira_search_by_jql global is the REAL bridge tool
+    // (mocks only shadow globals inside loadModule'd modules).
+    var jiraSourceStub = {
+        query: function (rule, ctx) {
+            var tickets = jiraSearchMock({ jql: (ctx && ctx.jql) || rule.jql, fields: ['key', 'labels'] }) || [];
+            return (Array.isArray(tickets) ? tickets : []).map(function (t) {
+                return { key: t.key,
+                         labels: (t.fields && t.fields.labels) || t.labels || [],
+                         pr: null, issueNumber: null, prNumber: null };
+            });
+        }
+    };
     var sm = loadModule(
         'js/smAgent.js',
         makeRequire({
             './configLoader.js': freshConfigLoader,
+            './sm/sourceResolver.js': { resolve: function () { return jiraSourceStub; } },
             './common/scm.js': mockScmModule,
-            './common/buildEncodedConfig.js': buildEncodedConfigModule
+            './common/buildEncodedConfig.js': buildEncodedConfigModule,
         }),
         smMocks
     );
 
     return {
         action: sm.action,
+        applyRuleOverridesForTest: sm.applyRuleOverridesForTest,
         capturedTriggers: capturedTriggers,
         capturedLabels: capturedLabels,
         capturedStatusMoves: capturedStatusMoves,
@@ -421,6 +438,28 @@ suite('smAgent: smRules override from config', function() {
 });
 
 // ── Ticket dispatch ───────────────────────────────────────────────────────────
+
+
+suite('smRuleOverrides: id-based patching (github rules)', function() {
+  test('patches a github rule by its stable id', function() {
+    var patched = makeSmAgent({}).applyRuleOverridesForTest(
+      [{ id: 'rework-on-red-ci', limit: 1, description: 'x' }],
+      { 'rework-on-red-ci': { limit: 5, enabled: false } });
+    assert.equal(patched[0].limit, 5, 'limit patched');
+    assert.equal(patched[0].enabled, false, 'enabled patched');
+    assert.equal(patched[0].description, 'x', 'untouched keys preserved');
+  });
+  test('configFile keys still work (jira rules)', function() {
+    var patched = makeSmAgent({}).applyRuleOverridesForTest(
+      [{ configFile: 'agents/sm.json' }], { 'agents/sm.json': { enabled: false } });
+    assert.equal(patched[0].enabled, false, 'configFile match');
+  });
+  test('unmatched rules pass through untouched', function() {
+    var patched = makeSmAgent({}).applyRuleOverridesForTest(
+      [{ id: 'other' }], { 'rework-on-red-ci': { limit: 5 } });
+    assert.equal(patched[0].limit, undefined, 'no patch applied');
+  });
+});
 
 suite('smAgent: ticket dispatch', function() {
 

@@ -1,0 +1,89 @@
+# Machine SM — GitHub-issues machine-loop watchdog (TEMPLATE).
+#
+# Copy this workflow into the TARGET repository (.github/workflows/sm.yml)
+# and adjust the env block below — that is the whole integration. The cron
+# tick runs the sm rule engine (agents/sm_github.json by default) which
+# reconciles machine-loop state (issue labels + linked PR facts) and
+# triggers the next step for every matching item: rework on red CI, review
+# on green, merge on approved (1 per tick), via workflow_dispatch.
+#
+# Requirements in the target repo:
+#   - .dmtools/config.js with repository {owner, repo} (+ optional machineSm
+#     / smRules overrides), OR env SM_REPO=owner/repo below
+#   - ai-teammate.yml (see ai-teammate.yml.template) with workflow_dispatch
+#     inputs issue/leg — the SM dispatch path
+#   - SECRETS: SOURCE_GITHUB_TOKEN (PAT) for gh operations
+#
+# Manual dispatch supports dryRun (SM_DRY_RUN=true prints the plan only).
+name: 'Machine SM'
+
+run-name: >-
+  🧹 SM ${{
+    github.event_name == 'workflow_dispatch' && 'manual tick' ||
+    format('tick {0}', github.event.schedule || '') }}${{
+  github.event.inputs.dryRun == 'true' && ' (dry)' || '' }}
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # short ticks — the engine idles while runs are active
+  workflow_dispatch:
+    inputs:
+      dryRun:
+        description: 'Log the plan, perform no action'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: machine-sm
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  actions: write
+
+env:
+  # ── adjust these per target repo ────────────────────────────────────────
+  SM_REPO: ${{ github.repository }}          # state source (issues + PRs)
+  SM_CONFIG: agents/sm_github.json           # in the dmtools-agents checkout
+  DMTOOLS_AGENTS_REF: main                   # dmtools-agents ref to use
+  DMTOOLS_VERSION: v0.1.5                    # dmtools CLI release
+  # ────────────────────────────────────────────────────────────────────────
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout dmtools-agents (rule engine + agent configs)
+        uses: actions/checkout@v4
+        with:
+          repository: IstiN/dmtools-agents
+          ref: ${{ env.DMTOOLS_AGENTS_REF }}
+          path: dmtools-agents
+
+      - name: Install dmtools CLI (pinned release)
+        run: sh dmtools-agents/setup/install.sh
+        env:
+          DMTOOLS_VERSION: ${{ env.DMTOOLS_VERSION }}
+
+      - name: Reconcile the machine loop
+        env:
+          GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # sm_github.json defaults point at the sm repo; the target repo
+          # override rides the standard CLI JSON deep-merge.
+          override="{\"params\":{\"jobParams\":{\"repo\":\"$SM_REPO\""
+          if [ "${{ github.event.inputs.dryRun }}" = "true" ]; then
+            override="$override,\"dryRun\":true"
+          fi
+          override="$override}}"
+          cd dmtools-agents && dmtools run "$SM_CONFIG" "$override"
