@@ -126,43 +126,61 @@ jobs:
             exit 0
           fi
           runner=""
+          # ── config-level runner overrides (target repo .dmtools/config.js) ──
+          # sm.runners.{dev,review,rework} — path relative to the TARGET repo
+          # (e.g. ".dmtools/runners/my-review.json"); overrides the factory
+          # defaults for this repo only. dev overrides both bug and story.
+          if [ -f .dmtools/config.js ]; then
+            ovr="$(node -e "try{const c=require('./.dmtools/config.js');const r=(c.sm&&c.sm.runners)||{};console.log([r.dev||'',r.review||'',r.rework||''].join('\t'))}catch(e){}" 2>/dev/null || true)"
+            if [ -n "$ovr" ]; then
+              OD="$(echo "$ovr" | cut -f1)"; OR="$(echo "$ovr" | cut -f2)"; OW="$(echo "$ovr" | cut -f3)"
+              [ -n "$OD" ] && RUNNER_BUG="$OD" && RUNNER_STORY="$OD"
+              [ -n "$OR" ] && RUNNER_REVIEW="$OR"
+              [ -n "$OW" ] && RUNNER_REWORK="$OW"
+              echo "→ config override: dev=${OD:--} review=${OR:--} rework=${OW:--}"
+            fi
+          fi
+          slot=""
           if [ -n "$INPUT_LEG" ]; then
             case "$INPUT_LEG" in
-              rework) runner="$RUNNER_REWORK" ;;
-              review) runner="$RUNNER_REVIEW" ;;
+              rework) runner="$RUNNER_REWORK"; slot="rework" ;;
+              review) runner="$RUNNER_REVIEW"; slot="review" ;;
               dev)
                 title="$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json title -q .title)"
                 if echo "$title" | grep -qiE '^\[?bug\]' \
                   || echo "$LABELS" | grep -qwi "bug"; then
-                  runner="$RUNNER_BUG"
+                  runner="$RUNNER_BUG"; slot="bug"
                 else
-                  runner="$RUNNER_STORY"
+                  runner="$RUNNER_STORY"; slot="story"
                 fi
                 ;;
             esac
           elif echo "$LABELS" | grep -qw "agent:rework"; then
             runner="$RUNNER_REWORK"
           elif echo "$LABELS" | grep -qw "agent:review"; then
-            runner="$RUNNER_REVIEW"
+            runner="$RUNNER_REVIEW"; slot="review"
           elif echo "$ASSIGNEES" | grep -qw "$AGENT_HANDLE" \
             || echo "$LABELS" | grep -qw "agent:dev"; then
             title="$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json title -q .title)"
             if echo "$title" | grep -qiE '^\[?bug\]' \
               || echo "$LABELS" | grep -qwi "bug"; then
-              runner="$RUNNER_BUG"
+              runner="$RUNNER_BUG"; slot="bug"
             else
-              runner="$RUNNER_STORY"
+              runner="$RUNNER_STORY"; slot="story"
             fi
           fi
           if [ -n "$runner" ]; then
             # Parent agent config — fa-session.sh derives the session group
             # from its basename (dev-write vs dev-review).
-            case "$runner" in
-              *fa-bug-dev*)      config="factory-agents/bug_development.json"; kind="dev" ;;
-              *fa-story-dev*)    config="factory-agents/story_development.json"; kind="dev" ;;
-              *fa-review-kimi*)  config="factory-agents/pr_review.json"; kind="review" ;;
-              *fa-rework-zai*)   config="factory-agents/pr_rework.json"; kind="dev" ;;
-              *)                 config="$runner"; kind="dev" ;;
+            # Parent pipeline by SLOT — custom runners (config overrides)
+            # inherit the leg's pipeline, so a repo can swap the agent
+            # without losing session/verdict semantics.
+            case "$slot" in
+              bug)     config="factory-agents/bug_development.json"; kind="dev" ;;
+              story)   config="factory-agents/story_development.json"; kind="dev" ;;
+              review)  config="factory-agents/pr_review.json";        kind="review" ;;
+              rework)  config="factory-agents/pr_rework.json";        kind="dev" ;;
+              *)       config="factory-agents/story_development.json"; kind="dev" ;;
             esac
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "runner=$runner" >> "$GITHUB_OUTPUT"

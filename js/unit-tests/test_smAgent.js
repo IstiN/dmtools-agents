@@ -163,6 +163,7 @@ function makeSmAgent(opts) {
 
     return {
         action: sm.action,
+        applyRuleOverridesForTest: sm.applyRuleOverridesForTest,
         capturedTriggers: capturedTriggers,
         capturedLabels: capturedLabels,
         capturedStatusMoves: capturedStatusMoves,
@@ -437,6 +438,28 @@ suite('smAgent: smRules override from config', function() {
 });
 
 // ── Ticket dispatch ───────────────────────────────────────────────────────────
+
+
+suite('smRuleOverrides: id-based patching (github rules)', function() {
+  test('patches a github rule by its stable id', function() {
+    var patched = makeSmAgent({}).applyRuleOverridesForTest(
+      [{ id: 'rework-on-red-ci', limit: 1, description: 'x' }],
+      { 'rework-on-red-ci': { limit: 5, enabled: false } });
+    assert.equal(patched[0].limit, 5, 'limit patched');
+    assert.equal(patched[0].enabled, false, 'enabled patched');
+    assert.equal(patched[0].description, 'x', 'untouched keys preserved');
+  });
+  test('configFile keys still work (jira rules)', function() {
+    var patched = makeSmAgent({}).applyRuleOverridesForTest(
+      [{ configFile: 'agents/sm.json' }], { 'agents/sm.json': { enabled: false } });
+    assert.equal(patched[0].enabled, false, 'configFile match');
+  });
+  test('unmatched rules pass through untouched', function() {
+    var patched = makeSmAgent({}).applyRuleOverridesForTest(
+      [{ id: 'other' }], { 'rework-on-red-ci': { limit: 5 } });
+    assert.equal(patched[0].limit, undefined, 'no patch applied');
+  });
+});
 
 suite('smAgent: ticket dispatch', function() {
 

@@ -878,6 +878,22 @@ function resolveWorkflowCap(jsonCap, projectCfg) {
     return normalizePositiveInt(jsonCap);
 }
 
+
+// Patches rules from project config smRuleOverrides, matched by rule id
+// (github rules carry stable ids) or configFile (jira rules).
+function applyRuleOverrides(rules, overrides) {
+    if (!overrides || typeof overrides !== 'object') return rules;
+    return rules.map(function(rule) {
+        var patch = overrides[rule.id] || overrides[rule.configFile];
+        if (!patch) return rule;
+        var patched = {};
+        Object.keys(rule).forEach(function(k) { patched[k] = rule[k]; });
+        Object.keys(patch).forEach(function(k) { patched[k] = patch[k]; });
+        console.log('SM Agent: Patched rule "' + (rule.id || rule.description || rule.configFile) + '" with override:', JSON.stringify(patch));
+        return patched;
+    });
+}
+
 function action(params) {
     var p     = params.jobParams || params;
     DRY = p.dryRun === true;
@@ -899,24 +915,14 @@ function action(params) {
         rules = projectConfig.smRules;
     }
 
-    // Apply smRuleOverrides from project config — patches individual rules by configFile
-    // Example in .dmtools/config.js:
+    // Apply smRuleOverrides from project config — patches individual rules by
+    // id (github rules) or configFile (jira rules). Example in .dmtools/config.js:
     //   smRuleOverrides: {
-    //     'agents/bug_creation.json':      { enabled: false },
+    //     'rework-on-red-ci':            { enabled: false },
+    //     'merge-approved-fifo':         { limit: 2 },
     //     'agents/bulk_bugs_creation.json': { enabled: true }
     //   }
-    if (projectConfig.smRuleOverrides && typeof projectConfig.smRuleOverrides === 'object') {
-        var overrides = projectConfig.smRuleOverrides;
-        rules = rules.map(function(rule) {
-            var patch = overrides[rule.configFile];
-            if (!patch) return rule;
-            var patched = {};
-            Object.keys(rule).forEach(function(k) { patched[k] = rule[k]; });
-            Object.keys(patch).forEach(function(k) { patched[k] = patch[k]; });
-            console.log('SM Agent: Patched rule "' + (rule.description || rule.configFile) + '" with override:', JSON.stringify(patch));
-            return patched;
-        });
-    }
+    rules = applyRuleOverrides(rules, projectConfig.smRuleOverrides);
 
     // Global "run everything locally" override — set via a CLI JSON override, e.g.:
     //   dmtools run agents/sm.json '{"params":{"jobParams":{"forceLocalTeammate":true}}}'
@@ -1067,5 +1073,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action: action };
+    module.exports = { action: action, applyRuleOverridesForTest: applyRuleOverrides };
 }

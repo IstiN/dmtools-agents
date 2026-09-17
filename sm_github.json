@@ -7,7 +7,7 @@
       "maxTriggeredWorkflows": 1,
       "rules": [
         {
-          "description": "GitHub: red CI on linked PR \u2192 rework (dead-letter re-fire)",
+          "description": "GitHub: red CI on linked PR → rework (dead-letter re-fire)",
           "source": "github",
           "query": {
             "type": "issue",
@@ -22,10 +22,11 @@
             "leg": "rework",
             "reason": "sm: red CI on linked PR"
           },
-          "limit": 1
+          "limit": 1,
+          "id": "rework-on-red-ci"
         },
         {
-          "description": "GitHub: green PR after dev \u2192 machine review",
+          "description": "GitHub: green PR after dev → machine review",
           "source": "github",
           "query": {
             "type": "issue",
@@ -44,10 +45,11 @@
             "leg": "review",
             "reason": "sm: green PR awaits review"
           },
-          "limit": 1
+          "limit": 1,
+          "id": "review-after-dev"
         },
         {
-          "description": "GitHub: approved \u2192 merge/cleanup (1 per tick)",
+          "description": "GitHub: approved → merge/cleanup (1 per tick)",
           "source": "github",
           "query": {
             "type": "issue",
@@ -60,7 +62,8 @@
           "addLabel": "sm_pr_merge_triggered",
           "recoverStaleTriggerLabel": true,
           "limit": 1,
-          "skipIfLabel": "sm_pr_merge_triggered"
+          "skipIfLabel": "sm_pr_merge_triggered",
+          "id": "merge-approved-fifo"
         }
       ]
     }
