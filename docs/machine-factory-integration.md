@@ -247,30 +247,38 @@ inputs).
 
 ---
 
-## 5a. Overriding agents per repository (no rule forks)
+## 5a. Runners and instructions — who owns what
 
-Two levels, both in the target repo's `.dmtools/config.js`:
-
-### 1. Swap a leg's runner — `sm.runners`
+- **The factory ships NO repo-specific runners.** Runner configs (agent
+  providers, models, queue, tracker wiring) live in the TARGET repo at
+  `.dmtools/runners/*.json` and are wired via `.dmtools/config.js`:
 
 ```js
 module.exports = {
   sm: {
     runners: {
-      // paths are TARGET-REPO-relative; 'dev' covers both bug and story legs
-      review: '.dmtools/runners/gpt5-review.json',
-      rework: '.dmtools/runners/glm-rework.json'
+      bug:    '.dmtools/runners/fa-bug-dev.json',
+      story:  '.dmtools/runners/fa-story-dev.json',   // or a single 'dev' for both
+      review: '.dmtools/runners/fa-review-kimi.json',
+      rework: '.dmtools/runners/fa-rework-zai.json'
     }
   }
 };
 ```
 
-The factory resolves the override in the guard (logged as
-`→ config override: dev=… review=… rework=…`), and the leg keeps its
-parent pipeline (pr_review / pr_rework / bug_development / …) by slot —
-custom runners inherit session and verdict semantics.
+  The factory guard fails fast with a pointer to this section when the
+  config or a slot is missing. Parent pipelines (bug_development /
+  story_development / pr_review / pr_rework) resolve by SLOT inside the
+  agents checkout, so a custom runner inherits session and verdict
+  semantics automatically.
 
-### 2. Patch rules — `smRuleOverrides`
+- **Instruction files are part of dmtools-agents** (extensions of the
+  default agents): `instructions/common/github_comment_format.md`,
+  `instructions/pr_review/review_verdict_rules.md`. Runner configs
+  reference them through the agents checkout mount:
+  `./factory-agents/instructions/…`.
+
+### Patching rules — `smRuleOverrides`
 
 Rules carry stable ids (`rework-on-red-ci`, `review-after-dev`,
 `merge-approved-fifo`). Patch any field or disable a rule entirely:

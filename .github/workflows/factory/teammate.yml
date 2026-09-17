@@ -6,10 +6,9 @@
 # the CALLER's context: github.repository = the target repo; vars.* and
 # secrets.* resolve from the caller (each target pins its own versions).
 #
-# Legs (guard derives the runner when `leg` is empty):
-#   dev     → configs/runners/fa-bug-dev.json | fa-story-dev.json
-#   review  → configs/runners/fa-review-kimi.json  (FA_PROVIDERS_QUEUE: kimi → z.ai)
-#   rework  → configs/runners/fa-rework-zai.json
+# Legs (guard derives the slot when `leg` is empty):
+#   bug | story | review | rework — the runner configs live in the TARGET repo
+#   (.dmtools/runners/*), wired via .dmtools/config.js sm.runners.
 #
 # Loop mechanics (identical to the dmtools-dart template this was ported
 # from — see that file's history for the full rationale):
@@ -77,10 +76,6 @@ env:
   AGENT_HANDLE: ai-teammate
   FA_VERSION: ${{ vars.FA_VERSION_MACHINE || vars.FA_VERSION || 'latest' }}
   DMTOOLS_VERSION: ${{ vars.DMTOOLS_VERSION || 'v0.1.14' }}
-  RUNNER_BUG: factory-agents/configs/runners/fa-bug-dev.json
-  RUNNER_STORY: factory-agents/configs/runners/fa-story-dev.json
-  RUNNER_REVIEW: factory-agents/configs/runners/fa-review-kimi.json
-  RUNNER_REWORK: factory-agents/configs/runners/fa-rework-zai.json
   MAX_AUTO_REWORK_ROUNDS: ${{ vars.MAX_AUTO_REWORK_ROUNDS || 2 }}
 
 jobs:
@@ -126,20 +121,24 @@ jobs:
             exit 0
           fi
           runner=""
-          # ── config-level runner overrides (target repo .dmtools/config.js) ──
-          # sm.runners.{dev,review,rework} — path relative to the TARGET repo
-          # (e.g. ".dmtools/runners/my-review.json"); overrides the factory
-          # defaults for this repo only. dev overrides both bug and story.
-          if [ -f .dmtools/config.js ]; then
-            ovr="$(node -e "try{const c=require('./.dmtools/config.js');const r=(c.sm&&c.sm.runners)||{};console.log([r.dev||'',r.review||'',r.rework||''].join('\t'))}catch(e){}" 2>/dev/null || true)"
-            if [ -n "$ovr" ]; then
-              OD="$(echo "$ovr" | cut -f1)"; OR="$(echo "$ovr" | cut -f2)"; OW="$(echo "$ovr" | cut -f3)"
-              [ -n "$OD" ] && RUNNER_BUG="$OD" && RUNNER_STORY="$OD"
-              [ -n "$OR" ] && RUNNER_REVIEW="$OR"
-              [ -n "$OW" ] && RUNNER_REWORK="$OW"
-              echo "→ config override: dev=${OD:--} review=${OR:--} rework=${OW:--}"
-            fi
+          # ── runners come from the TARGET repo (.dmtools/config.js) ──
+          # The factory ships no repo-specific runners: sm.runners maps
+          # legs to configs in this repository (see the integration guide,
+          # "Overriding agents per repository"). dev covers bug and story.
+          if [ ! -f .dmtools/config.js ]; then
+            echo "::error::.dmtools/config.js not found — the factory needs sm.runners to know this repo's agents (docs/machine-factory-integration.md §5a)"
+            exit 1
           fi
+          ovr="$(node -e "try{const c=require('./.dmtools/config.js');const r=(c.sm&&c.sm.runners)||{};console.log([r.bug||r.dev||'',r.story||r.dev||'',r.review||'',r.rework||''].join('\t'))}catch(e){}" 2>/dev/null || true)"
+          if [ -z "$ovr" ]; then
+            echo "::error::sm.runners missing in .dmtools/config.js (bug/story[/dev], review, rework → runner config paths)"
+            exit 1
+          fi
+          RUNNER_BUG="$(echo "$ovr" | cut -f1)"
+          RUNNER_STORY="$(echo "$ovr" | cut -f2)"
+          RUNNER_REVIEW="$(echo "$ovr" | cut -f3)"
+          RUNNER_REWORK="$(echo "$ovr" | cut -f4)"
+          echo "→ runners (from .dmtools/config.js): bug=${RUNNER_BUG:--} story=${RUNNER_STORY:--} review=${RUNNER_REVIEW:--} rework=${RUNNER_REWORK:--}"
           slot=""
           if [ -n "$INPUT_LEG" ]; then
             case "$INPUT_LEG" in
