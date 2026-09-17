@@ -97,6 +97,13 @@ jobs:
       config: ${{ steps.check.outputs.config }}
       kind: ${{ steps.check.outputs.kind }}
     steps:
+      - name: Checkout target repository (config, runners)
+        uses: actions/checkout@v4
+        with:
+          # caller-repo checkout: the factory reads .dmtools/config.js from
+          # the TARGET repository, never from the factory pack
+          ref: ${{ github.ref }}
+          fetch-depth: 0
       - name: Decide whether this event is for the agent
         id: check
         env:
