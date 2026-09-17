@@ -1,0 +1,22 @@
+{
+  "parent": {
+    "path": "../../pr_review.json"
+  },
+  "merge": ["params.cliPrompts"],
+  "params": {
+    "envVariables": {
+      "AI_AGENT_PROVIDER": "fa",
+      "FA_PROVIDER_TYPE": "kimi",
+      "FA_PROVIDER_CONFIG": "{\"baseUrl\": \"https://api.kimi.com/coding/v1\", \"model\": \"k3\", \"apiKeyEnvVar\": \"KIMI_REVIEW_KEY\"}",
+      "FA_PROVIDERS_QUEUE": "[{\"provider_type\":\"openai-completions\",\"provider_config\":{\"baseUrl\":\"https://api.kimi.com/coding/v1\",\"model\":\"k3\",\"apiKeyEnv\":\"KIMI_REVIEW_KEY\"}},{\"provider_type\":\"zai\",\"provider_config\":{\"baseUrl\":\"https://api.z.ai/api/coding/paas/v4\",\"model\":\"glm-5.3\",\"apiKeyEnv\":\"ZAI_CODE_KEY\"}}]"
+    },
+    "inputJql": "",
+    "customParams": {
+      "allowApproveWithSuggestions": true,
+      "formalGithubReview": true
+    },
+    "cliPrompts": [
+      "factory-agents/configs/instructions/review-verdict-rules.md"
+    ]
+  }
+}

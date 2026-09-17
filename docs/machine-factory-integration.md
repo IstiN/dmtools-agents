@@ -42,18 +42,22 @@ Design invariants:
 
 | Component | Where | Role |
 |---|---|---|
-| `ai-teammate.yml` | target repo `.github/workflows/` | the legs: `guard → dev/review/rework` jobs, each runs dmtools + a `fa` CLI agent |
-| `machine-sm.yml` | target repo `.github/workflows/` | SM watchdog: cron `*/10` + manual dry ticks, runs the smAgent via dmtools |
+| **factory/teammate.yml** | **dmtools-agents** (`.github/workflows/factory/`, reusable) | the legs: `guard → dev/review/rework` jobs, dmtools + `fa` agent |
+| **factory/sm.yml** | **dmtools-agents** (reusable) | SM watchdog tick: rules → reconcile |
+| thin stubs (~15 lines each) | target repo `.github/workflows/` | ONLY triggers + concurrency + `uses:` call |
 | `smAgent.js` + `sm/` | dmtools-agents (`js/smAgent.js`, `js/sm/sources/`, `js/common/smProvider.js`) | engine: rules → state query → dispatch/local execution |
-| `sm_github.json` | dmtools-agents (`configs/sm_github.json`) | default GitHub rule pack |
-| `.dmtools/config.js` | target repo root | repo-specific overrides (rules, repository, workflow names) |
+| `sm_github.json` | dmtools-agents (repo root) | default GitHub rule pack |
 | runners (`fa-*.json`) | dmtools-agents (`configs/runners/`) | per-leg agent configs (prompts, models, timers) |
-| `merge-trigger.yml` | target repo (optional fast-path) | merges on `pr_approved` + green main |
+| `.dmtools/config.js` | target repo root | repo-specific overrides (rules, repository, workflow names) |
+| `merge-trigger.yml` | target repo (optional fast-path) | merges on `pr_approved` + green main (`workflow_run` cannot live in a reusable) |
 | `auto-update-prs.yml` | target repo (optional) | blanket branch updates — see §9 before enabling |
 
-Reference copies of both workflows live in
-`machine-kit/workflows/` (dmtools-dart) as templates with placeholder
-rendering (`machine-kit/setup.sh`).
+The factory workflows are **reusable** (`workflow_call`): they execute in
+the CALLER's context — `github.repository`, `vars.*` and `secrets.*`
+resolve from the target repo, and the engine is self-pinned via
+`github.workflow_ref` (runners/scripts always match the invoked ref). The
+dmtools CLI installs from its release asset (version-locked), so the
+target repo needs no copies of anything.
 
 ---
 
@@ -98,14 +102,51 @@ dry runs of the engine.
 
 ## 4. Step-by-step integration
 
-### Step 1 — workflows
-Copy `machine-kit/workflows/ai-teammate.yml` and
-`machine-kit/workflows/machine-sm.yml` (or render via
-`machine-kit/setup.sh`). Adjust in `machine-sm.yml`:
-- `SM_AGENTS_REF` default (or rely on the repo var),
-- the reconcile job's `env`: `SM_RULES` (rule pack), `SM_DRY_RUN` (leave
-  manual ticks dry, cron ticks live — the default),
-- `SOURCE_GITHUB_TOKEN` / model keys.
+### Step 1 — workflows (two thin stubs)
+Drop these into the target repo `.github/workflows/` — nothing else:
+
+```yaml
+# factory-teammate.yml
+name: 'AI Teammate'
+on:
+  issues: { types: [assigned, labeled] }
+  workflow_dispatch:
+    inputs:
+      issue: { description: Issue number, required: true, type: number }
+      leg: { description: 'dev | review | rework (empty = derive)', required: false, type: string }
+concurrency:
+  group: ai-teammate-issue-${{ github.event.issue.number || inputs.issue }}
+  cancel-in-progress: false
+jobs:
+  factory:
+    uses: IstiN/dmtools-agents/.github/workflows/factory/teammate.yml@main
+    with:
+      issue: ${{ github.event.issue.number || inputs.issue }}
+      leg: ${{ inputs.leg || '' }}
+    secrets: inherit
+```
+
+```yaml
+# factory-sm.yml
+name: 'Machine SM'
+on:
+  schedule: [{ cron: '*/10 * * * *' }]
+  workflow_dispatch:
+    inputs:
+      dryRun: { description: Log only, required: false, type: boolean, default: true }
+concurrency:
+  group: machine-sm
+  cancel-in-progress: false
+jobs:
+  sm:
+    uses: IstiN/dmtools-agents/.github/workflows/factory/sm.yml@main
+    with:
+      dryRun: ${{ inputs.dryRun || false }}
+    secrets: inherit
+```
+
+Pin `@main` to a tag/sha of dmtools-agents for production (the factory
+version then moves in lockstep with the engine).
 
 ### Step 2 — rules
 Start from `configs/sm_github.json`. The default pack encodes the loop:

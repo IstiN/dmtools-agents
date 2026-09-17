@@ -1,0 +1,98 @@
+# Machine SM factory leg — REUSABLE workflow (dmtools-agents factory pack).
+#
+# Hosted here so target repositories carry only a thin stub (schedule +
+# this call) and their .dmtools/config.js — no workflow copies to drift.
+# Runs in the CALLER's context: github.repository = the target repo, vars.*
+# and secrets.* resolve from the caller (each target pins its own versions).
+#
+# What it does: installs the pinned dmtools CLI (release asset, no repo
+# file needed), checks out THIS repository at the exact ref the caller
+# invoked (github.workflow_ref self-pin — engine and factory always match),
+# and runs the SM rule engine (smAgent.js, deterministic, no LLM) against
+# the target repo's loop state.
+#
+# Caller stub:
+#   on:
+#     schedule: [{cron: '*/10 * * * *'}]
+#     workflow_dispatch: {inputs: {dryRun: {type: boolean, default: true}}}
+#   jobs:
+#     sm:
+#       uses: IstiN/dmtools-agents/.github/workflows/factory/sm.yml@<ref>
+#       with:
+#         dryRun: ${{ inputs.dryRun || false }}
+#       secrets: inherit
+
+name: 'Factory · Machine SM'
+
+on:
+  workflow_call:
+    inputs:
+      dryRun:
+        description: 'Log the plan, perform no action'
+        required: false
+        type: boolean
+        default: false
+
+# Never two SM instances; never cancel an in-flight reconcile. The caller
+# stub declares the same group — combined, still one tick at a time.
+concurrency:
+  group: machine-sm
+  cancel-in-progress: false
+
+permissions:
+  contents: read          # checkout target + engine
+  issues: write           # labels + close-issue safety net
+  pull-requests: write    # update-branch + merge
+  actions: write          # workflow_dispatch on the teammate workflow
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve factory ref (self-pin)
+        # github.workflow_ref = "<owner>/<repo>/.github/workflows/factory/sm.yml@<ref>"
+        # — the engine is checked out at EXACTLY the ref the caller invoked,
+        # so rules and workflow can never skew apart.
+        run: echo "FACTORY_REF=${GITHUB_WORKFLOW_REF##*@}" >> "$GITHUB_ENV"
+
+      - name: "Checkout factory (dmtools-agents: SM engine + rules)"
+        uses: actions/checkout@v4
+        with:
+          repository: IstiN/dmtools-agents
+          ref: ${{ env.FACTORY_REF }}
+          path: factory-agents
+          persist-credentials: false
+
+      - name: Install dmtools CLI (pinned release bundle)
+        # The installer ships as a release asset, version-locked to the
+        # bundle it installs — no copy of install.sh in the target repo.
+        env:
+          DMTOOLS_VERSION: ${{ vars.DMTOOLS_VERSION || 'v0.1.14' }}
+        run: |
+          curl -fsSL "https://github.com/epam/dmtools-dart/releases/download/${DMTOOLS_VERSION}/install.sh" \
+            -o /tmp/dmtools-install.sh
+          bash /tmp/dmtools-install.sh "${DMTOOLS_VERSION}"
+          echo "$HOME/.dmtools/bin" >> "$GITHUB_PATH"
+
+      - name: Reconcile the machine loop
+        env:
+          GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          # dmtools reads SOURCE_GITHUB_TOKEN (env-parity with Java); without
+          # it the GitHub integration counts as unconfigured and the JS
+          # runtime does not expose github_* globals at all.
+          SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+        run: |
+          repo='${{ github.repository }}'
+          if [ "${{ inputs.dryRun }}" = "true" ]; then
+            override="{\"params\":{\"jobParams\":{\"repo\":\"${repo}\",\"dryRun\":true}}}"
+          else
+            override="{\"params\":{\"jobParams\":{\"repo\":\"${repo}\"}}}"
+          fi
+          cd factory-agents && dmtools run sm_github.json "$override"

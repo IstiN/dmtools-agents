@@ -1,0 +1,25 @@
+{
+  "parent": {
+    "path": "../../pr_rework.json"
+  },
+  "params": {
+    "envVariables": {
+      "DEFAULT_TRACKER": "github",
+      "AI_AGENT_PROVIDER": "fa",
+      "FA_PROVIDER_TYPE": "zai",
+      "FA_PROVIDER_CONFIG": "{\"baseUrl\":\"https://api.z.ai/api/coding/paas/v4\",\"model\":\"glm-5.3-flash\",\"apiKeyEnvVar\":\"ZAI_CODE_KEY\"}"
+    },
+    "inputJql": "",
+    "cliPromptsByTracker": {
+      "github": [
+        "./factory-agents/configs/instructions/github_comment_format.md"
+      ]
+    },
+    "customParams": {
+      "targetRepository": {
+        "workingDir": ".",
+        "baseBranch": "main"
+      }
+    }
+  }
+}
