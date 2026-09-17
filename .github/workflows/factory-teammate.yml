@@ -61,9 +61,8 @@ on:
         required: false
         type: string
       factory_ref:
-        description: 'Optional ref override; defaults to GITHUB_JOB_WORKFLOW_REF (how the stub invoked us).'
-        required: false
-        default: ''
+        description: 'The dmtools-agents ref the factory runs from (the literal in the stub uses-line). github.workflow_ref cannot serve: in a called workflow it carries the CALLER ref, not the uses-ref.'
+        required: true
         type: string
 
     secrets:
@@ -233,16 +232,10 @@ jobs:
         # github.workflow_ref = "<owner>/<repo>/.github/workflows/factory-teammate.yml@<ref>"
         # — runners, scripts and workflow are checked out at EXACTLY the ref
         # the caller invoked: engine and factory can never skew apart.
-        env:
-          # github.workflow_ref = "<owner>/<repo>/.github/workflows/factory-teammate.yml@<ref>"
-          WF_REF: ${{ github.workflow_ref }}
         run: |
-          # self-pin: strip everything before '@' → the ref the caller invoked.
-          # inputs.factory_ref stays as an explicit override; default is the
-          # invocation ref itself (empty only when GitHub omits the context).
-          ref="${WF_REF##*@}"
-          if [ -n "${{ inputs.factory_ref }}" ]; then ref="${{ inputs.factory_ref }}"; fi
-          echo "FACTORY_REF=$ref" >> "$GITHUB_ENV"
+          # The stub passes the same literal its uses-line pins — engine and
+          # factory can never skew apart. Keep both in sync when flipping refs.
+          echo "FACTORY_REF=${{ inputs.factory_ref }}" >> "$GITHUB_ENV"
 
       - name: "Checkout factory (dmtools-agents: runners + scripts)"
         uses: actions/checkout@v4
