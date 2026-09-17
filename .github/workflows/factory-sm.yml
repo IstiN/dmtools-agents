@@ -32,6 +32,10 @@ on:
         required: false
         type: boolean
         default: false
+      factory_ref:
+        description: "The ref this workflow was invoked with (same literal as the stub uses-ref). GitHub exposes no context/env for the called-workflow ref (GITHUB_WORKFLOW_REF is the CALLER's), so the stub passes its pin explicitly."
+        required: true
+        type: string
 
 # Never two SM instances; never cancel an in-flight reconcile. The caller
 # stub declares the same group — combined, still one tick at a time.
@@ -59,11 +63,7 @@ jobs:
         # github.workflow_ref = "<owner>/<repo>/.github/workflows/factory-sm.yml@<ref>"
         # — the engine is checked out at EXACTLY the ref the caller invoked,
         # so rules and workflow can never skew apart.
-        # github.job_workflow_ref is a CONTEXT property (not exported as a
-        # runner env var) — inject it via the expression, then strip to the ref.
-        run: |
-          wf_ref='${{ github.job_workflow_ref }}'
-          echo "FACTORY_REF=${wf_ref##*@}" >> "$GITHUB_ENV"
+        run: echo "FACTORY_REF=${{ inputs.factory_ref }}" >> "$GITHUB_ENV"
 
       - name: "Checkout factory (dmtools-agents: SM engine + rules)"
         uses: actions/checkout@v4
