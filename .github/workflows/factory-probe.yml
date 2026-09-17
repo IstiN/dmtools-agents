@@ -11,6 +11,10 @@ on:
     secrets:
       SOURCE_GITHUB_TOKEN:
         required: true
+concurrency:
+  group: probe-issue-${{ inputs.issue }}
+  cancel-in-progress: false
+
 jobs:
   guard:
     runs-on: ubuntu-latest
