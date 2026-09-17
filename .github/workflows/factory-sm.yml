@@ -59,7 +59,11 @@ jobs:
         # github.workflow_ref = "<owner>/<repo>/.github/workflows/factory-sm.yml@<ref>"
         # — the engine is checked out at EXACTLY the ref the caller invoked,
         # so rules and workflow can never skew apart.
-        run: echo "FACTORY_REF=${GITHUB_JOB_WORKFLOW_REF##*@}" >> "$GITHUB_ENV"
+        # github.job_workflow_ref is a CONTEXT property (not exported as a
+        # runner env var) — inject it via the expression, then strip to the ref.
+        run: |
+          wf_ref='${{ github.job_workflow_ref }}'
+          echo "FACTORY_REF=${wf_ref##*@}" >> "$GITHUB_ENV"
 
       - name: "Checkout factory (dmtools-agents: SM engine + rules)"
         uses: actions/checkout@v4
