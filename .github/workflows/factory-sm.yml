@@ -19,8 +19,10 @@
 #     sm:
 #       uses: IstiN/dmtools-agents/.github/workflows/factory-sm.yml@<ref>
 #       with:
-#         dryRun: ${{ inputs.dryRun || false }}
-#       secrets: inherit
+#         dryRun: ${{ github.event.inputs.dryRun || 'false' }}   # STRING —
+#         # typed (boolean) reusable inputs reject expressions; strings take them.
+#       secrets:
+#         SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
 
 name: 'Factory · Machine SM'
 
@@ -28,10 +30,10 @@ on:
   workflow_call:
     inputs:
       dryRun:
-        description: 'Log the plan, perform no action'
+        description: "'true' to log the plan without acting (STRING — boolean-typed reusable inputs cannot take expressions, live bisect probes D/E)"
         required: false
-        type: boolean
-        default: false
+        type: string
+        default: 'false'
       factory_ref:
         description: "The ref this workflow was invoked with (same literal as the stub uses-ref). GitHub exposes no context/env for the called-workflow ref (GITHUB_WORKFLOW_REF is the CALLER's), so the stub passes its pin explicitly."
         required: true
