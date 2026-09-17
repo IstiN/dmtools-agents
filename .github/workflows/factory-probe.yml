@@ -1,5 +1,5 @@
 name: Factory · Probe (bisect)
-true:
+'on':
   workflow_call:
     inputs:
       issue:
