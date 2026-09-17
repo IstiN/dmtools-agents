@@ -58,12 +58,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout target repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608 # v4
         with:
           persist-credentials: false
 
       - name: Checkout dmtools-agents (rule engine + agent configs)
-        uses: actions/checkout@v4
+        uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608 # v4
         with:
           repository: IstiN/dmtools-agents
           ref: ${{ env.DMTOOLS_AGENTS_REF }}
@@ -78,11 +78,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          DRY_RUN_INPUT: ${{ github.event.inputs.dryRun }}
         run: |
           # sm_github.json defaults point at the sm repo; the target repo
           # override rides the standard CLI JSON deep-merge.
           override="{\"params\":{\"jobParams\":{\"repo\":\"$SM_REPO\""
-          if [ "${{ github.event.inputs.dryRun }}" = "true" ]; then
+          if [ "$DRY_RUN_INPUT" = "true" ]; then
             override="$override,\"dryRun\":true"
           fi
           override="$override}}"
