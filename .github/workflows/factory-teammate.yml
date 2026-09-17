@@ -77,9 +77,9 @@ on:
         description: 'kimi API key (review provider, first in the queue)'
         required: false
 
-concurrency:
-  group: ai-teammate-issue-${{ inputs.issue }}
-  cancel-in-progress: false
+# NOTE: no `concurrency` here — the caller stub owns the per-issue group.
+# A reusable workflow with the SAME group as its caller deadlocks: the caller
+# holds the group while the called workflow waits for it forever (pending, 0 jobs).
 
 permissions:
   contents: write
