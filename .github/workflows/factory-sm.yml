@@ -37,6 +37,11 @@ on:
         required: true
         type: string
 
+    secrets:
+      SOURCE_GITHUB_TOKEN:
+        description: 'PAT with repo scope — GitHub API access for the SM engine (labels, PR state, checks, dispatch). secrets: inherit does not cross repository boundaries, so the stub passes it explicitly.'
+        required: true
+
 # Never two SM instances; never cancel an in-flight reconcile. The caller
 # stub declares the same group — combined, still one tick at a time.
 concurrency:
