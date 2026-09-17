@@ -175,7 +175,7 @@ function queryPrs(rule, provider, repoInfo, limit) {
         });
     }
 
-    return items.filter(function (item) {
+    var matched = items.filter(function (item) {
         var labels = item.labels;
         var q2 = rule.query || {};
         if (q2.labels && !q2.labels.some(function (l) { return labels.indexOf(l) !== -1; })) return false;
@@ -183,7 +183,16 @@ function queryPrs(rule, provider, repoInfo, limit) {
         if (q2.draft === false && item.draft) return false;
         if (q2.branchPrefix && String(item.branch || '').indexOf(q2.branchPrefix) !== 0) return false;
         return matchesGuards(item, rule);
-    }).slice(0, limit);
+    });
+
+    // FIFO: oldest PR first. github_list_prs returns newest-first (API
+    // default), which would starve older approved PRs under limit:1 merge
+    // rules — the queue drains oldest-to-newest. Blocked candidates
+    // (conflicts, red/pending checks) never reach here: guards already
+    // filtered them, so the head of this list is the oldest mergeable PR.
+    matched.sort(function (a, b) { return (a.prNumber || 0) - (b.prNumber || 0); });
+
+    return matched.slice(0, limit);
 }
 
 if (typeof module !== 'undefined' && module.exports) {

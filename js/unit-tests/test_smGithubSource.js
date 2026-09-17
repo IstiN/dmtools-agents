@@ -108,6 +108,34 @@ suite('sm github source', function () {
         assert.equal(items[1].key, 'pr-42');
     });
 
+    test('pr rules: FIFO — API newest-first list drains oldest mergeable first', function () {
+        // GitHub list_prs returns newest-first (API default). The queue must
+        // still drain oldest-to-newest: under limit:1 a newest-first order
+        // would starve older approved PRs. Blocked candidates (conflict,
+        // red) are guard-filtered, so the head is the oldest MERGEABLE PR.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 57, labels: [{ name: 'pr_approved' }], head: { ref: 'feat/new' }, draft: false },
+                    { number: 56, labels: [{ name: 'pr_approved' }], head: { ref: 'feat/mid' }, draft: false },
+                    { number: 55, labels: [{ name: 'pr_approved' }], head: { ref: 'feat/old' }, draft: false }
+                ];
+            }
+        }, {}, {
+            55: { number: 55, state: 'OPEN', checks: 'green', mergeState: 'CONFLICTING', mergeable: false },
+            56: { number: 56, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true },
+            57: { number: 57, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['pr_approved'], checks: 'green', mergeable: true }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        // 55 is conflicted → guard-skipped; 56 (older) heads the queue
+        // ahead of 57 despite the API listing 57 first.
+        assert.equal(items.length, 2);
+        assert.equal(items[0].key, 'pr-56');
+        assert.equal(items[1].key, 'pr-57');
+    });
+
     test('pr rules: branchPrefix and draft filters', function () {
         var srcMod = load({
             github_list_prs: function () {
