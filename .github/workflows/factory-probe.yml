@@ -1,0 +1,33 @@
+name: 'Factory · Probe (bisect)'
+on:
+  workflow_call:
+    inputs:
+      issue:
+        required: true
+        type: number
+      factory_ref:
+        required: true
+        type: string
+    secrets:
+      SOURCE_GITHUB_TOKEN:
+        required: true
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        run: echo "run=true" >> "$GITHUB_OUTPUT"
+  teammate:
+    needs: guard
+    if: needs.guard.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    env:
+      AGENT_HANDLE: ai-teammate
+    steps:
+      - name: Probe step
+        env:
+          GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+        run: |
+          echo "issue=${{ inputs.issue }} ref=${{ inputs.factory_ref }} handle=$AGENT_HANDLE token=${#GH_TOKEN} chars"
