@@ -247,6 +247,45 @@ inputs).
 
 ---
 
+## 5a. Overriding agents per repository (no rule forks)
+
+Two levels, both in the target repo's `.dmtools/config.js`:
+
+### 1. Swap a leg's runner — `sm.runners`
+
+```js
+module.exports = {
+  sm: {
+    runners: {
+      // paths are TARGET-REPO-relative; 'dev' covers both bug and story legs
+      review: '.dmtools/runners/gpt5-review.json',
+      rework: '.dmtools/runners/glm-rework.json'
+    }
+  }
+};
+```
+
+The factory resolves the override in the guard (logged as
+`→ config override: dev=… review=… rework=…`), and the leg keeps its
+parent pipeline (pr_review / pr_rework / bug_development / …) by slot —
+custom runners inherit session and verdict semantics.
+
+### 2. Patch rules — `smRuleOverrides`
+
+Rules carry stable ids (`rework-on-red-ci`, `review-after-dev`,
+`merge-approved-fifo`). Patch any field or disable a rule entirely:
+
+```js
+module.exports = {
+  smRuleOverrides: {
+    'merge-approved-fifo': { limit: 2 },       // relax FIFO for this repo
+    'rework-on-red-ci':    { enabled: false }  // manual rework only
+  }
+};
+```
+
+Jira-style rules still match by `configFile` key.
+
 ## 6. The legs (runners)
 
 | Runner | Model | What it does |
