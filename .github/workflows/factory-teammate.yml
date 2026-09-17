@@ -224,8 +224,12 @@ jobs:
       - name: Checkout target repository
         uses: actions/checkout@v4
         with:
-          # The engine rides factory-agents/ (checked out next); the target's
-          # own submodules are not needed by the legs.
+          # The engine rides factory-agents/ (checked out next), but the
+          # parent runner configs reference the target's submodule paths
+          # verbatim (agents/js/*.js, ./agents/scripts/*) so the machine
+          # runs identically locally and in the factory — the submodule
+          # MUST be initialized at the reviewed, pinned SHA.
+          submodules: true
           persist-credentials: false
 
       - name: Resolve factory ref (self-pin)
