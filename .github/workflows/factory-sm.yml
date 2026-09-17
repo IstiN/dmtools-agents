@@ -1,4 +1,4 @@
-# Machine SM factory leg — REUSABLE workflow (dmtools-agents factory pack).
+# Machine SM factory leg — REUSABLE workflow (dmtools-agents factory pack, top-level: GitHub requires reusable workflows at the .github/workflows root — no subdirectories).
 #
 # Hosted here so target repositories carry only a thin stub (schedule +
 # this call) and their .dmtools/config.js — no workflow copies to drift.
@@ -17,7 +17,7 @@
 #     workflow_dispatch: {inputs: {dryRun: {type: boolean, default: true}}}
 #   jobs:
 #     sm:
-#       uses: IstiN/dmtools-agents/.github/workflows/factory/sm.yml@<ref>
+#       uses: IstiN/dmtools-agents/.github/workflows/factory-sm.yml@<ref>
 #       with:
 #         dryRun: ${{ inputs.dryRun || false }}
 #       secrets: inherit
@@ -56,7 +56,7 @@ jobs:
           persist-credentials: false
 
       - name: Resolve factory ref (self-pin)
-        # github.workflow_ref = "<owner>/<repo>/.github/workflows/factory/sm.yml@<ref>"
+        # github.workflow_ref = "<owner>/<repo>/.github/workflows/factory-sm.yml@<ref>"
         # — the engine is checked out at EXACTLY the ref the caller invoked,
         # so rules and workflow can never skew apart.
         run: echo "FACTORY_REF=${GITHUB_WORKFLOW_REF##*@}" >> "$GITHUB_ENV"

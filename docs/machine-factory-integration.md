@@ -119,7 +119,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   factory:
-    uses: IstiN/dmtools-agents/.github/workflows/factory/teammate.yml@main
+    uses: IstiN/dmtools-agents/.github/workflows/factory-teammate.yml@main
     with:
       issue: ${{ github.event.issue.number || inputs.issue }}
       leg: ${{ inputs.leg || '' }}
@@ -139,7 +139,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   sm:
-    uses: IstiN/dmtools-agents/.github/workflows/factory/sm.yml@main
+    uses: IstiN/dmtools-agents/.github/workflows/factory-sm.yml@main
     with:
       dryRun: ${{ inputs.dryRun || false }}
     secrets: inherit

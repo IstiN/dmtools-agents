@@ -1,4 +1,4 @@
-# Factory · AI Teammate leg — REUSABLE workflow (dmtools-agents factory pack).
+# Factory · AI Teammate leg — REUSABLE workflow (dmtools-agents factory pack, top-level: GitHub requires reusable workflows at the .github/workflows root — no subdirectories).
 #
 # The dev→review→rework machine loop for GitHub-issues trackers, hosted in
 # dmtools-agents so target repositories carry only a thin stub (event
@@ -36,7 +36,7 @@
 #     cancel-in-progress: false
 #   jobs:
 #     factory:
-#       uses: IstiN/dmtools-agents/.github/workflows/factory/teammate.yml@<ref>
+#       uses: IstiN/dmtools-agents/.github/workflows/factory-teammate.yml@<ref>
 #       with:
 #         issue: ${{ github.event.issue.number || inputs.issue }}
 #         leg: ${{ inputs.leg || '' }}
@@ -205,7 +205,7 @@ jobs:
           persist-credentials: false
 
       - name: Resolve factory ref (self-pin)
-        # github.workflow_ref = "<owner>/<repo>/.github/workflows/factory/teammate.yml@<ref>"
+        # github.workflow_ref = "<owner>/<repo>/.github/workflows/factory-teammate.yml@<ref>"
         # — runners, scripts and workflow are checked out at EXACTLY the ref
         # the caller invoked: engine and factory can never skew apart.
         run: echo "FACTORY_REF=${GITHUB_WORKFLOW_REF##*@}" >> "$GITHUB_ENV"
