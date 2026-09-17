@@ -61,12 +61,215 @@ jobs:
     needs: guard
     if: needs.guard.outputs.run == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       AGENT_HANDLE: ai-teammate
+      FA_VERSION: ${{ vars.FA_VERSION_MACHINE || vars.FA_VERSION || 'latest' }}
+      DMTOOLS_VERSION: ${{ vars.DMTOOLS_VERSION || 'v0.1.14' }}
+      MAX_AUTO_REWORK_ROUNDS: ${{ vars.MAX_AUTO_REWORK_ROUNDS || 2 }}
     steps:
-    - name: Probe step
+    - name: Checkout target repository
+      uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+    - name: Resolve factory ref (self-pin)
+      run: echo "FACTORY_REF=${{ inputs.factory_ref }}" >> "$GITHUB_ENV"
+    - name: 'Checkout factory (dmtools-agents: runners + scripts)'
+      uses: actions/checkout@v4
+      with:
+        repository: IstiN/dmtools-agents
+        ref: ${{ env.FACTORY_REF }}
+        path: factory-agents
+        persist-credentials: false
+    - name: Export fa session identity + cache keys
       env:
-        GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
-      run: 'echo "issue=${{ inputs.issue }} ref=${{ inputs.factory_ref }} handle=$AGENT_HANDLE token=${#GH_TOKEN} chars"
+        AI_TEAMMATE_CONFIG_FILE: ${{ needs.guard.outputs.config }}
+        AI_TEAMMATE_DISPLAY_KEY: GH-${{ inputs.issue }}
+        AI_TEAMMATE_CONCURRENCY_KEY: ${{ inputs.issue }}
+      run: bash factory-agents/setup/cache.sh keys fa-session
+    - name: Restore fa session (resume the ticket conversation)
+      env:
+        FA_SESS_BRANCH: fa-sess/gh-${{ inputs.issue }}
+      run: "if git fetch --depth 1 origin \"refs/heads/$FA_SESS_BRANCH\"; then\n  git checkout \"refs/remotes/origin/$FA_SESS_BRANCH\" -- .dmtools/fa-sessions\n  # Unstage (checkout <ref> -- <path> STAGES):\
+        \ the session store\n  # belongs on the fa-sess branch only.\n  git restore --staged .dmtools/fa-sessions\n  echo \"→ fa session restored from $FA_SESS_BRANCH\"\nelse\n  echo \"→ no saved fa session\
+        \ yet ($FA_SESS_BRANCH absent) — starting fresh\"\nfi\n"
+    - name: Cache fa CLI (by version)
+      if: env.FA_VERSION != 'latest'
+      uses: actions/cache@v6
+      with:
+        path: '~/.local/bin/fa
+
+          ~/lib
+
+          '
+        key: fa-${{ env.FA_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+    - name: Cache dmtools CLI (by version)
+      uses: actions/cache@v6
+      with:
+        path: ~/.dmtools/bin
+        key: dmtools-${{ env.DMTOOLS_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+    - name: Install prerequisites (fa; no-op on cache hit)
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: "if ! command -v fa >/dev/null 2>&1 && [ ! -x \"${HOME}/.local/bin/fa\" ]; then\n  case \"$(uname -m)\" in\n    x86_64) FA_ARCH=\"x64\" ;;\n    *)      FA_ARCH=\"arm64\" ;;\n  esac\n  tmp=\"\
+        $(mktemp -d)\"\n  gh release download \"${FA_VERSION}\" \\\n    --repo IstiN/flutter_agent_harness \\\n    --pattern \"fa-linux-${FA_ARCH}.tar.gz\" --dir \"${tmp}\" --clobber\n  tar -xzf \"${tmp}/fa-linux-${FA_ARCH}.tar.gz\"\
+        \ -C \"${tmp}\"\n  mkdir -p \"${HOME}/.local/bin\" \"${HOME}/.local/lib\"\n  cp \"${tmp}/bundle/bin/fa\" \"${HOME}/.local/bin/fa\"\n  chmod +x \"${HOME}/.local/bin/fa\"\n  cp -R \"${tmp}/bundle/lib/.\"\
+        \ \"${HOME}/.local/lib/\" 2>/dev/null || true\nfi\nbash factory-agents/setup/install.sh \"fa:${FA_VERSION}\"\n"
+    - name: Install dmtools CLI (pinned release bundle)
+      run: "curl -fsSL \"https://github.com/epam/dmtools-dart/releases/download/${DMTOOLS_VERSION}/install.sh\" \\\n  -o /tmp/dmtools-install.sh\nbash /tmp/dmtools-install.sh \"${DMTOOLS_VERSION}\"\necho\
+        \ \"$HOME/.dmtools/bin\" >> \"$GITHUB_PATH\"\n"
+    - name: Verify prerequisites
+      run: 'fa --version
+
+        dmtools --version
 
         '
+    - name: Configure Git Author + push credentials
+      env:
+        SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+      run: bash factory-agents/setup/install-source-git-credentials.sh
+    - name: Trace git credential stack (push-time evidence)
+      env:
+        SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+      run: "mkdir -p .dmtools\necho \"── credential.helper — all scopes, with origins ──\"\ngit config --show-origin --get-all credential.helper || true\ngit config --show-origin --get-all credential.https://github.com.helper\
+        \ || true\necho \"── http.https://github.com/.extraheader (must be empty — App token purged) ──\"\n# Redact the VALUE (gh-63 review threads 11/12): on a leftover this\n# dump prints AUTHORIZATION:\
+        \ basic <base64(App token)> — GitHub's\n# log masking matches the raw token string, not its base64 form.\n# git 2.x prints \"<origin>\\t<value>\" (--show-origin --get-all has\n# NO key= prefix),\
+        \ so redact everything after the first TAB — a\n# sed on '=' alone would only trim the base64 padding. The origin\n# (file/scope) stays visible; a tab-less line is fully redacted.\ngit config --show-origin\
+        \ --get-all http.https://github.com/.extraheader | sed -E 's/^([^\\t]*\\t).*/\\1<redacted>/; t; s/.+/<redacted> (unexpected line without origin)/' || true\nif git config --get-all http.https://github.com/.extraheader\
+        \ | grep -q .; then\n  echo \"::error::App-token extraheader still present after purge — pushes would authenticate as github-actions[bot]\"\n  exit 1\nfi\necho \"── submodule extraheaders (must\
+        \ be empty — App token purged there too) ──\"\n# checkout arms every submodule's local config with the same token;\n# a push made from inside agents/ must not fall back to it (gh-63).\n# The probe\
+        \ echoes a LEFTOVER marker line only when a config is\n# still armed, so \"no submodules\" and \"all clean\" stay quiet.\n# The marker names the submodule but NEVER the header value: it is\n# AUTHORIZATION:\
+        \ basic <base64(App token)>, decodable and NOT masked\n# by GitHub log redaction (gh-63 review threads 11/12).\nsub_leftovers=\"$(git submodule foreach --quiet --recursive \\\n  'c=\"$(git config\
+        \ --get-all http.https://github.com/.extraheader || true)\"; [ -z \"$c\" ] || echo \"LEFTOVER ${sm_path}: <redacted>\"' \\\n  || true)\"\nif [ -n \"$sub_leftovers\" ]; then\n  echo \"::error::App-token\
+        \ extraheader still present in a submodule config after purge — pushes from inside the submodule would authenticate as github-actions[bot]\"\n  printf '%s\\n' \"$sub_leftovers\"\n  exit 1\nfi\n\
+        echo \"── commit identity ──\"\ngit var GIT_AUTHOR_IDENT\ngit var GIT_COMMITTER_IDENT\necho \"── dry-run: credential a github.com push would use ──\"\n# Capture first, then assert: with GIT_ASKPASS=echo\
+        \ `git credential\n# fill` exits 0 even when NO helper answered (echo prints its prompt\n# back, git accepts it as a bogus credential) — only the\n# SOURCE helper's username proves the SOURCE credential\
+        \ wins.\n# CRED_HELPER_CONTEXT tags the helper's log line so this dry-run\n# stays distinguishable from real pushes in the evidence log.\nout=\"$(printf 'protocol=https\\nhost=github.com\\n' | CRED_HELPER_CONTEXT=trace-dry-run\
+        \ GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=echo git credential fill 2>&1)\" || true\nif printf '%s\\n' \"$out\" | grep -q '^username=x-access-token$'; then\n  echo \"$out\" | sed -E 's/^password=.+/password=<redacted\
+        \ — served by the SOURCE_GITHUB_TOKEN helper>/'\nelse\n  echo \"::error::dry-run credential was NOT served by the SOURCE_GITHUB_TOKEN helper — a github.com push would not authenticate as the SOURCE\
+        \ account\"\n  printf '%s\\n' \"$out\" | sed -E 's/^password=.+/password=<redacted>/'\n  exit 1\nfi\n"
+    - name: Write the issue into the agent input folder
+      env:
+        GH_TOKEN: ${{ github.token }}
+        NUMBER: ${{ inputs.issue }}
+      run: "# ticket.json carries the tracker-contract fields: dmtools hydrates\n# it into params.ticket for every JS action (Tracker abstraction).\nmkdir -p \"input/gh-${NUMBER}\"\ngh issue view \"$NUMBER\"\
+        \ --repo \"${{ github.repository }}\" \\\n  --json number,title,body,url,state,labels \\\n  -q '{key: (\"gh-\" + (.number|tostring)), number: .number,\n       title: .title, body: .body, url: .url,\
+        \ state: .state,\n       labels: [.labels[].name]}' \\\n  > \"input/gh-${NUMBER}/ticket.json\"\ngh issue view \"$NUMBER\" --repo \"${{ github.repository }}\" \\\n  --json title,body -q '.title,\
+        \ .body' > input/ticket.md\necho \"input/ticket.md: $(wc -l < input/ticket.md) lines\"\n"
+    - name: Run agent (fa provider via runner env overrides)
+      env:
+        CI_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RUNNER: ${{ needs.guard.outputs.runner }}
+        AI_AGENT_PROVIDER: fa
+        AI_TEAMMATE_CONFIG_FILE: ${{ needs.guard.outputs.config }}
+        AI_TEAMMATE_DISPLAY_KEY: GH-${{ inputs.issue }}
+        AI_TEAMMATE_CONCURRENCY_KEY: ${{ inputs.issue }}
+        ZAI_CODE_KEY: ${{ secrets.ZAI_CODE_KEY }}
+        KIMI_REVIEW_KEY: ${{ secrets.KIMI_REVIEW_KEY }}
+        SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+        GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN || github.token }}
+      run: "# FULL session trace: FA_LOG_FILE tees every line fa prints to the\n# file, uploaded as an artifact below; dmtools mirrors child output\n# live to its own stderr, so the agent's work streams\
+        \ into the log.\nFA_LOG_FILE=\"${GITHUB_WORKSPACE}/.dmtools/fa-trace.log\"\nexport FA_LOG_FILE\nmkdir -p \"$(dirname \"${FA_LOG_FILE}\")\"\ntouch \"${FA_LOG_FILE}\"\necho \"fa full trace: ${FA_LOG_FILE}\"\
+        \nRUN_OUTPUT=\"${GITHUB_WORKSPACE}/.dmtools/run-output.txt\"\ndmtools run \"${RUNNER}\" \\\n  --metadata '{\"contextId\":\"gh-${{ inputs.issue }}\"}' \\\n  --ciRunUrl \"${CI_RUN_URL}\" --debug 2>&1\
+        \ | tee \"${RUN_OUTPUT}\"\nRC=${PIPESTATUS[0]}\nexit \"${RC}\"\n"
+    - name: Apply the review verdict (review runs only)
+      if: needs.guard.outputs.kind == 'review'
+      env:
+        GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+        NUMBER: ${{ inputs.issue }}
+        RUN_OUTPUT: .dmtools/run-output.txt
+        MAX_ROUNDS: ${{ env.MAX_AUTO_REWORK_ROUNDS }}
+      run: "if [ -z \"${GH_TOKEN:-}\" ]; then\n  echo \"::warning::SOURCE_GITHUB_TOKEN not set — verdict labels would not trigger workflows; skipping (a maintainer must label manually)\"\n  exit 0\nfi\n\
+        repo=\"${{ github.repository }}\"\nlabels=\"$(gh issue view \"$NUMBER\" --repo \"$repo\" --json labels \\\n  --jq '[.labels[].name] | join(\" \")' 2>/dev/null || echo '')\"\nfind_linked_pr() {\n\
+        \  gh pr list --repo \"$repo\" --state open \\\n    --json number,body,headRefName --jq '\n    [.[] | select(\n        ((.body // \"\") | test(\"(?i)\\\\b(closes|fixes|resolves)\\\\s+#'\"$NUMBER\"\
+        '\\\\b\"))\n        or (.headRefName | test(\"^'\"$NUMBER\"'[-_.]\"))\n        or (.headRefName | test(\"(^|[-_./])gh-0*'\"$NUMBER\"'$\")))\n      | .number] | first // empty'\n}\npr=\"$(find_linked_pr)\"\
+        \n# Decision (pure logic, eval-safe key=value output): decision,\n# source, override, blocking_markers, rounds_done, next_round,\n# escalate, round_labels.\neval \"$(MAX_ROUNDS=\"${MAX_ROUNDS}\"\
+        \ \\\n  PR_REVIEW_JSON=\"outputs/pr_review.json\" \\\n  PR_REVIEW_JSON_ALT=\"outputs/gh-${NUMBER}/pr_review.json\" \\\n  RUN_OUTPUT=\"${RUN_OUTPUT}\" \\\n  ISSUE_LABELS=\"${labels}\" \\\n  bash\
+        \ factory-agents/setup/review-verdict.sh decide)\"\ndecision=\"${decision:-unknown}\"\nescalate=\"${escalate:-false}\"\nrounds_done=\"${rounds_done:-0}\"\nnext_round=\"${next_round:-0}\"\necho \"\
+        → review decision: ${decision} (source=${source:-none}, override=${override:-false}, rounds_done=${rounds_done})\"\nstrip_round_labels() {\n  for lbl in ${round_labels:-}; do\n    gh issue edit\
+        \ \"$NUMBER\" --repo \"$repo\" --remove-label \"$lbl\" || true\n  done\n}\n# bash -e: a missing label would abort the verdict transition —\n# create-or-update first (--force is an idempotent no-op).\n\
+        ensure_label() {\n  gh label create \"$1\" --repo \"$repo\" --color \"$2\" --force >/dev/null 2>&1 || true\n}\nif [ \"$decision\" = \"rework\" ]; then\n  if [ \"$escalate\" = \"true\" ]; then\n\
+        \    strip_round_labels\n    ensure_label \"needs-human\" \"B60205\"\n    gh issue edit \"$NUMBER\" --repo \"$repo\" --add-label \"needs-human\"\n    thread_summary=\"\"\n    if [ -n \"$pr\" ];\
+        \ then\n      owner=\"${GITHUB_REPOSITORY%%/*}\"\n      name=\"${GITHUB_REPOSITORY#*/}\"\n      threads_json=\"$(mktemp)\"\n      if gh api graphql \\\n        -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved\
+        \ path line comments(first:1){nodes{body author{login}}}}}}}}' \\\n        -f owner=\"$owner\" -f name=\"$name\" -F number=\"$pr\" \\\n        > \"$threads_json\"; then\n        thread_summary=\"\
+        $(bash factory-agents/setup/review-verdict.sh threads \"$threads_json\")\"\n      else\n        echo \"::warning::reviewThreads fetch failed — the findings live in the PR review comments\"\n   \
+        \   fi\n      rm -f \"$threads_json\"\n    fi\n    body_file=\"$(mktemp)\"\n    {\n      echo \"\U0001F6D1 **Auto-rework loop capped** — ${rounds_done} automatic rework rounds without an APPROVE\
+        \ verdict (cap: ${MAX_ROUNDS}). The machine stopped labeling \\`agent:rework\\`.\"\n      echo \"\"\n      if [ -n \"$pr\" ]; then\n        echo \"### Unresolved review threads on PR #${pr}\"\n\
+        \        echo \"\"\n        if [ -n \"$thread_summary\" ]; then\n          printf '%s\\n' \"$thread_summary\"\n        fi\n        echo \"\"\n        echo \"_If no threads are listed, the findings\
+        \ live in the PR general comments._\"\n      else\n        echo \"_No linked open PR found for this issue._\"\n      fi\n      echo \"\"\n      echo \"**Next step (human):** fix the remaining findings\
+        \ directly and re-label \\`agent:review\\` for a fresh review — or re-label \\`agent:rework\\` to re-arm the agent loop with a fresh round cap.\"\n    } > \"$body_file\"\n    gh issue comment \"\
+        $NUMBER\" --repo \"$repo\" --body-file \"$body_file\"\n    rm -f \"$body_file\"\n    echo \"→ labeled needs-human — auto-rework capped after ${rounds_done} round(s)\"\n    exit 0\n  fi\n  # agent:rework\
+        \ FIRST (ordering is load-bearing: the round-label\n  # event must not outrank the rework queue label), then the counter.\n  gh issue edit \"$NUMBER\" --repo \"$repo\" --remove-label \"needs-human\"\
+        \ || true\n  strip_round_labels\n  gh issue edit \"$NUMBER\" --repo \"$repo\" --add-label \"agent:rework\"\n  ensure_label \"rework-round-${next_round}\" \"BFD4F2\"\n  gh issue edit \"$NUMBER\"\
+        \ --repo \"$repo\" --add-label \"rework-round-${next_round}\"\n  echo \"→ labeled agent:rework (round ${next_round}/${MAX_ROUNDS}) — rework run queued (re-review follows automatically)\"\n  exit\
+        \ 0\nfi\nif [ \"$decision\" != \"approve\" ]; then\n  echo \"::warning::no verdict found in the run output — skipping labeling\"\n  exit 0\nfi\necho \"→ review verdict: approve\"\nif [ -z \"$pr\"\
+        \ ]; then\n  echo \"::warning::APPROVE verdict but no linked open PR for #${NUMBER} — skipping pr_approved\"\n  exit 0\nfi\necho \"→ linked PR #${pr} — waiting for green checks (≤10 min)\"\ndeadline=$((SECONDS\
+        \ + 600))\nwhile :; do\n  states=\"$(gh pr view \"$pr\" --repo \"$repo\" --json statusCheckRollup \\\n    --jq '.statusCheckRollup[] | if .status and .status != \"COMPLETED\"\n          then \"\
+        PENDING\" else (.conclusion // .state // \"PENDING\") end' \\\n    2>/dev/null || true)\"\n  if [ -n \"$states\" ]; then\n    if echo \"$states\" | grep -qxE 'FAILURE|ERROR|CANCELLED|TIMED_OUT|ACTION_REQUIRED|STARTUP_FAILURE|STALE';\
+        \ then\n      echo \"::warning::PR #${pr} checks FAILED — verdict not trusted, no label (a fresh dev/rework round must fix CI first)\"\n      exit 0\n    fi\n    if ! echo \"$states\" | grep -qvxE\
+        \ 'SUCCESS|SKIPPED|NEUTRAL'; then\n      echo \"→ PR #${pr} checks green\"\n      break\n    fi\n  fi\n  if [ \"$SECONDS\" -ge \"$deadline\" ]; then\n    echo \"::warning::PR #${pr} checks still\
+        \ pending after 10 min — skipping pr_approved (re-label or re-run to retry)\"\n    exit 0\n  fi\n  sleep 30\ndone\nstrip_round_labels\ngh issue edit \"$NUMBER\" --repo \"$repo\" --remove-label \"\
+        needs-human\" || true\ngh issue edit \"$NUMBER\" --repo \"$repo\" --add-label \"pr_approved\"\necho \"→ labeled pr_approved — merge-trigger will squash-merge PR #${pr} once CLEAN\"\n"
+    - name: Close the review cycle (review runs only)
+      if: always() && needs.guard.outputs.kind == 'review'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        NUMBER: ${{ inputs.issue }}
+      run: "gh issue edit \"$NUMBER\" --repo \"${{ github.repository }}\" \\\n  --remove-label \"agent:review\" || true\necho \"→ review cycle closed (agent:review removed)\"\n"
+    - name: Close the rework cycle (rework runs only)
+      if: always() && contains(needs.guard.outputs.runner, 'rework')
+      env:
+        GH_TOKEN: ${{ github.token }}
+        NUMBER: ${{ inputs.issue }}
+      run: "gh issue edit \"$NUMBER\" --repo \"${{ github.repository }}\" \\\n  --remove-label \"agent:rework\" || true\necho \"→ rework cycle closed (agent:rework removed)\"\n"
+    - name: Persist fa project memory into the repository
+      if: always()
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+      run: "bash factory-agents/setup/install-source-git-credentials.sh\necho \"── post-agent extraheader trace (must be empty) ──\"\ngit config --show-origin --get-all http.https://github.com/.extraheader\
+        \ | sed -E 's/^([^\\t]*\\t).*/\\1<redacted>/; t; s/.+/<redacted> (unexpected line without origin)/' || true\nif git config --get-all http.https://github.com/.extraheader | grep -q .; then\n  echo\
+        \ \"::error::App-token extraheader reappeared after the agent session — a mid-run re-assertion would push as github-actions[bot]\"\n  exit 1\nfi\nif [ -d .fah/memory ] && [ -n \"$(git status --porcelain\
+        \ -- .fah/memory)\" ]; then\n  git add .fah/memory\n  git commit -m \"chore(fa): persist agent project memory [skip ci]\"\n  git push || echo \"::warning::memory push rejected (protected branch?)\
+        \ — kept in run only\"\nelse\n  echo \"no new fa memory to persist\"\nfi\nif [ -f .dmtools/credential-helper.log ]; then\n  echo \"── SOURCE_GITHUB_TOKEN helper invocations this run ──\"\n  cat\
+        \ .dmtools/credential-helper.log\nfi\n"
+    - name: Upload the full fa session trace
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: fa-trace-gh-${{ inputs.issue }}-${{ github.run_id }}
+        path: '.dmtools/fa-trace.log
+
+          .dmtools/run-output.txt
+
+          .dmtools/credential-helper.log
+
+          '
+        if-no-files-found: ignore
+    - name: Persist fa session to its git branch
+      if: always()
+      env:
+        FA_SESS_BRANCH: fa-sess/gh-${{ inputs.issue }}
+        SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+      run: "if [ ! -d .dmtools/fa-sessions ] || \\\n   [ -z \"$(find .dmtools/fa-sessions -type f -print -quit 2>/dev/null)\" ]; then\n  echo \"no fa session to persist\"\n  exit 0\nfi\ngit config user.name\
+        \ \"dm.ai\"\ngit config user.email \"dm.ai@epam.com\"\ngit fetch --depth 1 origin \"refs/heads/$FA_SESS_BRANCH\" || true\nSESS_SNAP=\"$(mktemp -d)\"\ncp -a .dmtools/fa-sessions \"$SESS_SNAP/\"\n\
+        git switch --orphan \"$FA_SESS_BRANCH\" 2>/dev/null || git switch -C \"$FA_SESS_BRANCH\"\nrm -rf .dmtools/fa-sessions\nmkdir -p .dmtools\ncp -a \"$SESS_SNAP/fa-sessions\" .dmtools/\nrm -rf \"$SESS_SNAP\"\
+        \ngit add -f .dmtools/fa-sessions\nif git diff --cached --quiet; then\n  echo \"fa session staged nothing (ignored/empty) — nothing to persist\"\n  exit 0\nfi\ngit commit -m \"fa sessions: GH-${{\
+        \ inputs.issue }} (${{ needs.guard.outputs.config }}) [skip ci]\"\nif git push origin \"HEAD:$FA_SESS_BRANCH\" --force; then\n  echo \"→ fa session persisted to $FA_SESS_BRANCH\"\nelse\n  echo \"\
+        ::warning::fa session push rejected — session not persisted\"\nfi\n"
+    - name: Hand the issue to the reviewer (dev runs only)
+      if: needs.guard.outputs.kind == 'dev'
+      env:
+        GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+        NUMBER: ${{ inputs.issue }}
+      run: "gh issue edit \"$NUMBER\" --repo \"${{ github.repository }}\" \\\n  --remove-label \"agent:rework\" || true\ngh issue edit \"$NUMBER\" --repo \"${{ github.repository }}\" \\\n  --remove-label\
+        \ \"agent:review\" || true\ngh issue edit \"$NUMBER\" --repo \"${{ github.repository }}\" \\\n  --add-label \"agent:review\"\necho \"→ labeled agent:review (agent:rework stripped) — pr_review run\
+        \ queued\"\n"
+    - name: Link the run back to the issue
+      if: always()
+      env:
+        GH_TOKEN: ${{ github.token }}
+        NUMBER: ${{ inputs.issue }}
+        OUTCOME: ${{ job.status }}
+        CI_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: "gh issue comment \"$NUMBER\" --body \\\n  \"\U0001F916 AI Teammate run ${OUTCOME}: ${CI_RUN_URL:-$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID}\"\n"
