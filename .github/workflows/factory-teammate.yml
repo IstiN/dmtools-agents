@@ -60,6 +60,21 @@ on:
         description: 'Why this dispatch (audit trail, shown in logs)'
         required: false
         type: string
+      factory_ref:
+        description: "The ref this workflow was invoked with (same literal as the stub uses-ref; GitHub exposes no context for the called-workflow ref)."
+        required: true
+        type: string
+
+    secrets:
+      SOURCE_GITHUB_TOKEN:
+        description: 'PAT with repo scope — machine labels, pushes, PR/issue API (secrets: inherit does not cross repository boundaries).'
+        required: true
+      ZAI_CODE_KEY:
+        description: 'z.ai API key (dev/rework provider + review queue fallback)'
+        required: false
+      KIMI_REVIEW_KEY:
+        description: 'kimi API key (review provider, first in the queue)'
+        required: false
 
 concurrency:
   group: ai-teammate-issue-${{ inputs.issue }}
