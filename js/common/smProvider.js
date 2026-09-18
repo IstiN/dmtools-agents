@@ -233,7 +233,7 @@ function gitlabProvider(cfg) {
             // gitlab_list_issues accepts comma-separated labels (AND on
             // GitLab); machine labels are OR semantics, so list open issues
             // once and filter client-side.
-            var res = gitlab_list_issues({ state: 'opened', perPage: limit || 50 }) || [];
+            var res = gitlab_list_issues({ workspace: owner, repository: repo, state: 'opened', perPage: limit || 50 }) || [];
             return (res.issues || res || []).filter(function (it) {
                 var labels = it.labels || [];
                 var assignees = (it.assignees || []).map(function (a) { return a.username || a; });
@@ -245,13 +245,13 @@ function gitlabProvider(cfg) {
         findPr: function (issueNumber, branchPrefix) {
             var branch = branchPrefix + issueNumber;
             var bodyRe = new RegExp('(^|[^0-9])#' + issueNumber + '([^0-9]|$)');
-            var open = (gitlab_list_mrs({ state: 'opened' }) || []).filter(function (mr) {
+            var open = (gitlab_list_mrs({ workspace: owner, repository: repo, state: 'opened' }) || []).filter(function (mr) {
                 return mr.source_branch === branch || bodyRe.test(String(mr.description || ''));
             });
             if (open.length) {
                 return { number: open[0].iid, state: 'OPEN', branch: open[0].source_branch || branch };
             }
-            var merged = (gitlab_list_mrs({ state: 'merged' }) || []).filter(function (mr) {
+            var merged = (gitlab_list_mrs({ workspace: owner, repository: repo, state: 'merged' }) || []).filter(function (mr) {
                 return mr.source_branch === branch;
             });
             if (merged.length) {
@@ -261,9 +261,9 @@ function gitlabProvider(cfg) {
         },
 
         prStatus: function (mrNumber) {
-            var mr = gitlab_get_mr({ mergeRequestId: mrNumber }) || {};
+            var mr = gitlab_get_mr({ workspace: owner, repository: repo, pullRequestId: String(mrNumber) }) || {};
             // Pipelines for the MR head — the CI verdict.
-            var pipes = (gitlab_get_mr_pipelines({ mergeRequestId: mrNumber }) || {});
+            var pipes = (gitlab_get_mr_pipelines({ workspace: owner, repository: repo, pullRequestId: String(mrNumber) }) || {});
             var list = pipes.pipelines || pipes || [];
             var red = false, pending = false, any = false;
             list.forEach(function (p) {
@@ -287,7 +287,7 @@ function gitlabProvider(cfg) {
         activeMachineRuns: function () {
             // Pipelines do not expose trigger variables, so an API-sourced
             // running pipeline is conservatively "the machine is busy".
-            var res = gitlab_list_pipeline_runs({ status: 'running' }) || [];
+            var res = gitlab_list_pipeline_runs({ workspace: owner, repository: repo, status: 'running' }) || [];
             var runs = res.pipelines || res || [];
             var api = runs.filter(function (p) { return p.source === 'api' || p.source === 'trigger'; });
             return api.length ? ['unknown'] : [];
@@ -297,21 +297,23 @@ function gitlabProvider(cfg) {
             // The GitLab machine runner pipeline receives the leg the same
             // way ai-teammate.yml does on GitHub: variables.
             return gitlab_trigger_pipeline({
+                workspace: owner,
+                repository: repo,
                 ref: 'main',
-                variables: {
+                variablesJson: JSON.stringify({
                     issue: String(issueNumber),
                     leg: leg,
                     reason: reason || ''
-                }
+                })
             });
         },
 
         updateBranch: function (mrNumber) {
-            return gitlab_rebase_mr({ mergeRequestId: mrNumber });
+            return gitlab_rebase_mr({ workspace: owner, repository: repo, pullRequestId: String(mrNumber) });
         },
 
         merge: function (mrNumber) {
-            return gitlab_merge_mr({ mergeRequestId: mrNumber });
+            return gitlab_merge_mr({ workspace: owner, repository: repo, pullRequestId: String(mrNumber) });
         },
 
         closeIssue: function (issueNumber, comment) {
@@ -321,7 +323,7 @@ function gitlabProvider(cfg) {
                 issueNumber + ' left open (comment-only).');
             if (comment) {
                 // Issue notes ride the generic note path when present.
-                try { gitlab_create_mr_note({ mergeRequestId: issueNumber, note: comment }); }
+                try { gitlab_create_mr_note({ workspace: owner, repository: repo, pullRequestId: String(issueNumber), text: comment }); }
                 catch (e) { console.warn('  ⚠️ close-issue comment failed: ' + (e.message || e)); }
             }
             return null;
@@ -330,7 +332,7 @@ function gitlabProvider(cfg) {
         addIssueLabel: function (issueNumber, label) {
             // Issue-level labels ride the MR label tool shape; where the
             // project uses MR labels for machine state this is exact.
-            return gitlab_add_mr_label({ mergeRequestId: issueNumber, labels: [label] });
+            return gitlab_add_mr_label({ workspace: owner, repository: repo, pullRequestId: String(issueNumber), label: label });
         }
     };
 }

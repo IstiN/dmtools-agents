@@ -197,10 +197,18 @@ suite('smProvider', function () {
             gitlab_rebase_mr: function (args) { rebased = args; return {}; }
         });
         p.dispatchLeg(7, 'review', 'green', 'ai-teammate.yml');
-        assert.equal(trig.variables.issue, '7');
-        assert.equal(trig.variables.leg, 'review');
+        // Canonical tool contract (Java + Dart): workspace/repository scoping,
+        // variablesJson as a JSON string, pullRequestId as the MR id.
+        assert.equal(trig.workspace, 'mygroup');
+        assert.equal(trig.repository, 'my-repo');
+        assert.equal(trig.ref, 'main');
+        var vars = JSON.parse(trig.variablesJson);
+        assert.equal(vars.issue, '7');
+        assert.equal(vars.leg, 'review');
         p.updateBranch(7);
-        assert.equal(rebased.mergeRequestId, 7);
+        assert.equal(rebased.workspace, 'mygroup');
+        assert.equal(rebased.repository, 'my-repo');
+        assert.equal(rebased.pullRequestId, '7');
     });
 
     test('gitlab: closeIssue warns and stays non-fatal (documented gap)', function () {
