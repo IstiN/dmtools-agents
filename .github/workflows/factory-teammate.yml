@@ -470,6 +470,9 @@ jobs:
             echo '.dmtools/fa-sessions/'
             echo '.dmtools/copilot-sessions/'
             echo '.fah/bash_jobs/'
+            echo '# the factory clone itself: an in-index gitlink without'
+            echo '# .gitmodules breaks every actions/checkout with submodules'
+            echo 'factory-agents/'
           } >> .git/info/exclude
 
       - name: Write the issue into the agent input folder
