@@ -340,12 +340,20 @@ jobs:
           bash /tmp/dmtools-install.sh "${DMTOOLS_VERSION}"
           echo "$HOME/.dmtools/bin" >> "$GITHUB_PATH"
 
-      - name: Set up Flutter for agent work (cached)
-        # Agent legs compile/test target code: Flutter projects (fa) need the
-        # SDK on PATH or the agent burns minutes installing it per run. The
-        # action caches the SDK per version+os+arch; "" opts out for pure-Dart
-        # targets (dart ships in the runner image).
-        if: inputs.flutter-version != ''
+      # flutter-action treats a literal version string strictly — the words
+      # stable/beta/main/master are CHANNELS and crash the action ("Unable
+      # to determine Flutter version for channel: stable", live: gh-623 run
+      # 35370007049). Two steps with plain if-comparisons — the GH parser
+      # rejects map-indexing expressions inside with:.
+      - name: Set up Flutter for agent work (channel)
+        if: inputs.flutter-version == 'stable' || inputs.flutter-version == 'beta' || inputs.flutter-version == 'main' || inputs.flutter-version == 'master'
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ inputs.flutter-version }}
+          cache: true
+
+      - name: Set up Flutter for agent work (pinned version)
+        if: inputs.flutter-version != '' && !(inputs.flutter-version == 'stable' || inputs.flutter-version == 'beta' || inputs.flutter-version == 'main' || inputs.flutter-version == 'master')
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ inputs.flutter-version }}
