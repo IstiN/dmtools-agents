@@ -1,6 +1,10 @@
 name: Probe flutter channel fix
 on:
   workflow_dispatch:
+    inputs:
+      flutter:
+        description: 'stable | 3.24.0'
+        default: 'stable'
 jobs:
   flutter:
     runs-on: ubuntu-latest
