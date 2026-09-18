@@ -173,10 +173,13 @@ function stashGeneratedIndex() {
     }
 }
 
-function ensureCodegraphGitignoreEntry() {
+function ensureCodegraphLocalExclude() {
+    // .git/info/exclude (not .gitignore): the entry must never reach the
+    // target repo's committed files — agents run `git add -A`, and a
+    // factory-written .gitignore line would leak into every agent PR.
     try {
         var content = '';
-        try { content = file_read({ path: '.gitignore' }) || ''; } catch (e) { content = ''; }
+        try { content = file_read({ path: '.git/info/exclude' }) || ''; } catch (e) { content = ''; }
         var lines = content.split('\n');
         var alreadyPresent = false;
         for (var i = 0; i < lines.length; i++) {
@@ -185,18 +188,18 @@ function ensureCodegraphGitignoreEntry() {
         if (!alreadyPresent) {
             var sep = content && content.charAt(content.length - 1) !== '\n' ? '\n' : '';
             file_write({
-                path: '.gitignore',
+                path: '.git/info/exclude',
                 content: content + sep + '\n# CodeGraph generated index - regenerated per-run, must never be committed\n.codegraph/\n'
             });
         }
     } catch (e) {
-        console.warn('Could not add .codegraph/ to .gitignore:', e);
+        console.warn('Could not add .codegraph/ to .git/info/exclude:', e);
     }
 }
 
 function restoreGeneratedIndex() {
     try { runCmd({ command: 'git rm -r --cached --ignore-unmatch .codegraph' }); } catch (e) {}
-    ensureCodegraphGitignoreEntry();
+    ensureCodegraphLocalExclude();
     if (!commandSucceeds('bash -c "test -d .codegraph.branch-setup-bak"')) return;
     try {
         try { runCmd({ command: 'bash -c "rm -rf .codegraph"' }); } catch (e) {}

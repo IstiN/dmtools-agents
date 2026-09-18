@@ -378,9 +378,12 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
             -1,
             'normal branch work must not be discarded during pre-CLI setup'
         );
-        assert.equal(writes.length, 1, 'conflict guidance should be written');
-        assert.equal(writes[0].path, 'input/TS-1307/merge_conflicts.md');
-        assert.contains(writes[0].content, 'prefer `origin/main`');
+        var guidance = writes.filter(function (w) { return w.path === 'input/TS-1307/merge_conflicts.md'; });
+        assert.equal(guidance.length, 1, 'conflict guidance should be written');
+        assert.contains(guidance[0].content, 'prefer `origin/main`');
+        writes.forEach(function (w) {
+            assert.notEqual(w.path, '.gitignore', '.gitignore must never be written by factory setup');
+        });
     });
 
 });

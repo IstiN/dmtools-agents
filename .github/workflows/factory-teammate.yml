@@ -216,7 +216,11 @@ jobs:
     needs: guard
     if: needs.guard.outputs.run == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # A real fix is a 40-80 minute agent session (gh-623 burned a full RCA +
+    # TDD cycle at exactly 61 minutes and the job was killed mid-work).
+    # The autocommit timer (300s) bounds the blast radius of a kill; this
+    # timeout bounds the bill.
+    timeout-minutes: 120
     # Workflow-level env is NOT supported in reusable (workflow_call)
     # workflows — the factory failed validation at startup until this
     # moved down to the job.
@@ -433,6 +437,21 @@ jobs:
             printf '%s\n' "$out" | sed -E 's/^password=.+/password=<redacted>/'
             exit 1
           fi
+
+      - name: Seed local git excludes (factory workspace artifacts)
+        # Everything the factory/agent scribbles into the workspace that must
+        # NEVER reach a commit (agents run `git add -A`). .git/info/exclude is
+        # local-only by construction — no .gitignore pollution in agent PRs.
+        run: |
+          {
+            echo '# factory workspace artifacts (seeded per-run, never commit)'
+            echo '.codegraph/'
+            echo '.dmtools/fa-trace.log'
+            echo '.dmtools/run-output.txt'
+            echo '.dmtools/fa-sessions/'
+            echo '.dmtools/copilot-sessions/'
+            echo '.fah/bash_jobs/'
+          } >> .git/info/exclude
 
       - name: Write the issue into the agent input folder
         env:
