@@ -756,8 +756,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     var needsJql = !rule.source || rule.source === 'jira';
     // GitHub rules with explicit rule.inputs pin the runner via workflow
     // inputs (issue/leg) — configFile is only mandatory for the classic
-    // config_file dispatch shape.
-    if ((needsJql ? !rule.jql : !rule.query) || (!rule.configFile && !rule.inputs)) {
+    // config_file dispatch shape. localAction rules (close-on-merge) need
+    // neither: they act directly, no dispatch happens.
+    if ((needsJql ? !rule.jql : !rule.query) || (!rule.configFile && !rule.inputs && !rule.localAction)) {
         console.warn('  ⚠️  Skipping rule — ' + (needsJql ? 'jql' : 'query') +
             ' and configFile (or inputs) are required');
         return { processedKeys: [], skippedKeys: [] };
@@ -834,6 +835,26 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 skippedKeys.push(key);
                 continue;
             }
+        }
+
+        // localAction rules act directly on the source (no workflow dispatch,
+        // no AI runner) — e.g. close-on-merge finishing the cycle. Idempotency
+        // comes from the query itself: issues are searched with is:open, so a
+        // closed issue never matches again.
+        if (rule.localAction === 'close_issue') {
+            try {
+                github_close_issue({
+                    workspace: effectiveRepoInfo.owner,
+                    repository: effectiveRepoInfo.repo,
+                    number: ticket.issueNumber
+                });
+                console.log('  ✅ ' + key + ' issue #' + ticket.issueNumber +
+                    ' closed (linked PR #' + ticket.prNumber + ' merged)');
+                processedKeys.push(key);
+            } catch (e) {
+                console.error('  ❌ close_issue failed for ' + key + ': ' + (e.message || e));
+            }
+            continue;
         }
 
         if (rule.targetStatus) {
