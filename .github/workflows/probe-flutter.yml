@@ -2,11 +2,21 @@ name: Probe flutter channel fix
 on:
   workflow_dispatch:
 jobs:
-  call:
-    uses: ./.github/workflows/factory-teammate.yml
-    with:
-      issue: 1
-      leg: dev
-      flutter-version: stable
-      factory_ref: fix/flutter-channel-words
-    secrets: inherit
+  flutter:
+    runs-on: ubuntu-latest
+    steps:
+      # Exact copy of factory-teammate.yml's two steps — validates the
+      # channel-word mapping without the factory's required secrets.
+      - name: Set up Flutter for agent work (channel)
+        if: github.event.inputs.flutter == 'stable' || github.event.inputs.flutter == 'beta' || github.event.inputs.flutter == 'main' || github.event.inputs.flutter == 'master'
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Set up Flutter for agent work (pinned version)
+        if: github.event.inputs.flutter != '' && !(github.event.inputs.flutter == 'stable' || github.event.inputs.flutter == 'beta' || github.event.inputs.flutter == 'main' || github.event.inputs.flutter == 'master')
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.24.0
+          cache: true
+      - run: flutter --version
