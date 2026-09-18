@@ -64,6 +64,11 @@ on:
         description: 'The dmtools-agents ref the factory runs from (the literal in the stub uses-line). github.workflow_ref cannot serve: in a called workflow it carries the CALLER ref, not the uses-ref.'
         required: true
         type: string
+      flutter-version:
+        description: 'Flutter SDK for agent work (cached). "" skips — for pure-Dart targets that only need dart from the runner image. A value installs Flutter+matching Dart via flutter-action with SDK caching (e.g. "stable", "3.38.0").'
+        required: false
+        default: 'stable'
+        type: string
 
     secrets:
       SOURCE_GITHUB_TOKEN:
@@ -331,10 +336,25 @@ jobs:
           bash /tmp/dmtools-install.sh "${DMTOOLS_VERSION}"
           echo "$HOME/.dmtools/bin" >> "$GITHUB_PATH"
 
+      - name: Set up Flutter for agent work (cached)
+        # Agent legs compile/test target code: Flutter projects (fa) need the
+        # SDK on PATH or the agent burns minutes installing it per run. The
+        # action caches the SDK per version+os+arch; "" opts out for pure-Dart
+        # targets (dart ships in the runner image).
+        if: inputs.flutter-version != ''
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter-version }}
+          cache: true
+
       - name: Verify prerequisites
         run: |
           fa --version
           dmtools --version
+          if [ -n "${{ inputs.flutter-version }}" ]; then
+            flutter --version
+            dart --version
+          fi
 
       - name: Configure Git Author + push credentials
         # Purge the checkout's App token and make SOURCE_GITHUB_TOKEN the

@@ -84,6 +84,7 @@ target repo needs no copies of anything.
 |---|---|---|
 | `FA_VERSION_MACHINE` | `v0.1.392` | pins the `fa` CLI for the machine; falls back `FA_VERSION` (org) → `latest` |
 | `DMTOOLS_VERSION` | `v0.1.14` | pins the dmtools CLI release bundle the workflows install |
+| `FLUTTER_VERSION` | `stable` | Flutter SDK for agent work, cached per version (flutter-action). Empty string opts out — pure-Dart targets get `dart` from the runner image |
 | `SM_AGENTS_REF` | `<sha>` | pin of dmtools-agents the SM uses (a branch **hash**, not a mutable ref) |
 | `MERGE_TRIGGER_ENABLED` | `true` | fuse for merge-trigger.yml |
 
