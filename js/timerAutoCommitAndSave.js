@@ -51,12 +51,15 @@ function getContextId(params) {
  * Returns true if a commit was made.
  */
 function autoCommitAndPush(customParams, ticketKey) {
-    var targetRepo = customParams.targetRepository;
-    if (!targetRepo || !targetRepo.workingDir) {
-        return false;
+    var targetRepo = customParams.targetRepository || {};
+    // Fallback: explicit runner customParams → the job working directory.
+    // A missing config must never silently disable crash-safety commits
+    // (dev legs ran for years without targetRepository — the timer was a
+    // silent no-op there and kill-timeout runs lost the workspace).
+    var workingDir = targetRepo.workingDir || '.';
+    if (!targetRepo.workingDir) {
+        console.warn('⏱️ timer: targetRepository.workingDir not configured — falling back to the job directory');
     }
-
-    var workingDir = targetRepo.workingDir;
 
     // Safety net: never auto-commit/push while sitting on the base branch
     // (develop/main/...). If setup failed to switch onto the ticket branch
