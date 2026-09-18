@@ -36,6 +36,7 @@ function makeSmAgent(opts) {
     var capturedStatusMoves = [];
     var capturedJqls = [];
     var capturedCliCommands = [];
+    var capturedCloses = [];
 
     // Controlled file_read: config discovery paths from fileMap only; other paths from disk.
     var fileReadMock = function(readOpts) {
@@ -150,6 +151,16 @@ function makeSmAgent(opts) {
             });
         }
     };
+    // Optional github source stub: opts.github = { items: [...] } —
+    // for close-on-merge (localAction) rule tests.
+    if (opts.github) {
+        jiraSourceStub = {
+            query: function () { return opts.github.items; }
+        };
+        smMocks.github_close_issue = function (closeOpts) {
+            capturedCloses.push(closeOpts);
+        };
+    }
     var sm = loadModule(
         'js/smAgent.js',
         makeRequire({
@@ -168,7 +179,8 @@ function makeSmAgent(opts) {
         capturedLabels: capturedLabels,
         capturedStatusMoves: capturedStatusMoves,
         capturedJqls: capturedJqls,
-        capturedCliCommands: capturedCliCommands
+        capturedCliCommands: capturedCliCommands,
+        capturedCloses: capturedCloses
     };
 }
 
@@ -459,6 +471,55 @@ suite('smRuleOverrides: id-based patching (github rules)', function() {
       [{ id: 'other' }], { 'rework-on-red-ci': { limit: 5 } });
     assert.equal(patched[0].limit, undefined, 'no patch applied');
   });
+});
+
+suite('smAgent: localAction close_issue (github close-on-merge)', function () {
+
+    test('closes the issue when the linked PR is MERGED; no workflow dispatch', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'gh-155', labels: ['ai_developed', 'pr_approved'], issueNumber: 155, prNumber: 157,
+                      pr: { number: 157, state: 'MERGED', checks: 'none', mergeState: 'UNKNOWN', mergeable: null } }
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'GitHub: linked PR merged → close the issue',
+            source: 'github',
+            query: { type: 'issue', labels: ['ai_developed'], prState: 'MERGED' },
+            localAction: 'close_issue',
+            limit: 5,
+            id: 'close-on-merge'
+        }]));
+
+        assert.equal(sm.capturedCloses.length, 1, 'issue closed exactly once');
+        assert.equal(sm.capturedCloses[0].number, 155, 'closes the matching issue');
+        assert.equal(sm.capturedCloses[0].workspace, 'epam', 'owner from rule context');
+        assert.equal(sm.capturedCloses[0].repository, 'dmtools-dart', 'repo from rule context');
+        assert.equal(sm.capturedTriggers.length, 0, 'no workflow dispatched for a localAction rule');
+        assert.equal(sm.capturedLabels.length, 0, 'no label churn');
+    });
+
+    test('localAction rule is valid without configFile or inputs', function () {
+        // Smoke: the validation branch must not skip such rules (no crash, no dispatch).
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "a", repo: "b" } };' },
+            github: { items: [] }
+        });
+
+        sm.action(baseParams('a', 'b', [{
+            source: 'github',
+            query: { type: 'issue', labels: ['ai_developed'], prState: 'MERGED' },
+            localAction: 'close_issue',
+            id: 'close-on-merge'
+        }]));
+
+        assert.equal(sm.capturedCloses.length, 0, 'nothing to close');
+        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch');
+    });
 });
 
 suite('smAgent: ticket dispatch', function() {

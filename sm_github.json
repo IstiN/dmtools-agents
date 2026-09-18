@@ -64,6 +64,20 @@
           "limit": 1,
           "skipIfLabel": "sm_pr_merge_triggered",
           "id": "merge-approved-fifo"
+        },
+        {
+          "description": "GitHub: linked PR merged → close the issue (cycle complete)",
+          "source": "github",
+          "query": {
+            "type": "issue",
+            "labels": [
+              "ai_developed"
+            ],
+            "prState": "MERGED"
+          },
+          "localAction": "close_issue",
+          "limit": 5,
+          "id": "close-on-merge"
         }
       ]
     }
