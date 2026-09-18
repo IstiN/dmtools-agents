@@ -301,9 +301,19 @@ jobs:
               *)      FA_ARCH="arm64" ;;
             esac
             tmp="$(mktemp -d)"
-            gh release download "${FA_VERSION}" \
-              --repo IstiN/flutter_agent_harness \
-              --pattern "fa-linux-${FA_ARCH}.tar.gz" --dir "${tmp}" --clobber
+            # 'latest' is a WORD, not a tag — gh release download takes a
+            # literal tag; with no tag it resolves the latest release.
+            # (Live failure on IstiN/flutter_agent_harness gh-623: the repo
+            # has no FA_VERSION var -> 'latest' -> "release not found".)
+            if [ "${FA_VERSION}" = "latest" ] || [ -z "${FA_VERSION}" ]; then
+              gh release download \
+                --repo IstiN/flutter_agent_harness \
+                --pattern "fa-linux-${FA_ARCH}.tar.gz" --dir "${tmp}" --clobber
+            else
+              gh release download "${FA_VERSION}" \
+                --repo IstiN/flutter_agent_harness \
+                --pattern "fa-linux-${FA_ARCH}.tar.gz" --dir "${tmp}" --clobber
+            fi
             tar -xzf "${tmp}/fa-linux-${FA_ARCH}.tar.gz" -C "${tmp}"
             mkdir -p "${HOME}/.local/bin" "${HOME}/.local/lib"
             cp "${tmp}/bundle/bin/fa" "${HOME}/.local/bin/fa"
