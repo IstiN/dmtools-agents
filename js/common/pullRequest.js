@@ -15,8 +15,14 @@ function cleanCommandOutput(output) {
     }).join('\n').trim();
 }
 
+// Both GitHub and GitLab reject PR/MR titles over 255 characters. A prTitle
+// template like '{ticketKey} {ticketSummary}' can push an already-near-limit
+// ticket summary (itself truncated to 255 elsewhere) past that cap, so this is
+// the last-resort safety net right before the title is sent to gh/GitLab API.
+var MAX_TITLE_LENGTH = 255;
+
 function sanitizeTitle(title) {
-    return String(title || '')
+    var sanitized = String(title || '')
         .replace(/\r?\n/g, ' ')
         .replace(/"/g, '\\"')
         .replace(/->/g, '→')
@@ -24,6 +30,13 @@ function sanitizeTitle(title) {
         .replace(/[<>`|&;$]/g, ' ')
         .replace(/\s{2,}/g, ' ')
         .trim();
+
+    if (sanitized.length > MAX_TITLE_LENGTH) {
+        console.warn('PR/MR title exceeds ' + MAX_TITLE_LENGTH + ' characters (' + sanitized.length + '); truncating to fit GitHub/GitLab limit.');
+        sanitized = sanitized.substring(0, MAX_TITLE_LENGTH - 3) + '...';
+    }
+
+    return sanitized;
 }
 
 /** Escape a string so it can safely be placed inside a double-quoted shell argument.
