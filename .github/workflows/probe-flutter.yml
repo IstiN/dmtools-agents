@@ -1,0 +1,12 @@
+name: Probe flutter channel fix
+on:
+  workflow_dispatch:
+jobs:
+  call:
+    uses: ./.github/workflows/factory-teammate.yml@fix/flutter-channel-words
+    with:
+      issue: 1
+      leg: dev
+      flutter-version: stable
+      factory_ref: fix/flutter-channel-words
+    secrets: inherit
