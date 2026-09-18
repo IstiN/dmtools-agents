@@ -8,10 +8,18 @@ run_copilot() {
     echo "Using GITHUB_TOKEN as COPILOT_GITHUB_TOKEN"
   fi
 
+  # BYOK (custom provider) mode: the CLI itself states "GitHub authentication
+  # is not required when using a custom provider", so skip the token guard
+  # entirely instead of burning an extra LLM round-trip on a cached-credentials
+  # probe. COPILOT_PROVIDER_BASE_URL is what activates BYOK.
+  if [ -n "${COPILOT_PROVIDER_BASE_URL:-}" ]; then
+    if [ -z "${COPILOT_GITHUB_TOKEN:-}" ]; then
+      echo "COPILOT_PROVIDER_BASE_URL is set; skipping GitHub token requirement (custom provider/BYOK mode)"
+    fi
   # The local Copilot CLI can use cached device-code credentials in
   # ~/.config/github-copilot/auth.db when no token env var is set. Allow that
   # mode by skipping the hard error if gh CLI reports an active account.
-  if [ -z "${COPILOT_GITHUB_TOKEN:-}" ]; then
+  elif [ -z "${COPILOT_GITHUB_TOKEN:-}" ]; then
     if command -v copilot >/dev/null 2>&1; then
       # Try a tiny non-interactive prompt. If the CLI produces output and exits 0,
       # cached credentials are working. This avoids depending on the exact wording

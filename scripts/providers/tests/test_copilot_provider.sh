@@ -266,4 +266,52 @@ run_resume_notice_case "resume-name-gets-notice" "no" "yes"
 # inline-prompt behavior.
 run_resume_notice_case "fallback-fresh-name-no-notice" "yes" "no"
 
+# BYOK/custom-provider mode (COPILOT_PROVIDER_BASE_URL set) must skip the
+# GitHub token guard entirely, without wasting a "Reply exactly: ok" probe
+# call, even when neither COPILOT_GITHUB_TOKEN nor GITHUB_TOKEN is set.
+run_byok_no_token_case() {
+  local case_name="byok-skips-token-guard"
+  local case_dir="${TEST_ROOT}/${case_name}"
+  local fake_bin="${case_dir}/bin"
+  mkdir -p "${fake_bin}" "${case_dir}/outputs"
+
+  # Fails loudly if the probe prompt ("Reply exactly: ok") is ever sent —
+  # proves the cached-credentials probe was skipped, not just that it passed.
+  cat > "${fake_bin}/copilot" << 'BINEOF'
+#!/bin/bash
+if [ "${1:-}" = "--help" ]; then
+  echo "  --session-id"
+  exit 0
+fi
+for arg in "$@"; do
+  if [ "$arg" = "Reply exactly: ok" ]; then
+    echo "unexpected auth probe call under BYOK mode" >&2
+    exit 1
+  fi
+done
+printf 'Changes    +0 -0\nAI Credits 0 (1s)\nTokens     \u2191 0 (0 cached) \u2022 \u2193 0 (0 reasoning)\n'
+exit 0
+BINEOF
+  chmod +x "${fake_bin}/copilot"
+
+  (
+    cd "${case_dir}"
+    export HOME="${case_dir}"
+    export PATH="${fake_bin}:${PATH}"
+    export COPILOT_HOME="${case_dir}/copilot-home"
+    export COPILOT_PROVIDER_BASE_URL="http://core.dial.example.internal:8080"
+    export COPILOT_SESSION_ENABLED="false"
+    export AI_AGENT_USAGE_NAME="story_development"
+    export DMTOOLS_CLI_LOG_DIR="${case_dir}/logs"
+    unset COPILOT_GITHUB_TOKEN GITHUB_TOKEN COPILOT_SESSION_ID COPILOT_USD_PER_CREDIT
+    PROMPT_ARG="test prompt"
+    PROMPT="test prompt"
+    PROMPT_BYTES=11
+    PASS_ARGS=()
+
+    run_copilot >/dev/null 2>&1
+  )
+}
+run_byok_no_token_case
+
 echo "Copilot provider integration tests passed"
