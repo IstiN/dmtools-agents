@@ -6,6 +6,10 @@ Reviews a pull request like a senior reviewer: analyzes the diff, checks convent
 
 Configured via `customParams` in the agent JSON or the project `.dmtools/config.js` (project values win).
 
+- `cacheToReleases` — when enabled, the autocommit timer snapshots accumulated CLI output into a git release asset.
+- `scmProvider` — SCM provider override (`github`, `gitlab`, …) for this run.
+- `targetRepository` — repository override block (`owner`, `repo`, `baseBranch`, `workingDir`) — run the review against this repository instead of the project default.
+
 - `aiRepository` — repository the AI CLI works in when it differs from the PR repository.
 - `allowApproveWithSuggestions` — when `true`, the reviewer may approve a PR while leaving non-blocking suggestions.
 - `autoStartRework` — when `true`, automatically trigger the rework workflow when the review asks for changes.
