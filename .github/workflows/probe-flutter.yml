@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
 jobs:
   call:
-    uses: ./.github/workflows/factory-teammate.yml@fix/flutter-channel-words
+    uses: ./.github/workflows/factory-teammate.yml
     with:
       issue: 1
       leg: dev
