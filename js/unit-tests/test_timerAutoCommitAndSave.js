@@ -60,17 +60,25 @@ function loadTimer(mocks, opts) {
 
 suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
 
-    test('skips when targetRepository.workingDir is missing', function() {
+    test('falls back to the job directory when targetRepository.workingDir is missing', function() {
         var cliCalls = [];
         var m = loadTimer({
-            cli_execute_command: function(args) { cliCalls.push(args.command); return ''; }
+            cli_execute_command: function(args) {
+                cliCalls.push(args.command);
+                if (args.command.indexOf('git status') !== -1) return ''; // clean tree
+                return '';
+            }
         });
         m.action({
             ticket: { key: 'PROJ-123' },
             jobParams: { customParams: {}, metadata: { contextId: 'sf_story_development' } },
             currentCliOutput: ''
         });
-        assert.equal(cliCalls.length, 0);
+        // The timer must NOT silently no-op: it probes the job directory
+        // (crash-safety contract — a missing config used to disable the
+        // timer and kill-timeout runs lost the workspace).
+        assert.ok(cliCalls.some(function(c) { return c.indexOf('git status') !== -1; }),
+            'must probe the fallback job directory for changes');
     });
 
     test('does not commit when git status is clean', function() {
