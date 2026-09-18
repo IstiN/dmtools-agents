@@ -490,6 +490,30 @@ jobs:
             --json title,body -q '.title, .body' > input/ticket.md
           echo "input/ticket.md: $(wc -l < input/ticket.md) lines"
 
+      - name: Mark machine job started (issue task list)
+        # Deterministic start marker in the issue body — survives agent
+        # crashes/timeouts because the DONE twin below runs on always().
+        # Contract: a "## Machine jobs" section with one task-list line per
+        # factory run; the line's run URL is the unique id used to flip it.
+        env:
+          GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN || github.token }}
+          NUMBER: ${{ inputs.issue }}
+          JOB_LEG: ${{ needs.guard.outputs.kind }}
+          RUNNER: ${{ needs.guard.outputs.runner }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          repo="${{ github.repository }}"
+          leg="${JOB_LEG:-dev} ($(basename "${RUNNER:-agent}" .json))"
+          line="- [ ] ▶ ${leg} · [run](${RUN_URL}) · started $(date -u '+%H:%M') ⏳"
+          gh issue view "$NUMBER" --repo "$repo" --json body -q .body > /tmp/issue_body.md
+          if grep -q '^## Machine jobs' /tmp/issue_body.md; then
+            printf '%s\n' "$line" >> /tmp/issue_body.md
+          else
+            printf '\n## Machine jobs\n%s\n' "$line" >> /tmp/issue_body.md
+          fi
+          gh issue edit "$NUMBER" --repo "$repo" --body-file /tmp/issue_body.md
+          echo "job marker added: $line"
+
       - name: Run agent (fa provider via runner env overrides)
         env:
           CI_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -519,6 +543,44 @@ jobs:
             --ciRunUrl "${CI_RUN_URL}" --debug 2>&1 | tee "${RUN_OUTPUT}"
           RC=${PIPESTATUS[0]}
           exit "${RC}"
+
+      - name: Mark machine job done (issue task list)
+        # always(): the checkbox flips even when the agent run above timed
+        # out, was cancelled, or failed — the marker can never dangle.
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN || github.token }}
+          NUMBER: ${{ inputs.issue }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          JOB_RESULT: ${{ job.status }}
+        run: |
+          repo="${{ github.repository }}"
+          case "${JOB_RESULT}" in
+            success) mark="✅" ;;
+            failure) mark="❌" ;;
+            cancelled) mark="🚫" ;;
+            *) mark="⚠️ ${JOB_RESULT}" ;;
+          esac
+          end_ts="$(date -u '+%H:%M')"
+          gh issue view "$NUMBER" --repo "$repo" --json body -q .body > /tmp/issue_body.md
+          awk -v url="(${RUN_URL})" -v mark="$mark" -v end="$end_ts" '
+            index($0, url) > 0 && $0 ~ /^- \[ \]/ {
+              line = $0
+              sub(/^- \[ \] /, "- [x] ", line)
+              if (match(line, /started [0-9][0-9]:[0-9][0-9]/)) {
+                st = substr(line, RSTART, RLENGTH)
+                sub(/started [0-9][0-9]:[0-9][0-9] .*$/, st " · done " end " " mark, line)
+              }
+              $0 = line
+            }
+            { print }
+          ' /tmp/issue_body.md > /tmp/issue_body_new.md
+          if ! cmp -s /tmp/issue_body.md /tmp/issue_body_new.md; then
+            gh issue edit "$NUMBER" --repo "$repo" --body-file /tmp/issue_body_new.md
+            echo "job marker flipped to [x] ${mark}"
+          else
+            echo "::warning::start marker not found for ${RUN_URL} — nothing to flip"
+          fi
 
       - name: Apply the review verdict (review runs only)
         # Zero-maintainer keystone: convert the review agent's verdict into
