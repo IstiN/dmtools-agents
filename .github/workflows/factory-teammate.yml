@@ -314,15 +314,26 @@ jobs:
             # literal tag; with no tag it resolves the latest release.
             # (Live failure on IstiN/flutter_agent_harness gh-623: the repo
             # has no FA_VERSION var -> 'latest' -> "release not found".)
+            # A fresh latest release can also be asset-less for a while
+            # (v0.1.418 2026-09-18: tag landed, binaries never uploaded ->
+            # review leg died "no assets to download"). Walk back to the
+            # newest release that actually ships the CLI bundle.
             if [ "${FA_VERSION}" = "latest" ] || [ -z "${FA_VERSION}" ]; then
-              gh release download \
-                --repo IstiN/flutter_agent_harness \
-                --pattern "fa-linux-${FA_ARCH}.tar.gz" --dir "${tmp}" --clobber
-            else
-              gh release download "${FA_VERSION}" \
-                --repo IstiN/flutter_agent_harness \
-                --pattern "fa-linux-${FA_ARCH}.tar.gz" --dir "${tmp}" --clobber
+              for t in $(gh release list \
+                  --repo IstiN/flutter_agent_harness --limit 10 \
+                  --json tagName --jq '.[].tagName'); do
+                if gh release view "$t" --repo IstiN/flutter_agent_harness \
+                    --json assets --jq '.assets[].name' 2>/dev/null \
+                    | grep -q "^fa-linux-${FA_ARCH}\.tar\.gz$"; then
+                  FA_VERSION="$t"
+                  echo "fa install: latest asset-less, falling back to ${FA_VERSION}"
+                  break
+                fi
+              done
             fi
+            gh release download "${FA_VERSION}" \
+              --repo IstiN/flutter_agent_harness \
+              --pattern "fa-linux-${FA_ARCH}.tar.gz" --dir "${tmp}" --clobber
             tar -xzf "${tmp}/fa-linux-${FA_ARCH}.tar.gz" -C "${tmp}"
             mkdir -p "${HOME}/.local/bin" "${HOME}/.local/lib"
             cp "${tmp}/bundle/bin/fa" "${HOME}/.local/bin/fa"
