@@ -348,7 +348,12 @@ jobs:
         if: inputs.flutter-version != ''
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ inputs.flutter-version }}
+          # flutter-action treats a literal version string strictly — the
+          # words stable/beta/main are CHANNELS and crash the action
+          # ("Unable to determine Flutter version for channel: stable",
+          # live: gh-623 run 35370007049). Map channel-words to `channel:`.
+          channel: "${{ fromJSON('{\"stable\":\"stable\",\"beta\":\"beta\",\"main\":\"main\",\"master\":\"master\"}')[inputs.flutter-version] || '' }}"
+          flutter-version: "${{ !fromJSON('[\"stable\",\"beta\",\"main\",\"master\"]').includes(inputs.flutter-version) && inputs.flutter-version || '' }}"
           cache: true
 
       - name: Verify prerequisites
