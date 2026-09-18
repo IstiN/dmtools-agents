@@ -30,6 +30,27 @@ suite('pullRequest helper', function() {
         assert.notContains(title, '`', 'removes backtick');
     });
 
+    test('truncates an overlong title to 255 chars (GitHub/GitLab hard limit)', function() {
+        // Regression for GENSGENP-53793: '{ticketKey} {ticketSummary}' can push an
+        // already near-limit (255-char, truncated by createRepoTasks*.js) ticket
+        // summary over the GitLab MR title cap, causing
+        // "title is too long (maximum is 255 characters)".
+        var pr = loadPullRequestHelper();
+        var longTitle = 'GENSGENP-53793 ' + 'A'.repeat(300);
+        var result = pr.sanitizeTitle(longTitle);
+
+        assert.equal(result.length, 255, 'title truncated to 255 chars');
+        assert.equal(result.slice(-3), '...', 'truncated title ends with ellipsis');
+    });
+
+    test('leaves a title at or under 255 chars unchanged (aside from metachar sanitization)', function() {
+        var pr = loadPullRequestHelper();
+        var title = 'GENSGENP-1 ' + 'B'.repeat(200);
+        var result = pr.sanitizeTitle(title);
+
+        assert.equal(result, title, 'short title passes through unchanged');
+    });
+
     test('sanitizes commit messages and escapes quotes', function() {
         var pr = loadPullRequestHelper();
         var msg = pr.sanitizeCommitMessage("TS-1 Use <repo> and --header \"bad\" -> ok\nline");
