@@ -551,7 +551,7 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
 
     var RULES = {
         update: { source: 'github', query: { type: 'pr', labels: ['pr_approved'], mergeState: 'BEHIND' },
-                  localAction: 'update_branch', limit: 5, id: 'silent-update-armed' },
+                  localAction: 'update_branch', limit: 5, id: 'silent-update-behind' },
         validate: { source: 'github', query: { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'], notMergeState: 'BEHIND', draft: false },
                     localAction: 'validate_pr', limit: 1, id: 'validate-armed' },
         merge: { source: 'github', query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'green', mergeState: 'CLEAN' },
