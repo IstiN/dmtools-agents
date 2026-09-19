@@ -147,10 +147,19 @@ function githubProvider(cfg) {
                 else if (!concl || status === 'QUEUED' || status === 'IN_PROGRESS' ||
                          status === 'WAITING' || status === 'PENDING') pending = true;
             });
+            // Live shape: github_get_pr returns the REST body, where the
+            // field is `mergeable_state` with lowercase values (clean,
+            // dirty, blocked, behind, has_hooks, draft, unknown) — the
+            // GraphQL `mergeStateStatus` spelling never appears. Map REST
+            // first (uppercase), keep the GraphQL passthrough, and only
+            // then fall back to the coarse mergeable bool.
+            var ms = pr.mergeStateStatus ||
+                (pr.mergeable_state ? String(pr.mergeable_state).toUpperCase() : '') || '';
+            if (!ms) ms = pr.mergeable === true ? 'CLEAN' : 'UNKNOWN';
             return {
                 state: pr.state || 'OPEN',
                 checkConclusion: rollup.length === 0 ? 'none' : (red ? 'red' : (pending ? 'pending' : 'green')),
-                mergeState: pr.mergeStateStatus || (pr.mergeable === true ? 'CLEAN' : 'UNKNOWN'),
+                mergeState: ms,
                 mergeable: pr.mergeable
             };
         },

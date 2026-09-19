@@ -112,7 +112,11 @@ jobs:
           # it the GitHub integration counts as unconfigured and the JS
           # runtime does not expose github_* globals at all.
           SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
-          SILENT_GH_TOKEN: ${{ inputs.silent-token || secrets.SILENT_GH_TOKEN }}
+          # github.token does NOT cross the reusable-call boundary through
+          # inputs or secrets (live-verified BOTH arrive empty) — but a
+          # called workflow can reference its OWN github.token directly:
+          # same repo, same run, pushes with it trigger no workflows.
+          SILENT_GH_TOKEN: ${{ inputs.silent-token || secrets.SILENT_GH_TOKEN || github.token }}
         run: |
           repo='${{ github.repository }}'
           # #687: silentToken powers update_branch localActions (github.token

@@ -83,6 +83,35 @@ suite('smProvider', function () {
         assert.equal(st.mergeable, true);
     });
 
+    test('github: prStatus maps the REST mergeable_state (live github_get_pr shape)', function () {
+        // Live bug: the REST body carries mergeable_state (lowercase), not
+        // the GraphQL mergeStateStatus — the old fallback read mergeable===
+        // true and reported BEHIND PRs as CLEAN, so silent-update-behind
+        // never matched (live: 5 PRs sat behind, tick processed 0).
+        var shape = { state: 'OPEN', mergeable: true, statusCheckRollup: [] };
+        var p = loadProvider('github', {
+            github_get_pr: function () {
+                // mergeStateStatus deliberately ABSENT — REST shape.
+                return Object.assign({}, shape, { mergeable_state: currentRest });
+            }
+        });
+        var currentRest = 'behind';
+        assert.equal(p.prStatus(7).mergeState, 'BEHIND');
+        currentRest = 'dirty';
+        assert.equal(p.prStatus(7).mergeState, 'DIRTY');
+        currentRest = 'blocked';
+        assert.equal(p.prStatus(7).mergeState, 'BLOCKED');
+        currentRest = 'unknown';
+        assert.equal(p.prStatus(7).mergeState, 'UNKNOWN');
+        // Neither field present: coarse bool fallback stays.
+        var fb = loadProvider('github', {
+            github_get_pr: function () {
+                return { state: 'OPEN', mergeable: true, statusCheckRollup: [] };
+            }
+        });
+        assert.equal(fb.prStatus(7).mergeState, 'CLEAN');
+    });
+
     test('github: activeMachineRuns parses gh-N from in-progress run titles', function () {
         var statuses = [];
         var p = loadProvider('github', {
