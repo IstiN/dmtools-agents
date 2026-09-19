@@ -44,11 +44,11 @@ function cleanCommandOutput(output) {
     if (!output) {
         return '';
     }
-    const lines = output.split('\n').filter(function(line) {
+    const lines = output.split('\n').filter(function (line) {
         return line.indexOf('Script started') === -1 &&
-               line.indexOf('Script done') === -1 &&
-               line.indexOf('COMMAND=') === -1 &&
-               line.indexOf('COMMAND_EXIT_CODE=') === -1;
+            line.indexOf('Script done') === -1 &&
+            line.indexOf('COMMAND=') === -1 &&
+            line.indexOf('COMMAND_EXIT_CODE=') === -1;
     });
     return lines.join('\n').trim();
 }
@@ -163,10 +163,10 @@ function commandSucceeds(command) {
 }
 
 function stashGeneratedIndex() {
-    try { runCmd({ command: 'git rm -r --cached --ignore-unmatch .codegraph' }); } catch (e) {}
+    try { runCmd({ command: 'git rm -r --cached --ignore-unmatch .codegraph' }); } catch (e) { }
     if (!commandSucceeds('bash -c "test -d .codegraph"')) return;
     try {
-        try { runCmd({ command: 'bash -c "rm -rf .codegraph.branch-setup-bak"' }); } catch (e) {}
+        try { runCmd({ command: 'bash -c "rm -rf .codegraph.branch-setup-bak"' }); } catch (e) { }
         runCmd({ command: 'bash -c "mv .codegraph .codegraph.branch-setup-bak"' });
     } catch (e) {
         console.warn('Could not move .codegraph aside before branch setup:', e);
@@ -198,11 +198,11 @@ function ensureCodegraphLocalExclude() {
 }
 
 function restoreGeneratedIndex() {
-    try { runCmd({ command: 'git rm -r --cached --ignore-unmatch .codegraph' }); } catch (e) {}
+    try { runCmd({ command: 'git rm -r --cached --ignore-unmatch .codegraph' }); } catch (e) { }
     ensureCodegraphLocalExclude();
     if (!commandSucceeds('bash -c "test -d .codegraph.branch-setup-bak"')) return;
     try {
-        try { runCmd({ command: 'bash -c "rm -rf .codegraph"' }); } catch (e) {}
+        try { runCmd({ command: 'bash -c "rm -rf .codegraph"' }); } catch (e) { }
         runCmd({ command: 'bash -c "mv .codegraph.branch-setup-bak .codegraph"' });
     } catch (e) {
         console.warn('Could not restore .codegraph after branch setup:', e);
@@ -216,7 +216,7 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
     // Write workingDir to a known file so CLI shell scripts (e.g. create_test_commit.sh)
     // can discover the correct dependency dir without duplicating resolution logic.
     if (_workingDir) {
-        try { file_write({ path: '.dmtools-target-workingdir', content: _workingDir }); } catch (e) {}
+        try { file_write({ path: '.dmtools-target-workingdir', content: _workingDir }); } catch (e) { }
     }
     var branchName = configLoader.resolveBranchName(config, ticket, 'development');
     var rebaseBase = configLoader.resolvePRTargetBranch(config, ticket);
@@ -246,100 +246,100 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
     }
 
     try {
-    if (localBranches.trim()) {
-        console.log('Branch exists locally, aligning with base:', branchName);
-        runCmd({ command: 'git checkout ' + branchName });
-        alignBranchWithBase(ticketKey, branchName, rebaseBase);
-    } else {
-        var remoteBranches = '';
-        try {
-            var rawRemote = runCmd({ command: 'git ls-remote --heads origin ' + branchName }) || '';
-            remoteBranches = cleanCommandOutput(rawRemote);
-        } catch (e) {
-            console.warn('Error checking remote branches:', e);
-        }
-
-        if (remoteBranches.trim()) {
-            console.log('Branch exists on remote, fetching and aligning with base:', branchName);
-            // Explicitly fetch the branch so origin/<branch> tracking ref is available locally.
-            // git fetch origin --prune may not populate it if the repo is sparse/shallow.
-            try {
-                runCmd({ command: prHelper.buildOriginFetchCommand(branchName + ':' + branchName) });
-                runCmd({ command: 'git checkout ' + branchName });
-            } catch (fetchCheckoutErr) {
-                console.warn('fetch+checkout failed, resetting local branch from origin:', fetchCheckoutErr);
-                prHelper.ensureRemoteBranchRef(runCommandStr, _workingDir, branchName);
-                runCmd({ command: 'git checkout -B ' + branchName + ' origin/' + branchName });
-            }
+        if (localBranches.trim()) {
+            console.log('Branch exists locally, aligning with base:', branchName);
+            runCmd({ command: 'git checkout ' + branchName });
             alignBranchWithBase(ticketKey, branchName, rebaseBase);
         } else {
-            // New branch: in two-branch mode, ensure feature branch exists first
-            var branchBase = config.git.baseBranch;
-            if (config.git.featureBranch && config.git.featureBranch.enabled) {
-                var featureBranchName = configLoader.resolveBranchName(config, ticket, 'feature');
-                var featureLocal = '';
+            var remoteBranches = '';
+            try {
+                var rawRemote = runCmd({ command: 'git ls-remote --heads origin ' + branchName }) || '';
+                remoteBranches = cleanCommandOutput(rawRemote);
+            } catch (e) {
+                console.warn('Error checking remote branches:', e);
+            }
+
+            if (remoteBranches.trim()) {
+                console.log('Branch exists on remote, fetching and aligning with base:', branchName);
+                // Explicitly fetch the branch so origin/<branch> tracking ref is available locally.
+                // git fetch origin --prune may not populate it if the repo is sparse/shallow.
                 try {
-                    featureLocal = cleanCommandOutput(runCmd({ command: 'git branch --list "' + featureBranchName + '"' }) || '');
-                } catch (e) {}
-                var featureRemote = '';
-                try {
-                    featureRemote = cleanCommandOutput(runCmd({ command: 'git ls-remote --heads origin ' + featureBranchName }) || '');
-                } catch (e) {}
-                if (!featureLocal.trim() && !featureRemote.trim()) {
-                    var branchCreateFn = customParams.branchCreateFnPath
-                        ? configLoader.loadHookFn(customParams.branchCreateFnPath, 'branchCreateFnPath')
-                        : null;
-                    if (branchCreateFn) {
-                        console.log('Two-branch mode: delegating feature branch creation to', customParams.branchCreateFnPath, '→', featureBranchName);
-                        branchCreateFn({
-                            branchName: featureBranchName,
-                            baseBranch: config.git.baseBranch,
-                            workingDir: config.workingDir,
-                            ticket: ticket,
-                            config: config
-                        });
-                        // The hook is responsible for making featureBranchName exist on origin
-                        // (e.g. via an external CI job) — fetch it and check it out like any
-                        // other pre-existing remote branch.
-                        runCmd({ command: prHelper.buildOriginFetchCommand() });
+                    runCmd({ command: prHelper.buildOriginFetchCommand(branchName + ':' + branchName) });
+                    runCmd({ command: 'git checkout ' + branchName });
+                } catch (fetchCheckoutErr) {
+                    console.warn('fetch+checkout failed, resetting local branch from origin:', fetchCheckoutErr);
+                    prHelper.ensureRemoteBranchRef(runCommandStr, _workingDir, branchName);
+                    runCmd({ command: 'git checkout -B ' + branchName + ' origin/' + branchName });
+                }
+                alignBranchWithBase(ticketKey, branchName, rebaseBase);
+            } else {
+                // New branch: in two-branch mode, ensure feature branch exists first
+                var branchBase = config.git.baseBranch;
+                if (config.git.featureBranch && config.git.featureBranch.enabled) {
+                    var featureBranchName = configLoader.resolveBranchName(config, ticket, 'feature');
+                    var featureLocal = '';
+                    try {
+                        featureLocal = cleanCommandOutput(runCmd({ command: 'git branch --list "' + featureBranchName + '"' }) || '');
+                    } catch (e) { }
+                    var featureRemote = '';
+                    try {
+                        featureRemote = cleanCommandOutput(runCmd({ command: 'git ls-remote --heads origin ' + featureBranchName }) || '');
+                    } catch (e) { }
+                    if (!featureLocal.trim() && !featureRemote.trim()) {
+                        var branchCreateFn = customParams.branchCreateFnPath
+                            ? configLoader.loadHookFn(customParams.branchCreateFnPath, 'branchCreateFnPath')
+                            : null;
+                        if (branchCreateFn) {
+                            console.log('Two-branch mode: delegating feature branch creation to', customParams.branchCreateFnPath, '→', featureBranchName);
+                            branchCreateFn({
+                                branchName: featureBranchName,
+                                baseBranch: config.git.baseBranch,
+                                workingDir: config.workingDir,
+                                ticket: ticket,
+                                config: config
+                            });
+                            // The hook is responsible for making featureBranchName exist on origin
+                            // (e.g. via an external CI job) — fetch it and check it out like any
+                            // other pre-existing remote branch.
+                            runCmd({ command: prHelper.buildOriginFetchCommand() });
+                            runCmd({ command: 'git checkout -b ' + featureBranchName + ' origin/' + featureBranchName });
+                        } else {
+                            console.log('Two-branch mode: creating feature branch from', config.git.baseBranch + ':', featureBranchName);
+                            // ensureRemoteBranchRef fetches with an explicit destination refspec
+                            // (+refs/heads/<b>:refs/remotes/origin/<b>) so origin/<baseBranch> exists
+                            // even in a shallow/single-branch CI clone that never checked this branch
+                            // out before (e.g. a fixVersion-derived "develop/3.9.0") — a plain
+                            // `git checkout <baseBranch>` would otherwise fail with "pathspec ...
+                            // did not match any file(s) known to git".
+                            prHelper.ensureRemoteBranchRef(runCommandStr, _workingDir, config.git.baseBranch);
+                            runCmd({ command: 'git checkout -B ' + config.git.baseBranch + ' origin/' + config.git.baseBranch });
+                            runCmd({ command: 'git checkout -b ' + featureBranchName });
+                            runCmd({ command: 'git push -u origin ' + featureBranchName });
+                        }
+                    } else if (featureRemote.trim() && !featureLocal.trim()) {
                         runCmd({ command: 'git checkout -b ' + featureBranchName + ' origin/' + featureBranchName });
                     } else {
-                        console.log('Two-branch mode: creating feature branch from', config.git.baseBranch + ':', featureBranchName);
-                        // ensureRemoteBranchRef fetches with an explicit destination refspec
-                        // (+refs/heads/<b>:refs/remotes/origin/<b>) so origin/<baseBranch> exists
-                        // even in a shallow/single-branch CI clone that never checked this branch
-                        // out before (e.g. a fixVersion-derived "develop/3.9.0") — a plain
-                        // `git checkout <baseBranch>` would otherwise fail with "pathspec ...
-                        // did not match any file(s) known to git".
-                        prHelper.ensureRemoteBranchRef(runCommandStr, _workingDir, config.git.baseBranch);
-                        runCmd({ command: 'git checkout -B ' + config.git.baseBranch + ' origin/' + config.git.baseBranch });
-                        runCmd({ command: 'git checkout -b ' + featureBranchName });
-                        runCmd({ command: 'git push -u origin ' + featureBranchName });
+                        runCmd({ command: 'git checkout ' + featureBranchName });
                     }
-                } else if (featureRemote.trim() && !featureLocal.trim()) {
-                    runCmd({ command: 'git checkout -b ' + featureBranchName + ' origin/' + featureBranchName });
-                } else {
-                    runCmd({ command: 'git checkout ' + featureBranchName });
+                    branchBase = featureBranchName;
+                    console.log('Two-branch mode: dev branch will be created from feature branch:', featureBranchName);
                 }
-                branchBase = featureBranchName;
-                console.log('Two-branch mode: dev branch will be created from feature branch:', featureBranchName);
+                console.log('Creating new branch from', branchBase + ':', branchName);
+                // ensureRemoteBranchRef fetches with an explicit destination refspec so
+                // origin/<branchBase> actually exists locally before checkout — a plain
+                // `git fetch origin <branchBase>` (no destination refspec) only updates
+                // FETCH_HEAD, so a subsequent `git checkout <branchBase>` fails with
+                // "pathspec ... did not match any file(s) known to git" whenever branchBase
+                // was never checked out in this clone before (e.g. a fresh/shallow CI clone,
+                // or a fixVersion-derived base branch like "develop/3.9.0" seen for the first
+                // time on this runner/cache).
+                prHelper.ensureRemoteBranchRef(runCommandStr, _workingDir, branchBase);
+                runCmd({ command: 'git checkout -B ' + branchBase + ' origin/' + branchBase });
+                runCmd({ command: 'git checkout -b ' + branchName });
             }
-            console.log('Creating new branch from', branchBase + ':', branchName);
-            // ensureRemoteBranchRef fetches with an explicit destination refspec so
-            // origin/<branchBase> actually exists locally before checkout — a plain
-            // `git fetch origin <branchBase>` (no destination refspec) only updates
-            // FETCH_HEAD, so a subsequent `git checkout <branchBase>` fails with
-            // "pathspec ... did not match any file(s) known to git" whenever branchBase
-            // was never checked out in this clone before (e.g. a fresh/shallow CI clone,
-            // or a fixVersion-derived base branch like "develop/3.9.0" seen for the first
-            // time on this runner/cache).
-            prHelper.ensureRemoteBranchRef(runCommandStr, _workingDir, branchBase);
-            runCmd({ command: 'git checkout -B ' + branchBase + ' origin/' + branchBase });
-            runCmd({ command: 'git checkout -b ' + branchName });
         }
-    }
 
-    console.log('Branch ready:', branchName);
+        console.log('Branch ready:', branchName);
     } finally {
         restoreGeneratedIndex();
     }
@@ -377,13 +377,6 @@ function action(params) {
         var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
         var statuses = resolveStatuses(customParams, config.jira && config.jira.statuses);
 
-        // Persist the resolved base branch to outputs/pr_base_branch.txt so that
-        // quality-gate shell commands (static strings in the job's JSON config, unable
-        // to reference config.git.baseBranch at runtime) can read the actual branch
-        // this ticket develops against instead of relying on a hardcoded literal like
-        // "origin/master" — see js/common/baseBranchMarker.js docblock for the rationale.
-        baseBranchMarker.writeBaseBranchMarker(config.git.baseBranch);
-
         // Restore configured artefacts (e.g. cosmo test reports) from GitHub Release — non-fatal
         try { restoreFromReleases.action(params); } catch (e) { console.warn('⚠️ restoreFromReleases failed (non-fatal):', e); }
 
@@ -408,6 +401,18 @@ function action(params) {
             postSetupErrorToJira(ticketKey, 'Git Branch Setup', branchError);
             throw new Error('Git branch setup failed: ' + branchError);
         }
+
+        // Persist the resolved base branch to outputs/pr_base_branch.txt so that
+        // quality-gate shell commands (static strings in the job's JSON config, unable
+        // to reference config.git.baseBranch at runtime) can read the actual branch
+        // this ticket develops against instead of relying on a hardcoded literal like
+        // "origin/master" — see js/common/baseBranchMarker.js docblock for the rationale.
+        // Written AFTER checkout: writing it before left an untracked file in the working
+        // tree that collided with `git checkout -B <branch> origin/<branch>` whenever a
+        // prior run had leaked this same marker into a commit on that branch (e.g. via a
+        // `git add -A` auto-save), aborting checkout with "untracked working tree files
+        // would be overwritten".
+        baseBranchMarker.writeBaseBranchMarker(config.git.baseBranch);
 
         // 3. Fetch questions with answers into input folder
         fetchQuestionsToInput.action(actualParams);
