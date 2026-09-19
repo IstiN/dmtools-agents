@@ -102,7 +102,7 @@ jobs:
       kind: ${{ steps.check.outputs.kind }}
     steps:
       - name: Checkout target repository (config, runners)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # caller-repo checkout: the factory reads .dmtools/config.js from
           # the TARGET repository, never from the factory pack
@@ -231,7 +231,7 @@ jobs:
       MAX_AUTO_REWORK_ROUNDS: ${{ vars.MAX_AUTO_REWORK_ROUNDS || 2 }}
     steps:
       - name: Checkout target repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # The engine rides factory-agents/ (checked out next), but the
           # parent runner configs reference the target's submodule paths
@@ -251,7 +251,7 @@ jobs:
           echo "FACTORY_REF=${{ inputs.factory_ref }}" >> "$GITHUB_ENV"
 
       - name: "Checkout factory (dmtools-agents: runners + scripts)"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: IstiN/dmtools-agents
           ref: ${{ env.FACTORY_REF }}
@@ -786,7 +786,7 @@ jobs:
         # AFTER the memory-persist push: the artifact must include the final
         # helper invocation of the run.
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fa-trace-gh-${{ inputs.issue }}-${{ github.run_id }}
           path: |
