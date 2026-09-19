@@ -490,3 +490,8 @@ A Dark Factory setup is not complete until:
 - One real intake child triggers an agent dispatch.
 - Labels are used as locks and approvals according to the SM rules.
 - `main` cannot be changed except through the protected PR flow.
+- Runtime folders (`input/`, `outputs/`, `memory/`) are gitignored, untracked,
+  and agent PRs contain product changes only — no runtime artifacts, no stash
+  conflict markers.
+e SM rules.
+- `main` cannot be changed except through the protected PR flow.
