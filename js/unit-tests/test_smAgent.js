@@ -638,6 +638,25 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
     });
 
+    test('review-on-label: no re-dispatch while the stub run is active (dup guard)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(80, { labels: ['agent:review'] })] },
+            workflowRuns: { in_progress: [
+                // Stub-titled run for a DIFFERENT key — must not block.
+                { name: '\u25b6 review (SM) \u00b7 pr-79', id: 1, updated_at: new Date().toISOString() },
+                { name: '\u25b6 review (SM) \u00b7 pr-80', id: 2, updated_at: new Date().toISOString() }
+            ] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['agent:review'] },
+              workflowFile: 'ai-teammate.yml',
+              inputs: { issue: '', leg: 'review', reason: 'sm: agent:review label on PR', pr: '{prNumber}' },
+              id: 'review-on-label' }
+        ] } });
+        assert.equal(sm.capturedTriggers.length, 0,
+            'active stub-titled run for the same key blocks the re-dispatch');
+    });
+
     test('fail_validation: external PR (no linked issue) — report only', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: { items: [prItem(73, { labels: ['pr_approved', 'ai_validating'] })], pr: { number: 73, body: 'no link' } }
