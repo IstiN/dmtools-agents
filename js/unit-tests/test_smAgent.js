@@ -581,7 +581,11 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         sm.action(params);
 
         assert.equal(sm.capturedCliCommands.length, 1, 'one update command');
-        assert.equal(sm.capturedCliCommands[0].command, 'gh pr update-branch 681 --repo epam/dmtools-dart');
+        // REST endpoint, not `gh pr update-branch`: the GraphQL
+        // updatePullRequestBranch mutation hard-denies github-actions[bot]
+        // regardless of token scopes (live-verified twice).
+        assert.equal(sm.capturedCliCommands[0].command,
+            'gh api -X PATCH repos/epam/dmtools-dart/pulls/681/update-branch');
         // swap → update → restore, in that order
         assert.equal(sm.capturedEnvSets.length, 2, 'token swapped and restored');
         assert.equal(sm.capturedEnvSets[0].name, 'GH_TOKEN');
