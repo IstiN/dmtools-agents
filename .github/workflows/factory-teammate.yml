@@ -509,6 +509,12 @@ jobs:
           leg="${JOB_LEG:-dev} ($(basename "${RUNNER:-agent}" .json))"
           line="- [ ] ▶ ${leg} · [run](${RUN_URL}) · started $(date -u '+%H:%M') ⏳"
           gh issue view "$NUMBER" --repo "$repo" --json body -q .body > /tmp/issue_body.md
+          # Collapse trailing blank lines first: body rewrites (jq raw
+          # output, earlier appends, agent edits) can leave trailing
+          # newlines, and a marker appended after them splits the GitHub
+          # task list into separate lists (broken formatting). "$(cat …)"
+          # strips ALL trailing newlines; printf adds exactly one back.
+          printf '%s\n' "$(cat /tmp/issue_body.md)" > /tmp/issue_body.md
           if grep -q '^## Machine jobs' /tmp/issue_body.md; then
             printf '%s\n' "$line" >> /tmp/issue_body.md
           else
