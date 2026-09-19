@@ -63,6 +63,31 @@ function asList(parsed) {
 function githubProvider(cfg) {
     var owner = cfg.repository.owner;
     var repo = cfg.repository.repo;
+
+    // Default-branch HEAD cache (one SM tick). REST mergeable_state
+    // lazily recomputes to `unknown` right after a base push, so
+    // behind/CLEAN is computed deterministically from base.sha vs the
+    // live branch head (github_list_branches is always current).
+    var branchHeads = {};
+    function branchHead(name) {
+        if (!(name in branchHeads)) {
+            branchHeads[name] = null;
+            if (typeof github_list_branches === 'function') {
+                try {
+                    var branches = parseMcp(github_list_branches({
+                        workspace: owner, repository: repo
+                    })) || [];
+                    for (var i = 0; i < branches.length; i++) {
+                        if (branches[i].name === name) {
+                            branchHeads[name] = branches[i].commit && branches[i].commit.sha;
+                            break;
+                        }
+                    }
+                } catch (e) { /* older runtime without the tool */ }
+            }
+        }
+        return branchHeads[name];
+    }
     var full = owner + '/' + repo;
 
     function ghIssueToState(it) {
@@ -174,6 +199,15 @@ function githubProvider(cfg) {
             // then fall back to the coarse mergeable bool.
             var ms = pr.mergeStateStatus ||
                 (pr.mergeable_state ? String(pr.mergeable_state).toUpperCase() : '') || '';
+            // Deterministic override (see branchHead): DIRTY on real
+            // conflicts, else CLEAN/BEHIND from base freshness. Falls
+            // back to the REST mapping only when the head is unknowable.
+            if (pr.mergeable === false) {
+                ms = 'DIRTY';
+            } else if (pr.base && pr.base.ref) {
+                var head = branchHead(pr.base.ref);
+                if (head) ms = pr.base.sha === head ? 'CLEAN' : 'BEHIND';
+            }
             if (!ms) ms = pr.mergeable === true ? 'CLEAN' : 'UNKNOWN';
             return {
                 state: pr.state || 'OPEN',
