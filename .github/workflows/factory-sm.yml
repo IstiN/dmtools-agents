@@ -97,7 +97,7 @@ jobs:
         # The installer ships as a release asset, version-locked to the
         # bundle it installs — no copy of install.sh in the target repo.
         env:
-          DMTOOLS_VERSION: ${{ vars.DMTOOLS_VERSION || 'v0.1.14' }}
+          DMTOOLS_VERSION: ${{ vars.DMTOOLS_VERSION || 'v0.1.16' }}
         run: |
           curl -fsSL "https://github.com/epam/dmtools-dart/releases/download/${DMTOOLS_VERSION}/install.sh" \
             -o /tmp/dmtools-install.sh
