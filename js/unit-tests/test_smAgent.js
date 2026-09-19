@@ -571,9 +571,9 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
             'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
     }
 
-    test('update_branch: silent token swap around the gh update, restore after', function () {
+    test('update_branch: git merge push (workflow token — no CI, no bot-blocked APIs)', function () {
         var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
-            github: { items: [prItem(681)] }
+            github: { items: [prItem(681, { branch: 'feat/x' })] }
         }));
         var params = { jobParams: { owner: 'epam', repo: 'dmtools-dart',
             silentToken: 'SILENT-TOKEN', sourceToken: 'PAT-TOKEN', rules: [RULES.update] } };
@@ -581,23 +581,23 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         sm.action(params);
 
         assert.equal(sm.capturedCliCommands.length, 1, 'one update command');
-        // REST endpoint, not `gh pr update-branch`: the GraphQL
-        // updatePullRequestBranch mutation hard-denies github-actions[bot]
-        // regardless of token scopes (live-verified twice).
+        // A git merge push, not the GitHub update-branch APIs: GraphQL
+        // updatePullRequestBranch and the PUT REST endpoint both block
+        // github-actions[bot] (live-verified); a plain push on the runner
+        // checkout is allowed and triggers no workflows.
         assert.equal(sm.capturedCliCommands[0].command,
-            'gh api -X PUT repos/epam/dmtools-dart/pulls/681/update-branch');
-        // swap → update → restore, in that order
-        assert.equal(sm.capturedEnvSets.length, 2, 'token swapped and restored');
-        assert.equal(sm.capturedEnvSets[0].name, 'GH_TOKEN');
-        assert.equal(sm.capturedEnvSets[0].value, 'SILENT-TOKEN');
-        assert.equal(sm.capturedEnvSets[1].value, 'PAT-TOKEN');
+            'git fetch origin && git checkout -q feat/x && ' +
+            'git -c user.name=sm-silent-update ' +
+            '-c user.email=sm-silent-update@users.noreply.github.com ' +
+            'merge --no-edit origin/main && git push origin feat/x');
+        // No env swap: the push rides the checkout's stored credentials.
+        assert.equal(sm.capturedEnvSets.length, 0, 'no token swap');
     });
 
-    test('update_branch: without a silent token it updates with the ambient PAT', function () {
+    test('update_branch: branch-less ticket is skipped loudly', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), { github: { items: [prItem(9)] } }));
         sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.update] } });
-        assert.equal(sm.capturedCliCommands.length, 1);
-        assert.equal(sm.capturedEnvSets.length, 0, 'no swap without silentToken');
+        assert.equal(sm.capturedCliCommands.length, 0, 'no command without a branch name');
     });
 
     test('validate_pr: PAT update (no swap) + ai_validating label on the PR', function () {
@@ -605,8 +605,10 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         sm.action({ jobParams: { owner: 'a', repo: 'b',
             silentToken: 'SILENT', sourceToken: 'PAT', rules: [RULES.validate] } });
 
-        assert.equal(sm.capturedCliCommands.length, 1, 'gh pr update-branch (PAT push fires CI)');
-        assert.equal(sm.capturedEnvSets.length, 0, 'validation is NOT silent');
+        assert.equal(sm.capturedCliCommands.length, 1, 'REST PUT update (PAT push fires CI)');
+        assert.equal(sm.capturedCliCommands[0].command,
+            'gh api -X PUT repos/a/b/pulls/70/update-branch');
+        assert.equal(sm.capturedEnvSets.length, 2, 'PAT swapped in and restored');
         assert.equal(sm.capturedPrLabelAdds.length, 1);
         assert.equal(sm.capturedPrLabelAdds[0].number, 70);
         assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['ai_validating']);
