@@ -83,6 +83,43 @@ suite('smProvider', function () {
         assert.equal(st.mergeable, true);
     });
 
+    test('github: prStatus uses pullRequestId + REST check-runs rollup (live shape)', function () {
+        // Live bug: `number` hit /pulls/null (404) and statusCheckRollup is
+        // GraphQL-only — guards saw UNKNOWN/none forever. The REST path is
+        // github_get_pr(pullRequestId) + github_get_commit_check_runs(head.sha).
+        var prBody, checkBody;
+        var p = loadProvider('github', {
+            github_get_pr: function (args) {
+                prBody.args = args;
+                return prBody;
+            },
+            github_get_commit_check_runs: function (args) {
+                checkBody.args = args;
+                return checkBody;
+            }
+        });
+        prBody = { state: 'OPEN', mergeable: true, mergeable_state: 'behind',
+                   head: { sha: 'abc123' } };
+        checkBody = { total_count: 1, check_runs: [{ status: 'completed', conclusion: 'success' }] };
+        var st = p.prStatus(7);
+        assert.equal(prBody.args.pullRequestId, 7);
+        assert.equal(prBody.args.number, undefined);
+        assert.equal(checkBody.args.commitSha, 'abc123');
+        assert.equal(st.checkConclusion, 'green');
+        assert.equal(st.mergeState, 'BEHIND');
+
+        checkBody = { total_count: 1, check_runs: [{ status: 'completed', conclusion: 'failure' }] };
+        assert.equal(p.prStatus(7).checkConclusion, 'red');
+
+        checkBody = { total_count: 1, check_runs: [{ status: 'in_progress', conclusion: null }] };
+        assert.equal(p.prStatus(7).checkConclusion, 'pending');
+
+        // check-runs API shape: sha field name on head is `sha`.
+        prBody = { state: 'OPEN', mergeable: true, head: { sha: 'zzz' } };
+        checkBody = { total_count: 0, check_runs: [] };
+        assert.equal(p.prStatus(7).checkConclusion, 'none');
+    });
+
     test('github: prStatus maps the REST mergeable_state (live github_get_pr shape)', function () {
         // Live bug: the REST body carries mergeable_state (lowercase), not
         // the GraphQL mergeStateStatus — the old fallback read mergeable===
