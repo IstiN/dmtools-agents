@@ -151,7 +151,12 @@ function hasActiveTargetWorkflowRun(scm, workflowFile, configFile, ticketKey) {
             var matchesOldName = runName === expectedRunName;
             var matchesDisplayName = runName.indexOf(configFile + ' : ') === 0 &&
                 runName.substring(runName.length - expectedRunNameSuffix.length) === expectedRunNameSuffix;
-            if (matchesOldName || matchesDisplayName) {
+            // Stub-title match (#687): the caller-side stub names its runs
+            // '▶ <leg> (SM) · gh-<key>' / '· pr-<key>' — recognize the
+            // ticket key token so PR-anchored dispatches are not re-fired
+            // on every tick while the review is still running.
+            var matchesStubName = runName.indexOf('· ' + ticketKey) !== -1;
+            if (matchesOldName || matchesDisplayName || matchesStubName) {
                 console.log('  ⏭️  ' + ticketKey + ' skipped (active workflow already exists: ' + expectedRunName + ')');
                 return true;
             }
