@@ -20,6 +20,7 @@ suite('sm github source', function () {
         providerStub._prs = prs || {};
         providerStub._status = statuses || {};
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () { return providerStub; }
             }

@@ -313,13 +313,24 @@ instead of `issue`; the anchor rides the `pr-N` contextId into the agent
 scripts (`preparePRForReview` / `postPRReviewComments`).
 
 **Machine author is a deployment knob, never a rule field:** the agents
-repo carries no bot login. The factory-sm reusable workflow takes a
-`machine-author` input (callers pass their bot once — e.g. machine-sm.yml
-in the harness repo); it lands in `jobParams.machineAuthor` (per-repo
-`.dmtools/config.js` `machineAuthor` works too). It feeds `notMachine` in
-`review-external-once`, the `pr_approved` arming gate, and the rework
-re-arm. Without it the guards are inert: every green PR is reviewable, no
-PR-anchored APPROVE arms `pr_approved`.
+repo carries no bot login. Every machine-keyed guard (the `notMachine`
+filter in `review-external-once`, the `pr_approved` arming gate, the
+rework re-arm in PR-anchored reviews) resolves through one helper —
+`js/common/machineAuthor.js` → `resolveMachineAuthor(jobParams, config)`:
+
+1. `jobParams.machineAuthor` — **the JSON parameter at factory setup**.
+   The factory-sm reusable workflow takes a `machine-author` input; it
+   lands in the `dmtools run` override as
+   `{"params":{"jobParams":{...,"machineAuthor":"<login>"}}}`. This is the
+   global level: set once by the harness (machine-sm.yml
+   `machine-author:`), valid for every repo the factory runs against.
+2. `config.machineAuthor` — **the per-repo `.dmtools/config.js` knob**,
+   for fleets where different repos run different bots:
+   `module.exports = { machineAuthor: 'my-bot' };`
+3. `null` — unconfigured. All guards keyed on it are inert: every green
+   PR is reviewable, and a PR-anchored APPROVE never arms `pr_approved`
+   nor re-arms `agent:rework` (external semantics — the verdict comment
+   is the whole report).
 
 ## 6. The legs (runners)
 

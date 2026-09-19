@@ -52,11 +52,13 @@ function loadPostStoryTestAutomationReview(mocks) {
             './common/commentMarkup.js': commentMarkupModule,
         }), allMocks);
 var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
 
     var prReviewComments = loadModule(
         'js/postPRReviewComments.js',
         makeRequire({
             './config.js': configModule,
+            './common/machineAuthor.js': machineAuthorModule,
             './common/scm.js': { createScm: function() { return scmMock; } },
             './common/autoStart.js': {
                 triggerConfiguredWorkflowForTicket: function() { return false; },

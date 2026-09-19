@@ -177,6 +177,9 @@ function makeSmAgent(opts) {
             capturedEnvSets.push({ name: name, value: value });
         };
     }
+    var machineAuthorModule = loadModule(
+        'js/common/machineAuthor.js', makeRequire({}), {}
+    );
     var sm = loadModule(
         'js/smAgent.js',
         makeRequire({
@@ -184,6 +187,7 @@ function makeSmAgent(opts) {
             './sm/sourceResolver.js': { resolve: function () { return jiraSourceStub; } },
             './common/scm.js': mockScmModule,
             './common/buildEncodedConfig.js': buildEncodedConfigModule,
+            './common/machineAuthor.js': machineAuthorModule,
         }),
         smMocks
     );

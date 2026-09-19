@@ -76,6 +76,7 @@ var configLoader = require('./configLoader.js');
 var smSource = require('./sm/sourceResolver.js');
 var scmModule = require('./common/scm.js');
 var buildEncodedConfigModule = require('./common/buildEncodedConfig.js');
+var machineAuthorModule = require('./common/machineAuthor.js');
 
 // Project config loaded once in action() — used as global default for rules without configPath
 var projectConfig = null;
@@ -635,8 +636,8 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
         var sourceMod = smSource.resolve(rule);
         tickets = sourceMod.query(rule, {
             config: effectiveConfig, repoInfo: effectiveRepoInfo, jql: interpolatedJql,
-            machineAuthor: RUN_JOB_PARAMS.machineAuthor ||
-                (effectiveConfig && effectiveConfig.machineAuthor) || null
+            machineAuthor: machineAuthorModule.resolveMachineAuthor(
+                RUN_JOB_PARAMS, effectiveConfig)
         }) || [];
     } catch (e) {
         console.error('  ❌ state query failed: ' + (e.message || e));
@@ -775,8 +776,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         var sourceMod = smSource.resolve(rule);
         tickets = sourceMod.query(rule, {
             config: effectiveConfig, repoInfo: effectiveRepoInfo, jql: interpolatedJql,
-            machineAuthor: RUN_JOB_PARAMS.machineAuthor ||
-                (effectiveConfig && effectiveConfig.machineAuthor) || null
+            machineAuthor: machineAuthorModule.resolveMachineAuthor(
+                RUN_JOB_PARAMS, effectiveConfig)
         }) || [];
     } catch (e) {
         console.error('  ❌ state query failed: ' + (e.message || e));

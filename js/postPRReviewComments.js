@@ -14,6 +14,7 @@ var scmModule = require('./common/scm.js');
 var trackersModule = require('./common/trackers.js');
 var autoStart = require('./common/autoStart.js');
 var configLoader = require('./configLoader.js');
+var machineAuthorModule = require('./common/machineAuthor.js');
 var outputFiles = require('./common/outputFiles.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 var gh = require('./common/githubHelpers.js');
@@ -765,6 +766,7 @@ function action(params) {
         const ticketKey = prAnchor ? ('pr-' + prAnchor) : params.ticket.key;
         const jiraReview = params.response || '';
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var machineAuthor = machineAuthorModule.resolveMachineAuthor(jp, config);
         var workingDir = config.workingDir || null;
         var scm = scmModule.createScm(config);
         var labels = (params.ticket && params.ticket.fields && params.ticket.fields.labels) ? params.ticket.fields.labels : [];
@@ -941,8 +943,6 @@ function action(params) {
                 // STATE 1: APPROVE → label PR and Jira ticket; SM will retry merge when CI passes.
                 // PR-anchored EXTERNAL PRs are never auto-merge-armed — only
                 // machine-authored PRs enter the SM merge pipeline (#687).
-                var machineAuthor = (config && config.machineAuthor) ||
-                    (jp.machineAuthor) || null;
                 if (!prAnchor || prAuthor === machineAuthor) {
                     try {
                         scm.addLabel(prNumber, LABELS.PR_APPROVED);
@@ -990,9 +990,7 @@ function action(params) {
             if (!isApproved) {
                 // Machine-authored: re-arm the rework loop on the linked
                 // issue; external: the verdict comment is the whole report.
-                var machineAuthor2 = (config && config.machineAuthor) ||
-                    (jp.machineAuthor) || null;
-                if (prAuthor === machineAuthor2) {
+                if (prAuthor === machineAuthor) {
                     try {
                         var prRaw = github_get_pr({
                             workspace: repoInfo.owner, repository: repoInfo.repo, number: prNumber

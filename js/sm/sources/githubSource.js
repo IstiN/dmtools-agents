@@ -26,6 +26,7 @@
 'use strict';
 
 var smProviderModule = require('../../common/smProvider.js');
+var machineAuthorModule = require('../../common/machineAuthor.js');
 
 function parseMcp(result) {
     if (!result) return null;
@@ -91,7 +92,7 @@ function query(rule, ctx) {
 
     if (q.type === 'pr') {
         return queryPrs(rule, provider, repoInfo, limit,
-            (ctx && (ctx.machineAuthor || (ctx.config && ctx.config.machineAuthor))) || null);
+            machineAuthorModule.resolveMachineAuthor(ctx, ctx && ctx.config));
     }
     return queryIssues(rule, provider, repoInfo, branchPrefix, limit);
 }

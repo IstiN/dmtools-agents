@@ -2,6 +2,7 @@
  * Unit tests for js/postPRReviewComments.js.
  */
 var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
 
 
 var githubHelpersStub = {
@@ -42,6 +43,7 @@ function loadPostPRReviewComments(mocks) {
     return loadModule(
         'js/postPRReviewComments.js',
         makeRequire({
+            './common/machineAuthor.js': machineAuthorModule,
             './config.js': configModule,
             './common/scm.js': { createScm: function() { return {}; } },
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
@@ -346,6 +348,7 @@ suite('postPRReviewComments', function() {
             var mod = loadModule(
                 'js/postPRReviewComments.js',
                 makeRequire({
+            './common/machineAuthor.js': machineAuthorModule,
                     './config.js': configModule,
                     './common/scm.js': { createScm: function() { return scm; } },
                     './common/autoStart.js': {
@@ -569,6 +572,7 @@ suite('postPRReviewComments', function() {
             var mod = loadModule(
                 'js/postPRReviewComments.js',
                 makeRequire({
+            './common/machineAuthor.js': machineAuthorModule,
                     './config.js': configModule,
                     './common/scm.js': { createScm: function() { return scm; } },
                     './common/autoStart.js': {
@@ -733,6 +737,7 @@ suite('postPRReviewComments', function() {
             var mod2 = loadModule(
                 'js/postPRReviewComments.js',
                 makeRequire({
+            './common/machineAuthor.js': machineAuthorModule,
                     './config.js': configModule,
                     './common/scm.js': {
                         createScm: function() {
