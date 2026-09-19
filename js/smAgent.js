@@ -879,6 +879,19 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             continue;
         }
 
+        // REST update-branch: `gh pr update-branch` rides the GraphQL
+        // updatePullRequestBranch mutation, which hard-denies
+        // github-actions[bot] regardless of token scopes (live-verified:
+        // denied with PullRequests:write, again with Contents:write added).
+        // The REST endpoint checks scopes, not the actor identity.
+        function updatePrBranch(prNumber) {
+            cli_execute_command({
+                command: 'gh api -X PATCH repos/' + effectiveRepoInfo.owner +
+                         '/' + effectiveRepoInfo.repo + '/pulls/' + prNumber +
+                         '/update-branch'
+            });
+        }
+
         // ── PR-lifecycle localActions (issue #687: the SM owns the loop) ──
         // They act on the PR directly (type:pr rules; ticket.prNumber set,
         // ticket.issueNumber null). Idempotency comes from the query guards:
@@ -893,10 +906,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             var restore = jp.sourceToken || '';
             try {
                 if (silent) set_env_variable('GH_TOKEN', silent);
-                cli_execute_command({
-                    command: 'gh pr update-branch ' + ticket.prNumber +
-                             ' --repo ' + effectiveRepoInfo.owner + '/' + effectiveRepoInfo.repo
-                });
+                updatePrBranch(ticket.prNumber);
                 console.log('  ✅ ' + key + ' branch silently updated (no CI)');
                 processedKeys.push(key);
             } catch (e) {
@@ -912,10 +922,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // CI, so the validation run lands on the final head — then arm
             // the merge rule with the ai_validating marker.
             try {
-                cli_execute_command({
-                    command: 'gh pr update-branch ' + ticket.prNumber +
-                             ' --repo ' + effectiveRepoInfo.owner + '/' + effectiveRepoInfo.repo
-                });
+                updatePrBranch(ticket.prNumber);
                 github_add_labels({
                     workspace: effectiveRepoInfo.owner,
                     repository: effectiveRepoInfo.repo,
