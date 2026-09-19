@@ -877,7 +877,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // each action flips exactly the fact its rule filtered on.
 
         if (rule.localAction === 'update_branch') {
-            // Armed PR behind main → silent refresh: swap GH_TOKEN to the
+            // Open PR behind main → silent refresh: swap GH_TOKEN to the
             // workflow's own github.token for the push (github.token pushes
             // trigger no workflows → the CI matrix does not re-run).
             var jp = RUN_JOB_PARAMS || {};

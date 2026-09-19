@@ -282,7 +282,7 @@ module.exports = {
 ### Patching rules — `smRuleOverrides`
 
 Rules carry stable ids (`rework-on-red-ci`, `review-after-dev`,
-`silent-update-armed`). Patch any field or disable a rule entirely:
+`silent-update-behind`). Patch any field or disable a rule entirely:
 
 ```js
 module.exports = {
@@ -298,8 +298,10 @@ Jira-style rules still match by `configFile` key.
 ### PR lifecycle rules (#687) — test once per state
 
 The merge loop is PR-carried (issue labels stay the dev→review contract):
-`silent-update-armed` (behind armed PR → silent `github.token` refresh, no
-CI), `validate-armed` (merge window: PAT update fires validation CI on the
+`silent-update-behind` (ANY behind open non-draft PR → silent `github.token`
+refresh, no CI — free freshness, the retired auto-update-prs workflow's
+replacement; validating PRs excluded so their head never moves mid-run),
+`validate-armed` (merge window: PAT update fires validation CI on the
 final head + `ai_validating` marker), `fail-validation` (red → unarm,
 report, re-arm `agent:rework` on the linked issue), `merge-validated`
 (green + CLEAN → squash-merge, markers cleared). Note `labels` in SM

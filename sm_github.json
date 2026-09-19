@@ -7,18 +7,19 @@
       "maxTriggeredWorkflows": 1,
       "rules": [
         {
-          "description": "GitHub PR: armed (pr_approved) and behind main -> silent branch refresh, CI does NOT re-run (#687)",
+          "description": "Every open non-draft PR behind main gets a silent branch refresh with the workflow token (pushes trigger no workflows, so freshness is free); validating PRs are excluded so the validation head never moves mid-run. Replaces the retired auto-update-prs workflow.",
           "source": "github",
           "query": {
             "type": "pr",
-            "labels": [
-              "pr_approved"
+            "notLabels": [
+              "ai_validating"
             ],
-            "mergeState": "BEHIND"
+            "mergeState": "BEHIND",
+            "draft": false
           },
           "localAction": "update_branch",
           "limit": 5,
-          "id": "silent-update-armed"
+          "id": "silent-update-behind"
         },
         {
           "description": "GitHub PR: merge window — oldest armed PR gets a PAT update (validation CI fires on the final head) + ai_validating marker (#687)",

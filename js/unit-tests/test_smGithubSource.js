@@ -198,11 +198,8 @@ suite('sm github source', function () {
         }, { repoInfo: { owner: 'a', repo: 'b' } });
         assert.equal(listed.map(function (i) { return i.key; }).join(','), 'pr-61');
 
-        // silent-update-armed: only BEHIND armed PRs.
-        var behind = srcMod.query({
-            query: { type: 'pr', labels: ['pr_approved'], mergeState: 'BEHIND' }
-        }, { repoInfo: { owner: 'a', repo: 'b' } });
-        assert.equal(behind.map(function (i) { return i.key; }).join(','), 'pr-61');
+        // silent-update-behind rule shape lives in its own test below
+        // (broader fixture).
 
         // validate-armed: armed, not validating, not BEHIND (fresh enough).
         var fresh = srcMod.query({
@@ -217,5 +214,41 @@ suite('sm github source', function () {
             query: { type: 'pr', labels: ['ai_validating'], checks: 'red' }
         }, { repoInfo: { owner: 'a', repo: 'b' } });
         assert.equal(failed.map(function (i) { return i.key; }).join(','), 'pr-64');
+    });
+
+    test('pr rules: silent-update-behind — free freshness for every behind PR', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    // armed + behind (the old silent-update-armed case)
+                    { number: 61, labels: [{ name: 'pr_approved' }], draft: false,
+                      author: { login: 'vabhzw17eg2qu4m9-bit' } },
+                    // bare behind PR, no labels at all — still freshened
+                    { number: 65, labels: [], draft: false,
+                      author: { login: 'human-contributor' } },
+                    // behind but validating: head must not move mid-run
+                    { number: 66, labels: [{ name: 'ai_validating' }], draft: false,
+                      author: { login: 'vabhzw17eg2qu4m9-bit' } },
+                    // behind but draft: skipped
+                    { number: 67, labels: [], draft: true,
+                      author: { login: 'human-contributor' } },
+                    // fresh PR: not behind
+                    { number: 68, labels: [], draft: false,
+                      author: { login: 'human-contributor' } }
+                ];
+            }
+        }, {}, {
+            61: { state: 'OPEN', checkConclusion: 'green', mergeState: 'BEHIND', mergeable: true },
+            65: { state: 'OPEN', checkConclusion: 'none', mergeState: 'BEHIND', mergeable: true },
+            66: { state: 'OPEN', checkConclusion: 'none', mergeState: 'BEHIND', mergeable: true },
+            67: { state: 'OPEN', checkConclusion: 'none', mergeState: 'BEHIND', mergeable: true },
+            68: { state: 'OPEN', checkConclusion: 'none', mergeState: 'CLEAN', mergeable: true }
+        });
+
+        var behind = srcMod.query({
+            query: { type: 'pr', notLabels: ['ai_validating'],
+                     mergeState: 'BEHIND', draft: false }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(behind.map(function (i) { return i.key; }).join(','), 'pr-61,pr-65');
     });
 });
