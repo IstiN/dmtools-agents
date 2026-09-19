@@ -110,19 +110,17 @@
           "id": "review-after-dev"
         },
         {
-          "description": "GitHub PR: external green PR -> one-time review (PR-anchored; no re-review on later pushes)",
+          "description": "GitHub PR: external (non-machine) green PR -> one-time review (PR-anchored; no re-review on later pushes). The machine login is deployment-specific: it arrives via jobParams.machineAuthor / config.machineAuthor (factory-sm input machine-author); with none configured every green PR is reviewable.",
           "source": "github",
           "query": {
             "type": "pr",
-            "notAuthors": [
-              "vabhzw17eg2qu4m9-bit"
-            ],
             "notLabels": [
               "ai_pr_reviewed",
               "agent:review"
             ],
             "checks": "green",
-            "draft": false
+            "draft": false,
+            "notMachine": true
           },
           "workflowFile": "ai-teammate.yml",
           "inputs": {

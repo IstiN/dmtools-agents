@@ -90,7 +90,8 @@ function query(rule, ctx) {
     var limit = rule.limit || 50;
 
     if (q.type === 'pr') {
-        return queryPrs(rule, provider, repoInfo, limit);
+        return queryPrs(rule, provider, repoInfo, limit,
+            (ctx && (ctx.machineAuthor || (ctx.config && ctx.config.machineAuthor))) || null);
     }
     return queryIssues(rule, provider, repoInfo, branchPrefix, limit);
 }
@@ -155,7 +156,7 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit) {
     return enriched.filter(function (item) { return matchesGuards(item, rule); });
 }
 
-function queryPrs(rule, provider, repoInfo, limit) {
+function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {
     var q = rule.query || {};
     var prs = asList(parseMcp(github_list_prs({
         workspace: repoInfo.owner, repository: repoInfo.repo, state: 'open'
@@ -195,6 +196,12 @@ function queryPrs(rule, provider, repoInfo, limit) {
         // Author guards: `notAuthors` excludes machine-authored PRs (the
         // external one-time review rule) or vice versa.
         if (q2.notAuthors && q2.notAuthors.indexOf(item.author) !== -1) return false;
+        // `notMachine` excludes the machine author without naming it here —
+        // the login is deployment-specific (machineAuthor resolved from
+        // jobParams.machineAuthor / config.machineAuthor upstream). No
+        // machineAuthor configured -> inert (every green PR is reviewable).
+        if (q2.notMachine && machineAuthor &&
+            item.author === machineAuthor) return false;
         if (q2.authors && q2.authors.indexOf(item.author) === -1) return false;
         return matchesGuards(item, rule);
     });

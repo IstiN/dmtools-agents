@@ -941,7 +941,8 @@ function action(params) {
                 // STATE 1: APPROVE → label PR and Jira ticket; SM will retry merge when CI passes.
                 // PR-anchored EXTERNAL PRs are never auto-merge-armed — only
                 // machine-authored PRs enter the SM merge pipeline (#687).
-                var machineAuthor = (config && config.machineAuthor) || 'vabhzw17eg2qu4m9-bit';
+                var machineAuthor = (config && config.machineAuthor) ||
+                    (jp.machineAuthor) || null;
                 if (!prAnchor || prAuthor === machineAuthor) {
                     try {
                         scm.addLabel(prNumber, LABELS.PR_APPROVED);
@@ -989,7 +990,8 @@ function action(params) {
             if (!isApproved) {
                 // Machine-authored: re-arm the rework loop on the linked
                 // issue; external: the verdict comment is the whole report.
-                var machineAuthor2 = (config && config.machineAuthor) || 'vabhzw17eg2qu4m9-bit';
+                var machineAuthor2 = (config && config.machineAuthor) ||
+                    (jp.machineAuthor) || null;
                 if (prAuthor === machineAuthor2) {
                     try {
                         var prRaw = github_get_pr({

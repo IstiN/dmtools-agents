@@ -312,6 +312,15 @@ runner consumes the label). PR-anchored factory dispatches pass `pr`
 instead of `issue`; the anchor rides the `pr-N` contextId into the agent
 scripts (`preparePRForReview` / `postPRReviewComments`).
 
+**Machine author is a deployment knob, never a rule field:** the agents
+repo carries no bot login. The factory-sm reusable workflow takes a
+`machine-author` input (callers pass their bot once — e.g. machine-sm.yml
+in the harness repo); it lands in `jobParams.machineAuthor` (per-repo
+`.dmtools/config.js` `machineAuthor` works too). It feeds `notMachine` in
+`review-external-once`, the `pr_approved` arming gate, and the rework
+re-arm. Without it the guards are inert: every green PR is reviewable, no
+PR-anchored APPROVE arms `pr_approved`.
+
 ## 6. The legs (runners)
 
 | Runner | Model | What it does |

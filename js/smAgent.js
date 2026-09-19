@@ -634,7 +634,9 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
     try {
         var sourceMod = smSource.resolve(rule);
         tickets = sourceMod.query(rule, {
-            config: effectiveConfig, repoInfo: effectiveRepoInfo, jql: interpolatedJql
+            config: effectiveConfig, repoInfo: effectiveRepoInfo, jql: interpolatedJql,
+            machineAuthor: RUN_JOB_PARAMS.machineAuthor ||
+                (effectiveConfig && effectiveConfig.machineAuthor) || null
         }) || [];
     } catch (e) {
         console.error('  ❌ state query failed: ' + (e.message || e));
@@ -772,7 +774,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     try {
         var sourceMod = smSource.resolve(rule);
         tickets = sourceMod.query(rule, {
-            config: effectiveConfig, repoInfo: effectiveRepoInfo, jql: interpolatedJql
+            config: effectiveConfig, repoInfo: effectiveRepoInfo, jql: interpolatedJql,
+            machineAuthor: RUN_JOB_PARAMS.machineAuthor ||
+                (effectiveConfig && effectiveConfig.machineAuthor) || null
         }) || [];
     } catch (e) {
         console.error('  ❌ state query failed: ' + (e.message || e));

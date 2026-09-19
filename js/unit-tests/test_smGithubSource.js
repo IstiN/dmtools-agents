@@ -175,13 +175,27 @@ suite('sm github source', function () {
             64: { state: 'OPEN', checkConclusion: 'red', mergeState: 'BLOCKED', mergeable: true }
         });
 
-        // review-external-once: machine author excluded, drafts excluded,
-        // ai_pr_reviewed not yet set, green checks required.
+        // review-external-once: machine author excluded via the deployment
+        // knob (ctx.machineAuthor; no login in the agents repo), drafts
+        // excluded, ai_pr_reviewed not yet set, green checks required.
         var ext = srcMod.query({
-            query: { type: 'pr', notAuthors: ['vabhzw17eg2qu4m9-bit'],
+            query: { type: 'pr', notMachine: true,
                      notLabels: ['ai_pr_reviewed'], checks: 'green', draft: false }
-        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        }, { repoInfo: { owner: 'a', repo: 'b' }, machineAuthor: 'vabhzw17eg2qu4m9-bit' });
         assert.equal(ext.map(function (i) { return i.key; }).join(','), 'pr-62,pr-63');
+
+        // Same query without a configured machineAuthor: guard inert —
+        // machine PRs are reviewable too (deployment must set the knob).
+        var noKnob = srcMod.query({
+            query: { type: 'pr', notMachine: true, checks: 'green' }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(noKnob.map(function (i) { return i.key; }).join(','), 'pr-61,pr-62,pr-63');
+
+        // Generic notAuthors still works for explicit lists.
+        var listed = srcMod.query({
+            query: { type: 'pr', notAuthors: ['human-contributor'] }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(listed.map(function (i) { return i.key; }).join(','), 'pr-61');
 
         // silent-update-armed: only BEHIND armed PRs.
         var behind = srcMod.query({

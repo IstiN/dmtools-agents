@@ -38,6 +38,11 @@ on:
         description: "The ref this workflow was invoked with (same literal as the stub uses-ref). GitHub exposes no context/env for the called-workflow ref (GITHUB_WORKFLOW_REF is the CALLER's), so the stub passes its pin explicitly."
         required: true
         type: string
+      machine-author:
+        description: "Deployment's machine (bot) login for #687 PR rules: excluded from review-external-once, gates pr_approved arming and rework re-arm in PR-anchored reviews. Global-level knob — the agents repo carries no hardcoded login."
+        required: false
+        type: string
+        default: ''
 
     secrets:
       SOURCE_GITHUB_TOKEN:
@@ -110,6 +115,12 @@ jobs:
           extra=""
           if [ -n "$SILENT_GH_TOKEN" ]; then
             extra=",\"silentToken\":\"${SILENT_GH_TOKEN}\",\"sourceToken\":\"${SOURCE_GITHUB_TOKEN}\""
+          fi
+          # #687: machine login is deployment-level (never hardcoded in the
+          # agents repo) — jobParams.machineAuthor / config.machineAuthor.
+          ma='${{ inputs.machine-author }}'
+          if [ -n "$ma" ]; then
+            extra="${extra},\"machineAuthor\":\"${ma}\""
           fi
           if [ "${{ inputs.dryRun }}" = "true" ]; then
             override="{\"params\":{\"jobParams\":{\"repo\":\"${repo}\",\"dryRun\":true${extra}}}}"
