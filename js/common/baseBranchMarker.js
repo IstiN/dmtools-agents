@@ -32,10 +32,47 @@
  */
 function writeBaseBranchMarker(baseBranch) {
     if (!baseBranch) return;
+    ensureOutputsLocalExclude();
     try {
         file_write({ path: 'outputs/pr_base_branch.txt', content: String(baseBranch) });
     } catch (e) {
         console.warn('writeBaseBranchMarker: failed to write outputs/pr_base_branch.txt (non-fatal):',
+            e && e.toString ? e.toString() : String(e));
+    }
+}
+
+/**
+ * Belt-and-suspenders against the "leak into a commit" scenario described above:
+ * even with correct call ordering (write AFTER checkout), a later `git add -A`/
+ * `git add .` in the target repo (e.g. a WIP auto-save timer, or the final commit
+ * step) would otherwise still stage `outputs/pr_base_branch.txt` because most
+ * target repos don't gitignore a job-root `outputs/` directory. Once staged and
+ * pushed once, that branch permanently tracks the file, and any future run that
+ * writes this marker before re-checking out the same branch fails with git's
+ * "untracked working tree files would be overwritten by checkout" error.
+ *
+ * Uses `.git/info/exclude` (local-only, not `.gitignore`) so this never shows up
+ * as a diff in the target repo's own commits/PRs — same rationale as the
+ * `.codegraph/` exclusion in preCliDevelopmentSetup.js's ensureCodegraphLocalExclude().
+ */
+function ensureOutputsLocalExclude() {
+    try {
+        var content = '';
+        try { content = file_read({ path: '.git/info/exclude' }) || ''; } catch (e) { content = ''; }
+        var lines = content.split('\n');
+        var alreadyPresent = false;
+        for (var i = 0; i < lines.length; i++) {
+            if (lines[i].trim() === 'outputs/') { alreadyPresent = true; break; }
+        }
+        if (!alreadyPresent) {
+            var sep = content && content.charAt(content.length - 1) !== '\n' ? '\n' : '';
+            file_write({
+                path: '.git/info/exclude',
+                content: content + sep + '\n# Job output marker files (e.g. pr_base_branch.txt) - must never be committed\noutputs/\n'
+            });
+        }
+    } catch (e) {
+        console.warn('ensureOutputsLocalExclude: failed to update .git/info/exclude (non-fatal):',
             e && e.toString ? e.toString() : String(e));
     }
 }
