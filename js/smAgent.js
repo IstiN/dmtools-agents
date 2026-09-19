@@ -879,19 +879,40 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             continue;
         }
 
-        // REST update-branch: `gh pr update-branch` rides the GraphQL
-        // updatePullRequestBranch mutation, which hard-denies
-        // github-actions[bot] regardless of token scopes (live-verified:
-        // denied with PullRequests:write, again with Contents:write added).
-        // The REST endpoint is PUT (a PATCH 404s — live-verified; the
-        // method is easy to get wrong: it predates the modern PATCH style)
-        // and it checks scopes, not the actor identity.
-        function updatePrBranch(prNumber) {
+        // Silent branch refresh = a git merge push, NOT the GitHub
+        // update-branch APIs. Live-verified dead ends for
+        // github-actions[bot]: the GraphQL mutation (gh pr update-branch)
+        // is denied regardless of token scopes, and the REST endpoint is
+        // PUT-only (PATCH 404s) yet still 403s the bot with "user doesn't
+        // have permission to update head repository". A plain git push on
+        // the runner's checkout IS allowed with the workflow token — and
+        // workflow-token pushes trigger no workflows, which is the whole
+        // point of the silent path. The merge aborts on conflicts (a DIRTY
+        // PR is skipped with an error, the correct semantics).
+        function silentUpdateBranch(branchName) {
             cli_execute_command({
-                command: 'gh api -X PUT repos/' + effectiveRepoInfo.owner +
-                         '/' + effectiveRepoInfo.repo + '/pulls/' + prNumber +
-                         '/update-branch'
+                command: 'git fetch origin && git checkout -q ' + branchName +
+                         ' && git -c user.name=sm-silent-update' +
+                         ' -c user.email=sm-silent-update@users.noreply.github.com' +
+                         ' merge --no-edit origin/main && git push origin ' + branchName
             });
+        }
+
+        // Validation is the deliberate opposite: a PAT (source token) push
+        // DOES fire CI, and the PAT passes the REST update-branch actor
+        // check (live: 202 with the PAT where the bot got 403).
+        function patUpdateBranch(prNumber, pat) {
+            var restore = pat ? (RUN_JOB_PARAMS.sourceToken || '') : '';
+            try {
+                if (pat) set_env_variable('GH_TOKEN', pat);
+                cli_execute_command({
+                    command: 'gh api -X PUT repos/' + effectiveRepoInfo.owner +
+                             '/' + effectiveRepoInfo.repo + '/pulls/' + prNumber +
+                             '/update-branch'
+                });
+            } finally {
+                if (pat && restore) set_env_variable('GH_TOKEN', restore);
+            }
         }
 
         // ── PR-lifecycle localActions (issue #687: the SM owns the loop) ──
@@ -900,21 +921,19 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // each action flips exactly the fact its rule filtered on.
 
         if (rule.localAction === 'update_branch') {
-            // Open PR behind main → silent refresh: swap GH_TOKEN to the
-            // workflow's own github.token for the push (github.token pushes
-            // trigger no workflows → the CI matrix does not re-run).
-            var jp = RUN_JOB_PARAMS || {};
-            var silent = jp.silentToken || '';
-            var restore = jp.sourceToken || '';
+            // Open PR behind main → silent refresh via a git merge push on
+            // the runner checkout (workflow-token pushes trigger no
+            // workflows → the CI matrix does not re-run).
+            if (!ticket.branch) {
+                console.error('  ❌ update_branch: no head branch on ' + key + ' — skipped');
+                continue;
+            }
             try {
-                if (silent) set_env_variable('GH_TOKEN', silent);
-                updatePrBranch(ticket.prNumber);
+                silentUpdateBranch(ticket.branch);
                 console.log('  ✅ ' + key + ' branch silently updated (no CI)');
                 processedKeys.push(key);
             } catch (e) {
                 console.error('  ❌ update_branch failed for ' + key + ': ' + (e.message || e));
-            } finally {
-                if (silent && restore) set_env_variable('GH_TOKEN', restore);
             }
             continue;
         }
@@ -924,7 +943,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // CI, so the validation run lands on the final head — then arm
             // the merge rule with the ai_validating marker.
             try {
-                updatePrBranch(ticket.prNumber);
+                patUpdateBranch(ticket.prNumber, (RUN_JOB_PARAMS || {}).sourceToken);
                 github_add_labels({
                     workspace: effectiveRepoInfo.owner,
                     repository: effectiveRepoInfo.repo,
