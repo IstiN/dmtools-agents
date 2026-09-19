@@ -883,10 +883,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // updatePullRequestBranch mutation, which hard-denies
         // github-actions[bot] regardless of token scopes (live-verified:
         // denied with PullRequests:write, again with Contents:write added).
-        // The REST endpoint checks scopes, not the actor identity.
+        // The REST endpoint is PUT (a PATCH 404s — live-verified; the
+        // method is easy to get wrong: it predates the modern PATCH style)
+        // and it checks scopes, not the actor identity.
         function updatePrBranch(prNumber) {
             cli_execute_command({
-                command: 'gh api -X PATCH repos/' + effectiveRepoInfo.owner +
+                command: 'gh api -X PUT repos/' + effectiveRepoInfo.owner +
                          '/' + effectiveRepoInfo.repo + '/pulls/' + prNumber +
                          '/update-branch'
             });

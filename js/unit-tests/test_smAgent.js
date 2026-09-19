@@ -585,7 +585,7 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         // updatePullRequestBranch mutation hard-denies github-actions[bot]
         // regardless of token scopes (live-verified twice).
         assert.equal(sm.capturedCliCommands[0].command,
-            'gh api -X PATCH repos/epam/dmtools-dart/pulls/681/update-branch');
+            'gh api -X PUT repos/epam/dmtools-dart/pulls/681/update-branch');
         // swap → update → restore, in that order
         assert.equal(sm.capturedEnvSets.length, 2, 'token swapped and restored');
         assert.equal(sm.capturedEnvSets[0].name, 'GH_TOKEN');
