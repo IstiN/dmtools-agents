@@ -250,5 +250,34 @@ suite('sm github source', function () {
                      mergeState: 'BEHIND', draft: false }
         }, { repoInfo: { owner: 'a', repo: 'b' } });
         assert.equal(behind.map(function (i) { return i.key; }).join(','), 'pr-61,pr-65');
+
+        // Array mergeState: BEHIND or BLOCKED (REST flip-flops under
+        // branch protection; update-branch no-ops when fresh).
+        var anyBehind = srcMod.query({
+            query: { type: 'pr', mergeState: ['BEHIND', 'BLOCKED'], draft: false }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(anyBehind.map(function (i) { return i.key; }).join(','),
+                     'pr-61,pr-65,pr-66');
+    });
+
+    test('pr rules: REST list shape — creator rides `user`, not `author`', function () {
+        // Live REST /pulls has NO author key; the creator is `user`.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 71, labels: [], draft: false,
+                      user: { login: 'vabhzw17eg2qu4m9-bit' } },
+                    { number: 72, labels: [], draft: false,
+                      user: { login: 'human-contributor' } }
+                ];
+            }
+        }, {}, {
+            71: { state: 'OPEN', checkConclusion: 'green', mergeState: 'CLEAN', mergeable: true },
+            72: { state: 'OPEN', checkConclusion: 'green', mergeState: 'CLEAN', mergeable: true }
+        });
+        var machine = srcMod.query({
+            query: { type: 'pr', notMachine: true, checks: 'green' }
+        }, { repoInfo: { owner: 'a', repo: 'b' }, machineAuthor: 'vabhzw17eg2qu4m9-bit' });
+        assert.equal(machine.map(function (i) { return i.key; }).join(','), 'pr-72');
     });
 });

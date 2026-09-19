@@ -135,10 +135,29 @@ function githubProvider(cfg) {
         },
 
         prStatus: function (prNumber) {
+            // Java @MCPParam parity: github_get_pr takes pullRequestId —
+            // a bare `number` hit /pulls/null and 404'd silently, so every
+            // rule guard reading mergeState/checks saw UNKNOWN/none (live:
+            // the enrichment printed "finished" while returning garbage).
             var pr = parseMcp(github_get_pr({
-                workspace: owner, repository: repo, number: prNumber
+                workspace: owner, repository: repo, pullRequestId: prNumber
             })) || {};
             var rollup = pr.statusCheckRollup || [];
+            if (!rollup.length && pr.head && pr.head.sha) {
+                // REST reality: the pull body has no rollup (that is the
+                // GraphQL spelling); the Java-parity check-runs tool is
+                // the REST path. Conclusions arrive lowercase — normalize
+                // before the red/pending comparisons below.
+                var cr = parseMcp(github_get_commit_check_runs({
+                    workspace: owner, repository: repo, commitSha: pr.head.sha
+                })) || {};
+                rollup = (cr.check_runs || []).map(function (r) {
+                    return {
+                        conclusion: r.conclusion ? String(r.conclusion).toUpperCase() : null,
+                        status: r.status ? String(r.status).toUpperCase() : null
+                    };
+                });
+            }
             var red = false, pending = false;
             rollup.forEach(function (c) {
                 var concl = c.conclusion;

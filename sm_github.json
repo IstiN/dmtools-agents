@@ -7,14 +7,17 @@
       "maxTriggeredWorkflows": 1,
       "rules": [
         {
-          "description": "Every open non-draft PR behind main gets a silent branch refresh with the workflow token (pushes trigger no workflows, so freshness is free); validating PRs are excluded so the validation head never moves mid-run. Replaces the retired auto-update-prs workflow.",
+          "description": "Every open non-draft PR behind main gets a silent branch refresh with the workflow token (pushes trigger no workflows, so freshness is free); validating PRs are excluded so the validation head never moves mid-run. mergeState matches BEHIND or BLOCKED — REST mergeable_state flip-flops between the two for the same behind PR under branch protection, and gh pr update-branch is a no-op on a fresh branch, so over-matching is harmless. Replaces the retired auto-update-prs workflow.",
           "source": "github",
           "query": {
             "type": "pr",
             "notLabels": [
               "ai_validating"
             ],
-            "mergeState": "BEHIND",
+            "mergeState": [
+              "BEHIND",
+              "BLOCKED"
+            ],
             "draft": false
           },
           "localAction": "update_branch",

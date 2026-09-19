@@ -63,7 +63,8 @@ function matchesGuards(item, rule) {
     var rollup = function (pr) { return pr ? (pr.checkConclusion || pr.checks) : undefined; };
     if (q.prChecks && rollup(item.pr) !== q.prChecks) return false;
     if (q.prMergeState && (!item.pr || item.pr.mergeState !== q.prMergeState)) return false;
-    if (q.mergeState && (!item.pr || item.pr.mergeState !== q.mergeState)) return false;
+    var msWant = Array.isArray(q.mergeState) ? q.mergeState : (q.mergeState ? [q.mergeState] : null);
+    if (msWant && (!item.pr || msWant.indexOf(item.pr.mergeState) === -1)) return false;
     // PR-carrier guards (issue #687 lifecycle rules): `checks` reads the
     // provider's check rollup (green/red/pending/none); `notMergeState`
     // excludes one state (e.g. BEHIND while a silent update lands).
@@ -172,7 +173,11 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {
             prNumber: p.number,
             draft: !!p.draft,
             branch: (p.head && p.head.ref) || p.headRefName || '',
-            author: (p.author && (p.author.login || p.author.name)) || ''
+            // REST /pulls carries the creator under `user` (no `author`
+            // key at all — live-verified); GraphQL and the unit fixtures
+            // use `author`. Read both.
+            author: (p.user && p.user.login) ||
+                (p.author && (p.author.login || p.author.name)) || ''
         };
     });
 

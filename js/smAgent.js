@@ -727,8 +727,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     }
 
     // localTeammate runs synchronously in-process — the workflow cap only bounds
-    // concurrent/outstanding GitHub Actions dispatches, so it doesn't apply here.
-    if (!rule.localTeammate && workflowBudget && workflowBudget.remaining <= 0) {
+    // concurrent/outstanding GitHub Actions dispatches, so it applies neither
+    // here nor to localActions (inline curl/API calls, no dispatch).
+    if (!rule.localTeammate && !rule.localAction && workflowBudget && workflowBudget.remaining <= 0) {
         var skippedLabel = rule.description || ('Rule #' + (ruleIndex + 1));
         var workflowFile = rule.workflowFile || 'ai-teammate.yml';
         console.log('\n══ ' + skippedLabel + ' ══');
@@ -799,7 +800,14 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
 
     var ruleLimit = (typeof rule.limit === 'number' && rule.limit > 0) ? Math.floor(rule.limit) : null;
     var effectiveLimit = ruleLimit;
-    if (workflowBudget && !rule.localTeammate) {
+    // The workflow budget caps concurrent AI-RUN dispatches. localActions
+    // (update_branch, validate_pr, merge_pr, close_issue, fail_validation)
+    // run inline curl/API calls — they neither start workflows nor compete
+    // for dispatch slots, so the budget must not throttle them (live bug:
+    // one active review run zeroed the budget and silent-update-behind
+    // freshened exactly ONE of four behind PRs per tick).
+    var budgetCapped = !rule.localTeammate && !rule.localAction;
+    if (workflowBudget && budgetCapped) {
         effectiveLimit = effectiveLimit === null
             ? workflowBudget.remaining
             : Math.min(effectiveLimit, workflowBudget.remaining);
@@ -820,7 +828,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     var skippedKeys   = [];
 
     for (var idx = 0; idx < tickets.length; idx++) {
-        if (!rule.localTeammate && workflowBudget && workflowBudget.remaining <= 0) {
+        if (!rule.localTeammate && !rule.localAction && workflowBudget && workflowBudget.remaining <= 0) {
             break;
         }
         if (effectiveLimit !== null && processedKeys.length >= effectiveLimit) {
