@@ -56,6 +56,11 @@ on:
         description: 'PR number for PR-anchored runs (review leg on PRs born without an issue, #687). Exactly one of issue|pr must be set.'
         required: false
         type: string
+      machine-author:
+        description: "Deployment's machine (bot) login (#687): gates pr_approved arming and rework re-arm in PR-anchored reviews. Injected as jobParams.machineAuthor — branch-independent (the checked-out PR branch carries no machineAuthor config)."
+        required: false
+        type: string
+        default: ''
       leg:
         description: "Which leg to run: dev | review | rework (empty = derive from labels/assignees)"
         required: false
@@ -607,7 +612,16 @@ jobs:
           touch "${FA_LOG_FILE}"
           echo "fa full trace: ${FA_LOG_FILE}"
           RUN_OUTPUT="${GITHUB_WORKSPACE}/.dmtools/run-output.txt"
-          dmtools run "${RUNNER}" \
+          # #687: machine login rides jobParams so PR-anchored verdicts arm
+          # the merge pipeline regardless of what the checked-out branch's
+          # .dmtools/config.js carries (postPRReviewComments reads
+          # jobParams.machineAuthor first).
+          DMTOOLS_ARGS=()
+          MA='${{ inputs.machine-author }}'
+          if [ -n "$MA" ]; then
+            DMTOOLS_ARGS+=('{"params":{"jobParams":{"machineAuthor":"'"$MA"'"}}}')
+          fi
+          dmtools run "${RUNNER}" ${DMTOOLS_ARGS[@]+"${DMTOOLS_ARGS[@]}"} \
             --metadata '{"contextId":"${{ needs.guard.outputs.anchor }}"}' \
             --ciRunUrl "${CI_RUN_URL}" --debug 2>&1 | tee "${RUN_OUTPUT}"
           RC=${PIPESTATUS[0]}
