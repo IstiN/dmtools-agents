@@ -37,6 +37,11 @@ function makeSmAgent(opts) {
     var capturedJqls = [];
     var capturedCliCommands = [];
     var capturedCloses = [];
+    var capturedPrMerges = [];
+    var capturedPrLabelAdds = [];
+    var capturedPrLabelRemoves = [];
+    var capturedPrComments = [];
+    var capturedEnvSets = [];
 
     // Controlled file_read: config discovery paths from fileMap only; other paths from disk.
     var fileReadMock = function(readOpts) {
@@ -151,8 +156,8 @@ function makeSmAgent(opts) {
             });
         }
     };
-    // Optional github source stub: opts.github = { items: [...] } —
-    // for close-on-merge (localAction) rule tests.
+    // Optional github source stub: opts.github = { items: [...], pr: {...} } —
+    // for close-on-merge (localAction) and PR-lifecycle (#687) rule tests.
     if (opts.github) {
         jiraSourceStub = {
             query: function () { return opts.github.items; }
@@ -160,7 +165,21 @@ function makeSmAgent(opts) {
         smMocks.github_close_issue = function (closeOpts) {
             capturedCloses.push(closeOpts);
         };
+        // #687 PR-lifecycle localActions: capture every GitHub mutation.
+        smMocks.github_merge_pr = function (mergeOpts) { capturedPrMerges.push(mergeOpts); };
+        smMocks.github_add_labels = function (labelOpts) { capturedPrLabelAdds.push(labelOpts); };
+        smMocks.github_remove_label = function (remOpts) { capturedPrLabelRemoves.push(remOpts); };
+        smMocks.github_create_comment = function (cOpts) { capturedPrComments.push(cOpts); };
+        smMocks.github_get_pr = function () {
+            return JSON.stringify(opts.github.pr || { number: 1, body: opts.github.prBody || '' });
+        };
+        smMocks.set_env_variable = function (name, value) {
+            capturedEnvSets.push({ name: name, value: value });
+        };
     }
+    var machineAuthorModule = loadModule(
+        'js/common/machineAuthor.js', makeRequire({}), {}
+    );
     var sm = loadModule(
         'js/smAgent.js',
         makeRequire({
@@ -168,6 +187,7 @@ function makeSmAgent(opts) {
             './sm/sourceResolver.js': { resolve: function () { return jiraSourceStub; } },
             './common/scm.js': mockScmModule,
             './common/buildEncodedConfig.js': buildEncodedConfigModule,
+            './common/machineAuthor.js': machineAuthorModule,
         }),
         smMocks
     );
@@ -180,7 +200,12 @@ function makeSmAgent(opts) {
         capturedStatusMoves: capturedStatusMoves,
         capturedJqls: capturedJqls,
         capturedCliCommands: capturedCliCommands,
-        capturedCloses: capturedCloses
+        capturedCloses: capturedCloses,
+        capturedPrMerges: capturedPrMerges,
+        capturedPrLabelAdds: capturedPrLabelAdds,
+        capturedPrLabelRemoves: capturedPrLabelRemoves,
+        capturedPrComments: capturedPrComments,
+        capturedEnvSets: capturedEnvSets
     };
 }
 
@@ -519,6 +544,108 @@ suite('smAgent: localAction close_issue (github close-on-merge)', function () {
 
         assert.equal(sm.capturedCloses.length, 0, 'nothing to close');
         assert.equal(sm.capturedTriggers.length, 0, 'no dispatch');
+    });
+});
+
+suite('smAgent: PR lifecycle localActions (#687)', function () {
+
+    var RULES = {
+        update: { source: 'github', query: { type: 'pr', labels: ['pr_approved'], mergeState: 'BEHIND' },
+                  localAction: 'update_branch', limit: 5, id: 'silent-update-armed' },
+        validate: { source: 'github', query: { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'], notMergeState: 'BEHIND', draft: false },
+                    localAction: 'validate_pr', limit: 1, id: 'validate-armed' },
+        merge: { source: 'github', query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'green', mergeState: 'CLEAN' },
+                 localAction: 'merge_pr', limit: 1, id: 'merge-validated' },
+        fail: { source: 'github', query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'red' },
+                localAction: 'fail_validation', limit: 1, id: 'fail-validation' }
+    };
+
+    function prItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved'], issueNumber: null, prNumber: n, draft: false };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    test('update_branch: silent token swap around the gh update, restore after', function () {
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            github: { items: [prItem(681)] }
+        }));
+        var params = { jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            silentToken: 'SILENT-TOKEN', sourceToken: 'PAT-TOKEN', rules: [RULES.update] } };
+
+        sm.action(params);
+
+        assert.equal(sm.capturedCliCommands.length, 1, 'one update command');
+        assert.equal(sm.capturedCliCommands[0].command, 'gh pr update-branch 681 --repo epam/dmtools-dart');
+        // swap → update → restore, in that order
+        assert.equal(sm.capturedEnvSets.length, 2, 'token swapped and restored');
+        assert.equal(sm.capturedEnvSets[0].name, 'GH_TOKEN');
+        assert.equal(sm.capturedEnvSets[0].value, 'SILENT-TOKEN');
+        assert.equal(sm.capturedEnvSets[1].value, 'PAT-TOKEN');
+    });
+
+    test('update_branch: without a silent token it updates with the ambient PAT', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), { github: { items: [prItem(9)] } }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.update] } });
+        assert.equal(sm.capturedCliCommands.length, 1);
+        assert.equal(sm.capturedEnvSets.length, 0, 'no swap without silentToken');
+    });
+
+    test('validate_pr: PAT update (no swap) + ai_validating label on the PR', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), { github: { items: [prItem(70)] } }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+            silentToken: 'SILENT', sourceToken: 'PAT', rules: [RULES.validate] } });
+
+        assert.equal(sm.capturedCliCommands.length, 1, 'gh pr update-branch (PAT push fires CI)');
+        assert.equal(sm.capturedEnvSets.length, 0, 'validation is NOT silent');
+        assert.equal(sm.capturedPrLabelAdds.length, 1);
+        assert.equal(sm.capturedPrLabelAdds[0].number, 70);
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['ai_validating']);
+    });
+
+    test('merge_pr: squash-merge + clears ai_validating and pr_approved', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(71, { labels: ['pr_approved', 'ai_validating'] })] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.merge] } });
+
+        assert.equal(sm.capturedPrMerges.length, 1);
+        assert.equal(sm.capturedPrMerges[0].number, 71);
+        assert.equal(sm.capturedPrMerges[0].mergeMethod, 'squash');
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
+            ['ai_validating', 'pr_approved']);
+    });
+
+    test('fail_validation: unarms, comments, re-arms agent:rework on the linked issue', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(72, { labels: ['pr_approved', 'ai_validating'] })],
+                pr: { number: 72, body: 'Fixes #503 — boot cost' }
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.fail] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }), ['ai_validating']);
+        assert.equal(sm.capturedPrComments.length, 1, 'PR report comment');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('validation CI went red') !== -1);
+        assert.equal(sm.capturedPrLabelAdds.length, 1);
+        assert.equal(sm.capturedPrLabelAdds[0].number, 503, 're-arm lands on the linked issue');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+    });
+
+    test('fail_validation: external PR (no linked issue) — report only', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(73, { labels: ['pr_approved', 'ai_validating'] })], pr: { number: 73, body: 'no link' } }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.fail] } });
+
+        assert.equal(sm.capturedPrComments.length, 1);
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no issue to re-arm');
     });
 });
 

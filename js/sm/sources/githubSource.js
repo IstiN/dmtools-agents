@@ -26,6 +26,7 @@
 'use strict';
 
 var smProviderModule = require('../../common/smProvider.js');
+var machineAuthorModule = require('../../common/machineAuthor.js');
 
 function parseMcp(result) {
     if (!result) return null;
@@ -57,9 +58,17 @@ function matchesGuards(item, rule) {
     if (q.notLabels && q.notLabels.some(function (l) { return labels.indexOf(l) !== -1; })) {
         return false;
     }
-    if (q.prChecks && (!item.pr || item.pr.checks !== q.prChecks)) return false;
+    // The live provider reports `checkConclusion`; older stubs (and the
+    // issue-path placeholder) use `checks`. Accept both everywhere.
+    var rollup = function (pr) { return pr ? (pr.checkConclusion || pr.checks) : undefined; };
+    if (q.prChecks && rollup(item.pr) !== q.prChecks) return false;
     if (q.prMergeState && (!item.pr || item.pr.mergeState !== q.prMergeState)) return false;
     if (q.mergeState && (!item.pr || item.pr.mergeState !== q.mergeState)) return false;
+    // PR-carrier guards (issue #687 lifecycle rules): `checks` reads the
+    // provider's check rollup (green/red/pending/none); `notMergeState`
+    // excludes one state (e.g. BEHIND while a silent update lands).
+    if (q.checks && rollup(item.pr) !== q.checks) return false;
+    if (q.notMergeState && (!item.pr || item.pr.mergeState === q.notMergeState)) return false;
     if (q.mergeable === true && (!item.pr || item.pr.mergeable !== true)) return false;
     if (q.prState && (!item.pr || item.pr.state !== q.prState)) return false;
     return true;
@@ -82,7 +91,8 @@ function query(rule, ctx) {
     var limit = rule.limit || 50;
 
     if (q.type === 'pr') {
-        return queryPrs(rule, provider, repoInfo, limit);
+        return queryPrs(rule, provider, repoInfo, limit,
+            machineAuthorModule.resolveMachineAuthor(ctx, ctx && ctx.config));
     }
     return queryIssues(rule, provider, repoInfo, branchPrefix, limit);
 }
@@ -147,7 +157,7 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit) {
     return enriched.filter(function (item) { return matchesGuards(item, rule); });
 }
 
-function queryPrs(rule, provider, repoInfo, limit) {
+function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {
     var q = rule.query || {};
     var prs = asList(parseMcp(github_list_prs({
         workspace: repoInfo.owner, repository: repoInfo.repo, state: 'open'
@@ -161,13 +171,15 @@ function queryPrs(rule, provider, repoInfo, limit) {
             issueNumber: null,
             prNumber: p.number,
             draft: !!p.draft,
-            branch: (p.head && p.head.ref) || p.headRefName || ''
+            branch: (p.head && p.head.ref) || p.headRefName || '',
+            author: (p.author && (p.author.login || p.author.name)) || ''
         };
     });
 
     // PR guards that need per-PR facts (checks/merge state) resolve lazily:
     // only when the rule actually filters on them.
-    var needsStatus = q.checks || q.mergeState || q.mergeable !== undefined || q.prChecks;
+    var needsStatus = q.checks || q.mergeState || q.notMergeState ||
+        q.mergeable !== undefined || q.prChecks;
     if (needsStatus) {
         items = items.map(function (item) {
             item.pr = provider.prStatus(item.prNumber);
@@ -182,6 +194,16 @@ function queryPrs(rule, provider, repoInfo, limit) {
         if (q2.notLabels && q2.notLabels.some(function (l) { return labels.indexOf(l) !== -1; })) return false;
         if (q2.draft === false && item.draft) return false;
         if (q2.branchPrefix && String(item.branch || '').indexOf(q2.branchPrefix) !== 0) return false;
+        // Author guards: `notAuthors` excludes machine-authored PRs (the
+        // external one-time review rule) or vice versa.
+        if (q2.notAuthors && q2.notAuthors.indexOf(item.author) !== -1) return false;
+        // `notMachine` excludes the machine author without naming it here —
+        // the login is deployment-specific (machineAuthor resolved from
+        // jobParams.machineAuthor / config.machineAuthor upstream). No
+        // machineAuthor configured -> inert (every green PR is reviewable).
+        if (q2.notMachine && machineAuthor &&
+            item.author === machineAuthor) return false;
+        if (q2.authors && q2.authors.indexOf(item.author) === -1) return false;
         return matchesGuards(item, rule);
     });
 

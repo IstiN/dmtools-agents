@@ -38,11 +38,19 @@ on:
         description: "The ref this workflow was invoked with (same literal as the stub uses-ref). GitHub exposes no context/env for the called-workflow ref (GITHUB_WORKFLOW_REF is the CALLER's), so the stub passes its pin explicitly."
         required: true
         type: string
+      machine-author:
+        description: "Deployment's machine (bot) login for #687 PR rules: excluded from review-external-once, gates pr_approved arming and rework re-arm in PR-anchored reviews. Global-level knob — the agents repo carries no hardcoded login."
+        required: false
+        type: string
+        default: ''
 
     secrets:
       SOURCE_GITHUB_TOKEN:
         description: 'PAT with repo scope — GitHub API access for the SM engine (labels, PR state, checks, dispatch). secrets: inherit does not cross repository boundaries, so the stub passes it explicitly.'
         required: true
+      SILENT_GH_TOKEN:
+        description: "The caller workflow's github.token — pushes made with it trigger NO workflows, so silent branch updates (#687) refresh armed PRs without re-running the CI matrix. Optional: without it updates use the PAT (CI re-runs)."
+        required: false
 
 # Never two SM instances; never cancel an in-flight reconcile. The caller
 # stub declares the same group — combined, still one tick at a time.
@@ -99,11 +107,24 @@ jobs:
           # it the GitHub integration counts as unconfigured and the JS
           # runtime does not expose github_* globals at all.
           SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+          SILENT_GH_TOKEN: ${{ secrets.SILENT_GH_TOKEN }}
         run: |
           repo='${{ github.repository }}'
+          # #687: silentToken powers update_branch localActions (github.token
+          # pushes trigger no workflows); sourceToken restores the PAT after.
+          extra=""
+          if [ -n "$SILENT_GH_TOKEN" ]; then
+            extra=",\"silentToken\":\"${SILENT_GH_TOKEN}\",\"sourceToken\":\"${SOURCE_GITHUB_TOKEN}\""
+          fi
+          # #687: machine login is deployment-level (never hardcoded in the
+          # agents repo) — jobParams.machineAuthor / config.machineAuthor.
+          ma='${{ inputs.machine-author }}'
+          if [ -n "$ma" ]; then
+            extra="${extra},\"machineAuthor\":\"${ma}\""
+          fi
           if [ "${{ inputs.dryRun }}" = "true" ]; then
-            override="{\"params\":{\"jobParams\":{\"repo\":\"${repo}\",\"dryRun\":true}}}"
+            override="{\"params\":{\"jobParams\":{\"repo\":\"${repo}\",\"dryRun\":true${extra}}}}"
           else
-            override="{\"params\":{\"jobParams\":{\"repo\":\"${repo}\"}}}"
+            override="{\"params\":{\"jobParams\":{\"repo\":\"${repo}\"${extra}}}}"
           fi
           cd factory-agents && dmtools run sm_github.json "$override"

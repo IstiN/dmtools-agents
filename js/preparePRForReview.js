@@ -16,6 +16,14 @@ function action(params) {
     try {
         const inputFolder = params.inputFolderPath;
         const ticketKey = inputFolder.split('/').pop();
+        // PR-anchored review (issue #687): a `pr-N` contextId makes the PR
+        // itself the anchor — no ticket lookup, no ticket comments. Covers
+        // PRs born without an issue and on-demand PR reviews (agent:review).
+        var jp = params.jobParams || params;
+        var anchorMatch = /^pr-(\d+)$/.exec(String(ticketKey || ''));
+        const prAnchor = (anchorMatch ? parseInt(anchorMatch[1], 10) : null) ||
+            (parseInt(jp.prNumber || jp.pr || '', 10) || null);
+        const noTicket = !!prAnchor;
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var scm = configLoader.createScm(config);
 
@@ -45,22 +53,30 @@ function action(params) {
         console.log('Resolved repository:', repoInfo.owner + '/' + repoInfo.repo);
 
         // Step 2: Find PR
-        console.log('Searching for open PR associated with ticket:', ticketKey);
-        var prSearchOptions = config.prSearchFn ? { prSearchFn: config.prSearchFn } : {};
-        const pr = gh.findPRForTicket(scm, ticketKey, prSearchOptions);
+        var pr;
+        if (prAnchor) {
+            console.log('PR-anchored review: PR #' + prAnchor + ' (no ticket lookup)');
+            pr = { number: prAnchor };
+        } else {
+            console.log('Searching for open PR associated with ticket:', ticketKey);
+            var prSearchOptions = config.prSearchFn ? { prSearchFn: config.prSearchFn } : {};
+            pr = gh.findPRForTicket(scm, ticketKey, prSearchOptions);
+        }
         if (!pr) {
             console.warn('No open PR found for ticket:', ticketKey);
-            try {
-                jira_post_comment({
-                    key: ticketKey,
-                    comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Setup Failed') + '\n\n' +
-                        'Could not find an open Pull Request associated with ' + commentMarkup.forTicket(ticketKey).bold(ticketKey) + '.\n\n' +
-                        'Please ensure:\n' +
-                        '* A PR has been created with the ticket key in the title or branch name\n' +
-                        '* The PR is open and accessible\n\n' +
-                        '_Review cancelled — no PR to review._'
-                });
-            } catch (e) {}
+            if (!noTicket) {
+                try {
+                    jira_post_comment({
+                        key: ticketKey,
+                        comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Setup Failed') + '\n\n' +
+                            'Could not find an open Pull Request associated with ' + commentMarkup.forTicket(ticketKey).bold(ticketKey) + '.\n\n' +
+                            'Please ensure:\n' +
+                            '* A PR has been created with the ticket key in the title or branch name\n' +
+                            '* The PR is open and accessible\n\n' +
+                            '_Review cancelled — no PR to review._'
+                    });
+                } catch (e) {}
+            }
             return false;
         }
         console.log('Found PR candidate #' + pr.number + ' with title: ' + (pr.title || '(no title)'));
@@ -71,12 +87,14 @@ function action(params) {
         const prDetails = gh.getPRDetails(scm, pr.number);
         if (!prDetails) {
             console.error('Failed to fetch PR details for PR #' + pr.number);
-            try {
-                jira_post_comment({
-                    key: ticketKey,
-                    comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Setup Failed') + '\n\nCould not fetch details for PR #' + pr.number + '.\n\n_Review cancelled._'
-                });
-            } catch (e) {}
+            if (!noTicket) {
+                try {
+                    jira_post_comment({
+                        key: ticketKey,
+                        comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Setup Failed') + '\n\nCould not fetch details for PR #' + pr.number + '.\n\n_Review cancelled._'
+                    });
+                } catch (e) {}
+            }
             return false;
         }
         console.log('Loaded PR details for #' + prDetails.number +
@@ -120,9 +138,12 @@ function action(params) {
         var failedChecks = gh.detectFailedChecks(scm, headSha, inputFolder, config.scm && config.scm.jenkinsBasePath);
         console.log('Detected failed checks:', failedChecks.length);
 
-        // Step 7: Jira comment
-        try {
-            var m = commentMarkup.forTicket(ticketKey);
+        // Step 7: Ticket comment (issue-anchored runs only — a PR-anchored
+        // review has no ticket to notify; the PR comment comes from the
+        // post action).
+        if (!noTicket) {
+            try {
+                var m = commentMarkup.forTicket(ticketKey);
             var jiraComment = m.h(3, '🔍 Automated PR Review Started') + '\n\n' +
                 m.bold('Pull Request') + ': ' + m.link('PR #' + prDetails.number, prDetails.html_url) + '\n' +
                 m.bold('Branch') + ': ' + m.code(branchName || 'unknown') + '\n' +
@@ -145,17 +166,21 @@ function action(params) {
 
             jira_post_comment({ key: ticketKey, comment: jiraComment });
             console.log('Posted "review started" comment to Jira ticket:', ticketKey);
-        } catch (e) {
-            console.warn('Failed to post review started comment:', e);
+            } catch (e) {
+                console.warn('Failed to post review started comment:', e);
+            }
         }
 
         console.log('✅ PR review setup completed — PR #' + prDetails.number);
 
         // Enrich input with [BA]/[SA]/[VD] context from parent siblings
-        try {
-            fetchParentContextToInput.action(params);
-        } catch (e) {
-            console.warn('fetchParentContextToInput failed (non-fatal):', e);
+        // (ticket-anchored runs only — no parent context without a ticket).
+        if (!noTicket) {
+            try {
+                fetchParentContextToInput.action(params);
+            } catch (e) {
+                console.warn('fetchParentContextToInput failed (non-fatal):', e);
+            }
         }
 
         return {
@@ -169,13 +194,15 @@ function action(params) {
 
     } catch (error) {
         console.error('❌ Error in preparePRForReview:', error);
-        try {
-            const ticketKey = params.inputFolderPath.split('/').pop();
-            jira_post_comment({
-                key: ticketKey,
-                comment: commentMarkup.forTicket(ticketKey).h(3, '❌ PR Review Setup Error') + '\n\n' + commentMarkup.forTicket(ticketKey).code(error.toString())
-            });
-        } catch (e) {}
+        if (!noTicket) {
+            try {
+                const ticketKey = params.inputFolderPath.split('/').pop();
+                jira_post_comment({
+                    key: ticketKey,
+                    comment: commentMarkup.forTicket(ticketKey).h(3, '❌ PR Review Setup Error') + '\n\n' + commentMarkup.forTicket(ticketKey).code(error.toString())
+                });
+            } catch (e) {}
+        }
         return false;
     }
 }
