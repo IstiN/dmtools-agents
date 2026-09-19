@@ -94,7 +94,7 @@ permissions:
 
 jobs:
   guard:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       run: ${{ steps.check.outputs.run }}
       runner: ${{ steps.check.outputs.runner }}
@@ -215,7 +215,7 @@ jobs:
   teammate:
     needs: guard
     if: needs.guard.outputs.run == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # A real fix is a 40-80 minute agent session (gh-623 burned a full RCA +
     # TDD cycle at exactly 61 minutes and the job was killed mid-work).
     # The autocommit timer (300s) bounds the blast radius of a kill; this
