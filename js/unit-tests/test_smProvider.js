@@ -120,6 +120,59 @@ suite('smProvider', function () {
         assert.equal(p.prStatus(7).checkConclusion, 'none');
     });
 
+    test('github: prStatus computes BEHIND/CLEAN from base.sha vs branch head (deterministic)', function () {
+        // Live race: right after a base push, REST mergeable_state says
+        // `unknown` for every PR while GitHub recomputes lazily — an SM
+        // tick in that window updated nothing. base.sha vs the live
+        // branch head (github_list_branches) is always current.
+        var branches = [
+            { name: 'main', commit: { sha: 'mainhead' } },
+            { name: 'dev', commit: { sha: 'devhead' } }
+        ];
+        function mkProvider(pr) {
+            return loadProvider('github', {
+                github_get_pr: function () { return pr; },
+                github_get_commit_check_runs: function () { return { check_runs: [] }; },
+                github_list_branches: function () { return branches; }
+            });
+        }
+        // stale base + mergeable true (or null mid-recompute) -> BEHIND
+        assert.equal(mkProvider({
+            state: 'OPEN', mergeable: true, mergeable_state: 'unknown',
+            base: { ref: 'main', sha: 'oldbase' }, head: { sha: 'h' }
+        }).prStatus(7).mergeState, 'BEHIND');
+        assert.equal(mkProvider({
+            state: 'OPEN', mergeable: null, mergeable_state: 'unknown',
+            base: { ref: 'main', sha: 'oldbase' }, head: { sha: 'h' }
+        }).prStatus(7).mergeState, 'BEHIND');
+        // fresh base -> CLEAN (even when REST still mutters 'behind')
+        assert.equal(mkProvider({
+            state: 'OPEN', mergeable: true, mergeable_state: 'behind',
+            base: { ref: 'main', sha: 'mainhead' }, head: { sha: 'h' }
+        }).prStatus(7).mergeState, 'CLEAN');
+        // conflicts beat freshness -> DIRTY
+        assert.equal(mkProvider({
+            state: 'OPEN', mergeable: false, mergeable_state: 'dirty',
+            base: { ref: 'main', sha: 'mainhead' }, head: { sha: 'h' }
+        }).prStatus(7).mergeState, 'DIRTY');
+        // non-default base branch heads work too
+        assert.equal(mkProvider({
+            state: 'OPEN', mergeable: true, mergeable_state: 'unknown',
+            base: { ref: 'dev', sha: 'devhead' }, head: { sha: 'h' }
+        }).prStatus(7).mergeState, 'CLEAN');
+    });
+
+    test('github: prStatus falls back to REST mergeable_state without the branches tool', function () {
+        var p = loadProvider('github', {
+            github_get_pr: function () {
+                return { state: 'OPEN', mergeable: true, mergeable_state: 'behind' };
+            },
+            github_get_commit_check_runs: function () { return { check_runs: [] }; }
+            // no github_list_branches stub — older runtime
+        });
+        assert.equal(p.prStatus(7).mergeState, 'BEHIND');
+    });
+
     test('github: prStatus maps the REST mergeable_state (live github_get_pr shape)', function () {
         // Live bug: the REST body carries mergeable_state (lowercase), not
         // the GraphQL mergeStateStatus — the old fallback read mergeable===
