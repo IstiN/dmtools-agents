@@ -7,6 +7,67 @@
       "maxTriggeredWorkflows": 1,
       "rules": [
         {
+          "description": "GitHub PR: armed (pr_approved) and behind main -> silent branch refresh, CI does NOT re-run (#687)",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "pr_approved"
+            ],
+            "mergeState": "BEHIND"
+          },
+          "localAction": "update_branch",
+          "limit": 5,
+          "id": "silent-update-armed"
+        },
+        {
+          "description": "GitHub PR: merge window — oldest armed PR gets a PAT update (validation CI fires on the final head) + ai_validating marker (#687)",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "pr_approved"
+            ],
+            "notLabels": [
+              "ai_validating"
+            ],
+            "notMergeState": "BEHIND",
+            "draft": false
+          },
+          "localAction": "validate_pr",
+          "limit": 1,
+          "id": "validate-armed"
+        },
+        {
+          "description": "GitHub PR: validation CI red on the final head -> unarm, report, requeue agent:rework on the linked issue (#687). NB: labels are OR-matched; ai_validating only ever lands on armed (pr_approved) PRs.",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validating"
+            ],
+            "checks": "red"
+          },
+          "localAction": "fail_validation",
+          "limit": 1,
+          "id": "fail-validation"
+        },
+        {
+          "description": "GitHub PR: validation green + CLEAN -> squash-merge, clear markers (FIFO drain, #687). NB: labels are OR-matched; ai_validating implies armed (pr_approved).",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validating"
+            ],
+            "checks": "green",
+            "mergeState": "CLEAN"
+          },
+          "localAction": "merge_pr",
+          "limit": 1,
+          "id": "merge-validated"
+        },
+        {
           "description": "GitHub: red CI on linked PR → rework (dead-letter re-fire)",
           "source": "github",
           "query": {
@@ -49,21 +110,48 @@
           "id": "review-after-dev"
         },
         {
-          "description": "GitHub: approved → merge/cleanup (1 per tick)",
+          "description": "GitHub PR: external green PR -> one-time review (PR-anchored; no re-review on later pushes)",
           "source": "github",
           "query": {
-            "type": "issue",
+            "type": "pr",
+            "notAuthors": [
+              "vabhzw17eg2qu4m9-bit"
+            ],
+            "notLabels": [
+              "ai_pr_reviewed",
+              "agent:review"
+            ],
+            "checks": "green",
+            "draft": false
+          },
+          "workflowFile": "ai-teammate.yml",
+          "inputs": {
+            "issue": "",
+            "leg": "review",
+            "reason": "sm: external PR green - one-time review",
+            "pr": "{prNumber}"
+          },
+          "limit": 1,
+          "id": "review-external-once"
+        },
+        {
+          "description": "GitHub PR: agent:review label on a PR -> review on demand (any author; consumed by the review runner)",
+          "source": "github",
+          "query": {
+            "type": "pr",
             "labels": [
-              "pr_approved"
+              "agent:review"
             ]
           },
-          "configFile": "agents/retry_merge_github.json",
-          "localExecution": true,
-          "addLabel": "sm_pr_merge_triggered",
-          "recoverStaleTriggerLabel": true,
+          "workflowFile": "ai-teammate.yml",
+          "inputs": {
+            "issue": "",
+            "leg": "review",
+            "reason": "sm: agent:review label on PR",
+            "pr": "{prNumber}"
+          },
           "limit": 1,
-          "skipIfLabel": "sm_pr_merge_triggered",
-          "id": "merge-approved-fifo"
+          "id": "review-on-label"
         },
         {
           "description": "GitHub: linked PR merged → close the issue (cycle complete)",

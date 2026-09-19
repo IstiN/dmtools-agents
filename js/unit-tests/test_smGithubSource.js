@@ -152,4 +152,55 @@ suite('sm github source', function () {
         assert.equal(items.length, 1);
         assert.equal(items[0].key, 'pr-51');
     });
+
+    test('pr rules: #687 lifecycle guards — notAuthors, notMergeState, live checkConclusion', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 61, labels: [{ name: 'pr_approved' }], draft: false,
+                      author: { login: 'vabhzw17eg2qu4m9-bit' } },
+                    { number: 62, labels: [{ name: 'pr_approved' }], draft: false,
+                      author: { login: 'human-contributor' } },
+                    { number: 63, labels: [{ name: 'pr_approved' }], draft: false,
+                      author: { login: 'human-contributor' } },
+                    { number: 64, labels: [{ name: 'ai_validating' }], draft: false,
+                      author: { login: 'human-contributor' } }
+                ];
+            }
+        }, {}, {
+            // Live provider shape: checkConclusion (not the stub's `checks`).
+            61: { state: 'OPEN', checkConclusion: 'green', mergeState: 'BEHIND', mergeable: true },
+            62: { state: 'OPEN', checkConclusion: 'green', mergeState: 'BLOCKED', mergeable: true },
+            63: { state: 'OPEN', checkConclusion: 'green', mergeState: 'CLEAN', mergeable: true },
+            64: { state: 'OPEN', checkConclusion: 'red', mergeState: 'BLOCKED', mergeable: true }
+        });
+
+        // review-external-once: machine author excluded, drafts excluded,
+        // ai_pr_reviewed not yet set, green checks required.
+        var ext = srcMod.query({
+            query: { type: 'pr', notAuthors: ['vabhzw17eg2qu4m9-bit'],
+                     notLabels: ['ai_pr_reviewed'], checks: 'green', draft: false }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(ext.map(function (i) { return i.key; }).join(','), 'pr-62,pr-63');
+
+        // silent-update-armed: only BEHIND armed PRs.
+        var behind = srcMod.query({
+            query: { type: 'pr', labels: ['pr_approved'], mergeState: 'BEHIND' }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(behind.map(function (i) { return i.key; }).join(','), 'pr-61');
+
+        // validate-armed: armed, not validating, not BEHIND (fresh enough).
+        var fresh = srcMod.query({
+            query: { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'],
+                     notMergeState: 'BEHIND', draft: false }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(fresh.map(function (i) { return i.key; }).join(','), 'pr-62,pr-63');
+
+        // fail-validation: labels are OR-matched, so the rule keys on
+        // ai_validating alone (it only ever lands on armed PRs).
+        var failed = srcMod.query({
+            query: { type: 'pr', labels: ['ai_validating'], checks: 'red' }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(failed.map(function (i) { return i.key; }).join(','), 'pr-64');
+    });
 });

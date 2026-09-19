@@ -282,18 +282,35 @@ module.exports = {
 ### Patching rules — `smRuleOverrides`
 
 Rules carry stable ids (`rework-on-red-ci`, `review-after-dev`,
-`merge-approved-fifo`). Patch any field or disable a rule entirely:
+`silent-update-armed`). Patch any field or disable a rule entirely:
 
 ```js
 module.exports = {
   smRuleOverrides: {
-    'merge-approved-fifo': { limit: 2 },       // relax FIFO for this repo
-    'rework-on-red-ci':    { enabled: false }  // manual rework only
+    'validate-armed':       { limit: 2 },     // validate two PRs per tick
+    'rework-on-red-ci':     { enabled: false } // manual rework only
   }
 };
 ```
 
 Jira-style rules still match by `configFile` key.
+
+### PR lifecycle rules (#687) — test once per state
+
+The merge loop is PR-carried (issue labels stay the dev→review contract):
+`silent-update-armed` (behind armed PR → silent `github.token` refresh, no
+CI), `validate-armed` (merge window: PAT update fires validation CI on the
+final head + `ai_validating` marker), `fail-validation` (red → unarm,
+report, re-arm `agent:rework` on the linked issue), `merge-validated`
+(green + CLEAN → squash-merge, markers cleared). Note `labels` in SM
+queries are **OR**-matched — the validating rules key on `ai_validating`
+alone because it only ever lands on armed (`pr_approved`) PRs. Reviews of
+PRs born without an issue: `review-external-once` (any non-machine author,
+green checks, once — `ai_pr_reviewed` blocks re-review on later pushes)
+and `review-on-label` (`agent:review` on the PR, any author; the review
+runner consumes the label). PR-anchored factory dispatches pass `pr`
+instead of `issue`; the anchor rides the `pr-N` contextId into the agent
+scripts (`preparePRForReview` / `postPRReviewComments`).
 
 ## 6. The legs (runners)
 

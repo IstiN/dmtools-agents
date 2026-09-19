@@ -207,6 +207,54 @@ function githubProvider(cfg) {
 
         addIssueLabel: function (issueNumber, label) {
             return github_add_labels({ workspace: owner, repository: repo, number: issueNumber, labels: [label] });
+        },
+
+        // ── PR lifecycle primitives (issue #687: SM owns the PR loop) ──
+        // Labels ride the issues API — a PR is an issue for labeling.
+
+        addPrLabel: function (prNumber, label) {
+            return github_add_labels({ workspace: owner, repository: repo, number: prNumber, labels: [label] });
+        },
+
+        removePrLabel: function (prNumber, label) {
+            // Absent label → 404; treat as an idempotent no-op.
+            try {
+                return github_remove_label({ workspace: owner, repository: repo, number: prNumber, label: label });
+            } catch (e) {
+                console.warn('  ⚠️ remove "' + label + '" from PR #' + prNumber + ': ' + (e.message || e));
+                return null;
+            }
+        },
+
+        dispatchPrLeg: function (prNumber, leg, reason, workflowFile) {
+            // PR-anchored dispatch: the factory takes the PR number as the
+            // anchor instead of an issue (review of PRs born without one).
+            return github_trigger_workflow({
+                workflowId: workflowFile,
+                ref: 'main',
+                inputs: JSON.stringify({
+                    issue: '', leg: leg, reason: reason || '', pr: String(prNumber)
+                })
+            });
+        },
+
+        silentUpdateBranch: function (prNumber, silentToken, restoreToken) {
+            // Silent refresh of an armed PR: pushes made with the workflow's
+            // own github.token trigger NO workflows, so the branch updates
+            // without re-running the CI matrix (issue #687 — test once per
+            // state, update for free).
+            var update = function () {
+                return cli_execute_command({
+                    command: 'gh pr update-branch ' + prNumber + ' --repo ' + full
+                });
+            };
+            if (!silentToken) return update();
+            try {
+                set_env_variable('GH_TOKEN', silentToken);
+                return update();
+            } finally {
+                set_env_variable('GH_TOKEN', restoreToken || silentToken);
+            }
         }
     };
 }

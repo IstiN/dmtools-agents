@@ -754,7 +754,15 @@ function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl) 
  */
 function action(params) {
     try {
-        const ticketKey = params.ticket.key;
+        // PR-anchored review (issue #687): no ticket hydration — the PR is
+        // the anchor. Verdict + labels land on the PR itself; ticket-side
+        // steps (statuses, tracker labels) are skipped via an early return.
+        var jp = params.jobParams || params;
+        var folderKey = String((params.inputFolderPath || '').split('/').pop() || '');
+        var anchorMatch = /^pr-(\d+)$/.exec(folderKey);
+        var prAnchor = (anchorMatch ? parseInt(anchorMatch[1], 10) : null) ||
+            (parseInt(jp.prNumber || jp.pr || '', 10) || null);
+        const ticketKey = prAnchor ? ('pr-' + prAnchor) : params.ticket.key;
         const jiraReview = params.response || '';
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var workingDir = config.workingDir || null;
@@ -789,6 +797,7 @@ function action(params) {
         let prNumber = null;
         let prUrl = null;
         let prBranch = null;
+        let prAuthor = null;
 
         // Try to get repo info — prefer targetRepository from config over git remote
         var repoInfo = null;
@@ -798,6 +807,8 @@ function action(params) {
         } else {
             repoInfo = scm.getRemoteRepoInfo();
         }
+        // PR-anchored runs know the PR number outright.
+        if (prAnchor) prNumber = prAnchor;
         if (!repoInfo) {
             console.warn('Could not get GitHub repo info - skipping GitHub comments');
         }
@@ -823,6 +834,12 @@ function action(params) {
                 }
                 if (branchMatch) {
                     prBranch = branchMatch[1];
+                }
+                if (prAnchor) {
+                    // Author line (written by writePRContext) decides whether an
+                    // approve may arm the machine merge pipeline.
+                    var authorMatch = prInfo.match(/\*\*Author\*\*:\s*([^\s\n]+)/);
+                    if (authorMatch) prAuthor = authorMatch[1];
                 }
                 console.log('Found PR info in input folder: #' + prNumber);
             }
@@ -921,12 +938,19 @@ function action(params) {
 
             // Step 5: Two-state outcome
             if (isApproved) {
-                // STATE 1: APPROVE → label PR and Jira ticket; SM will retry merge when CI passes
-                try {
-                    scm.addLabel(prNumber, LABELS.PR_APPROVED);
-                    console.log('✅ Added pr_approved label to GitHub PR #' + prNumber);
-                } catch (labelErr) {
-                    console.warn('Failed to add pr_approved label to GitHub PR:', labelErr);
+                // STATE 1: APPROVE → label PR and Jira ticket; SM will retry merge when CI passes.
+                // PR-anchored EXTERNAL PRs are never auto-merge-armed — only
+                // machine-authored PRs enter the SM merge pipeline (#687).
+                var machineAuthor = (config && config.machineAuthor) || 'vabhzw17eg2qu4m9-bit';
+                if (!prAnchor || prAuthor === machineAuthor) {
+                    try {
+                        scm.addLabel(prNumber, LABELS.PR_APPROVED);
+                        console.log('✅ Added pr_approved label to GitHub PR #' + prNumber);
+                    } catch (labelErr) {
+                        console.warn('Failed to add pr_approved label to GitHub PR:', labelErr);
+                    }
+                } else {
+                    console.log('External PR #' + prNumber + ' approved — verdict posted, merge left to maintainers');
                 }
             } else {
                 // STATE 2: REQUEST_CHANGES / BLOCK → do NOT merge
@@ -949,6 +973,41 @@ function action(params) {
 
         } else {
             console.warn('No PR number or repo info - skipping GitHub comments and merge');
+        }
+
+        // ── PR-anchored runs end here (#687): verdict + labels live on the
+        // PR; the ticket-side steps below (tracker statuses/labels, ticket
+        // comments) assume a hydrated ticket this run does not have.
+        if (prAnchor) {
+            try { scm.addLabel(prNumber, LABELS.AI_PR_REVIEWED); } catch (e) {
+                console.warn('Failed to add ai_pr_reviewed to PR #' + prNumber + ':', e.message || e);
+            }
+            // Consume the on-demand trigger so the label never loops.
+            try { scm.removeLabel(prNumber, 'agent:review'); } catch (e2) {
+                console.warn('No agent:review label to remove from PR #' + prNumber);
+            }
+            if (!isApproved) {
+                // Machine-authored: re-arm the rework loop on the linked
+                // issue; external: the verdict comment is the whole report.
+                var machineAuthor2 = (config && config.machineAuthor) || 'vabhzw17eg2qu4m9-bit';
+                if (prAuthor === machineAuthor2) {
+                    try {
+                        var prRaw = github_get_pr({
+                            workspace: repoInfo.owner, repository: repoInfo.repo, number: prNumber
+                        });
+                        var prObj = typeof prRaw === 'string' ? JSON.parse(prRaw) : (prRaw || {});
+                        var lm = /(?:closes|fixes|resolves)\s+#(\d+)/i.exec(String(prObj.body || ''));
+                        if (lm) {
+                            scm.addLabel(parseInt(lm[1], 10), 'agent:rework');
+                            console.log('Re-armed agent:rework on linked issue #' + lm[1]);
+                        }
+                    } catch (e3) {
+                        console.warn('Linked-issue rework re-arm failed:', e3.message || e3);
+                    }
+                }
+            }
+            console.log('✅ PR-anchored review complete — PR #' + prNumber + ' (' + recommendation + ')');
+            return { success: true, prNumber: prNumber, recommendation: recommendation };
         }
 
         // Step 6: Post review to the ticket (merge is handled by SM/required reviewers, not by this agent)

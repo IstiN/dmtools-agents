@@ -49,8 +49,12 @@ on:
   workflow_call:
     inputs:
       issue:
-        description: 'Issue number (string: number-typed reusable inputs cannot take expressions)'
-        required: true
+        description: 'Issue number (string: number-typed reusable inputs cannot take expressions). Empty when pr is given (PR-anchored run, #687).'
+        required: false
+        type: string
+      pr:
+        description: 'PR number for PR-anchored runs (review leg on PRs born without an issue, #687). Exactly one of issue|pr must be set.'
+        required: false
         type: string
       leg:
         description: "Which leg to run: dev | review | rework (empty = derive from labels/assignees)"
@@ -100,6 +104,7 @@ jobs:
       runner: ${{ steps.check.outputs.runner }}
       config: ${{ steps.check.outputs.config }}
       kind: ${{ steps.check.outputs.kind }}
+      anchor: ${{ steps.check.outputs.anchor }}
     steps:
       - name: Checkout target repository (config, runners)
         uses: actions/checkout@v7
@@ -113,6 +118,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NUMBER: ${{ inputs.issue }}
+          PR_NUMBER: ${{ inputs.pr }}
           # Event context rides through from the caller (issues events) —
           # empty for pure dispatches; the guard refreshes from the API then.
           ASSIGNEES: ${{ join(github.event.issue.assignees.*.login, ' ') }}
@@ -121,6 +127,55 @@ jobs:
           INPUT_LEG: ${{ inputs.leg }}
           INPUT_REASON: ${{ inputs.reason }}
         run: |
+          # Anchor validation (#687): exactly one of issue|pr.
+          if [ -n "$NUMBER" ] && [ -n "$PR_NUMBER" ]; then
+            echo "::error::both issue ($NUMBER) and pr ($PR_NUMBER) given — exactly one anchor allowed"
+            exit 1
+          fi
+          if [ -z "$NUMBER" ] && [ -z "$PR_NUMBER" ]; then
+            echo "::error::no anchor — pass either issue or pr"
+            exit 1
+          fi
+
+          # ── runners come from the TARGET repo (.dmtools/config.js) ──
+          # The factory ships no repo-specific runners: sm.runners maps
+          # legs to configs in this repository (see the integration guide,
+          # "Overriding agents per repository"). dev covers bug and story.
+          if [ ! -f .dmtools/config.js ]; then
+            echo "::error::.dmtools/config.js not found — the factory needs sm.runners to know this repo's agents (docs/machine-factory-integration.md §5a)"
+            exit 1
+          fi
+          ovr="$(node -e "try{const c=require('./.dmtools/config.js');const r=(c.sm&&c.sm.runners)||{};console.log([r.bug||r.dev||'',r.story||r.dev||'',r.review||'',r.rework||''].join('\t'))}catch(e){}" 2>/dev/null || true)"
+          if [ -z "$ovr" ]; then
+            echo "::error::sm.runners missing in .dmtools/config.js (bug/story[/dev], review, rework → runner config paths)"
+            exit 1
+          fi
+          RUNNER_BUG="$(echo "$ovr" | cut -f1)"
+          RUNNER_STORY="$(echo "$ovr" | cut -f2)"
+          RUNNER_REVIEW="$(echo "$ovr" | cut -f3)"
+          RUNNER_REWORK="$(echo "$ovr" | cut -f4)"
+          echo "→ runners (from .dmtools/config.js): bug=${RUNNER_BUG:--} story=${RUNNER_STORY:--} review=${RUNNER_REVIEW:--} rework=${RUNNER_REWORK:--}"
+
+          # ── PR-anchored dispatch (#687): the PR is the anchor; only the
+          # review leg is defined for it. The agent scripts derive the PR
+          # number from the pr-N contextId; verdict + labels land on the PR.
+          if [ -n "$PR_NUMBER" ]; then
+            state="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state -q .state)"
+            if [ "$state" != "OPEN" ]; then
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              echo "→ PR #$PR_NUMBER is ${state} — not for the agent"
+              exit 0
+            fi
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "runner=$RUNNER_REVIEW" >> "$GITHUB_OUTPUT"
+            echo "config=factory-agents/pr_review.json" >> "$GITHUB_OUTPUT"
+            echo "kind=review" >> "$GITHUB_OUTPUT"
+            echo "anchor=pr-${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "→ PR-anchored review of #$PR_NUMBER (reason=${INPUT_REASON:-<none>})"
+            exit 0
+          fi
+          echo "anchor=gh-${NUMBER}" >> "$GITHUB_OUTPUT"
+
           # SM dispatch (or a bare dispatch with no event payload): refresh
           # labels/assignees from the API and log the audit reason.
           if [ -n "$INPUT_LEG" ] || [ -z "$LABELS" ]; then
@@ -142,24 +197,6 @@ jobs:
             exit 0
           fi
           runner=""
-          # ── runners come from the TARGET repo (.dmtools/config.js) ──
-          # The factory ships no repo-specific runners: sm.runners maps
-          # legs to configs in this repository (see the integration guide,
-          # "Overriding agents per repository"). dev covers bug and story.
-          if [ ! -f .dmtools/config.js ]; then
-            echo "::error::.dmtools/config.js not found — the factory needs sm.runners to know this repo's agents (docs/machine-factory-integration.md §5a)"
-            exit 1
-          fi
-          ovr="$(node -e "try{const c=require('./.dmtools/config.js');const r=(c.sm&&c.sm.runners)||{};console.log([r.bug||r.dev||'',r.story||r.dev||'',r.review||'',r.rework||''].join('\t'))}catch(e){}" 2>/dev/null || true)"
-          if [ -z "$ovr" ]; then
-            echo "::error::sm.runners missing in .dmtools/config.js (bug/story[/dev], review, rework → runner config paths)"
-            exit 1
-          fi
-          RUNNER_BUG="$(echo "$ovr" | cut -f1)"
-          RUNNER_STORY="$(echo "$ovr" | cut -f2)"
-          RUNNER_REVIEW="$(echo "$ovr" | cut -f3)"
-          RUNNER_REWORK="$(echo "$ovr" | cut -f4)"
-          echo "→ runners (from .dmtools/config.js): bug=${RUNNER_BUG:--} story=${RUNNER_STORY:--} review=${RUNNER_REVIEW:--} rework=${RUNNER_REWORK:--}"
           slot=""
           if [ -n "$INPUT_LEG" ]; then
             case "$INPUT_LEG" in
@@ -261,8 +298,8 @@ jobs:
       - name: Export fa session identity + cache keys
         env:
           AI_TEAMMATE_CONFIG_FILE: ${{ needs.guard.outputs.config }}
-          AI_TEAMMATE_DISPLAY_KEY: GH-${{ inputs.issue }}
-          AI_TEAMMATE_CONCURRENCY_KEY: ${{ inputs.issue }}
+          AI_TEAMMATE_DISPLAY_KEY: GH-${{ needs.guard.outputs.anchor }}
+          AI_TEAMMATE_CONCURRENCY_KEY: ${{ needs.guard.outputs.anchor }}
         run: bash factory-agents/setup/cache.sh keys fa-session
 
       - name: Restore fa session (resume the ticket conversation)
@@ -270,7 +307,7 @@ jobs:
         # cache-read-only there), so the session tree rides a dedicated git
         # branch per issue; the per-issue concurrency group serializes writers.
         env:
-          FA_SESS_BRANCH: fa-sess/gh-${{ inputs.issue }}
+          FA_SESS_BRANCH: fa-sess/${{ needs.guard.outputs.anchor }}
         run: |
           if git fetch --depth 1 origin "refs/heads/$FA_SESS_BRANCH"; then
             git checkout "refs/remotes/origin/$FA_SESS_BRANCH" -- .dmtools/fa-sessions
@@ -476,6 +513,7 @@ jobs:
           } >> .git/info/exclude
 
       - name: Write the issue into the agent input folder
+        if: inputs.pr == ''
         env:
           GH_TOKEN: ${{ github.token }}
           NUMBER: ${{ inputs.issue }}
@@ -493,11 +531,33 @@ jobs:
             --json title,body -q '.title, .body' > input/ticket.md
           echo "input/ticket.md: $(wc -l < input/ticket.md) lines"
 
+      - name: Write the PR into the agent input folder (PR-anchored runs)
+        # #687: the PR is the anchor — the pr-N contextId is what the agent
+        # scripts key on; ticket.json carries the same tracker-contract
+        # shape so hydration paths stay uniform.
+        if: inputs.pr != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr }}
+        run: |
+          mkdir -p "input/pr-${PR_NUMBER}"
+          gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" \
+            --json number,title,body,url,state,labels \
+            -q '{key: ("pr-" + (.number|tostring)), number: .number,
+                 title: .title, body: .body, url: .url, state: .state,
+                 labels: [.labels[].name]}' \
+            > "input/pr-${PR_NUMBER}/ticket.json"
+          gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" \
+            --json title,body -q '.title, .body' > input/ticket.md
+          echo "input/ticket.md: $(wc -l < input/ticket.md) lines"
+
       - name: Mark machine job started (issue task list)
         # Deterministic start marker in the issue body — survives agent
         # crashes/timeouts because the DONE twin below runs on always().
         # Contract: a "## Machine jobs" section with one task-list line per
         # factory run; the line's run URL is the unique id used to flip it.
+        # PR-anchored runs skip it: no issue body to carry the task list.
+        if: inputs.pr == ''
         env:
           GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN || github.token }}
           NUMBER: ${{ inputs.issue }}
@@ -529,8 +589,8 @@ jobs:
           RUNNER: ${{ needs.guard.outputs.runner }}
           AI_AGENT_PROVIDER: fa
           AI_TEAMMATE_CONFIG_FILE: ${{ needs.guard.outputs.config }}
-          AI_TEAMMATE_DISPLAY_KEY: GH-${{ inputs.issue }}
-          AI_TEAMMATE_CONCURRENCY_KEY: ${{ inputs.issue }}
+          AI_TEAMMATE_DISPLAY_KEY: GH-${{ needs.guard.outputs.anchor }}
+          AI_TEAMMATE_CONCURRENCY_KEY: ${{ needs.guard.outputs.anchor }}
           ZAI_CODE_KEY: ${{ secrets.ZAI_CODE_KEY }}
           KIMI_REVIEW_KEY: ${{ secrets.KIMI_REVIEW_KEY }}
           SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
@@ -548,7 +608,7 @@ jobs:
           echo "fa full trace: ${FA_LOG_FILE}"
           RUN_OUTPUT="${GITHUB_WORKSPACE}/.dmtools/run-output.txt"
           dmtools run "${RUNNER}" \
-            --metadata '{"contextId":"gh-${{ inputs.issue }}"}' \
+            --metadata '{"contextId":"${{ needs.guard.outputs.anchor }}"}' \
             --ciRunUrl "${CI_RUN_URL}" --debug 2>&1 | tee "${RUN_OUTPUT}"
           RC=${PIPESTATUS[0]}
           exit "${RC}"
@@ -556,7 +616,8 @@ jobs:
       - name: Mark machine job done (issue task list)
         # always(): the checkbox flips even when the agent run above timed
         # out, was cancelled, or failed — the marker can never dangle.
-        if: always()
+        # PR-anchored runs skip it (no issue task list).
+        if: always() && inputs.pr == ''
         env:
           GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN || github.token }}
           NUMBER: ${{ inputs.issue }}
@@ -599,7 +660,7 @@ jobs:
         # The CI-green gate applies to the APPROVE path only: gating rework
         # on green CI would deadlock exactly when CI is red because the code
         # needs rework. A PAT is REQUIRED for labeling (mute GITHUB_TOKEN).
-        if: needs.guard.outputs.kind == 'review'
+        if: needs.guard.outputs.kind == 'review' && inputs.pr == ''
         env:
           GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
           NUMBER: ${{ inputs.issue }}
@@ -740,7 +801,7 @@ jobs:
       - name: Close the review cycle (review runs only)
         # A review run must never re-queue itself: strip the queue label at
         # completion (removing a label fires no `labeled` event).
-        if: always() && needs.guard.outputs.kind == 'review'
+        if: always() && needs.guard.outputs.kind == 'review' && inputs.pr == ''
         env:
           GH_TOKEN: ${{ github.token }}
           NUMBER: ${{ inputs.issue }}
@@ -794,7 +855,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: fa-trace-gh-${{ inputs.issue }}-${{ github.run_id }}
+          name: fa-trace-${{ needs.guard.outputs.anchor }}-${{ github.run_id }}
           path: |
             .dmtools/fa-trace.log
             .dmtools/run-output.txt
@@ -807,7 +868,7 @@ jobs:
         # round needs). Best-effort.
         if: always()
         env:
-          FA_SESS_BRANCH: fa-sess/gh-${{ inputs.issue }}
+          FA_SESS_BRANCH: fa-sess/${{ needs.guard.outputs.anchor }}
           SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
         run: |
           if [ ! -d .dmtools/fa-sessions ] || \
@@ -830,7 +891,7 @@ jobs:
             echo "fa session staged nothing (ignored/empty) — nothing to persist"
             exit 0
           fi
-          git commit -m "fa sessions: GH-${{ inputs.issue }} (${{ needs.guard.outputs.config }}) [skip ci]"
+          git commit -m "fa sessions: GH-${{ needs.guard.outputs.anchor }} (${{ needs.guard.outputs.config }}) [skip ci]"
           if git push origin "HEAD:$FA_SESS_BRANCH" --force; then
             echo "→ fa session persisted to $FA_SESS_BRANCH"
           else
@@ -841,7 +902,7 @@ jobs:
         # Remove-then-add agent:review so the `labeled` event always fires
         # (re-adding an existing label is event-wise a no-op); agent:rework
         # goes too — the guard routes on it with priority over review.
-        if: needs.guard.outputs.kind == 'dev'
+        if: needs.guard.outputs.kind == 'dev' && inputs.pr == ''
         env:
           GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
           NUMBER: ${{ inputs.issue }}
@@ -855,7 +916,7 @@ jobs:
           echo "→ labeled agent:review (agent:rework stripped) — pr_review run queued"
 
       - name: Link the run back to the issue
-        if: always()
+        if: always() && inputs.pr == ''
         env:
           GH_TOKEN: ${{ github.token }}
           NUMBER: ${{ inputs.issue }}

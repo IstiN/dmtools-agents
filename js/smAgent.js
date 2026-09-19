@@ -709,6 +709,10 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
 
 // ─── Rule processor ───────────────────────────────────────────────────────────
 
+// Run context (set once per action() invocation): PR-lifecycle
+// localActions read the silent/source tokens from here (#687).
+var RUN_JOB_PARAMS = {};
+
 function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     if (rule.localExecution) {
         return processRuleLocally(rule, globalRepoInfo, ruleIndex);
@@ -857,6 +861,133 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             continue;
         }
 
+        // ── PR-lifecycle localActions (issue #687: the SM owns the loop) ──
+        // They act on the PR directly (type:pr rules; ticket.prNumber set,
+        // ticket.issueNumber null). Idempotency comes from the query guards:
+        // each action flips exactly the fact its rule filtered on.
+
+        if (rule.localAction === 'update_branch') {
+            // Armed PR behind main → silent refresh: swap GH_TOKEN to the
+            // workflow's own github.token for the push (github.token pushes
+            // trigger no workflows → the CI matrix does not re-run).
+            var jp = RUN_JOB_PARAMS || {};
+            var silent = jp.silentToken || '';
+            var restore = jp.sourceToken || '';
+            try {
+                if (silent) set_env_variable('GH_TOKEN', silent);
+                cli_execute_command({
+                    command: 'gh pr update-branch ' + ticket.prNumber +
+                             ' --repo ' + effectiveRepoInfo.owner + '/' + effectiveRepoInfo.repo
+                });
+                console.log('  ✅ ' + key + ' branch silently updated (no CI)');
+                processedKeys.push(key);
+            } catch (e) {
+                console.error('  ❌ update_branch failed for ' + key + ': ' + (e.message || e));
+            } finally {
+                if (silent && restore) set_env_variable('GH_TOKEN', restore);
+            }
+            continue;
+        }
+
+        if (rule.localAction === 'validate_pr') {
+            // Merge window: PAT update — a SOURCE-token push DOES trigger
+            // CI, so the validation run lands on the final head — then arm
+            // the merge rule with the ai_validating marker.
+            try {
+                cli_execute_command({
+                    command: 'gh pr update-branch ' + ticket.prNumber +
+                             ' --repo ' + effectiveRepoInfo.owner + '/' + effectiveRepoInfo.repo
+                });
+                github_add_labels({
+                    workspace: effectiveRepoInfo.owner,
+                    repository: effectiveRepoInfo.repo,
+                    number: ticket.prNumber,
+                    labels: ['ai_validating']
+                });
+                console.log('  🧪 ' + key + ' validation armed (CI runs on the final head)');
+                processedKeys.push(key);
+            } catch (e) {
+                console.error('  ❌ validate_pr failed for ' + key + ': ' + (e.message || e));
+            }
+            continue;
+        }
+
+        if (rule.localAction === 'merge_pr') {
+            // Validated green + CLEAN → squash-merge, then clear the armed
+            // markers (merge approval consumed; close-on-merge finishes the
+            // linked issue on its next tick).
+            try {
+                github_merge_pr({
+                    workspace: effectiveRepoInfo.owner,
+                    repository: effectiveRepoInfo.repo,
+                    number: ticket.prNumber,
+                    mergeMethod: 'squash'
+                });
+                try {
+                    github_remove_label({
+                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                        number: ticket.prNumber, label: 'ai_validating'
+                    });
+                    github_remove_label({
+                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                        number: ticket.prNumber, label: 'pr_approved'
+                    });
+                } catch (e2) { /* absent labels are fine post-merge */ }
+                console.log('  🎉 ' + key + ' squash-merged');
+                processedKeys.push(key);
+            } catch (e) {
+                console.error('  ❌ merge_pr failed for ' + key + ': ' + (e.message || e));
+            }
+            continue;
+        }
+
+        if (rule.localAction === 'fail_validation') {
+            // Validation CI went red: unarm, tell the PR, and requeue the
+            // machine loop by re-arming agent:rework on the linked issue
+            // (the existing rework-on-red-ci rule picks it up). External
+            // PRs without a linked issue get the report only.
+            try {
+                try {
+                    github_remove_label({
+                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                        number: ticket.prNumber, label: 'ai_validating'
+                    });
+                } catch (e3) { /* absent label is fine */ }
+                var linked = null;
+                try {
+                    var prRaw = github_get_pr({
+                        workspace: effectiveRepoInfo.owner,
+                        repository: effectiveRepoInfo.repo,
+                        number: ticket.prNumber
+                    });
+                    var prObj = typeof prRaw === 'string' ? JSON.parse(prRaw) : (prRaw || {});
+                    var m = /(?:closes|fixes|resolves)\s+#(\d+)/i.exec(String(prObj.body || ''));
+                    if (m) linked = parseInt(m[1], 10);
+                } catch (e4) { console.warn('  ⚠️ linked-issue lookup failed: ' + (e4.message || e4)); }
+                var report = '⚠️ Pre-merge validation CI went red on the final head — merge aborted, rework re-queued.' +
+                    (linked ? ' (linked issue #' + linked + ' re-armed)' : '');
+                github_create_comment({
+                    workspace: effectiveRepoInfo.owner,
+                    repository: effectiveRepoInfo.repo,
+                    number: ticket.prNumber,
+                    body: report
+                });
+                if (linked) {
+                    github_add_labels({
+                        workspace: effectiveRepoInfo.owner,
+                        repository: effectiveRepoInfo.repo,
+                        number: linked,
+                        labels: ['agent:rework']
+                    });
+                }
+                console.log('  🔁 ' + key + ' validation failed — rework re-queued' + (linked ? ' (issue #' + linked + ')' : ''));
+                processedKeys.push(key);
+            } catch (e) {
+                console.error('  ❌ fail_validation failed for ' + key + ': ' + (e.message || e));
+            }
+            continue;
+        }
+
         if (rule.targetStatus) {
             if (!rule.localTeammate && isWorkflowBudgetExhausted(rule, effectiveConfig, workflowBudget)) {
                 console.log('  ⏭️  ' + key + ' skipped before transition (global workflow cap reached: ' + workflowBudget.initial + ')');
@@ -917,6 +1048,7 @@ function applyRuleOverrides(rules, overrides) {
 
 function action(params) {
     var p     = params.jobParams || params;
+    RUN_JOB_PARAMS = p;
     DRY = p.dryRun === true;
     if (DRY) console.log('🧪 DRY RUN — no side effects will be performed');
     var rules = p.rules;
