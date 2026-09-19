@@ -43,6 +43,11 @@ on:
         required: false
         type: string
         default: ''
+      silent-token:
+        description: "The caller's github.token for silent branch updates (#687) — pushes with it trigger no workflows. Routed as an INPUT: GitHub delivers an EMPTY value when github.token is mapped through the reusable-call secrets block (live-verified), while inputs carry it; GitHub auto-masks token values in logs either way."
+        required: false
+        type: string
+        default: ''
 
     secrets:
       SOURCE_GITHUB_TOKEN:
@@ -107,7 +112,7 @@ jobs:
           # it the GitHub integration counts as unconfigured and the JS
           # runtime does not expose github_* globals at all.
           SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
-          SILENT_GH_TOKEN: ${{ secrets.SILENT_GH_TOKEN }}
+          SILENT_GH_TOKEN: ${{ inputs.silent-token || secrets.SILENT_GH_TOKEN }}
         run: |
           repo='${{ github.repository }}'
           # #687: silentToken powers update_branch localActions (github.token
