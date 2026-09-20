@@ -57,7 +57,7 @@ on:
         required: false
         type: string
       machine-author:
-        description: "Deployment's machine (bot) login (#687): gates pr_approved arming and rework re-arm in PR-anchored reviews. Injected as jobParams.machineAuthor — branch-independent (the checked-out PR branch carries no machineAuthor config)."
+        description: "Deployment's machine (bot) login (#687): gates rework re-arm in PR-anchored reviews (auto-approve via pr_approved is author-agnostic per the owner rule). Injected as jobParams.machineAuthor — branch-independent (the checked-out PR branch carries no machineAuthor config)."
         required: false
         type: string
         default: ''
