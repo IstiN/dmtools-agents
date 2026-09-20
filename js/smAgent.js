@@ -335,9 +335,20 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
             // Rule-declared dispatch inputs (github-source rules): values may
             // reference the matched item via '{key}' / '{issueNumber}' /
             // '{prNumber}' placeholders.
+            var it = item || {};
+            // {issueNumber} on a PR-carrier item without a linked issue must
+            // NOT fall back to the ticket key — dispatching issue='pr-N'
+            // breaks the factory guard's anchor validation. Skip loudly.
+            var needsIssue = Object.keys(rule.inputs).some(function (k) {
+                return String(rule.inputs[k]).indexOf('{issueNumber}') !== -1;
+            });
+            if (needsIssue && (it.issueNumber === undefined || it.issueNumber === null)) {
+                console.log('  ⏭️  ' + ticketKey + ' skipped (rule "' + (rule.id || '') +
+                    '" needs {issueNumber} but the PR links no issue)');
+                return false;
+            }
             inputs = {};
             Object.keys(rule.inputs).forEach(function (k) {
-                var it = item || {};
                 inputs[k] = String(rule.inputs[k])
                     .replace(/\{key\}/g, String(ticketKey))
                     .replace(/\{issueNumber\}/g, String(it.issueNumber !== undefined && it.issueNumber !== null ? it.issueNumber : ticketKey))
@@ -1159,6 +1170,17 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             : triggerWorkflow(effectiveRepoInfo, key, rule, effectiveConfig, workflowBudget, ticket);
 
         if (triggered && !ruleSelfManagesLabel) addRuleLabels(key, rule);
+
+        // consumeLabels: the matched label IS the request (e.g. agent:rework
+        // on a PR — a human's manual rework ask on any author). Consume it on
+        // dispatch or every later tick re-fires; the issue-anchored runner's
+        // customParams.removeLabels only reaches the ISSUE's labels, never
+        // the PR's. Reuses the stale-label removal primitive (no-op in DRY).
+        if (triggered && rule.consumeLabels) {
+            normalizeLabels(null, rule.consumeLabels).forEach(function (label) {
+                removeRuleLabel(key, label, rule);
+            });
+        }
 
         if (triggered) {
             processedKeys.push(key);

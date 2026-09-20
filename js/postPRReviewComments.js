@@ -952,17 +952,15 @@ function action(params) {
             // Step 5: Two-state outcome
             if (isApproved) {
                 // STATE 1: APPROVE → label PR and Jira ticket; SM will retry merge when CI passes.
-                // PR-anchored EXTERNAL PRs are never auto-merge-armed — only
-                // machine-authored PRs enter the SM merge pipeline (#687).
-                if (!prAnchor || prAuthor === machineAuthor) {
-                    try {
-                        scm.addLabel(prNumber, LABELS.PR_APPROVED);
-                        console.log('✅ Added pr_approved label to GitHub PR #' + prNumber);
-                    } catch (labelErr) {
-                        console.warn('Failed to add pr_approved label to GitHub PR:', labelErr);
-                    }
-                } else {
-                    console.log('External PR #' + prNumber + ' approved — verdict posted, merge left to maintainers');
+                // Owner rule: auto-APPROVE applies to EXTERNAL PRs too —
+                // pr_approved arms the SM merge pipeline (validate → merge)
+                // for any author. Only auto-REWORK stays machine-author-gated
+                // (the re-arm below).
+                try {
+                    scm.addLabel(prNumber, LABELS.PR_APPROVED);
+                    console.log('✅ Added pr_approved label to GitHub PR #' + prNumber);
+                } catch (labelErr) {
+                    console.warn('Failed to add pr_approved label to GitHub PR:', labelErr);
                 }
             } else {
                 // STATE 2: REQUEST_CHANGES / BLOCK → do NOT merge

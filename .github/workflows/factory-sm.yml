@@ -39,7 +39,7 @@ on:
         required: true
         type: string
       machine-author:
-        description: "Deployment's machine (bot) login for #687 PR rules: excluded from review-external-once, gates pr_approved arming and rework re-arm in PR-anchored reviews. Global-level knob — the agents repo carries no hardcoded login."
+        description: "Deployment's machine (bot) login for #687 PR rules: excluded from review-external-once, gates rework re-arm in PR-anchored reviews and the SM prMachineAuthor rules (auto legs, e.g. auto rework). Global-level knob — the agents repo carries no hardcoded login."
         required: false
         type: string
         default: ''

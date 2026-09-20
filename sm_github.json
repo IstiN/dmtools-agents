@@ -72,13 +72,14 @@
           "id": "merge-validated"
         },
         {
-          "description": "Rework leg: agent:rework armed on the issue either by the review verdict (CHANGES_REQUESTED) or by red pre-merge CI. Pushing fixes removes the label (pr_rework removeLabels).",
+          "description": "Auto rework leg: agent:rework armed on the issue either by the review verdict (CHANGES_REQUESTED) or by red pre-merge CI. Pushing fixes removes the label (pr_rework removeLabels). prMachineAuthor: auto rework fires ONLY on machine-authored PRs (owner rule) — the machine login is deployment config (jobParams.machineAuthor / config.machineAuthor / factory-sm machine-author input), never hardcoded; unconfigured fails closed. Manual rework on ANY PR: label the PR agent:rework (see rework-on-label).",
           "source": "github",
           "query": {
             "type": "issue",
             "labels": [
               "agent:rework"
-            ]
+            ],
+            "prMachineAuthor": true
           },
           "workflowFile": "ai-teammate.yml",
           "inputs": {
@@ -88,6 +89,27 @@
           },
           "limit": 1,
           "id": "rework-on-red-ci"
+        },
+        {
+          "description": "Manual rework request: agent:rework label on the PR itself -> rework on demand, ANY author (a human asked explicitly). Dispatches the issue-anchored rework leg on the linked issue (closing-keyword/#N body reference); the PR label is consumed on dispatch so the next tick does not re-fire. PRs without a linked issue are skipped loudly.",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "agent:rework"
+            ]
+          },
+          "workflowFile": "ai-teammate.yml",
+          "inputs": {
+            "issue": "{issueNumber}",
+            "leg": "rework",
+            "reason": "sm: agent:rework label on the PR (manual rework request)"
+          },
+          "consumeLabels": [
+            "agent:rework"
+          ],
+          "limit": 1,
+          "id": "rework-on-label"
         },
         {
           "id": "develop-done",

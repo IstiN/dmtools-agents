@@ -460,6 +460,32 @@ suite('sm github source', function () {
         assert.equal(noKnob.length, 0, 'no machineAuthor configured — gate fails closed');
     });
 
+    test('pr rules: linked issue resolves from the PR body (closing keyword, bare #N, none)', function () {
+        // The manual rework rule (rework-on-label) dispatches an
+        // issue-anchored leg for a PR-carrier match — the {issueNumber}
+        // input needs this link.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 91, labels: [{ name: 'agent:rework' }], draft: false,
+                      body: 'Closes #123\n\nSome description' },
+                    { number: 92, labels: [{ name: 'agent:rework' }], draft: false,
+                      body: 'Related to #45, no closing keyword' },
+                    { number: 93, labels: [{ name: 'agent:rework' }], draft: false,
+                      body: 'no reference at all' }
+                ];
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:rework'] }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        var byPr = {};
+        items.forEach(function (i) { byPr[i.prNumber] = i.issueNumber; });
+        assert.equal(byPr[91], 123, 'closing keyword resolves');
+        assert.equal(byPr[92], 45, 'bare #N mention resolves (findPr convention)');
+        assert.equal(byPr[93], null, 'no reference → null (dispatch skips loudly)');
+    });
+
     test('issue rules: prMachineAuthor reads the linked PR author (prStatus)', function () {
         // Issue-anchored rework rules carry the state on the issue but the
         // author fact lives on the enriched PR — the gate reads it from

@@ -759,6 +759,60 @@ suite('postPRReviewComments', function() {
             );
         });
 
+        test('PR-anchored EXTERNAL PR + APPROVE: pr_approved arms the merge pipeline for any author (owner rule)', function() {
+            // Owner rule: external PRs get auto-APPROVE (pr_approved →
+            // validate → merge); only auto-REWORK stays machine-gated.
+            // Previously the pr_approved arming was machineAuthor-gated and
+            // external PRs were "verdict only, merge left to maintainers".
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                config: { machineAuthor: 'ai-teammate' },
+                prInfoContent: '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: feat/external\n- **Author**: some-human\n',
+                reviewData: {
+                    recommendation: 'APPROVE',
+                    issueCounts: { blocking: 0, important: 0, suggestions: 0 },
+                    inlineComments: []
+                }
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'pr-42', fields: { labels: [] } },
+                response: 'review content',
+                inputFolderPath: 'input/pr-42'
+            });
+
+            assert.ok(
+                loaded.addLabelCalls.some(function(c) { return c.prId === 42 && c.label === 'pr_approved'; }),
+                'external PR approved → pr_approved armed: ' + JSON.stringify(loaded.addLabelCalls)
+            );
+        });
+
+        test('PR-anchored EXTERNAL PR + REQUEST_CHANGES: no agent:rework re-arm (auto rework stays machine-gated)', function() {
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                config: { machineAuthor: 'ai-teammate' },
+                prInfoContent: '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: feat/external\n- **Author**: some-human\n',
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                }
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'pr-42', fields: { labels: [] } },
+                response: 'review content',
+                inputFolderPath: 'input/pr-42'
+            });
+
+            assert.ok(
+                !loaded.addLabelCalls.some(function(c) { return c.label === 'agent:rework'; }),
+                'external PR: rework is NEVER auto-armed — the human author fixes it: ' + JSON.stringify(loaded.addLabelCalls)
+            );
+            assert.ok(
+                !loaded.addLabelCalls.some(function(c) { return c.label === 'pr_approved'; }),
+                'no pr_approved on a rejected review'
+            );
+        });
+
         test('enabled + scm without submitReview support (e.g. non-GitHub provider): skips gracefully, no error thrown', function() {
             var loaded = loadPostPRReviewCommentsForFormalReview({
                 reviewData: {

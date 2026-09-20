@@ -214,8 +214,20 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
     return matched.slice(0, limit);
 }
 
-function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {
-    var q = rule.query || {};
+// Linked-issue resolution (pr-carrier → issue anchor): issue-anchored legs
+// dispatched for a PR (manual rework via the agent:rework PR label) need the
+// issue number for the {issueNumber} input. Closing keywords first (GitHub's
+// own linking semantics), then a bare #N mention — the same body convention
+// findPr() relies on in the issue→pr direction. null when unlinked.
+function linkedIssueNumber(body) {
+    var text = String(body || '');
+    var m = /(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i.exec(text);
+    if (m) return parseInt(m[1], 10);
+    m = /(^|[^0-9])#(\d+)([^0-9]|$)/.exec(text);
+    return m ? parseInt(m[2], 10) : null;
+}
+
+function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {    var q = rule.query || {};
     var prs = asList(parseMcp(github_list_prs({
         workspace: repoInfo.owner, repository: repoInfo.repo, state: 'open'
     })));
@@ -225,7 +237,7 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {
             key: 'pr-' + p.number,
             labels: prLabels(p),
             pr: null,
-            issueNumber: null,
+            issueNumber: linkedIssueNumber(p.body),
             prNumber: p.number,
             draft: !!p.draft,
             branch: (p.head && p.head.ref) || p.headRefName || '',
