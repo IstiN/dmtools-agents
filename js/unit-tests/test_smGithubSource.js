@@ -64,6 +64,33 @@ suite('sm github source', function () {
         assert.equal(queries.some(function (q) { return q.indexOf('label:"agent:rework"') !== -1; }), true);
     });
 
+    test('issue rules: FIFO — oldest issue first, limit slices from the head', function () {
+        // Live starvation (owner report): github_search_issues returns
+        // newest-first and limit:1 rules took the head — the oldest
+        // machine-loop issue rotted at the bottom of the queue while
+        // newer ones were worked. Mirrors the PR-carrier FIFO fix.
+        var srcMod = load({
+            github_search_issues: function () {
+                return { items: [
+                    { number: 9, labels: [{ name: 'agent:dev' }] },
+                    { number: 5, labels: [{ name: 'agent:dev' }] },
+                    { number: 3, labels: [{ name: 'agent:dev' }] }
+                ] };
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'issue', labels: ['agent:dev'] }, limit: 2
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.map(function (i) { return i.key; }).join(','), 'gh-3,gh-5',
+            'oldest first, limit slices from the head');
+
+        var one = srcMod.query({
+            query: { type: 'issue', labels: ['agent:dev'] }, limit: 1
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(one.length, 1);
+        assert.equal(one[0].key, 'gh-3', 'limit:1 picks the OLDEST issue, not the newest');
+    });
+
     test('issue rules: green guard drops red-PR items', function () {
         var srcMod = load({
             github_search_issues: function () {

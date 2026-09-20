@@ -1036,8 +1036,18 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // Merge window: PAT update — a SOURCE-token push DOES trigger
             // CI, so the validation run lands on the final head — then arm
             // the merge rule with the ai_validating marker.
+            // Already-fresh PRs 422 ("no new commits on the base branch"):
+            // the current head IS the final head and its checks are the
+            // validation run — arm directly instead of failing every tick
+            // and never merging (live: pr-743 stuck validate loop).
             try {
-                patUpdateBranch(ticket.prNumber, (RUN_JOB_PARAMS || {}).sourceToken);
+                try {
+                    patUpdateBranch(ticket.prNumber, (RUN_JOB_PARAMS || {}).sourceToken);
+                } catch (updateErr) {
+                    var updateMsg = String((updateErr && updateErr.message) || updateErr);
+                    if (updateMsg.indexOf('no new commits') === -1) throw updateErr;
+                    console.log('  ℹ️  ' + key + ' already fresh against base — validation arms on the current (final) head');
+                }
                 github_add_labels({
                     workspace: effectiveRepoInfo.owner,
                     repository: effectiveRepoInfo.repo,
