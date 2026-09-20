@@ -102,7 +102,8 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
   ```json
   [
     "sm_story_rework_triggered",
-    "sm_story_review_triggered"
+    "sm_story_review_triggered",
+    "agent:rework"
   ]
   ```
 - `checkOpenPR`: `true`
