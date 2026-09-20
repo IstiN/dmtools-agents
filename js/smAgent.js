@@ -890,11 +890,25 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // point of the silent path. The merge aborts on conflicts (a DIRTY
         // PR is skipped with an error, the correct semantics).
         function silentUpdateBranch(branchName) {
+            // The reconcile job's working directory is the dmtools-agents
+            // engine checkout (live: `git fetch origin` there fetched
+            // dmtools-agents and every PR pathspec 404'd) — clone the
+            // TARGET repo instead. `gh repo clone` rides GH_TOKEN; with
+            // the workflow token that push is silent (a PAT in its place
+            // would fire CI — do not point silent-token at a PAT).
+            var dir = '/tmp/sm-silent-update-' + Date.now() + '-' +
+                      String(branchName).replace(/[^a-zA-Z0-9._-]/g, '_');
             cli_execute_command({
-                command: 'git fetch origin && git checkout -q ' + branchName +
+                command: 'gh repo clone ' + effectiveRepoInfo.owner + '/' +
+                         effectiveRepoInfo.repo + ' ' + dir +
+                         ' -- --no-tags --single-branch --branch ' + branchName +
+                         ' --depth 200' +
+                         ' && cd ' + dir +
+                         ' && git fetch --no-tags --depth 200 origin main' +
                          ' && git -c user.name=sm-silent-update' +
                          ' -c user.email=sm-silent-update@users.noreply.github.com' +
-                         ' merge --no-edit origin/main && git push origin ' + branchName
+                         ' merge --no-edit FETCH_HEAD' +
+                         ' && git push origin ' + branchName
             });
         }
 
