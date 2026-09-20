@@ -108,7 +108,7 @@
           "localAction": "mark_developed"
         },
         {
-          "description": "GitHub: green PR after dev \u2192 machine review",
+          "description": "GitHub: green PR after dev \u2192 machine review (never on an armed PR: pr_approved means the review already concluded APPROVED - re-dispatching review duplicates the leg and un-arms the merge queue)",
           "source": "github",
           "query": {
             "type": "issue",
@@ -119,7 +119,8 @@
               "agent:rework"
             ],
             "notPrLabels": [
-              "ai_pr_reviewed"
+              "ai_pr_reviewed",
+              "pr_approved"
             ],
             "prChecks": "green"
           },
@@ -139,7 +140,8 @@
             "type": "pr",
             "notLabels": [
               "ai_pr_reviewed",
-              "agent:review"
+              "agent:review",
+              "pr_approved"
             ],
             "checks": "green",
             "draft": false,
