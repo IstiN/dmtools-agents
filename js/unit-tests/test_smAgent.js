@@ -613,8 +613,12 @@ suite('smAgent: localAction mark_developed (github machine-loop backfill)', func
         sm.action(baseParams('epam', 'dmtools-dart', [{
             description: 'dev done backfill',
             source: 'github',
-            query: { type: 'issue', labels: ['in progress'], notLabels: ['ai_developed', 'agent:rework'],
-                     prState: 'OPEN', prChecks: 'green' },
+            // Mirrors the live rule: NO `in progress` requirement (issues
+            // whose dev leg predates the status-label convention — live:
+            // fa #503 / PR #676 — must still backfill) + prMachineAuthor so
+            // external PRs never enter the review loop through here.
+            query: { type: 'issue', notLabels: ['ai_developed', 'agent:rework'],
+                     prState: 'OPEN', prChecks: 'green', prMachineAuthor: true },
             localAction: 'mark_developed',
             limit: 5,
             id: 'develop-done'

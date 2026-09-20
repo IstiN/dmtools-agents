@@ -229,8 +229,11 @@ jobs:
             # status transition echoes back as a `labeled` event and would
             # re-derive the same leg on top of itself.
             runner="$RUNNER_REWORK"
-          elif echo "$LABELS" | grep -qw "agent:review" \
-            && ! echo "$LABELS" | grep -q 'status:In Review'; then
+          elif echo "$LABELS" | grep -qw "agent:review"; then
+            # status:In Review is NOT an in-flight marker here — the DEV leg
+            # sets it as the "ready for review" invitation, so blocking on it
+            # kills the label-echo review trigger (live: dmtools-dart gh-182).
+            # Real duplicate protection is the per-issue concurrency group.
             runner="$RUNNER_REVIEW"; slot="review"
           elif echo "$LABELS" | grep -qE 'status:In Development|status:In Review|status:In Rework|in progress|ai_developed|ai_pr_reviewed|_wip|rework-round-'; then
             # Dev is a FRESH handoff only: once the loop has touched the
