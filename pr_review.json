@@ -141,8 +141,6 @@
       "./agents/instructions/pr_review/few_shots.md",
       "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md"
-    ],
-    "timerIntervalSeconds": 300,
-    "timerJSAction": "agents/js/timerAutoCommitAndSave.js"
+    ]
   }
 }
