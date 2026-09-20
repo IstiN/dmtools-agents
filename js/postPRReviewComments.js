@@ -144,17 +144,23 @@ function readMarkdownFile(filePath, ticketKey, workingDir) {
 /**
  * Defense-in-depth guard: the agent is instructed (instructions/pr_review/output_rules.md,
  * few_shots.md) to reference comment text via the `comment` field (a path to a
- * .md file under outputs/pr_review_comments/), never inline in `body`. If a
+ * .md file under outputs/), never inline in `body`. If a
  * prompt/schema inconsistency ever causes the model to duplicate that path
  * into `body` instead of the actual comment text (observed in production),
  * posting it verbatim would silently publish a broken review comment
  * containing just a file path. Detect that shape and resolve it to the real
  * file content instead of trusting `body` blindly.
+ *
+ * The same shape holds for `generalComment`: the contract carries the PATH
+ * to outputs/pr_review_general.md (postGeneralComment reads the file), and
+ * the formal-review path must resolve it too — live bug: an APPROVE review
+ * landed with the literal string "outputs/pr_review_general.md" as its body
+ * (flutter_agent_harness #720).
  */
 function resolveCommentFileReference(value, ticketKey, workingDir) {
     if (typeof value !== 'string') return null;
     var trimmed = value.trim();
-    if (!/^(outputs\/)?pr_review_comments\/[\w.\-]+\.md$/.test(trimmed)) {
+    if (!/^(outputs\/)?(pr_review_comments\/)?[\w.\-]+\.md$/.test(trimmed)) {
         return null;
     }
     var content = readMarkdownFile(trimmed, ticketKey, workingDir);
@@ -640,13 +646,18 @@ function resolveApprovedThreads(scm, pullRequestId, resolvedThreadIds) {
  *
  * Never touches LABELS.PR_APPROVED or any Jira/GitHub label.
  */
-function applyFormalGithubReview(scm, pullRequestId, isApproved, recommendation, generalComment) {
+function applyFormalGithubReview(scm, pullRequestId, isApproved, recommendation, generalComment, ticketKey, workingDir) {
     if (typeof scm.submitReview !== 'function') {
         console.warn('formalGithubReview: SCM provider does not support submitReview — skipping');
         return;
     }
-    var approveBody = (generalComment && String(generalComment).trim())
-        ? generalComment
+    // generalComment follows the file-path contract (postGeneralComment
+    // reads it via readMarkdownFile): resolve path → CONTENT before
+    // submitting, or the review body is the literal "outputs/..." string
+    // (live: flutter_agent_harness #720 APPROVE body was the file path).
+    var generalContent = resolveCommentFileReference(generalComment, ticketKey, workingDir) || generalComment;
+    var approveBody = (generalContent && String(generalContent).trim())
+        ? generalContent
         : 'AI review approves this pull request.';
     try {
         if (isApproved) {
@@ -684,8 +695,8 @@ function applyFormalGithubReview(scm, pullRequestId, isApproved, recommendation,
                 console.warn('formalGithubReview: formal APPROVE rejected (own-PR restriction?):', approveErr.message || approveErr);
             }
         } else {
-            var body = (generalComment && String(generalComment).trim())
-                ? generalComment
+            var body = (generalContent && String(generalContent).trim())
+                ? generalContent
                 : ('AI review returned ' + recommendation + '. See PR comments for details.');
             scm.submitReview(pullRequestId, 'REQUEST_CHANGES', body);
             console.log('✅ Submitted formal Request Changes review');
@@ -969,7 +980,7 @@ function action(params) {
                     ? customParams.formalGithubReview
                     : !!(config && config.formalGithubReview === true);
             if (formalReviewEnabled) {
-                applyFormalGithubReview(scm, prNumber, isApproved, recommendation, reviewData.generalComment);
+                applyFormalGithubReview(scm, prNumber, isApproved, recommendation, reviewData.generalComment, ticketKey, workingDir);
             }
 
         } else {
