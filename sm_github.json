@@ -132,18 +132,16 @@
         {
           "id": "develop-done",
           "source": "github",
-          "description": "Machine-loop completion backfill: the dev leg's post-action labeling is Jira-only, so GitHub issues linger `in progress` after their PR is open+green. The SM labels the issue ai_developed itself, which arms review-after-dev. Idempotent: ai_developed in notLabels.",
+          "description": "Machine-loop completion backfill: an open issue with an open+green MACHINE-authored PR gets ai_developed, which arms review-after-dev. Machine-only (prMachineAuthor) so external PRs never enter the review loop through the backfill; no `in progress` requirement — issues whose dev leg predates the status-label convention (live: fa #503 / PR #676) must still be picked up. Idempotent: ai_developed in notLabels.",
           "query": {
             "type": "issue",
-            "labels": [
-              "in progress"
-            ],
             "notLabels": [
               "ai_developed",
               "agent:rework"
             ],
             "prState": "OPEN",
-            "prChecks": "green"
+            "prChecks": "green",
+            "prMachineAuthor": true
           },
           "localAction": "mark_developed"
         },
