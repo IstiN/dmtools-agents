@@ -687,6 +687,27 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['ai_validating']);
     });
 
+    test('validate_pr: already-fresh PR (update-branch 422 "no new commits") still arms ai_validating', function () {
+        // Live stuck loop (flutter_agent_harness pr-743): the armed PR was
+        // already fresh against base, the PAT update-branch 422'd, the
+        // ai_validating label never armed, the merge rule never fired —
+        // every tick re-failed the same way.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(72)] },
+            onCliExecute: function () {
+                throw new Error('Command execution failed (exit code 1): ' +
+                    '{"message":"There are no new commits on the base branch.","status":"422"}');
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+            silentToken: 'SILENT', sourceToken: 'PAT', rules: [RULES.validate] } });
+
+        assert.equal(sm.capturedCliCommands.length, 1, 'update-branch attempted');
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'fresh head IS the final head — validation arms');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 72);
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['ai_validating']);
+    });
+
     test('merge_pr: squash-merge + clears ai_validating and pr_approved', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: { items: [prItem(71, { labels: ['pr_approved', 'ai_validating'] })] }

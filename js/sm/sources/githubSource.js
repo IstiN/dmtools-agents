@@ -152,9 +152,10 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
     var seen = {};
     var items = [];
 
-    // Per-label OR search (GitHub ANDs multi-label queries).
+    // Per-label OR search (GitHub ANDs multi-label queries). Collect ALL
+    // matches — the FIFO sort at the end picks the oldest, so an early
+    // per-label cut at `limit` would drop old issues behind newer ones.
     (q.labels || []).forEach(function (ml) {
-        if (Object.keys(seen).length >= limit) return;
         var res = parseMcp(github_search_issues({
             query: 'repo:' + full + ' is:issue is:open label:"' + ml + '"'
         }));
@@ -203,7 +204,14 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
         return item;
     });
 
-    return enriched.filter(function (item) { return matchesGuards(item, rule, provider, machineAuthor); });
+    var matched = enriched.filter(function (item) { return matchesGuards(item, rule, provider, machineAuthor); });
+
+    // FIFO: oldest issue first — github_search_issues returns newest-first,
+    // which starves the oldest ticket under limit:1 rules (the oldest
+    // machine-loop PR rots at the bottom of the queue). Same starvation fix
+    // as the PR-carrier path below; issue number order == creation order.
+    matched.sort(function (a, b) { return (a.issueNumber || 0) - (b.issueNumber || 0); });
+    return matched.slice(0, limit);
 }
 
 function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {
