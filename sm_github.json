@@ -173,6 +173,27 @@
           "id": "review-stale-verdict"
         },
         {
+          "description": "GitHub PR: all review threads resolved + the last verdict is older than the head (fixes landed and the threads were worked through) + green -> re-arm agent:review. Covers PR #676: the rework resolves threads (the CHANGES_REQUESTED verdict dissolves into COMMENTED), so verdict-staleness alone misses it. Convergent: the re-review's verdict lands on the current head and its fresh threads are unresolved until worked.",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_pr_reviewed"
+            ],
+            "notLabels": [
+              "agent:review",
+              "ai_validating"
+            ],
+            "checks": "green",
+            "draft": false,
+            "threadsResolved": true,
+            "staleVerdict": true
+          },
+          "localAction": "arm_review",
+          "limit": 5,
+          "id": "review-threads-resolved"
+        },
+        {
           "description": "GitHub PR: agent:review label on a PR -> review on demand (any author; consumed by the review runner)",
           "source": "github",
           "query": {

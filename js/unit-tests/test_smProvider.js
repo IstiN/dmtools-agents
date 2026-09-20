@@ -171,6 +171,39 @@ suite('smProvider', function () {
         assert.equal(empty.lastReview(9), null);
     });
 
+    test('github: reviewThreads counts resolved/unresolved (GraphQL envelope)', function () {
+        // Threads are GraphQL-only; the provider must navigate
+        // data.repository.pullRequest.reviewThreads.nodes and count
+        // isResolved — the threadsResolved guard re-arms a re-review only
+        // when at least one thread exists and none are unresolved.
+        var calls = [];
+        var p = loadProvider('github', {
+            github_get_pr_review_threads: function (args) {
+                calls.push(args);
+                return { data: { repository: { pullRequest: { reviewThreads: {
+                    nodes: [
+                        { id: 't1', isResolved: true, path: 'a.dart' },
+                        { id: 't2', isResolved: true, path: 'b.dart' },
+                        { id: 't3', isResolved: false, path: 'c.dart' }
+                    ]
+                } } } } };
+            }
+        });
+        var th = p.reviewThreads(6);
+        assert.equal(calls[0].pullRequestId, '6');
+        assert.equal(th.total, 3);
+        assert.equal(th.resolved, 2);
+        assert.equal(th.unresolved, 1);
+
+        // shape variance / empty → zeroed totals, never a throw
+        var bare = loadProvider('github', {
+            github_get_pr_review_threads: function () { return null; }
+        });
+        var none = bare.reviewThreads(6);
+        assert.equal(none.total, 0);
+        assert.equal(none.unresolved, 0);
+    });
+
     test('github: prStatus computes BEHIND/CLEAN from base.sha vs branch head (deterministic)', function () {
         // Live race: right after a base push, REST mergeable_state says
         // `unknown` for every PR while GitHub recomputes lazily — an SM

@@ -13,15 +13,18 @@ suite('sm github source', function () {
         findPr: function (n) { return providerStub._prs[n] || null; },
         prStatus: function (n) { return providerStub._status[n] || null; },
         lastReview: function (n) { return providerStub._reviews[n] || null; },
+        reviewThreads: function (n) { return providerStub._threads[n] || null; },
         _prs: {},
         _status: {},
-        _reviews: {}
+        _reviews: {},
+        _threads: {}
     };
 
-    function load(tools, prs, statuses, reviews) {
+    function load(tools, prs, statuses, reviews, threads) {
         providerStub._prs = prs || {};
         providerStub._status = statuses || {};
         providerStub._reviews = reviews || {};
+        providerStub._threads = threads || {};
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
@@ -350,5 +353,56 @@ suite('sm github source', function () {
         // 43 stale but APPROVED → no; 44 no reviews → no.
         assert.equal(items.length, 1);
         assert.equal(items[0].key, 'pr-41');
+    });
+
+    test('pr rules: threadsResolved + staleVerdict — resolved threads after fixes re-review once per head', function () {
+        // Live shape (flutter_agent_harness PR #676): the rework resolved
+        // every review thread, so the CHANGES_REQUESTED verdict dissolved
+        // into COMMENTED — verdict-staleness alone misses it. The rule
+        // matches only while BOTH hold: all threads resolved AND the last
+        // verdict predates the head. After the re-review the verdict lands
+        // on the current head → never re-arms (no loop).
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 61, labels: [{ name: 'ai_pr_reviewed' }], head: { ref: 'feat/a' }, draft: false },
+                    { number: 62, labels: [{ name: 'ai_pr_reviewed' }], head: { ref: 'feat/b' }, draft: false },
+                    { number: 63, labels: [{ name: 'ai_pr_reviewed' }], head: { ref: 'feat/c' }, draft: false },
+                    { number: 64, labels: [{ name: 'ai_pr_reviewed' }], head: { ref: 'feat/d' }, draft: false },
+                    { number: 65, labels: [{ name: 'ai_pr_reviewed' }], head: { ref: 'feat/e' }, draft: false }
+                ];
+            }
+        }, {}, {
+            61: { state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true, headSha: 'head61' },
+            62: { state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true, headSha: 'head62' },
+            63: { state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true, headSha: 'head63' },
+            64: { state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true, headSha: 'head64' },
+            65: { state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true, headSha: 'head65' }
+        }, {
+            61: { state: 'COMMENTED', commitId: 'old61' },
+            62: { state: 'COMMENTED', commitId: 'old62' },
+            63: { state: 'COMMENTED', commitId: 'old63' },
+            64: { state: 'COMMENTED', commitId: 'head64' }
+            // 65: never reviewed
+        }, {
+            61: { total: 3, resolved: 3, unresolved: 0 },
+            62: { total: 3, resolved: 2, unresolved: 1 },
+            63: { total: 0, resolved: 0, unresolved: 0 },
+            64: { total: 2, resolved: 2, unresolved: 0 }
+            // 65: no threads entry
+        });
+        var items = srcMod.query({
+            query: {
+                type: 'pr', labels: ['ai_pr_reviewed'],
+                notLabels: ['agent:review'], checks: 'green', draft: false,
+                threadsResolved: true, staleVerdict: true
+            }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        // 61 resolved+stale → match; 62 has an unresolved thread → no;
+        // 63 no threads → no; 64 resolved but the verdict is on the
+        // current head (fresh re-review already happened) → no;
+        // 65 never reviewed → no.
+        assert.equal(items.length, 1);
+        assert.equal(items[0].key, 'pr-61');
     });
 });
