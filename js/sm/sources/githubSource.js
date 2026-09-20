@@ -72,6 +72,12 @@ function matchesGuards(item, rule) {
     if (q.notMergeState && (!item.pr || item.pr.mergeState === q.notMergeState)) return false;
     if (q.mergeable === true && (!item.pr || item.pr.mergeable !== true)) return false;
     if (q.prState && (!item.pr || item.pr.state !== q.prState)) return false;
+    // PR-side label guards (issue-anchored rules): the machine loop pins
+    // ai_pr_reviewed and agent:review on the PR while the rule's type is
+    // issue — match/not-match must read the linked PR's labels.
+    var prLs = (item.pr && item.pr.labels) || [];
+    if (q.prLabels && !q.prLabels.some(function (l) { return prLs.indexOf(l) !== -1; })) return false;
+    if (q.notPrLabels && q.notPrLabels.some(function (l) { return prLs.indexOf(l) !== -1; })) return false;
     return true;
 }
 

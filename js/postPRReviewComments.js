@@ -993,7 +993,7 @@ function action(params) {
                 if (prAuthor === machineAuthor) {
                     try {
                         var prRaw = github_get_pr({
-                            workspace: repoInfo.owner, repository: repoInfo.repo, number: prNumber
+                            workspace: repoInfo.owner, repository: repoInfo.repo, pullRequestId: prNumber
                         });
                         var prObj = typeof prRaw === 'string' ? JSON.parse(prRaw) : (prRaw || {});
                         var lm = /(?:closes|fixes|resolves)\s+#(\d+)/i.exec(String(prObj.body || ''));
