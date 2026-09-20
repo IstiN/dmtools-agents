@@ -147,7 +147,12 @@ function hasActiveTargetWorkflowRun(scm, workflowFile, configFile, ticketKey) {
         for (var j = 0; j < runs.length; j++) {
             var run = runs[j] || {};
             if (isStaleNonRunningWorkflowRun(run, statuses[i])) continue;
-            var runName = run.name || run.display_title || '';
+            // GitHub REST carries BOTH fields: `name` is the workflow name
+            // ('AI Teammate') while `display_title` is the per-run title
+            // ('▶ review (SM) · gh-702'). Name-first made the stub-title
+            // match dead code — every SM-dispatched run slipped the
+            // in-flight guard and duplicated (live: gh-702 review ×2).
+            var runName = run.display_title || run.displayTitle || run.name || '';
             var matchesOldName = runName === expectedRunName;
             var matchesDisplayName = runName.indexOf(configFile + ' : ') === 0 &&
                 runName.substring(runName.length - expectedRunNameSuffix.length) === expectedRunNameSuffix;
