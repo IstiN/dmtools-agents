@@ -131,6 +131,12 @@ jobs:
           ACTOR: ${{ github.event.action || github.event_name }}
           INPUT_LEG: ${{ inputs.leg }}
           INPUT_REASON: ${{ inputs.reason }}
+          # The assignee gate below compares against the machine login.
+          # AGENT_HANDLE lives on the TEAMMATE job's env — without it here
+          # the guard's $AGENT_HANDLE is empty, `grep -w` never matches, and
+          # assignment-triggered dev legs never start (live: dmtools-dart
+          # run 35519287617 — issue #173 assigned to ai-teammate → skipped).
+          AGENT_HANDLE: ai-teammate
         run: |
           # Anchor validation (#687): exactly one of issue|pr.
           if [ -n "$NUMBER" ] && [ -n "$PR_NUMBER" ]; then
