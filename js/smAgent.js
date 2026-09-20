@@ -903,6 +903,29 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             continue;
         }
 
+        if (rule.localAction === 'arm_review') {
+            // Stale-verdict re-review (PR #690): the review's
+            // CHANGES_REQUESTED was pinned to an older commit; fixes were
+            // pushed and checks went green. Re-arm agent:review on the PR
+            // — review-on-label dispatches the runner, the runner consumes
+            // the label and re-reviews the current head. The fresh verdict
+            // carries the head's commit_id, so the stale query never
+            // matches it again (convergent, no loop).
+            try {
+                github_add_labels({
+                    workspace: effectiveRepoInfo.owner,
+                    repository: effectiveRepoInfo.repo,
+                    number: ticket.prNumber,
+                    labels: ['agent:review']
+                });
+                console.log('  ✅ ' + key + ' agent:review re-armed (stale CHANGES_REQUESTED on PR #' + ticket.prNumber + ')');
+                processedKeys.push(key);
+            } catch (e) {
+                console.error('  ❌ arm_review failed for ' + key + ': ' + (e.message || e));
+            }
+            continue;
+        }
+
         // Silent branch refresh = a git merge push, NOT the GitHub
         // update-branch APIs. Live-verified dead ends for
         // github-actions[bot]: the GraphQL mutation (gh pr update-branch)

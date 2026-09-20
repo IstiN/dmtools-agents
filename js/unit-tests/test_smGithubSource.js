@@ -12,13 +12,16 @@ suite('sm github source', function () {
     var providerStub = {
         findPr: function (n) { return providerStub._prs[n] || null; },
         prStatus: function (n) { return providerStub._status[n] || null; },
+        lastReview: function (n) { return providerStub._reviews[n] || null; },
         _prs: {},
-        _status: {}
+        _status: {},
+        _reviews: {}
     };
 
-    function load(tools, prs, statuses) {
+    function load(tools, prs, statuses, reviews) {
         providerStub._prs = prs || {};
         providerStub._status = statuses || {};
+        providerStub._reviews = reviews || {};
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
@@ -312,5 +315,40 @@ suite('sm github source', function () {
             query: { type: 'pr', notMachine: true, checks: 'green' }
         }, { repoInfo: { owner: 'a', repo: 'b' }, machineAuthor: 'vabhzw17eg2qu4m9-bit' });
         assert.equal(machine.map(function (i) { return i.key; }).join(','), 'pr-72');
+    });
+
+    test('pr rules: reviewStale — CHANGES_REQUESTED on an older head re-matches after fixes', function () {
+        // Live shape (flutter_agent_harness PR #690): the verdict
+        // (CHANGES_REQUESTED) was rendered on commit 'old123' while fixes
+        // moved the head to 'new456' and checks went green — a re-review
+        // is owed. Fresh verdicts (commit == head), stale APPROVED
+        // verdicts, and never-reviewed PRs must NOT match.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 41, labels: [], head: { ref: 'feat/a' }, draft: false },
+                    { number: 42, labels: [], head: { ref: 'feat/b' }, draft: false },
+                    { number: 43, labels: [], head: { ref: 'feat/c' }, draft: false },
+                    { number: 44, labels: [], head: { ref: 'feat/d' }, draft: false }
+                ];
+            }
+        }, {}, {
+            41: { number: 41, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true, headSha: 'new456' },
+            42: { number: 42, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true, headSha: 'new456' },
+            43: { number: 43, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true, headSha: 'new456' },
+            44: { number: 44, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true, headSha: 'new456' }
+        }, {
+            41: { state: 'CHANGES_REQUESTED', commitId: 'old123' },
+            42: { state: 'CHANGES_REQUESTED', commitId: 'new456' },
+            43: { state: 'APPROVED', commitId: 'old123' }
+            // 44: never reviewed
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', checks: 'green', draft: false, reviewStale: true }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        // 41 stale CHANGES → match; 42 verdict on the current head → no;
+        // 43 stale but APPROVED → no; 44 no reviews → no.
+        assert.equal(items.length, 1);
+        assert.equal(items[0].key, 'pr-41');
     });
 });

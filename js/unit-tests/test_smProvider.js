@@ -137,10 +137,38 @@ suite('smProvider', function () {
         var st = p.prStatus(7);
         assert.equal(st.state, 'OPEN');
         assert.equal(st.checkConclusion, 'green');
+        // head sha pins the stale-verdict comparison (reviewStale guard)
+        assert.equal(st.headSha, 'abc123');
 
         // absent state (defensive stubs) still yields the OPEN default
         prBody = { mergeable: true };
         assert.equal(p.prStatus(7).state, 'OPEN');
+    });
+
+    test('github: lastReview pins the newest verdict commit (REST shape)', function () {
+        // The stale-verdict guard compares the latest review's commit_id
+        // against the PR head: reviews arrive chronological, so the last
+        // entry is the freshest verdict (REST spelling: commit_id).
+        var calls = [];
+        var p = loadProvider('github', {
+            github_list_pr_reviews: function (args) {
+                calls.push(args);
+                return [
+                    { state: 'COMMENTED', commit_id: 'aaa1', user: { login: 'ai-teammate' } },
+                    { state: 'CHANGES_REQUESTED', commit_id: '7bac91fd', user: { login: 'ai-teammate' } }
+                ];
+            }
+        });
+        var lr = p.lastReview(9);
+        assert.equal(calls[0].pullRequestId, '9');
+        assert.equal(lr.state, 'CHANGES_REQUESTED');
+        assert.equal(lr.commitId, '7bac91fd');
+        assert.equal(lr.author, 'ai-teammate');
+        // never-reviewed PRs → null (the guard treats them as not stale)
+        var empty = loadProvider('github', {
+            github_list_pr_reviews: function () { return []; }
+        });
+        assert.equal(empty.lastReview(9), null);
     });
 
     test('github: prStatus computes BEHIND/CLEAN from base.sha vs branch head (deterministic)', function () {

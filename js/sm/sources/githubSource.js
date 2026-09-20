@@ -52,7 +52,7 @@ function prLabels(p) {
     return (p.labels || []).map(function (l) { return (l && l.name) || l; });
 }
 
-function matchesGuards(item, rule) {
+function matchesGuards(item, rule, provider) {
     var q = rule.query || {};
     var labels = item.labels || [];
     if (q.notLabels && q.notLabels.some(function (l) { return labels.indexOf(l) !== -1; })) {
@@ -70,6 +70,18 @@ function matchesGuards(item, rule) {
     // excludes one state (e.g. BEHIND while a silent update lands).
     if (q.checks && rollup(item.pr) !== q.checks) return false;
     if (q.notMergeState && (!item.pr || item.pr.mergeState === q.notMergeState)) return false;
+    // Stale review verdict (PR #690): CHANGES_REQUESTED pinned to an older
+    // commit while fixes landed on a newer green head — a re-review is
+    // owed. Lazily resolved via provider.lastReview; without a provider
+    // (defensive stubs) the guard never matches.
+    if (q.reviewStale) {
+        var lr = (provider && provider.lastReview)
+            ? provider.lastReview(item.prNumber) : null;
+        var stale = !!(lr && lr.state === 'CHANGES_REQUESTED' && item.pr &&
+                       item.pr.headSha && lr.commitId &&
+                       lr.commitId !== item.pr.headSha);
+        if (!stale) return false;
+    }
     if (q.mergeable === true && (!item.pr || item.pr.mergeable !== true)) return false;
     if (q.prState && (!item.pr || item.pr.state !== q.prState)) return false;
     // PR-side label guards (issue-anchored rules): the machine loop pins
@@ -161,7 +173,7 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit) {
         return item;
     });
 
-    return enriched.filter(function (item) { return matchesGuards(item, rule); });
+    return enriched.filter(function (item) { return matchesGuards(item, rule, provider); });
 }
 
 function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {
@@ -215,7 +227,7 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {
         if (q2.notMachine && machineAuthor &&
             item.author === machineAuthor) return false;
         if (q2.authors && q2.authors.indexOf(item.author) === -1) return false;
-        return matchesGuards(item, rule);
+        return matchesGuards(item, rule, provider);
     });
 
     // FIFO: oldest PR first. github_list_prs returns newest-first (API
