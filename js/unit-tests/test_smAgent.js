@@ -585,11 +585,12 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         // updatePullRequestBranch and the PUT REST endpoint both block
         // github-actions[bot] (live-verified); a plain push on the runner
         // checkout is allowed and triggers no workflows.
-        assert.equal(sm.capturedCliCommands[0].command,
-            'git fetch origin && git checkout -q feat/x && ' +
-            'git -c user.name=sm-silent-update ' +
-            '-c user.email=sm-silent-update@users.noreply.github.com ' +
-            'merge --no-edit origin/main && git push origin feat/x');
+        var cmd = sm.capturedCliCommands[0].command;
+        assert.ok(cmd.indexOf('gh repo clone ') === 0, 'clones via gh (whitelisted, GH_TOKEN)');
+        assert.ok(cmd.indexOf('epam/dmtools-dart') !== -1, 'clones the TARGET repo');
+        assert.ok(cmd.indexOf('--branch feat/x') !== -1, 'single-branch clone of the head ref');
+        assert.ok(cmd.indexOf('merge --no-edit FETCH_HEAD') !== -1, 'merges fetched main');
+        assert.equal(cmd.slice(-'git push origin feat/x'.length), 'git push origin feat/x');
         // No env swap: the push rides the checkout's stored credentials.
         assert.equal(sm.capturedEnvSets.length, 0, 'no token swap');
     });
