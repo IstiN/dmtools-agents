@@ -156,6 +156,23 @@
           "id": "review-external-once"
         },
         {
+          "description": "GitHub PR: CHANGES_REQUESTED verdict pinned to an older commit (fixes pushed after the review) + green -> re-arm agent:review. review-on-label dispatches the runner, the runner consumes the label and re-reviews the current head; the fresh verdict's commit_id equals the head, so this never loops.",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "notLabels": [
+              "agent:review",
+              "ai_validating"
+            ],
+            "checks": "green",
+            "draft": false,
+            "reviewStale": true
+          },
+          "localAction": "arm_review",
+          "limit": 5,
+          "id": "review-stale-verdict"
+        },
+        {
           "description": "GitHub PR: agent:review label on a PR -> review on demand (any author; consumed by the review runner)",
           "source": "github",
           "query": {

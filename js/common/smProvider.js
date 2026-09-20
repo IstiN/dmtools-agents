@@ -217,12 +217,31 @@ function githubProvider(cfg) {
                 checkConclusion: rollup.length === 0 ? 'none' : (red ? 'red' : (pending ? 'pending' : 'green')),
                 mergeState: ms,
                 mergeable: pr.mergeable,
+                // Head sha pins the review-verdict comparison: a verdict
+                // rendered on an older commit is stale after pushes.
+                headSha: (pr.head && pr.head.sha) || null,
                 // PR-side labels (REST body): issue-anchored SM rules read
                 // them via prLabels/notPrLabels guards — the machine loop
                 // keeps ai_pr_reviewed/agent:review on the PR, not the issue.
                 labels: (pr.labels || []).map(function (l) {
                     return (l && l.name) || l;
                 })
+            };
+        },
+
+        lastReview: function (prNumber) {
+            // REST: reviews arrive chronological, the last entry is the
+            // latest verdict; commit_id pins the head it was rendered on
+            // (GraphQL spelling commitId kept as a fallback).
+            var list = asList(parseMcp(github_list_pr_reviews({
+                workspace: owner, repository: repo, pullRequestId: String(prNumber)
+            })));
+            if (!list.length) return null;
+            var r = list[list.length - 1];
+            return {
+                state: r.state || null,
+                commitId: r.commit_id || r.commitId || null,
+                author: (r.user && r.user.login) || null
             };
         },
 
