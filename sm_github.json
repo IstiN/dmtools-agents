@@ -72,6 +72,24 @@
           "id": "merge-validated"
         },
         {
+          "description": "Validated-but-stale: armed (ai_validating) + validation concluded but base moved before the merge tick. silent-update-behind excludes ai_validating and merge-validated needs CLEAN, so without this unarm the PR deadlocks (live: fa pr-744). Drops ai_validating; the silent refresh + merge window re-validate the fresh head (the 422-arm covers the already-fresh case), then merge fires.",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validating"
+            ],
+            "mergeState": [
+              "BEHIND",
+              "BLOCKED"
+            ],
+            "draft": false
+          },
+          "localAction": "unarm_validation",
+          "limit": 1,
+          "id": "unarm-stale-validation"
+        },
+        {
           "description": "Auto rework leg: agent:rework armed on the issue either by the review verdict (CHANGES_REQUESTED) or by red pre-merge CI. Pushing fixes removes the label (pr_rework removeLabels). prMachineAuthor: auto rework fires ONLY on machine-authored PRs (owner rule) — the machine login is deployment config (jobParams.machineAuthor / config.machineAuthor / factory-sm machine-author input), never hardcoded; unconfigured fails closed. Manual rework on ANY PR: label the PR agent:rework (see rework-on-label).",
           "source": "github",
           "query": {

@@ -657,7 +657,9 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         merge: { source: 'github', query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'green', mergeState: 'CLEAN' },
                  localAction: 'merge_pr', limit: 1, id: 'merge-validated' },
         fail: { source: 'github', query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'red' },
-                localAction: 'fail_validation', limit: 1, id: 'fail-validation' }
+                localAction: 'fail_validation', limit: 1, id: 'fail-validation' },
+        unarm: { source: 'github', query: { type: 'pr', labels: ['ai_validating'], mergeState: ['BEHIND', 'BLOCKED'], draft: false },
+                 localAction: 'unarm_validation', limit: 1, id: 'unarm-stale-validation' }
     };
 
     function prItem(n, extra) {
@@ -777,6 +779,20 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
 
         assert.equal(sm.capturedTriggers.length, 0, 'no dispatch without an issue anchor');
         assert.equal(sm.capturedPrLabelRemoves.length, 0, 'label stays — nothing consumed');
+    });
+
+    test('unarm_validation: stale validated PR drops ai_validating (refresh + re-validate follows)', function () {
+        // Live deadlock (fa pr-744): armed + validated green, then base
+        // moved → BEHIND. silent-update-behind excludes ai_validating,
+        // merge-validated needs CLEAN — nothing ever touched the PR again.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(74, { labels: ['pr_approved', 'ai_validating'] })] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.unarm] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }), ['ai_validating']);
+        assert.equal(sm.capturedPrMerges.length, 0, 'no merge on a stale head');
+        assert.equal(sm.capturedTriggers.length, 0, 'localAction never dispatches');
     });
 
     test('merge_pr: squash-merge + clears ai_validating and pr_approved', function () {
