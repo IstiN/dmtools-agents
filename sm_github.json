@@ -91,6 +91,7 @@
         },
         {
           "id": "develop-done",
+          "source": "github",
           "description": "Machine-loop completion backfill: the dev leg's post-action labeling is Jira-only, so GitHub issues linger `in progress` after their PR is open+green. The SM labels the issue ai_developed itself, which arms review-after-dev. Idempotent: ai_developed in notLabels.",
           "query": {
             "type": "issue",

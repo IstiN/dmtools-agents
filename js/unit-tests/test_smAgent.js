@@ -547,6 +547,25 @@ suite('smAgent: localAction close_issue (github close-on-merge)', function () {
     });
 });
 
+suite('smAgent: sm_github.json rule hygiene', function () {
+
+    test('every deployed github rule passes the validator (source + query + dispatch shape)', function () {
+        // Live regression (#458 follow-up): the develop-done rule shipped
+        // without `source: github` and the validator silently skipped it
+        // ("jql and configFile are required" — classic-rule branch). Pin
+        // the hygiene of every rule in the deployed config.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        assert.ok(rules.length >= 10, 'expected the full rule set, got ' + rules.length);
+        rules.forEach(function (r) {
+            assert.equal(r.source, 'github', r.id + ' must declare source: github');
+            assert.ok(r.query, r.id + ' needs a query object');
+            assert.ok(r.configFile || r.inputs || r.localAction,
+                r.id + ' needs configFile, inputs, or localAction');
+        });
+    });
+});
+
 suite('smAgent: localAction mark_developed (github machine-loop backfill)', function () {
 
     test('labels the issue ai_developed when its green PR is open; no dispatch', function () {
