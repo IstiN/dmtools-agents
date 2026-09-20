@@ -82,6 +82,23 @@ function matchesGuards(item, rule, provider) {
                        lr.commitId !== item.pr.headSha);
         if (!stale) return false;
     }
+    // ANY verdict (not just CHANGES_REQUESTED) rendered on an older commit
+    // — pairs with threadsResolved so a re-review fires once per head
+    // change and never loops (the re-review's verdict lands on the
+    // current head, clearing the staleness).
+    if (q.staleVerdict) {
+        var lv = (provider && provider.lastReview)
+            ? provider.lastReview(item.prNumber) : null;
+        if (!(lv && lv.commitId && item.pr && item.pr.headSha &&
+              lv.commitId !== item.pr.headSha)) return false;
+    }
+    // All review threads resolved (at least one exists): the rework leg
+    // resolved the review's findings — a fresh verdict is owed.
+    if (q.threadsResolved) {
+        var th = (provider && provider.reviewThreads)
+            ? provider.reviewThreads(item.prNumber) : null;
+        if (!(th && th.total > 0 && th.unresolved === 0)) return false;
+    }
     if (q.mergeable === true && (!item.pr || item.pr.mergeable !== true)) return false;
     if (q.prState && (!item.pr || item.pr.state !== q.prState)) return false;
     // PR-side label guards (issue-anchored rules): the machine loop pins

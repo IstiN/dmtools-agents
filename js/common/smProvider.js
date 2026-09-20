@@ -245,6 +245,24 @@ function githubProvider(cfg) {
             };
         },
 
+        reviewThreads: function (prNumber) {
+            // GraphQL-only surface (REST has no threads endpoint):
+            // {data:{repository:{pullRequest:{reviewThreads:{nodes:[
+            // {id,isResolved,...}]}}}}} — navigate the envelope by hand,
+            // parseMcp only unwraps the JSON string.
+            var res = parseMcp(github_get_pr_review_threads({
+                workspace: owner, repository: repo, pullRequestId: String(prNumber)
+            }));
+            var nodes = (res && res.data && res.data.repository &&
+                         res.data.repository.pullRequest &&
+                         res.data.repository.pullRequest.reviewThreads &&
+                         res.data.repository.pullRequest.reviewThreads.nodes) || [];
+            var resolved = 0;
+            nodes.forEach(function (t) { if (t && t.isResolved) resolved++; });
+            return { total: nodes.length, resolved: resolved,
+                     unresolved: nodes.length - resolved };
+        },
+
         activeMachineRuns: function (workflowFile) {
             var runs = parseMcp(github_list_workflow_runs({
                 workflowId: workflowFile, status: 'in_progress', perPage: 30
