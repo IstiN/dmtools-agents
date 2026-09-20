@@ -22,8 +22,10 @@
  *   findPr(issueNumber, branchPrefix) → null | {number, state, branch}
  *       OPEN first (branch match <prefix><n> or body references #n), then
  *       MERGED on the branch (close-issue safety net).
- *   prStatus(prNumber) → {state, checkConclusion, mergeState, mergeable}
+ *   prStatus(prNumber) → {state, checkConclusion, mergeState, mergeable, author}
  *       checkConclusion: 'red' | 'green' | 'pending' | 'none'.
+ *       author: creator login ('' when the API does not expose it) — the
+ *       prMachineAuthor gate keys on it.
  *   activeMachineRuns() → [issueNumber, …]
  *       Issues with a queued/in_progress machine run right now.
  *   dispatchLeg(issueNumber, leg, reason)
@@ -225,7 +227,12 @@ function githubProvider(cfg) {
                 // keeps ai_pr_reviewed/agent:review on the PR, not the issue.
                 labels: (pr.labels || []).map(function (l) {
                     return (l && l.name) || l;
-                })
+                }),
+                // Creator login — the prMachineAuthor gate keys auto legs
+                // on it. REST body spells it `user`; GraphQL/tests use
+                // `author` (same dual read as the PR list path).
+                author: (pr.user && pr.user.login) ||
+                    (pr.author && (pr.author.login || pr.author.name)) || ''
             };
         },
 
@@ -436,7 +443,10 @@ function gitlabProvider(cfg) {
                 state: mr.state ? String(mr.state).toUpperCase() : 'OPEN',
                 checkConclusion: any ? (red ? 'red' : (pending ? 'pending' : 'green')) : 'none',
                 mergeState: mergeState,
-                mergeable: mr.merge_status === 'can_be_merged' && !mr.has_conflicts
+                mergeable: mr.merge_status === 'can_be_merged' && !mr.has_conflicts,
+                // MR author login — the prMachineAuthor gate (GitHub twin
+                // reads `user.login`; GitLab spells it `author.username`).
+                author: (mr.author && mr.author.username) || ''
             };
         },
 

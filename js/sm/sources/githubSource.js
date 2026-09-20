@@ -52,7 +52,7 @@ function prLabels(p) {
     return (p.labels || []).map(function (l) { return (l && l.name) || l; });
 }
 
-function matchesGuards(item, rule, provider) {
+function matchesGuards(item, rule, provider, machineAuthor) {
     var q = rule.query || {};
     var labels = item.labels || [];
     if (q.notLabels && q.notLabels.some(function (l) { return labels.indexOf(l) !== -1; })) {
@@ -99,6 +99,19 @@ function matchesGuards(item, rule, provider) {
             ? provider.reviewThreads(item.prNumber) : null;
         if (!(th && th.total > 0 && th.unresolved === 0)) return false;
     }
+    // Machine-author gate (owner rule): auto legs (rework, …) only fire on
+    // PRs authored by the deployment's machine login. The login is
+    // repo-configured (jobParams.machineAuthor / config.machineAuthor /
+    // the factory-sm machine-author input) and never hardcoded; with none
+    // configured the gate fails CLOSED — no auto legs at all.
+    // PR-carrier items carry `author` from the list call (free);
+    // issue-carrier items read it from the enriched prStatus.
+    if (q.prMachineAuthor) {
+        var prAuthor = item.author || (item.pr && item.pr.author) || '';
+        if (!(machineAuthor && prAuthor === machineAuthor)) {
+            return false;
+        }
+    }
     if (q.mergeable === true && (!item.pr || item.pr.mergeable !== true)) return false;
     if (q.prState && (!item.pr || item.pr.state !== q.prState)) return false;
     // PR-side label guards (issue-anchored rules): the machine loop pins
@@ -126,14 +139,14 @@ function query(rule, ctx) {
     var branchPrefix = rule.branchPrefix || 'ai/gh-';
     var limit = rule.limit || 50;
 
+    var machineAuthor = machineAuthorModule.resolveMachineAuthor(ctx, ctx && ctx.config);
     if (q.type === 'pr') {
-        return queryPrs(rule, provider, repoInfo, limit,
-            machineAuthorModule.resolveMachineAuthor(ctx, ctx && ctx.config));
+        return queryPrs(rule, provider, repoInfo, limit, machineAuthor);
     }
-    return queryIssues(rule, provider, repoInfo, branchPrefix, limit);
+    return queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAuthor);
 }
 
-function queryIssues(rule, provider, repoInfo, branchPrefix, limit) {
+function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAuthor) {
     var q = rule.query || {};
     var full = repoInfo.owner + '/' + repoInfo.repo;
     var seen = {};
@@ -190,7 +203,7 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit) {
         return item;
     });
 
-    return enriched.filter(function (item) { return matchesGuards(item, rule, provider); });
+    return enriched.filter(function (item) { return matchesGuards(item, rule, provider, machineAuthor); });
 }
 
 function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {
@@ -244,7 +257,7 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {
         if (q2.notMachine && machineAuthor &&
             item.author === machineAuthor) return false;
         if (q2.authors && q2.authors.indexOf(item.author) === -1) return false;
-        return matchesGuards(item, rule, provider);
+        return matchesGuards(item, rule, provider, machineAuthor);
     });
 
     // FIFO: oldest PR first. github_list_prs returns newest-first (API

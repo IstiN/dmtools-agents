@@ -405,4 +405,63 @@ suite('sm github source', function () {
         assert.equal(items.length, 1);
         assert.equal(items[0].key, 'pr-61');
     });
+
+    test('pr rules: prMachineAuthor — auto legs fire only on machine-authored PRs', function () {
+        // Owner rule: rework-style auto legs must never fire on a
+        // human-authored PR, and with no machineAuthor configured the gate
+        // fails CLOSED (no auto legs at all — unlike notMachine, which is
+        // inert without the knob).
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 81, labels: [{ name: 'pr_changes_requested' }], draft: false,
+                      author: { login: 'vabhzw17eg2qu4m9-bit' } },
+                    { number: 82, labels: [{ name: 'pr_changes_requested' }], draft: false,
+                      author: { login: 'human-contributor' } }
+                ];
+            }
+        });
+
+        var mine = srcMod.query({
+            query: { type: 'pr', labels: ['pr_changes_requested'], prMachineAuthor: true }
+        }, { repoInfo: { owner: 'a', repo: 'b' }, machineAuthor: 'vabhzw17eg2qu4m9-bit' });
+        assert.equal(mine.map(function (i) { return i.key; }).join(','), 'pr-81');
+
+        var noKnob = srcMod.query({
+            query: { type: 'pr', labels: ['pr_changes_requested'], prMachineAuthor: true }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(noKnob.length, 0, 'no machineAuthor configured — gate fails closed');
+    });
+
+    test('issue rules: prMachineAuthor reads the linked PR author (prStatus)', function () {
+        // Issue-anchored rework rules carry the state on the issue but the
+        // author fact lives on the enriched PR — the gate reads it from
+        // provider.prStatus (item.author is an issue-side field there).
+        var srcMod = load({
+            github_search_issues: function () {
+                return { items: [
+                    { number: 3, labels: [{ name: 'agent:rework' }] },
+                    { number: 4, labels: [{ name: 'agent:rework' }] }
+                ] };
+            }
+        }, {
+            3: { number: 30, state: 'OPEN' },
+            4: { number: 40, state: 'OPEN' }
+        }, {
+            30: { number: 30, state: 'OPEN', checks: 'green', mergeState: 'CLEAN',
+                  mergeable: true, author: 'vabhzw17eg2qu4m9-bit' },
+            40: { number: 40, state: 'OPEN', checks: 'green', mergeState: 'CLEAN',
+                  mergeable: true, author: 'human-contributor' }
+        });
+
+        var items = srcMod.query({
+            query: { type: 'issue', labels: ['agent:rework'], prMachineAuthor: true }
+        }, { repoInfo: { owner: 'a', repo: 'b' }, machineAuthor: 'vabhzw17eg2qu4m9-bit' });
+        assert.equal(items.map(function (i) { return i.key; }).join(','), 'gh-3');
+
+        var noKnob = srcMod.query({
+            query: { type: 'issue', labels: ['agent:rework'], prMachineAuthor: true }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(noKnob.length, 0, 'no machineAuthor configured — gate fails closed');
+    });
 });
