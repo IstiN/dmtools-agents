@@ -223,10 +223,25 @@ jobs:
                 fi
                 ;;
             esac
-          elif echo "$LABELS" | grep -qw "agent:rework"; then
+          elif echo "$LABELS" | grep -qw "agent:rework" \
+            && ! echo "$LABELS" | grep -q 'status:In Rework'; then
+            # status:In Rework = a rework leg already runs/ran — its own
+            # status transition echoes back as a `labeled` event and would
+            # re-derive the same leg on top of itself.
             runner="$RUNNER_REWORK"
-          elif echo "$LABELS" | grep -qw "agent:review"; then
+          elif echo "$LABELS" | grep -qw "agent:review" \
+            && ! echo "$LABELS" | grep -q 'status:In Review'; then
             runner="$RUNNER_REVIEW"; slot="review"
+          elif echo "$LABELS" | grep -qE 'status:In Development|status:In Review|status:In Rework|in progress|ai_developed|ai_pr_reviewed|_wip|rework-round-'; then
+            # Dev is a FRESH handoff only: once the loop has touched the
+            # issue, later `labeled` events (the dev leg's OWN status:In
+            # Development transition, SM backfill labels, ...) would
+            # re-derive dev and queue a duplicate leg on top of the
+            # running/finished one (live: fa gh-746 — the assigned-handoff
+            # dev ran while its status-label echo queued a second dev).
+            # The SM owns the loop from there; explicit dispatches
+            # (inputs.leg) bypass this derive branch entirely.
+            :
           elif echo "$ASSIGNEES" | grep -qw "$AGENT_HANDLE" \
             || echo "$LABELS" | grep -qw "agent:dev"; then
             title="$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json title -q .title)"
