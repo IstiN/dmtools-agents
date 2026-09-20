@@ -551,7 +551,12 @@ suite('postPRReviewComments', function() {
                 readOutputFileDetailed: function() {
                     return { content: JSON.stringify(opts.reviewData), path: 'outputs/pr_review.json' };
                 },
-                readOutputFile: function() { return null; }
+                readOutputFile: function(p) {
+                    if (opts.generalMdContent && p && String(p).indexOf('pr_review_general.md') !== -1) {
+                        return opts.generalMdContent;
+                    }
+                    return null;
+                }
             };
 
             var formalMocks = {
@@ -719,6 +724,38 @@ suite('postPRReviewComments', function() {
             assert.equal(
                 loaded.addLabelCalls.filter(function(c) { return c.label === 'pr_approved'; }).length, 1,
                 'pr_approved label lifecycle on approve must be unchanged'
+            );
+        });
+
+        test('APPROVE body resolves a generalComment FILE PATH to its content (#720 live bug)', function() {
+            // Live bug (flutter_agent_harness #720): the model followed the
+            // file-path contract (generalComment = 'outputs/pr_review_general.md'),
+            // postGeneralComment read the file correctly, but the formal APPROVE
+            // review posted the literal PATH as its body.
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                reviewData: {
+                    recommendation: 'APPROVE',
+                    generalComment: 'outputs/pr_review_general.md',
+                    issueCounts: { blocking: 0, important: 0, suggestions: 0 },
+                    inlineComments: []
+                },
+                generalMdContent: '## Automated Code Review — APPROVE\n\nSolid work.',
+                existingReviews: []
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1',
+                customParams: { formalGithubReview: true }
+            });
+
+            assert.equal(loaded.submitReviewCalls.length, 1, 'exactly one formal review');
+            assert.equal(loaded.submitReviewCalls[0].event, 'APPROVE');
+            assert.equal(
+                loaded.submitReviewCalls[0].body,
+                '## Automated Code Review — APPROVE\n\nSolid work.',
+                'the review body must be the file CONTENT, never the outputs/ path'
             );
         });
 
