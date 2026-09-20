@@ -590,7 +590,8 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.ok(cmd.indexOf('epam/dmtools-dart') !== -1, 'clones the TARGET repo');
         assert.ok(cmd.indexOf('--branch feat/x') !== -1, 'single-branch clone of the head ref');
         assert.ok(cmd.indexOf('merge --no-edit FETCH_HEAD') !== -1, 'merges fetched main');
-        assert.equal(cmd.slice(-'git push origin feat/x'.length), 'git push origin feat/x');
+        assert.equal(cmd.slice(-'git push https://x-access-token:${GH_TOKEN}@github.com/epam/dmtools-dart.git feat/x'.length),
+            'git push https://x-access-token:${GH_TOKEN}@github.com/epam/dmtools-dart.git feat/x');
         // No env swap: the push rides the checkout's stored credentials.
         assert.equal(sm.capturedEnvSets.length, 0, 'no token swap');
     });
