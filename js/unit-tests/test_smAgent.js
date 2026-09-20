@@ -42,6 +42,7 @@ function makeSmAgent(opts) {
     var capturedPrLabelRemoves = [];
     var capturedPrComments = [];
     var capturedEnvSets = [];
+    var capturedScmConfigs = [];
 
     // Controlled file_read: config discovery paths from fileMap only; other paths from disk.
     var fileReadMock = function(readOpts) {
@@ -123,7 +124,7 @@ function makeSmAgent(opts) {
         getRemoteRepoInfo: function() { return null; }
     };
     var mockScmModule = {
-        createScm: function(config) { return mockScmProvider; }
+        createScm: function(config) { capturedScmConfigs.push(config); return mockScmProvider; }
     };
 
     // CRITICAL: create a fresh configLoader using the SAME file_read mock.
@@ -205,7 +206,8 @@ function makeSmAgent(opts) {
         capturedPrLabelAdds: capturedPrLabelAdds,
         capturedPrLabelRemoves: capturedPrLabelRemoves,
         capturedPrComments: capturedPrComments,
-        capturedEnvSets: capturedEnvSets
+        capturedEnvSets: capturedEnvSets,
+        capturedScmConfigs: capturedScmConfigs
     };
 }
 
@@ -1011,6 +1013,39 @@ suite('smAgent: ticket dispatch', function() {
         ]));
 
         assert.equal(sm.capturedTriggers.length, 0, 'in-flight stub-titled run must suppress the re-dispatch');
+    });
+
+    test('in-flight guard resolves the scm against the TARGET repo, not the engine checkout', function() {
+        // Live bug (flutter_agent_harness gh-691 review dispatched twice):
+        // the rule config carried no repository, so createScm fell back to
+        // git-remote autodetect — the ENGINE checkout (IstiN/dmtools-agents)
+        // — and the guard listed workflow runs in the wrong repo, never
+        // seeing the in-flight review in flutter_agent_harness.
+        // createTargetScm pins every scm client to the rule's effective repo.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" } };' },
+            tickets: [{ key: 'P-42', fields: { labels: [] } }],
+            workflowRuns: {
+                in_progress: [
+                    { name: 'AI Teammate', display_title: '▶ review (SM) · P-42', status: 'in_progress' }
+                ]
+            }
+        });
+
+        sm.action(baseParams('target-org', 'target-repo', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/pr_rework.json',
+                addLabel: 'sm_story_rework_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 0, 'in-flight run suppresses the re-dispatch');
+        assert.ok(sm.capturedScmConfigs.length > 0, 'scm client was created');
+        sm.capturedScmConfigs.forEach(function(cfg) {
+            assert.ok(cfg && cfg.repository, 'every createScm config carries repository');
+            assert.equal(cfg.repository.owner, 'target-org', 'guard lists runs in the TARGET org');
+            assert.equal(cfg.repository.repo, 'target-repo', 'guard lists runs in the TARGET repo');
+        });
     });
 
 });

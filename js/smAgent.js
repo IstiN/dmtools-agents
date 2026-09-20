@@ -275,11 +275,31 @@ function ensureWorkflowBudgetActiveCount(workflowBudget, scm, workflowFile) {
     }
 }
 
-function isWorkflowBudgetExhausted(rule, effectiveConfig, workflowBudget) {
+// Creates the SCM client pinned to the rule's EFFECTIVE target repo.
+// The SM engine runs from the dmtools-agents checkout, so createScm's
+// git-remote autodetect would otherwise resolve the ENGINE repo whenever
+// the config carries no explicit repository (live: the in-flight guard
+// listed runs in IstiN/dmtools-agents while the dispatch went to
+// flutter_agent_harness — duplicate review gh-691).
+function createTargetScm(effectiveConfig, repoInfo) {
+    if (!repoInfo || !repoInfo.owner || !repoInfo.repo) {
+        return scmModule.createScm(effectiveConfig);
+    }
+    var cfg = {};
+    if (effectiveConfig) {
+        for (var k in effectiveConfig) {
+            if (Object.prototype.hasOwnProperty.call(effectiveConfig, k)) cfg[k] = effectiveConfig[k];
+        }
+    }
+    cfg.repository = { owner: repoInfo.owner, repo: repoInfo.repo };
+    return scmModule.createScm(cfg);
+}
+
+function isWorkflowBudgetExhausted(rule, effectiveConfig, workflowBudget, repoInfo) {
     if (!workflowBudget) return false;
 
     var workflowFile = rule.workflowFile || 'ai-teammate.yml';
-    var scm = scmModule.createScm(effectiveConfig);
+    var scm = createTargetScm(effectiveConfig, repoInfo);
     ensureWorkflowBudgetActiveCount(workflowBudget, scm, workflowFile);
     return workflowBudget.remaining <= 0;
 }
@@ -300,7 +320,7 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
     }
 
     try {
-        var scm = scmModule.createScm(effectiveConfig);
+        var scm = createTargetScm(effectiveConfig, repoInfo);
         ensureWorkflowBudgetActiveCount(workflowBudget, scm, workflowFile);
         if (workflowBudget && workflowBudget.remaining <= 0) {
             console.log('  ⏭️  ' + ticketKey + ' skipped (global workflow cap reached: ' + workflowBudget.initial + ')');
@@ -849,7 +869,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             if (!rule.localTeammate && shouldRecoverStaleTriggerLabel(rule, skipLabel)) {
                 var workflowFile = rule.workflowFile || 'ai-teammate.yml';
                 var resolvedCf = buildEncodedConfigModule.resolveConfigFile(rule, effectiveConfig);
-                var scm = scmModule.createScm(effectiveConfig);
+                var scm = createTargetScm(effectiveConfig, effectiveRepoInfo);
                 var activeKey = rule.concurrencyKey || key;
                 if (hasActiveTargetWorkflowRun(scm, workflowFile, resolvedCf, activeKey)) {
                     skippedKeys.push(key);
@@ -1109,7 +1129,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         }
 
         if (rule.targetStatus) {
-            if (!rule.localTeammate && isWorkflowBudgetExhausted(rule, effectiveConfig, workflowBudget)) {
+            if (!rule.localTeammate && isWorkflowBudgetExhausted(rule, effectiveConfig, workflowBudget, effectiveRepoInfo)) {
                 console.log('  ⏭️  ' + key + ' skipped before transition (global workflow cap reached: ' + workflowBudget.initial + ')');
                 break;
             }
