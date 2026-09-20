@@ -213,7 +213,13 @@ function githubProvider(cfg) {
                 state: pr.state || 'OPEN',
                 checkConclusion: rollup.length === 0 ? 'none' : (red ? 'red' : (pending ? 'pending' : 'green')),
                 mergeState: ms,
-                mergeable: pr.mergeable
+                mergeable: pr.mergeable,
+                // PR-side labels (REST body): issue-anchored SM rules read
+                // them via prLabels/notPrLabels guards — the machine loop
+                // keeps ai_pr_reviewed/agent:review on the PR, not the issue.
+                labels: (pr.labels || []).map(function (l) {
+                    return (l && l.name) || l;
+                })
             };
         },
 

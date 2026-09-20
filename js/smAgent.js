@@ -879,6 +879,30 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             continue;
         }
 
+        if (rule.localAction === 'mark_developed') {
+            // Machine-loop backfill: the dev leg opened a green PR but the
+            // post-action labeling it grew up with is Jira-only, so GitHub
+            // issues linger in `in progress` and the review rule (which
+            // gates on ai_developed) never fires. The SM itself detects
+            // the completed-development shape (issue in progress + OPEN
+            // green PR) and labels the ISSUE — self-healing every stuck
+            // ticket on the first tick after deploy, no manual backfill.
+            try {
+                github_add_labels({
+                    workspace: effectiveRepoInfo.owner,
+                    repository: effectiveRepoInfo.repo,
+                    number: ticket.issueNumber,
+                    labels: ['ai_developed']
+                });
+                console.log('  ✅ ' + key + ' issue #' + ticket.issueNumber +
+                    ' labeled ai_developed (green PR #' + ticket.prNumber + ')');
+                processedKeys.push(key);
+            } catch (e) {
+                console.error('  ❌ mark_developed failed for ' + key + ': ' + (e.message || e));
+            }
+            continue;
+        }
+
         // Silent branch refresh = a git merge push, NOT the GitHub
         // update-branch APIs. Live-verified dead ends for
         // github-actions[bot]: the GraphQL mutation (gh pr update-branch)
@@ -1026,7 +1050,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     var prRaw = github_get_pr({
                         workspace: effectiveRepoInfo.owner,
                         repository: effectiveRepoInfo.repo,
-                        number: ticket.prNumber
+                        pullRequestId: ticket.prNumber
                     });
                     var prObj = typeof prRaw === 'string' ? JSON.parse(prRaw) : (prRaw || {});
                     var m = /(?:closes|fixes|resolves)\s+#(\d+)/i.exec(String(prObj.body || ''));

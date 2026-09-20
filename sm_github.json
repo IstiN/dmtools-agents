@@ -7,7 +7,7 @@
       "maxTriggeredWorkflows": 1,
       "rules": [
         {
-          "description": "Every open non-draft PR behind main gets a silent branch refresh with the workflow token (pushes trigger no workflows, so freshness is free); validating PRs are excluded so the validation head never moves mid-run. mergeState matches BEHIND or BLOCKED — REST mergeable_state flip-flops between the two for the same behind PR under branch protection, and gh pr update-branch is a no-op on a fresh branch, so over-matching is harmless. Replaces the retired auto-update-prs workflow.",
+          "description": "Every open non-draft PR behind main gets a silent branch refresh with the workflow token (pushes trigger no workflows, so freshness is free); validating PRs are excluded so the validation head never moves mid-run. mergeState matches BEHIND or BLOCKED \u2014 REST mergeable_state flip-flops between the two for the same behind PR under branch protection, and gh pr update-branch is a no-op on a fresh branch, so over-matching is harmless. Replaces the retired auto-update-prs workflow.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -25,7 +25,7 @@
           "id": "silent-update-behind"
         },
         {
-          "description": "GitHub PR: merge window — oldest armed PR gets a PAT update (validation CI fires on the final head) + ai_validating marker (#687)",
+          "description": "GitHub PR: merge window \u2014 oldest armed PR gets a PAT update (validation CI fires on the final head) + ai_validating marker (#687)",
           "source": "github",
           "query": {
             "type": "pr",
@@ -72,26 +72,42 @@
           "id": "merge-validated"
         },
         {
-          "description": "GitHub: red CI on linked PR → rework (dead-letter re-fire)",
+          "description": "Rework leg: agent:rework armed on the issue either by the review verdict (CHANGES_REQUESTED) or by red pre-merge CI. Pushing fixes removes the label (pr_rework removeLabels).",
           "source": "github",
           "query": {
             "type": "issue",
             "labels": [
               "agent:rework"
-            ],
-            "prChecks": "red"
+            ]
           },
           "workflowFile": "ai-teammate.yml",
           "inputs": {
             "issue": "{issueNumber}",
             "leg": "rework",
-            "reason": "sm: red CI on linked PR"
+            "reason": "sm: agent:rework (red CI or review CHANGES)"
           },
           "limit": 1,
           "id": "rework-on-red-ci"
         },
         {
-          "description": "GitHub: green PR after dev → machine review",
+          "id": "develop-done",
+          "description": "Machine-loop completion backfill: the dev leg's post-action labeling is Jira-only, so GitHub issues linger `in progress` after their PR is open+green. The SM labels the issue ai_developed itself, which arms review-after-dev. Idempotent: ai_developed in notLabels.",
+          "query": {
+            "type": "issue",
+            "labels": [
+              "in progress"
+            ],
+            "notLabels": [
+              "ai_developed",
+              "agent:rework"
+            ],
+            "prState": "OPEN",
+            "prChecks": "green"
+          },
+          "localAction": "mark_developed"
+        },
+        {
+          "description": "GitHub: green PR after dev \u2192 machine review",
           "source": "github",
           "query": {
             "type": "issue",
@@ -99,8 +115,10 @@
               "ai_developed"
             ],
             "notLabels": [
-              "ai_pr_reviewed",
               "agent:rework"
+            ],
+            "notPrLabels": [
+              "ai_pr_reviewed"
             ],
             "prChecks": "green"
           },
@@ -156,7 +174,7 @@
           "id": "review-on-label"
         },
         {
-          "description": "GitHub: linked PR merged → close the issue (cycle complete)",
+          "description": "GitHub: linked PR merged \u2192 close the issue (cycle complete)",
           "source": "github",
           "query": {
             "type": "issue",

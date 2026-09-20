@@ -726,6 +726,22 @@ function action(params) {
         // Remove SM idempotency label so the ticket can be re-triggered next cycle
         removeConfiguredLabels(tracker, ticketKey, _customParams);
 
+        // GitHub machine loop: the once-guard lives on the PR (ai_pr_reviewed),
+        // not the issue. Clear it so the reworked head gets a FRESH review —
+        // otherwise review-after-dev (notPrLabels: ai_pr_reviewed) skips the
+        // PR forever and the loop stalls after one review round.
+        if (pr && pr.number && typeof github_remove_label === 'function') {
+            try {
+                github_remove_label({
+                    workspace: repoInfo.owner, repository: repoInfo.repo,
+                    number: pr.number, label: 'ai_pr_reviewed'
+                });
+                console.log('✅ Cleared ai_pr_reviewed on PR #' + pr.number + ' — fresh review armed');
+            } catch (e) {
+                console.warn('Failed to clear ai_pr_reviewed on PR #' + pr.number + ':', e.message || e);
+            }
+        }
+
         // Auto-start pr_review after rework is pushed to In Review (opt-in via customParams)
         var reviewStarted = false;
         const autoStartReview = _customParams && _customParams.autoStartReview;

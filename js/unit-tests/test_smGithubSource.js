@@ -74,6 +74,39 @@ suite('sm github source', function () {
         assert.equal(items.length, 0);
     });
 
+    test('issue rules: prLabels/notPrLabels read the linked PR labels (#687 machine loop)', function () {
+        // The machine loop pins ai_pr_reviewed on the PR, never on the
+        // issue — review-after-dev must gate on the PR-side label or it
+        // re-dispatches a review every tick.
+        var srcMod = load({
+            github_search_issues: function () {
+                return { items: [{ number: 2, labels: [{ name: 'ai_developed' }] }] };
+            }
+        }, {
+            2: { number: 20, state: 'OPEN' }
+        }, {
+            20: { number: 20, state: 'OPEN', checks: 'green', mergeState: 'CLEAN',
+                  mergeable: true, labels: ['ai_pr_reviewed'] }
+        });
+        var filtered = srcMod.query({
+            query: { type: 'issue', labels: ['ai_developed'], notPrLabels: ['ai_pr_reviewed'] }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(filtered.length, 0, 'PR already reviewed — rule must not match');
+
+        var statuses = {};
+        statuses[20] = { number: 20, state: 'OPEN', checks: 'green', mergeState: 'CLEAN',
+                         mergeable: true, labels: [] };
+        var srcMod2 = load({
+            github_search_issues: function () {
+                return { items: [{ number: 2, labels: [{ name: 'ai_developed' }] }] };
+            }
+        }, { 2: { number: 20, state: 'OPEN' } }, statuses);
+        var fresh = srcMod2.query({
+            query: { type: 'issue', labels: ['ai_developed'], notPrLabels: ['ai_pr_reviewed'] }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(fresh.length, 1, 'unreviewed PR matches');
+    });
+
     test('issue rules: notLabels filters', function () {
         var srcMod = load({
             github_search_issues: function () {

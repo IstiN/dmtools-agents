@@ -547,6 +547,56 @@ suite('smAgent: localAction close_issue (github close-on-merge)', function () {
     });
 });
 
+suite('smAgent: localAction mark_developed (github machine-loop backfill)', function () {
+
+    test('labels the issue ai_developed when its green PR is open; no dispatch', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'gh-701', labels: ['in progress'], issueNumber: 701, prNumber: 724,
+                      pr: { number: 724, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true, labels: [] } }
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'dev done backfill',
+            source: 'github',
+            query: { type: 'issue', labels: ['in progress'], notLabels: ['ai_developed', 'agent:rework'],
+                     prState: 'OPEN', prChecks: 'green' },
+            localAction: 'mark_developed',
+            limit: 5,
+            id: 'develop-done'
+        }]));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'exactly one label add');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 701, 'labels the ISSUE number');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['ai_developed']);
+        assert.equal(sm.capturedTriggers.length, 0, 'localAction never dispatches workflows');
+    });
+
+    test('nothing to backfill — no label churn, no dispatch', function () {
+        // The source-level notLabels guard is covered by test_smGithubSource;
+        // here the stub returns items verbatim, so an empty feed is the
+        // convention for guard-side cases (see the close_issue suite).
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "a", repo: "b" } };' },
+            github: { items: [] }
+        });
+
+        sm.action(baseParams('a', 'b', [{
+            source: 'github',
+            query: { type: 'issue', labels: ['in progress'], notLabels: ['ai_developed'], prState: 'OPEN' },
+            localAction: 'mark_developed',
+            id: 'develop-done'
+        }]));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no label churn');
+        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch');
+    });
+});
+
 suite('smAgent: PR lifecycle localActions (#687)', function () {
 
     var RULES = {
