@@ -908,7 +908,15 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                          ' && git -c user.name=sm-silent-update' +
                          ' -c user.email=sm-silent-update@users.noreply.github.com' +
                          ' merge --no-edit FETCH_HEAD' +
-                         ' && git push origin ' + branchName
+                         // The anonymous clone of a public repo carries no
+                         // push credentials ("could not read Username" —
+                         // live). Push via a one-off token URL: sh expands
+                         // ${GH_TOKEN} from the child env (the workflow
+                         // token there), and the token never appears in
+                         // this script or the logged command line.
+                         ' && git push https://x-access-token:${GH_TOKEN}@github.com/' +
+                         effectiveRepoInfo.owner + '/' + effectiveRepoInfo.repo +
+                         '.git ' + branchName
             });
         }
 
