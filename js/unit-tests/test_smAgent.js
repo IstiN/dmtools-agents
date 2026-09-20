@@ -566,6 +566,35 @@ suite('smAgent: sm_github.json rule hygiene', function () {
                 r.id + ' needs configFile, inputs, or localAction');
         });
     });
+
+    test('rework policy: auto gated on machine author, manual via PR label (any author), review ungated', function () {
+        // Owner rule (fa run 35520284127 — auto rework fired on a
+        // foreign-authored PR and was cancelled): AUTO rework only on
+        // machine-authored PRs; MANUAL rework via the agent:rework PR label
+        // on any author; REVIEW stays for all PRs.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+
+        var auto = byId['rework-on-red-ci'];
+        assert.ok(auto, 'rework-on-red-ci exists');
+        assert.equal(auto.query.prMachineAuthor, true,
+            'auto rework is machine-author-gated (fail-closed when unconfigured)');
+
+        var manual = byId['rework-on-label'];
+        assert.ok(manual, 'rework-on-label exists (manual PR-label request)');
+        assert.equal(manual.query.type, 'pr', 'manual request lives on the PR');
+        assert.ok((manual.query.labels || []).indexOf('agent:rework') !== -1);
+        assert.ok(!manual.query.prMachineAuthor, 'manual rework is NOT author-gated');
+        assert.ok((manual.consumeLabels || []).indexOf('agent:rework') !== -1,
+            'the PR request label is consumed on dispatch (no re-fire)');
+
+        ['review-after-dev', 'review-external-once', 'review-on-label'].forEach(function (id) {
+            assert.ok(byId[id], id + ' exists');
+            assert.ok(!byId[id].query.prMachineAuthor, id + ': review stays open to all authors');
+        });
+    });
 });
 
 suite('smAgent: localAction mark_developed (github machine-loop backfill)', function () {
@@ -706,6 +735,48 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedPrLabelAdds.length, 1, 'fresh head IS the final head — validation arms');
         assert.equal(sm.capturedPrLabelAdds[0].number, 72);
         assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['ai_validating']);
+    });
+
+    test('rework-on-label: manual PR rework — any author, consumes the PR label on dispatch', function () {
+        // Owner rule: rework fires on ANY PR when a human labels the PR
+        // agent:rework; only the AUTO path (agent:rework armed on the issue
+        // by verdict/CI) is machine-author-gated. The PR label is consumed
+        // at dispatch — the issue-anchored rework runner's removeLabels
+        // never reaches PR labels, so without consumption every later tick
+        // re-fires.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(90, { labels: ['agent:rework'], issueNumber: 732, author: 'some-human' })] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['agent:rework'] },
+              workflowFile: 'ai-teammate.yml',
+              inputs: { issue: '{issueNumber}', leg: 'rework',
+                        reason: 'sm: agent:rework label on the PR (manual rework request)' },
+              consumeLabels: ['agent:rework'], limit: 1, id: 'rework-on-label' }
+        ] } });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'manual rework dispatches for any author');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.issue, '732', 'issue-anchored dispatch on the linked issue');
+        assert.equal(inputs.leg, 'rework');
+        assert.equal(sm.capturedPrLabelRemoves.length, 1, 'the request label is consumed');
+        assert.equal(sm.capturedPrLabelRemoves[0].number, 90);
+        assert.deepEqual(sm.capturedPrLabelRemoves[0].labels, ['agent:rework']);
+    });
+
+    test('rework-on-label: PR without a linked issue is skipped (no pr-N pseudo-anchor)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(91, { labels: ['agent:rework'], issueNumber: null })] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['agent:rework'] },
+              workflowFile: 'ai-teammate.yml',
+              inputs: { issue: '{issueNumber}', leg: 'rework' },
+              consumeLabels: ['agent:rework'], limit: 1, id: 'rework-on-label' }
+        ] } });
+
+        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch without an issue anchor');
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'label stays — nothing consumed');
     });
 
     test('merge_pr: squash-merge + clears ai_validating and pr_approved', function () {
