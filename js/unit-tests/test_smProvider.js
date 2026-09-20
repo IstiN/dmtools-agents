@@ -120,6 +120,29 @@ suite('smProvider', function () {
         assert.equal(p.prStatus(7).checkConclusion, 'none');
     });
 
+    test('github: prStatus normalizes REST lowercase state to OPEN', function () {
+        // Live bug (flutter_agent_harness): the REST body reports
+        // `state: 'open'` (lowercase) while issue-anchored guards compare
+        // against 'OPEN' — develop-done evaluated its candidates, then
+        // rejected every one ('open' !== 'OPEN') and printed
+        // "No tickets found" for genuinely green PRs.
+        var prBody = { state: 'open', mergeable: true, mergeable_state: 'clean',
+                       head: { sha: 'abc123' } };
+        var p = loadProvider('github', {
+            github_get_pr: function () { return prBody; },
+            github_get_commit_check_runs: function () {
+                return { check_runs: [{ status: 'completed', conclusion: 'success' }] };
+            }
+        });
+        var st = p.prStatus(7);
+        assert.equal(st.state, 'OPEN');
+        assert.equal(st.checkConclusion, 'green');
+
+        // absent state (defensive stubs) still yields the OPEN default
+        prBody = { mergeable: true };
+        assert.equal(p.prStatus(7).state, 'OPEN');
+    });
+
     test('github: prStatus computes BEHIND/CLEAN from base.sha vs branch head (deterministic)', function () {
         // Live race: right after a base push, REST mergeable_state says
         // `unknown` for every PR while GitHub recomputes lazily — an SM

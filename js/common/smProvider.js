@@ -210,7 +210,10 @@ function githubProvider(cfg) {
             }
             if (!ms) ms = pr.mergeable === true ? 'CLEAN' : 'UNKNOWN';
             return {
-                state: pr.state || 'OPEN',
+                // REST reports `state` lowercase ('open'); guards compare
+                // against 'OPEN'/'MERGED' — normalize like the check-run
+                // conclusions and mergeable_state above.
+                state: pr.state ? String(pr.state).toUpperCase() : 'OPEN',
                 checkConclusion: rollup.length === 0 ? 'none' : (red ? 'red' : (pending ? 'pending' : 'green')),
                 mergeState: ms,
                 mergeable: pr.mergeable,
