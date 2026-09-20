@@ -1073,6 +1073,27 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             continue;
         }
 
+        if (rule.localAction === 'unarm_validation') {
+            // Validated-but-stale: ai_validating armed, validation green, but
+            // base moved before the merge tick (mergeState BEHIND/BLOCKED).
+            // silent-update-behind excludes ai_validating and merge-validated
+            // needs CLEAN — without this unarm the PR deadlocks (live: fa
+            // pr-744). Drop the marker; next ticks: silent refresh → merge
+            // window re-validates the fresh head (422-arm covers the
+            // already-fresh case) → merge.
+            try {
+                github_remove_label({
+                    workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                    number: ticket.prNumber, label: 'ai_validating'
+                });
+                console.log('  🔓 ' + key + ' unarmed (validated head went stale) — refresh + re-validate follows');
+                processedKeys.push(key);
+            } catch (e) {
+                console.error('  ❌ unarm_validation failed for ' + key + ': ' + (e.message || e));
+            }
+            continue;
+        }
+
         if (rule.localAction === 'merge_pr') {
             // Validated green + CLEAN → squash-merge, then clear the armed
             // markers (merge approval consumed; close-on-merge finishes the
