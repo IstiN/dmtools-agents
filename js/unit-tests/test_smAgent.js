@@ -988,6 +988,31 @@ suite('smAgent: ticket dispatch', function() {
         assert.equal(sm.capturedLabels.length, 0, 'skip label should not be added for skipped duplicate');
     });
 
+    test('skips dispatch when a stub-titled GitHub run is in flight (display_title precedence)', function() {
+        // Live bug (gh-702 review dispatched twice): the workflow-runs API
+        // returns name='AI Teammate' (the WORKFLOW name) and display_title
+        //='▶ review (SM) · gh-42' — name-first made the stub-title match
+        // dead code, so the in-flight run never suppressed the next tick.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-42', fields: { labels: [] } }],
+            workflowRuns: {
+                in_progress: [
+                    { name: 'AI Teammate', display_title: '▶ review (SM) · P-42', status: 'in_progress' }
+                ]
+            }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/pr_rework.json',
+                addLabel: 'sm_story_rework_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 0, 'in-flight stub-titled run must suppress the re-dispatch');
+    });
+
 });
 
 // ── localTeammate execution mode ────────────────────────────────────────────
