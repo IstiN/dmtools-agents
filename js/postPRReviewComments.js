@@ -65,9 +65,22 @@ function markForSmStoryRework(tracker, ticketKey) {
     try {
         tracker.addLabel(ticketKey, 'sm_story_rework_triggered');
         console.log('✅ Added SM rework label: sm_story_rework_triggered');
-        return true;
     } catch (e) {
         console.warn('⚠️ Failed to add SM rework label:', e.message || e);
+        return false;
+    }
+    // GitHub machine loop (live pathology: fa gh-746 — 24 review rounds,
+    // zero reworks): no SM rule reads sm_story_rework_triggered — the
+    // rework-on-red-ci rule matches agent:rework (prMachineAuthor-gated).
+    // Arm the live label so the SM can actually dispatch the rework leg;
+    // it also blocks review-after-dev (notLabels agent:rework), stopping
+    // the every-tick re-review loop on the same unchanged head.
+    try {
+        tracker.addLabel(ticketKey, 'agent:rework');
+        console.log('✅ Armed agent:rework on', ticketKey, '— SM will dispatch the rework leg');
+        return true;
+    } catch (e2) {
+        console.warn('⚠️ Failed to arm agent:rework:', e2.message || e2);
         return false;
     }
 }
@@ -1057,6 +1070,17 @@ function action(params) {
             tracker.addLabel(ticketKey, LABELS.AI_PR_REVIEWED);
         } catch (error) {
             console.warn('Failed to add ai_pr_reviewed label:', error);
+        }
+        // PR-side marker too (#750 pathology): the SM's review-after-dev rule
+        // reads notPrLabels on the PR — an issue-anchored review that only
+        // labels the ticket leaves the PR unmarked and the rule re-dispatches
+        // a review every tick on the same unchanged head.
+        if (prNumber && repoInfo) {
+            try {
+                scm.addLabel(prNumber, LABELS.AI_PR_REVIEWED);
+            } catch (prLabelError) {
+                console.warn('Failed to add ai_pr_reviewed to PR #' + prNumber + ':', prLabelError.message || prLabelError);
+            }
         }
 
         // Step 9: Remove WIP label if present

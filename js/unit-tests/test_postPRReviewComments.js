@@ -313,11 +313,12 @@ suite('postPRReviewComments', function() {
             var jiraMoveToStatusCalls = [];
             var jiraPostCommentCalls = [];
             var triggerSmIfIdleCalls = [];
+            var scmAddLabelCalls = [];
 
             var scm = {
                 listPrs: function() { return opts.openPrs || []; },
                 getRemoteRepoInfo: function() { return opts.repoInfo !== undefined ? opts.repoInfo : null; },
-                addLabel: function() {},
+                addLabel: function(number, label) { scmAddLabelCalls.push({ number: number, label: label }); },
                 fetchDiscussions: function() { return { rawThreads: { threads: [] } }; }
             };
 
@@ -373,7 +374,8 @@ suite('postPRReviewComments', function() {
                 jiraAddLabelCalls: jiraAddLabelCalls,
                 jiraMoveToStatusCalls: jiraMoveToStatusCalls,
                 jiraPostCommentCalls: jiraPostCommentCalls,
-                triggerSmIfIdleCalls: triggerSmIfIdleCalls
+                triggerSmIfIdleCalls: triggerSmIfIdleCalls,
+                scmAddLabelCalls: scmAddLabelCalls
             };
         }
 
@@ -404,6 +406,10 @@ suite('postPRReviewComments', function() {
             assert.equal(
                 loaded.jiraAddLabelCalls.filter(function(c) { return c.label === 'sm_story_rework_triggered'; }).length, 0,
                 'must NOT mark for SM story rework when no PR was found'
+            );
+            assert.equal(
+                loaded.jiraAddLabelCalls.filter(function(c) { return c.label === 'agent:rework'; }).length, 0,
+                'must NOT arm agent:rework when no PR was found'
             );
             assert.equal(
                 loaded.triggerSmIfIdleCalls.length, 0,
@@ -445,6 +451,20 @@ suite('postPRReviewComments', function() {
             assert.equal(
                 loaded.jiraAddLabelCalls.filter(function(c) { return c.label === 'sm_story_rework_triggered'; }).length, 1,
                 'should still mark for SM story rework when a PR was found'
+            );
+            // Live pathology (fa gh-746 — 24 review rounds, zero reworks):
+            // no SM rule reads sm_story_rework_triggered; the rework rule
+            // matches agent:rework. The SM marker alone was a dead contract.
+            assert.equal(
+                loaded.jiraAddLabelCalls.filter(function(c) { return c.label === 'agent:rework'; }).length, 1,
+                'should arm agent:rework so the SM rework rule can dispatch (gh-746)'
+            );
+            // And the linked PR gets ai_pr_reviewed — review-after-dev reads
+            // notPrLabels on the PR, so an issue-only marker re-dispatched a
+            // review every tick on the same head.
+            assert.ok(
+                loaded.scmAddLabelCalls.some(function(c) { return c.number === 42 && c.label === 'ai_pr_reviewed'; }),
+                'should label the linked PR ai_pr_reviewed: ' + JSON.stringify(loaded.scmAddLabelCalls)
             );
             assert.equal(
                 loaded.triggerSmIfIdleCalls.length, 1,
