@@ -821,12 +821,31 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         }));
         sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.fail] } });
 
-        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }), ['ai_validating']);
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.number + ':' + r.label; }),
+            ['72:ai_validating', '72:pr_approved', '503:pr_approved'],
+            'unarms ai_validating AND pr_approved (merge aborted — verdict no longer covers the head; ' +
+            'stale pr_approved re-matches validate-armed every tick: fa pr-750 validate/fail loop)');
         assert.equal(sm.capturedPrComments.length, 1, 'PR report comment');
         assert.ok(sm.capturedPrComments[0].body.indexOf('validation CI went red') !== -1);
         assert.equal(sm.capturedPrLabelAdds.length, 1);
         assert.equal(sm.capturedPrLabelAdds[0].number, 503, 're-arm lands on the linked issue');
         assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+    });
+
+    test('fail_validation: branch-name fallback when the body lacks a closing keyword (fa pr-750)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(750, { labels: ['pr_approved', 'ai_validating'], branch: 'ai/gh-746' })],
+                pr: { number: 750, body: '### What changed\n\nFixes the Play Store rejection (gh-746) by ...' }
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.fail] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'issue found via the ai/gh-<n> branch convention');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 746);
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) { return r.number === 750 && r.label === 'pr_approved'; }));
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) { return r.number === 746 && r.label === 'pr_approved'; }));
     });
 
     test('review-on-label: no re-dispatch while the stub run is active (dup guard)', function () {
@@ -856,6 +875,8 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
 
         assert.equal(sm.capturedPrComments.length, 1);
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'no issue to re-arm');
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) { return r.number === 73 && r.label === 'pr_approved'; }),
+            'pr_approved is unarmed even without a linked issue — else validate-armed loops');
     });
 });
 

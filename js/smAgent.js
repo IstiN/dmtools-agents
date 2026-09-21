@@ -1146,6 +1146,25 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     var m = /(?:closes|fixes|resolves)\s+#(\d+)/i.exec(String(prObj.body || ''));
                     if (m) linked = parseInt(m[1], 10);
                 } catch (e4) { console.warn('  ⚠️ linked-issue lookup failed: ' + (e4.message || e4)); }
+                // Fallback (live: fa pr-750 — body said "Fixes the Play Store
+                // rejection (gh-746)", no closing keyword): machine PRs carry
+                // the issue in the branch name (ai/gh-<n>); humans naming a
+                // branch gh-<n> get the same courtesy.
+                if (!linked && ticket.branch) {
+                    var bm = /(?:^|\/)gh-(\d+)$/i.exec(String(ticket.branch));
+                    if (bm) linked = parseInt(bm[1], 10);
+                }
+                // Unarm pr_approved too (live: fa pr-750 validate↔fail loop):
+                // merge aborted — the verdict no longer covers this head, and
+                // leaving pr_approved makes validate-armed re-arm every tick,
+                // burning the workflow cap on a PR that can never validate.
+                // The rework + re-review re-approves the fixed head.
+                try {
+                    github_remove_label({
+                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                        number: ticket.prNumber, label: 'pr_approved'
+                    });
+                } catch (e5) { /* absent label is fine */ }
                 var report = '⚠️ Pre-merge validation CI went red on the final head — merge aborted, rework re-queued.' +
                     (linked ? ' (linked issue #' + linked + ' re-armed)' : '');
                 github_create_comment({
@@ -1161,6 +1180,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         number: linked,
                         labels: ['agent:rework']
                     });
+                    try {
+                        github_remove_label({
+                            workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                            number: linked, label: 'pr_approved'
+                        });
+                    } catch (e6) { /* absent label is fine */ }
                 }
                 console.log('  🔁 ' + key + ' validation failed — rework re-queued' + (linked ? ' (issue #' + linked + ')' : ''));
                 processedKeys.push(key);
