@@ -713,39 +713,56 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedCliCommands.length, 0, 'no command without a branch name');
     });
 
-    test('validate_pr: PAT update (no swap) + ai_validating label on the PR', function () {
-        var sm = makeSmAgent(Object.assign(config('a', 'b'), { github: { items: [prItem(70)] } }));
+    test('validate_pr: dispatches the CI workflow on the head + ai_validating label on the PR', function () {
+        // Dispatch-only CI: no push ever fires CI — the SM is the only
+        // trigger. The PAT update-branch dance is retired.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(70, { branch: 'ai/gh-50' })] }
+        }));
         sm.action({ jobParams: { owner: 'a', repo: 'b',
             silentToken: 'SILENT', sourceToken: 'PAT', rules: [RULES.validate] } });
 
-        assert.equal(sm.capturedCliCommands.length, 1, 'REST PUT update (PAT push fires CI)');
+        assert.equal(sm.capturedCliCommands.length, 1, 'one dispatch command');
         assert.equal(sm.capturedCliCommands[0].command,
-            'gh api -X PUT repos/a/b/pulls/70/update-branch');
-        assert.equal(sm.capturedEnvSets.length, 2, 'PAT swapped in and restored');
+            'gh workflow run quality.yml --repo a/b --ref ai/gh-50');
+        assert.equal(sm.capturedEnvSets.length, 0, 'no PAT swap — dispatch rides the ambient token');
         assert.equal(sm.capturedPrLabelAdds.length, 1);
         assert.equal(sm.capturedPrLabelAdds[0].number, 70);
         assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['ai_validating']);
     });
 
-    test('validate_pr: already-fresh PR (update-branch 422 "no new commits") still arms ai_validating', function () {
-        // Live stuck loop (flutter_agent_harness pr-743): the armed PR was
-        // already fresh against base, the PAT update-branch 422'd, the
-        // ai_validating label never armed, the merge rule never fired —
-        // every tick re-failed the same way.
+    test('validate_pr: jobParams.ciWorkflow overrides the default (per-repo CI file)', function () {
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(76, { branch: 'ai/gh-9' })] }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [RULES.validate] } });
+
+        assert.equal(sm.capturedCliCommands[0].command,
+            'gh workflow run ci.yml --repo IstiN/flutter_agent_harness --ref ai/gh-9');
+    });
+
+    test('validate_pr: dispatch failure leaves the marker un-armed (next tick retries)', function () {
+        // Self-healing: a failed dispatch (bad workflow name, transient
+        // API error) must not arm ai_validating — the rule re-matches on
+        // the next tick and retries.
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
-            github: { items: [prItem(72)] },
+            github: { items: [prItem(72, { branch: 'feat/x' })] },
             onCliExecute: function () {
-                throw new Error('Command execution failed (exit code 1): ' +
-                    '{"message":"There are no new commits on the base branch.","status":"422"}');
+                throw new Error('Command execution failed (exit code 1): workflow not found');
             }
         }));
-        sm.action({ jobParams: { owner: 'a', repo: 'b',
-            silentToken: 'SILENT', sourceToken: 'PAT', rules: [RULES.validate] } });
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.validate] } });
 
-        assert.equal(sm.capturedCliCommands.length, 1, 'update-branch attempted');
-        assert.equal(sm.capturedPrLabelAdds.length, 1, 'fresh head IS the final head — validation arms');
-        assert.equal(sm.capturedPrLabelAdds[0].number, 72);
-        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['ai_validating']);
+        assert.equal(sm.capturedCliCommands.length, 1, 'dispatch attempted');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no marker without a dispatched run');
+    });
+
+    test('validate_pr: branch-less ticket is skipped loudly', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), { github: { items: [prItem(78)] } }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.validate] } });
+        assert.equal(sm.capturedCliCommands.length, 0, 'no branch — no dispatch target');
+        assert.equal(sm.capturedPrLabelAdds.length, 0);
     });
 
     test('rework-on-label: manual PR rework — any author, consumes the PR label on dispatch', function () {
@@ -804,9 +821,12 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedTriggers.length, 0, 'localAction never dispatches');
     });
 
-    test('merge_pr: squash-merge + clears ai_validating and pr_approved', function () {
+    test('merge_pr: squash-merge + clears ai_validating, pr_approved and ai_validated', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
-            github: { items: [prItem(71, { labels: ['pr_approved', 'ai_validating'] })] }
+            github: {
+                items: [prItem(71, { labels: ['pr_approved', 'ai_validating'] })],
+                pr: { number: 71, labels: ['pr_approved', 'ai_validating'] }
+            }
         }));
         sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.merge] } });
 
@@ -814,7 +834,25 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedPrMerges[0].number, 71);
         assert.equal(sm.capturedPrMerges[0].mergeMethod, 'squash');
         assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
-            ['ai_validating', 'pr_approved']);
+            ['ai_validating', 'pr_approved', 'ai_validated']);
+    });
+
+    test('merge_pr: un-approved green head latches ai_validated instead of merging', function () {
+        // Dispatch-only CI armed the validation PRE-review (validate-fresh):
+        // green + CLEAN but no sticky pr_approved yet — merge is refused,
+        // the latch flips, review-after-dev picks the head up.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(77, { labels: ['ai_validating'] })],
+                pr: { number: 77, labels: ['ai_validating'] }
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.merge] } });
+
+        assert.equal(sm.capturedPrMerges.length, 0, 'never merges without pr_approved');
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }), ['ai_validating']);
+        assert.equal(sm.capturedPrLabelAdds.length, 1);
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['ai_validated']);
     });
 
     test('merge_pr: refused merge (405 body, no thrown error) keeps the armed markers (fa pr-753)', function () {
@@ -825,6 +863,7 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: {
                 items: [prItem(753, { labels: ['pr_approved', 'ai_validating'] })],
+                pr: { number: 753, labels: ['pr_approved', 'ai_validating'] },
                 mergeResult: JSON.stringify({ message: 'Pull Request is not mergeable', merged: false })
             }
         }));
@@ -839,6 +878,7 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: {
                 items: [prItem(754, { labels: ['pr_approved', 'ai_validating'] })],
+                pr: { number: 754, labels: ['pr_approved', 'ai_validating'] },
                 mergeResult: 'Bad Gateway'
             }
         }));
@@ -847,21 +887,42 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedPrLabelRemoves.length, 0);
     });
 
-    test('fail_validation: unarms, comments, re-arms agent:rework on the linked issue', function () {
+    test('complete_validation: green pre-review head latches ai_validated', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(79, { labels: ['ai_validating'] })] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [{
+            source: 'github',
+            query: { type: 'pr', labels: ['ai_validating'], notLabels: ['pr_approved'], checks: 'green' },
+            localAction: 'complete_validation', limit: 1, id: 'validated-green'
+        }] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }), ['ai_validating']);
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (r) { return r.labels; }), [['ai_validated']]);
+        assert.equal(sm.capturedPrMerges.length, 0);
+    });
+
+    test('fail_validation: unarms, comments, re-arms agent:rework — pr_approved is STICKY', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: {
                 items: [prItem(72, { labels: ['pr_approved', 'ai_validating'] })],
-                pr: { number: 72, body: 'Fixes #503 — boot cost' }
+                pr: { number: 72, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #503 — boot cost' }
             }
         }));
         sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.fail] } });
 
+        // Owner rule 2026-09 (token budget): after the first approval the
+        // loop NEVER re-reviews — validation red re-arms rework only; the
+        // fixed head re-validates via validate-armed and merges. Keeping
+        // pr_approved armed would previously burn the workflow cap (fa
+        // pr-750) — that loop is now closed by the latch semantics
+        // themselves (validate-armed dispatches instead of PAT-pushing).
         assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.number + ':' + r.label; }),
-            ['72:ai_validating', '72:pr_approved', '503:pr_approved'],
-            'unarms ai_validating AND pr_approved (merge aborted — verdict no longer covers the head; ' +
-            'stale pr_approved re-matches validate-armed every tick: fa pr-750 validate/fail loop)');
+            ['72:ai_validating'],
+            'only ai_validating is unarmed — pr_approved sticks for the re-validated head');
         assert.equal(sm.capturedPrComments.length, 1, 'PR report comment');
-        assert.ok(sm.capturedPrComments[0].body.indexOf('validation CI went red') !== -1);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Validation CI went red') !== -1);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('no re-review') !== -1);
         assert.equal(sm.capturedPrLabelAdds.length, 1);
         assert.equal(sm.capturedPrLabelAdds[0].number, 503, 're-arm lands on the linked issue');
         assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
@@ -871,7 +932,8 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: {
                 items: [prItem(750, { labels: ['pr_approved', 'ai_validating'], branch: 'ai/gh-746' })],
-                pr: { number: 750, body: '### What changed\n\nFixes the Play Store rejection (gh-746) by ...' }
+                pr: { number: 750, labels: ['pr_approved', 'ai_validating'],
+                      body: '### What changed\n\nFixes the Play Store rejection (gh-746) by ...' }
             }
         }));
         sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.fail] } });
@@ -879,8 +941,9 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedPrLabelAdds.length, 1, 'issue found via the ai/gh-<n> branch convention');
         assert.equal(sm.capturedPrLabelAdds[0].number, 746);
         assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
-        assert.ok(sm.capturedPrLabelRemoves.some(function (r) { return r.number === 750 && r.label === 'pr_approved'; }));
-        assert.ok(sm.capturedPrLabelRemoves.some(function (r) { return r.number === 746 && r.label === 'pr_approved'; }));
+        // Sticky approval: no pr_approved removal anywhere (PR or issue).
+        assert.ok(!sm.capturedPrLabelRemoves.some(function (r) { return r.label === 'pr_approved'; }),
+            'pr_approved is never disarmed — rework re-validates, never re-reviews');
     });
 
     test('review-on-label: no re-dispatch while the stub run is active (dup guard)', function () {
@@ -904,14 +967,15 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
 
     test('fail_validation: external PR (no linked issue) — report only', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
-            github: { items: [prItem(73, { labels: ['pr_approved', 'ai_validating'] })], pr: { number: 73, body: 'no link' } }
+            github: { items: [prItem(73, { labels: ['pr_approved', 'ai_validating'] })],
+                      pr: { number: 73, labels: ['pr_approved', 'ai_validating'], body: 'no link' } }
         }));
         sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.fail] } });
 
         assert.equal(sm.capturedPrComments.length, 1);
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'no issue to re-arm');
-        assert.ok(sm.capturedPrLabelRemoves.some(function (r) { return r.number === 73 && r.label === 'pr_approved'; }),
-            'pr_approved is unarmed even without a linked issue — else validate-armed loops');
+        assert.ok(!sm.capturedPrLabelRemoves.some(function (r) { return r.label === 'pr_approved'; }),
+            'pr_approved is sticky even without a linked issue — approval survives CI red');
     });
 });
 

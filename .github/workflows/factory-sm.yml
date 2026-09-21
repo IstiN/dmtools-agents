@@ -48,6 +48,11 @@ on:
         required: false
         type: string
         default: ''
+      ci-workflow:
+        description: "CI workflow FILE NAME the SM dispatches on PR heads (dispatch-only CI: pushes fire no CI). Per-repo knob — e.g. 'quality.yml' (dmtools-dart) vs 'ci.yml' (fa). Rides jobParams.ciWorkflow into the SM engine."
+        required: false
+        type: string
+        default: 'quality.yml'
 
     secrets:
       SOURCE_GITHUB_TOKEN:
@@ -130,6 +135,11 @@ jobs:
           ma='${{ inputs.machine-author }}'
           if [ -n "$ma" ]; then
             extra="${extra},\"machineAuthor\":\"${ma}\""
+          fi
+          # Dispatch-only CI: which workflow file the SM runs on PR heads.
+          cw='${{ inputs.ci-workflow }}'
+          if [ -n "$cw" ]; then
+            extra="${extra},\"ciWorkflow\":\"${cw}\""
           fi
           if [ "${{ inputs.dryRun }}" = "true" ]; then
             override="{\"params\":{\"jobParams\":{\"repo\":\"${repo}\",\"dryRun\":true${extra}}}}"

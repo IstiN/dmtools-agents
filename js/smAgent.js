@@ -837,7 +837,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     var ruleLimit = (typeof rule.limit === 'number' && rule.limit > 0) ? Math.floor(rule.limit) : null;
     var effectiveLimit = ruleLimit;
     // The workflow budget caps concurrent AI-RUN dispatches. localActions
-    // (update_branch, validate_pr, merge_pr, close_issue, fail_validation)
+    // (update_branch, validate_pr, merge_pr, complete_validation, close_issue, fail_validation)
     // run inline curl/API calls — they neither start workflows nor compete
     // for dispatch slots, so the budget must not throttle them (live bug:
     // one active review run zeroed the budget and silent-update-behind
@@ -1003,21 +1003,22 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             });
         }
 
-        // Validation is the deliberate opposite: a PAT (source token) push
-        // DOES fire CI, and the PAT passes the REST update-branch actor
-        // check (live: 202 with the PAT where the bot got 403).
-        function patUpdateBranch(prNumber, pat) {
-            var restore = pat ? (RUN_JOB_PARAMS.sourceToken || '') : '';
-            try {
-                if (pat) set_env_variable('GH_TOKEN', pat);
-                cli_execute_command({
-                    command: 'gh api -X PUT repos/' + effectiveRepoInfo.owner +
-                             '/' + effectiveRepoInfo.repo + '/pulls/' + prNumber +
-                             '/update-branch'
-                });
-            } finally {
-                if (pat && restore) set_env_variable('GH_TOKEN', restore);
-            }
+        // Validation trigger (dispatch-only CI): no push ever fires CI on
+        // its own — the SM is the only trigger. The PAT update-branch dance
+        // (a source-token push DOES fire CI) is retired: a workflow_dispatch
+        // run lands directly on the branch head, needs no actor checks, and
+        // branch freshness stays with silent-update-behind (the validate
+        // rules already exclude BEHIND PRs). The CI workflow file is a
+        // per-repo knob: rule.ciWorkflow > jobParams.ciWorkflow (factory-sm
+        // `ci-workflow` input) > 'quality.yml'.
+        function dispatchCiWorkflow(branchName) {
+            var ciWorkflow = rule.ciWorkflow ||
+                ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml';
+            cli_execute_command({
+                command: 'gh workflow run ' + ciWorkflow +
+                         ' --repo ' + effectiveRepoInfo.owner + '/' +
+                         effectiveRepoInfo.repo + ' --ref ' + branchName
+            });
         }
 
         // ── PR-lifecycle localActions (issue #687: the SM owns the loop) ──
@@ -1044,28 +1045,25 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         }
 
         if (rule.localAction === 'validate_pr') {
-            // Merge window: PAT update — a SOURCE-token push DOES trigger
-            // CI, so the validation run lands on the final head — then arm
-            // the merge rule with the ai_validating marker.
-            // Already-fresh PRs 422 ("no new commits on the base branch"):
-            // the current head IS the final head and its checks are the
-            // validation run — arm directly instead of failing every tick
-            // and never merging (live: pr-743 stuck validate loop).
+            // Dispatch the CI workflow on the head branch and arm the
+            // ai_validating marker. Pre- and post-approval validation share
+            // this action: pre-review (validate-fresh) latches ai_validated
+            // on green; post-approval (validate-armed, sticky pr_approved)
+            // merges on green. A dispatch failure leaves the marker un-armed
+            // — the next tick retries (self-healing).
+            if (!ticket.branch) {
+                console.error('  ❌ validate_pr: no head branch on ' + key + ' — skipped');
+                continue;
+            }
             try {
-                try {
-                    patUpdateBranch(ticket.prNumber, (RUN_JOB_PARAMS || {}).sourceToken);
-                } catch (updateErr) {
-                    var updateMsg = String((updateErr && updateErr.message) || updateErr);
-                    if (updateMsg.indexOf('no new commits') === -1) throw updateErr;
-                    console.log('  ℹ️  ' + key + ' already fresh against base — validation arms on the current (final) head');
-                }
+                dispatchCiWorkflow(ticket.branch);
                 github_add_labels({
                     workspace: effectiveRepoInfo.owner,
                     repository: effectiveRepoInfo.repo,
                     number: ticket.prNumber,
                     labels: ['ai_validating']
                 });
-                console.log('  🧪 ' + key + ' validation armed (CI runs on the final head)');
+                console.log('  🧪 ' + key + ' validation dispatched (CI runs on the head via workflow_dispatch)');
                 processedKeys.push(key);
             } catch (e) {
                 console.error('  ❌ validate_pr failed for ' + key + ': ' + (e.message || e));
@@ -1095,10 +1093,40 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         }
 
         if (rule.localAction === 'merge_pr') {
-            // Validated green + CLEAN → squash-merge, then clear the armed
-            // markers (merge approval consumed; close-on-merge finishes the
-            // linked issue on its next tick).
+            // Validated green + CLEAN + APPROVED → squash-merge, then clear
+            // the armed markers. ai_validating no longer implies armed
+            // (pre-review validation uses the same marker): verify the
+            // sticky pr_approved latch on the PR itself — an un-approved
+            // green head latches ai_validated and defers to review instead
+            // of merging (defense in depth for the rule guards).
             try {
+                var gateRaw = github_get_pr({
+                    workspace: effectiveRepoInfo.owner,
+                    repository: effectiveRepoInfo.repo,
+                    pullRequestId: ticket.prNumber
+                });
+                var gatePr = {};
+                try {
+                    gatePr = typeof gateRaw === 'string' ? JSON.parse(gateRaw) : (gateRaw || {});
+                } catch (gateParseErr) { gatePr = {}; }
+                var gateLabels = (gatePr.labels || []).map(function (l) {
+                    return (l && l.name) || l;
+                });
+                if (gateLabels.indexOf('pr_approved') === -1) {
+                    // Pre-review validation green: latch, unarm, review
+                    // follows (review-after-dev requires ai_validated).
+                    github_remove_label({
+                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                        number: ticket.prNumber, label: 'ai_validating'
+                    });
+                    github_add_labels({
+                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                        number: ticket.prNumber, labels: ['ai_validated']
+                    });
+                    console.log('  ✅ ' + key + ' validated (no approval yet) — ai_validated latched, review follows');
+                    processedKeys.push(key);
+                    continue;
+                }
                 var mergeRaw = github_merge_pr({
                     workspace: effectiveRepoInfo.owner,
                     repository: effectiveRepoInfo.repo,
@@ -1130,11 +1158,37 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
                         number: ticket.prNumber, label: 'pr_approved'
                     });
+                    github_remove_label({
+                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                        number: ticket.prNumber, label: 'ai_validated'
+                    });
                 } catch (e2) { /* absent labels are fine post-merge */ }
                 console.log('  🎉 ' + key + ' squash-merged');
                 processedKeys.push(key);
             } catch (e) {
                 console.error('  ❌ merge_pr failed for ' + key + ': ' + (e.message || e));
+            }
+            continue;
+        }
+
+        if (rule.localAction === 'complete_validation') {
+            // Pre-review validation green (not CLEAN-armed, not approved):
+            // latch ai_validated, unarm ai_validating — review-after-dev
+            // dispatches the review leg on the latched head. Idempotent by
+            // the query guard (only fires while ai_validating is armed).
+            try {
+                github_remove_label({
+                    workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                    number: ticket.prNumber, label: 'ai_validating'
+                });
+                github_add_labels({
+                    workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                    number: ticket.prNumber, labels: ['ai_validated']
+                });
+                console.log('  ✅ ' + key + ' validation green — ai_validated latched, review follows');
+                processedKeys.push(key);
+            } catch (e) {
+                console.error('  ❌ complete_validation failed for ' + key + ': ' + (e.message || e));
             }
             continue;
         }
@@ -1170,19 +1224,17 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     var bm = /(?:^|\/)gh-(\d+)$/i.exec(String(ticket.branch));
                     if (bm) linked = parseInt(bm[1], 10);
                 }
-                // Unarm pr_approved too (live: fa pr-750 validate↔fail loop):
-                // merge aborted — the verdict no longer covers this head, and
-                // leaving pr_approved makes validate-armed re-arm every tick,
-                // burning the workflow cap on a PR that can never validate.
-                // The rework + re-review re-approves the fixed head.
-                try {
-                    github_remove_label({
-                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                        number: ticket.prNumber, label: 'pr_approved'
-                    });
-                } catch (e5) { /* absent label is fine */ }
-                var report = '⚠️ Pre-merge validation CI went red on the final head — merge aborted, rework re-queued.' +
-                    (linked ? ' (linked issue #' + linked + ' re-armed)' : '');
+                // pr_approved is STICKY (owner rule 2026-09: no re-review
+                // after the first approval — review tokens are the budget).
+                // Validation red post-approval re-arms rework only; the
+                // fixed head re-validates via validate-armed and merges —
+                // the reviewer never re-fires. Pre-review red also skips
+                // this block: no approval exists to unarm. (Supersedes the
+                // fa pr-750 unarm fix: the validate↔fail burn it patched is
+                // now closed by the latch itself.)
+                var report = '⚠️ Validation CI went red on the head — merge aborted, rework re-queued.' +
+                    (linked ? ' (linked issue #' + linked + ' re-armed)' : '') +
+                    ' (approval latch kept — no re-review after fixes)';
                 github_create_comment({
                     workspace: effectiveRepoInfo.owner,
                     repository: effectiveRepoInfo.repo,
@@ -1196,12 +1248,6 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         number: linked,
                         labels: ['agent:rework']
                     });
-                    try {
-                        github_remove_label({
-                            workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                            number: linked, label: 'pr_approved'
-                        });
-                    } catch (e6) { /* absent label is fine */ }
                 }
                 console.log('  🔁 ' + key + ' validation failed — rework re-queued' + (linked ? ' (issue #' + linked + ')' : ''));
                 processedKeys.push(key);
