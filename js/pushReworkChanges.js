@@ -46,6 +46,25 @@ function hasPrApprovedLabel(ticket) {
     return labels.indexOf(LABELS.PR_APPROVED) !== -1;
 }
 
+/**
+ * pr_approved stickiness beats rework completion (owner rule 2026-09-21):
+ * once a review concluded APPROVED, NO later rework leg may clear
+ * ai_pr_reviewed or arm a re-review — the reworked head just re-validates
+ * and merges. The verdict lives on the PR (REST labels: [{name}] objects
+ * or strings); the ticket-hydration path (hasPrApprovedLabel) is the
+ * fallback when the PR body is unavailable.
+ */
+function prHasApproved(pr, ticket) {
+    if (pr && Array.isArray(pr.labels)) {
+        for (var i = 0; i < pr.labels.length; i++) {
+            var l = pr.labels[i];
+            var name = (l && typeof l === 'object') ? l.name : l;
+            if (name === LABELS.PR_APPROVED) return true;
+        }
+    }
+    return hasPrApprovedLabel(ticket);
+}
+
 function normalizeLabels(singleLabel, labelList) {
     var labels = [];
     if (singleLabel) labels.push(singleLabel);
@@ -769,8 +788,23 @@ function action(params) {
         // Token-burn guard: a no-op rework (no new commits since the last
         // review's head) keeps the latch and goes straight back to rework —
         // no LLM re-review of the unchanged head.
-        var freshReviewWanted = headMovedSinceLastReview(scm, pr);
-        if (!freshReviewWanted && pr && pr.number) {
+        var stickyApproved = prHasApproved(pr, actualParams.ticket || (params.jobParams && params.jobParams.ticket));
+        var freshReviewWanted = !stickyApproved && headMovedSinceLastReview(scm, pr);
+        if (stickyApproved && pr && pr.number) {
+            // Owner rule (sticky approval): never re-review an approved PR.
+            // The rework pushed its fixes; validation re-runs on the new
+            // head and merge-validated closes the loop. Keep BOTH latches
+            // (pr_approved + ai_pr_reviewed) and arm nothing.
+            try {
+                scm.addComment(pr.number,
+                    '✅ Rework finished. `pr_approved` is sticky (approved once — never re-reviewed): ' +
+                    'the new head re-validates and merges directly.');
+            } catch (e) {
+                console.warn('Failed to post sticky-approval comment on PR #' + pr.number + ':', e.message || e);
+            }
+            console.log('ℹ️ Sticky approval on PR #' + pr.number + ' — re-review NOT armed; re-validation + merge follow');
+        }
+        if (!stickyApproved && !freshReviewWanted && pr && pr.number) {
             try {
                 tracker.addLabel(ticketKey, 'agent:rework');
                 console.log('✅ No-op rework: verdict head unchanged — agent:rework re-armed on ' + ticketKey);
@@ -806,6 +840,8 @@ function action(params) {
             const ticket = actualParams.ticket || (params.jobParams && params.jobParams.ticket);
             if (!freshReviewWanted) {
                 console.log('ℹ️ autoStartReview: skipped — rework pushed no new commits (token guard)');
+            } else if (stickyApproved) {
+                console.log('ℹ️ autoStartReview: skipped — pr_approved is sticky on the PR (owner rule 2026-09-21)');
             } else if (hasPrApprovedLabel(ticket)) {
                 console.log('ℹ️ autoStartReview: skipped — ticket has pr_approved label');
             } else {
