@@ -1198,6 +1198,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // machine loop by re-arming agent:rework on the linked issue
             // (the existing rework-on-red-ci rule picks it up). External
             // PRs without a linked issue get the report only.
+            // Owner rule 2026-09-21: auto-REWORK is machine-author-ONLY.
+            // Accounts other than the machine login are guests: they get
+            // review + validation and NEVER a rework arm (they fix their
+            // own findings; the SM re-validates on their push). A guest
+            // "fixes #<n>" body must not arm rework on a machine ticket.
             try {
                 try {
                     github_remove_label({
@@ -1205,24 +1210,30 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         number: ticket.prNumber, label: 'ai_validating'
                     });
                 } catch (e3) { /* absent label is fine */ }
+                var machineAuthor = machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, effectiveConfig);
+                var isMachinePr = !!machineAuthor && !!ticket.author &&
+                    String(ticket.author).toLowerCase() === String(machineAuthor).toLowerCase();
                 var linked = null;
-                try {
-                    var prRaw = github_get_pr({
-                        workspace: effectiveRepoInfo.owner,
-                        repository: effectiveRepoInfo.repo,
-                        pullRequestId: ticket.prNumber
-                    });
-                    var prObj = typeof prRaw === 'string' ? JSON.parse(prRaw) : (prRaw || {});
-                    var m = /(?:closes|fixes|resolves)\s+#(\d+)/i.exec(String(prObj.body || ''));
-                    if (m) linked = parseInt(m[1], 10);
-                } catch (e4) { console.warn('  ⚠️ linked-issue lookup failed: ' + (e4.message || e4)); }
-                // Fallback (live: fa pr-750 — body said "Fixes the Play Store
-                // rejection (gh-746)", no closing keyword): machine PRs carry
-                // the issue in the branch name (ai/gh-<n>); humans naming a
-                // branch gh-<n> get the same courtesy.
-                if (!linked && ticket.branch) {
-                    var bm = /(?:^|\/)gh-(\d+)$/i.exec(String(ticket.branch));
-                    if (bm) linked = parseInt(bm[1], 10);
+                if (isMachinePr) {
+                    try {
+                        var prRaw = github_get_pr({
+                            workspace: effectiveRepoInfo.owner,
+                            repository: effectiveRepoInfo.repo,
+                            pullRequestId: ticket.prNumber
+                        });
+                        var prObj = typeof prRaw === 'string' ? JSON.parse(prRaw) : (prRaw || {});
+                        var m = /(?:closes|fixes|resolves)\s+#(\d+)/i.exec(String(prObj.body || ''));
+                        if (m) linked = parseInt(m[1], 10);
+                    } catch (e4) { console.warn('  ⚠️ linked-issue lookup failed: ' + (e4.message || e4)); }
+                    // Fallback (live: fa pr-750 — body said "Fixes the Play Store
+                    // rejection (gh-746)", no closing keyword): machine PRs carry
+                    // the issue in the branch name (ai/gh-<n>). Guest branches
+                    // get nothing — the owner rule keeps auto-rework
+                    // machine-only, so the fallback must be too.
+                    if (!linked && ticket.branch) {
+                        var bm = /(?:^|\/)gh-(\d+)$/i.exec(String(ticket.branch));
+                        if (bm) linked = parseInt(bm[1], 10);
+                    }
                 }
                 // pr_approved is STICKY (owner rule 2026-09: no re-review
                 // after the first approval — review tokens are the budget).
@@ -1232,16 +1243,19 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // this block: no approval exists to unarm. (Supersedes the
                 // fa pr-750 unarm fix: the validate↔fail burn it patched is
                 // now closed by the latch itself.)
-                var report = '⚠️ Validation CI went red on the head — merge aborted, rework re-queued.' +
-                    (linked ? ' (linked issue #' + linked + ' re-armed)' : '') +
-                    ' (approval latch kept — no re-review after fixes)';
+                var report = isMachinePr
+                    ? ('⚠️ Validation CI went red on the head — merge aborted, rework re-queued.' +
+                       (linked ? ' (linked issue #' + linked + ' re-armed)' : '') +
+                       ' (approval latch kept — no re-review after fixes)')
+                    : '⚠️ Validation CI went red on the head. Guest PR: fix the findings and push — ' +
+                      'validation re-runs automatically; auto-rework is reserved for the machine account.';
                 github_create_comment({
                     workspace: effectiveRepoInfo.owner,
                     repository: effectiveRepoInfo.repo,
                     number: ticket.prNumber,
                     body: report
                 });
-                if (linked) {
+                if (isMachinePr && linked) {
                     github_add_labels({
                         workspace: effectiveRepoInfo.owner,
                         repository: effectiveRepoInfo.repo,
@@ -1249,7 +1263,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         labels: ['agent:rework']
                     });
                 }
-                console.log('  🔁 ' + key + ' validation failed — rework re-queued' + (linked ? ' (issue #' + linked + ')' : ''));
+                console.log('  🔁 ' + key + ' validation failed — ' +
+                    (isMachinePr ? 'rework re-queued' + (linked ? ' (issue #' + linked + ')' : '') : 'guest PR, report only'));
                 processedKeys.push(key);
             } catch (e) {
                 console.error('  ❌ fail_validation failed for ' + key + ': ' + (e.message || e));
