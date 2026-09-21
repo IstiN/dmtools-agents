@@ -25,11 +25,14 @@
           "id": "silent-update-behind"
         },
         {
-          "description": "GitHub PR: head with no check runs (fresh dev/rework push — pushes fire no CI) -> dispatch the CI workflow on the head + ai_validating marker. Runs pre-review (latches ai_validated on green) AND pre-merge for approved PRs is handled by validate-armed; this rule catches every un-armed, un-approved, fresh head exactly once per head.",
+          "description": "GitHub PR: head with no CONCLUDED validation (checks 'none' — fresh push, no CI — or 'pending' — the dispatch bridge's waiting check runs; pushes fire no CI) -> dispatch the CI workflow on the head + ai_validating marker. Runs pre-review (latches ai_validated on green) AND pre-merge for approved PRs is handled by validate-armed; this rule catches every un-armed, un-approved, fresh head exactly once per head. The pending match is safe: while the SM's own dispatched run is in flight the marker ai_validating excludes the PR here.",
           "source": "github",
           "query": {
             "type": "pr",
-            "checks": "none",
+            "checks": [
+              "none",
+              "pending"
+            ],
             "notLabels": [
               "ai_validating",
               "pr_approved"
