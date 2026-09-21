@@ -64,6 +64,7 @@ _Push Rework Changes Post-Action_
 
 - Source: `agents/js/pushReworkChanges.js`
 - Side effects:
+  - add label "agent:rework" (via tracker)
   - post ticket comment (via tracker)
   - move ticket to status (via tracker)
   - assign ticket (via tracker)
