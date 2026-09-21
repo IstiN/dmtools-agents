@@ -7,7 +7,7 @@
       "maxTriggeredWorkflows": 1,
       "rules": [
         {
-          "description": "Every open non-draft PR behind main gets a silent branch refresh with the workflow token (pushes trigger no workflows, so freshness is free); validating PRs are excluded so the validation head never moves mid-run. mergeState matches BEHIND or BLOCKED \u2014 REST mergeable_state flip-flops between the two for the same behind PR under branch protection, and gh pr update-branch is a no-op on a fresh branch, so over-matching is harmless. Replaces the retired auto-update-prs workflow.",
+          "description": "Every open non-draft PR behind main gets a silent branch refresh with the workflow token (pushes trigger no workflows, so freshness is free); validating PRs are excluded so the validation head never moves mid-run. mergeState matches BEHIND or BLOCKED — REST mergeable_state flip-flops between the two for the same behind PR under branch protection, and gh pr update-branch is a no-op on a fresh branch, so over-matching is harmless. Replaces the retired auto-update-prs workflow.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -25,7 +25,24 @@
           "id": "silent-update-behind"
         },
         {
-          "description": "GitHub PR: merge window \u2014 oldest armed PR gets a PAT update (validation CI fires on the final head) + ai_validating marker (#687)",
+          "description": "GitHub PR: head with no check runs (fresh dev/rework push — pushes fire no CI) -> dispatch the CI workflow on the head + ai_validating marker. Runs pre-review (latches ai_validated on green) AND pre-merge for approved PRs is handled by validate-armed; this rule catches every un-armed, un-approved, fresh head exactly once per head.",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "checks": "none",
+            "notLabels": [
+              "ai_validating",
+              "pr_approved"
+            ],
+            "notMergeState": "BEHIND",
+            "draft": false
+          },
+          "localAction": "validate_pr",
+          "limit": 1,
+          "id": "validate-fresh"
+        },
+        {
+          "description": "GitHub PR: post-approval merge window — oldest approved PR gets its CI dispatched on the head (workflow_dispatch; pushes never fire CI) + ai_validating marker. pr_approved is STICKY: after rework fixes the new head re-validates here and merges — no re-review (#token-budget).",
           "source": "github",
           "query": {
             "type": "pr",
@@ -43,7 +60,7 @@
           "id": "validate-armed"
         },
         {
-          "description": "GitHub PR: validation CI red on the final head -> unarm, report, requeue agent:rework on the linked issue (#687). NB: labels are OR-matched; ai_validating only ever lands on armed (pr_approved) PRs.",
+          "description": "GitHub PR: validation CI red on the head -> unarm ai_validating, report, requeue agent:rework on the linked issue. pr_approved is STICKY (owner rule 2026-09): the reworked head re-validates and merges without a re-review — no token burn on review legs.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -57,7 +74,7 @@
           "id": "fail-validation"
         },
         {
-          "description": "GitHub PR: validation green + CLEAN -> squash-merge, clear markers (FIFO drain, #687). NB: labels are OR-matched; ai_validating implies armed (pr_approved).",
+          "description": "GitHub PR: validation green + CLEAN -> squash-merge (merge_pr verifies the sticky pr_approved latch on the PR; an un-approved green head latches ai_validated instead — see merge_pr). FIFO drain (#687).",
           "source": "github",
           "query": {
             "type": "pr",
@@ -70,6 +87,23 @@
           "localAction": "merge_pr",
           "limit": 1,
           "id": "merge-validated"
+        },
+        {
+          "description": "GitHub PR: validation green but not yet approved -> latch ai_validated, unarm ai_validating. review-after-dev requires the latch + green checks, so review fires exactly once per validated head. Approved PRs are excluded (merge-validated / unarm-stale own them).",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validating"
+            ],
+            "notLabels": [
+              "pr_approved"
+            ],
+            "checks": "green"
+          },
+          "localAction": "complete_validation",
+          "limit": 1,
+          "id": "validated-green"
         },
         {
           "description": "Validated-but-stale: armed (ai_validating) + validation concluded but base moved before the merge tick. silent-update-behind excludes ai_validating and merge-validated needs CLEAN, so without this unarm the PR deadlocks (live: fa pr-744). Drops ai_validating; the silent refresh + merge window re-validate the fresh head (the 422-arm covers the already-fresh case), then merge fires.",
@@ -146,7 +180,7 @@
           "localAction": "mark_developed"
         },
         {
-          "description": "GitHub: green PR after dev \u2192 machine review (never on an armed PR: pr_approved means the review already concluded APPROVED - re-dispatching review duplicates the leg and un-arms the merge queue)",
+          "description": "GitHub: validated PR (ai_validated latch + green checks on the head) after dev -> machine review (never on an armed PR: pr_approved means the review already concluded APPROVED - re-dispatching review duplicates the leg and un-arms the merge queue). The latch guarantees a dispatched CI run covered this exact stage; checks green guarantees the head did not move since.",
           "source": "github",
           "query": {
             "type": "issue",
@@ -160,7 +194,10 @@
               "ai_pr_reviewed",
               "pr_approved"
             ],
-            "prChecks": "green"
+            "prChecks": "green",
+            "prLabels": [
+              "ai_validated"
+            ]
           },
           "workflowFile": "ai-teammate.yml",
           "inputs": {
@@ -196,13 +233,14 @@
           "id": "review-external-once"
         },
         {
-          "description": "GitHub PR: CHANGES_REQUESTED verdict pinned to an older commit (fixes pushed after the review) + green -> re-arm agent:review. review-on-label dispatches the runner, the runner consumes the label and re-reviews the current head; the fresh verdict's commit_id equals the head, so this never loops.",
+          "description": "GitHub PR: CHANGES_REQUESTED verdict pinned to an older commit (fixes pushed after the review) + green -> re-arm agent:review. review-on-label dispatches the runner, the runner consumes the label and re-reviews the current head; the fresh verdict's commit_id equals the head, so this never loops. Never on approved PRs (pr_approved is sticky — approved rework re-validates, never re-reviews).",
           "source": "github",
           "query": {
             "type": "pr",
             "notLabels": [
               "agent:review",
-              "ai_validating"
+              "ai_validating",
+              "pr_approved"
             ],
             "checks": "green",
             "draft": false,
@@ -213,7 +251,7 @@
           "id": "review-stale-verdict"
         },
         {
-          "description": "GitHub PR: all review threads resolved + the last verdict is older than the head (fixes landed and the threads were worked through) + green -> re-arm agent:review. Covers PR #676: the rework resolves threads (the CHANGES_REQUESTED verdict dissolves into COMMENTED), so verdict-staleness alone misses it. Convergent: the re-review's verdict lands on the current head and its fresh threads are unresolved until worked.",
+          "description": "GitHub PR: all review threads resolved + the last verdict is older than the head (fixes landed and the threads were worked through) + green -> re-arm agent:review. Covers PR #676: the rework resolves threads (the CHANGES_REQUESTED verdict dissolves into COMMENTED), so verdict-staleness alone misses it. Convergent: the re-review's verdict lands on the current head and its fresh threads are unresolved until worked. Never on approved PRs (pr_approved is sticky — approved rework re-validates, never re-reviews).",
           "source": "github",
           "query": {
             "type": "pr",
@@ -222,7 +260,8 @@
             ],
             "notLabels": [
               "agent:review",
-              "ai_validating"
+              "ai_validating",
+              "pr_approved"
             ],
             "checks": "green",
             "draft": false,
@@ -253,7 +292,7 @@
           "id": "review-on-label"
         },
         {
-          "description": "GitHub: linked PR merged \u2192 close the issue (cycle complete)",
+          "description": "GitHub: linked PR merged → close the issue (cycle complete)",
           "source": "github",
           "query": {
             "type": "issue",
