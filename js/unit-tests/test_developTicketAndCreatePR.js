@@ -2,33 +2,37 @@
  * Unit tests for js/developTicketAndCreatePR.js failure recovery.
  */
 
+// Declared once at module scope — every loader below references it in its
+// makeRequire() map, so it must exist before any of them run.
+var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+
 function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
     return loadModule(
         'js/developTicketAndCreatePR.js',
         makeRequire({
-            './common/jiraHelpers.js': { extractTicketKey: function(key) { return key; } },
-            './common/pullRequest.js': { cleanCommandOutput: function(output) { return (output || '').trim(); } },
+            './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
+            './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
             './common/submodules.js': {},
             './common/feedbackLoop.js': Object.assign({
-                runQualityGates: function() { return { success: true }; },
-                runPolicyGates: function() { return { success: true }; },
-                runPostPublishGates: function() { return { success: true }; },
-                resumeAgent: function() { return { attempted: false }; }
+                runQualityGates: function () { return { success: true }; },
+                runPolicyGates: function () { return { success: true }; },
+                runPostPublishGates: function () { return { success: true }; },
+                resumeAgent: function () { return { attempted: false }; }
             }, feedbackLoopOverrides || {}),
-            './common/autoStart.js': { triggerSmIfIdle: function() {} },
-            './common/outputFiles.js': { readOutputFile: function() { return null; } },
+            './common/autoStart.js': { triggerSmIfIdle: function () { } },
+            './common/outputFiles.js': { readOutputFile: function () { return null; } },
             './cacheToReleases.js': {},
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
-        ,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function () { } }
+            ,
             './common/commentMarkup.js': commentMarkupModule,
         }),
         Object.assign({
-            cli_execute_command: function() { return ''; },
-            jira_post_comment: function() {},
-            jira_move_to_status: function() {},
-            jira_remove_label: function() {}
+            cli_execute_command: function () { return ''; },
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
         }, mocks || {})
     );
 }
@@ -39,35 +43,34 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
 // which the bare stubs can't reach (they lack readStagedDiffStat/buildOriginFetchCommand).
 function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks) {
     var realPrHelper = loadModule('js/common/pullRequest.js', makeRequire({
-            './common/commentMarkup.js': commentMarkupModule,
-        }), {});
-var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+        './common/commentMarkup.js': commentMarkupModule,
+    }), {});
     return loadModule(
         'js/developTicketAndCreatePR.js',
         makeRequire({
-            './common/jiraHelpers.js': { extractTicketKey: function(key) { return key; } },
+            './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
             './common/pullRequest.js': realPrHelper,
-            './common/submodules.js': { pushManagedSubmodules: function() {} },
+            './common/submodules.js': { pushManagedSubmodules: function () { } },
             './common/feedbackLoop.js': {
-                runQualityGates: function() { return { success: true }; },
-                runPolicyGates: function() { return { success: true }; },
-                runPostPublishGates: function() { return { success: true }; },
-                resumeAgent: function() { return { attempted: false }; }
+                runQualityGates: function () { return { success: true }; },
+                runPolicyGates: function () { return { success: true }; },
+                runPostPublishGates: function () { return { success: true }; },
+                resumeAgent: function () { return { attempted: false }; }
             },
-            './common/autoStart.js': { triggerSmIfIdle: function() {} },
-            './common/outputFiles.js': { readOutputFile: function() { return null; } },
+            './common/autoStart.js': { triggerSmIfIdle: function () { } },
+            './common/outputFiles.js': { readOutputFile: function () { return null; } },
             './cacheToReleases.js': {},
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
-        ,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function () { } }
+            ,
             './common/commentMarkup.js': commentMarkupModule,
         }),
         Object.assign({
-            cli_execute_command: function() { return ''; },
-            jira_post_comment: function() {},
-            jira_move_to_status: function() {},
-            jira_remove_label: function() {}
+            cli_execute_command: function () { return ''; },
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
         }, mocks || {})
     );
 }
@@ -77,7 +80,7 @@ var commentMarkupModule = loadModule('js/common/commentMarkup.js');
 // never actually ran (which is exactly what happens when the AI CLI binary is
 // missing from the runner, exit code 127).
 function noChangesGitCommandMock(ticketKey, branchName) {
-    return function(args) {
+    return function (args) {
         var command = args.command;
         if (command.indexOf('gh pr list --head ' + branchName) === 0) return '';
         if (command === 'git branch --show-current') return branchName;
@@ -87,23 +90,23 @@ function noChangesGitCommandMock(ticketKey, branchName) {
     };
 }
 
-suite('developTicketAndCreatePR > failure recovery', function() {
+suite('developTicketAndCreatePR > failure recovery', function () {
 
-    test('resets ticket and removes retry-blocking labels when git configuration fails', function() {
+    test('resets ticket and removes retry-blocking labels when git configuration fails', function () {
         var movedTo = [];
         var removedLabels = [];
         var comments = [];
         var commands = [];
         var mod = loadDevelopTicketAndCreatePR({
-            cli_execute_command: function(args) {
+            cli_execute_command: function (args) {
                 commands.push(args.command);
                 if (args.command.indexOf('gh pr list --head ai/TS-1') === 0) return '';
                 if (args.command === 'git config user.name "AI Teammate"') throw new Error('git config failed');
                 return '';
             },
-            jira_post_comment: function(args) { comments.push(args); },
-            jira_move_to_status: function(args) { movedTo.push(args.statusName); },
-            jira_remove_label: function(args) { removedLabels.push(args.label); }
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); },
+            jira_remove_label: function (args) { removedLabels.push(args.label); }
         });
 
         var result = mod.action({
@@ -130,12 +133,12 @@ suite('developTicketAndCreatePR > failure recovery', function() {
         assert.ok(commands.length > 0, 'expected git/gh commands to run');
     });
 
-    test('still resets ticket and posts an honest error comment when feedbackLoop.resumeAgent itself throws (e.g. blocked by CLI_ALLOWED_COMMANDS)', function() {
+    test('still resets ticket and posts an honest error comment when feedbackLoop.resumeAgent itself throws (e.g. blocked by CLI_ALLOWED_COMMANDS)', function () {
         var movedTo = [];
         var comments = [];
         var mod = loadDevelopTicketAndCreatePR(
             {
-                cli_execute_command: function(args) {
+                cli_execute_command: function (args) {
                     if (args.command.indexOf('gh pr list --head ai/TS-2') === 0) return '';
                     if (args.command === 'git branch --show-current') {
                         // Simulate an unrelated, unexpected failure reaching the outer catch —
@@ -144,16 +147,16 @@ suite('developTicketAndCreatePR > failure recovery', function() {
                     }
                     return '';
                 },
-                jira_post_comment: function(args) { comments.push(args); },
-                jira_move_to_status: function(args) { movedTo.push(args.statusName); },
-                jira_remove_label: function() {}
+                jira_post_comment: function (args) { comments.push(args); },
+                jira_move_to_status: function (args) { movedTo.push(args.statusName); },
+                jira_remove_label: function () { }
             },
             {
                 // Simulate the real-world bug: the feedback loop's own self-invocation
                 // (mkdir/bash/run-agent.sh --continue) gets blocked by a
                 // misconfigured CLI_ALLOWED_COMMANDS whitelist and throws instead of
                 // returning { attempted: false }.
-                resumeAgent: function() { throw new Error('Security violation: Command not whitelisted: bash'); }
+                resumeAgent: function () { throw new Error('Security violation: Command not whitelisted: bash'); }
             }
         );
 
@@ -176,7 +179,7 @@ suite('developTicketAndCreatePR > failure recovery', function() {
         assert.contains(comments[0].comment, 'Development Workflow Error');
     });
 
-    test('fails the job explicitly (throws) instead of resetting for retry when the AI CLI binary is missing from the runner (exit code 127)', function() {
+    test('fails the job explicitly (throws) instead of resetting for retry when the AI CLI binary is missing from the runner (exit code 127)', function () {
         var movedTo = [];
         var removedLabels = [];
         var comments = [];
@@ -190,12 +193,12 @@ suite('developTicketAndCreatePR > failure recovery', function() {
 
         var mod = loadDevelopTicketAndCreatePRWithRealGitHelpers({
             cli_execute_command: noChangesGitCommandMock('TS-3', 'ai/TS-3'),
-            jira_post_comment: function(args) { comments.push(args); },
-            jira_move_to_status: function(args) { movedTo.push(args.statusName); },
-            jira_remove_label: function(args) { removedLabels.push(args.label); }
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); },
+            jira_remove_label: function (args) { removedLabels.push(args.label); }
         });
 
-        assert.throws(function() {
+        assert.throws(function () {
             mod.action({
                 ticket: { key: 'TS-3', fields: { summary: 'Broken CLI', description: '', labels: [] } },
                 metadata: { contextId: 'story_development' },
@@ -210,13 +213,13 @@ suite('developTicketAndCreatePR > failure recovery', function() {
         assert.contains(comments[0].comment, 'AI CLI Environment Failure');
     });
 
-    test('still resets ticket for retry (does not throw) on an ordinary interrupted response with no fatal environment signature', function() {
+    test('still resets ticket for retry (does not throw) on an ordinary interrupted response with no fatal environment signature', function () {
         var movedTo = [];
         var comments = [];
         var mod = loadDevelopTicketAndCreatePRWithRealGitHelpers({
             cli_execute_command: noChangesGitCommandMock('TS-4', 'ai/TS-4'),
-            jira_post_comment: function(args) { comments.push(args); },
-            jira_move_to_status: function(args) { movedTo.push(args.statusName); }
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); }
         });
 
         var result = mod.action({
@@ -231,6 +234,40 @@ suite('developTicketAndCreatePR > failure recovery', function() {
         assert.deepEqual(movedTo, ['Ready For Development']);
         assert.equal(comments.length, 1);
         assert.contains(comments[0].comment, 'Development Interrupted');
+    });
+
+    test('fails the job explicitly (throws) when currentCliHasFatalError is set, even though the response text matches no known fatal-error signature (e.g. a provider HTTP 5xx)', function () {
+        var movedTo = [];
+        var removedLabels = [];
+        var comments = [];
+
+        var mod = loadDevelopTicketAndCreatePRWithRealGitHelpers({
+            cli_execute_command: noChangesGitCommandMock('TS-5', 'ai/TS-5'),
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); },
+            jira_remove_label: function (args) { removedLabels.push(args.label); }
+        });
+
+        assert.throws(function () {
+            mod.action({
+                ticket: { key: 'TS-5', fields: { summary: 'Provider outage', description: '', labels: [] } },
+                metadata: { contextId: 'story_development' },
+                customParams: {},
+                // Same ordinary-looking text as the "interrupted" test above — matches NONE of
+                // the exit-code-127/PATH/unknown-provider regexes — but Teammate's own
+                // authoritative signal says the CLI call actually failed fatally (e.g. a DIAL/
+                // provider HTTP 502). Proves the flag alone drives the fatal path, not text-sniffing.
+                response: 'Agent hit a rate limit and stopped mid-analysis.',
+                currentCliHasFatalError: true,
+                currentCliErrorMessage: '502: Failed to connect to upstream server'
+            });
+        }, 'expected action() to throw so the CI job fails explicitly instead of silently resetting for retry');
+
+        assert.equal(movedTo.length, 0, 'ticket must not be silently reset to Ready For Development');
+        assert.equal(removedLabels.length, 0, 'retry-blocking labels must not be removed on a fatal CLI/provider error');
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'AI CLI Environment Failure');
+        assert.contains(comments[0].comment, '502: Failed to connect to upstream server');
     });
 
 });

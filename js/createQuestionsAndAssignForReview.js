@@ -170,6 +170,34 @@ function action(params) {
             ? params.metadata.contextId + '_wip'
             : null;
 
+        // The CLI/AI-provider call can fail (missing binary, provider outage, HTTP 5xx, ...)
+        // while outputType is 'none' and skipAIProcessing is true — in that setup Teammate's
+        // own "skip field update, post error comment" safety net never runs (it's gated behind
+        // outputType != none), so this is the only place left to detect the failure. Do NOT
+        // let a fatal CLI error fall through to the "0 questions were raised" path below: that
+        // path unconditionally labels, assigns and moves the ticket to PO Review as if the AI
+        // had genuinely reviewed the story and found it clear, which silently hides the failure.
+        if (params.currentCliHasFatalError) {
+            var cliErrorMessage = params.currentCliErrorMessage || 'unknown CLI/provider error';
+            console.error('Fatal CLI/provider error for ' + ticketKey + ' — leaving the ticket untouched instead of treating it as "no questions needed": ' + cliErrorMessage);
+            try {
+                jira_post_comment({
+                    key: ticketKey,
+                    comment: 'h3. \u274c AI agent run failed \u2014 ticket left unchanged\n\n' +
+                        'The underlying CLI/AI provider call failed, so no clarifying questions could be generated:\n\n' +
+                        '{code}' + cliErrorMessage + '{code}\n\n' +
+                        'This ticket was NOT moved to PO Review and no labels were changed. Please retry the agent.'
+                });
+            } catch (commentError) {
+                console.warn('Failed to post CLI-failure comment:', commentError);
+            }
+            return {
+                success: false,
+                error: 'CLI/provider failure: ' + cliErrorMessage,
+                createdQuestions: []
+            };
+        }
+
         var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
         var jiraConfig = projectConfig.jira;
         var labels = projectConfig.labels;
@@ -195,7 +223,7 @@ function action(params) {
 
         // 2. Create question subtasks
         var createdTickets = [];
-        questions.forEach(function(entry) {
+        questions.forEach(function (entry) {
             var key = createQuestion(entry, ticketKey, projectKey, Object.assign({}, jiraConfig, { labels: labels }), priorityMap);
             createdTickets.push({
                 summary: ensureQPrefix(entry.summary || ''),
@@ -277,8 +305,8 @@ function action(params) {
             try {
                 var scm = scmModule.createScm(projectConfig);
                 createdTickets
-                    .filter(function(ticket) { return ticket.success && ticket.key; })
-                    .forEach(function(ticket) {
+                    .filter(function (ticket) { return ticket.success && ticket.key; })
+                    .forEach(function (ticket) {
                         autoStart.triggerConfiguredWorkflowForTicket({
                             scm: scm,
                             config: projectConfig,
