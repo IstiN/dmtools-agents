@@ -67,6 +67,7 @@ _Post PR Review Comments Action_
 - Source: `agents/js/postPRReviewComments.js`
 - Side effects:
   - add label "sm_story_rework_triggered" (via tracker)
+  - add label "agent:rework" (via tracker)
   - post ticket comment (via tracker)
   - move ticket to status (via tracker)
   - assign ticket (via tracker)
