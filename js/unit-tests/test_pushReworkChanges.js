@@ -692,10 +692,12 @@ suite('pushReworkChanges — no-op rework token guard (2026-09-21, epam/dmtools-
     });
 
     function actionFixture(opts) {
+        opts = opts || {};
         var cliCommandsRef = [];
         var ghAddLabelCalls = [];
         var ghRemoveLabelCalls = [];
         var reviewTriggers = [];
+        var ghCommentBodies = [];
         var loaded = loadPushReworkChangesForAction(
             {
                 github_add_label: function(args) { ghAddLabelCalls.push(args); return '{}'; },
@@ -704,7 +706,7 @@ suite('pushReworkChanges — no-op rework token guard (2026-09-21, epam/dmtools-
                     return '{}';
                 },
                 github_remove_label: function(args) { ghRemoveLabelCalls.push(args); return '{}'; },
-                github_create_comment: function() { return '{}'; },
+                github_create_comment: function(args) { ghCommentBodies.push(args.body); return '{}'; },
                 cli_execute_command: function(args) {
                     cliCommandsRef.push(args.command);
                     if (args.command === 'git branch --show-current') return 'ai/gh-191\n';
@@ -727,7 +729,14 @@ suite('pushReworkChanges — no-op rework token guard (2026-09-21, epam/dmtools-
             {
                 config: { repository: { owner: 'epam', repo: 'dmtools-dart' } },
                 scm: {
-                    listPrs: function() { return [prFixture()]; },
+                    listPrs: function() {
+                        var p = prFixture();
+                        if (opts.prApproved) {
+                            p = Object.assign({}, p, { labels: [{ name: 'pr_approved' }, { name: 'ai_pr_reviewed' }] });
+                        }
+                        return [p];
+                    },
+                    addComment: function(n, body) { ghCommentBodies.push(body); },
                     listReviews: function() { return [{
                         state: 'CHANGES_REQUESTED',
                         commit_id: opts && opts.verdictOnHead ? HEAD : VERDICT_SHA,
@@ -744,6 +753,7 @@ suite('pushReworkChanges — no-op rework token guard (2026-09-21, epam/dmtools-
             loaded: loaded,
             ghAddLabelCalls: ghAddLabelCalls,
             ghRemoveLabelCalls: ghRemoveLabelCalls,
+            ghCommentBodies: ghCommentBodies,
             reviewTriggers: reviewTriggers,
             run: function() {
                 return loaded.mod.action({
@@ -774,6 +784,32 @@ suite('pushReworkChanges — no-op rework token guard (2026-09-21, epam/dmtools-
         );
         assert.equal(fx.reviewTriggers.length, 0,
             'no LLM re-review may be started for an unchanged head (token guard)');
+    });
+
+    test('action: STICKY APPROVAL (owner rule 2026-09-21) — rework on an approved PR never arms a re-review', function() {
+        // Live (dart #194): infra-red re-armed rework; the rework finished
+        // with a moved head (ci-restart empty commit) and the completion
+        // path cleared ai_pr_reviewed + armed agent:review — a third review
+        // dispatched on a pr_approved PR. Sticky approval must beat every
+        // fresh-review arm, even with the head moved.
+        var fx = actionFixture({ verdictOnHead: false, prApproved: true });
+        var result = fx.run();
+
+        assert.equal(result.success, true);
+        assert.ok(
+            !fx.ghRemoveLabelCalls.some(function(c) { return c.label === 'ai_pr_reviewed'; }),
+            'the ai_pr_reviewed latch must be KEPT on an approved PR'
+        );
+        assert.equal(fx.reviewTriggers.length, 0,
+            'autoStartReview must not fire — approval is sticky, no reviewer pass ever again');
+        assert.ok(
+            !fx.ghAddLabelCalls.some(function(c) { return c.label === 'agent:rework'; }),
+            'no agent:rework re-arm — the head just re-validates and merges'
+        );
+        assert.ok(
+            fx.ghCommentBodies.some(function(b) { return String(b).indexOf('sticky') !== -1; }),
+            'the PR is told the loop re-validates and merges without a re-review'
+        );
     });
 
     test('action: real rework (head moved) still clears the latch and starts the fresh review', function() {
