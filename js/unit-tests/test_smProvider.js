@@ -246,6 +246,39 @@ suite('smProvider', function () {
         }).prStatus(7).mergeState, 'CLEAN');
     });
 
+    test('github: prStatus preserves BLOCKED on a fresh base (dart #195 deadlock)', function () {
+        // Live: dart #195 sat armed (ai_validating) on a fresh head whose
+        // required checks were pending — REST reported mergeable_state
+        // 'blocked', but the deterministic override masked it as CLEAN, so
+        // unarm-stale-validation ({mergeState:[BEHIND,BLOCKED]}) never
+        // matched and the PR deadlocked for hours. BLOCKED on a fresh base
+        // is a REAL verdict (branch protection unmet) and must survive;
+        // 'behind'/'unknown' on a fresh base stay recompute lies -> CLEAN.
+        var branches = [{ name: 'main', commit: { sha: 'mainhead' } }];
+        function mkProvider(pr) {
+            return loadProvider('github', {
+                github_get_pr: function () { return pr; },
+                github_get_commit_check_runs: function () { return { check_runs: [] }; },
+                github_list_branches: function () { return branches; }
+            });
+        }
+        // fresh head + required checks pending/red -> BLOCKED survives
+        assert.equal(mkProvider({
+            state: 'OPEN', mergeable: true, mergeable_state: 'blocked',
+            base: { ref: 'main', sha: 'mainhead' }, head: { sha: 'h' }
+        }).prStatus(7).mergeState, 'BLOCKED');
+        // GraphQL spelling of the same verdict
+        assert.equal(mkProvider({
+            state: 'OPEN', mergeable: true, mergeStateStatus: 'BLOCKED',
+            base: { ref: 'main', sha: 'mainhead' }, head: { sha: 'h' }
+        }).prStatus(7).mergeState, 'BLOCKED');
+        // stale REST 'behind' on a fresh base is still a lie -> CLEAN
+        assert.equal(mkProvider({
+            state: 'OPEN', mergeable: true, mergeable_state: 'behind',
+            base: { ref: 'main', sha: 'mainhead' }, head: { sha: 'h' }
+        }).prStatus(7).mergeState, 'CLEAN');
+    });
+
     test('github: prStatus falls back to REST mergeable_state without the branches tool', function () {
         var p = loadProvider('github', {
             github_get_pr: function () {
