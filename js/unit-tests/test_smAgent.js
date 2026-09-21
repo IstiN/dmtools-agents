@@ -905,11 +905,11 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
     test('fail_validation: unarms, comments, re-arms agent:rework — pr_approved is STICKY', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: {
-                items: [prItem(72, { labels: ['pr_approved', 'ai_validating'] })],
+                items: [prItem(72, { labels: ['pr_approved', 'ai_validating'], author: 'ai-teammate' })],
                 pr: { number: 72, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #503 — boot cost' }
             }
         }));
-        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.fail] } });
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
 
         // Owner rule 2026-09 (token budget): after the first approval the
         // loop NEVER re-reviews — validation red re-arms rework only; the
@@ -931,12 +931,12 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
     test('fail_validation: branch-name fallback when the body lacks a closing keyword (fa pr-750)', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: {
-                items: [prItem(750, { labels: ['pr_approved', 'ai_validating'], branch: 'ai/gh-746' })],
+                items: [prItem(750, { labels: ['pr_approved', 'ai_validating'], branch: 'ai/gh-746', author: 'ai-teammate' })],
                 pr: { number: 750, labels: ['pr_approved', 'ai_validating'],
                       body: '### What changed\n\nFixes the Play Store rejection (gh-746) by ...' }
             }
         }));
-        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.fail] } });
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
 
         assert.equal(sm.capturedPrLabelAdds.length, 1, 'issue found via the ai/gh-<n> branch convention');
         assert.equal(sm.capturedPrLabelAdds[0].number, 746);
@@ -967,15 +967,54 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
 
     test('fail_validation: external PR (no linked issue) — report only', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
-            github: { items: [prItem(73, { labels: ['pr_approved', 'ai_validating'] })],
+            github: { items: [prItem(73, { labels: ['pr_approved', 'ai_validating'], author: 'ai-teammate' })],
                       pr: { number: 73, labels: ['pr_approved', 'ai_validating'], body: 'no link' } }
         }));
-        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.fail] } });
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
 
         assert.equal(sm.capturedPrComments.length, 1);
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'no issue to re-arm');
         assert.ok(!sm.capturedPrLabelRemoves.some(function (r) { return r.label === 'pr_approved'; }),
             'pr_approved is sticky even without a linked issue — approval survives CI red');
+    });
+
+    test('fail_validation: GUEST PR (owner rule 2026-09-21) — report only, never a rework arm', function () {
+        // Guest = any account other than the machine login: they get review
+        // + validation only. A guest 'Fixes #191' body must not arm rework on
+        // a (possibly machine) linked issue; the ai/gh-<n> branch fallback is
+        // machine-only too.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(99, { labels: ['pr_approved', 'ai_validating'], branch: 'ai/gh-191', author: 'someguest' })],
+                pr: { number: 99, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #191 — guest contribution' }
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.number + ':' + r.label; }),
+            ['99:ai_validating'], 'ai_validating still disarms');
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'NO agent:rework arm for a guest PR — not via the body link, not via the branch fallback');
+        assert.equal(sm.capturedPrComments.length, 1);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Guest PR') !== -1,
+            'the report tells the guest to fix and push');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('re-runs automatically') !== -1,
+            'validation re-runs on their push — guests keep the validate leg');
+    });
+
+    test('fail_validation: machineAuthor unconfigured — fail-closed, no rework arm at all', function () {
+        // machineAuthor.js invariant: with no machine login configured every
+        // machine-keyed guard is inert/fail-closed. Red CI then reports only.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(77, { labels: ['pr_approved', 'ai_validating'], author: 'ai-teammate' })],
+                pr: { number: 77, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #55' }
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.fail] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'fail-closed: no rework arm without a machine login');
+        assert.equal(sm.capturedPrComments.length, 1, 'the report still posts');
     });
 });
 
