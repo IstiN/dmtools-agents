@@ -1099,12 +1099,28 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // markers (merge approval consumed; close-on-merge finishes the
             // linked issue on its next tick).
             try {
-                github_merge_pr({
+                var mergeRaw = github_merge_pr({
                     workspace: effectiveRepoInfo.owner,
                     repository: effectiveRepoInfo.repo,
                     number: ticket.prNumber,
                     mergeMethod: 'squash'
                 });
+                // The HTTP layer returns the raw body for error statuses
+                // (Java parity) — a 405 "not mergeable" arrives as
+                // {"merged": false, ...} with NO thrown error (live: fa
+                // pr-753 — the merge was refused, the SM still cleared
+                // pr_approved/ai_validating and logged "squash-merged",
+                // orphaning the armed PR). Anything but an explicit
+                // merged:true is a failure: keep the markers so the loop
+                // self-heals (unarm-stale → refresh → re-validate → retry).
+                var mergeResp = {};
+                try {
+                    mergeResp = typeof mergeRaw === 'string' ? JSON.parse(mergeRaw) : (mergeRaw || {});
+                } catch (parseErr) { /* non-JSON body counts as refusal */ }
+                if (mergeResp.merged !== true) {
+                    throw new Error('merge refused: ' +
+                        (typeof mergeRaw === 'string' ? mergeRaw : JSON.stringify(mergeRaw)));
+                }
                 try {
                     github_remove_label({
                         workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,

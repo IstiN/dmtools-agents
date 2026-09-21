@@ -167,7 +167,12 @@ function makeSmAgent(opts) {
             capturedCloses.push(closeOpts);
         };
         // #687 PR-lifecycle localActions: capture every GitHub mutation.
-        smMocks.github_merge_pr = function (mergeOpts) { capturedPrMerges.push(mergeOpts); };
+        smMocks.github_merge_pr = function (mergeOpts) {
+            capturedPrMerges.push(mergeOpts);
+            return opts.github.mergeResult !== undefined
+                ? opts.github.mergeResult
+                : JSON.stringify({ merged: true, sha: 'deadbeef', message: 'Pull Request successfully merged' });
+        };
         smMocks.github_add_labels = function (labelOpts) { capturedPrLabelAdds.push(labelOpts); };
         smMocks.github_remove_label = function (remOpts) { capturedPrLabelRemoves.push(remOpts); };
         smMocks.github_create_comment = function (cOpts) { capturedPrComments.push(cOpts); };
@@ -810,6 +815,36 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedPrMerges[0].mergeMethod, 'squash');
         assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
             ['ai_validating', 'pr_approved']);
+    });
+
+    test('merge_pr: refused merge (405 body, no thrown error) keeps the armed markers (fa pr-753)', function () {
+        // The HTTP layer returns the raw body for error statuses (Java
+        // parity) — github_merge_pr does NOT throw on a 405. Clearing the
+        // markers on a refused merge orphaned fa pr-753 (logged
+        // "squash-merged", PR stayed open and unarmed).
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(753, { labels: ['pr_approved', 'ai_validating'] })],
+                mergeResult: JSON.stringify({ message: 'Pull Request is not mergeable', merged: false })
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.merge] } });
+
+        assert.equal(sm.capturedPrMerges.length, 1, 'merge attempted');
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'markers must survive a refused merge — unarm-stale/refresh/re-validate self-heals');
+    });
+
+    test('merge_pr: non-JSON body also counts as refusal', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(754, { labels: ['pr_approved', 'ai_validating'] })],
+                mergeResult: 'Bad Gateway'
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.merge] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0);
     });
 
     test('fail_validation: unarms, comments, re-arms agent:rework on the linked issue', function () {
