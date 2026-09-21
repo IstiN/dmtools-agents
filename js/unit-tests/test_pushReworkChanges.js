@@ -13,13 +13,17 @@
  * postThreadReplies() must accept both field-name conventions.
  */
 
+// File-scope base module (was previously misplaced INSIDE the file_read mock
+// closure below — a latent defect masked in run_all.json by another test file
+// leaking the same sloppy-mode global, but breaking isolated per-file runs).
+var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+
 function makeOutputFiles(fileMap) {
     return loadModule('js/common/outputFiles.js', makeRequire({
             './common/commentMarkup.js': commentMarkupModule,
         }), {
         file_read: function(opts) {
             var path = opts && (opts.path || opts);
-var commentMarkupModule = loadModule('js/common/commentMarkup.js');
             return fileMap[path] !== undefined ? fileMap[path] : null;
         }
     });
@@ -355,10 +359,10 @@ function loadPushReworkChangesForAction(mocks, opts) {
     var resumeAgentCalls = [];
     var cliCommands = [];
 
-    var scm = {
+    var scm = Object.assign({
         listPrs: function() { return []; },
         getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; }
-    };
+    }, (opts && opts.scm) || {});
 
     var defaultMocks = {
         cli_execute_command: function(args) {
@@ -411,7 +415,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
                 runPostPublishGates: function() { return { success: true }; },
                 resumeAgent: function(args) { resumeAgentCalls.push(args); return { attempted: false }; }
             },
-            './common/autoStart.js': {
+            './common/autoStart.js': (opts && opts.autoStart) || {
                 triggerSmIfIdle: function() {},
                 triggerConfiguredWorkflowForTicket: function() { return false; }
             },
@@ -635,5 +639,156 @@ suite('pushReworkChanges.action — resumeAgent exception safety', function() {
         assert.equal(result.success, false);
         assert.equal(comments.length, 1, 'an honest error comment must still be posted even though resumeAgent threw');
         assert.contains(comments[0].comment, 'Rework Workflow Error');
+    });
+});
+
+suite('pushReworkChanges — no-op rework token guard (2026-09-21, epam/dmtools-dart #194)', function() {
+
+    var HEAD = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    var VERDICT_SHA = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+    function prFixture() {
+        return { number: 194, title: 'epam/dmtools-dart#191 parity follow-up', head: { ref: 'ai/gh-191', sha: HEAD } };
+    }
+
+    function reviewScm(reviews) {
+        return { listReviews: function() { return reviews; } };
+    }
+
+    test('headMovedSinceLastReview: false when the last verdict covers the current head', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var verdict = reviewScm([
+            { state: 'CHANGES_REQUESTED', commit_id: VERDICT_SHA, submitted_at: '2026-09-21T18:45:00Z' },
+            { state: 'CHANGES_REQUESTED', commit_id: HEAD, submitted_at: '2026-09-21T18:58:00Z' }
+        ]);
+        assert.equal(loaded.mod.headMovedSinceLastReview(verdict, prFixture()), false,
+            'a rework that pushed nothing must NOT buy a fresh LLM review of the same head');
+    });
+
+    test('headMovedSinceLastReview: true when fixes landed after the verdict', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var verdict = reviewScm([
+            { state: 'CHANGES_REQUESTED', commit_id: VERDICT_SHA, submitted_at: '2026-09-21T18:58:00Z' }
+        ]);
+        assert.equal(loaded.mod.headMovedSinceLastReview(verdict, prFixture()), true);
+    });
+
+    test('headMovedSinceLastReview: PENDING/DISMISSED reviews are not the verdict', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var verdict = reviewScm([
+            { state: 'CHANGES_REQUESTED', commit_id: VERDICT_SHA, submitted_at: '2026-09-21T18:45:00Z' },
+            { state: 'PENDING', commit_id: HEAD, submitted_at: '2026-09-21T18:50:00Z' }
+        ]);
+        assert.equal(loaded.mod.headMovedSinceLastReview(verdict, prFixture()), true,
+            'only concluded verdicts (CHANGES_REQUESTED/APPROVED) pin the reviewed head');
+    });
+
+    test('headMovedSinceLastReview: true with no concluded reviews and when the probe throws (fail-open)', function() {
+        var loaded = loadPushReworkChangesModule({});
+        assert.equal(loaded.mod.headMovedSinceLastReview(reviewScm([]), prFixture()), true);
+        assert.equal(loaded.mod.headMovedSinceLastReview(reviewScm(null), prFixture()), true);
+        assert.equal(loaded.mod.headMovedSinceLastReview({ listReviews: function() { throw new Error('api down'); } }, prFixture()), true);
+        assert.equal(loaded.mod.headMovedSinceLastReview(reviewScm([]), null), true, 'no PR at all → fail-open');
+    });
+
+    function actionFixture(opts) {
+        var cliCommandsRef = [];
+        var ghAddLabelCalls = [];
+        var ghRemoveLabelCalls = [];
+        var reviewTriggers = [];
+        var loaded = loadPushReworkChangesForAction(
+            {
+                github_add_label: function(args) { ghAddLabelCalls.push(args); return '{}'; },
+                github_add_labels: function(args) {
+                    (args.labels || []).forEach(function(l) { ghAddLabelCalls.push({ label: l, number: args.number }); });
+                    return '{}';
+                },
+                github_remove_label: function(args) { ghRemoveLabelCalls.push(args); return '{}'; },
+                github_create_comment: function() { return '{}'; },
+                cli_execute_command: function(args) {
+                    cliCommandsRef.push(args.command);
+                    if (args.command === 'git branch --show-current') return 'ai/gh-191\n';
+                    if (args.command.indexOf('git ls-remote --heads origin') === 0) {
+                        return 'abc123\trefs/heads/ai/gh-191\n';
+                    }
+                    return '';
+                },
+                file_read: function(args) {
+                    var p2 = args && (args.path || args);
+                    if (p2 && p2.indexOf('rework_setup_failed.md') !== -1) {
+                        throw new Error('File does not exist');
+                    }
+                    if (p2 && p2.indexOf('pr_info.md') !== -1) {
+                        return '**Branch**: `ai/gh-191` → `main`';
+                    }
+                    return null;
+                }
+            },
+            {
+                config: { repository: { owner: 'epam', repo: 'dmtools-dart' } },
+                scm: {
+                    listPrs: function() { return [prFixture()]; },
+                    listReviews: function() { return [{
+                        state: 'CHANGES_REQUESTED',
+                        commit_id: opts && opts.verdictOnHead ? HEAD : VERDICT_SHA,
+                        submitted_at: '2026-09-21T18:58:00Z'
+                    }]; }
+                },
+                autoStart: {
+                    triggerSmIfIdle: function() {},
+                    triggerConfiguredWorkflowForTicket: function(args) { reviewTriggers.push(args); return true; }
+                }
+            }
+        );
+        return {
+            loaded: loaded,
+            ghAddLabelCalls: ghAddLabelCalls,
+            ghRemoveLabelCalls: ghRemoveLabelCalls,
+            reviewTriggers: reviewTriggers,
+            run: function() {
+                return loaded.mod.action({
+                    ticket: { key: 'epam/dmtools-dart#191', fields: { labels: [] } },
+                    response: 'Fix summary long enough to be a meaningful rework completion summary.',
+                    customParams: {
+                        trackerProvider: 'github',
+                        autoStartReview: true,
+                        autoStartReviewConfigFile: 'pr_review.json'
+                    }
+                });
+            }
+        };
+    }
+
+    test('action: no-op rework keeps ai_pr_reviewed, re-arms agent:rework, starts NO re-review', function() {
+        var fx = actionFixture({ verdictOnHead: true });
+        var result = fx.run();
+
+        assert.equal(result.success, true);
+        assert.ok(
+            fx.ghAddLabelCalls.some(function(c) { return c.label === 'agent:rework'; }),
+            'the ticket must go straight back to rework (cheap convergence, no reviewer pass)'
+        );
+        assert.ok(
+            !fx.ghRemoveLabelCalls.some(function(c) { return c.label === 'ai_pr_reviewed'; }),
+            'the ai_pr_reviewed latch must be KEPT — the standing verdict still covers this head'
+        );
+        assert.equal(fx.reviewTriggers.length, 0,
+            'no LLM re-review may be started for an unchanged head (token guard)');
+    });
+
+    test('action: real rework (head moved) still clears the latch and starts the fresh review', function() {
+        var fx = actionFixture({ verdictOnHead: false });
+        var result = fx.run();
+
+        assert.equal(result.success, true);
+        assert.ok(
+            fx.ghRemoveLabelCalls.some(function(c) { return c.label === 'ai_pr_reviewed'; }),
+            'a genuine rework must arm a FRESH review as before');
+        assert.equal(fx.reviewTriggers.length, 1,
+            'the fresh review must be auto-started exactly once');
+        assert.ok(
+            !fx.ghAddLabelCalls.some(function(c) { return c.label === 'agent:rework'; }),
+            'no agent:rework re-arm on the productive path'
+        );
     });
 });

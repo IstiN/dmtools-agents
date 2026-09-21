@@ -518,6 +518,41 @@ function handleInterruptedRework(tracker, ticketKey, branchName, customParams, s
     };
 }
 
+/**
+ * GitHub machine loop, token-burn guard (live pathology 2026-09-21,
+ * epam/dmtools-dart #194): a rework run that pushed NO new commits used to
+ * clear ai_pr_reviewed and auto-start a fresh LLM review of the SAME head —
+ * a full reviewer pass that just restated the standing findings ("round 2,
+ * unchanged commit"). The last concluded PR review's commit_id is the
+ * durable "what the verdict covered" marker: when it equals the PR head,
+ * the rework was a no-op and the verdict still stands.
+ *
+ * Returns true when a fresh review IS wanted (head moved, no concluded
+ * reviews, or the probe failed — fail-open so the review loop can never
+ * stall on a broken probe).
+ */
+function headMovedSinceLastReview(scm, pr) {
+    try {
+        if (!pr || !pr.number) { return true; }
+        var reviews = scm.listReviews(pr.number);
+        var concluded = (reviews || []).filter(function (r) {
+            return r && (r.state === 'CHANGES_REQUESTED' || r.state === 'APPROVED');
+        });
+        if (!concluded.length) { return true; }
+        concluded.sort(function (a, b) {
+            return String(a.submitted_at || '') < String(b.submitted_at || '') ? -1 : 1;
+        });
+        var last = concluded[concluded.length - 1];
+        var headSha = pr.head && (pr.head.sha || pr.head);
+        if (last.commit_id && headSha && String(last.commit_id) === String(headSha)) {
+            return false;
+        }
+    } catch (e) {
+        console.warn('headMovedSinceLastReview probe failed (fail-open):', e.message || e);
+    }
+    return true;
+}
+
 function action(params) {
     try {
         const actualParams = params.ticket ? params : (params.jobParams || params);
@@ -730,7 +765,27 @@ function action(params) {
         // not the issue. Clear it so the reworked head gets a FRESH review —
         // otherwise review-after-dev (notPrLabels: ai_pr_reviewed) skips the
         // PR forever and the loop stalls after one review round.
-        if (pr && pr.number && typeof github_remove_label === 'function') {
+        //
+        // Token-burn guard: a no-op rework (no new commits since the last
+        // review's head) keeps the latch and goes straight back to rework —
+        // no LLM re-review of the unchanged head.
+        var freshReviewWanted = headMovedSinceLastReview(scm, pr);
+        if (!freshReviewWanted && pr && pr.number) {
+            try {
+                tracker.addLabel(ticketKey, 'agent:rework');
+                console.log('✅ No-op rework: verdict head unchanged — agent:rework re-armed on ' + ticketKey);
+            } catch (e) {
+                console.warn('Failed to re-arm agent:rework on ' + ticketKey + ':', e.message || e);
+            }
+            try {
+                scm.addComment(pr.number,
+                    '⚠️ Rework finished with **no new commits** — the previous review verdict (same head) ' +
+                    'still stands and its findings are unchanged. Re-review skipped (token guard); rework re-armed.');
+            } catch (e) {
+                console.warn('Failed to post no-op rework comment on PR #' + pr.number + ':', e.message || e);
+            }
+        }
+        if (freshReviewWanted && pr && pr.number && typeof github_remove_label === 'function') {
             try {
                 github_remove_label({
                     workspace: repoInfo.owner, repository: repoInfo.repo,
@@ -749,7 +804,9 @@ function action(params) {
         if (autoStartReview && reviewConfigFile) {
             // Skip if ticket already has pr_approved label (already approved, merge pending)
             const ticket = actualParams.ticket || (params.jobParams && params.jobParams.ticket);
-            if (hasPrApprovedLabel(ticket)) {
+            if (!freshReviewWanted) {
+                console.log('ℹ️ autoStartReview: skipped — rework pushed no new commits (token guard)');
+            } else if (hasPrApprovedLabel(ticket)) {
                 console.log('ℹ️ autoStartReview: skipped — ticket has pr_approved label');
             } else {
                 try {
@@ -836,5 +893,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, resolveCustomParams, isInterruptedReworkResponse, postThreadReplies, commitAndPush, readReworkSetupFailure };
+    module.exports = { action, resolveCustomParams, isInterruptedReworkResponse, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview };
 }
