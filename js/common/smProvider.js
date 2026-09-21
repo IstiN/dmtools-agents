@@ -202,13 +202,29 @@ function githubProvider(cfg) {
             var ms = pr.mergeStateStatus ||
                 (pr.mergeable_state ? String(pr.mergeable_state).toUpperCase() : '') || '';
             // Deterministic override (see branchHead): DIRTY on real
-            // conflicts, else CLEAN/BEHIND from base freshness. Falls
-            // back to the REST mapping only when the head is unknowable.
+            // conflicts, BEHIND when the base moved, else the REST verdict
+            // — preserving BLOCKED for fresh heads whose required checks
+            // are pending/red. Masking BLOCKED as CLEAN deadlocked
+            // unarm-stale-validation on armed fresh PRs (live: dart #195 —
+            // ai_validating stuck for hours while this override reported
+            // CLEAN to every mergeState:[BEHIND,BLOCKED] rule). Falls back
+            // to CLEAN/UNKNOWN only when the REST body has no verdict.
             if (pr.mergeable === false) {
                 ms = 'DIRTY';
             } else if (pr.base && pr.base.ref) {
                 var head = branchHead(pr.base.ref);
-                if (head) ms = pr.base.sha === head ? 'CLEAN' : 'BEHIND';
+                if (head) {
+                    if (pr.base.sha !== head) {
+                        ms = 'BEHIND';
+                    } else {
+                        // Base fresh: a REST BLOCKED is real (required checks
+                        // pending/red on the current head — branch protection
+                        // unmet) and must survive; any other REST verdict on a
+                        // fresh base ('behind', 'unknown') is a recompute lie —
+                        // deterministically CLEAN.
+                        ms = ms === 'BLOCKED' ? 'BLOCKED' : 'CLEAN';
+                    }
+                }
             }
             if (!ms) ms = pr.mergeable === true ? 'CLEAN' : 'UNKNOWN';
             return {
