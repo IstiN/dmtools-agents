@@ -128,7 +128,7 @@ function performPushOnly(branchName, baseBranch) {
         branchName: branchName,
         baseBranch: baseBranch || 'main',
         workingDir: _workingDir,
-        runCommand: function(command, workingDir) {
+        runCommand: function (command, workingDir) {
             var args = { command: command };
             if (workingDir) args.workingDirectory = workingDir;
             return cli_execute_command(args);
@@ -148,12 +148,12 @@ function performPushOnly(branchName, baseBranch) {
     }
 
     var pushFailed = pushThrewException ||
-                     pushOutput.indexOf('remote rejected') !== -1 ||
-                     pushOutput.indexOf('GH013') !== -1 ||
-                     pushOutput.indexOf('error: failed to push') !== -1 ||
-                     pushOutput.indexOf('push declined') !== -1 ||
-                     pushOutput.indexOf('non-fast-forward') !== -1 ||
-                     pushOutput.indexOf('rejected') !== -1;
+        pushOutput.indexOf('remote rejected') !== -1 ||
+        pushOutput.indexOf('GH013') !== -1 ||
+        pushOutput.indexOf('error: failed to push') !== -1 ||
+        pushOutput.indexOf('push declined') !== -1 ||
+        pushOutput.indexOf('non-fast-forward') !== -1 ||
+        pushOutput.indexOf('rejected') !== -1;
 
     if (pushFailed) {
         // Try force push (branch may have diverged from a previous interrupted run)
@@ -165,9 +165,9 @@ function performPushOnly(branchName, baseBranch) {
             forceOutput = String(forceErr);
         }
         var forceFailed = forceOutput.indexOf('remote rejected') !== -1 ||
-                          forceOutput.indexOf('GH013') !== -1 ||
-                          forceOutput.indexOf('error: failed to push') !== -1 ||
-                          forceOutput.indexOf('push declined') !== -1;
+            forceOutput.indexOf('GH013') !== -1 ||
+            forceOutput.indexOf('error: failed to push') !== -1 ||
+            forceOutput.indexOf('push declined') !== -1;
         if (forceFailed) {
             return { success: false, isPushFailure: true, error: 'Push still rejected after force: ' + forceOutput.substring(0, 300) };
         }
@@ -196,7 +196,7 @@ function performPushOnly(branchName, baseBranch) {
 function performGitOperations(branchName, commitMessage, baseBranch, config, customParams, ticketKey) {
     try {
         submoduleHelper.pushManagedSubmodules({
-            run: function(command) {
+            run: function (command) {
                 return runCmd({ command: command });
             },
             cleanOutput: cleanCommandOutput,
@@ -220,13 +220,13 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
         });
 
         // Check if there are changes to commit
-        const statusOutput = prHelper.readStagedDiffStat(function(command) {
+        const statusOutput = prHelper.readStagedDiffStat(function (command) {
             return runCmd({ command: command });
         }, _workingDir);
 
         if (!statusOutput || !statusOutput.trim()) {
             // No uncommitted changes — but check if the agent already committed its work
-221.             // (the CLI agent sometimes commits itself before postJSAction runs)
+            221.             // (the CLI agent sometimes commits itself before postJSAction runs)
             var originRef = baseBranch ? 'origin/' + baseBranch : 'origin/main';
             var aheadOutput = '';
             try {
@@ -246,7 +246,7 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
             var remoteAheadOutput = '';
             try {
                 // Fetch remote refs so origin/<branchName> is up to date
-                try { runCmd({ command: prHelper.buildOriginFetchCommand(branchName) }); } catch (e) {}
+                try { runCmd({ command: prHelper.buildOriginFetchCommand(branchName) }); } catch (e) { }
                 remoteAheadOutput = cleanCommandOutput(runCmd({ command: 'git rev-list --count ' + originRef + '..origin/' + branchName }) || '');
             } catch (e) {
                 console.warn('Could not check remote branch commits:', e);
@@ -280,7 +280,7 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
             branchName: branchName,
             baseBranch: baseBranch || 'main',
             workingDir: _workingDir,
-            runCommand: function(command, workingDir) {
+            runCommand: function (command, workingDir) {
                 var args = { command: command };
                 if (workingDir) args.workingDirectory = workingDir;
                 return cli_execute_command(args);
@@ -311,12 +311,12 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
         // Check output text for soft-rejected pushes (exit 0 but error text) AND
         // exception messages (exit non-zero) — covers both code paths.
         const pushFailed = pushThrewException ||
-                           pushOutput.indexOf('remote rejected') !== -1 ||
-                           pushOutput.indexOf('GH013') !== -1 ||
-                           pushOutput.indexOf('error: failed to push') !== -1 ||
-                           pushOutput.indexOf('push declined') !== -1 ||
-                           pushOutput.indexOf('non-fast-forward') !== -1 ||
-                           pushOutput.indexOf('rejected') !== -1;
+            pushOutput.indexOf('remote rejected') !== -1 ||
+            pushOutput.indexOf('GH013') !== -1 ||
+            pushOutput.indexOf('error: failed to push') !== -1 ||
+            pushOutput.indexOf('push declined') !== -1 ||
+            pushOutput.indexOf('non-fast-forward') !== -1 ||
+            pushOutput.indexOf('rejected') !== -1;
 
         if (pushFailed) {
             return {
@@ -402,7 +402,7 @@ function createPullRequest(title, branchName, baseBranch) {
         scm: _scm,
         bodyFileCandidates: ['outputs/response.md'],
         defaultBody: 'Development changes.',
-        runCommand: function(command, workingDir) {
+        runCommand: function (command, workingDir) {
             var args = { command: command };
             if (workingDir) args.workingDirectory = workingDir;
             return cli_execute_command(args);
@@ -478,8 +478,17 @@ function postErrorCommentToJira(ticketKey, stage, errorMessage) {
  * transient failures (rate limits, timeouts = exit code 124) that a resume/retry can
  * plausibly resolve. Silently resetting the ticket for retry on this class of error
  * just loops forever, since the missing tool never appears on its own.
+ *
+ * `cliReportedFatalError` is Teammate's own authoritative signal (params.currentCliHasFatalError,
+ * set whenever cliResult.hasFatalError() is true — covers provider/network errors such as HTTP
+ * 5xx that never match the regexes below) and always wins over the text heuristics: relying on
+ * text-sniffing alone let those failures fall through as a plain "interrupted, will retry",
+ * masking a non-retryable failure as a transient one.
  */
-function isFatalCliEnvironmentError(responseText) {
+function isFatalCliEnvironmentError(responseText, cliReportedFatalError) {
+    if (cliReportedFatalError) {
+        return true;
+    }
     var text = String(responseText || '');
     return /exit code 127\)/.test(text) ||
         /not found in PATH/i.test(text) ||
@@ -516,12 +525,12 @@ function labelsToRemove(customParams, metadata) {
     var labels = [];
     if (customParams && customParams.removeLabel) labels.push(customParams.removeLabel);
     if (customParams && Array.isArray(customParams.removeLabels)) {
-        customParams.removeLabels.forEach(function(label) { labels.push(label); });
+        customParams.removeLabels.forEach(function (label) { labels.push(label); });
     }
     if (metadata && metadata.contextId) labels.push(metadata.contextId + '_wip');
 
     var seen = {};
-    return labels.filter(function(label) {
+    return labels.filter(function (label) {
         if (!label || seen[label]) return false;
         seen[label] = true;
         return true;
@@ -538,7 +547,7 @@ function resetDevelopmentForRetry(ticketKey, statuses, customParams, metadata, s
         console.warn('Failed to move ' + ticketKey + ' to ' + statuses.READY_FOR_DEVELOPMENT + ':', e);
     }
 
-    labelsToRemove(customParams, metadata).forEach(function(label) {
+    labelsToRemove(customParams, metadata).forEach(function (label) {
         try {
             jira_remove_label({ key: ticketKey, label: label });
             console.log('✅ Removed retry-blocking label:', label);
@@ -613,9 +622,9 @@ function retryAfterPushFailure(ticketKey, branchName, pushError) {
         retryOutput = String(forceErr);
     }
     var retryFailed = retryOutput.indexOf('remote rejected') !== -1 ||
-                      retryOutput.indexOf('GH013') !== -1 ||
-                      retryOutput.indexOf('error: failed to push') !== -1 ||
-                      retryOutput.indexOf('push declined') !== -1;
+        retryOutput.indexOf('GH013') !== -1 ||
+        retryOutput.indexOf('error: failed to push') !== -1 ||
+        retryOutput.indexOf('push declined') !== -1;
 
     if (retryFailed) {
         return { success: false, error: 'Push still rejected after agent fix: ' + retryOutput.substring(0, 300) };
@@ -657,6 +666,9 @@ function action(params) {
         const ticketSummary = actualParams.ticket.fields.summary;
         const ticketDescription = actualParams.ticket.fields.description || '';
         const developmentSummary = actualParams.response || '';
+        // Teammate's authoritative CLI-outcome signal — see isFatalCliEnvironmentError() below.
+        const cliHasFatalError = actualParams.currentCliHasFatalError === true;
+        const cliErrorMessage = actualParams.currentCliErrorMessage || null;
 
         // Resolve statuses — allows per-project overrides via customParams.customStatuses
         const _customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
@@ -671,25 +683,25 @@ function action(params) {
         const expectedBranch = configLoader.resolveBranchName(config, params.ticket || actualParams.ticket, 'development');
         try {
             var openPrs = _scm.listPrs('open') || [];
-            var existingPr = openPrs.filter(function(pr) {
+            var existingPr = openPrs.filter(function (pr) {
                 return pr && pr.head && pr.head.ref === expectedBranch;
             })[0];
             if (existingPr) {
-                    var existingUrl = existingPr.html_url || existingPr.url || '';
-                    console.log('⚠️  PR already open for', ticketKey, ':', existingUrl || ('#' + existingPr.number), '— skipping re-development');
-                    try {
-                        jira_post_comment({
-                            key: ticketKey,
-                            comment: commentMarkup.forTicket(ticketKey).h(3, 'ℹ️ PR Already Open') + '\n\n' +
-                                'A pull/merge request already exists for this ticket: ' + (existingUrl || ('#' + existingPr.number)) + '\n\n' +
-                                'Moved ticket to ' + commentMarkup.forTicket(ticketKey).bold('In Review') + ' for review.'
-                        });
-                    } catch (e) {}
-                    try {
-                        jira_move_to_status({ key: ticketKey, statusName: statuses.IN_REVIEW });
-                        console.log('✅ Moved', ticketKey, 'to In Review');
-                    } catch (e) { console.warn('Failed to move to In Review:', e); }
-                    return { success: true, path: 'pr_already_open', ticketKey };
+                var existingUrl = existingPr.html_url || existingPr.url || '';
+                console.log('⚠️  PR already open for', ticketKey, ':', existingUrl || ('#' + existingPr.number), '— skipping re-development');
+                try {
+                    jira_post_comment({
+                        key: ticketKey,
+                        comment: commentMarkup.forTicket(ticketKey).h(3, 'ℹ️ PR Already Open') + '\n\n' +
+                            'A pull/merge request already exists for this ticket: ' + (existingUrl || ('#' + existingPr.number)) + '\n\n' +
+                            'Moved ticket to ' + commentMarkup.forTicket(ticketKey).bold('In Review') + ' for review.'
+                    });
+                } catch (e) { }
+                try {
+                    jira_move_to_status({ key: ticketKey, statusName: statuses.IN_REVIEW });
+                    console.log('✅ Moved', ticketKey, 'to In Review');
+                } catch (e) { console.warn('Failed to move to In Review:', e); }
+                return { success: true, path: 'pr_already_open', ticketKey };
             }
         } catch (prCheckErr) {
             console.warn('Could not check existing PRs (non-fatal):', prCheckErr);
@@ -710,7 +722,7 @@ function action(params) {
             // Also try to remove from source-control PR/MR if branch already has one open
             try {
                 var openPrsForCleanup = _scm.listPrs('open') || [];
-                var prForCleanup = openPrsForCleanup.filter(function(pr) {
+                var prForCleanup = openPrsForCleanup.filter(function (pr) {
                     return pr && pr.head && pr.head.ref === expectedBranch;
                 })[0];
                 if (prForCleanup && prForCleanup.number) {
@@ -762,7 +774,7 @@ function action(params) {
         console.log('Using branch:', branchName);
 
         // Prepare commit message and PR target
-        const commitMessage = configLoader.formatTemplate(config.formats.commitMessage.development, {ticketKey: ticketKey, ticketSummary: ticketSummary});
+        const commitMessage = configLoader.formatTemplate(config.formats.commitMessage.development, { ticketKey: ticketKey, ticketSummary: ticketSummary });
         const prTarget = configLoader.resolvePRTargetBranch(config, params.ticket || actualParams.ticket);
 
         // Push the agent's work before running quality gates.
@@ -819,16 +831,17 @@ function action(params) {
                         console.warn('Failed to move ticket to ' + statuses.IN_REVIEW + ':', e);
                     }
                     if (wipLabelIfNoChanges) {
-                        try { jira_remove_label({ key: ticketKey, label: wipLabelIfNoChanges }); } catch (e) {}
+                        try { jira_remove_label({ key: ticketKey, label: wipLabelIfNoChanges }); } catch (e) { }
                     }
                     return { success: true, path: 'no-changes-needed', ticketKey: ticketKey };
                 }
 
                 // Case B: agent was genuinely interrupted, OR the CLI/environment itself is
-                // broken (e.g. missing AI CLI binary) — the latter can never self-resolve via retry.
-                if (isFatalCliEnvironmentError(developmentSummary)) {
-                    console.error('CLI/environment failure detected (e.g. AI CLI binary missing from PATH) — failing the job explicitly instead of resetting for retry.');
-                    throwFatalCliEnvironmentError(ticketKey, developmentSummary);
+                // broken (e.g. missing AI CLI binary, or a fatal provider/network error) —
+                // the latter can never self-resolve via retry.
+                if (isFatalCliEnvironmentError(developmentSummary, cliHasFatalError)) {
+                    console.error('CLI/environment failure detected (e.g. AI CLI binary missing from PATH, or a fatal provider/network error reported by dmtools) — failing the job explicitly instead of resetting for retry.');
+                    throwFatalCliEnvironmentError(ticketKey, cliErrorMessage || developmentSummary);
                 }
                 console.log('No git changes detected AND no response.md — CLI agent was interrupted. Resetting ticket for retry.');
                 try {
@@ -836,7 +849,7 @@ function action(params) {
                         key: ticketKey,
                         comment: commentMarkup.forTicket(ticketKey).h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted (likely hit a rate limit) before completing the implementation. The ticket has been reset to ' + commentMarkup.forTicket(ticketKey).bold('Ready For Development') + ' and will be automatically retried.'
                     });
-                } catch (e) {}
+                } catch (e) { }
                 try {
                     jira_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
                     console.log('✅ Moved', ticketKey, 'to Ready For Development for retry');
@@ -844,7 +857,7 @@ function action(params) {
                     console.warn('Failed to move ticket to Ready For Development:', e);
                 }
                 if (wipLabelIfNoChanges) {
-                    try { jira_remove_label({ key: ticketKey, label: wipLabelIfNoChanges }); } catch (e) {}
+                    try { jira_remove_label({ key: ticketKey, label: wipLabelIfNoChanges }); } catch (e) { }
                 }
                 return { success: true, path: 'interrupted', ticketKey: ticketKey };
             } else {
@@ -931,9 +944,9 @@ function action(params) {
         if (!responseContent || !responseContent.trim()) {
             // Same distinction as above: an unrecoverable CLI/environment failure must fail
             // the job explicitly rather than reset for an endless retry loop.
-            if (isFatalCliEnvironmentError(developmentSummary)) {
-                console.error('CLI/environment failure detected (e.g. AI CLI binary missing from PATH) — failing the job explicitly instead of resetting for retry.');
-                throwFatalCliEnvironmentError(ticketKey, developmentSummary);
+            if (isFatalCliEnvironmentError(developmentSummary, cliHasFatalError)) {
+                console.error('CLI/environment failure detected (e.g. AI CLI binary missing from PATH, or a fatal provider/network error reported by dmtools) — failing the job explicitly instead of resetting for retry.');
+                throwFatalCliEnvironmentError(ticketKey, cliErrorMessage || developmentSummary);
             }
             // Agent was interrupted after committing partial work (e.g. outputs/rca.md) but
             // before writing response.md. Reset ticket for retry rather than posting an error.
@@ -943,7 +956,7 @@ function action(params) {
                     key: ticketKey,
                     comment: commentMarkup.forTicket(ticketKey).h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted before completing the implementation (partial work was pushed to branch ' + commentMarkup.forTicket(ticketKey).bold(branchName) + '). The ticket has been reset to ' + commentMarkup.forTicket(ticketKey).bold('Ready For Development') + ' and will be automatically retried.\n\nThe agent can resume from the existing branch.'
                 });
-            } catch (e) {}
+            } catch (e) { }
             try {
                 jira_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
                 console.log('✅ Moved', ticketKey, 'to Ready For Development for retry');
@@ -953,14 +966,14 @@ function action(params) {
             const wipLabel2 = actualParams.metadata && actualParams.metadata.contextId
                 ? actualParams.metadata.contextId + '_wip' : null;
             if (wipLabel2) {
-                try { jira_remove_label({ key: ticketKey, label: wipLabel2 }); } catch (e) {}
+                try { jira_remove_label({ key: ticketKey, label: wipLabel2 }); } catch (e) { }
             }
             return { success: true, path: 'interrupted', ticketKey: ticketKey };
         }
         console.log('Using outputs/response.md as PR body (' + responseContent.length + ' characters)');
 
         // Create Pull Request
-        const prTitle = configLoader.formatTemplate(config.formats.prTitle.development, {ticketKey: ticketKey, ticketSummary: ticketSummary});
+        const prTitle = configLoader.formatTemplate(config.formats.prTitle.development, { ticketKey: ticketKey, ticketSummary: ticketSummary });
         const prResult = createPullRequest(prTitle, branchName, prTarget);
 
         if (!prResult.success) {

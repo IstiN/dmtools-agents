@@ -11,7 +11,7 @@
 
 function makeOutputFiles(fileMap) {
     return loadModule('js/common/outputFiles.js', makeRequire({}), {
-        file_read: function(opts) {
+        file_read: function (opts) {
             var path = opts && (opts.path || opts);
             return fileMap[path] !== undefined ? fileMap[path] : null;
         }
@@ -27,16 +27,16 @@ function loadCreateQuestionsModule(fileMap, extraGlobals) {
     var createdTickets = [];
 
     var globals = {
-        file_read: function(opts) {
+        file_read: function (opts) {
             var path = opts && (opts.path || opts);
             return fileMap[path] !== undefined ? fileMap[path] : null;
         },
-        jira_post_comment: function(args) { comments.push(args); },
-        jira_add_label: function(args) { labels.push(args); },
-        jira_move_to_status: function(args) { moves.push(args); },
-        jira_remove_label: function(args) { removedLabels.push(args); },
-        jira_assign_ticket_to: function() {},
-        jira_create_ticket_with_json: function(args) {
+        jira_post_comment: function (args) { comments.push(args); },
+        jira_add_label: function (args) { labels.push(args); },
+        jira_move_to_status: function (args) { moves.push(args); },
+        jira_remove_label: function (args) { removedLabels.push(args); },
+        jira_assign_ticket_to: function () { },
+        jira_create_ticket_with_json: function (args) {
             createdTickets.push(args);
             return JSON.stringify({ key: 'BICE-' + (900 + createdTickets.length) });
         }
@@ -46,17 +46,21 @@ function loadCreateQuestionsModule(fileMap, extraGlobals) {
     var mod = loadModule(
         'js/createQuestionsAndAssignForReview.js',
         makeRequire({
-            './common/jiraHelpers.js': { extractTicketKey: function(result) {
-                try { return JSON.parse(result).key; } catch (e) { return null; }
-            }},
-            './common/aiResponseParser.js': { buildSummary: function(summary, index) {
-                return summary || ('Follow-up question #' + (index + 1));
-            }},
+            './common/jiraHelpers.js': {
+                extractTicketKey: function (result) {
+                    try { return JSON.parse(result).key; } catch (e) { return null; }
+                }
+            },
+            './common/aiResponseParser.js': {
+                buildSummary: function (summary, index) {
+                    return summary || ('Follow-up question #' + (index + 1));
+                }
+            },
             './config.js': configModule,
             './configLoader.js': configLoaderModule,
-            './common/scm.js': { createScm: function() { return {}; } },
-            './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/scm.js': { createScm: function () { return {}; } },
+            './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function () { return false; } },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
             './common/outputFiles.js': outputFiles
         }),
         globals
@@ -72,16 +76,16 @@ function loadCreateQuestionsModule(fileMap, extraGlobals) {
     };
 }
 
-suite('createQuestionsAndAssignForReview — module export', function() {
-    test('module.exports is guarded with typeof for direct execution (postJSAction) compatibility', function() {
+suite('createQuestionsAndAssignForReview — module export', function () {
+    test('module.exports is guarded with typeof for direct execution (postJSAction) compatibility', function () {
         var code = file_read({ path: 'js/createQuestionsAndAssignForReview.js' });
         var hasGuard = code.indexOf('typeof module') !== -1 || code.indexOf('module.exports') === -1;
         assert.equal(hasGuard, true, 'module.exports usage (if any) should be guarded');
     });
 });
 
-suite('createQuestionsAndAssignForReview — with questions', function() {
-    test('creates a subtask per entry in questions.json', function() {
+suite('createQuestionsAndAssignForReview — with questions', function () {
+    test('creates a subtask per entry in questions.json', function () {
         var loaded = loadCreateQuestionsModule({
             'outputs/questions.json': JSON.stringify([
                 { summary: 'Clarify X', priority: 'High', description: 'outputs/questions/question-1.md' }
@@ -102,8 +106,8 @@ suite('createQuestionsAndAssignForReview — with questions', function() {
     });
 });
 
-suite('createQuestionsAndAssignForReview — no questions, with response.md', function() {
-    test('posts response.md content as explanation comment', function() {
+suite('createQuestionsAndAssignForReview — no questions, with response.md', function () {
+    test('posts response.md content as explanation comment', function () {
         var loaded = loadCreateQuestionsModule({
             'outputs/questions.json': '[]',
             'outputs/response.md': 'Investigated the codebase and Confluence specs — every acceptance ' +
@@ -130,8 +134,8 @@ suite('createQuestionsAndAssignForReview — no questions, with response.md', fu
     });
 });
 
-suite('createQuestionsAndAssignForReview — no questions, no response.md', function() {
-    test('posts a fallback warning comment instead of silently skipping', function() {
+suite('createQuestionsAndAssignForReview — no questions, no response.md', function () {
+    test('posts a fallback warning comment instead of silently skipping', function () {
         var loaded = loadCreateQuestionsModule({
             'outputs/questions.json': '[]'
             // no outputs/response.md entry — missing
@@ -150,5 +154,52 @@ suite('createQuestionsAndAssignForReview — no questions, no response.md', func
             loaded.comments[0].comment.indexOf('No clarifying questions raised') !== -1,
             'fallback comment warns about missing explanation'
         );
+    });
+});
+
+suite('createQuestionsAndAssignForReview — fatal CLI/provider error', function () {
+    test('does not move the ticket forward or touch labels when currentCliHasFatalError is true', function () {
+        // No outputs/questions.json at all — a fatal CLI error means the agent never ran.
+        var loaded = loadCreateQuestionsModule({});
+
+        var result = loaded.mod.action({
+            ticket: { key: 'BICE-829' },
+            metadata: { contextId: 'story_questions' },
+            initiator: '712020:abc',
+            jobParams: { customParams: {} },
+            currentCliHasFatalError: true,
+            currentCliErrorMessage: '502: Failed to connect to upstream server'
+        });
+
+        assert.equal(result.success, false, 'a fatal CLI error must not be reported as success');
+        assert.equal(loaded.createdTickets.length, 0, 'no question subtasks created');
+        assert.equal(loaded.labels.length, 0, 'ai_questions_asked/ai_generated labels not added');
+        assert.equal(loaded.moves.length, 0, 'ticket not moved to PO Review');
+        assert.equal(loaded.removedLabels.length, 0, 'WIP label not touched');
+        assert.equal(loaded.comments.length, 1, 'exactly one comment posted');
+        assert.ok(
+            loaded.comments[0].comment.indexOf('502: Failed to connect to upstream server') !== -1,
+            'comment surfaces the actual CLI/provider error message'
+        );
+        assert.ok(
+            loaded.comments[0].comment.indexOf('NOT moved to PO Review') !== -1,
+            'comment makes clear the ticket was left untouched'
+        );
+    });
+
+    test('treats currentCliHasFatalError as false when absent (backwards compatible)', function () {
+        var loaded = loadCreateQuestionsModule({
+            'outputs/questions.json': '[]',
+            'outputs/response.md': 'No gaps found.'
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'BICE-829' },
+            metadata: { contextId: 'story_questions' },
+            jobParams: { customParams: {} }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(loaded.moves.length, 1, 'ticket still moved to PO Review on the normal no-questions path');
     });
 });
