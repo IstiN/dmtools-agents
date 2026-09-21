@@ -837,7 +837,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     var ruleLimit = (typeof rule.limit === 'number' && rule.limit > 0) ? Math.floor(rule.limit) : null;
     var effectiveLimit = ruleLimit;
     // The workflow budget caps concurrent AI-RUN dispatches. localActions
-    // (update_branch, validate_pr, merge_pr, complete_validation, close_issue, fail_validation)
+    // (update_branch, validate_pr, merge_pr, complete_validation, close_issue,
+    // fail_validation, unarm_validation, conflict_rework)
     // run inline curl/API calls — they neither start workflows nor compete
     // for dispatch slots, so the budget must not throttle them (live bug:
     // one active review run zeroed the budget and silent-update-behind
@@ -1088,6 +1089,105 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 processedKeys.push(key);
             } catch (e) {
                 console.error('  ❌ unarm_validation failed for ' + key + ': ' + (e.message || e));
+            }
+            continue;
+        }
+
+        if (rule.localAction === 'conflict_rework') {
+            // Owner rule 2026-09-21: a machine PR whose branch CONFLICTS with
+            // main (silent-update's git merge cannot land; mergeState DIRTY)
+            // must not sit in the queue forever — send it to rework: the
+            // agent resolves the conflicts and pushes, then the normal
+            // validate → (pr_approved sticky) merge flow resumes. Guests get
+            // the report only (same owner rule as fail_validation: rework is
+            // machine-author-only). Once per head: a conflict-marker comment
+            // carrying the current head sha means this head was already
+            // reported+armed.
+            try {
+                var headSha = (ticket.pr && ticket.pr.headSha) || null;
+                if (!headSha) {
+                    try {
+                        var cpr = github_get_pr({
+                            workspace: effectiveRepoInfo.owner,
+                            repository: effectiveRepoInfo.repo,
+                            pullRequestId: ticket.prNumber
+                        });
+                        var cprObj = typeof cpr === 'string' ? JSON.parse(cpr) : (cpr || {});
+                        headSha = (cprObj.head && (cprObj.head.sha || cprObj.head)) || null;
+                    } catch (e5) { /* stays null — dedup degrades to marker-only */ }
+                }
+                var marker = '⚠️ Merge conflict with main';
+                var alreadyReported = false;
+                try {
+                    var commentsRaw = github_get_pr_comments({
+                        workspace: effectiveRepoInfo.owner,
+                        repository: effectiveRepoInfo.repo,
+                        pullRequestId: ticket.prNumber
+                    });
+                    var commentsObj = typeof commentsRaw === 'string' ? JSON.parse(commentsRaw) : (commentsRaw || []);
+                    var commentList = Array.isArray(commentsObj)
+                        ? commentsObj
+                        : (commentsObj.comments || commentsObj.items || []);
+                    alreadyReported = commentList.some(function (c) {
+                        var b = String((c && c.body) || '');
+                        return b.indexOf(marker) !== -1 &&
+                            (!headSha || b.indexOf(String(headSha)) !== -1);
+                    });
+                } catch (e6) { /* read failed — treat as not reported */ }
+                if (alreadyReported) {
+                    console.log('  ⏭️  ' + key + ' conflict already reported for head — waiting on rework');
+                    processedKeys.push(key);
+                    continue;
+                }
+                try {
+                    github_remove_label({
+                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                        number: ticket.prNumber, label: 'ai_validating'
+                    });
+                } catch (e7) { /* absent label is fine */ }
+                var cMachineAuthor = machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, effectiveConfig);
+                var cIsMachinePr = !!cMachineAuthor && !!ticket.author &&
+                    String(ticket.author).toLowerCase() === String(cMachineAuthor).toLowerCase();
+                var cLinked = null;
+                if (cIsMachinePr) {
+                    try {
+                        var bodyRaw = github_get_pr({
+                            workspace: effectiveRepoInfo.owner,
+                            repository: effectiveRepoInfo.repo,
+                            pullRequestId: ticket.prNumber
+                        });
+                        var bodyObj = typeof bodyRaw === 'string' ? JSON.parse(bodyRaw) : (bodyRaw || {});
+                        var cm = /(?:closes|fixes|resolves)\s+#(\d+)/i.exec(String(bodyObj.body || ''));
+                        if (cm) cLinked = parseInt(cm[1], 10);
+                    } catch (e8) { console.warn('  ⚠️ linked-issue lookup failed: ' + (e8.message || e8)); }
+                    if (!cLinked && ticket.branch) {
+                        var cbm = /(?:^|\/)gh-(\d+)$/i.exec(String(ticket.branch));
+                        if (cbm) cLinked = parseInt(cbm[1], 10);
+                    }
+                }
+                var cReport = cIsMachinePr
+                    ? (marker + ' — the silent branch update could not merge main (conflict).' +
+                       (headSha ? ' (head `' + headSha + '`)' : '') +
+                       (cLinked ? ' Rework re-queued (linked issue #' + cLinked + ' re-armed): resolve the conflicts and push — validation re-runs automatically.' : ' Rework re-queued: resolve the conflicts and push — validation re-runs automatically.') +
+                       ' (approval latch kept — no re-review after the fix)')
+                    : (marker + ' — the silent branch update could not merge main (conflict).' +
+                       (headSha ? ' (head `' + headSha + '`)' : '') +
+                       ' Guest PR: rebase onto main and push — validation re-runs automatically; auto-rework is reserved for the machine account.');
+                github_create_comment({
+                    workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                    number: ticket.prNumber, body: cReport
+                });
+                if (cIsMachinePr && cLinked) {
+                    github_add_labels({
+                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                        number: cLinked, labels: ['agent:rework']
+                    });
+                }
+                console.log('  🔁 ' + key + ' merge conflict with main — ' +
+                    (cIsMachinePr ? 'rework re-queued' + (cLinked ? ' (issue #' + cLinked + ')' : '') : 'guest PR, report only'));
+                processedKeys.push(key);
+            } catch (e) {
+                console.error('  ❌ conflict_rework failed for ' + key + ': ' + (e.message || e));
             }
             continue;
         }

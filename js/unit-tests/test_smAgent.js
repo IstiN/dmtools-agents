@@ -179,6 +179,9 @@ function makeSmAgent(opts) {
         smMocks.github_get_pr = function () {
             return JSON.stringify(opts.github.pr || { number: 1, body: opts.github.prBody || '' });
         };
+        smMocks.github_get_pr_comments = function () {
+            return JSON.stringify(opts.github.prComments || []);
+        };
         smMocks.set_env_variable = function (name, value) {
             capturedEnvSets.push({ name: name, value: value });
         };
@@ -900,6 +903,85 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }), ['ai_validating']);
         assert.deepEqual(sm.capturedPrLabelAdds.map(function (r) { return r.labels; }), [['ai_validated']]);
         assert.equal(sm.capturedPrMerges.length, 0);
+    });
+
+    test('conflict_rework: machine DIRTY PR — comments with head sha, re-arms agent:rework, pr_approved STICKY', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(95, { labels: ['pr_approved', 'ai_validating'], branch: 'ai/gh-91', author: 'ai-teammate',
+                                      pr: { headSha: 'deadbee' } })],
+                pr: { number: 95, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #91 — thing' },
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [{
+            source: 'github', query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+            localAction: 'conflict_rework', limit: 1, id: 'conflict-rework' }] } });
+
+        assert.equal(sm.capturedPrComments.length, 1, 'conflict report comment');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Merge conflict with main') !== -1);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('deadbee') !== -1, 'comment carries the head sha (per-head dedup key)');
+        assert.equal(sm.capturedPrLabelAdds.length, 1);
+        assert.equal(sm.capturedPrLabelAdds[0].number, 91, 're-arm lands on the linked issue');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) { return r.label === 'ai_validating'; }),
+            'ai_validating disarmed');
+        assert.ok(!sm.capturedPrLabelRemoves.some(function (r) { return r.label === 'pr_approved'; }),
+            'pr_approved is STICKY — the conflicted fix re-validates, never re-reviews');
+    });
+
+    test('conflict_rework: already reported for THIS head — silent skip (once per head)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(95, { labels: [], branch: 'ai/gh-91', author: 'ai-teammate',
+                                      pr: { headSha: 'deadbee' } })],
+                pr: { number: 95, labels: [], body: 'Fixes #91 — thing' },
+                prComments: [
+                    { body: '⚠️ Merge conflict with main — the silent branch update could not merge main (conflict). (head `deadbee`)' }
+                ]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [{
+            source: 'github', query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+            localAction: 'conflict_rework', limit: 1, id: 'conflict-rework' }] } });
+
+        assert.equal(sm.capturedPrComments.length, 0, 'no duplicate comment for the same head');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no duplicate rework arm for the same head');
+        // A comment for a DIFFERENT head must NOT suppress: new head = new report.
+        var sm2 = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(95, { labels: [], branch: 'ai/gh-91', author: 'ai-teammate',
+                                      pr: { headSha: 'cafe123' } })],
+                pr: { number: 95, labels: [], body: 'Fixes #91 — thing' },
+                prComments: [
+                    { body: '⚠️ Merge conflict with main — ... (head `deadbee`)' }
+                ]
+            }
+        }));
+        sm2.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [{
+            source: 'github', query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+            localAction: 'conflict_rework', limit: 1, id: 'conflict-rework' }] } });
+        assert.equal(sm2.capturedPrComments.length, 1, 'moved head re-reports');
+        assert.equal(sm2.capturedPrLabelAdds.length, 1, 'moved head re-arms rework');
+    });
+
+    test('conflict_rework: GUEST DIRTY PR — report only, never a rework arm', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(96, { labels: [], branch: 'fix/773-thing', author: 'someguest',
+                                      pr: { headSha: 'ab12cd' } })],
+                pr: { number: 96, labels: [], body: 'Fixes #773 — guest' },
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [{
+            source: 'github', query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+            localAction: 'conflict_rework', limit: 1, id: 'conflict-rework' }] } });
+
+        assert.equal(sm.capturedPrComments.length, 1);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Guest PR') !== -1);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('rebase onto main') !== -1);
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no rework arm for guests');
     });
 
     test('fail_validation: unarms, comments, re-arms agent:rework — pr_approved is STICKY', function () {

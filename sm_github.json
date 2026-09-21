@@ -126,6 +126,20 @@
           "id": "unarm-stale-validation"
         },
         {
+          "description": "GitHub PR: branch conflicts with main (silent-update's git merge cannot land; mergeState DIRTY) -> the queue would stall forever — report and, for MACHINE-authored PRs, re-arm agent:rework on the linked issue so the agent resolves the conflicts and pushes; the normal validate flow then resumes (pr_approved is STICKY — no re-review). Guest PRs get the report only (owner rule 2026-09-21: auto-rework is machine-author-only). Fires once per head: the marker comment carries the head sha and suppresses re-reports for the same head.",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "mergeState": [
+              "DIRTY"
+            ],
+            "draft": false
+          },
+          "localAction": "conflict_rework",
+          "limit": 1,
+          "id": "conflict-rework"
+        },
+        {
           "description": "Auto rework leg: agent:rework armed on the issue either by the review verdict (CHANGES_REQUESTED) or by red pre-merge CI. Pushing fixes removes the label (pr_rework removeLabels). prMachineAuthor: auto rework fires ONLY on machine-authored PRs (owner rule) — the machine login is deployment config (jobParams.machineAuthor / config.machineAuthor / factory-sm machine-author input), never hardcoded; unconfigured fails closed. Manual rework on ANY PR: label the PR agent:rework (see rework-on-label).",
           "source": "github",
           "query": {
