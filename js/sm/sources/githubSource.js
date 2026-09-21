@@ -60,15 +60,21 @@ function matchesGuards(item, rule, provider, machineAuthor) {
     }
     // The live provider reports `checkConclusion`; older stubs (and the
     // issue-path placeholder) use `checks`. Accept both everywhere.
+    // Array form (like mergeState): the dispatch-CI bridge reports a
+    // PENDING check run on every fresh head, so "no CI yet" is either
+    // 'none' or 'pending' — validate-fresh matches both.
     var rollup = function (pr) { return pr ? (pr.checkConclusion || pr.checks) : undefined; };
-    if (q.prChecks && rollup(item.pr) !== q.prChecks) return false;
+    var rollupWant = function (want) {
+        return Array.isArray(want) ? want : (want ? [want] : null);
+    };
+    if (q.prChecks && rollupWant(q.prChecks).indexOf(rollup(item.pr)) === -1) return false;
     if (q.prMergeState && (!item.pr || item.pr.mergeState !== q.prMergeState)) return false;
     var msWant = Array.isArray(q.mergeState) ? q.mergeState : (q.mergeState ? [q.mergeState] : null);
     if (msWant && (!item.pr || msWant.indexOf(item.pr.mergeState) === -1)) return false;
     // PR-carrier guards (issue #687 lifecycle rules): `checks` reads the
     // provider's check rollup (green/red/pending/none); `notMergeState`
     // excludes one state (e.g. BEHIND while a silent update lands).
-    if (q.checks && rollup(item.pr) !== q.checks) return false;
+    if (q.checks && rollupWant(q.checks).indexOf(rollup(item.pr)) === -1) return false;
     if (q.notMergeState && (!item.pr || item.pr.mergeState === q.notMergeState)) return false;
     // Stale review verdict (PR #690): CHANGES_REQUESTED pinned to an older
     // commit while fixes landed on a newer green head — a re-review is

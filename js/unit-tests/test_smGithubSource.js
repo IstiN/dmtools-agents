@@ -517,4 +517,33 @@ suite('sm github source', function () {
         }, { repoInfo: { owner: 'a', repo: 'b' } });
         assert.equal(noKnob.length, 0, 'no machineAuthor configured — gate fails closed');
     });
+
+    test('pr rules: checks accepts an array (dispatch-CI bridge reports pending on fresh heads)', function () {
+        // With dispatch-only CI, a pull_request-triggered bridge workflow
+        // holds PENDING check runs on every fresh head while it waits for
+        // the SM's dispatched run — "no validation yet" is 'none' OR
+        // 'pending'. validate-fresh matches both; scalar form unchanged.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 61, labels: [], head: { ref: 'a/x' }, draft: false },
+                    { number: 62, labels: [], head: { ref: 'a/y' }, draft: false },
+                    { number: 63, labels: [], head: { ref: 'a/z' }, draft: false }
+                ];
+            }
+        }, {}, {
+            61: { number: 61, state: 'OPEN', checks: 'none', mergeState: 'CLEAN', mergeable: true },
+            62: { number: 62, state: 'OPEN', checks: 'pending', mergeState: 'CLEAN', mergeable: true },
+            63: { number: 63, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', checks: ['none', 'pending'] }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.map(function (i) { return i.key; }).join(','), 'pr-61,pr-62');
+
+        var scalar = srcMod.query({
+            query: { type: 'pr', checks: 'green' }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(scalar.map(function (i) { return i.key; }).join(','), 'pr-63');
+    });
 });
