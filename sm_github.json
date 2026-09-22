@@ -108,7 +108,7 @@
           "id": "validated-green"
         },
         {
-          "description": "Validated-but-stale: armed (ai_validating) + validation concluded but base moved before the merge tick. silent-update-behind excludes ai_validating and merge-validated needs CLEAN, so without this unarm the PR deadlocks (live: fa pr-744). Drops ai_validating; the silent refresh + merge window re-validate the fresh head (the 422-arm covers the already-fresh case), then merge fires.",
+          "description": "Validated-but-stale: armed (ai_validating) + validation concluded but BASE MOVED (BEHIND only). BLOCKED must NOT unarm: since #483 BLOCKED is a real verdict, and on a freshly armed head BLOCKED simply means 'required checks pending' — unarming there races validate-armed in the SAME tick and deadlocks the PR forever (live: fa pr-762 armed at 08:25:37, unarmed 08:25:58 by the BLOCKED match, re-armed next tick, loop). silent-update-behind excludes ai_validating and merge-validated needs CLEAN, so without this unarm a genuinely moved base still deadlocks (live: fa pr-744) — BEHIND-only keeps that recovery and stops the self-inflicted one.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -116,8 +116,7 @@
               "ai_validating"
             ],
             "mergeState": [
-              "BEHIND",
-              "BLOCKED"
+              "BEHIND"
             ],
             "draft": false
           },
