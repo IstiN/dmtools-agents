@@ -1,0 +1,20 @@
+# machine merge
+
+The event-driven merge fast path: a deterministic jsrunner bot that concludes merge-stage transitions the moment their evidence lands on a PR — squash-merges approved+green+CLEAN heads, latches `ai_validated` on green unapproved heads, and unarms stale ones. Complements the cron-based SM tick (GitHub scheduled runs are best-effort and silently drop under load); idempotent against the SM's own merge-validated/validated-green rules — shared labels, first actor wins.
+
+Runs via `factory-merge.yml` (reusable) on `workflow_run` / `pull_request` / `check_run` / `workflow_dispatch` events — see the workflow stub in the target repo (`machine-merge.yml`).
+
+## Parameters
+
+Configured via the job JSON (`machine_merge.json`) or the `run` override.
+
+- `repo` — target `owner/repo` the bot scans (`params.jobParams.repo`, or `GH_REPO`).
+- `dryRun` — reserved (future): log the plan without acting.
+
+### Merge semantics
+
+- approved (`pr_approved`) + `ai_validating` + all head checks green + CLEAN → squash-merge (one retry on transient refusals, errors surfaced verbatim);
+- `ai_validating` + green + CLEAN + unapproved → latch `ai_validated`, unarm (review follows);
+- `ai_validating` + green + stale base (BEHIND/BLOCKED) → unarm only — the SM refreshes and re-validates.
+
+Never dispatches workflows, never arms review/rework, skips `agent:review` PRs (SM mid-review) and conflicts (conflict-rework owns them).
