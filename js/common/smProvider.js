@@ -248,6 +248,9 @@ function githubProvider(cfg) {
                 // Head sha pins the review-verdict comparison: a verdict
                 // rendered on an older commit is stale after pushes.
                 headSha: (pr.head && pr.head.sha) || null,
+                // Head ref — SM legs dispatched on the PR branch link their
+                // workflow runs to the PR (checks area + timeline).
+                branch: (pr.head && pr.head.ref) || '',
                 // PR-side labels (REST body): issue-anchored SM rules read
                 // them via prLabels/notPrLabels guards — the machine loop
                 // keeps ai_pr_reviewed/agent:review on the PR, not the issue.

@@ -306,7 +306,16 @@ function isWorkflowBudgetExhausted(rule, effectiveConfig, workflowBudget, repoIn
 
 function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBudget, item) {
     var workflowFile = rule.workflowFile || 'ai-teammate.yml';
+    // workflowRef may reference the matched item: '{branch}' dispatches the
+    // leg ON the PR head so GitHub links the run to the PR (checks + PR
+    // timeline) — e.g. review/rework legs become pr-visible runs. An empty
+    // expansion (no linked PR / no head) falls back to 'main'.
     var workflowRef  = rule.workflowRef  || 'main';
+    var it0 = item || {};
+    workflowRef = String(workflowRef)
+        .replace(/\{branch\}/g, String(it0.branch || ''))
+        .replace(/\{prNumber\}/g, String(it0.prNumber || ''));
+    if (!workflowRef) workflowRef = 'main';
     var resolvedCf   = buildEncodedConfigModule.resolveConfigFile(rule, effectiveConfig);
     var concurrencyKey = rule.concurrencyKey || ticketKey;
 

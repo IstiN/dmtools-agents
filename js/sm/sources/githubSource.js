@@ -208,6 +208,7 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
         if (prRef && prRef.state === 'OPEN') {
             item.pr = provider.prStatus(prRef.number);
             item.prNumber = prRef.number;
+            item.branch = (item.pr && item.pr.branch) || '';
         } else if (prRef) {
             item.pr = { number: prRef.number, state: prRef.state,
                         checks: 'none', mergeState: 'UNKNOWN', mergeable: null };

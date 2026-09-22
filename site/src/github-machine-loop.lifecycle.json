@@ -2,7 +2,7 @@
   "schema_version": 1,
   "diagram_type": "lifecycle",
   "meta": {
-    "title": "dmtools-agents — GitHub Machine Loop (latched gates)",
+    "title": "dmtools-agents — GitHub Machine Loop (SM owns every transition)",
     "output": "site/index.html",
     "viewBox": [
       980,
@@ -13,19 +13,15 @@
   "lanes": [
     {
       "id": "main",
-      "label": "Ticket pipeline (labels = state)"
+      "label": "Dev lane — parallel, non-blocking"
     },
     {
-      "id": "loop",
-      "label": "Rework loop"
-    },
-    {
-      "id": "driver",
-      "label": "Orchestrator"
+      "id": "events",
+      "label": "Rework loop · merge window (FIFO, mutex) — SM tick ×10 dials drive every transition"
     },
     {
       "id": "terminal",
-      "label": "Terminal"
+      "label": "Outcome"
     }
   ],
   "states": [
@@ -37,45 +33,45 @@
       "lane": "main",
       "col": 0,
       "step": "01",
-      "tag": "event"
+      "tag": "sole auto-trigger"
     },
     {
       "id": "developing",
       "type": "active",
-      "label": "In Development",
-      "sublabel": "dev leg · fa session",
+      "label": "Development",
+      "sublabel": "dev leg · free pushes",
       "lane": "main",
       "col": 1,
       "step": "02",
-      "tag": "ai_dev_started pinned once"
+      "tag": "CI silent on push"
     },
     {
       "id": "validating",
-      "type": "decision",
+      "type": "active",
       "label": "Validating",
       "sublabel": "SM-dispatched CI",
       "lane": "main",
       "col": 2,
       "step": "03",
-      "tag": "no auto-CI on push"
+      "tag": "validate-fresh ×5"
     },
     {
       "id": "in_review",
       "type": "waiting",
       "label": "In Review",
-      "sublabel": "one approval max",
+      "sublabel": "review on PR head",
       "lane": "main",
-      "col": 4,
+      "col": 3,
       "step": "04",
-      "tag": "pr_approved latch"
+      "tag": "review ×10"
     },
     {
       "id": "rework",
       "type": "active",
-      "label": "In Rework",
-      "sublabel": "rework leg pushes (CI silent)",
-      "lane": "loop",
-      "col": 1,
+      "label": "Rework",
+      "sublabel": "fixes · CI silent",
+      "lane": "events",
+      "col": 0,
       "tag": "agent:rework"
     },
     {
@@ -83,167 +79,79 @@
       "type": "failure",
       "label": "Escalated",
       "sublabel": "human takes over",
-      "lane": "loop",
-      "col": 2,
-      "tag": "rework-round cap",
-      "width": 110
+      "lane": "events",
+      "col": 0,
+      "tag": "round cap",
+      "yOffset": 98
     },
     {
-      "id": "sm_tick",
-      "type": "external",
-      "label": "SM tick · cron */10",
-      "sublabel": "dispatch CI · update branch",
-      "lane": "driver",
-      "col": 1,
-      "yOffset": 145,
-      "tag": "cap = 1"
+      "id": "approved",
+      "type": "active",
+      "label": "Approved",
+      "sublabel": "FIFO queue",
+      "lane": "events",
+      "col": 2,
+      "step": "05",
+      "tag": "oldest first"
     },
     {
       "id": "merged",
       "type": "success",
       "label": "Merged",
-      "sublabel": "squash · markers cleared",
+      "sublabel": "squash · cleaned",
       "lane": "terminal",
-      "col": 2,
-      "tag": "done"
+      "col": 1,
+      "step": "06",
+      "tag": "green + CLEAN"
     }
   ],
   "transitions": [
     {
       "from": "assigned",
-      "to": "developing",
-      "label": "dev leg starts once",
-      "labelAt": [
-        171,
-        202
-      ]
+      "to": "developing"
     },
     {
       "from": "developing",
-      "to": "validating",
-      "label": "PR opened → CI",
-      "labelAt": [
-        272,
-        202
-      ]
+      "to": "validating"
     },
     {
       "from": "validating",
       "to": "in_review",
-      "label": "green → review",
-      "labelAt": [
-        520,
-        138
-      ]
+      "route": "straight"
     },
     {
       "from": "in_review",
-      "to": "validating",
-      "label": "APPROVE · pin pr_approved",
-      "variant": "dashed",
-      "route": "top-channel",
-      "channelY": 98,
-      "labelAt": [
-        479,
-        84
-      ]
+      "to": "approved",
+      "variant": "dashed"
+    },
+    {
+      "from": "approved",
+      "to": "merged"
     },
     {
       "from": "validating",
       "to": "rework",
-      "label": "CI red → rework",
       "variant": "security",
-      "fromSide": "left",
-      "toSide": "left",
-      "via": [
-        [
-          320,
-          157
-        ],
-        [
-          320,
-          307
-        ]
-      ],
-      "labelAt": [
-        250,
-        240
-      ]
+      "fromSide": "bottom",
+      "toSide": "top"
     },
     {
       "from": "rework",
       "to": "validating",
-      "label": "fixes pushed → validate",
-      "fromSide": "top",
-      "toSide": "right",
-      "via": [
-        [
-          556,
-          200
-        ],
-        [
-          470,
-          200
-        ],
-        [
-          470,
-          157
-        ]
-      ],
-      "labelAt": [
-        480,
-        224
-      ]
+      "route": "left-channel",
+      "channelX": 320
     },
     {
       "from": "in_review",
       "to": "rework",
-      "label": "CHANGES → rework",
       "variant": "security",
       "fromSide": "bottom",
-      "toSide": "top",
-      "via": [
-        [
-          710,
-          260
-        ],
-        [
-          556,
-          260
-        ]
-      ],
-      "labelAt": [
-        640,
-        244
-      ]
+      "toSide": "right"
     },
     {
       "from": "rework",
       "to": "escalated",
       "variant": "security"
-    },
-    {
-      "from": "validating",
-      "to": "merged",
-      "label": "approved → squash",
-      "fromSide": "bottom",
-      "toSide": "bottom",
-      "route": "bottom-channel",
-      "channelY": 520,
-      "labelAt": [
-        520,
-        504
-      ]
-    },
-    {
-      "from": "sm_tick",
-      "to": "rework",
-      "label": "SM dispatch",
-      "variant": "dashed",
-      "labelAt": [
-        570,
-        380
-      ]
     }
   ]
 }
