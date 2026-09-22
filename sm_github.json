@@ -90,7 +90,7 @@
           "id": "validate-fresh"
         },
         {
-          "description": "GitHub PR: validation CI red on the head -> unarm ai_validating, report, requeue agent:rework on the linked issue. pr_approved is STICKY (owner rule 2026-09): the reworked head re-validates and merges without a re-review \u2014 no token burn on review legs.",
+          "description": "GitHub PR: validation CI red on the head -> unarm ai_validating, report, requeue agent:rework on the linked issue. pr_approved is STICKY (owner rule 2026-09): the reworked head re-validates and merges without a re-review \u2014 no token burn on review legs. Limit 10 (owner 2026-09-22): latch/unlatch verdicts in waves \u2014 pure label writes, nothing serial.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -100,7 +100,7 @@
             "checks": "red"
           },
           "localAction": "fail_validation",
-          "limit": 1,
+          "limit": 10,
           "id": "fail-validation"
         },
         {
@@ -119,7 +119,7 @@
           "id": "merge-validated"
         },
         {
-          "description": "GitHub PR: validation green but not yet approved -> latch ai_validated, unarm ai_validating. review-after-dev requires the latch + green checks, so review fires exactly once per validated head. Approved PRs are excluded (merge-validated / unarm-stale own them).",
+          "description": "GitHub PR: validation green but not yet approved -> latch ai_validated, unarm ai_validating. review-after-dev requires the latch + green checks, so review fires exactly once per validated head. Approved PRs are excluded (merge-validated / unarm-stale own them). Limit 10 (owner 2026-09-22): latch/unlatch verdicts in waves \u2014 pure label writes, nothing serial.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -132,7 +132,7 @@
             "checks": "green"
           },
           "localAction": "complete_validation",
-          "limit": 1,
+          "limit": 10,
           "id": "validated-green"
         },
         {
