@@ -1,0 +1,9 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "js/sm/mergeBot.js",
+    "jobParams": {
+      "repo": "owner/name"
+    }
+  }
+}

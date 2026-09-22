@@ -1,0 +1,106 @@
+# Merge bot factory leg — REUSABLE workflow (dmtools-agents factory pack).
+#
+# Why: the SM tick is cron */10 and GitHub cron is BEST-EFFORT — under load
+# scheduled runs silently vanish (live: fa ticks stopped for 30+ minutes
+# while approved green PRs waited to merge). The merge stage needs no
+# orchestration: its evidence (labels + concluded checks + mergeability)
+# is fully on the PR. This workflow runs the deterministic, idempotent
+# mergeBot.js on EVENTS so conclusions act within seconds:
+#
+#   workflow_run (the dispatched CI concluded)   — the primary trigger
+#   pull_request (labeled / synchronize / edited)— latch-relevant changes
+#   check_run (completed)                         — bridge mirrors conclude
+#   workflow_dispatch                             — manual / watchdog nudge
+#
+# The bot performs ONLY: approved+validating+green+CLEAN -> squash-merge
+# (one retry on transient refusals, full error surfacing); validating+
+# green+CLEAN+unapproved -> latch ai_validated; validating+green+stale
+# base -> unarm. Everything else stays SM-owned (no dispatches, no legs).
+# Overlap with the SM's merge-validated/validated-green rules is safe:
+# both sides are idempotent on the same labels; whoever runs first wins
+# and the other becomes a no-op.
+#
+# Caller stub (machine-merge.yml in the target repo):
+#   on:
+#     workflow_run: {workflows: ['Quality'], types: [completed]}
+#     pull_request: {types: [labeled, synchronize, edited]}
+#     check_run: {types: [completed]}
+#     workflow_dispatch: {}
+#   jobs:
+#     merge:
+#       if: github.event_name != 'pull_request' || contains(github.event.label.name, 'ai_') || contains(github.event.label.name, 'pr_approved')
+#       uses: IstiN/dmtools-agents/.github/workflows/factory-merge.yml@<ref>
+#       with:
+#         factory_ref: <same literal ref>
+#       secrets:
+#         SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+
+name: 'Factory · Machine Merge Bot'
+
+on:
+  workflow_call:
+    inputs:
+      factory_ref:
+        description: "The ref this workflow was invoked with (same literal as the stub uses-ref) — the engine is checked out at exactly the caller's pin."
+        required: true
+        type: string
+      dry-run:
+        description: "'true' to log the plan without acting (STRING — boolean-typed reusable inputs cannot take expressions)."
+        required: false
+        type: string
+        default: 'false'
+
+    secrets:
+      SOURCE_GITHUB_TOKEN:
+        description: 'PAT with repo scope — GitHub API access for the merge bot (labels, PR state, checks, merge).'
+        required: true
+
+# One bot at a time per repo; never cancel an in-flight pass (idempotent —
+# a queued second pass just re-confirms). The SM tick runs in its own group;
+# overlap between the bot and the SM is by design safe (shared labels).
+concurrency:
+  group: machine-merge-bot
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  merge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: "Checkout factory (dmtools-agents: merge bot)"
+        uses: actions/checkout@v7
+        with:
+          repository: IstiN/dmtools-agents
+          ref: ${{ inputs.factory_ref }}
+          path: factory-agents
+          persist-credentials: false
+
+      - name: Install dmtools CLI (pinned release bundle)
+        env:
+          DMTOOLS_VERSION: ${{ vars.DMTOOLS_VERSION || 'v0.1.16' }}
+        run: |
+          curl -fsSL "https://github.com/epam/dmtools-dart/releases/download/${DMTOOLS_VERSION}/install.sh" \
+            -o /tmp/dmtools-install.sh
+          bash /tmp/dmtools-install.sh "${DMTOOLS_VERSION}"
+          echo "$HOME/.dmtools/bin" >> "$GITHUB_PATH"
+
+      - name: Run the merge bot
+        env:
+          GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+          SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+        run: |
+          repo='${{ github.repository }}'
+          dry=""
+          if [ "${{ inputs.dry-run }}" = "true" ]; then dry=",\"dryRun\":true"; fi
+          override="{\"params\":{\"jobParams\":{\"repo\":\"${repo}\"${dry}}}}"
+          cd factory-agents && dmtools run machine_merge.json "$override"

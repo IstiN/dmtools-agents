@@ -87,7 +87,8 @@
         "js/unit-tests/test_machineSmAgent.js",
         "js/unit-tests/test_machineAuthor.js",
         "js/unit-tests/test_smProvider.js",
-        "js/unit-tests/test_smGithubSource.js"
+        "js/unit-tests/test_smGithubSource.js",
+        "js/unit-tests/test_mergeBot.js"
       ]
     }
   }
