@@ -185,14 +185,24 @@ function githubProvider(cfg) {
                     };
                 });
             }
-            var red = false, pending = false;
+            // CANCELLED is NOT a verdict: a cancelled validation run says
+            // nothing about the head (stale-run cleanup, quota sweeps,
+            // re-dispatches all cancel runs). Treating it as red made the
+            // engine dispatch rework legs on perfectly good PRs (live:
+            // dart gh-191, twice on 2026-09-22 after manual run cleanups).
+            // A cancelled check is ignored; if nothing conclusive remains,
+            // the rollup reads pending/none and validate-fresh re-runs CI.
+            var red = false, pending = false, ignored = 0;
+            // (all-cancelled still counts as 'no verdict yet': see CANCELLED note above)
             rollup.forEach(function (c) {
                 var concl = c.conclusion;
                 var status = c.status;
-                if (concl === 'FAILURE' || concl === 'TIMED_OUT' || concl === 'CANCELLED') red = true;
+                if (concl === 'CANCELLED') { ignored++; return; }
+                if (concl === 'FAILURE' || concl === 'TIMED_OUT') red = true;
                 else if (!concl || status === 'QUEUED' || status === 'IN_PROGRESS' ||
                          status === 'WAITING' || status === 'PENDING') pending = true;
             });
+            if (rollup.length > 0 && red === false && pending === false && ignored > 0) pending = true;
             // Live shape: github_get_pr returns the REST body, where the
             // field is `mergeable_state` with lowercase values (clean,
             // dirty, blocked, behind, has_hooks, draft, unknown) — the

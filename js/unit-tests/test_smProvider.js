@@ -454,4 +454,23 @@ suite('smProvider', function () {
         var res = p.closeIssue(7, 'bye');   // must not throw
         assert.equal(res, null);
     });
+    test('cancelled checks are not a verdict: all-cancelled rollup reads pending, never red', function () {
+        // Live bug (dmtools-dart gh-191, twice on 2026-09-22): manual
+        // run cleanups cancel validation runs; the engine read the
+        // CANCELLED check runs as red and dispatched rework legs on an
+        // approved+validated PR.
+        var p = loadProvider('github', {
+            github_get_pr: function () { return { state: 'open', mergeable: true, mergeable_state: 'clean', head: { sha: 'abc123' } }; },
+            github_get_commit_check_runs: function () {
+                return { check_runs: [
+                    { status: 'completed', conclusion: 'cancelled' },
+                    { status: 'completed', conclusion: 'cancelled' }
+                ] };
+            }
+        });
+        var st = p.prStatus(7);
+        assert.notEqual(st.checkConclusion, 'red', 'cancelled runs are not failures — rework must not fire');
+        assert.equal(st.checkConclusion, 'pending', 'nothing conclusive left — re-run validation, do not rework');
+    });
+
 });
