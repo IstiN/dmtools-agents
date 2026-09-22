@@ -69,7 +69,7 @@
           "id": "revalidate-armed"
         },
         {
-          "description": "GitHub PR: head with no CONCLUDED validation (checks 'none' \u2014 fresh push, no CI \u2014 or 'pending' \u2014 the dispatch bridge's waiting check runs; pushes fire no CI) -> dispatch the CI workflow on the head + ai_validating marker. Runs pre-review (latches ai_validated on green) AND pre-merge for approved PRs is handled by validate-armed; this rule catches every un-armed, un-approved, fresh head exactly once per head. The pending match is safe: while the SM's own dispatched run is in flight the marker ai_validating excludes the PR here. DEV lane (owner 2026-09-22): validation here is NON-BLOCKING \u2014 dev PRs validate in parallel and flow to ai review as each turns green; the one-at-a-time mutex lives ONLY in the approved merge window (validate-armed/revalidate-armed). chore:pin PRs (factory lockstep bumps) are exempt: the factory suite gates them before the cut, and the next real PR validates the pinned content via silent-update.",
+          "description": "GitHub PR: head with no CONCLUDED validation (checks 'none' \u2014 fresh push, no CI \u2014 or 'pending' \u2014 the dispatch bridge's waiting check runs; pushes fire no CI) -> dispatch the CI workflow on the head + ai_validating marker. Runs pre-review (latches ai_validated on green) AND pre-merge for approved PRs is handled by validate-armed; this rule catches every un-armed, un-approved, fresh head exactly once per head. The pending match is safe: while the SM's own dispatched run is in flight the marker ai_validating excludes the PR here. DEV lane (owner 2026-09-22): validation here is NON-BLOCKING \u2014 dev PRs validate in parallel and flow to ai review as each turns green; the one-at-a-time mutex lives ONLY in the approved merge window (validate-armed/revalidate-armed). chore:pin PRs (factory lockstep bumps) are exempt: the factory suite gates them before the cut, and the next real PR validates the pinned content via silent-update. Limit 5 (owner 2026-09-22): first-validation caps at 5 concurrent CI dispatches per tick \u2014 parallel but quota-friendly.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -86,7 +86,7 @@
             "draft": false
           },
           "localAction": "validate_pr",
-          "limit": 1,
+          "limit": 5,
           "id": "validate-fresh"
         },
         {
