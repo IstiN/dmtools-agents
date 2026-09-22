@@ -20,7 +20,7 @@
             "draft": false
           },
           "localAction": "update_branch",
-          "limit": 20,
+          "limit": 10,
           "id": "silent-update-behind"
         },
         {
