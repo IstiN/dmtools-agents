@@ -233,6 +233,15 @@ function action(params) {
             });
         });
 
+        var failedCount = createdTickets.filter(function (t) { return !t.success; }).length;
+        if (failedCount > 0) {
+            throw new Error(
+                'Failed to create ' + failedCount + ' of ' + createdTickets.length +
+                ' question subtask(s) under ' + ticketKey +
+                ' — check the errors logged above for details'
+            );
+        }
+
         // 3. Add ai_questions_asked label to parent ticket
         try {
             jira_add_label({
@@ -338,10 +347,7 @@ function action(params) {
 
     } catch (error) {
         console.error('Error in createQuestionsAndAssignForReview:', error);
-        return {
-            success: false,
-            error: error.toString()
-        };
+        throw error;
     }
 }
 
