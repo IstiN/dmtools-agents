@@ -24,6 +24,25 @@
           "id": "silent-update-behind"
         },
         {
+          "description": "GitHub PR: post-approval merge window — oldest approved PR gets its CI dispatched on the head (workflow_dispatch; pushes never fire CI) + ai_validating marker. pr_approved is STICKY: after rework fixes the new head re-validates here and merges — no re-review (#token-budget).",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "pr_approved"
+            ],
+            "notLabels": [
+              "ai_validating"
+            ],
+            "notMergeState": "BEHIND",
+            "draft": false,
+            "mutex": "ai_validating"
+          },
+          "localAction": "validate_pr",
+          "limit": 1,
+          "id": "validate-armed"
+        },
+        {
           "description": "GitHub PR: head with no CONCLUDED validation (checks 'none' — fresh push, no CI — or 'pending' — the dispatch bridge's waiting check runs; pushes fire no CI) -> dispatch the CI workflow on the head + ai_validating marker. Runs pre-review (latches ai_validated on green) AND pre-merge for approved PRs is handled by validate-armed; this rule catches every un-armed, un-approved, fresh head exactly once per head. The pending match is safe: while the SM's own dispatched run is in flight the marker ai_validating excludes the PR here.",
           "source": "github",
           "query": {
@@ -37,29 +56,12 @@
               "pr_approved"
             ],
             "notMergeState": "BEHIND",
-            "draft": false
+            "draft": false,
+            "mutex": "ai_validating"
           },
           "localAction": "validate_pr",
           "limit": 1,
           "id": "validate-fresh"
-        },
-        {
-          "description": "GitHub PR: post-approval merge window — oldest approved PR gets its CI dispatched on the head (workflow_dispatch; pushes never fire CI) + ai_validating marker. pr_approved is STICKY: after rework fixes the new head re-validates here and merges — no re-review (#token-budget).",
-          "source": "github",
-          "query": {
-            "type": "pr",
-            "labels": [
-              "pr_approved"
-            ],
-            "notLabels": [
-              "ai_validating"
-            ],
-            "notMergeState": "BEHIND",
-            "draft": false
-          },
-          "localAction": "validate_pr",
-          "limit": 1,
-          "id": "validate-armed"
         },
         {
           "description": "GitHub PR: validation CI red on the head -> unarm ai_validating, report, requeue agent:rework on the linked issue. pr_approved is STICKY (owner rule 2026-09): the reworked head re-validates and merges without a re-review — no token burn on review legs.",

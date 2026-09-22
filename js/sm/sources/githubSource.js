@@ -255,6 +255,24 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {    var q = r
         };
     });
 
+    // Mutex (q.mutex = label): if ANY open PR holds the label, this rule
+    // defers entirely. Serializes one-dispatch stages — validate-armed/
+    // validate-fresh both arm ai_validating + dispatch CI; without the
+    // mutex multiple approved PRs validate in parallel and every merge
+    // (base move) re-invalidates the others: N merges = N×N validation
+    // runs. One at a time, oldest-first (FIFO sort below) = each head
+    // validates exactly once. Owner rule 2026-09-22 (live: fa #778/#779
+    // both ai_validating while older #762 waited).
+    if (q.mutex) {
+        var held = items.some(function (it) {
+            return it.labels.indexOf(q.mutex) !== -1;
+        });
+        if (held) {
+            console.log('   🔒 mutex "' + q.mutex + '" held by another PR — rule defers (serial FIFO)');
+            return [];
+        }
+    }
+
     // PR guards that need per-PR facts (checks/merge state) resolve lazily:
     // only when the rule actually filters on them.
     var needsStatus = q.checks || q.mergeState || q.notMergeState ||
