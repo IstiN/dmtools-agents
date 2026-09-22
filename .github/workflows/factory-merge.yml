@@ -55,12 +55,12 @@ on:
         description: 'PAT with repo scope — GitHub API access for the merge bot (labels, PR state, checks, merge).'
         required: true
 
-# One bot at a time per repo; never cancel an in-flight pass (idempotent —
-# a queued second pass just re-confirms). The SM tick runs in its own group;
-# overlap between the bot and the SM is by design safe (shared labels).
-concurrency:
-  group: machine-merge-bot
-  cancel-in-progress: false
+# NOTE: NO concurrency block here — deliberately. A called workflow's
+# concurrency NEVER applies (GitHub ignores it; only the caller's does),
+# and a caller + callee sharing the SAME group name makes every run fail
+# at startup with zero jobs and no annotations (live bisect 2026-09-22:
+# probes D-G green without it, H red with group name collision, H1 green
+# after rename). The caller stub owns the group (machine-merge-bot).
 
 permissions:
   contents: read
