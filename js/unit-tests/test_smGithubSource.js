@@ -203,6 +203,30 @@ suite('sm github source', function () {
         assert.equal(items[1].key, 'pr-57');
     });
 
+    test('pr rules: notMergeState array — oldest DIRTY/BEHIND skipped, next approved flows (owner FIFO)', function () {
+        // Owner rule: the oldest approved PR leads to merge; advance past
+        // it only while it is conflicted (rework) or behind (refreshing).
+        // Array notMergeState must exclude BOTH from one rule.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 10, labels: [{ name: 'pr_approved' }], head: { ref: 'a' }, draft: false },
+                    { number: 11, labels: [{ name: 'pr_approved' }], head: { ref: 'b' }, draft: false },
+                    { number: 12, labels: [{ name: 'pr_approved' }], head: { ref: 'c' }, draft: false }
+                ];
+            }
+        }, {}, {
+            10: { number: 10, state: 'OPEN', checks: 'green', mergeState: 'DIRTY', mergeable: false },
+            11: { number: 11, state: 'OPEN', checks: 'green', mergeState: 'BEHIND', mergeable: true },
+            12: { number: 12, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['pr_approved'], notMergeState: ['BEHIND', 'DIRTY'] }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.length, 1);
+        assert.equal(items[0].key, 'pr-12', 'conflicted 10 and behind 11 skipped; fresh 12 flows');
+    });
+
     test('pr rules: mutex — rule defers while another PR holds the label', function () {
         // Live FIFO violation (owner report, fa 2026-09-22): #778/#779 both
         // ai_validating while older #762 waited — parallel validations

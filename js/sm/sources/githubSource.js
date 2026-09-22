@@ -75,7 +75,13 @@ function matchesGuards(item, rule, provider, machineAuthor) {
     // provider's check rollup (green/red/pending/none); `notMergeState`
     // excludes one state (e.g. BEHIND while a silent update lands).
     if (q.checks && rollupWant(q.checks).indexOf(rollup(item.pr)) === -1) return false;
-    if (q.notMergeState && (!item.pr || item.pr.mergeState === q.notMergeState)) return false;
+    // Array form (owner FIFO rule 2026-09-22): exclude PRs in ANY of the
+    // listed states — validate-armed must skip BEHIND (refresh first) AND
+    // DIRTY (conflict-rework owns the oldest; a newer approved proceeds
+    // while the conflicted one reworks — no wasted validation on a head
+    // that can never merge).
+    var nmsWant = Array.isArray(q.notMergeState) ? q.notMergeState : (q.notMergeState ? [q.notMergeState] : null);
+    if (nmsWant && (!item.pr || nmsWant.indexOf(item.pr.mergeState) !== -1)) return false;
     // Stale review verdict (PR #690): CHANGES_REQUESTED pinned to an older
     // commit while fixes landed on a newer green head — a re-review is
     // owed. Lazily resolved via provider.lastReview; without a provider
