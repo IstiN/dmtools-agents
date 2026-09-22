@@ -104,6 +104,18 @@ suite('mergeBot', function () {
         assert.equal(fx.calls.merges.length, 1, 'rollup green must merge');
     });
 
+    test('workflow_run race: green rollup + BLOCKED (checks settling) -> wait, never unarm', function () {
+        var fx = fixture({
+            labels: ['ai_validating', 'pr_approved'],
+            checkRuns: [{ name: 'c1', status: 'completed', conclusion: 'success' }],
+            mergeableState: 'blocked'
+        });
+        fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(fx.calls.merges.length, 0, 'must not merge on BLOCKED');
+        assert.equal(fx.calls.removes.filter(function (l) { return r.label === 'ai_validating'; }).length, 0,
+            'BLOCKED is checks-settling, not staleness — the arm must survive');
+    });
+
     test('API-refreshed head: no check runs anywhere, green CI run on sha -> merge (#762)', function () {
         // REST PR body carries no statusCheckRollup and silent-updated heads
         // carry no check runs — the dispatched CI workflow run on the head

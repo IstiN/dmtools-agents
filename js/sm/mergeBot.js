@@ -173,15 +173,20 @@ function action(params) {
         }
         var ms = mergeStateOf(pr);
         if (ms !== 'CLEAN') {
-            if (approved) {
-                // Validated-but-stale (base moved): unarm so the SM's silent
-                // refresh + merge window re-validate the fresh head (the
-                // 422-arm covers the already-fresh case).
+            // Unarm ONLY on real staleness (BEHIND: base moved; DIRTY:
+            // conflicts). BLOCKED right after a workflow_run trigger means
+            // 'required checks still settling' — unarming there races the
+            // check-run conclusion, drops a green armed PR, and forces a
+            // full re-validation cycle (live: fa pr-762, 11:36 — bot unarm
+            // on BLOCKED while the rollup was green two lines above).
+            if (approved && (ms === 'BEHIND' || ms === 'DIRTY')) {
                 try {
                     github_remove_label({ workspace: owner, repository: name, number: pr.number, label: 'ai_validating' });
                     say('🔓 pr-' + pr.number + ' validated head stale (' + ms + ') — unarmed, refresh follows');
                     acted++;
                 } catch (e) { say('⚠️ pr-' + pr.number + ' unarm failed: ' + (e.message || e)); }
+            } else {
+                say('⏳ pr-' + pr.number + ' mergeState=' + ms + ' — waiting (checks settling)');
             }
             continue;
         }
