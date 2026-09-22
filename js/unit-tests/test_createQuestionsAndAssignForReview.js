@@ -203,3 +203,91 @@ suite('createQuestionsAndAssignForReview — fatal CLI/provider error', function
         assert.equal(loaded.moves.length, 1, 'ticket still moved to PO Review on the normal no-questions path');
     });
 });
+
+suite('createQuestionsAndAssignForReview — failed ticket creation throws', function () {
+    test('throws when jira_create_ticket_with_json fails for all questions', function () {
+        var loaded = loadCreateQuestionsModule(
+            {
+                'outputs/questions.json': JSON.stringify([
+                    { summary: 'Question 1', priority: 'High' },
+                    { summary: 'Question 2', priority: 'Medium' }
+                ])
+            },
+            {
+                jira_create_ticket_with_json: function () {
+                    throw new Error('{"errors":{"issuetype":"Specify a valid issue type"}}');
+                }
+            }
+        );
+
+        var threw = false;
+        var thrownMessage = '';
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TR-1' },
+                metadata: { contextId: 'story_questions' },
+                initiator: '712020:abc',
+                jobParams: { customParams: {} }
+            });
+        } catch (err) {
+            threw = true;
+            thrownMessage = err.message || String(err);
+        }
+
+        assert.equal(threw, true, 'action() must throw when ticket creation fails');
+        assert.ok(
+            thrownMessage.indexOf('Failed to create') !== -1,
+            'error message must mention failure count, got: ' + thrownMessage
+        );
+        assert.ok(
+            thrownMessage.indexOf('2 of 2') !== -1,
+            'error message must include correct failure count, got: ' + thrownMessage
+        );
+        assert.ok(
+            thrownMessage.indexOf('TR-1') !== -1,
+            'error message must include parent ticket key, got: ' + thrownMessage
+        );
+    });
+
+    test('throws when jira_create_ticket_with_json fails for some (but not all) questions', function () {
+        var callCount = 0;
+        var loaded = loadCreateQuestionsModule(
+            {
+                'outputs/questions.json': JSON.stringify([
+                    { summary: 'Question 1', priority: 'High' },
+                    { summary: 'Question 2', priority: 'Medium' },
+                    { summary: 'Question 3', priority: 'Low' }
+                ])
+            },
+            {
+                jira_create_ticket_with_json: function (args) {
+                    callCount++;
+                    if (callCount === 2) {
+                        throw new Error('{"errors":{"issuetype":"Specify a valid issue type"}}');
+                    }
+                    return JSON.stringify({ key: 'TR-' + (900 + callCount) });
+                }
+            }
+        );
+
+        var threw = false;
+        var thrownMessage = '';
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TR-1' },
+                metadata: { contextId: 'story_questions' },
+                initiator: '712020:abc',
+                jobParams: { customParams: {} }
+            });
+        } catch (err) {
+            threw = true;
+            thrownMessage = err.message || String(err);
+        }
+
+        assert.equal(threw, true, 'action() must throw even when only some tickets fail');
+        assert.ok(
+            thrownMessage.indexOf('1 of 3') !== -1,
+            'error message must reflect partial failure count, got: ' + thrownMessage
+        );
+    });
+});
