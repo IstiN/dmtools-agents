@@ -50,11 +50,33 @@ function labelNames(pr) {
  * before declaring 'none' — otherwise a green approved CLEAN head waits
  * forever and only the SM tick's better-informed merge can land it.
  */
-function checksRollup(commitSha, pr) {
+function checksRollup(commitSha, pr, job) {
     var cr = parseMcp(github_get_commit_check_runs({ commitSha: commitSha }));
     var runs = cr.check_runs || cr.total_count !== undefined ? (cr.check_runs || []) : [];
     if (!runs.length && pr && Array.isArray(pr.statusCheckRollup) && pr.statusCheckRollup.length) {
         runs = pr.statusCheckRollup;
+    }
+    if (!runs.length) {
+        // Workflow-run fallback (live: fa #762): the REST PR body has NO
+        // statusCheckRollup (GraphQL-only) and API silent-updated heads carry
+        // no check runs — but the SM-dispatched CI run IS on this exact sha.
+        // Read the repo's CI workflow runs and match head_sha. The SM's own
+        // waiter is a pull_request-event job: it never re-runs on refreshed
+        // heads, so this is the ONLY conclusive evidence for them.
+        var wf = parseMcp(github_list_workflow_runs({
+            workflowId: (job && job.ciWorkflow) || 'ci.yml', perPage: 30
+        }));
+        var wruns = (wf && (wf.workflow_runs || wf.runs)) || [];
+        var mine = wruns.filter(function (r) { return String(r.head_sha || r.headSha) === String(commitSha); });
+        if (mine.length) {
+            // newest first (API order); conclusion decides, in-flight waits
+            var top = mine[0];
+            var c = top.conclusion ? String(top.conclusion).toUpperCase() : null;
+            if (c === 'SUCCESS') return 'green';
+            if (c === 'FAILURE' || c === 'TIMED_OUT' || c === 'CANCELLED') return 'red';
+            return 'pending';
+        }
+        return 'none';
     }
     if (!runs.length) return 'none';
     var red = false, pending = false;
@@ -143,7 +165,7 @@ function action(params) {
         if (!validating || labels.indexOf('agent:review') !== -1) continue; // mid-review: SM owns it
         if (pr.mergeable === false) continue; // conflicts: conflict-rework (SM) owns it
 
-        var rollup = checksRollup(String(headSha), pr);
+        var rollup = checksRollup(String(headSha), pr, job);
         if (rollup !== 'green') {
             say('⏳ pr-' + pr.number + ' checks=' + rollup + ' — waiting');
             continue;

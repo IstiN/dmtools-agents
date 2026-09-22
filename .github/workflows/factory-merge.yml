@@ -49,6 +49,11 @@ on:
         required: false
         type: string
         default: 'false'
+      ci_workflow:
+        description: "CI workflow FILE NAME this repo dispatches on PR heads (fa: ci.yml, dart: quality.yml) — the bot's workflow-run fallback reads its runs when a head carries no check runs (API silent-updated heads, live fa #762)."
+        required: false
+        type: string
+        default: 'ci.yml'
 
     secrets:
       SOURCE_GITHUB_TOKEN:
@@ -102,5 +107,6 @@ jobs:
           repo='${{ github.repository }}'
           dry=""
           if [ "${{ inputs.dry-run }}" = "true" ]; then dry=",\"dryRun\":true"; fi
-          override="{\"params\":{\"jobParams\":{\"repo\":\"${repo}\"${dry}}}}"
+          CIWF="${{ inputs.ci_workflow }}"
+          override="{\"params\":{\"jobParams\":{\"repo\":\"${repo}\",\"ciWorkflow\":\"${CIWF}\"${dry}}}}"
           cd factory-agents && dmtools run machine_merge.json "$override"
