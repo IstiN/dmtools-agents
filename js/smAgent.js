@@ -989,6 +989,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                          ' --depth 200' +
                          ' && cd ' + dir +
                          ' && git fetch --no-tags --depth 200 origin main' +
+                         // Skip when main is already contained: two ticks racing
+                         // on the same branch produced a branch-into-itself
+                         // merge commit (dart gh-191, 14:08) that moved the head
+                         // past a green validation for no reason.
+                         ' && ! git merge-base --is-ancestor FETCH_HEAD HEAD' +
+                         ' || exit 0' +
                          ' && git -c user.name=sm-silent-update' +
                          ' -c user.email=sm-silent-update@users.noreply.github.com' +
                          ' merge --no-edit FETCH_HEAD' +
