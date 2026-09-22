@@ -7,7 +7,7 @@
       "maxTriggeredWorkflows": 1,
       "rules": [
         {
-          "description": "Every open non-draft PR behind main gets a silent branch refresh with the workflow token (pushes trigger no workflows, so freshness is free); validating PRs are excluded so the validation head never moves mid-run. mergeState is BEHIND only: the prStatus deterministic override computes BEHIND from base freshness (immune to the REST BEHIND/BLOCKED flip-flop this rule used to paper over with both values), and BLOCKED is now a REAL verdict (fresh head, required checks pending/red) \u2014 updating those would no-op-clone every pending PR on every tick. Limit 20 (owner 2026-09-22): silent pushes fire no CI \u2014 refreshing every BEHIND head every tick is free and keeps PRs merge-ready, so the merge window never waits for a refresh first.",
+          "description": "Every open non-draft PR behind main gets a silent branch refresh with the workflow token (pushes trigger no workflows, so freshness is free); validating PRs are excluded so the validation head never moves mid-run. mergeState is BEHIND only: the prStatus deterministic override computes BEHIND from base freshness (immune to the REST BEHIND/BLOCKED flip-flop this rule used to paper over with both values), and BLOCKED is now a REAL verdict (fresh head, required checks pending/red) — updating those would no-op-clone every pending PR on every tick. Limit 20 (owner 2026-09-22): silent pushes fire no CI — refreshing every BEHIND head every tick is free and keeps PRs merge-ready, so the merge window never waits for a refresh first.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -24,7 +24,7 @@
           "id": "silent-update-behind"
         },
         {
-          "description": "Post-approval merge window \u2014 OWNER FIFO RULE (2026-09-22): lead the OLDEST approved PR all the way to merge; never validate other approved PRs meanwhile (the merge moves the base \u2014 they would re-validate anyway). Advance to the next approved ONLY when the oldest is DIRTY (conflict-rework owns it) or its validation went RED (rework leg fixes it) \u2014 both free this slot while the oldest repairs. BEHIND/DIRTY excluded here: silent-update refreshes BEHIND heads first; conflicted heads can never reach CLEAN. Mutex ai_validating = one validation at a time.",
+          "description": "Post-approval merge window — OWNER FIFO RULE (2026-09-22): lead the OLDEST approved PR all the way to merge; never validate other approved PRs meanwhile (the merge moves the base — they would re-validate anyway). Advance to the next approved ONLY when the oldest is DIRTY (conflict-rework owns it) or its validation went RED (rework leg fixes it) — both free this slot while the oldest repairs. BEHIND/DIRTY excluded here: silent-update refreshes BEHIND heads first; conflicted heads can never reach CLEAN. Mutex ai_validating = one validation at a time.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -46,7 +46,7 @@
           "id": "validate-armed"
         },
         {
-          "description": "Armed head moved mid-validation (double silent-update, rework push): the green run no longer covers the head, checks read 'none' on it, but the ai_validating arm persists \u2014 no rule matched and the PR stalled until a manual disarm (live: dart pr-194, 15:06 \u2014 tick processed 0). Re-dispatch the CI on the CURRENT head. 'pending' never matches: that is the in-flight bridge check on this head. BEHIND/DIRTY excluded like validate-armed; same mutex.",
+          "description": "Armed head moved mid-validation (double silent-update, rework push): the green run no longer covers the head, checks read 'none' on it, but the ai_validating arm persists — no rule matched and the PR stalled until a manual disarm (live: dart pr-194, 15:06 — tick processed 0). Re-dispatch the CI on the CURRENT head. 'pending' never matches: that is the in-flight bridge check on this head. BEHIND/DIRTY excluded like validate-armed; same mutex.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -69,7 +69,7 @@
           "id": "revalidate-armed"
         },
         {
-          "description": "GitHub PR: head with no CONCLUDED validation (checks 'none' \u2014 fresh push, no CI \u2014 or 'pending' \u2014 the dispatch bridge's waiting check runs; pushes fire no CI) -> dispatch the CI workflow on the head + ai_validating marker. Runs pre-review (latches ai_validated on green) AND pre-merge for approved PRs is handled by validate-armed; this rule catches every un-armed, un-approved, fresh head exactly once per head. The pending match is safe: while the SM's own dispatched run is in flight the marker ai_validating excludes the PR here. DEV lane (owner 2026-09-22): validation here is NON-BLOCKING \u2014 dev PRs validate in parallel and flow to ai review as each turns green; the one-at-a-time mutex lives ONLY in the approved merge window (validate-armed/revalidate-armed). chore:pin PRs (factory lockstep bumps) are exempt: the factory suite gates them before the cut, and the next real PR validates the pinned content via silent-update.",
+          "description": "GitHub PR: head with no CONCLUDED validation (checks 'none' — fresh push, no CI — or 'pending' — the dispatch bridge's waiting check runs; pushes fire no CI) -> dispatch the CI workflow on the head + ai_validating marker. Runs pre-review (latches ai_validated on green) AND pre-merge for approved PRs is handled by validate-armed; this rule catches every un-armed, un-approved, fresh head exactly once per head. The pending match is safe: while the SM's own dispatched run is in flight the marker ai_validating excludes the PR here. DEV lane (owner 2026-09-22): validation here is NON-BLOCKING — dev PRs validate in parallel and flow to ai review as each turns green; the one-at-a-time mutex lives ONLY in the approved merge window (validate-armed/revalidate-armed). chore:pin PRs (factory lockstep bumps) are exempt: the factory suite gates them before the cut, and the next real PR validates the pinned content via silent-update.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -90,7 +90,7 @@
           "id": "validate-fresh"
         },
         {
-          "description": "GitHub PR: validation CI red on the head -> unarm ai_validating, report, requeue agent:rework on the linked issue. pr_approved is STICKY (owner rule 2026-09): the reworked head re-validates and merges without a re-review \u2014 no token burn on review legs. Limit 10 (owner 2026-09-22): latch/unlatch verdicts in waves \u2014 pure label writes, nothing serial.",
+          "description": "GitHub PR: validation CI red on the head -> unarm ai_validating, report, requeue agent:rework on the linked issue. pr_approved is STICKY (owner rule 2026-09): the reworked head re-validates and merges without a re-review — no token burn on review legs. Limit 10 (owner 2026-09-22): latch/unlatch verdicts in waves — pure label writes, nothing serial.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -104,7 +104,7 @@
           "id": "fail-validation"
         },
         {
-          "description": "GitHub PR: validation green + CLEAN -> squash-merge (merge_pr verifies the sticky pr_approved latch on the PR; an un-approved green head latches ai_validated instead \u2014 see merge_pr). FIFO drain (#687).",
+          "description": "GitHub PR: validation green + CLEAN -> squash-merge (merge_pr verifies the sticky pr_approved latch on the PR; an un-approved green head latches ai_validated instead — see merge_pr). FIFO drain (#687).",
           "source": "github",
           "query": {
             "type": "pr",
@@ -119,7 +119,7 @@
           "id": "merge-validated"
         },
         {
-          "description": "GitHub PR: validation green but not yet approved -> latch ai_validated, unarm ai_validating. review-after-dev requires the latch + green checks, so review fires exactly once per validated head. Approved PRs are excluded (merge-validated / unarm-stale own them). Limit 10 (owner 2026-09-22): latch/unlatch verdicts in waves \u2014 pure label writes, nothing serial.",
+          "description": "GitHub PR: validation green but not yet approved -> latch ai_validated, unarm ai_validating. review-after-dev requires the latch + green checks, so review fires exactly once per validated head. Approved PRs are excluded (merge-validated / unarm-stale own them). Limit 10 (owner 2026-09-22): latch/unlatch verdicts in waves — pure label writes, nothing serial.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -136,7 +136,7 @@
           "id": "validated-green"
         },
         {
-          "description": "Validated-but-stale: armed (ai_validating) + validation concluded but BASE MOVED (BEHIND only). BLOCKED must NOT unarm: since #483 BLOCKED is a real verdict, and on a freshly armed head BLOCKED simply means 'required checks pending' \u2014 unarming there races validate-armed in the SAME tick and deadlocks the PR forever (live: fa pr-762 armed at 08:25:37, unarmed 08:25:58 by the BLOCKED match, re-armed next tick, loop). silent-update-behind excludes ai_validating and merge-validated needs CLEAN, so without this unarm a genuinely moved base still deadlocks (live: fa pr-744) \u2014 BEHIND-only keeps that recovery and stops the self-inflicted one.",
+          "description": "Validated-but-stale: armed (ai_validating) + validation concluded but BASE MOVED (BEHIND only). BLOCKED must NOT unarm: since #483 BLOCKED is a real verdict, and on a freshly armed head BLOCKED simply means 'required checks pending' — unarming there races validate-armed in the SAME tick and deadlocks the PR forever (live: fa pr-762 armed at 08:25:37, unarmed 08:25:58 by the BLOCKED match, re-armed next tick, loop). silent-update-behind excludes ai_validating and merge-validated needs CLEAN, so without this unarm a genuinely moved base still deadlocks (live: fa pr-744) — BEHIND-only keeps that recovery and stops the self-inflicted one.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -153,7 +153,7 @@
           "id": "unarm-stale-validation"
         },
         {
-          "description": "GitHub PR: branch conflicts with main (silent-update's git merge cannot land; mergeState DIRTY) -> the queue would stall forever \u2014 report and, for MACHINE-authored PRs, re-arm agent:rework on the linked issue so the agent resolves the conflicts and pushes; the normal validate flow then resumes (pr_approved is STICKY \u2014 no re-review). Guest PRs get the report only (owner rule 2026-09-21: auto-rework is machine-author-only). Fires once per head: the marker comment carries the head sha and suppresses re-reports for the same head.",
+          "description": "GitHub PR: branch conflicts with main (silent-update's git merge cannot land; mergeState DIRTY) -> the queue would stall forever — report and, for MACHINE-authored PRs, re-arm agent:rework on the linked issue so the agent resolves the conflicts and pushes; the normal validate flow then resumes (pr_approved is STICKY — no re-review). Guest PRs get the report only (owner rule 2026-09-21: auto-rework is machine-author-only). Fires once per head: the marker comment carries the head sha and suppresses re-reports for the same head.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -167,7 +167,7 @@
           "id": "conflict-rework"
         },
         {
-          "description": "Auto rework leg: agent:rework armed on the issue either by the review verdict (CHANGES_REQUESTED) or by red pre-merge CI. Pushing fixes removes the label (pr_rework removeLabels). prMachineAuthor: auto rework fires ONLY on machine-authored PRs (owner rule) \u2014 the machine login is deployment config (jobParams.machineAuthor / config.machineAuthor / factory-sm machine-author input), never hardcoded; unconfigured fails closed. Manual rework on ANY PR: label the PR agent:rework (see rework-on-label).",
+          "description": "Auto rework leg: agent:rework armed on the issue either by the review verdict (CHANGES_REQUESTED) or by red pre-merge CI. Pushing fixes removes the label (pr_rework removeLabels). prMachineAuthor: auto rework fires ONLY on machine-authored PRs (owner rule) — the machine login is deployment config (jobParams.machineAuthor / config.machineAuthor / factory-sm machine-author input), never hardcoded; unconfigured fails closed. Manual rework on ANY PR: label the PR agent:rework (see rework-on-label). workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
           "source": "github",
           "query": {
             "type": "issue",
@@ -183,10 +183,11 @@
             "reason": "sm: agent:rework (red CI or review CHANGES)"
           },
           "limit": 1,
-          "id": "rework-on-red-ci"
+          "id": "rework-on-red-ci",
+          "workflowRef": "{branch}"
         },
         {
-          "description": "Manual rework request: agent:rework label on the PR itself -> rework on demand, ANY author (a human asked explicitly). Dispatches the issue-anchored rework leg on the linked issue (closing-keyword/#N body reference); the PR label is consumed on dispatch so the next tick does not re-fire. PRs without a linked issue are skipped loudly.",
+          "description": "Manual rework request: agent:rework label on the PR itself -> rework on demand, ANY author (a human asked explicitly). Dispatches the issue-anchored rework leg on the linked issue (closing-keyword/#N body reference); the PR label is consumed on dispatch so the next tick does not re-fire. PRs without a linked issue are skipped loudly. workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
           "source": "github",
           "query": {
             "type": "pr",
@@ -204,12 +205,13 @@
             "agent:rework"
           ],
           "limit": 1,
-          "id": "rework-on-label"
+          "id": "rework-on-label",
+          "workflowRef": "{branch}"
         },
         {
           "id": "develop-done",
           "source": "github",
-          "description": "Machine-loop completion backfill: an open issue with an open+green MACHINE-authored PR gets ai_developed, which arms review-after-dev. Machine-only (prMachineAuthor) so external PRs never enter the review loop through the backfill; no `in progress` requirement \u2014 issues whose dev leg predates the status-label convention (live: fa #503 / PR #676) must still be picked up. Idempotent: ai_developed in notLabels.",
+          "description": "Machine-loop completion backfill: an open issue with an open+green MACHINE-authored PR gets ai_developed, which arms review-after-dev. Machine-only (prMachineAuthor) so external PRs never enter the review loop through the backfill; no `in progress` requirement — issues whose dev leg predates the status-label convention (live: fa #503 / PR #676) must still be picked up. Idempotent: ai_developed in notLabels.",
           "query": {
             "type": "issue",
             "notLabels": [
@@ -223,7 +225,7 @@
           "localAction": "mark_developed"
         },
         {
-          "description": "GitHub: validated PR (ai_validated latch + green checks on the head) after dev -> machine review (never on an armed PR: pr_approved means the review already concluded APPROVED - re-dispatching review duplicates the leg and un-arms the merge queue). The latch guarantees a dispatched CI run covered this exact stage; checks green guarantees the head did not move since. Limit 10 (owner 2026-09-22): review legs are plain workflow runs \u2014 they parallelize freely; one-per-tick serialized a 12-PR green wave into hours.",
+          "description": "GitHub: validated PR (ai_validated latch + green checks on the head) after dev -> machine review (never on an armed PR: pr_approved means the review already concluded APPROVED - re-dispatching review duplicates the leg and un-arms the merge queue). The latch guarantees a dispatched CI run covered this exact stage; checks green guarantees the head did not move since. Limit 10 (owner 2026-09-22): review legs are plain workflow runs — they parallelize freely; one-per-tick serialized a 12-PR green wave into hours. workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
           "source": "github",
           "query": {
             "type": "issue",
@@ -249,7 +251,8 @@
             "reason": "sm: green PR awaits review"
           },
           "limit": 10,
-          "id": "review-after-dev"
+          "id": "review-after-dev",
+          "workflowRef": "{branch}"
         },
         {
           "description": "GitHub PR: external (non-machine) green PR -> one-time review (PR-anchored; no re-review on later pushes). The machine login is deployment-specific: it arrives via jobParams.machineAuthor / config.machineAuthor (factory-sm input machine-author); with none configured every green PR is reviewable.",
@@ -276,7 +279,7 @@
           "id": "review-external-once"
         },
         {
-          "description": "GitHub PR: CHANGES_REQUESTED verdict pinned to an older commit (fixes pushed after the review) + green -> re-arm agent:review. review-on-label dispatches the runner, the runner consumes the label and re-reviews the current head; the fresh verdict's commit_id equals the head, so this never loops. Never on approved PRs (pr_approved is sticky \u2014 approved rework re-validates, never re-reviews).",
+          "description": "GitHub PR: CHANGES_REQUESTED verdict pinned to an older commit (fixes pushed after the review) + green -> re-arm agent:review. review-on-label dispatches the runner, the runner consumes the label and re-reviews the current head; the fresh verdict's commit_id equals the head, so this never loops. Never on approved PRs (pr_approved is sticky — approved rework re-validates, never re-reviews). workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
           "source": "github",
           "query": {
             "type": "pr",
@@ -291,10 +294,11 @@
           },
           "localAction": "arm_review",
           "limit": 5,
-          "id": "review-stale-verdict"
+          "id": "review-stale-verdict",
+          "workflowRef": "{branch}"
         },
         {
-          "description": "GitHub PR: all review threads resolved + the last verdict is older than the head (fixes landed and the threads were worked through) + green -> re-arm agent:review. Covers PR #676: the rework resolves threads (the CHANGES_REQUESTED verdict dissolves into COMMENTED), so verdict-staleness alone misses it. Convergent: the re-review's verdict lands on the current head and its fresh threads are unresolved until worked. Never on approved PRs (pr_approved is sticky \u2014 approved rework re-validates, never re-reviews).",
+          "description": "GitHub PR: all review threads resolved + the last verdict is older than the head (fixes landed and the threads were worked through) + green -> re-arm agent:review. Covers PR #676: the rework resolves threads (the CHANGES_REQUESTED verdict dissolves into COMMENTED), so verdict-staleness alone misses it. Convergent: the re-review's verdict lands on the current head and its fresh threads are unresolved until worked. Never on approved PRs (pr_approved is sticky — approved rework re-validates, never re-reviews). workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
           "source": "github",
           "query": {
             "type": "pr",
@@ -313,10 +317,11 @@
           },
           "localAction": "arm_review",
           "limit": 5,
-          "id": "review-threads-resolved"
+          "id": "review-threads-resolved",
+          "workflowRef": "{branch}"
         },
         {
-          "description": "GitHub PR: agent:review label on a PR -> review on demand (any author; consumed by the review runner)",
+          "description": "GitHub PR: agent:review label on a PR -> review on demand (any author; consumed by the review runner) workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
           "source": "github",
           "query": {
             "type": "pr",
@@ -332,10 +337,11 @@
             "pr": "{prNumber}"
           },
           "limit": 1,
-          "id": "review-on-label"
+          "id": "review-on-label",
+          "workflowRef": "{branch}"
         },
         {
-          "description": "GitHub: linked PR merged \u2192 close the issue (cycle complete)",
+          "description": "GitHub: linked PR merged → close the issue (cycle complete)",
           "source": "github",
           "query": {
             "type": "issue",

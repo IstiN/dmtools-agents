@@ -1321,6 +1321,46 @@ suite('smAgent: ticket dispatch', function() {
         assert.equal(sm.capturedTriggers[0].ref, 'develop');
     });
 
+    test('workflowRef {branch} placeholder dispatches on the PR head (PR-linked runs)', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: { items: [{ key: 'pr-42', labels: ['pr_approved'], issueNumber: null,
+                                prNumber: 42, draft: false, branch: 'ai/gh-42' }] }
+        });
+
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [
+            makeRule('project = X', { source: 'github', id: 'review-after-dev-test',
+              query: { type: 'pr', labels: ['pr_approved'], draft: false },
+              inputs: { pr: '{prNumber}', leg: 'review' },
+              workflowRef: '{branch}' })
+        ] } });
+
+        if (!sm.capturedTriggers.length) throw new Error('NO TRIGGER CAPTURED');
+        assert.equal(sm.capturedTriggers[0].ref, 'ai/gh-42',
+            '{branch} must expand to the item head ref so the run links to the PR');
+    });
+
+    test('workflowRef {branch} falls back to main when the item has no branch', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: { items: [{ key: 'pr-43', labels: ['pr_approved'], issueNumber: null,
+                                prNumber: 43, draft: false }] }
+        });
+
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [
+            makeRule('project = X', { source: 'github', id: 'review-after-dev-test',
+              query: { type: 'pr', labels: ['pr_approved'], draft: false },
+              inputs: { pr: '{prNumber}', leg: 'review' },
+              workflowRef: '{branch}' })
+        ] } });
+
+        if (!sm.capturedTriggers.length) throw new Error('NO TRIGGER CAPTURED (fallback)');
+        assert.equal(sm.capturedTriggers[0].ref, 'main',
+            'empty expansion must fall back to main, never dispatch on an empty ref');
+    });
+
     test('skips dispatch when matching workflow is already active', function() {
         var sm = makeSmAgent({
             fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
