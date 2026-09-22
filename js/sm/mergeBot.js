@@ -115,7 +115,7 @@ function squashMerge(owner, repo, number) {
         try {
             var res = parseMcp(github_merge_pr({
                 workspace: owner, repository: repo,
-                number: number, mergeMethod: 'squash'
+                pullRequestId: number, mergeMethod: 'squash'
             }));
             // GitHub returns {"merged": true} on success; anything else
             // carries a message — surface it VERBATIM (the fa pr-759 404
