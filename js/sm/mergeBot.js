@@ -39,11 +39,23 @@ function labelNames(pr) {
 /**
  * Check-rollup for a head sha: 'green' (all concluded SUCCESS), 'red'
  * (any FAILURE/TIMED_OUT/CANCELLED), 'pending' (queued/in flight),
- * 'none' (no check runs at all — nothing concluded yet).
+ * 'none' (no evidence at all — nothing concluded anywhere).
+ *
+ * Fallback (live: fa #762, 2026-09-22): silent-update refreshes a branch
+ * via the update-branch API, which fires NO pull_request event — the
+ * gate waiter check run never re-runs on the new head, so commit check
+ * runs come back EMPTY even though the dispatched CI (check suites) is
+ * green on that exact sha. When check runs are empty, fall back to the
+ * PR-level statusCheckRollup (suites + statuses aggregated by GitHub)
+ * before declaring 'none' — otherwise a green approved CLEAN head waits
+ * forever and only the SM tick's better-informed merge can land it.
  */
-function checksRollup(commitSha) {
+function checksRollup(commitSha, pr) {
     var cr = parseMcp(github_get_commit_check_runs({ commitSha: commitSha }));
     var runs = cr.check_runs || cr.total_count !== undefined ? (cr.check_runs || []) : [];
+    if (!runs.length && pr && Array.isArray(pr.statusCheckRollup) && pr.statusCheckRollup.length) {
+        runs = pr.statusCheckRollup;
+    }
     if (!runs.length) return 'none';
     var red = false, pending = false;
     runs.forEach(function (r) {
@@ -131,7 +143,7 @@ function action(params) {
         if (!validating || labels.indexOf('agent:review') !== -1) continue; // mid-review: SM owns it
         if (pr.mergeable === false) continue; // conflicts: conflict-rework (SM) owns it
 
-        var rollup = checksRollup(String(headSha));
+        var rollup = checksRollup(String(headSha), pr);
         if (rollup !== 'green') {
             say('⏳ pr-' + pr.number + ' checks=' + rollup + ' — waiting');
             continue;

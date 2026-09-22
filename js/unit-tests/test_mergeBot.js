@@ -17,6 +17,7 @@ function fixture(opts) {
         mergeable: opts.mergeable !== undefined ? opts.mergeable : true,
         mergeable_state: opts.mergeableState || 'clean',
         head: { sha: opts.headSha || 'deadbeef' },
+        statusCheckRollup: opts.statusCheckRollup || undefined,
         labels: (opts.labels || ['ai_validating']).map(function (n) {
             return { name: n };
         })
@@ -78,6 +79,24 @@ suite('mergeBot', function () {
             assert.equal(result.acted, 0, pair[0] + ' checks must leave the PR untouched');
             assert.equal(fx.calls.merges.length + fx.calls.adds.length + fx.calls.removes.length, 0);
         });
+    });
+
+    test('silent-updated head: empty check runs, green rollup -> merge (fa #762)', function () {
+        // API branch refresh fires no pull_request event — no waiter check
+        // run on the new head. The PR-level statusCheckRollup (suites) is
+        // the evidence; 'none' there would starve a green CLEAN approved
+        // head forever (live: fa #762, 30 min green+CLEAN, no merge).
+        var fx = fixture({
+            labels: ['pr_approved', 'ai_validating', 'ai_pr_reviewed'],
+            checkRuns: [],
+            statusCheckRollup: [
+                { status: 'COMPLETED', conclusion: 'SUCCESS' },
+                { status: 'COMPLETED', conclusion: 'SUCCESS' }
+            ]
+        });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(result.success, true);
+        assert.equal(fx.calls.merges.length, 1, 'rollup green must merge');
     });
 
     test('transient merge refusal (404) is retried once and then succeeds', function () {
