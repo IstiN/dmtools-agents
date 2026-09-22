@@ -22,8 +22,10 @@ function fixture(opts) {
             return { name: n };
         })
     };
+    var wfCalls = [];
     var mods = {
-        github_list_workflow_runs: function () {
+        github_list_workflow_runs: function (a) {
+            wfCalls.push(a);
             return JSON.stringify({ workflow_runs: opts.workflowRuns || [] });
         },
         github_list_prs: function () { return JSON.stringify([{ number: pr.number }]); },
@@ -39,7 +41,7 @@ function fixture(opts) {
         github_remove_label: function (r) { calls.removes.push(r); return '{}'; }
     };
     var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
-    return { bot: bot, calls: calls, mods: mods };
+    return { bot: bot, calls: calls, mods: mods, wfCalls: wfCalls };
 }
 
 suite('mergeBot', function () {
@@ -116,6 +118,10 @@ suite('mergeBot', function () {
         var result = fx.bot.action({ jobParams: { repo: 'a/b', ciWorkflow: 'ci.yml' } });
         assert.equal(result.success, true);
         assert.equal(fx.calls.merges.length, 1, 'CI-run green on the sha must merge');
+        assert.equal(fx.wfCalls.length, 1, 'exactly one workflow-run lookup');
+        var q = fx.wfCalls[0];
+        assert.equal(q.workspace, 'a', 'fallback must scope the lookup to the repo');
+        assert.equal(q.repository, 'b', 'fallback must scope the lookup to the repo');
     });
 
     test('API-refreshed head: CI run on sha RED -> no merge, SM owns rework', function () {

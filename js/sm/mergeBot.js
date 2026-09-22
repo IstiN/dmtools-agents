@@ -50,7 +50,7 @@ function labelNames(pr) {
  * before declaring 'none' — otherwise a green approved CLEAN head waits
  * forever and only the SM tick's better-informed merge can land it.
  */
-function checksRollup(commitSha, pr, job) {
+function checksRollup(commitSha, pr, job, owner, name) {
     var cr = parseMcp(github_get_commit_check_runs({ commitSha: commitSha }));
     var runs = cr.check_runs || cr.total_count !== undefined ? (cr.check_runs || []) : [];
     if (!runs.length && pr && Array.isArray(pr.statusCheckRollup) && pr.statusCheckRollup.length) {
@@ -64,6 +64,7 @@ function checksRollup(commitSha, pr, job) {
         // waiter is a pull_request-event job: it never re-runs on refreshed
         // heads, so this is the ONLY conclusive evidence for them.
         var wf = parseMcp(github_list_workflow_runs({
+            workspace: owner, repository: name,
             workflowId: (job && job.ciWorkflow) || 'ci.yml', perPage: 30
         }));
         var wruns = (wf && (wf.workflow_runs || wf.runs)) || [];
@@ -165,7 +166,7 @@ function action(params) {
         if (!validating || labels.indexOf('agent:review') !== -1) continue; // mid-review: SM owns it
         if (pr.mergeable === false) continue; // conflicts: conflict-rework (SM) owns it
 
-        var rollup = checksRollup(String(headSha), pr, job);
+        var rollup = checksRollup(String(headSha), pr, job, owner, name);
         if (rollup !== 'green') {
             say('⏳ pr-' + pr.number + ' checks=' + rollup + ' — waiting');
             continue;
