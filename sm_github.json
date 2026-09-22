@@ -39,7 +39,10 @@
               "DIRTY"
             ],
             "draft": false,
-            "mutex": "ai_validating"
+            "mutex": "ai_validating",
+            "mutexAmong": [
+              "pr_approved"
+            ]
           },
           "localAction": "validate_pr",
           "limit": 1,
@@ -62,7 +65,10 @@
               "none"
             ],
             "draft": false,
-            "mutex": "ai_validating"
+            "mutex": "ai_validating",
+            "mutexAmong": [
+              "pr_approved"
+            ]
           },
           "localAction": "validate_pr",
           "limit": 1,
