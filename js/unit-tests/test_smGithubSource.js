@@ -602,5 +602,19 @@ suite('sm github source', function () {
             query: { type: 'pr', checks: 'green' }
         }, { repoInfo: { owner: 'a', repo: 'b' } });
         assert.equal(scalar.map(function (i) { return i.key; }).join(','), 'pr-63');
+    });    test('revalidate-armed rule exists in sm_github.json (armed head moved mid-validation)', function () {
+        // Live hole (dart pr-194, 2026-09-22 15:06): double silent-update moved
+        // the head past the green run; ai_validating stayed, checks read 'none',
+        // and NO rule matched — the tick processed 0 until a manual disarm.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.rules || (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules)) || [];
+        var r = rules.filter(function (x) { return x.id === 'revalidate-armed'; })[0];
+        assert.ok(r, 'revalidate-armed present');
+        assert.deepEqual(r.query.labels.sort(), ['ai_validating', 'pr_approved'].sort(),
+            'matches ARMED approved PRs');
+        assert.deepEqual(r.query.checks, ['none'], 'only when the head carries no checks');
+        assert.equal(r.query.mutex, 'ai_validating', 'one validation at a time');
+        assert.equal(r.localAction, 'validate_pr', 're-dispatches CI on the head');
     });
+
 });
