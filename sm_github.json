@@ -7,7 +7,7 @@
       "maxTriggeredWorkflows": 1,
       "rules": [
         {
-          "description": "Every open non-draft PR behind main gets a silent branch refresh with the workflow token (pushes trigger no workflows, so freshness is free); validating PRs are excluded so the validation head never moves mid-run. mergeState is BEHIND only: the prStatus deterministic override computes BEHIND from base freshness (immune to the REST BEHIND/BLOCKED flip-flop this rule used to paper over with both values), and BLOCKED is now a REAL verdict (fresh head, required checks pending/red) \u2014 updating those would no-op-clone every pending PR on every tick.",
+          "description": "Every open non-draft PR behind main gets a silent branch refresh with the workflow token (pushes trigger no workflows, so freshness is free); validating PRs are excluded so the validation head never moves mid-run. mergeState is BEHIND only: the prStatus deterministic override computes BEHIND from base freshness (immune to the REST BEHIND/BLOCKED flip-flop this rule used to paper over with both values), and BLOCKED is now a REAL verdict (fresh head, required checks pending/red) \u2014 updating those would no-op-clone every pending PR on every tick. Limit 20 (owner 2026-09-22): silent pushes fire no CI \u2014 refreshing every BEHIND head every tick is free and keeps PRs merge-ready, so the merge window never waits for a refresh first.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -20,7 +20,7 @@
             "draft": false
           },
           "localAction": "update_branch",
-          "limit": 5,
+          "limit": 20,
           "id": "silent-update-behind"
         },
         {
