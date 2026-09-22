@@ -270,9 +270,21 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {    var q = r
     // runs. One at a time, oldest-first (FIFO sort below) = each head
     // validates exactly once. Owner rule 2026-09-22 (live: fa #778/#779
     // both ai_validating while older #762 waited).
+    //
+    // q.mutexAmong = [labels]: scope the mutex to holders that ALSO carry
+    // one of these labels. Owner priority rule 2026-09-22 (live: fa #801
+    // pr_approved+ai_validated starved behind dev-lane ai_validating arms
+    // on #831/#832/#834 — validate-armed deferred every tick while the
+    // parallel dev wave re-occupied the label): the dev lane is
+    // non-blocking by design, so its arms must NOT block the approved
+    // merge window. Only approved-PR arms serialize the merge window
+    // (the N×N re-validation invariant is a merge-window property).
     if (q.mutex) {
+        var among = q.mutexAmong;
         var held = items.some(function (it) {
-            return it.labels.indexOf(q.mutex) !== -1;
+            if (it.labels.indexOf(q.mutex) === -1) return false;
+            if (!among) return true;
+            return among.some(function (l) { return it.labels.indexOf(l) !== -1; });
         });
         if (held) {
             console.log('   🔒 mutex "' + q.mutex + '" held by another PR — rule defers (serial FIFO)');

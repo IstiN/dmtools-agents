@@ -260,6 +260,46 @@ suite('sm github source', function () {
         assert.equal(items.length, 1);
         assert.equal(items[0].key, 'pr-10');
     });
+
+    test('pr rules: mutexAmong — dev-lane arms do not block the merge window', function () {
+        // Live priority inversion (owner report, fa 2026-09-22): #801
+        // (pr_approved + ai_validated, FIFO head) starved because dev-lane
+        // validations (#831/#832/#834) held ai_validating and validate-armed
+        // deferred entirely every tick. mutexAmong scopes the mutex to
+        // holders that also carry the given labels: dev arms don't block
+        // the approved merge window, approved arms still serialize it.
+        function mk(devArmed, approvedArmed) {
+            return function () {
+                var prs = [
+                    { number: 10, labels: [{ name: 'pr_approved' }, { name: 'ai_validated' }],
+                      head: { ref: 'ai/gh-10' }, draft: false }
+                ];
+                if (devArmed) {
+                    prs.push({ number: 12, labels: [{ name: 'ai_validating' }],
+                               head: { ref: 'ai/gh-12' }, draft: false });
+                    prs.push({ number: 13, labels: [{ name: 'ai_validating' }],
+                               head: { ref: 'ai/gh-13' }, draft: false });
+                }
+                if (approvedArmed) {
+                    prs.push({ number: 14, labels: [{ name: 'ai_validating' }, { name: 'pr_approved' }],
+                               head: { ref: 'ai/gh-14' }, draft: false });
+                }
+                return prs;
+            };
+        }
+        var q = { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'],
+                  mutex: 'ai_validating', mutexAmong: ['pr_approved'] };
+        var src = load({ github_list_prs: mk(true, false) }, {}, {});
+        // Dev arms only → mutex NOT held for the merge window → pr-10 flows
+        var items = src.query({ query: q }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.length, 1);
+        assert.equal(items[0].key, 'pr-10');
+
+        var srcHeld = load({ github_list_prs: mk(true, true) }, {}, {});
+        // An approved PR holds the arm → merge window still serializes
+        items = srcHeld.query({ query: q }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.length, 0);
+    });
     test('pr rules: branchPrefix and draft filters', function () {
         var srcMod = load({
             github_list_prs: function () {
