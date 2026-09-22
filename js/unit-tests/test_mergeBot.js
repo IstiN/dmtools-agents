@@ -51,7 +51,7 @@ suite('mergeBot', function () {
         assert.equal(result.success, true);
         assert.equal(fx.calls.merges.length, 1, 'exactly one merge call');
         assert.equal(fx.calls.merges[0].mergeMethod, 'squash');
-        assert.equal(fx.calls.merges[0].number, 42);
+        assert.equal(fx.calls.merges[0].pullRequestId, 42, 'Java-parity param — number broke on dmtools v0.1.18+ (pulls/null/merge → 404)');
         assert.equal(result.acted, 1);
     });
 
