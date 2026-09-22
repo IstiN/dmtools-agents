@@ -203,6 +203,39 @@ suite('sm github source', function () {
         assert.equal(items[1].key, 'pr-57');
     });
 
+    test('pr rules: mutex — rule defers while another PR holds the label', function () {
+        // Live FIFO violation (owner report, fa 2026-09-22): #778/#779 both
+        // ai_validating while older #762 waited — parallel validations
+        // re-churn on every merge. With mutex, validate-armed returns
+        // nothing while ANY PR holds ai_validating: one dispatch at a time.
+        var listCalls = 0;
+        function mk(holdsLabel) {
+            return function () {
+                listCalls++;
+                return [
+                    { number: 10, labels: [{ name: 'pr_approved' }], head: { ref: 'ai/gh-10' }, draft: false },
+                    { number: 11, labels: holdsLabel
+                        ? [{ name: 'ai_validating' }, { name: 'pr_approved' }]
+                        : [{ name: 'other' }], head: { ref: 'ai/gh-11' }, draft: false }
+                ];
+            };
+        }
+        var held = load({ github_list_prs: mk(true) }, {}, {});
+        var items = held.query({
+            query: { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'],
+                     mutex: 'ai_validating' }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.length, 0);
+
+        var free = load({ github_list_prs: mk(false) }, {}, {});
+        items = free.query({
+            query: { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'],
+                     mutex: 'ai_validating' }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        // No holder → oldest approved candidate flows through
+        assert.equal(items.length, 1);
+        assert.equal(items[0].key, 'pr-10');
+    });
     test('pr rules: branchPrefix and draft filters', function () {
         var srcMod = load({
             github_list_prs: function () {
