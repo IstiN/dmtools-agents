@@ -23,6 +23,9 @@ function fixture(opts) {
         })
     };
     var mods = {
+        github_list_workflow_runs: function () {
+            return JSON.stringify({ workflow_runs: opts.workflowRuns || [] });
+        },
         github_list_prs: function () { return JSON.stringify([{ number: pr.number }]); },
         github_get_pr: function () { return JSON.stringify(pr); },
         github_get_commit_check_runs: function () {
@@ -97,6 +100,35 @@ suite('mergeBot', function () {
         var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
         assert.equal(result.success, true);
         assert.equal(fx.calls.merges.length, 1, 'rollup green must merge');
+    });
+
+    test('API-refreshed head: no check runs anywhere, green CI run on sha -> merge (#762)', function () {
+        // REST PR body carries no statusCheckRollup and silent-updated heads
+        // carry no check runs — the dispatched CI workflow run on the head
+        // sha is the only evidence. Green run => merge.
+        var fx = fixture({
+            labels: ['pr_approved', 'ai_validating', 'ai_pr_reviewed'],
+            checkRuns: [],
+            workflowRuns: [
+                { head_sha: 'deadbeef', conclusion: 'SUCCESS', status: 'completed' }
+            ]
+        });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', ciWorkflow: 'ci.yml' } });
+        assert.equal(result.success, true);
+        assert.equal(fx.calls.merges.length, 1, 'CI-run green on the sha must merge');
+    });
+
+    test('API-refreshed head: CI run on sha RED -> no merge, SM owns rework', function () {
+        var fx = fixture({
+            labels: ['pr_approved', 'ai_validating'],
+            checkRuns: [],
+            workflowRuns: [
+                { head_sha: 'deadbeef', conclusion: 'FAILURE', status: 'completed' }
+            ]
+        });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', ciWorkflow: 'ci.yml' } });
+        assert.equal(result.success, true);
+        assert.equal(fx.calls.merges.length, 0, 'red CI on the sha must not merge');
     });
 
     test('transient merge refusal (404) is retried once and then succeeds', function () {
