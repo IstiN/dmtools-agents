@@ -24,7 +24,7 @@
           "id": "silent-update-behind"
         },
         {
-          "description": "GitHub PR: post-approval merge window — oldest approved PR gets its CI dispatched on the head (workflow_dispatch; pushes never fire CI) + ai_validating marker. pr_approved is STICKY: after rework fixes the new head re-validates here and merges — no re-review (#token-budget).",
+          "description": "Post-approval merge window — OWNER FIFO RULE (2026-09-22): lead the OLDEST approved PR all the way to merge; never validate other approved PRs meanwhile (the merge moves the base — they would re-validate anyway). Advance to the next approved ONLY when the oldest is DIRTY (conflict-rework owns it) or its validation went RED (rework leg fixes it) — both free this slot while the oldest repairs. BEHIND/DIRTY excluded here: silent-update refreshes BEHIND heads first; conflicted heads can never reach CLEAN. Mutex ai_validating = one validation at a time.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -34,7 +34,10 @@
             "notLabels": [
               "ai_validating"
             ],
-            "notMergeState": "BEHIND",
+            "notMergeState": [
+              "BEHIND",
+              "DIRTY"
+            ],
             "draft": false,
             "mutex": "ai_validating"
           },
