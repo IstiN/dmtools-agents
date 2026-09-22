@@ -223,7 +223,7 @@
           "localAction": "mark_developed"
         },
         {
-          "description": "GitHub: validated PR (ai_validated latch + green checks on the head) after dev -> machine review (never on an armed PR: pr_approved means the review already concluded APPROVED - re-dispatching review duplicates the leg and un-arms the merge queue). The latch guarantees a dispatched CI run covered this exact stage; checks green guarantees the head did not move since.",
+          "description": "GitHub: validated PR (ai_validated latch + green checks on the head) after dev -> machine review (never on an armed PR: pr_approved means the review already concluded APPROVED - re-dispatching review duplicates the leg and un-arms the merge queue). The latch guarantees a dispatched CI run covered this exact stage; checks green guarantees the head did not move since. Limit 10 (owner 2026-09-22): review legs are plain workflow runs \u2014 they parallelize freely; one-per-tick serialized a 12-PR green wave into hours.",
           "source": "github",
           "query": {
             "type": "issue",
@@ -248,7 +248,7 @@
             "leg": "review",
             "reason": "sm: green PR awaits review"
           },
-          "limit": 1,
+          "limit": 10,
           "id": "review-after-dev"
         },
         {
