@@ -48,6 +48,11 @@ name: 'Factory · AI Teammate'
 on:
   workflow_call:
     inputs:
+      runner:
+        description: 'Runner label (self-hosted pools must be visible to the CALLING org)'
+        type: string
+        default: 'ubuntu-24.04'
+    inputs:
       issue:
         description: 'Issue number (string: number-typed reusable inputs cannot take expressions). Empty when pr is given (PR-anchored run, #687).'
         required: false
@@ -103,7 +108,7 @@ permissions:
 
 jobs:
   guard:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner || 'ubuntu-24.04' }}
     outputs:
       run: ${{ steps.check.outputs.run }}
       runner: ${{ steps.check.outputs.runner }}
@@ -281,7 +286,7 @@ jobs:
   teammate:
     needs: guard
     if: needs.guard.outputs.run == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner || 'ubuntu-24.04' }}
     # A real fix is a 40-80 minute agent session (gh-623 burned a full RCA +
     # TDD cycle at exactly 61 minutes and the job was killed mid-work).
     # The autocommit timer (300s) bounds the blast radius of a kill; this
