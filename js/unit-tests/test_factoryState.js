@@ -123,10 +123,9 @@ suite('factoryState — publishFactoryState', function () {
       function (a) { seen.push(a.command); });
     assert.equal(url,
       'https://github.com/IstiN/flutter_agent_harness/releases/latest/download/fa-state.json');
-    assert.ok(seen[0].indexOf('printf %s ') === 0);          // write tmp json
+    assert.ok(seen[0].indexOf('dmtools file_write ') === 0);  // write tmp json (whitelist!)
     assert.ok(seen[1].indexOf('gh release create') === 0);
     assert.ok(seen[2].indexOf('gh release upload') === 0);   // uses same tmp
-    assert.ok(seen[3].indexOf('rm -f ') === 0);
   });
 
   test('defaults: tag factory-state, asset <factory>-state.json', function () {
