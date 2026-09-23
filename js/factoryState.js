@@ -130,60 +130,75 @@ function buildFactoryState(input) {
 }
 
 // ── Publisher ────────────────────────────────────────────────────────────────
+// Transport: a `factory-data` branch committed via the Git data API (pure gh,
+// no tmp files). The CLI whitelist admits only gh/git/dmtools/... as the
+// first token (printf/rm rejected — live 18:56 tick; the runner's dmtools
+// file_write schema drifted — live 19:12 tick), so EVERY command starts with
+// `gh`, and the JSON rides inside `-f` fields. The board reads
+// raw.githubusercontent.com/O/R/factory-data/data/<asset> — CDN, token-free.
 
-var DEFAULT_TAG = 'factory-state';
+var DEFAULT_TAG = 'factory-data';
+var DATA_BRANCH = 'factory-data';
 
-/**
- * Pure: the gh commands that publish `state` per cfg. Tests assert on these;
- * publishFactoryState just runs them. Uses `gh release` (view/create/upload)
- * — the same silent-token CLI surface the tick already drives.
- */
-function publishCommands(state, cfg) {
-    var repo = cfg.repo || state.repo;
-    var tag = cfg.tag || DEFAULT_TAG;
-    var asset = assetName(state, cfg);
-    var tmpPath = '/tmp/' + asset;
-    return [
-        // create once (fails harmlessly when it exists — output ignored)
-        'gh release create ' + tag + ' --repo ' + repo +
-            ' --title "factory state (auto)" --prerelease' +
-            ' --notes "auto-updated by the SM tick; do not edit"',
-        'gh release upload ' + tag + ' ' + tmpPath + ' --repo ' + repo + ' --clobber'
-    ];
-}
-
-/**
- * Publish via `exec` (cli_execute_command in the bridge; a capturer in
- * tests). Returns the public CDN URL the board reads.
- */
 function assetName(state, cfg) {
     return (cfg && cfg.asset) ||
         ((state.factory || 'factory') + '-state.json');
 }
 
+function tagOf(cfg) {
+    return (cfg && cfg.tag) || DEFAULT_TAG;
+}
+
+// Single-quote an argv token, splicing shell substitutions around a marker:
+// quotedWithSub('a__OID__b', '__OID__', 'gh api ...') =>
+//   'a'"$(gh api ...)"'b'    ($() expands OUTSIDE the single quotes)
+function quotedWithSub(s, marker, cmd) {
+    return s.split(marker).map(shellQuote).join('"$(' + cmd + ')"');
+}
+
+/**
+ * Pure: the gh commands that publish `state` (board URL derivable without
+ * running them). First command bootstraps the data branch (fails harmlessly
+ * when it exists); second commits data/<asset> via createCommitOnBranch —
+ * expectedHeadOid is resolved IN-SHELL, so concurrent ticks fail open and
+ * the next tick retries.
+ */
+function publishCommands(state, cfg) {
+    var repo = (cfg && cfg.repo) || state.repo;
+    var branch = tagOf(cfg);
+    var asset = assetName(state, cfg);
+    var path = 'data/' + asset;
+    var json = JSON.stringify(state);
+    var input = JSON.stringify({
+        branch: { repositoryNameWithOwner: repo, branchName: branch },
+        message: { headline: 'factory state — ' + (state.tick && state.tick.at || '') },
+        fileChanges: { additions: [{ path: path, contents: json }] },
+        expectedHeadOid: '__OID__'
+    });
+    var inputArg = quotedWithSub(input, '__OID__',
+        'gh api repos/' + repo + '/git/ref/heads/' + branch + ' --jq .object.sha');
+    return [
+        'gh api -X POST repos/' + repo + '/git/refs -f ref=refs/heads/' + branch +
+            ' -f sha="$(gh api repos/' + repo +
+            '/git/ref/heads/$(gh api repos/' + repo +
+            ' --jq .default_branch) --jq .object.sha)"',
+        'gh api graphql -f query=\'mutation($input: CreateCommitOnBranchInput!)' +
+            '{ createCommitOnBranch(input: $input) { commit { oid } } }\'' +
+            ' -F input=' + inputArg
+    ];
+}
+
+/**
+ * Publish via `exec` (cli_execute_command in the bridge; a capturer in
+ * tests). Returns the public board URL.
+ */
 function publishFactoryState(state, cfg, exec) {
     var repo = (cfg && cfg.repo) || state.repo;
     var asset = assetName(state, cfg);
-    var commands = publishCommands(state, cfg || {});
-    var tmpPath = '/tmp/' + asset;
-    // The bridge has no direct file write from JS; shell heredoc via gh-free
-    // printf keeps this one command chain. Encode the JSON in the command —
-    // it is small (KBs), single-quoted-safe (no single quotes in JSON).
-    var json = JSON.stringify(state);
-    // The CLI whitelist allows only gh/git/dmtools/... as the first token —
-    // printf/rm are rejected (live 18:56 tick). Write the tmp file via the
-    // file_write TOOL dispatched through the dmtools CLI itself; no cleanup
-    // (a stale /tmp/<asset> is harmless).
-    exec({ command: 'dmtools file_write ' + shellQuote(JSON.stringify({
-        path: tmpPath, content: json
-    })) });
-    commands.forEach(function (c) { exec({ command: c }); });
-    return 'https://github.com/' + repo +
-        '/releases/latest/download/' + asset;
-}
-
-function tagOf(cfg) {
-    return (cfg && cfg.tag) || DEFAULT_TAG;
+    var branch = tagOf(cfg);
+    publishCommands(state, cfg).forEach(function (c) { exec({ command: c }); });
+    return 'https://raw.githubusercontent.com/' + repo + '/' + branch +
+        '/data/' + asset;
 }
 
 function shellQuote(s) {
@@ -193,6 +208,7 @@ function shellQuote(s) {
 module.exports = {
     buildFactoryState: buildFactoryState,
     publishCommands: publishCommands,
+    quotedWithSub: quotedWithSub,
     publishFactoryState: publishFactoryState,
     assetName: assetName,
     tagOf: tagOf,

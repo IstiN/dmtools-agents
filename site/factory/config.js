@@ -19,13 +19,13 @@ window.FACTORY_BOARD_CONFIG = {
     {
       id: 'fa',
       name: 'flutter_agent_harness',
-      stateUrl: 'https://github.com/IstiN/flutter_agent_harness/releases/latest/download/fa-state.json',
+      stateUrl: 'https://raw.githubusercontent.com/IstiN/flutter_agent_harness/factory-data/data/fa-state.json',
       accent: '#4f8cff'
     },
     {
       id: 'dart',
       name: 'dmtools-dart',
-      stateUrl: 'https://github.com/epam/dmtools-dart/releases/latest/download/dart-state.json',
+      stateUrl: 'https://raw.githubusercontent.com/epam/dmtools-dart/factory-data/data/dart-state.json',
       accent: '#33b077'
     }
   ],
