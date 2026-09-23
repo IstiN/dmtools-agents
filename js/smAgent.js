@@ -1067,18 +1067,20 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                 status + (conclusion ? '/' + conclusion : ''));
                     return;
                 }
+                // github_create_check_run is NOT in the JS-bridge sync
+                // toolset (MCP-registry only) — shell out to gh api (the
+                // tick already proves gh + GH_TOKEN works for dispatches).
                 try {
-                    github_create_check_run({
-                        workspace: effectiveRepoInfo.owner,
-                        repository: effectiveRepoInfo.repo,
-                        name: checkName,
-                        headSha: headSha,
-                        status: status,
-                        conclusion: conclusion || undefined,
-                        title: 'SM validation' + (conclusion ? (': ' + conclusion) : ' (tick-dispatched)'),
-                        summary: runUrl ? ('Dispatched run: ' + runUrl)
-                                        : 'Stamped by the SM tick (bridge-free mode).'
-                    });
+                    var cmd = 'gh api -X POST repos/' + effectiveRepoInfo.owner +
+                              '/' + effectiveRepoInfo.repo + '/check-runs/' + headSha +
+                              ' -f name="' + checkName + '"' +
+                              ' -f status="' + status + '"' +
+                              (conclusion ? (' -f conclusion="' + conclusion + '"') : '') +
+                              ' -f title="SM validation' +
+                              (conclusion ? (': ' + conclusion) : ' (tick-dispatched)') + '"' +
+                              ' -f summary="' + (runUrl ? ('Dispatched run: ' + runUrl) :
+                                  'Stamped by the SM tick (bridge-free mode).') + '"';
+                    cli_execute_command({ command: cmd });
                 } catch (e) {
                     console.warn('  ⚠️  stamp "' + checkName + '" on ' +
                                  String(headSha).slice(0, 7) + ': ' + (e.message || e));
