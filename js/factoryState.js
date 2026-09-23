@@ -162,24 +162,11 @@ function publishCommands(state, cfg) {
     var asset = assetName(state, cfg);
     var path = 'data/' + asset;
     var json = JSON.stringify(state);
-    // gh -F/--field sends STRINGS — the GraphQL variable must be a real
-    // object, so the request body rides a heredoc on stdin (--input -).
-    // Unquoted EOF keeps $( ) live for the in-shell OID resolution; the
-    // state JSON contains no $ or backticks (pure API data).
-    var body = JSON.stringify({
-        query: 'mutation($input: CreateCommitOnBranchInput!)' +
-               '{ createCommitOnBranch(input: $input) { commit { oid } } }',
-        variables: {
-            input: {
-                branch: { repositoryNameWithOwner: repo, branchName: branch },
-                message: { headline: 'factory state — ' +
-                    ((state.tick && state.tick.at) || '') },
-                fileChanges: { additions: [{ path: path, contents: json }] },
-                expectedHeadOid: '__OID__'
-            }
-        }
-    }).replace('__OID__', '$(gh api repos/' + repo +
-        '/git/ref/heads/' + branch + ' --jq .object.sha)');
+    // gh's GraphQL transports are unusable from here: -F sends the object
+    // as a STRING, and `--input -` template-parses `$` inside the query
+    // (both failed live). The Contents API PUT is plain REST and takes the
+    // payload base64-encoded — no quoting or parser can touch it.
+    // The existing-file sha rides ${S:+...} so first publish = create.
     return [
         // '|| true': the normal case is "branch already exists" (422) — the
         // executor throws on non-zero exit, which would abort the commit.
@@ -187,7 +174,14 @@ function publishCommands(state, cfg) {
             ' -f sha="$(gh api repos/' + repo +
             '/git/ref/heads/$(gh api repos/' + repo +
             ' --jq .default_branch) --jq .object.sha)" || true',
-        'gh api graphql --input - <<EOF\n' + body + '\nEOF'
+        'S=$(gh api "repos/' + repo + '/contents/' + path +
+            '?ref=' + branch + '" --jq .sha 2>/dev/null || true); ' +
+            'gh api -X PUT repos/' + repo + '/contents/' + path +
+            ' -f branch=' + branch +
+            ' -f message=' + shellQuote('factory state — ' +
+                ((state.tick && state.tick.at) || '')) +
+            ' -f content="$(printf %s ' + shellQuote(json) + ' | base64)"' +
+            ' ${S:+-f sha="$S"}'
     ];
 }
 
