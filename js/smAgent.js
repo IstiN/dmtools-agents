@@ -798,7 +798,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     if (rule.source === 'github' && (rule.query || {}).type === 'pr') {
         try {
             // stampValidationChecksFor hoists within processRule's scope.
-            syncValidationChecks(effectiveRepoInfo, stampValidationChecksFor);
+            syncValidationChecks(effectiveRepoInfo, function (sha, st, co, url) {
+                stampValidationChecksForModule(effectiveRepoInfo, sha, st, co, url);
+            });
         } catch (e) {
             console.warn('  ⚠️  validation-check sync failed: ' + (e.message || e));
         }
@@ -1058,59 +1060,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // the dispatched run's verdict on every subsequent pass (see
         // syncValidationChecks, hooked ahead of each PR rule's source
         // query). Repos without the knob keep the bridge architecture.
-        function stampValidationChecksFor(headSha, status, conclusion, runUrl) {
-            var names = validationCheckNames();
-            if (!names || !headSha) return;
-            // Check runs are GitHub-App-only ("You must authenticate via a
-            // GitHub App") — the tick PAT cannot create them. The workflow
-            // token (jobParams.silentToken) IS an App token with
-            // checks:write on the repo the tick runs in. Swap GH_TOKEN for
-            // the gh child exactly like silentUpdateBranch does, restore
-            // after (sourceToken).
-            var appToken = (RUN_JOB_PARAMS || {}).silentToken;
-            var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
-            var swapped = false;
-            if (appToken) {
-                try {
-                    set_env_variable('GH_TOKEN', appToken);
-                    swapped = true;
-                } catch (e) {
-                    console.warn('  ⚠️  token swap failed, stamps use the PAT: ' + (e.message || e));
-                }
-            }
-            try {
-                names.forEach(function (checkName) {
-                    if (DRY) {
-                        console.log('  🧪 [dry] stamp "' + checkName + '" ' +
-                                    status + (conclusion ? '/' + conclusion : ''));
-                        return;
-                    }
-                    // POST /repos/{o}/{r}/check-runs — head_sha is a FIELD,
-                    // never a path segment (sha-in-path 404s). github_create
-                    // _check_run is MCP-registry-only (not a JS-bridge tool).
-                    try {
-                        var cmd = 'gh api -X POST repos/' + effectiveRepoInfo.owner +
-                                  '/' + effectiveRepoInfo.repo + '/check-runs' +
-                                  ' -f name="' + checkName + '"' +
-                                  ' -f head_sha=' + headSha +
-                                  ' -f status="' + status + '"' +
-                                  (conclusion ? (' -f conclusion="' + conclusion + '"') : '') +
-                                  ' -f title="SM validation' +
-                                  (conclusion ? (': ' + conclusion) : ' (tick-dispatched)') + '"' +
-                                  ' -f summary="' + (runUrl ? ('Dispatched run: ' + runUrl) :
-                                      'Stamped by the SM tick (bridge-free mode).') + '"';
-                        cli_execute_command({ command: cmd });
-                    } catch (e) {
-                        console.warn('  ⚠️  stamp "' + checkName + '" on ' +
-                                     String(headSha).slice(0, 7) + ': ' + (e.message || e));
-                    }
-                });
-            } finally {
-                if (swapped && sourceTok) {
-                    try { set_env_variable('GH_TOKEN', sourceTok); } catch (e2) {}
-                }
-            }
-        }
+
 
         // ── PR-lifecycle localActions (issue #687: the SM owns the loop) ──
         // They act on the PR directly (type:pr rules; ticket.prNumber set,
@@ -1150,7 +1100,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 dispatchCiWorkflow(ticket.branch);
                 var vHead = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
                 if (vHead) {
-                    stampValidationChecksFor(vHead, 'in_progress', null, null);
+                    stampValidationChecksForModule(effectiveRepoInfo, vHead, 'in_progress', null, null);
                 }
                 github_add_labels({
                     workspace: effectiveRepoInfo.owner,
@@ -1558,6 +1508,60 @@ function validationCheckNames() {
     }
     return null;
 }
+
+function stampValidationChecksForModule(repoInfo, headSha, status, conclusion, runUrl) {
+            var names = validationCheckNames();
+            if (!names || !headSha) return;
+            // Check runs are GitHub-App-only ("You must authenticate via a
+            // GitHub App") — the tick PAT cannot create them. The workflow
+            // token (jobParams.silentToken) IS an App token with
+            // checks:write on the repo the tick runs in. Swap GH_TOKEN for
+            // the gh child exactly like silentUpdateBranch does, restore
+            // after (sourceToken).
+            var appToken = (RUN_JOB_PARAMS || {}).silentToken;
+            var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
+            var swapped = false;
+            if (appToken) {
+                try {
+                    set_env_variable('GH_TOKEN', appToken);
+                    swapped = true;
+                } catch (e) {
+                    console.warn('  ⚠️  token swap failed, stamps use the PAT: ' + (e.message || e));
+                }
+            }
+            try {
+                names.forEach(function (checkName) {
+                    if (DRY) {
+                        console.log('  🧪 [dry] stamp "' + checkName + '" ' +
+                                    status + (conclusion ? '/' + conclusion : ''));
+                        return;
+                    }
+                    // POST /repos/{o}/{r}/check-runs — head_sha is a FIELD,
+                    // never a path segment (sha-in-path 404s). github_create
+                    // _check_run is MCP-registry-only (not a JS-bridge tool).
+                    try {
+                        var cmd = 'gh api -X POST repos/' + repoInfo.owner +
+                                  '/' + repoInfo.repo + '/check-runs' +
+                                  ' -f name="' + checkName + '"' +
+                                  ' -f head_sha=' + headSha +
+                                  ' -f status="' + status + '"' +
+                                  (conclusion ? (' -f conclusion="' + conclusion + '"') : '') +
+                                  ' -f title="SM validation' +
+                                  (conclusion ? (': ' + conclusion) : ' (tick-dispatched)') + '"' +
+                                  ' -f summary="' + (runUrl ? ('Dispatched run: ' + runUrl) :
+                                      'Stamped by the SM tick (bridge-free mode).') + '"';
+                        cli_execute_command({ command: cmd });
+                    } catch (e) {
+                        console.warn('  ⚠️  stamp "' + checkName + '" on ' +
+                                     String(headSha).slice(0, 7) + ': ' + (e.message || e));
+                    }
+                });
+            } finally {
+                if (swapped && sourceTok) {
+                    try { set_env_variable('GH_TOKEN', sourceTok); } catch (e2) {}
+                }
+            }
+        }
 
 // One sync per repo per tick-process (the hook fires per PR rule; a
 // short window stops repeat API passes inside a single tick).
