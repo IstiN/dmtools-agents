@@ -170,9 +170,14 @@ function publishFactoryState(state, cfg, exec) {
     // printf keeps this one command chain. Encode the JSON in the command —
     // it is small (KBs), single-quoted-safe (no single quotes in JSON).
     var json = JSON.stringify(state);
-    exec({ command: 'printf %s ' + shellQuote(json) + ' > ' + tmpPath });
+    // The CLI whitelist allows only gh/git/dmtools/... as the first token —
+    // printf/rm are rejected (live 18:56 tick). Write the tmp file via the
+    // file_write TOOL dispatched through the dmtools CLI itself; no cleanup
+    // (a stale /tmp/<asset> is harmless).
+    exec({ command: 'dmtools file_write ' + shellQuote(JSON.stringify({
+        path: tmpPath, content: json
+    })) });
     commands.forEach(function (c) { exec({ command: c }); });
-    exec({ command: 'rm -f ' + tmpPath });
     return 'https://github.com/' + repo +
         '/releases/latest/download/' + asset;
 }
