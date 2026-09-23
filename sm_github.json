@@ -7,6 +7,23 @@
       "maxTriggeredWorkflows": 1,
       "rules": [
         {
+          "description": "Validated-but-stale: armed (ai_validating) + validation concluded but BASE MOVED (BEHIND only). BLOCKED must NOT unarm: since #483 BLOCKED is a real verdict, and on a freshly armed head BLOCKED simply means 'required checks pending' — unarming there races validate-armed in the SAME tick and deadlocks the PR forever (live: fa pr-762 armed at 08:25:37, unarmed 08:25:58 by the BLOCKED match, re-armed next tick, loop). silent-update-behind excludes ai_validating and merge-validated needs CLEAN, so without this unarm a genuinely moved base still deadlocks (live: fa pr-744) — BEHIND-only keeps that recovery and stops the self-inflicted one.",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validating"
+            ],
+            "mergeState": [
+              "BEHIND"
+            ],
+            "draft": false
+          },
+          "localAction": "unarm_validation",
+          "limit": 1,
+          "id": "unarm-stale-validation"
+        },
+        {
           "description": "Every open non-draft PR behind main gets a silent branch refresh with the workflow token (pushes trigger no workflows, so freshness is free); validating PRs are excluded so the validation head never moves mid-run. mergeState is BEHIND only: the prStatus deterministic override computes BEHIND from base freshness (immune to the REST BEHIND/BLOCKED flip-flop this rule used to paper over with both values), and BLOCKED is now a REAL verdict (fresh head, required checks pending/red) — updating those would no-op-clone every pending PR on every tick. Limit 20 (owner 2026-09-22): silent pushes fire no CI — refreshing every BEHIND head every tick is free and keeps PRs merge-ready, so the merge window never waits for a refresh first.",
           "source": "github",
           "query": {
@@ -141,23 +158,6 @@
           "localAction": "complete_validation",
           "limit": 10,
           "id": "validated-green"
-        },
-        {
-          "description": "Validated-but-stale: armed (ai_validating) + validation concluded but BASE MOVED (BEHIND only). BLOCKED must NOT unarm: since #483 BLOCKED is a real verdict, and on a freshly armed head BLOCKED simply means 'required checks pending' — unarming there races validate-armed in the SAME tick and deadlocks the PR forever (live: fa pr-762 armed at 08:25:37, unarmed 08:25:58 by the BLOCKED match, re-armed next tick, loop). silent-update-behind excludes ai_validating and merge-validated needs CLEAN, so without this unarm a genuinely moved base still deadlocks (live: fa pr-744) — BEHIND-only keeps that recovery and stops the self-inflicted one.",
-          "source": "github",
-          "query": {
-            "type": "pr",
-            "labels": [
-              "ai_validating"
-            ],
-            "mergeState": [
-              "BEHIND"
-            ],
-            "draft": false
-          },
-          "localAction": "unarm_validation",
-          "limit": 1,
-          "id": "unarm-stale-validation"
         },
         {
           "description": "GitHub PR: branch conflicts with main (silent-update's git merge cannot land; mergeState DIRTY) -> the queue would stall forever — report and, for MACHINE-authored PRs, re-arm agent:rework on the linked issue so the agent resolves the conflicts and pushes; the normal validate flow then resumes (pr_approved is STICKY — no re-review). Guest PRs get the report only (owner rule 2026-09-21: auto-rework is machine-author-only). Fires once per head: the marker comment carries the head sha and suppresses re-reports for the same head.",

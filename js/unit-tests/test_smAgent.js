@@ -785,6 +785,28 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedPrLabelAdds.length, 1, 'ai_validating armed');
     });
 
+    test('config order: unarm precedes silent-update (same-tick actualization)', function () {
+        // Owner 2026-09-23: a BEHIND queue head with ai_validating armed
+        // took 3 ticks to refresh (rule 0 skipped the armed PR, the unarm
+        // rule ran last, update+re-arm followed next ticks). unarm MUST
+        // run before the update rule so BEHIND+armed is resolved in one
+        // tick; stale runs are cancelled by validate_pr (agents#519).
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (function dig(o) {
+            if (o && typeof o === 'object') {
+                if (Array.isArray(o.rules)) return o.rules;
+                for (var k in o) { var r = dig(o[k]); if (r) return r; }
+            }
+            return null;
+        })(cfg);
+        var gh = rules.filter(function (r) { return r.source === 'github'; });
+        var idx = function (id) {
+            return gh.map(function (r) { return r.id; }).indexOf(id);
+        };
+        assert.ok(idx('unarm-stale-validation') < idx('silent-update-behind'),
+                  'unarm-stale-validation must precede silent-update-behind');
+    });
+
     test('validate_pr: dispatch failure leaves the marker un-armed (next tick retries)', function () {
         // Self-healing: a failed dispatch (bad workflow name, transient
         // API error) must not arm ai_validating — the rule re-matches on
