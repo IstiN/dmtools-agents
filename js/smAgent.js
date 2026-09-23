@@ -75,6 +75,7 @@ var DRY = false;
 var configLoader = require('./configLoader.js');
 var smSource = require('./sm/sourceResolver.js');
 var scmModule = require('./common/scm.js');
+var factoryStateModule = require('./factoryState.js');
 var buildEncodedConfigModule = require('./common/buildEncodedConfig.js');
 var machineAuthorModule = require('./common/machineAuthor.js');
 
@@ -1465,6 +1466,53 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         if (triggered) {
             processedKeys.push(key);
             if (!rule.localTeammate && workflowBudget) workflowBudget.remaining -= 1;
+        }
+    }
+
+    // ── Factory state publishing (owner 2026-09-23, OPT-IN) ──────────────
+    // jobParams.statePublish = {channel:'release', repo?, tag?, asset?} —
+    // anything else (absent / none) publishes nothing. Renders the snapshot
+    // from the same sources the reconcile pass read and uploads it as a
+    // release asset (public prerelease; the board reads the CDN link, no
+    // tokens in the browser, no rate limits). The workflow input arrives as
+    // an escaped JSON STRING — parse before guarding.
+    var spCfgRaw = (RUN_JOB_PARAMS || {}).statePublish;
+    if (typeof spCfgRaw === 'string') {
+        try { spCfgRaw = JSON.parse(spCfgRaw); } catch (eSp0) { spCfgRaw = null; }
+    }
+    if (((spCfgRaw || {}).channel) === 'release' && !DRY) {
+        try {
+            var spCfg = spCfgRaw;
+            var spRepo = (spCfg.repo ? (function () {
+                    var parts = String(spCfg.repo).split('/');
+                    return { owner: parts[0], repo: parts[1] };
+                })() : (effectiveRepoInfo && effectiveRepoInfo.owner) ?
+                effectiveRepoInfo : null);
+            if (spRepo && spRepo.owner && spRepo.repo) {
+                var spPrs = mcpParse(github_list_prs({
+                    workspace: spRepo.owner, repository: spRepo.repo, state: 'open'
+                }));
+                var spPrList = Array.isArray(spPrs) ? spPrs :
+                    ((spPrs && (spPrs.pullRequests || spPrs.data || spPrs.items)) || []);
+                var spRuns = mcpParse(github_list_workflow_runs({
+                    workspace: spRepo.owner, repository: spRepo.repo, perPage: 50
+                })) || {};
+                var spRunList = spRuns.workflow_runs || spRuns.workflowRuns || [];
+                var spState = factoryStateModule.buildFactoryState({
+                    repoInfo: spRepo,
+                    prs: spPrList,
+                    runs: spRunList,
+                    checkNames: validationCheckNames() || [],
+                    dryRun: DRY,
+                    processed: processedKeys
+                });
+                var spUrl = factoryStateModule.publishFactoryState(
+                    spState, spCfg, function (args) { cli_execute_command(args); });
+                console.log('  📡 factory state published → ' + spUrl);
+            }
+        } catch (ePub) {
+            console.warn('  ⚠️  factory state publish failed: ' +
+                         (ePub.message || ePub));
         }
     }
 

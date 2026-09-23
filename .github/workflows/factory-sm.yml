@@ -62,6 +62,11 @@ on:
         required: false
         type: string
         default: ''
+      state-publish:
+        description: "OPT-IN factory-state publishing (owner 2026-09-23): JSON object {channel:'release', repo?, tag?, asset?}. The tick uploads factory-state.json as a public prerelease asset; the board (site/factory) reads the releases/latest CDN link. Empty = off."
+        required: false
+        type: string
+        default: ''
 
     secrets:
       SOURCE_GITHUB_TOKEN:
@@ -162,6 +167,15 @@ jobs:
           if [ -n "$vc" ]; then
             vc_escaped=$(printf '%s' "$vc" | sed 's/"/\\"/g')
             extra="${extra},\"validationChecks\":\"${vc_escaped}\""
+          fi
+          # Factory-state publishing (owner 2026-09-23, OPT-IN): JSON object
+          # {channel:'release', repo?, tag?, asset?}. Empty = off. The tick
+          # uploads a factory-state.json snapshot as a release asset; the
+          # board reads the public CDN link (no tokens, no rate limits).
+          sp='${{ inputs.state-publish }}'
+          if [ -n "$sp" ]; then
+            sp_escaped=$(printf '%s' "$sp" | sed 's/"/\\"/g')
+            extra="${extra},\"statePublish\":\"${sp_escaped}\""
           fi
           if [ "${{ inputs.dryRun }}" = "true" ]; then
             override="{\"params\":{\"jobParams\":{\"repo\":\"${repo}\",\"dryRun\":true${extra}}}}"

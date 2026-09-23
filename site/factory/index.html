@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Factory Board</title>
+  <!--
+    Factory board template (owner 2026-09-23) — deploy anywhere (GitHub
+    Pages, Cloudflare Pages, fa1.dev). Zero build, zero tokens: the board
+    reads factory-state.json assets published by the SM tick as public
+    prerelease assets (releases/latest/download CDN links).
+
+    DEPLOY:
+      1. Copy this folder.
+      2. Edit config.js — factories[] + branding (all knobs live there).
+      3. Style: edit styles.css :root variables (or data-theme overrides).
+  -->
+  <script>
+    (function () {
+      try {
+        var t = new URLSearchParams(location.search).get('theme');
+        if (t !== 'light' && t !== 'dark') {
+          t = localStorage.getItem('fb-theme') ||
+              (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+        }
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" id="brand-logo">🏭</span>
+      <h1 id="brand-title">Factory Board</h1>
+      <span class="live" id="live-dot" title="auto-refresh"></span>
+    </div>
+    <div class="topbar-right">
+      <span class="clock" id="clock">—</span>
+      <button class="theme-btn" id="theme-btn" title="toggle theme">◐</button>
+    </div>
+  </header>
+
+  <nav class="factory-tabs" id="factory-tabs"></nav>
+
+  <main id="board">
+    <section class="statusline" id="statusline" hidden>
+      <span class="pill" id="tick-pill">tick: —</span>
+      <span class="pill" id="counts-pill"></span>
+      <span class="pill" id="repo-pill"></span>
+    </section>
+    <div class="lanes" id="lanes"></div>
+    <p class="error" id="error" hidden></p>
+  </main>
+
+  <footer class="foot">
+    <span id="foot-note">states are what the machine decided — snapshot from the SM tick</span>
+  </footer>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

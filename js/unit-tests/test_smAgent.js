@@ -197,6 +197,7 @@ function makeSmAgent(opts) {
             './common/scm.js': mockScmModule,
             './common/buildEncodedConfig.js': buildEncodedConfigModule,
             './common/machineAuthor.js': machineAuthorModule,
+            './factoryState.js': loadModule('js/factoryState.js', makeRequire({}), {}),
         }),
         smMocks
     );
