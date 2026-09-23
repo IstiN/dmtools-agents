@@ -1,0 +1,66 @@
+name: 'Factory probe (sync tools)'
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout factory (engine)
+        uses: actions/checkout@v7
+        with:
+          repository: IstiN/dmtools-agents
+          ref: ${{ github.sha }}
+          path: factory-agents
+          persist-credentials: false
+      - name: Install dmtools CLI (pinned release bundle)
+        env:
+          DMTOOLS_VERSION: 'v0.1.16'
+        run: |
+          curl -fsSL "https://github.com/epam/dmtools-dart/releases/download/${DMTOOLS_VERSION}/install.sh" -o /tmp/i.sh
+          bash /tmp/i.sh "${DMTOOLS_VERSION}"
+          echo "$HOME/.dmtools/bin" >> "$GITHUB_PATH"
+      - name: Probe github sync tools against fa
+        env:
+          SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+        run: |
+          cd factory-agents
+          cat > js/probe_sync.js <<'JS'
+          var out = {};
+          try {
+              var r1 = github_list_workflow_runs({
+                  workspace: 'IstiN', repository: 'flutter_agent_harness',
+                  workflowId: 'ci.yml', perPage: 5
+              });
+              var p1 = (typeof r1 === 'string') ? JSON.parse(r1) : r1;
+              out.wfRuns = ((p1 && p1.workflow_runs) || []).length;
+              out.wfRaw = JSON.stringify(p1).slice(0, 120);
+          } catch (e) { out.wfErr = String((e && e.message) || e).slice(0, 120); }
+          try {
+              var r2 = github_list_workflow_runs({
+                  workspace: 'IstiN', repository: 'flutter_agent_harness',
+                  perPage: 5
+              });
+              var p2 = (typeof r2 === 'string') ? JSON.parse(r2) : r2;
+              out.allRuns = ((p2 && p2.workflow_runs) || []).length;
+          } catch (e) { out.allErr = String((e && e.message) || e).slice(0, 120); }
+          try {
+              var r3 = github_list_prs({
+                  workspace: 'IstiN', repository: 'flutter_agent_harness',
+                  state: 'open'
+              });
+              var p3 = (typeof r3 === 'string') ? JSON.parse(r3) : r3;
+              var l3 = Array.isArray(p3) ? p3 : ((p3 && (p3.pullRequests || p3.data)) || []);
+              out.prs = l3.length;
+              out.prHead = (l3[0] && l3[0].head && l3[0].head.sha) ? 'sha-ok' : 'NO-HEAD';
+          } catch (e) { out.prErr = String((e && e.message) || e).slice(0, 120); }
+          console.log('PROBE_RESULT ' + JSON.stringify(out));
+          JS
+          cat > /tmp/probe.json <<'CFG'
+          { "name": "JSRunner", "params": { "jsPath": "js/probe_sync.js", "jobParams": {} } }
+          CFG
+          dmtools run /tmp/probe.json 2>&1 | grep -E 'PROBE_RESULT|Error|error' | head -5
