@@ -215,10 +215,102 @@ function shellQuote(s) {
     return "'" + String(s).replace(/'/g, "'\\''") + "'";
 }
 
+/**
+ * Time-travel history (owner 2026-09-24): every tick also lands a
+ * timestamped snapshot `<base>-<stamp>.json` (unique name → always a
+ * create, no sha) and rewrites the rolling index `<base>-history.json`
+ * the factory board probes for its scrub/play controls. The index keeps
+ * the newest `cfg.historyKeep` (default 72 = 12h at the 10-min cadence)
+ * snapshots; snapshot URLs are absolute raw links the board fetches
+ * directly. Every command starts with `gh` (executor whitelist); the
+ * index body is decoded in-shell (`| base64 -d`), so the JS side never
+ * needs a base64 codec.
+ */
+function stampOf(state) {
+    var at = String((state && state.tick && state.tick.at) || '');
+    // '2026-09-23T22:35:55.658Z' → '20260923-2235' (pure string surgery)
+    return at.slice(0, 10).replace(/-/g, '') + '-' + at.slice(11, 16).replace(':', '');
+}
+
+function snapshotPutCommand(state, cfg, stamp) {
+    var repo = (cfg && cfg.repo) || state.repo;
+    var base = assetName(state, cfg).replace(/\.json$/, '');
+    var json = JSON.stringify(state);
+    return 'gh api -X PUT repos/' + repo + '/contents/data/' + base + '-' +
+        stamp + '.json' +
+        ' -f branch=' + tagOf(cfg) +
+        ' -f message=' + shellQuote('factory state snapshot ' + stamp) +
+        ' -f content="$(printf %s ' + shellQuote(json) + ' | base64)"';
+}
+
+function historyPutCommand(state, cfg, index, existingSha) {
+    var repo = (cfg && cfg.repo) || state.repo;
+    var base = assetName(state, cfg).replace(/\.json$/, '');
+    var path = 'data/' + base + '-history.json';
+    var put = 'gh api -X PUT repos/' + repo + '/contents/' + path +
+        ' -f branch=' + tagOf(cfg) +
+        ' -f message=' + shellQuote('factory state history — ' +
+            ((state.tick && state.tick.at) || '')) +
+        ' -f content="$(printf %s ' + shellQuote(JSON.stringify(index)) +
+        ' | base64)"';
+    if (existingSha) {
+        put += " -f sha=" + shellQuote(existingSha);
+    }
+    return put;
+}
+
+function execOut(exec, command) {
+    var res = exec({ command: command });
+    return String((res && (res.output || res.stdout)) || res || '').trim();
+}
+
+function updateHistory(state, cfg, exec) {
+    var repo = (cfg && cfg.repo) || state.repo;
+    var branch = tagOf(cfg);
+    var base = assetName(state, cfg).replace(/\.json$/, '');
+    var keep = (cfg && cfg.historyKeep) || 72;
+    var stamp = stampOf(state);
+    exec({ command: snapshotPutCommand(state, cfg, stamp) });
+    var indexPath = 'data/' + base + '-history.json';
+    var snaps = [];
+    var sha = '';
+    try {
+        sha = execOut(exec, 'gh api repos/' + repo + '/contents/' +
+            indexPath + '?ref=' + branch + ' --jq .sha');
+        if (sha.indexOf('Not Found') !== -1) sha = '';
+    } catch (e) { sha = ''; }
+    if (sha) {
+        try {
+            var cur = JSON.parse(execOut(exec, 'gh api repos/' + repo +
+                '/contents/' + indexPath + '?ref=' + branch +
+                ' --jq .content | base64 -d') || '{}');
+            snaps = (cur && cur.snapshots) || [];
+        } catch (e2) { snaps = []; }
+    }
+    snaps = snaps.filter(function (s) { return s && s.url; });
+    snaps.unshift({
+        ts: new Date().toISOString(),
+        tick: (state && state.tick && state.tick.at) || '',
+        stamp: stamp,
+        url: 'https://raw.githubusercontent.com/' + repo + '/' + branch +
+             '/data/' + base + '-' + stamp + '.json'
+    });
+    snaps = snaps.slice(0, keep);
+    exec({ command: historyPutCommand(state, cfg,
+        { schema: 1, repo: repo, asset: assetName(state, cfg), snapshots: snaps },
+        sha) });
+    return 'https://raw.githubusercontent.com/' + repo + '/' + branch + '/' +
+        indexPath;
+}
+
 module.exports = {
     buildFactoryState: buildFactoryState,
     publishCommands: publishCommands,
     publishFactoryState: publishFactoryState,
+    stampOf: stampOf,
+    snapshotPutCommand: snapshotPutCommand,
+    historyPutCommand: historyPutCommand,
+    updateHistory: updateHistory,
     assetName: assetName,
     tagOf: tagOf,
     laneOf: laneOf,
