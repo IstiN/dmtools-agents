@@ -746,6 +746,45 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
             'gh workflow run ci.yml --repo IstiN/flutter_agent_harness --ref ai/gh-9');
     });
 
+    test('validate_pr: cancels in-flight validations on superseded heads before arming', function () {
+        // Owner 2026-09-23: a branch that moves after dispatch makes the
+        // old runs useless — cancel them, scoped to THIS branch only (a
+        // run on the current head or on another branch is untouchable).
+        var CUR = 'cccc1111cccc1111cccc1111cccc1111cccc1111';
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(82, { branch: 'ai/gh-77', headSha: CUR })] },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=') !== -1) return { workflow_runs: [] };
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [
+                        { id: 111, event: 'workflow_dispatch', head_branch: 'ai/gh-77',
+                          head_sha: 'aaaa0000aaaa', status: 'in_progress' },
+                        { id: 222, event: 'workflow_dispatch', head_branch: 'ai/gh-77',
+                          head_sha: CUR, status: 'queued' },
+                        { id: 333, event: 'workflow_dispatch', head_branch: 'other/branch',
+                          head_sha: 'bbbb0000bbbb', status: 'in_progress' },
+                        { id: 444, event: 'workflow_dispatch', head_branch: 'ai/gh-77',
+                          head_sha: 'dddd0000dddd', status: 'completed' }
+                    ] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [RULES.validate] } });
+
+        var cancels = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('/cancel') !== -1; }).map(function (c) {
+            return c.command; });
+        assert.equal(cancels.length, 1, 'exactly the superseded-head run is cancelled');
+        assert.ok(cancels[0].indexOf('/actions/runs/111/cancel') !== -1, 'run 111 (old head, this branch)');
+        var dispatch = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; });
+        assert.equal(dispatch.length, 1, 'arm still proceeds after the cleanup');
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'ai_validating armed');
+    });
+
     test('validate_pr: dispatch failure leaves the marker un-armed (next tick retries)', function () {
         // Self-healing: a failed dispatch (bad workflow name, transient
         // API error) must not arm ai_validating — the rule re-matches on

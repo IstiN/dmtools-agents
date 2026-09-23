@@ -1106,10 +1106,19 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // runs first: an active one means the arm is already in
                 // flight — skip, the validation-sync loop owns the stamping.
                 var vHead0 = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
-                if (vHead0 && hasActiveDispatchedRun(vHead0)) {
+                var vCiWf = rule.ciWorkflow ||
+                    ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml';
+                if (vHead0 && hasActiveDispatchedRun(effectiveRepoInfo, vCiWf, vHead0)) {
                     console.log('  ⏭️  ' + key +
                                 ' validation already dispatching on this head — skip');
                     continue;
+                }
+                // Superseded-head cleanup (owner 2026-09-23): any active
+                // dispatched run on an older head of THIS branch is pure
+                // waste — cancel before arming the fresh one.
+                if (vHead0) {
+                    cancelStaleDispatchedRuns(effectiveRepoInfo, vCiWf,
+                                              ticket.branch, vHead0);
                 }
                 dispatchCiWorkflow(ticket.branch);
                 var vHead = vHead0;
@@ -1551,13 +1560,61 @@ function applyRuleOverrides(rules, overrides) {
 // pending run is invisible until GitHub materializes it (~30s), so a
 // completed run newer than 15 minutes on the same head also counts as
 // "in flight" — the arm label + stamps cover the rest.
-function hasActiveDispatchedRun(headSha) {
-    var ciWorkflow = rule.ciWorkflow ||
-        ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml';
+// Cancel in-flight dispatched validations on superseded heads of this
+// branch (owner 2026-09-23: when the branch moves after a dispatch, the
+// old runs can never stamp a verdict on the current head — cancel them
+// instead of burning the hosted queue). Scoped by head_branch === the
+// PR's branch, so a concurrent validation of a DIFFERENT PR is untouchable.
+function cancelStaleDispatchedRuns(repoInfo, ciWorkflow, branch, currentSha) {
+    if (!branch || !currentSha) return 0;
     try {
         var res = cli_execute_command({
-            command: 'gh api "repos/' + effectiveRepoInfo.owner + '/' +
-                     effectiveRepoInfo.repo +
+            command: 'gh api "repos/' + repoInfo.owner + '/' +
+                     repoInfo.repo +
+                     '/actions/workflows/' + ciWorkflow +
+                     '/runs?event=workflow_dispatch&per_page=50"'
+        });
+        var runs = mcpParse((res || {}).output ||
+                            (res || {}).stdout || res);
+        var list = (runs && runs.workflow_runs) || [];
+        var stale = list.filter(function (r) {
+            return r && r.head_branch === branch &&
+                   r.head_sha !== currentSha &&
+                   (r.status === 'queued' || r.status === 'in_progress' ||
+                    r.status === 'waiting' || r.status === 'pending');
+        });
+        var cancelled = 0;
+        stale.forEach(function (r) {
+            try {
+                cli_execute_command({
+                    command: 'gh api -X POST repos/' +
+                        repoInfo.owner + '/' + repoInfo.repo +
+                        '/actions/runs/' + r.id + '/cancel || true'
+                });
+                cancelled++;
+                console.log('  🛑 cancelled stale validation run ' + r.id +
+                            ' on superseded head ' +
+                            String(r.head_sha).slice(0, 7) + ' (' +
+                            branch + ')');
+            } catch (e2) {
+                console.warn('  ⚠️  cancel of stale run ' + r.id +
+                             ' failed: ' + (e2.message || e2));
+            }
+        });
+        return cancelled;
+    } catch (e) {
+        // Fail OPEN: a stale-cancel probe error must not wedge the arm —
+        // worst case is the wasted runs we are trying to prevent.
+        console.warn('  ⚠️  stale-cancel probe failed: ' + (e.message || e));
+        return 0;
+    }
+}
+
+function hasActiveDispatchedRun(repoInfo, ciWorkflow, headSha) {
+    try {
+        var res = cli_execute_command({
+            command: 'gh api "repos/' + repoInfo.owner + '/' +
+                     repoInfo.repo +
                      '/actions/workflows/' + ciWorkflow +
                      '/runs?head_sha=' + headSha +
                      '&event=workflow_dispatch&per_page=5"'
