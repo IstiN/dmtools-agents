@@ -178,10 +178,12 @@ function publishCommands(state, cfg) {
     var inputArg = quotedWithSub(input, '__OID__',
         'gh api repos/' + repo + '/git/ref/heads/' + branch + ' --jq .object.sha');
     return [
+        // '|| true': the normal case is "branch already exists" (422) — the
+        // executor throws on non-zero exit, which would abort the commit.
         'gh api -X POST repos/' + repo + '/git/refs -f ref=refs/heads/' + branch +
             ' -f sha="$(gh api repos/' + repo +
             '/git/ref/heads/$(gh api repos/' + repo +
-            ' --jq .default_branch) --jq .object.sha)"',
+            ' --jq .default_branch) --jq .object.sha)" || true',
         'gh api graphql -f query=\'mutation($input: CreateCommitOnBranchInput!)' +
             '{ createCommitOnBranch(input: $input) { commit { oid } } }\'' +
             ' -F input=' + inputArg

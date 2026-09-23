@@ -114,6 +114,7 @@ suite('factoryState — publishFactoryState', function () {
     assert.ok(cmds[0].indexOf('gh api -X POST repos/IstiN/flutter_agent_harness/git/refs') === 0,
               'first token must be gh (CLI whitelist)');
     assert.ok(cmds[0].indexOf('refs/heads/factory-data') > 0);
+    assert.ok(cmds[0].endsWith('|| true'), 'bootstrap 422 must not abort the chain');
     assert.ok(cmds[1].indexOf('gh api graphql') === 0);
     assert.ok(cmds[1].indexOf('createCommitOnBranch') > 0);
     assert.ok(cmds[1].indexOf('data/fa-state.json') > 0);
@@ -136,6 +137,7 @@ suite('factoryState — publishFactoryState', function () {
   test('defaults: branch factory-data, asset <factory>-state.json', function () {
     var cmds = fsModule.publishCommands(ST, {});
     assert.ok(cmds[0].indexOf('refs/heads/factory-data') > 0);
+    assert.ok(cmds[0].endsWith('|| true'), 'bootstrap 422 must not abort the chain');
     assert.ok(cmds[1].indexOf('data/flutter_agent_harness-state.json') > 0);
   });
 
