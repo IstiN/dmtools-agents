@@ -156,17 +156,26 @@ function tagOf(cfg) {
  * expectedHeadOid is resolved IN-SHELL, so concurrent ticks fail open and
  * the next tick retries.
  */
-function publishCommands(state, cfg) {
+function publishCommands(state, cfg, existingSha) {
     var repo = (cfg && cfg.repo) || state.repo;
     var branch = tagOf(cfg);
     var asset = assetName(state, cfg);
     var path = 'data/' + asset;
     var json = JSON.stringify(state);
-    // gh's GraphQL transports are unusable from here: -F sends the object
-    // as a STRING, and `--input -` template-parses `$` inside the query
-    // (both failed live). The Contents API PUT is plain REST and takes the
-    // payload base64-encoded — no quoting or parser can touch it.
-    // The existing-file sha rides ${S:+...} so first publish = create.
+    // gh's GraphQL transports are unusable from here (see #516/#518);
+    // the Contents API PUT is plain REST with a base64 payload. The
+    // existing-file sha comes from the caller (publishFactoryState
+    // probes it via exec) — omit it and a first publish CREATES the
+    // file. Every command MUST start with `gh`: the executor whitelists
+    // the first token, so no leading `S=$( ... )` tricks.
+    var put = 'gh api -X PUT repos/' + repo + '/contents/' + path +
+        ' -f branch=' + branch +
+        ' -f message=' + shellQuote('factory state — ' +
+            ((state.tick && state.tick.at) || '')) +
+        ' -f content="$(printf %s ' + shellQuote(json) + ' | base64)"';
+    if (existingSha) {
+        put += " -f sha=" + shellQuote(existingSha);
+    }
     return [
         // '|| true': the normal case is "branch already exists" (422) — the
         // executor throws on non-zero exit, which would abort the commit.
@@ -174,14 +183,7 @@ function publishCommands(state, cfg) {
             ' -f sha="$(gh api repos/' + repo +
             '/git/ref/heads/$(gh api repos/' + repo +
             ' --jq .default_branch) --jq .object.sha)" || true',
-        'S=$(gh api "repos/' + repo + '/contents/' + path +
-            '?ref=' + branch + '" --jq .sha 2>/dev/null || true); ' +
-            'gh api -X PUT repos/' + repo + '/contents/' + path +
-            ' -f branch=' + branch +
-            ' -f message=' + shellQuote('factory state — ' +
-                ((state.tick && state.tick.at) || '')) +
-            ' -f content="$(printf %s ' + shellQuote(json) + ' | base64)"' +
-            ' ${S:+-f sha="$S"}'
+        put
     ];
 }
 
@@ -193,7 +195,18 @@ function publishFactoryState(state, cfg, exec) {
     var repo = (cfg && cfg.repo) || state.repo;
     var asset = assetName(state, cfg);
     var branch = tagOf(cfg);
-    publishCommands(state, cfg).forEach(function (c) { exec({ command: c }); });
+    var path = 'data/' + asset;
+    var sha = '';
+    try {
+        var res = exec({ command: 'gh api repos/' + repo + '/contents/' +
+            path + '?ref=' + branch + ' --jq .sha' });
+        sha = String((res && (res.output || res.stdout)) || res || '')
+            .trim();
+        if (sha.indexOf('Not Found') !== -1) sha = '';
+    } catch (e) { sha = ''; } // first publish — the file is absent
+    publishCommands(state, cfg, sha).forEach(function (c) {
+        exec({ command: c });
+    });
     return 'https://raw.githubusercontent.com/' + repo + '/' + branch +
         '/data/' + asset;
 }

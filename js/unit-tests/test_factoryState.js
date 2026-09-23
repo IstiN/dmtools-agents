@@ -118,19 +118,34 @@ suite('factoryState — publishFactoryState', function () {
               'publish must use the plain-Rest Contents API (gh GraphQL transports parse/break)');
     assert.ok(cmds[1].indexOf('| base64') > 0, 'payload rides base64 — quoting-proof');
     assert.ok(cmds[1].indexOf('-f branch=factory-data') > 0);
-    assert.ok(cmds[1].indexOf('${S:+-f sha="$S"}') > 0, 'update sha optional — first publish creates');
+    assert.ok(cmds[1].indexOf('-f sha=') === -1,
+              'no probed sha — first publish creates the file');
   });
 
   test('publish runs exec per command and returns the raw.githubusercontent URL', function () {
     var seen = [];
     var url = fsModule.publishFactoryState(ST, { repo: 'IstiN/flutter_agent_harness',
       tag: 'factory-data', asset: 'fa-state.json' },
-      function (a) { seen.push(a.command); });
+      function (a) {
+        seen.push(a.command);
+        if (a.command.indexOf('/contents/') > 0 &&
+            a.command.indexOf('-X PUT') === -1) {
+          return { output: 'deadbeef123\n' };
+        }
+        return undefined;
+      });
     assert.equal(url,
       'https://raw.githubusercontent.com/IstiN/flutter_agent_harness/factory-data/data/fa-state.json');
-    assert.equal(seen.length, 2);
-    assert.ok(seen[0].indexOf('gh api') === 0);
-    assert.ok(seen[1].indexOf('-X PUT repos/IstiN/flutter_agent_harness/contents/') > 0);
+    assert.equal(seen.length, 3, 'sha probe + bootstrap + PUT');
+    assert.ok(seen[0].indexOf('/contents/') > 0 && seen[0].indexOf('--jq .sha') > 0,
+              'sha probe first');
+    var put = seen.filter(function (c) { return c.indexOf('-X PUT') > 0; })[0];
+    assert.ok(put, 'PUT present');
+    assert.ok(put.indexOf("-f sha='deadbeef123'") > 0,
+              'probed sha rides the PUT');
+    assert.ok(seen.filter(function (c) {
+      return c.indexOf('gh api -X POST repos/IstiN/flutter_agent_harness/git/refs') === 0;
+    }).length === 1, 'branch bootstrap present');
   });
 
   test('defaults: branch factory-data, asset <factory>-state.json', function () {
