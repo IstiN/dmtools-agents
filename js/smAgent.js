@@ -1559,10 +1559,29 @@ function syncValidationChecks(repoInfo, stampFn) {
             });
     });
     if (!armed.length) return;
+    // NOTE: workspace/repository are REQUIRED — _repoSeg builds the URL
+    // from the args; without them it degenerates to /repos// and 404s
+    // (live: first bridge-free ticks stamped nothing, exactly this).
     var runs = mcpParse(github_list_workflow_runs({
+        workspace: repoInfo.owner, repository: repoInfo.repo,
         workflowId: ciWorkflow, perPage: 50
     })) || {};
     var runList = runs.workflow_runs || runs.workflowRuns || [];
+    var runsErr = (runList.length === 0 && runs && runs.message) || null;
+    if (runsErr) {
+        // Live 2026-09-23: the workflow-id form 404s for the tick PAT on
+        // fa (while gh CLI dispatch works) — fall back to the all-runs
+        // endpoint and filter by the workflow PATH client-side.
+        var all = mcpParse(github_list_workflow_runs({
+            workspace: repoInfo.owner, repository: repoInfo.repo, perPage: 50
+        })) || {};
+        var allList = all.workflow_runs || all.workflowRuns || [];
+        var want = '.github/workflows/' + ciWorkflow;
+        runList = allList.filter(function (r) { return r.path === want; });
+        console.log('  ℹ️  validation-sync: workflow-id form failed (' +
+                    String(runsErr).slice(0, 60) + ') — all-runs fallback: ' +
+                    runList.length + ' runs');
+    }
     if (!runList.length) {
         console.log('  ℹ️  validation-sync: 0 runs from ' + ciWorkflow +
                     ' — raw: ' + JSON.stringify(runs).slice(0, 200));
