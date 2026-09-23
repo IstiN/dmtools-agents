@@ -52,7 +52,6 @@ on:
         description: 'Runner label (self-hosted pools must be visible to the CALLING org)'
         type: string
         default: 'ubuntu-24.04'
-    inputs:
       issue:
         description: 'Issue number (string: number-typed reusable inputs cannot take expressions). Empty when pr is given (PR-anchored run, #687).'
         required: false
