@@ -81,6 +81,7 @@ permissions:
   contents: read          # checkout target + engine
   issues: write           # labels + close-issue safety net
   pull-requests: write    # update-branch + merge
+  checks: write           # bridge-free validation stamps (factory #510)
   actions: write          # workflow_dispatch on the teammate workflow
 
 jobs:

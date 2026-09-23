@@ -1061,31 +1061,55 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         function stampValidationChecksFor(headSha, status, conclusion, runUrl) {
             var names = validationCheckNames();
             if (!names || !headSha) return;
-            names.forEach(function (checkName) {
-                if (DRY) {
-                    console.log('  🧪 [dry] stamp "' + checkName + '" ' +
-                                status + (conclusion ? '/' + conclusion : ''));
-                    return;
-                }
-                // github_create_check_run is NOT in the JS-bridge sync
-                // toolset (MCP-registry only) — shell out to gh api (the
-                // tick already proves gh + GH_TOKEN works for dispatches).
+            // Check runs are GitHub-App-only ("You must authenticate via a
+            // GitHub App") — the tick PAT cannot create them. The workflow
+            // token (jobParams.silentToken) IS an App token with
+            // checks:write on the repo the tick runs in. Swap GH_TOKEN for
+            // the gh child exactly like silentUpdateBranch does, restore
+            // after (sourceToken).
+            var appToken = (RUN_JOB_PARAMS || {}).silentToken;
+            var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
+            var swapped = false;
+            if (appToken) {
                 try {
-                    var cmd = 'gh api -X POST repos/' + effectiveRepoInfo.owner +
-                              '/' + effectiveRepoInfo.repo + '/check-runs/' + headSha +
-                              ' -f name="' + checkName + '"' +
-                              ' -f status="' + status + '"' +
-                              (conclusion ? (' -f conclusion="' + conclusion + '"') : '') +
-                              ' -f title="SM validation' +
-                              (conclusion ? (': ' + conclusion) : ' (tick-dispatched)') + '"' +
-                              ' -f summary="' + (runUrl ? ('Dispatched run: ' + runUrl) :
-                                  'Stamped by the SM tick (bridge-free mode).') + '"';
-                    cli_execute_command({ command: cmd });
+                    set_env_variable('GH_TOKEN', appToken);
+                    swapped = true;
                 } catch (e) {
-                    console.warn('  ⚠️  stamp "' + checkName + '" on ' +
-                                 String(headSha).slice(0, 7) + ': ' + (e.message || e));
+                    console.warn('  ⚠️  token swap failed, stamps use the PAT: ' + (e.message || e));
                 }
-            });
+            }
+            try {
+                names.forEach(function (checkName) {
+                    if (DRY) {
+                        console.log('  🧪 [dry] stamp "' + checkName + '" ' +
+                                    status + (conclusion ? '/' + conclusion : ''));
+                        return;
+                    }
+                    // POST /repos/{o}/{r}/check-runs — head_sha is a FIELD,
+                    // never a path segment (sha-in-path 404s). github_create
+                    // _check_run is MCP-registry-only (not a JS-bridge tool).
+                    try {
+                        var cmd = 'gh api -X POST repos/' + effectiveRepoInfo.owner +
+                                  '/' + effectiveRepoInfo.repo + '/check-runs' +
+                                  ' -f name="' + checkName + '"' +
+                                  ' -f head_sha=' + headSha +
+                                  ' -f status="' + status + '"' +
+                                  (conclusion ? (' -f conclusion="' + conclusion + '"') : '') +
+                                  ' -f title="SM validation' +
+                                  (conclusion ? (': ' + conclusion) : ' (tick-dispatched)') + '"' +
+                                  ' -f summary="' + (runUrl ? ('Dispatched run: ' + runUrl) :
+                                      'Stamped by the SM tick (bridge-free mode).') + '"';
+                        cli_execute_command({ command: cmd });
+                    } catch (e) {
+                        console.warn('  ⚠️  stamp "' + checkName + '" on ' +
+                                     String(headSha).slice(0, 7) + ': ' + (e.message || e));
+                    }
+                });
+            } finally {
+                if (swapped && sourceTok) {
+                    try { set_env_variable('GH_TOKEN', sourceTok); } catch (e2) {}
+                }
+            }
         }
 
         // ── PR-lifecycle localActions (issue #687: the SM owns the loop) ──
@@ -1607,13 +1631,24 @@ function syncValidationChecks(repoInfo, stampFn) {
         if (terminal.length) {
             var t = terminal[0];
             console.log('  📍 stamp verdict pr#' + pr.number + ' ' +
-                        t.conclusion + ' run ' + t.id);
-            stampFn(headSha, 'completed',
-                    t.conclusion === 'success' ? 'success' : 'failure',
-                    t.html_url);
+                        t.conclusion + ' run ' + t.id +
+                        ' (stampFn: ' + typeof stampFn + ')');
+            try {
+                stampFn(headSha, 'completed',
+                        t.conclusion === 'success' ? 'success' : 'failure',
+                        t.html_url);
+            } catch (e) {
+                console.warn('  ⚠️  verdict stamp threw: ' + (e.message || e) +
+                             ' / stack: ' + String(e.stack || '').split('\n').slice(0, 3).join(' | '));
+            }
         } else if (active.length) {
-            console.log('  📍 stamp in-progress pr#' + pr.number);
-            stampFn(headSha, 'in_progress', null, active[0].html_url);
+            console.log('  📍 stamp in-progress pr#' + pr.number +
+                        ' (stampFn: ' + typeof stampFn + ')');
+            try {
+                stampFn(headSha, 'in_progress', null, active[0].html_url);
+            } catch (e) {
+                console.warn('  ⚠️  in-progress stamp threw: ' + (e.message || e));
+            }
         }
     });
     console.log('  ℹ️  validation-sync: ' + JSON.stringify(syncDebug));
