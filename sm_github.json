@@ -75,7 +75,7 @@
           "id": "revalidate-armed"
         },
         {
-          "description": "GitHub PR: head with no CONCLUDED validation (checks 'none' — fresh push, no CI — or 'pending' — the dispatch bridge's waiting check runs; pushes fire no CI) -> dispatch the CI workflow on the head + ai_validating marker. Runs pre-review (latches ai_validated on green) AND pre-merge for approved PRs is handled by validate-armed; this rule catches every un-armed, un-approved, fresh head exactly once per head. The pending match is safe: while the SM's own dispatched run is in flight the marker ai_validating excludes the PR here. DEV lane (owner 2026-09-22): validation here is NON-BLOCKING — dev PRs validate in parallel and flow to ai review as each turns green; the one-at-a-time mutex lives ONLY in the approved merge window (validate-armed/revalidate-armed). chore:pin PRs (factory lockstep bumps) are exempt: the factory suite gates them before the cut, and the next real PR validates the pinned content via silent-update.",
+          "description": "GitHub PR: head with no CONCLUDED validation (checks 'none' — fresh push, no CI — or 'pending' — the dispatch bridge's waiting check runs; pushes fire no CI) -> dispatch the CI workflow on the head + ai_validating marker. OWNER RULE (2026-09-23, validation economy): validate ONCE per PR — the first green is the ticket to review; after it the ai_validated latch excludes the PR here, silent-update keeps it fresh (no re-validation on refresh), and the single pre-merge validation lives in validate-armed (post-approve, current head). Red heads repeat this rule only after a NEW push clears the red. chore:pin PRs (factory lockstep bumps) are exempt: the factory suite gates them before the cut, and the next real PR validates the pinned content via silent-update.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -86,7 +86,8 @@
             "notLabels": [
               "ai_validating",
               "pr_approved",
-              "chore:pin"
+              "chore:pin",
+              "ai_validated"
             ],
             "notMergeState": "BEHIND",
             "draft": false
@@ -231,7 +232,7 @@
           "localAction": "mark_developed"
         },
         {
-          "description": "GitHub: validated PR (ai_validated latch + green checks on the head) after dev -> machine review (never on an armed PR: pr_approved means the review already concluded APPROVED - re-dispatching review duplicates the leg and un-arms the merge queue). The latch guarantees a dispatched CI run covered this exact stage; checks green guarantees the head did not move since. Limit 10 (owner 2026-09-22): review legs are plain workflow runs — they parallelize freely; one-per-tick serialized a 12-PR green wave into hours. workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
+          "description": "GitHub: validated PR (ai_validated latch) after dev -> machine review (never on an armed PR: pr_approved means the review already concluded APPROVED - re-dispatching review duplicates the leg and un-arms the merge queue). OWNER RULE (2026-09-23, validation economy): the latch alone qualifies — no prChecks green requirement. silent-update keeps the head fresh; the review covers the current diff; the FINAL head gets its one pre-merge validation in validate-armed, so a head that moved since the latch's green is safe to review without re-running CI first. Limit 10 (owner 2026-09-22): review legs are plain workflow runs — they parallelize freely; one-per-tick serialized a 12-PR green wave into hours. workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
           "source": "github",
           "query": {
             "type": "issue",
@@ -245,7 +246,6 @@
               "ai_pr_reviewed",
               "pr_approved"
             ],
-            "prChecks": "green",
             "prLabels": [
               "ai_validated"
             ]
