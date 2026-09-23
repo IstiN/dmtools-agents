@@ -1516,8 +1516,26 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     processed: processedKeys
                 });
                 var spUrl = factoryStateModule.publishFactoryState(
-                    spState, spCfg, function (args) { cli_execute_command(args); });
+                    spState, spCfg, function (args) {
+                        // MUST return: publishFactoryState probes the
+                        // existing-file sha through this lambda — without
+                        // the return the probe yields undefined, the PUT
+                        // goes out sha-less and every update 422s
+                        // ("sha wasn't supplied") after the first create.
+                        return cli_execute_command(args);
+                    });
                 console.log('  📡 factory state published → ' + spUrl);
+                try {
+                    var hUrl = factoryStateModule.updateHistory(
+                        spState, spCfg, function (a) {
+                            return cli_execute_command(a);
+                        });
+                    console.log('  🕘 factory state history updated → ' + hUrl);
+                } catch (eHist) {
+                    // history is a board affordance — never fail the tick
+                    console.warn('  ⚠️  factory state history failed: ' +
+                                 (eHist.message || eHist));
+                }
             }
         } catch (ePub) {
             console.warn('  ⚠️  factory state publish failed: ' +

@@ -155,3 +155,92 @@ suite('factoryState — publishFactoryState', function () {
   });
 
 });
+
+// ── time-travel history ──────────────────────────────────────────────────────
+
+suite('factoryState — history (board time travel)', function () {
+  var ST = fsModule.buildFactoryState({
+    repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' },
+    prs: [], runs: [], now: '2026-09-23T22:35:55Z'
+  });
+
+  test('stampOf: tick timestamp → snapshot stamp', function () {
+    assert.equal(fsModule.stampOf(ST), '20260923-2235');
+  });
+
+  test('snapshot PUT: unique name, gh-first, create (no sha)', function () {
+    var c = fsModule.snapshotPutCommand(ST,
+      { repo: 'IstiN/flutter_agent_harness', asset: 'fa-state.json' },
+      '20260923-2235');
+    assert.ok(c.indexOf('gh api -X PUT') === 0, 'first token must be gh');
+    assert.ok(c.indexOf('data/fa-state-20260923-2235.json') > 0);
+    assert.ok(c.indexOf('-f sha=') === -1, 'snapshot is a create — no sha');
+    assert.ok(c.indexOf('| base64)') > 0, 'payload rides base64');
+  });
+
+  test('history PUT: sha rides only when the index already exists', function () {
+    var idx = { schema: 1, snapshots: [] };
+    var create = fsModule.historyPutCommand(ST,
+      { repo: 'IstiN/flutter_agent_harness', asset: 'fa-state.json' }, idx, '');
+    assert.ok(create.indexOf('data/fa-state-history.json') > 0);
+    assert.ok(create.indexOf('-f sha=') === -1);
+    var update = fsModule.historyPutCommand(ST,
+      { repo: 'IstiN/flutter_agent_harness', asset: 'fa-state.json' }, idx, 'abc123');
+    assert.ok(update.indexOf("-f sha='abc123'") > 0, 'update must carry the sha');
+  });
+
+  test('updateHistory: first run creates the index with one snapshot', function () {
+    var seen = [];
+    var url = fsModule.updateHistory(ST,
+      { repo: 'IstiN/flutter_agent_harness', asset: 'fa-state.json' },
+      function (a) {
+        seen.push(a.command);
+        if (a.command.indexOf('--jq .sha') > 0) {
+          throw new Error('Not Found'); // probe misses → first publish
+        }
+        return undefined;
+      });
+    assert.equal(seen.length, 3, 'snapshot PUT + sha probe + index PUT');
+    assert.ok(seen[0].indexOf('data/fa-state-20260923-2235.json') > 0,
+              'snapshot lands first');
+    assert.ok(seen[1].indexOf('--jq .sha') > 0, 'index sha probe second');
+    var idxPut = seen[2];
+    assert.ok(idxPut.indexOf('data/fa-state-history.json') > 0);
+    assert.ok(idxPut.indexOf('-f sha=') === -1, 'create has no sha');
+    assert.ok(idxPut.indexOf('"snapshots":[{"') > 0, 'one snapshot inside');
+    assert.ok(url.indexOf('/data/fa-state-history.json') > 0);
+  });
+
+  test('updateHistory: existing index — append, carry sha, trim to keep', function () {
+    var KEEP = 3;
+    var old = { schema: 1, repo: 'IstiN/flutter_agent_harness',
+      asset: 'fa-state.json',
+      snapshots: [
+        { ts: 't3', tick: 'a3', stamp: 's3', url: 'u3' },
+        { ts: 't2', tick: 'a2', stamp: 's2', url: 'u2' },
+        { ts: 't1', tick: 'a1', stamp: 's1', url: 'u1' }
+      ] };
+    var seen = [];
+    fsModule.updateHistory(ST,
+      { repo: 'IstiN/flutter_agent_harness', asset: 'fa-state.json',
+        historyKeep: KEEP },
+      function (a) {
+        seen.push(a.command);
+        if (a.command.indexOf('--jq .sha') > 0) return { output: 'feedface\n' };
+        if (a.command.indexOf('--jq .content') > 0) {
+          return { output: JSON.stringify(old) };
+        }
+        return undefined;
+      });
+    var idxPut = seen[seen.length - 1];
+    assert.ok(idxPut.indexOf("-f sha='feedface'") > 0, 'update carries probed sha');
+    var m = idxPut.match(/"snapshots":\[(.*)\]/);
+    assert.ok(m, 'index payload present');
+    var urls = [];
+    idxPut.replace(/"url":"([^"]+)"/g, function (_, u) { urls.push(u); return u; });
+    assert.equal(urls.length, KEEP, 'trimmed to historyKeep');
+    assert.ok(urls[0].indexOf('fa-state-20260923-2235.json') > 0,
+              'newest snapshot first');
+  });
+
+});
