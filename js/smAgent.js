@@ -1563,6 +1563,11 @@ function syncValidationChecks(repoInfo, stampFn) {
         workflowId: ciWorkflow, perPage: 50
     })) || {};
     var runList = runs.workflow_runs || runs.workflowRuns || [];
+    if (!runList.length) {
+        console.log('  ℹ️  validation-sync: 0 runs from ' + ciWorkflow +
+                    ' — raw: ' + JSON.stringify(runs).slice(0, 200));
+    }
+    var syncDebug = { armed: armed.length, runs: runList.length };
     armed.forEach(function (pr) {
         var headSha = pr.head.sha;
         // REST lists newest-first; only THIS head's dispatched runs count.
@@ -1580,13 +1585,17 @@ function syncValidationChecks(repoInfo, stampFn) {
         });
         if (terminal.length) {
             var t = terminal[0];
+            console.log('  📍 stamp verdict pr#' + pr.number + ' ' +
+                        t.conclusion + ' run ' + t.id);
             stampFn(headSha, 'completed',
                     t.conclusion === 'success' ? 'success' : 'failure',
                     t.html_url);
         } else if (active.length) {
+            console.log('  📍 stamp in-progress pr#' + pr.number);
             stampFn(headSha, 'in_progress', null, active[0].html_url);
         }
     });
+    console.log('  ℹ️  validation-sync: ' + JSON.stringify(syncDebug));
 }
 
 function action(params) {
