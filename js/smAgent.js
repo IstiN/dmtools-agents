@@ -792,6 +792,18 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     var effectiveRepo  = (effectiveConfig.repository && effectiveConfig.repository.repo)  || globalRepoInfo.repo;
     var effectiveRepoInfo = { owner: effectiveOwner, repo: effectiveRepo };
 
+    // Bridge-free checks: refresh tick-stamped validation verdicts BEFORE
+    // this rule's source reads the rollup, so green/red rules see the
+    // dispatched run's conclusion in the same tick (owner 2026-09-23).
+    if (rule.source === 'github' && (rule.query || {}).type === 'pr') {
+        try {
+            // stampValidationChecksFor hoists within processRule's scope.
+            syncValidationChecks(effectiveRepoInfo, stampValidationChecksFor);
+        } catch (e) {
+            console.warn('  ⚠️  validation-check sync failed: ' + (e.message || e));
+        }
+    }
+
     // JQL interpolation per rule using effectiveConfig (so {jiraProject} resolves correctly per project)
     var interpolatedJql = configLoader.interpolateJql(rule.jql, effectiveConfig);
 
@@ -1037,6 +1049,43 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             });
         }
 
+        // ── Bridge-free validation checks (owner 2026-09-23) ──────────────
+        // "sm стартанул триггер... ушел спать" — the tick IS the mirror. No
+        // ci-gate waiter jobs burning runner slots for 85 minutes: when the
+        // caller configures jobParams.validationChecks (JSON array of the
+        // branch-protection required check names), the SM stamps those
+        // checks itself — in_progress right after the dispatch (below) and
+        // the dispatched run's verdict on every subsequent pass (see
+        // syncValidationChecks, hooked ahead of each PR rule's source
+        // query). Repos without the knob keep the bridge architecture.
+        function stampValidationChecksFor(headSha, status, conclusion, runUrl) {
+            var names = validationCheckNames();
+            if (!names || !headSha) return;
+            names.forEach(function (checkName) {
+                if (DRY) {
+                    console.log('  🧪 [dry] stamp "' + checkName + '" ' +
+                                status + (conclusion ? '/' + conclusion : ''));
+                    return;
+                }
+                try {
+                    github_create_check_run({
+                        workspace: effectiveRepoInfo.owner,
+                        repository: effectiveRepoInfo.repo,
+                        name: checkName,
+                        headSha: headSha,
+                        status: status,
+                        conclusion: conclusion || undefined,
+                        title: 'SM validation' + (conclusion ? (': ' + conclusion) : ' (tick-dispatched)'),
+                        summary: runUrl ? ('Dispatched run: ' + runUrl)
+                                        : 'Stamped by the SM tick (bridge-free mode).'
+                    });
+                } catch (e) {
+                    console.warn('  ⚠️  stamp "' + checkName + '" on ' +
+                                 String(headSha).slice(0, 7) + ': ' + (e.message || e));
+                }
+            });
+        }
+
         // ── PR-lifecycle localActions (issue #687: the SM owns the loop) ──
         // They act on the PR directly (type:pr rules; ticket.prNumber set,
         // ticket.issueNumber null). Idempotency comes from the query guards:
@@ -1073,6 +1122,10 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             }
             try {
                 dispatchCiWorkflow(ticket.branch);
+                var vHead = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
+                if (vHead) {
+                    stampValidationChecksFor(vHead, 'in_progress', null, null);
+                }
                 github_add_labels({
                     workspace: effectiveRepoInfo.owner,
                     repository: effectiveRepoInfo.repo,
@@ -1456,10 +1509,89 @@ function applyRuleOverrides(rules, overrides) {
     });
 }
 
+// ── Bridge-free validation checks (owner 2026-09-23) ──────────────────
+// Shared helpers for tick-stamped checks. parseMcp parity: bridge tools
+// may return decoded objects, JSON strings, or {data:…} envelopes.
+function mcpParse(result) {
+    if (!result) return null;
+    if (typeof result === 'string') {
+        try { return JSON.parse(result); } catch (e) { return null; }
+    }
+    return result;
+}
+
+function validationCheckNames() {
+    var raw = (RUN_JOB_PARAMS || {}).validationChecks;
+    if (!raw) return null;
+    if (Array.isArray(raw)) return raw.length ? raw : null;
+    if (typeof raw === 'string') {
+        try {
+            var arr = JSON.parse(raw);
+            return (Array.isArray(arr) && arr.length) ? arr : null;
+        } catch (e) { return null; }
+    }
+    return null;
+}
+
+// One sync per repo per tick-process (the hook fires per PR rule; a
+// short window stops repeat API passes inside a single tick).
+var validationCheckSync = { repo: null, at: 0 };
+
+// Refresh the stamped validation checks for every ai_validating PR in the
+// repo from the newest dispatched ci runs (CANCELLED is never a verdict —
+// gh-191; newest terminal non-cancelled run decides, else newest active).
+function syncValidationChecks(repoInfo, stampFn) {
+    if (!validationCheckNames() || !repoInfo || !repoInfo.owner || !repoInfo.repo) return;
+    var repoKey = repoInfo.owner + '/' + repoInfo.repo;
+    var now = Date.now();
+    if (validationCheckSync.repo === repoKey && (now - validationCheckSync.at) < 5000) return;
+    validationCheckSync = { repo: repoKey, at: now };
+    var ciWorkflow = ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml';
+    var prs = mcpParse(github_list_prs({
+        workspace: repoInfo.owner, repository: repoInfo.repo, state: 'open'
+    }));
+    var prList = Array.isArray(prs) ? prs :
+        ((prs && (prs.pullRequests || prs.data || prs.items)) || []);
+    var armed = prList.filter(function (pr) {
+        return pr.head && pr.head.sha && pr.head.ref &&
+            (pr.labels || []).some(function (l) {
+                return (l && l.name) === 'ai_validating';
+            });
+    });
+    if (!armed.length) return;
+    var runs = mcpParse(github_list_workflow_runs({
+        workflowId: ciWorkflow, perPage: 50
+    })) || {};
+    var runList = runs.workflow_runs || runs.workflowRuns || [];
+    armed.forEach(function (pr) {
+        var headSha = pr.head.sha;
+        // REST lists newest-first; only THIS head's dispatched runs count.
+        var mine = runList.filter(function (r) {
+            return r.event === 'workflow_dispatch' && r.head_sha === headSha;
+        });
+        if (!mine.length) return; // dispatch not landed; validate_pr stamps
+        var active = mine.filter(function (r) {
+            return r.status === 'queued' || r.status === 'in_progress' ||
+                   r.status === 'waiting' || r.status === 'pending';
+        });
+        var terminal = mine.filter(function (r) {
+            return r.status === 'completed' && r.conclusion &&
+                   r.conclusion !== 'cancelled';
+        });
+        if (terminal.length) {
+            var t = terminal[0];
+            stampFn(headSha, 'completed',
+                    t.conclusion === 'success' ? 'success' : 'failure',
+                    t.html_url);
+        } else if (active.length) {
+            stampFn(headSha, 'in_progress', null, active[0].html_url);
+        }
+    });
+}
+
 function action(params) {
     var p     = params.jobParams || params;
-    RUN_JOB_PARAMS = p;
-    DRY = p.dryRun === true;
+    RUN_JOB_PARAMS = p;    DRY = p.dryRun === true;
     if (DRY) console.log('🧪 DRY RUN — no side effects will be performed');
     var rules = p.rules;
 
