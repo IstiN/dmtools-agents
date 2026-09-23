@@ -1097,8 +1097,21 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 continue;
             }
             try {
+                // Duplicate-dispatch guard (owner 2026-09-23: manual-tick
+                // spam + cron landed inside GitHub's check-run visibility
+                // window — each tick saw "armed, checks none" on a head
+                // whose dispatch had JUST fired and re-dispatched; 4 wasted
+                // hosted CI runs on one PR). Ask for this head's dispatched
+                // runs first: an active one means the arm is already in
+                // flight — skip, the validation-sync loop owns the stamping.
+                var vHead0 = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
+                if (vHead0 && hasActiveDispatchedRun(vHead0)) {
+                    console.log('  ⏭️  ' + key +
+                                ' validation already dispatching on this head — skip');
+                    continue;
+                }
                 dispatchCiWorkflow(ticket.branch);
-                var vHead = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
+                var vHead = vHead0;
                 if (vHead) {
                     stampValidationChecksForModule(effectiveRepoInfo, vHead, 'in_progress', null, null);
                 }
@@ -1484,6 +1497,44 @@ function applyRuleOverrides(rules, overrides) {
         return patched;
     });
 }
+
+// Active dispatched run for a head SHA? (duplicate-dispatch guard.)
+// Reuses the same workflow filter the validation-sync loop reads; a
+// pending run is invisible until GitHub materializes it (~30s), so a
+// completed run newer than 15 minutes on the same head also counts as
+// "in flight" — the arm label + stamps cover the rest.
+function hasActiveDispatchedRun(headSha) {
+    var ciWorkflow = rule.ciWorkflow ||
+        ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml';
+    try {
+        var res = cli_execute_command({
+            command: 'gh api "repos/' + effectiveRepoInfo.owner + '/' +
+                     effectiveRepoInfo.repo +
+                     '/actions/workflows/' + ciWorkflow +
+                     '/runs?head_sha=' + headSha +
+                     '&event=workflow_dispatch&per_page=5"'
+        });
+        var runs = mcpParse((res || {}).output ||
+                            (res || {}).stdout || res);
+        var list = (runs && runs.workflow_runs) || [];
+        var now = Date.now();
+        return list.some(function (r) {
+            if (r.status === 'queued' || r.status === 'in_progress' ||
+                r.status === 'waiting' || r.status === 'pending') return true;
+            if (r.status === 'completed') {
+                var age = now - new Date(r.created_at).getTime();
+                return age >= 0 && age < 15 * 60 * 1000;
+            }
+            return false;
+        });
+    } catch (e) {
+        // Fail OPEN: a probe error must not wedge the arm — worst case
+        // is the pre-guard duplicate we are trying to prevent.
+        console.warn('  ⚠️  dispatch-guard probe failed: ' + (e.message || e));
+        return false;
+    }
+}
+
 
 // ── Bridge-free validation checks (owner 2026-09-23) ──────────────────
 // Shared helpers for tick-stamped checks. parseMcp parity: bridge tools
