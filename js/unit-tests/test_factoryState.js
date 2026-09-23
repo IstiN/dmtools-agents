@@ -114,12 +114,11 @@ suite('factoryState — publishFactoryState', function () {
     assert.ok(cmds[0].indexOf('gh api -X POST repos/IstiN/flutter_agent_harness/git/refs') === 0,
               'first token must be gh (CLI whitelist)');
     assert.ok(cmds[0].indexOf('refs/heads/factory-data') > 0);
-    assert.ok(cmds[1].indexOf('gh api graphql --input - <<EOF') === 0,
-              'GraphQL variable must ride stdin (gh -F sends strings)');
-    assert.ok(cmds[1].indexOf('createCommitOnBranch') > 0);
-    assert.ok(cmds[1].indexOf('data/fa-state.json') > 0);
-    // OID resolved in-shell via $() inside the unquoted heredoc
-    assert.ok(cmds[1].indexOf('$(gh api repos/IstiN/flutter_agent_harness/git/ref/heads/factory-data --jq .object.sha)') > 0);
+    assert.ok(cmds[1].indexOf('-X PUT repos/IstiN/flutter_agent_harness/contents/data/fa-state.json') > 0,
+              'publish must use the plain-Rest Contents API (gh GraphQL transports parse/break)');
+    assert.ok(cmds[1].indexOf('| base64') > 0, 'payload rides base64 — quoting-proof');
+    assert.ok(cmds[1].indexOf('-f branch=factory-data') > 0);
+    assert.ok(cmds[1].indexOf('${S:+-f sha="$S"}') > 0, 'update sha optional — first publish creates');
   });
 
   test('publish runs exec per command and returns the raw.githubusercontent URL', function () {
@@ -131,7 +130,7 @@ suite('factoryState — publishFactoryState', function () {
       'https://raw.githubusercontent.com/IstiN/flutter_agent_harness/factory-data/data/fa-state.json');
     assert.equal(seen.length, 2);
     assert.ok(seen[0].indexOf('gh api') === 0);
-    assert.ok(seen[1].indexOf('gh api graphql') === 0);
+    assert.ok(seen[1].indexOf('-X PUT repos/IstiN/flutter_agent_harness/contents/') > 0);
   });
 
   test('defaults: branch factory-data, asset <factory>-state.json', function () {
