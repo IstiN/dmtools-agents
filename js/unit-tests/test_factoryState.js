@@ -114,10 +114,11 @@ suite('factoryState — publishFactoryState', function () {
     assert.ok(cmds[0].indexOf('gh api -X POST repos/IstiN/flutter_agent_harness/git/refs') === 0,
               'first token must be gh (CLI whitelist)');
     assert.ok(cmds[0].indexOf('refs/heads/factory-data') > 0);
-    assert.ok(cmds[1].indexOf('gh api graphql') === 0);
+    assert.ok(cmds[1].indexOf('gh api graphql --input - <<EOF') === 0,
+              'GraphQL variable must ride stdin (gh -F sends strings)');
     assert.ok(cmds[1].indexOf('createCommitOnBranch') > 0);
     assert.ok(cmds[1].indexOf('data/fa-state.json') > 0);
-    // OID resolved in-shell — the $() sits OUTSIDE the single-quoted spans
+    // OID resolved in-shell via $() inside the unquoted heredoc
     assert.ok(cmds[1].indexOf('$(gh api repos/IstiN/flutter_agent_harness/git/ref/heads/factory-data --jq .object.sha)') > 0);
   });
 
@@ -139,8 +140,4 @@ suite('factoryState — publishFactoryState', function () {
     assert.ok(cmds[1].indexOf('data/flutter_agent_harness-state.json') > 0);
   });
 
-  test('quotedWithSub splices $() outside single quotes', function () {
-    var arg = fsModule.quotedWithSub('x__OID__y', '__OID__', 'echo hi');
-    assert.equal(arg, "'x'\"$(echo hi)\"'y'");
-  });
 });

@@ -149,13 +149,6 @@ function tagOf(cfg) {
     return (cfg && cfg.tag) || DEFAULT_TAG;
 }
 
-// Single-quote an argv token, splicing shell substitutions around a marker:
-// quotedWithSub('a__OID__b', '__OID__', 'gh api ...') =>
-//   'a'"$(gh api ...)"'b'    ($() expands OUTSIDE the single quotes)
-function quotedWithSub(s, marker, cmd) {
-    return s.split(marker).map(shellQuote).join('"$(' + cmd + ')"');
-}
-
 /**
  * Pure: the gh commands that publish `state` (board URL derivable without
  * running them). First command bootstraps the data branch (fails harmlessly
@@ -169,14 +162,24 @@ function publishCommands(state, cfg) {
     var asset = assetName(state, cfg);
     var path = 'data/' + asset;
     var json = JSON.stringify(state);
-    var input = JSON.stringify({
-        branch: { repositoryNameWithOwner: repo, branchName: branch },
-        message: { headline: 'factory state — ' + (state.tick && state.tick.at || '') },
-        fileChanges: { additions: [{ path: path, contents: json }] },
-        expectedHeadOid: '__OID__'
-    });
-    var inputArg = quotedWithSub(input, '__OID__',
-        'gh api repos/' + repo + '/git/ref/heads/' + branch + ' --jq .object.sha');
+    // gh -F/--field sends STRINGS — the GraphQL variable must be a real
+    // object, so the request body rides a heredoc on stdin (--input -).
+    // Unquoted EOF keeps $( ) live for the in-shell OID resolution; the
+    // state JSON contains no $ or backticks (pure API data).
+    var body = JSON.stringify({
+        query: 'mutation($input: CreateCommitOnBranchInput!)' +
+               '{ createCommitOnBranch(input: $input) { commit { oid } } }',
+        variables: {
+            input: {
+                branch: { repositoryNameWithOwner: repo, branchName: branch },
+                message: { headline: 'factory state — ' +
+                    ((state.tick && state.tick.at) || '') },
+                fileChanges: { additions: [{ path: path, contents: json }] },
+                expectedHeadOid: '__OID__'
+            }
+        }
+    }).replace('__OID__', '$(gh api repos/' + repo +
+        '/git/ref/heads/' + branch + ' --jq .object.sha)');
     return [
         // '|| true': the normal case is "branch already exists" (422) — the
         // executor throws on non-zero exit, which would abort the commit.
@@ -184,9 +187,7 @@ function publishCommands(state, cfg) {
             ' -f sha="$(gh api repos/' + repo +
             '/git/ref/heads/$(gh api repos/' + repo +
             ' --jq .default_branch) --jq .object.sha)" || true',
-        'gh api graphql -f query=\'mutation($input: CreateCommitOnBranchInput!)' +
-            '{ createCommitOnBranch(input: $input) { commit { oid } } }\'' +
-            ' -F input=' + inputArg
+        'gh api graphql --input - <<EOF\n' + body + '\nEOF'
     ];
 }
 
@@ -210,7 +211,6 @@ function shellQuote(s) {
 module.exports = {
     buildFactoryState: buildFactoryState,
     publishCommands: publishCommands,
-    quotedWithSub: quotedWithSub,
     publishFactoryState: publishFactoryState,
     assetName: assetName,
     tagOf: tagOf,
