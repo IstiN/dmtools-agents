@@ -12,7 +12,7 @@ the asset lives on a published prerelease tag).
 SM tick (sm_github.json)
   └─ end of pass: buildFactoryState() + publishFactoryState()
        └─ gh release upload <tag> <asset> --clobber     (silent token)
-            └─ https://github.com/O/R/releases/latest/download/<asset>
+            └─ https://raw.githubusercontent.com/O/R/factory-data/data/<asset>
                  └─ board fetch() every refreshMs
 ```
 

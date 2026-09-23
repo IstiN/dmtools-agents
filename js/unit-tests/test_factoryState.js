@@ -3,11 +3,12 @@
  * the release-asset publisher (owner 2026-09-23, OPT-IN via statePublish).
  *
  * Pure functions only: no tool globals needed; the publisher takes an `exec`
- * capturer.
+ * capturer. assert = the harness global (equal/deepEqual/ok/contains).
  */
 
 var assert = globalThis.assert;
-var fsModule = loadModule('js/factoryState.js', makeRequire({}));
+
+var fsModule = loadModule('js/factoryState.js', makeRequire({}), {});
 
 // ── laneOf ───────────────────────────────────────────────────────────────────
 
@@ -77,7 +78,7 @@ suite('factoryState — buildFactoryState', function () {
     assert.equal(st.counts.approved_queue, 1);
   });
 
-  test('head verdict: terminal non-cancelled wins over active; null when none', function () {
+  test('head verdict: terminal non-cancelled wins over active', function () {
     var st = fsModule.buildFactoryState({
       repoInfo: { owner: 'o', repo: 'r' }, prs: PRS, runs: RUNS,
       now: '2026-09-23T18:00:00Z'
@@ -106,31 +107,40 @@ suite('factoryState — publishFactoryState', function () {
     prs: [], runs: [], now: '2026-09-23T18:00:00Z'
   });
 
-  test('commands: create-once + upload --clobber; url is the CDN link', function () {
+  test('commands: gh-only (whitelist), branch bootstrap + graphql commit', function () {
     var cmds = fsModule.publishCommands(ST, { repo: 'IstiN/flutter_agent_harness',
-      tag: 'factory-state', asset: 'fa-state.json' });
+      tag: 'factory-data', asset: 'fa-state.json' });
     assert.equal(cmds.length, 2);
-    assert.ok(cmds[0].indexOf('gh release create factory-state') === 0);
-    assert.ok(cmds[0].indexOf('--prerelease') > 0);
-    assert.ok(cmds[1].indexOf('gh release upload factory-state /tmp/fa-state.json') === 0);
-    assert.ok(cmds[1].indexOf('--clobber') > 0);
+    assert.ok(cmds[0].indexOf('gh api -X POST repos/IstiN/flutter_agent_harness/git/refs') === 0,
+              'first token must be gh (CLI whitelist)');
+    assert.ok(cmds[0].indexOf('refs/heads/factory-data') > 0);
+    assert.ok(cmds[1].indexOf('gh api graphql') === 0);
+    assert.ok(cmds[1].indexOf('createCommitOnBranch') > 0);
+    assert.ok(cmds[1].indexOf('data/fa-state.json') > 0);
+    // OID resolved in-shell — the $() sits OUTSIDE the single-quoted spans
+    assert.ok(cmds[1].indexOf('$(gh api repos/IstiN/flutter_agent_harness/git/ref/heads/factory-data --jq .object.sha)') > 0);
   });
 
-  test('publish runs exec per command and returns the public URL', function () {
+  test('publish runs exec per command and returns the raw.githubusercontent URL', function () {
     var seen = [];
     var url = fsModule.publishFactoryState(ST, { repo: 'IstiN/flutter_agent_harness',
-      tag: 'factory-state', asset: 'fa-state.json' },
+      tag: 'factory-data', asset: 'fa-state.json' },
       function (a) { seen.push(a.command); });
     assert.equal(url,
-      'https://github.com/IstiN/flutter_agent_harness/releases/latest/download/fa-state.json');
-    assert.ok(seen[0].indexOf('dmtools file_write ') === 0);  // write tmp json (whitelist!)
-    assert.ok(seen[1].indexOf('gh release create') === 0);
-    assert.ok(seen[2].indexOf('gh release upload') === 0);   // uses same tmp
+      'https://raw.githubusercontent.com/IstiN/flutter_agent_harness/factory-data/data/fa-state.json');
+    assert.equal(seen.length, 2);
+    assert.ok(seen[0].indexOf('gh api') === 0);
+    assert.ok(seen[1].indexOf('gh api graphql') === 0);
   });
 
-  test('defaults: tag factory-state, asset <factory>-state.json', function () {
+  test('defaults: branch factory-data, asset <factory>-state.json', function () {
     var cmds = fsModule.publishCommands(ST, {});
-    assert.ok(cmds[0].indexOf('factory-state') > 0);
-    assert.ok(cmds[1].indexOf('flutter_agent_harness-state.json') > 0);
+    assert.ok(cmds[0].indexOf('refs/heads/factory-data') > 0);
+    assert.ok(cmds[1].indexOf('data/flutter_agent_harness-state.json') > 0);
+  });
+
+  test('quotedWithSub splices $() outside single quotes', function () {
+    var arg = fsModule.quotedWithSub('x__OID__y', '__OID__', 'echo hi');
+    assert.equal(arg, "'x'\"$(echo hi)\"'y'");
   });
 });
