@@ -29,6 +29,11 @@ name: 'Factory · Machine SM'
 on:
   workflow_call:
     inputs:
+      runner:
+        description: 'Runner label (self-hosted pools must be visible to the CALLING org)'
+        type: string
+        default: 'ubuntu-24.04'
+    inputs:
       dryRun:
         description: "'true' to log the plan without acting (STRING — boolean-typed reusable inputs cannot take expressions, live bisect probes D/E)"
         required: false
@@ -76,14 +81,12 @@ permissions:
 
 jobs:
   reconcile:
-    # Bitrise Build Hub pool "dmtools-ci" (owner experiment 2026-09-23): the
-    # same pool the Java repo (epam/dm.ai unit-tests.yml) runs on; probe PR
-    # epam/dmtools-dart#229 proved the pool serves this org's repos
-    # (Linux X64 AMD Zen4 4c/16g, ~15s pickup). NOTE: for CALLERS outside the
-    # epam org (IstiN/flutter_agent_harness) visibility of the runner group is
-    # the experiment — if ticks queue forever from a caller, that caller's
-    # machine-sm.yml must revert its pin. Fallback: ubuntu-24.04.
-    runs-on: bitrise-runner-dmtools-ci
+    # Runner is caller-controlled: `runner` input, default hosted ubuntu.
+    # epam-org callers (dmtools-dart) pass bitrise-runner-dmtools-ci — the
+    # Bitrise Build Hub pool the Java repo uses (probe epam/dmtools-dart#229:
+    # 15s pickup). IstiN-org callers CANNOT see that pool (fa tick
+    # 35864581472 queued 4+ min with no runner) and use the default.
+    runs-on: ${{ inputs.runner || 'ubuntu-24.04' }}
     timeout-minutes: 10
     steps:
       - name: Checkout target repository
