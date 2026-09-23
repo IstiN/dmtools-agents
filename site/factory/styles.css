@@ -1,0 +1,92 @@
+/* Factory board — style. Customize ONLY the :root variables (and the
+   data-theme="light" overrides) to restyle for your site (fa1.dev etc.). */
+:root, :root[data-theme="dark"] {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --panel-2: #1c2330;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --line: #263040;
+  --accent: #4f8cff;
+  --ok: #3fb950;
+  --bad: #f85149;
+  --run: #d29922;
+  --card-shadow: 0 1px 3px rgba(0,0,0,.4);
+}
+:root[data-theme="light"] {
+  --bg: #f6f8fa;
+  --panel: #ffffff;
+  --panel-2: #f0f3f7;
+  --text: #1f2328;
+  --muted: #656d76;
+  --line: #d8dee4;
+  --card-shadow: 0 1px 2px rgba(31,35,40,.08);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--panel);
+}
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand h1 { font-size: 16px; margin: 0; font-weight: 600; }
+.live {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--ok);
+  animation: pulse 2.4s infinite;
+}
+@keyframes pulse { 0%,100% {opacity:1} 50% {opacity:.35} }
+.topbar-right { display: flex; gap: 12px; align-items: center; color: var(--muted); }
+.theme-btn {
+  background: none; border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; width: 30px; height: 26px; cursor: pointer;
+}
+.factory-tabs { display: flex; gap: 8px; padding: 10px 18px 0; }
+.tab {
+  border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+  padding: 6px 14px; border-radius: 18px; cursor: pointer; font-size: 13px;
+}
+.tab.on { color: var(--text); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.statusline { display: flex; gap: 8px; padding: 12px 18px 0; flex-wrap: wrap; }
+.pill {
+  background: var(--panel); border: 1px solid var(--line); color: var(--muted);
+  border-radius: 12px; padding: 3px 10px; font-size: 12px;
+}
+.lanes {
+  display: grid; gap: 12px; padding: 12px 18px 20px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+.lane { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.lane-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 9px 12px; border-bottom: 1px solid var(--line);
+  font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+}
+.count { background: var(--panel-2); border-radius: 10px; padding: 1px 8px; }
+.lane-body { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.empty { color: var(--muted); text-align: center; padding: 14px 0; font-size: 12px; }
+.card {
+  display: block; background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 8px; padding: 8px 10px; color: var(--text);
+  text-decoration: none; box-shadow: var(--card-shadow);
+}
+.card:hover { border-color: var(--accent); }
+.card-top { display: flex; gap: 8px; align-items: baseline; }
+.pr { color: var(--accent); font-weight: 700; white-space: nowrap; }
+.pos { color: var(--muted); font-size: 12px; }
+.title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.labels { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+.lbl {
+  font-size: 11px; color: var(--muted); border: 1px solid var(--line);
+  border-radius: 9px; padding: 0 7px;
+}
+.lbl.hot { color: var(--text); border-color: var(--accent); background: rgba(79,140,255,.08); }
+.checks { margin-top: 6px; display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
+.dot.run { background: var(--run); animation: pulse 1.6s infinite; }
+.error { color: var(--bad); padding: 10px 18px; }
+.foot { color: var(--muted); font-size: 12px; padding: 4px 18px 18px; }
