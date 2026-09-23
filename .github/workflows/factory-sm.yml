@@ -33,7 +33,6 @@ on:
         description: 'Runner label (self-hosted pools must be visible to the CALLING org)'
         type: string
         default: 'ubuntu-24.04'
-    inputs:
       dryRun:
         description: "'true' to log the plan without acting (STRING — boolean-typed reusable inputs cannot take expressions, live bisect probes D/E)"
         required: false

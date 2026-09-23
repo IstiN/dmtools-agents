@@ -44,7 +44,6 @@ on:
         description: 'Runner label (self-hosted pools must be visible to the CALLING org)'
         type: string
         default: 'ubuntu-24.04'
-    inputs:
       factory_ref:
         description: "The ref this workflow was invoked with (same literal as the stub uses-ref) — the engine is checked out at exactly the caller's pin."
         required: true
