@@ -55,6 +55,14 @@ suite('mergeBot', function () {
         assert.equal(result.acted, 1);
     });
 
+    test('blocked label: bot ignores the PR even when approved + green (fa #939)', function () {
+        var fx = fixture({ labels: ['pr_approved', 'ai_validating', 'blocked'] });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(result.success, true);
+        assert.equal(fx.calls.merges.length, 0, 'owner-parked PR must not merge');
+        assert.equal(result.acted, 0);
+    });
+
     test('validating + green + CLEAN + NOT approved -> latch ai_validated, unarm', function () {
         var fx = fixture({ labels: ['ai_validating'] });
         var result = fx.bot.action({ jobParams: { repo: 'a/b' } });

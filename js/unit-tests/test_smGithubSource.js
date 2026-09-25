@@ -152,6 +152,39 @@ suite('sm github source', function () {
         assert.equal(items.length, 0);
     });
 
+    test('blocked label: the SM ignores the item on every rule (fa #939)', function () {
+        // 'blocked' is owner-controlled parking: label matches the rule,
+        // yet the item must not surface from ANY query.
+        var srcMod = load({
+            github_search_issues: function () {
+                return { items: [{ number: 7, labels: [{ name: 'ai_developed' }, { name: 'blocked' }] }] };
+            }
+        }, {}, {});
+        var items = srcMod.query({
+            query: { type: 'issue', labels: ['ai_developed'] }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.length, 0);
+    });
+
+    test('blocked label: PR rules skip owner-parked PRs even when green (fa #939)', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 61, labels: [{ name: 'pr_approved' }, { name: 'blocked' }], head: { ref: 'feat/blocked' }, draft: false },
+                    { number: 60, labels: [{ name: 'pr_approved' }], head: { ref: 'feat/ok' }, draft: false }
+                ];
+            }
+        }, {}, {
+            60: { number: 60, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true },
+            61: { number: 61, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['pr_approved'], checks: 'green', mergeable: true }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.length, 1);
+        assert.equal(items[0].key, 'pr-60');
+    });
+
     test('pr rules: label guards + checks + mergeable, PRs without issues', function () {
         var srcMod = load({
             github_list_prs: function () {
