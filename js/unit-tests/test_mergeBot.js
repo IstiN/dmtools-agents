@@ -203,6 +203,23 @@ suite('mergeBot', function () {
         assert.equal(fx.calls.merges.length + fx.calls.adds.length + fx.calls.removes.length, 0);
     });
 
+    test('approved without arm -> FIFO-queued line is logged, no actions', function () {
+        var fx = fixture({ labels: ['pr_approved', 'ai_validated'] });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(fx.calls.merges.length + fx.calls.adds.length + fx.calls.removes.length, 0);
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('FIFO-queued') !== -1 && l.indexOf('pr-42') !== -1;
+        }), 'the operator sees the PR is queued, not stuck: ' + JSON.stringify(result.log));
+    });
+
+    test('unapproved without arm -> still silent (pre-review, SM owns it)', function () {
+        var fx = fixture({ labels: ['ai_validated'] });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(fx.calls.merges.length + fx.calls.adds.length + fx.calls.removes.length, 0);
+        assert.ok(!result.log.some(function (l) { return l.indexOf('FIFO-queued') !== -1; }),
+            'non-approved PRs are the review flow\u2019s business, not FIFO noise');
+    });
+
     test('draft PRs are invisible to the bot', function () {
         var fx = fixture({ labels: ['pr_approved', 'ai_validating'], draft: true });
         fx.bot.action({ jobParams: { repo: 'a/b' } });

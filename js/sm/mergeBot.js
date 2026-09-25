@@ -164,7 +164,17 @@ function action(params) {
 
         var approved = labels.indexOf('pr_approved') !== -1;
         var validating = labels.indexOf('ai_validating') !== -1;
-        if (!validating || labels.indexOf('agent:review') !== -1) continue; // mid-review: SM owns it
+        if (!validating || labels.indexOf('agent:review') !== -1) {
+            // Approved-but-unarmed PRs are FIFO-queued behind the current
+            // validation (validate-armed mutex, one CI at a time). Say so —
+            // a silent skip is indistinguishable from a stuck pipeline for
+            // the operator (live: fa 2026-09-25, pr-948/pr-963 sat silent
+            // for hours while the queue was healthy).
+            if (approved && labels.indexOf('agent:review') === -1) {
+                say('⏳ pr-' + pr.number + ' approved — FIFO-queued (awaiting validate-armed turn)');
+            }
+            continue; // mid-review: SM owns it
+        }
         if (pr.mergeable === false) continue; // conflicts: conflict-rework (SM) owns it
 
         var rollup = checksRollup(String(headSha), pr, job, owner, name);
