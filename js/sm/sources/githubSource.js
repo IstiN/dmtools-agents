@@ -58,6 +58,13 @@ function matchesGuards(item, rule, provider, machineAuthor) {
     if (q.notLabels && q.notLabels.some(function (l) { return labels.indexOf(l) !== -1; })) {
         return false;
     }
+    // 'blocked' = owner-controlled parking label (fa #939): the SM ignores
+    // the item ENTIRELY — no dispatch, no merge, no review, no branch
+    // updates. Global, not per-rule: applies to every rule incl. future
+    // ones. Removing the label returns the item to the queue unchanged.
+    if (labels.indexOf('blocked') !== -1) {
+        return false;
+    }
     // The live provider reports `checkConclusion`; older stubs (and the
     // issue-path placeholder) use `checks`. Accept both everywhere.
     // Array form (like mergeState): the dispatch-CI bridge reports a
@@ -306,6 +313,7 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {    var q = r
     var matched = items.filter(function (item) {
         var labels = item.labels;
         var q2 = rule.query || {};
+        if (labels.indexOf('blocked') !== -1) return false; // #939: parked by owner — see matchesGuards
         if (q2.labels && !q2.labels.some(function (l) { return labels.indexOf(l) !== -1; })) return false;
         if (q2.notLabels && q2.notLabels.some(function (l) { return labels.indexOf(l) !== -1; })) return false;
         if (q2.draft === false && item.draft) return false;

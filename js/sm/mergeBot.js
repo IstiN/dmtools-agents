@@ -160,6 +160,7 @@ function action(params) {
         var labels = labelNames(pr);
         var headSha = pr.head && (pr.head.sha || pr.head);
         if (!headSha) continue;
+        if (labels.indexOf('blocked') !== -1) continue; // #939: owner-parked — the bot ignores it even when green
 
         var approved = labels.indexOf('pr_approved') !== -1;
         var validating = labels.indexOf('ai_validating') !== -1;
