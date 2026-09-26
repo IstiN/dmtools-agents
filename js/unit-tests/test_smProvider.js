@@ -348,7 +348,7 @@ suite('smProvider', function () {
         assert.equal(inputs.leg, 'rework');
         p.merge(42);
         assert.equal(merged.mergeMethod, 'squash');
-        assert.equal(merged.number, 42);
+        assert.equal(merged.pullRequestId, 42);
     });
 
     test('github: updateBranch falls back to the gh CLI', function () {
