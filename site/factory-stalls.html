@@ -5609,8 +5609,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <h3>Reading the board</h3>
         </div>
         <ul>
-          <li>&bull; Each wedge lists the exact label/check signature that stalls the loop and the rule, JS action, or HUMAN that unblocks it</li>
-          <li>&bull; SM tick ~10 min (factory-sm.yml → sm_github.json → js/smAgent.js) — a healthy queue visibly moves within 2–3 ticks</li>
+          <li>&bull; Each wedge lists its exact label/check signature + the rule, JS action, or HUMAN that unblocks it</li>
+          <li>&bull; SM tick ~10 min — a healthy queue visibly moves in 2–3 ticks</li>
         </ul>
       </div>
 
@@ -5620,8 +5620,18 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <h3>Companion pages</h3>
         </div>
         <ul>
-          <li>&bull; factory-flow.html — three-level flow with full gate guards · machine-pipeline.html · index.html (lifecycle)</li>
-          <li>&bull; Sources of truth: sm_github.json (rule table) · js/smAgent.js (localActions) · factory-teammate.yml (agent legs)</li>
+          <li>&bull; index.html — four-level flow with gate guards + state→stage lookup</li>
+          <li>&bull; Sources: sm_github.json · js/smAgent.js · factory-teammate.yml</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot rose"></div>
+          <h3>Live wedge + diagnostic note</h3>
+        </div>
+        <ul>
+          <li>&bull; Live wedge: &gt;1 PR holds ai_validating (+1/tick) — recovery rules assume ≤1 armed · fix: exclude-self mutex · checks:null in state file = publisher artifact, not a wedge</li>
         </ul>
       </div>
     </div>
