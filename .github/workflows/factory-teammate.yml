@@ -129,7 +129,8 @@ jobs:
           NUMBER: ${{ inputs.issue }}
           PR_NUMBER: ${{ inputs.pr }}
           # Event context rides through from the caller (issues events) —
-          # empty for pure dispatches; the guard refreshes from the API then.
+          # empty for pure dispatches. The guard ALWAYS refreshes from the
+          # API (queued runs see a stale payload); this is only a fallback.
           ASSIGNEES: ${{ join(github.event.issue.assignees.*.login, ' ') }}
           LABELS: ${{ join(github.event.issue.labels.*.name, ' ') }}
           ACTOR: ${{ github.event.action || github.event_name }}
@@ -191,12 +192,25 @@ jobs:
           fi
           echo "anchor=gh-${NUMBER}" >> "$GITHUB_OUTPUT"
 
-          # SM dispatch (or a bare dispatch with no event payload): refresh
-          # labels/assignees from the API and log the audit reason.
-          if [ -n "$INPUT_LEG" ] || [ -z "$LABELS" ]; then
-            echo "→ dispatch: leg=${INPUT_LEG:-<derive>} reason=${INPUT_REASON:-<none>}"
-            LABELS="$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json labels -q '[.labels[].name] | join(" ")')"
-            ASSIGNEES="$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json assignees -q '[.assignees[].login] | join(" ")')"
+          # ALWAYS refresh labels/assignees from the API — not just for
+          # explicit dispatches. Event-triggered runs (issues:assigned,
+          # labeled, ...) sit QUEUED behind the per-issue concurrency group,
+          # and the github.event.issue payload they carry is a snapshot from
+          # trigger time: a guard that trusts it misses labels the
+          # already-running leg has since applied (status:In Development,
+          # status:In Rework) and dispatches a duplicate dev/rework leg on
+          # top of the live one (live: dmtools-dart run 36252718919 for #257;
+          # a duplicate rework dispatch for #259). The event payload is only
+          # a fallback when the API read itself fails.
+          if fresh_labels="$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json labels -q '[.labels[].name] | join(" ")')" \
+            && fresh_assignees="$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json assignees -q '[.assignees[].login] | join(" ")')"; then
+            LABELS="$fresh_labels"
+            ASSIGNEES="$fresh_assignees"
+          else
+            echo "::warning::labels/assignees refresh failed for #$NUMBER — falling back to the (possibly stale) event payload"
+          fi
+          if [ -n "$INPUT_LEG" ]; then
+            echo "→ dispatch: leg=$INPUT_LEG reason=${INPUT_REASON:-<none>}"
           fi
           # Closed issues are terminal: no agent runs on them.
           state="$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json state -q .state)"
