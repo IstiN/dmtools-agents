@@ -1,0 +1,135 @@
+# Agent pack release (dmtools-agents#441).
+#
+# Builds and publishes per-agent versioned packs — one self-contained zip per
+# affected agent (<agent>-<version>.zip + manifest.json + .sha256) — so
+# consumers fetch a single agent over plain HTTPS instead of a git submodule.
+#
+# The pack format is built by `dmtools compile` (dm.ai#595) — the runtime repo
+# owns the single implementation; this workflow only orchestrates: test →
+# compute affected set → bump versions.json → compile → validate → publish.
+#
+# Triggers:
+#   push to main            — affected set from the diff since the last release tag
+#   workflow_dispatch       — manual; `agents=all` or `agents=name1,name2`,
+#                             `bump` selects patch/minor/major (default patch)
+name: Agent Pack Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      # Docs-only / CI-only changes never cut a release.
+      - '.github/**'
+      - 'docs/**'
+      - 'site/**'
+      - '**.md'
+  workflow_dispatch:
+    inputs:
+      agents:
+        description: "'all' or a comma-separated agent list (default: affected set)"
+        required: false
+        default: ''
+      bump:
+        description: 'Version bump'
+        required: false
+        default: 'patch'
+        type: choice
+        options: [patch, minor, major]
+      dry_run:
+        description: 'Build + validate without publishing'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: agent-pack-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write # publish the GitHub Release + commit versions.json
+
+jobs:
+  test:
+    # The JS unit-test suite is the release gate — a red suite blocks any release.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dmtools CLI (pinned release bundle)
+        env:
+          DMTOOLS_VERSION: ${{ vars.DMTOOLS_VERSION || 'v0.1.16' }}
+        run: |
+          curl -fsSL "https://github.com/epam/dmtools-dart/releases/download/${DMTOOLS_VERSION}/install.sh" \
+            -o /tmp/dmtools-install.sh
+          bash /tmp/dmtools-install.sh "${DMTOOLS_VERSION}"
+          echo "$HOME/.dmtools/bin" >> "$GITHUB_PATH"
+
+      - name: Run the JS unit-test suite
+        run: dmtools run js/unit-tests/run_all.json
+
+  release:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history for the since-last-release diff
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dmtools CLI (pinned release bundle)
+        env:
+          DMTOOLS_VERSION: ${{ vars.DMTOOLS_VERSION || 'v0.1.16' }}
+        run: |
+          curl -fsSL "https://github.com/epam/dmtools-dart/releases/download/${DMTOOLS_VERSION}/install.sh" \
+            -o /tmp/dmtools-install.sh
+          bash /tmp/dmtools-install.sh "${DMTOOLS_VERSION}"
+          echo "$HOME/.dmtools/bin" >> "$GITHUB_PATH"
+
+      - name: Compute base ref (last release tag, if any)
+        id: base
+        run: |
+          last_tag=$(git tag --list 'agents-rel-*' --sort=-creatordate | head -1)
+          echo "ref=${last_tag}" >> "$GITHUB_OUTPUT"
+          echo "base ref: ${last_tag:-<none — first release, all agents>}"
+
+      - name: Build + validate affected agent packs
+        id: build
+        env:
+          AGENTS: ${{ inputs.agents || '' }}
+          BUMP: ${{ inputs.bump || 'patch' }}
+          DRY: ${{ inputs.dry_run || false }}
+        run: |
+          set -euo pipefail
+          args=(--out dist)
+          [ -n "${AGENTS}" ] && args+=(--agents="${AGENTS}")
+          [ -n "${{ steps.base.outputs.ref }}" ] && args+=(--base-ref="${{ steps.base.outputs.ref }}")
+          [ "${DRY}" = "true" ] && args+=(--dry-run)
+          [ "${BUMP}" != "patch" ] && args+=(--bump="${BUMP}")
+          node ci/release_packs.mjs "${args[@]}"
+          # Signal "nothing to release" to the publish steps.
+          if [ -f dist/.no-release ]; then echo "released=false" >> "$GITHUB_OUTPUT"; else echo "released=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Commit bumped versions.json
+        if: steps.build.outputs.released == 'true' && inputs.dry_run != true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add versions.json
+          git diff --cached --quiet || git commit -m "chore(release): bump agent versions [skip ci]"
+          git push
+
+      - name: Publish the GitHub Release
+        if: steps.build.outputs.released == 'true' && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="agents-rel-$(date -u +%Y%m%d-%H%M%S)"
+          notes="Per-agent packs built by \`dmtools compile\` (dm.ai#595). See catalog.json for agent → version."
+          # Upload zips + sidecar checksums + catalog.json as release assets.
+          gh release create "$tag" dist/*.zip dist/*.zip.sha256 dist/catalog.json \
+            --title "Agent packs $tag" --notes "$notes" --repo "$GITHUB_REPOSITORY"
+          echo "Published $tag"
