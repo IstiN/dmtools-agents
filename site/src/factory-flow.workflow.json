@@ -153,11 +153,12 @@
       "id": "crverdict",
       "label": "CR verdict",
       "sublabel": "review-verdict.sh CR",
-      "lane": "lt",
+      "lane": "l2",
       "type": "external",
       "tag": "SEE: verdict CR",
-      "col": 1,
-      "width": 150
+      "col": 0,
+      "width": 150,
+      "yOffset": -22
     },
     {
       "id": "cisig",
@@ -196,12 +197,15 @@
       "from": "reviewleg",
       "to": "varmed",
       "label": "APPROVE + green",
-      "variant": "emphasis"
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top"
     },
     {
       "from": "manual",
       "to": "reworkleg",
-      "label": "human label"
+      "label": "human label",
+      "toSide": "top"
     },
     {
       "from": "varmed",
@@ -212,34 +216,42 @@
     {
       "from": "crverdict",
       "to": "reworkleg",
-      "label": "verdict CR"
+      "label": "verdict CR",
+      "toSide": "left"
     },
     {
       "from": "cisig",
       "to": "failval",
-      "label": "checks red"
+      "label": "checks red",
+      "toSide": "top"
     },
     {
       "from": "reviewleg",
       "to": "reworkleg",
       "label": "CHANGES_REQUESTED",
-      "role": "error"
+      "role": "error",
+      "toSide": "right"
     },
     {
       "from": "reworkleg",
       "to": "reviewleg",
-      "label": "threads resolved \u2192 re-review"
+      "label": "threads resolved \u2192 re-review",
+      "fromSide": "top",
+      "toSide": "left"
     },
     {
       "from": "reworkleg",
       "to": "vfresh",
-      "label": "push \u2192 new head"
+      "label": "push \u2192 new head",
+      "fromSide": "right"
     },
     {
       "from": "varmed",
       "to": "failval",
       "label": "checks red (armed)",
-      "role": "error"
+      "role": "error",
+      "fromSide": "right",
+      "toSide": "bottom"
     },
     {
       "from": "vfresh",
@@ -257,7 +269,8 @@
       "from": "conflict",
       "to": "reworkleg",
       "label": "DIRTY \u2192 +agent:rework",
-      "role": "error"
+      "role": "error",
+      "toSide": "bottom"
     }
   ],
   "cards": [
