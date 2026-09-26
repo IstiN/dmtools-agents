@@ -66,7 +66,7 @@
           "id": "validate-armed"
         },
         {
-          "description": "Armed head moved mid-validation (double silent-update, rework push): the green run no longer covers the head, checks read 'none' on it, but the ai_validating arm persists — no rule matched and the PR stalled until a manual disarm (live: dart pr-194, 15:06 — tick processed 0). Re-dispatch the CI on the CURRENT head. 'pending' never matches: that is the in-flight bridge check on this head. BEHIND/DIRTY excluded like validate-armed. NO MUTEX on purpose (live: fa pr-922, 2026-09-26): the mutex scans ALL open PRs for the ai_validating label — which this rule's own target carries by definition, so a mutex here self-blocks the rule 100% of the time and it can never fire. Serialization is structural instead: only an already-armed approved PR matches, and validate-armed's mutex guarantees at most one of those exists.",
+          "description": "Armed head moved mid-validation (double silent-update, rework push): the green run no longer covers the head, checks read 'none' on it, but the ai_validating arm persists — no rule matched and the PR stalled until a manual disarm (live: dart pr-194, 15:06 — tick processed 0). Re-dispatch the CI on the CURRENT head. 'pending' never matches: that is the in-flight bridge check on this head. BEHIND/DIRTY excluded like validate-armed. MUTEX with mutexExcludeSelf (multi-arm leak fix, live: fa 2026-09-26 — 7 approved PRs held ai_validating simultaneously: 922/923/930/932/934/948/961, +1 arm per tick): this rule previously ran with NO mutex because the global mutex scan sees the rule's own armed target and self-blocks 100% of the time — and its 'structural serialization' assumption (validate-armed's mutex guarantees <=1 armed approved PR) is FALSE once heads move: silent-update / BEHIND unarm races / guest pushes keep feeding checks=none states, and each tick this rule armed one more approved PR. The exclude-self mutex (githubSource) evaluates per candidate: it defers only while ANOTHER approved PR holds ai_validating. Exactly one armed approved PR = the candidate itself = the rule fires; a second approved arm anywhere = every candidate defers and the stack drains via merge-validated / fail-validation / unarm-stale.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -81,14 +81,19 @@
             "checks": [
               "none"
             ],
-            "draft": false
+            "draft": false,
+            "mutex": "ai_validating",
+            "mutexAmong": [
+              "pr_approved"
+            ],
+            "mutexExcludeSelf": true
           },
           "localAction": "validate_pr",
           "limit": 1,
           "id": "revalidate-armed"
         },
         {
-          "description": "Dead-zone fix (live: fa pr-922, 2026-09-26 — frozen in ai_validating for hours, ticks processed 0): the armed head's dispatched CI run was LOST (racing dispatch canceled by concurrency, or the gh workflow run CLI call failed silently — dispatchCiWorkflow cannot throw). Every existing check is green, but the required CI check is ABSENT from the head, so the rollup reads 'green' while REST mergeState stays BLOCKED. No rule matched: revalidate-armed wants checks=none, merge-validated wants CLEAN, fail-validation wants red, unarm-stale wants BEHIND. 'green' + not-CLEAN here means the arm is stale and the CI verdict is missing — re-dispatch (validate_pr's duplicate-dispatch guard skips if a run is already landing; the skipIfGreenCi flag stops the loop when a completed green CI run already covers the head and the blocker is some other workflow's required check). Armed+green+CLEAN must NOT match — that is merge-validated's merge — hence CLEAN is excluded. NO MUTEX: same self-block reason as revalidate-armed — this rule's target carries ai_validating by definition; the arm itself is the singleton (validate-armed's mutex guarantees <=1 armed approved PR).",
+          "description": "Dead-zone fix (live: fa pr-922, 2026-09-26 — frozen in ai_validating for hours, ticks processed 0): the armed head's dispatched CI run was LOST (racing dispatch canceled by concurrency, or the gh workflow run CLI call failed silently — dispatchCiWorkflow cannot throw). Every existing check is green, but the required CI check is ABSENT from the head, so the rollup reads 'green' while REST mergeState stays BLOCKED. No rule matched: revalidate-armed wants checks=none, merge-validated wants CLEAN, fail-validation wants red, unarm-stale wants BEHIND. 'green' + not-CLEAN here means the arm is stale and the CI verdict is missing — re-dispatch (validate_pr's duplicate-dispatch guard skips if a run is already landing; the skipIfGreenCi flag stops the loop when a completed green CI run already covers the head and the blocker is some other workflow's required check). Armed+green+CLEAN must NOT match — that is merge-validated's merge — hence CLEAN is excluded. MUTEX with mutexExcludeSelf (multi-arm leak fix, live: fa 2026-09-26 — 7 approved PRs armed at once): same self-block reason as revalidate-armed made this rule ship mutex-less, and the same false singleton assumption let it feed the +1-arm-per-tick leak. The exclude-self mutex defers the candidate only while ANOTHER approved PR holds ai_validating; with the invariant restored this rule fires exactly on the one armed approved PR and never arms a second.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -104,7 +109,12 @@
             "checks": [
               "green"
             ],
-            "draft": false
+            "draft": false,
+            "mutex": "ai_validating",
+            "mutexAmong": [
+              "pr_approved"
+            ],
+            "mutexExcludeSelf": true
           },
           "localAction": "validate_pr",
           "limit": 1,

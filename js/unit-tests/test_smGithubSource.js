@@ -333,6 +333,84 @@ suite('sm github source', function () {
         items = srcHeld.query({ query: q }, { repoInfo: { owner: 'a', repo: 'b' } });
         assert.equal(items.length, 0);
     });
+    test('pr rules: mutexExcludeSelf — recovery rule fires when the ONLY approved arm is the candidate', function () {
+        // Multi-arm leak fix (fa 2026-09-26): revalidate-armed /
+        // revalidate-armed-green target ALREADY-armed approved PRs, so the
+        // global mutex self-blocks them 100% of the time. Exclude-self drops
+        // the candidate's own arm from the holder scan: exactly one armed
+        // approved PR = the candidate itself = the rule fires.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 20, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }],
+                      head: { ref: 'ai/gh-20' }, draft: false },
+                    { number: 21, labels: [{ name: 'pr_approved' }],
+                      head: { ref: 'ai/gh-21' }, draft: false },
+                    { number: 22, labels: [{ name: 'ai_validating' }],
+                      head: { ref: 'ai/gh-22' }, draft: false }
+                ];
+            }
+        }, {}, {
+            20: { number: 20, state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true },
+            21: { number: 21, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true },
+            22: { number: 22, state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                     checks: ['none'], notMergeState: ['BEHIND', 'DIRTY'], draft: false,
+                     mutex: 'ai_validating', mutexAmong: ['pr_approved'],
+                     mutexExcludeSelf: true }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.length, 1, 'the lone armed approved PR is the candidate — fires');
+        assert.equal(items[0].key, 'pr-20');
+        // 22 is a DEV-lane arm (no pr_approved): mutexAmong scopes it out of holders.
+    });
+
+    test('pr rules: mutexExcludeSelf — recovery rule defers while ANOTHER approved PR is armed (leak shape)', function () {
+        // The exact leak shape (fa 2026-09-26: 7 armed approved PRs, +1 per
+        // tick): every candidate sees another approved holder → all defer →
+        // no second arm; the stack drains via merge-validated /
+        // fail-validation / unarm-stale.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 30, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }],
+                      head: { ref: 'ai/gh-30' }, draft: false },
+                    { number: 31, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }],
+                      head: { ref: 'ai/gh-31' }, draft: false }
+                ];
+            }
+        }, {}, {
+            30: { number: 30, state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true },
+            // 31's green rollup would fail this rule's checks guard anyway —
+            // the mutex must defer 30 BEFORE guards even run.
+            31: { number: 31, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', mergeable: true }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                     checks: ['none'], notMergeState: ['BEHIND', 'DIRTY'], draft: false,
+                     mutex: 'ai_validating', mutexAmong: ['pr_approved'],
+                     mutexExcludeSelf: true }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.length, 0, 'another approved arm exists — recovery defers (no second arm)');
+    });
+
+    test('validate-armed keeps the GLOBAL mutex — exclude-self form does not leak into it', function () {
+        // Behavior for validate-armed must stay byte-identical: its candidate
+        // is NOT yet armed (notLabels: ai_validating), so self never appears
+        // in the scan and the global defer-all form is correct there.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.rules || (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules)) || [];
+        var r = rules.filter(function (x) { return x.id === 'validate-armed'; })[0];
+        assert.ok(r, 'validate-armed present');
+        assert.equal(r.query.mutex, 'ai_validating');
+        assert.deepEqual(r.query.mutexAmong, ['pr_approved']);
+        assert.equal(r.query.mutexExcludeSelf, undefined,
+            'global form — the candidate is not yet armed, self never appears');
+        assert.deepEqual((r.query.notLabels || []), ['ai_validating'],
+            'still targets un-armed approved PRs only');
+    });
+
     test('pr rules: branchPrefix and draft filters', function () {
         var srcMod = load({
             github_list_prs: function () {
@@ -686,12 +764,16 @@ suite('sm github source', function () {
         assert.deepEqual(r.query.labels.sort(), ['ai_validating', 'pr_approved'].sort(),
             'matches ARMED approved PRs');
         assert.deepEqual(r.query.checks, ['none'], 'only when the head carries no checks');
-        // Live (fa pr-922, 2026-09-26): the mutex used to self-block this rule
-        // 100% of the time — it scans ALL open PRs for ai_validating, which the
-        // rule's own target carries by definition, so the rule could never fire.
-        // Serialization is structural: the arm itself is the singleton.
-        assert.equal(r.query.mutex, undefined,
-            'no mutex — the armed target itself would hold it (dead rule)');
+        // Live multi-arm leak (fa 2026-09-26 — 7 approved PRs armed at once,
+        // +1/tick): a plain mutex self-blocks this rule (its own target carries
+        // ai_validating), so it shipped mutex-less on a false "structural
+        // singleton" assumption. The exclude-self mutex restores serialization:
+        // defer only while ANOTHER approved PR holds the arm.
+        assert.equal(r.query.mutex, 'ai_validating', 'serializes on the arm label');
+        assert.deepEqual(r.query.mutexAmong, ['pr_approved'],
+            'scoped to approved holders (dev-lane arms do not block)');
+        assert.equal(r.query.mutexExcludeSelf, true,
+            'exclude-self: the candidate’s own arm must not self-block the rule');
         assert.equal(r.localAction, 'validate_pr', 're-dispatches CI on the head');
     });
 
@@ -710,8 +792,11 @@ suite('sm github source', function () {
         assert.deepEqual(r.query.checks, ['green'], 'fires exactly on the green-rollup dead zone');
         assert.deepEqual((r.query.notMergeState || []).slice().sort(), ['BEHIND', 'CLEAN', 'DIRTY'],
             'CLEAN excluded (merge-validated owns it), BEHIND/DIRTY excluded like the siblings');
-        assert.equal(r.query.mutex, undefined,
-            'no mutex — the armed target itself would hold it (dead rule)');
+        assert.equal(r.query.mutex, 'ai_validating', 'serializes on the arm label');
+        assert.deepEqual(r.query.mutexAmong, ['pr_approved'],
+            'scoped to approved holders (dev-lane arms do not block)');
+        assert.equal(r.query.mutexExcludeSelf, true,
+            'exclude-self: the candidate’s own arm must not self-block the rule');
         assert.equal(r.skipIfGreenCi, true,
             'green-cover guard: a completed green CI run on the head stops the re-dispatch loop');
         assert.equal(r.localAction, 'validate_pr', 're-dispatches CI on the head');
