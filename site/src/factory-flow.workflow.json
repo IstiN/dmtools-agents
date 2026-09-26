@@ -81,7 +81,8 @@
       "label": "Rework leg",
       "sublabel": "leg=rework \u00b7 pr_rework.json \u00b7 pushReworkChanges.js",
       "tag": "SEE: agent:rework",
-      "width": 250
+      "width": 250,
+      "yOffset": -22
     },
     {
       "id": "reviewleg",
@@ -91,7 +92,8 @@
       "label": "Review leg",
       "sublabel": "leg=review \u00b7 pr_review.json \u00b7 +ai_pr_reviewed",
       "tag": "SEE: agent:review",
-      "width": 250
+      "width": 250,
+      "yOffset": 0
     },
     {
       "id": "vfresh",
@@ -101,17 +103,19 @@
       "label": "validate-fresh",
       "sublabel": "validate_pr \u00b7 +ai_validating",
       "tag": "SEE: checks pending",
-      "width": 189
+      "width": 189,
+      "yOffset": -30
     },
     {
       "id": "varmed",
       "lane": "l3",
       "col": 4,
-      "type": "security",
+      "type": "messagebus",
       "label": "validate-armed",
       "sublabel": "mutex ai_validating FIFO \u00b7 validate_pr",
       "tag": "SEE: pr_approved armed",
-      "width": 248
+      "width": 248,
+      "yOffset": 4
     },
     {
       "id": "failval",
@@ -121,7 +125,8 @@
       "label": "fail-validation",
       "sublabel": "fail_validation \u00b7 unarm ai_validating",
       "tag": "SEE: checks red",
-      "width": 242
+      "width": 242,
+      "yOffset": 22
     },
     {
       "id": "merged",
@@ -141,7 +146,8 @@
       "label": "conflict-rework",
       "sublabel": "conflict_rework \u00b7 DIRTY owner",
       "tag": "SEE: mergeState DIRTY",
-      "width": 195
+      "width": 195,
+      "yOffset": 26
     },
     {
       "id": "crverdict",
