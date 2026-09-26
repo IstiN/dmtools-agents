@@ -1113,6 +1113,20 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                 ' validation already dispatching on this head — skip');
                     continue;
                 }
+                // Green-cover guard (rule flag skipIfGreenCi — the
+                // revalidate-armed-green dead-zone rule): if the head
+                // already carries a COMPLETED green dispatched CI run,
+                // re-running it cannot change a still-BLOCKED mergeState
+                // (the unmet required check is not this workflow's) — skip
+                // instead of looping CI every tick. Rules without the flag
+                // are unaffected.
+                if (rule.skipIfGreenCi && vHead0 &&
+                    hasSuccessfulDispatchedRun(effectiveRepoInfo, vCiWf, vHead0)) {
+                    console.log('  ⏭️  ' + key +
+                                ' head already carries a green dispatched CI run' +
+                                ' — blocker is not this CI; skip re-dispatch');
+                    continue;
+                }
                 // Superseded-head cleanup (owner 2026-09-23): any active
                 // dispatched run on an older head of THIS branch is pure
                 // waste — cancel before arming the fresh one.
@@ -1654,6 +1668,38 @@ function hasActiveDispatchedRun(repoInfo, ciWorkflow, headSha) {
         // Fail OPEN: a probe error must not wedge the arm — worst case
         // is the pre-guard duplicate we are trying to prevent.
         console.warn('  ⚠️  dispatch-guard probe failed: ' + (e.message || e));
+        return false;
+    }
+}
+
+
+function hasSuccessfulDispatchedRun(repoInfo, ciWorkflow, headSha) {
+    // Green-CI cover probe (rule flag skipIfGreenCi — used by
+    // revalidate-armed-green): a COMPLETED dispatched run with conclusion
+    // 'success' on this exact head means CI already passed here. If the
+    // mergeState is still BLOCKED then, the unmet required check belongs
+    // to ANOTHER workflow — re-dispatching this one cannot fix it, and
+    // without this guard the rule would re-dispatch on every tick
+    // forever. CANCELLED completions do NOT cover: a canceled run leaves
+    // no verdict (concurrency-cancel on racing dispatches is exactly how
+    // an armed head loses its CI — live: fa pr-922, 2026-09-26).
+    try {
+        var res = cli_execute_command({
+            command: 'gh api "repos/' + repoInfo.owner + '/' +
+                     repoInfo.repo +
+                     '/actions/workflows/' + ciWorkflow +
+                     '/runs?head_sha=' + headSha +
+                     '&event=workflow_dispatch&per_page=5"'
+        });
+        var runs = mcpParse((res || {}).output ||
+                            (res || {}).stdout || res);
+        var list = (runs && runs.workflow_runs) || [];
+        return list.some(function (r) {
+            return r.status === 'completed' && r.conclusion === 'success';
+        });
+    } catch (e) {
+        // Fail OPEN (dispatch): a probe error costs at most one extra run.
+        console.warn('  ⚠️  green-cover probe failed: ' + (e.message || e));
         return false;
     }
 }
