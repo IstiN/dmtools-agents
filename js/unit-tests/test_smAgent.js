@@ -974,7 +974,7 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.merge] } });
 
         assert.equal(sm.capturedPrMerges.length, 1);
-        assert.equal(sm.capturedPrMerges[0].number, 71);
+        assert.equal(sm.capturedPrMerges[0].pullRequestId, 71);
         assert.equal(sm.capturedPrMerges[0].mergeMethod, 'squash');
         assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
             ['ai_validating', 'pr_approved', 'ai_validated']);

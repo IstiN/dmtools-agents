@@ -1311,7 +1311,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 var mergeRaw = github_merge_pr({
                     workspace: effectiveRepoInfo.owner,
                     repository: effectiveRepoInfo.repo,
-                    number: ticket.prNumber,
+                    pullRequestId: ticket.prNumber,
                     mergeMethod: 'squash'
                 });
                 // The HTTP layer returns the raw body for error statuses

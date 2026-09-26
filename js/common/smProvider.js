@@ -337,7 +337,7 @@ function githubProvider(cfg) {
 
         merge: function (prNumber) {
             return github_merge_pr({
-                workspace: owner, repository: repo, number: prNumber, mergeMethod: 'squash'
+                workspace: owner, repository: repo, pullRequestId: prNumber, mergeMethod: 'squash'
             });
         },
 
