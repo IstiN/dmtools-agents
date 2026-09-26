@@ -286,16 +286,45 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {    var q = r
     // non-blocking by design, so its arms must NOT block the approved
     // merge window. Only approved-PR arms serialize the merge window
     // (the N×N re-validation invariant is a merge-window property).
+    // q.mutexExcludeSelf = true (recovery-rule form): the rule's own target
+    // carries the mutex label by definition (it re-dispatches CI on an
+    // ALREADY armed PR), so the global scan would self-block it 100% of the
+    // time — which is exactly why the recovery rules shipped with NO mutex
+    // and leaked (live multi-arm, fa 2026-09-26: 7 approved PRs held
+    // ai_validating at once, +1 arm per tick, while their descriptions
+    // claimed validate-armed's mutex made the arm a singleton — false once
+    // heads move: silent-update / BEHIND unarm races / guest pushes keep
+    // feeding checks=none states). With exclude-self the mutex is evaluated
+    // PER CANDIDATE: a candidate defers only while ANOTHER PR holds the arm
+    // (mutexAmong still scopes the holders). One armed approved PR = the
+    // candidate itself = fires; any second approved arm = every candidate
+    // defers. While a leaked stack drains (merge-validated / fail-validation
+    // / unarm-stale own the completions) the recovery rules correctly stay
+    // out of the way.
     if (q.mutex) {
         var among = q.mutexAmong;
-        var held = items.some(function (it) {
+        var holdsMutex = function (it) {
             if (it.labels.indexOf(q.mutex) === -1) return false;
             if (!among) return true;
             return among.some(function (l) { return it.labels.indexOf(l) !== -1; });
-        });
-        if (held) {
-            console.log('   🔒 mutex "' + q.mutex + '" held by another PR — rule defers (serial FIFO)');
-            return [];
+        };
+        if (q.mutexExcludeSelf) {
+            items = items.filter(function (candidate) {
+                var blocked = items.some(function (it) {
+                    return it.prNumber !== candidate.prNumber && holdsMutex(it);
+                });
+                if (blocked) {
+                    console.log('   🔒 mutex "' + q.mutex + '" held by another PR — candidate pr-' +
+                        candidate.prNumber + ' defers (serial FIFO, exclude-self)');
+                }
+                return !blocked;
+            });
+        } else {
+            var held = items.some(holdsMutex);
+            if (held) {
+                console.log('   🔒 mutex "' + q.mutex + '" held by another PR — rule defers (serial FIFO)');
+                return [];
+            }
         }
     }
 
