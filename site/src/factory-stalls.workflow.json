@@ -1,0 +1,251 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Factory Stalls — wedge states & recovery (dmtools-agents machine loop)",
+    "output": "site/factory-stalls.html",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "w1",
+      "label": "Stalls A–D — wedge signature",
+      "variant": "exception"
+    },
+    {
+      "id": "r1",
+      "label": "Recovery A–D — rule / JS / HUMAN"
+    },
+    {
+      "id": "w2",
+      "label": "Stalls E–H — wedge signature",
+      "variant": "exception"
+    },
+    {
+      "id": "r2",
+      "label": "Recovery E–H — rule / JS / HUMAN"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "s1",
+      "lane": "w1",
+      "col": 0,
+      "type": "security",
+      "label": "A · Merge leg 404",
+      "sublabel": "pr_approved+ai_validating+green — silent",
+      "tag": "github_merge_pr arg bug · fixed #529",
+      "width": 210
+    },
+    {
+      "id": "s2",
+      "lane": "w1",
+      "col": 1,
+      "type": "security",
+      "label": "B · Cancelled validation",
+      "sublabel": "ai_validating stuck · CANCELLED = no verdict",
+      "tag": "orphaned in_progress checks",
+      "width": 210
+    },
+    {
+      "id": "s3",
+      "lane": "w1",
+      "col": 2,
+      "type": "security",
+      "label": "C · Mutex self-block",
+      "sublabel": "mutex scan matches its own ai_validating",
+      "tag": "dead revalidate rules · fixed #527",
+      "width": 210
+    },
+    {
+      "id": "s4",
+      "lane": "w1",
+      "col": 3,
+      "type": "security",
+      "label": "D · Guest PR starvation",
+      "sublabel": "CHANGES_REQUESTED / red · non-machine author",
+      "tag": "comment-only, waits — BY DESIGN",
+      "width": 210
+    },
+    {
+      "id": "r1a",
+      "lane": "r1",
+      "col": 0,
+      "type": "backend",
+      "label": "Bump factory pin",
+      "sublabel": "github_merge_pr needs pullRequestId",
+      "tag": "js/smAgent.js merge_pr · #529",
+      "width": 210
+    },
+    {
+      "id": "r1b",
+      "lane": "r1",
+      "col": 1,
+      "type": "external",
+      "label": "Human unstick",
+      "sublabel": "CANCELLED leaves no verdict · unarm",
+      "tag": "HUMAN",
+      "width": 190
+    },
+    {
+      "id": "r1c",
+      "lane": "r1",
+      "col": 2,
+      "type": "backend",
+      "label": "Structural fix",
+      "sublabel": "no mutex on revalidate rules",
+      "tag": "sm_github.json revalidate-armed(-green)",
+      "width": 210
+    },
+    {
+      "id": "r1d",
+      "lane": "r1",
+      "col": 3,
+      "type": "external",
+      "label": "Human drives rework",
+      "sublabel": "auto legs machine-only · author re-labels",
+      "tag": "HUMAN (owner rule)",
+      "width": 210
+    },
+    {
+      "id": "s5",
+      "lane": "w2",
+      "col": 0,
+      "type": "security",
+      "label": "E · Rework skipped loudly",
+      "sublabel": "agent:rework on PR · no linked issue",
+      "tag": "smAgent.js {issueNumber} guard",
+      "width": 210
+    },
+    {
+      "id": "s6",
+      "lane": "w2",
+      "col": 1,
+      "type": "security",
+      "label": "F · DIRTY conflict",
+      "sublabel": "mergeState DIRTY · update = BEHIND-only",
+      "tag": "queue stalls without conflict-rework",
+      "width": 210
+    },
+    {
+      "id": "s7",
+      "lane": "w2",
+      "col": 2,
+      "type": "security",
+      "label": "G · Armed head moved",
+      "sublabel": "ai_validating + checks none · arm persists",
+      "tag": "e.g. double silent-update",
+      "width": 210
+    },
+    {
+      "id": "s8",
+      "lane": "w2",
+      "col": 3,
+      "type": "security",
+      "label": "H · Re-review never fires",
+      "sublabel": "stale verdict · ANY thread unresolved",
+      "tag": "review-threads-resolved gated",
+      "width": 210
+    },
+    {
+      "id": "r2a",
+      "lane": "r2",
+      "col": 0,
+      "type": "external",
+      "label": "Link the issue",
+      "sublabel": "add Closes/Fixes #N to body · re-label",
+      "tag": "HUMAN",
+      "width": 190
+    },
+    {
+      "id": "r2b",
+      "lane": "r2",
+      "col": 1,
+      "type": "backend",
+      "label": "conflict_rework",
+      "sublabel": "report · machine PRs +agent:rework",
+      "tag": "js/smAgent.js conflict_rework",
+      "width": 210
+    },
+    {
+      "id": "r2c",
+      "lane": "r2",
+      "col": 2,
+      "type": "backend",
+      "label": "Re-dispatch CI",
+      "sublabel": "validate_pr re-dispatch on the head",
+      "tag": "sm_github.json · no mutex",
+      "width": 210
+    },
+    {
+      "id": "r2d",
+      "lane": "r2",
+      "col": 3,
+      "type": "external",
+      "label": "Resolve all threads",
+      "sublabel": "threads resolved + green → arm_review",
+      "tag": "review-on-label consumes",
+      "width": 210
+    }
+  ],
+  "edges": [
+    {
+      "from": "s1",
+      "to": "r1a",
+      "variant": "emphasis"
+    },
+    {
+      "from": "s2",
+      "to": "r1b",
+      "variant": "emphasis"
+    },
+    {
+      "from": "s3",
+      "to": "r1c",
+      "variant": "emphasis"
+    },
+    {
+      "from": "s4",
+      "to": "r1d",
+      "variant": "emphasis"
+    },
+    {
+      "from": "s5",
+      "to": "r2a",
+      "variant": "emphasis"
+    },
+    {
+      "from": "s6",
+      "to": "r2b",
+      "variant": "emphasis"
+    },
+    {
+      "from": "s7",
+      "to": "r2c",
+      "variant": "emphasis"
+    },
+    {
+      "from": "s8",
+      "to": "r2d",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Reading the board",
+      "items": [
+        "Each wedge lists the exact label/check signature that stalls the loop and the rule, JS action, or HUMAN that unblocks it",
+        "SM tick ~10 min (factory-sm.yml → sm_github.json → js/smAgent.js) — a healthy queue visibly moves within 2–3 ticks"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Companion pages",
+      "items": [
+        "factory-flow.html — three-level flow with full gate guards · machine-pipeline.html · index.html (lifecycle)",
+        "Sources of truth: sm_github.json (rule table) · js/smAgent.js (localActions) · factory-teammate.yml (agent legs)"
+      ]
+    }
+  ]
+}
