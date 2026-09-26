@@ -4,7 +4,7 @@
   "meta": {
     "title": "Factory Flow — four levels of the dmtools-agents machine loop",
     "output": "site/index.html",
-    "quality_profile": "showcase"
+    "quality_profile": "standard"
   },
   "lanes": [
     {
@@ -12,8 +12,12 @@
       "label": "01 · Level 1 — Issue → Development"
     },
     {
+      "id": "lt",
+      "label": "⚡ External triggers (outside the machine)"
+    },
+    {
       "id": "l2",
-      "label": "02 · Level 2 — Development loop (PR ↔ review ↔ rework)"
+      "label": "02 · Level 2 — Development loop (review ↔ rework + fail path)"
     },
     {
       "id": "l3",
@@ -36,10 +40,10 @@
       "lane": "l1",
       "col": 0,
       "type": "external",
-      "label": "New issue → handoff",
-      "sublabel": "assign ai-teammate · label agent:dev",
-      "tag": "SEE: issue open · no status labels yet",
-      "width": 175
+      "label": "New issue",
+      "sublabel": "→ dev handoff",
+      "tag": "SEE: issue open · fresh",
+      "width": 120
     },
     {
       "id": "devleg",
@@ -47,59 +51,59 @@
       "col": 1,
       "type": "backend",
       "label": "Dev leg",
-      "sublabel": "factory-teammate.yml · guard → dev",
-      "tag": "SEE: dev workflow run in_progress",
-      "width": 195
+      "sublabel": "leg=dev · guard",
+      "tag": "SEE: dev run active",
+      "width": 120
     },
     {
       "id": "pr",
       "lane": "l1",
-      "col": 4,
+      "col": 2,
       "type": "frontend",
       "label": "PR opened",
-      "sublabel": "body Closes #N · head branch",
-      "tag": "SEE: issue ai_developed · PR no ai_* labels",
-      "width": 185
+      "sublabel": "body Closes #N",
+      "tag": "SEE: ai_developed",
+      "width": 120
     },
     {
       "id": "manual",
-      "lane": "l2",
+      "lane": "lt",
       "col": 0,
       "type": "external",
       "label": "Manual rework",
-      "sublabel": "human labels PR agent:rework",
-      "tag": "SEE: agent:rework set by a human",
-      "width": 140
+      "sublabel": "human +agent:rework",
+      "tag": "SEE: rework-on-label",
+      "width": 120
     },
     {
       "id": "reworkleg",
       "lane": "l2",
-      "col": 1,
+      "col": 2,
       "type": "messagebus",
       "label": "Rework leg",
-      "sublabel": "leg=rework · pr_rework.json",
-      "tag": "SEE: agent:rework · pushReworkChanges.js → PR head",
-      "width": 215
+      "sublabel": "leg=rework",
+      "tag": "SEE: agent:rework",
+      "width": 120
     },
     {
       "id": "reviewleg",
       "lane": "l2",
       "col": 3,
       "type": "backend",
-      "label": "Review leg + verdict",
-      "sublabel": "leg=review · pr_review.json · review-verdict.sh",
-      "tag": "SEE: agent:review + ai_validated on PR",
-      "width": 220
+      "label": "Review leg",
+      "sublabel": "pr_review.json",
+      "tag": "SEE: agent:review",
+      "width": 120
     },
     {
       "id": "vfresh",
       "lane": "l3",
-      "col": 5,
+      "col": 3,
       "type": "security",
       "label": "validate-fresh",
-      "sublabel": "checks none|pending · red→failval",
-      "tag": "SEE: ai_validating · checks pending",
-      "width": 185
+      "sublabel": "checks pending",
+      "tag": "SEE: ai_validating",
+      "width": 120
     },
     {
       "id": "varmed",
@@ -107,39 +111,59 @@
       "col": 4,
       "type": "security",
       "label": "validate-armed",
-      "sublabel": "pr_approved · mutex ai_validating",
-      "tag": "SEE: pr_approved + ai_validating · red→failval",
-      "width": 185
+      "sublabel": "pr_approved mutex",
+      "tag": "SEE: armed · approved",
+      "width": 120
     },
     {
       "id": "failval",
-      "lane": "l3",
-      "col": 0,
+      "lane": "l2",
+      "col": 4,
       "type": "security",
       "label": "fail-validation",
-      "sublabel": "checks red → unarm ai_validating",
-      "tag": "SEE: checks red · arm cleared",
-      "width": 175
+      "sublabel": "red → unarm",
+      "tag": "SEE: red · rework loop",
+      "width": 120
     },
     {
       "id": "merged",
       "lane": "l4",
       "col": 4,
-      "type": "security",
+      "type": "backend",
       "label": "Merged",
-      "sublabel": "merge_pr squash · -ai_validating",
-      "tag": "SEE: PR MERGED · issue closed",
-      "width": 175
+      "sublabel": "merge_pr squash",
+      "tag": "SEE: MERGED",
+      "width": 120
     },
     {
       "id": "conflict",
       "lane": "l3",
-      "col": 3,
+      "col": 5,
       "type": "messagebus",
       "label": "conflict-rework",
-      "sublabel": "DIRTY → conflict_rework",
-      "tag": "SEE: mergeState DIRTY on the PR",
-      "width": 170
+      "sublabel": "DIRTY owner",
+      "tag": "SEE: DIRTY",
+      "width": 120
+    },
+    {
+      "id": "crverdict",
+      "label": "CR verdict",
+      "sublabel": "review-verdict.sh",
+      "lane": "lt",
+      "type": "external",
+      "tag": "SEE: verdict CR",
+      "col": 1,
+      "width": 120
+    },
+    {
+      "id": "cisig",
+      "label": "Red CI · DIRTY",
+      "sublabel": "checks red · DIRTY",
+      "lane": "lt",
+      "type": "external",
+      "tag": "SEE: red · DIRTY",
+      "col": 4,
+      "width": 120
     }
   ],
   "edges": [
@@ -169,27 +193,8 @@
       "variant": "emphasis"
     },
     {
-      "from": "vfresh",
-      "to": "varmed",
-      "label": "pr_approved latch → armed re-validation"
-    },
-    {
       "from": "manual",
       "to": "reworkleg"
-    },
-    {
-      "from": "reviewleg",
-      "to": "reworkleg",
-      "label": "CHANGES_REQUESTED → +agent:rework (machine authors only)",
-      "variant": "security",
-      "role": "error"
-    },
-    {
-      "from": "failval",
-      "to": "reworkleg",
-      "label": "+agent:rework · rework-on-red-ci (prMachineAuthor only)",
-      "variant": "security",
-      "role": "error"
     },
     {
       "from": "varmed",
@@ -198,9 +203,14 @@
       "variant": "emphasis"
     },
     {
-      "from": "conflict",
+      "from": "crverdict",
       "to": "reworkleg",
-      "variant": "security"
+      "label": "+agent:rework · prMachineAuthor only (guests: HUMAN)"
+    },
+    {
+      "from": "cisig",
+      "to": "failval",
+      "label": "red → fail-validation · unarm ai_validating"
     }
   ],
   "cards": [
