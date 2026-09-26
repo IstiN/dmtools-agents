@@ -16,7 +16,11 @@
 
 var AGENT_JSON_PATTERN = /^[a-zA-Z0-9_]+\.json$/;
 var ACTION_PARAMS = ['preJSAction', 'preCliJSAction', 'postCliJSAction', 'postJSAction', 'timerJSAction'];
-var EXCLUDED = { 'sm.json': true, 'sm_merge.json': true };
+var EXCLUDED = {
+    'sm.json': true,
+    'sm_merge.json': true,
+    'versions.json': true // pack-version registry, not an agent config
+};
 
 function listTrackedAgentConfigs() {
     var output = cli_execute_command({ command: 'git ls-files "*.json"' });
@@ -154,6 +158,16 @@ suite('agentDocsCoverage', function() {
                 'Agent docs coverage failed (' + failures.length + ' problem(s)). ' +
                 'Regenerate with: node js/agentDocGenerator.js\n  - ' + failures.join('\n  - ')
             );
+        }
+    });
+
+    test('versions.json pack-version registry is excluded from doc coverage', function() {
+        if (!EXCLUDED['versions.json']) {
+            throw new Error('versions.json must be in EXCLUDED — it is a pack-version registry, not an agent config');
+        }
+        var configs = listTrackedAgentConfigs();
+        if (configs.indexOf('versions.json') !== -1) {
+            throw new Error('versions.json must not be discovered as an agent config');
         }
     });
 

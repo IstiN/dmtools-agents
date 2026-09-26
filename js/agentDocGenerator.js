@@ -57,6 +57,7 @@ function listAgentConfigs() {
         return f.endsWith('.json') &&
             f !== 'sm.json' &&
             f !== 'sm_merge.json' &&
+            f !== 'versions.json' && // pack-version registry, not an agent config
             !f.startsWith('run_') &&
             f.indexOf('_lock') === -1;
     }).sort();
