@@ -1,0 +1,225 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Factory Flow — three levels of the dmtools-agents machine loop",
+    "output": "site/factory-flow.html",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "l1",
+      "label": "01 · Level 1 — Issue → Development"
+    },
+    {
+      "id": "l2",
+      "label": "02 · Level 2 — Development loop (PR ↔ review ↔ rework)"
+    },
+    {
+      "id": "l3",
+      "label": "03 · Level 3 — Validation → Merge"
+    }
+  ],
+  "mainPath": [
+    "issue",
+    "devleg",
+    "pr",
+    "vfresh",
+    "gate"
+  ],
+  "nodes": [
+    {
+      "id": "issue",
+      "lane": "l1",
+      "col": 0,
+      "type": "external",
+      "label": "New issue → handoff",
+      "sublabel": "assign ai-teammate · label agent:dev",
+      "tag": "issues: assigned / labeled event",
+      "width": 190
+    },
+    {
+      "id": "devleg",
+      "lane": "l1",
+      "col": 1,
+      "type": "backend",
+      "label": "Dev leg",
+      "sublabel": "factory-teammate.yml · guard → dev",
+      "tag": "story|bug_development.json",
+      "width": 210
+    },
+    {
+      "id": "pr",
+      "lane": "l1",
+      "col": 4,
+      "type": "frontend",
+      "label": "PR opened",
+      "sublabel": "body Closes #N · head branch",
+      "tag": "+ai_developed (developTicketAndCreatePR.js)",
+      "width": 200
+    },
+    {
+      "id": "manual",
+      "lane": "l2",
+      "col": 0,
+      "type": "external",
+      "label": "Manual rework",
+      "sublabel": "human labels PR agent:rework",
+      "tag": "rule rework-on-label",
+      "width": 150
+    },
+    {
+      "id": "reworkleg",
+      "lane": "l2",
+      "col": 1,
+      "type": "messagebus",
+      "label": "Rework leg",
+      "sublabel": "leg=rework · pr_rework.json",
+      "tag": "re-review: review-threads-resolved → arm_review",
+      "width": 230
+    },
+    {
+      "id": "reviewleg",
+      "lane": "l2",
+      "col": 3,
+      "type": "backend",
+      "label": "Review leg + verdict",
+      "sublabel": "leg=review · pr_review.json · review-verdict.sh",
+      "tag": "+ai_pr_reviewed · APPROVE | CHANGES_REQUESTED",
+      "width": 230
+    },
+    {
+      "id": "conflict",
+      "lane": "l3",
+      "col": 0,
+      "type": "messagebus",
+      "label": "conflict-rework",
+      "sublabel": "mergeState DIRTY → conflict_rework",
+      "tag": "report · machine PRs +agent:rework",
+      "width": 190
+    },
+    {
+      "id": "vfresh",
+      "lane": "l3",
+      "col": 4,
+      "type": "security",
+      "label": "validate-fresh",
+      "sublabel": "checks none|pending · red → fail-validation",
+      "tag": "validate_pr · +ai_validating · dispatch CI",
+      "width": 200
+    },
+    {
+      "id": "gate",
+      "lane": "l3",
+      "col": 5,
+      "type": "security",
+      "label": "validate-armed → merge",
+      "sublabel": "mutex ai_validating · green+CLEAN → merge_pr",
+      "tag": "squash · close-on-merge → close_issue",
+      "width": 200
+    },
+    {
+      "id": "failval",
+      "lane": "l3",
+      "col": 2,
+      "type": "security",
+      "label": "fail-validation",
+      "sublabel": "checks red → unarm ai_validating",
+      "tag": "report · +agent:rework on issue",
+      "width": 190
+    }
+  ],
+  "edges": [
+    {
+      "from": "issue",
+      "to": "devleg"
+    },
+    {
+      "from": "devleg",
+      "to": "pr"
+    },
+    {
+      "from": "pr",
+      "to": "vfresh",
+      "label": "SM tick · validate-fresh"
+    },
+    {
+      "from": "vfresh",
+      "to": "reviewleg",
+      "label": "green → +ai_validated · review-after-dev",
+      "variant": "emphasis"
+    },
+    {
+      "from": "reviewleg",
+      "to": "gate",
+      "label": "APPROVE + green checks → +pr_approved → validate-armed (mutex free)",
+      "variant": "emphasis"
+    },
+    {
+      "from": "vfresh",
+      "to": "gate"
+    },
+    {
+      "from": "manual",
+      "to": "reworkleg"
+    },
+    {
+      "from": "conflict",
+      "to": "reworkleg",
+      "variant": "security"
+    },
+    {
+      "from": "reworkleg",
+      "to": "pr",
+      "label": "pushReworkChanges.js pushes fixes",
+      "variant": "dashed",
+      "role": "return"
+    },
+    {
+      "from": "reviewleg",
+      "to": "reworkleg",
+      "label": "CHANGES_REQUESTED → +agent:rework (machine authors only)",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "from": "vfresh",
+      "to": "failval",
+      "label": "red",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "from": "gate",
+      "to": "failval",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "from": "failval",
+      "to": "reworkleg",
+      "label": "+agent:rework · rework-on-red-ci (prMachineAuthor only)",
+      "variant": "security",
+      "role": "error"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Gate guards — Levels 1–2 (full blocking conditions)",
+      "items": [
+        "dev leg: issue OPEN · ¬agent:skip · assignee ai-teammate or label agent:dev · fresh handoff only (no status:In */_wip/ai_developed/ai_pr_reviewed yet)",
+        "review-after-dev: issue ai_developed + PR ai_validated · ¬ai_pr_reviewed ¬pr_approved · review-threads-resolved: ai_pr_reviewed + checks green + ALL threads resolved + stale verdict · ¬agent:review ¬ai_validating ¬pr_approved"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Gate guards — Level 3 (full blocking conditions)",
+      "items": [
+        "validate-fresh: checks none|pending · ¬ai_validating ¬pr_approved ¬chore:pin ¬ai_validated · ¬BEHIND · validate-armed: pr_approved + mutex ai_validating free (FIFO, oldest) · ¬BEHIND ¬DIRTY",
+        "merge-validated: ai_validating + green + CLEAN · fail-validation: ai_validating + red (CANCELLED = no verdict) · conflict-rework: mergeState DIRTY · close-on-merge: ai_developed + PR MERGED",
+        "Wedge states + recovery owners: see factory-stalls.html"
+      ]
+    }
+  ]
+}
