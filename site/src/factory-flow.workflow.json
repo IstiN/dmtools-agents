@@ -129,7 +129,7 @@
       "id": "vfresh",
       "lane": "l3",
       "col": 3,
-      "type": "security",
+      "type": "messagebus",
       "label": "validate-fresh",
       "sublabel": "validate_pr dispatches CI · +ai_validating",
       "tag": "SEE: ai_validating · checks pending",
@@ -235,6 +235,40 @@
       "from": "conflict",
       "to": "reworkleg",
       "label": "+agent:rework (machine) · HUMAN (guest)",
+      "role": "error"
+    },
+    {
+      "from": "reworkleg",
+      "to": "reviewleg",
+      "label": "threads resolved + green + stale verdict → re-review (review-threads-resolved)",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [
+        [
+          436,
+          438
+        ],
+        [
+          952,
+          438
+        ]
+      ]
+    },
+    {
+      "from": "reworkleg",
+      "to": "vfresh",
+      "label": "push → new head · checks none → re-dispatch"
+    },
+    {
+      "from": "varmed",
+      "to": "failval",
+      "label": "checks red (armed) → fail_validation · unarm",
+      "role": "error"
+    },
+    {
+      "from": "vfresh",
+      "to": "failval",
+      "label": "checks red → fail_validation · unarm",
       "role": "error"
     }
   ],
