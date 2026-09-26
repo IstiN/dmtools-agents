@@ -41,9 +41,9 @@
       "col": 0,
       "type": "external",
       "label": "New issue",
-      "sublabel": "→ dev handoff",
-      "tag": "SEE: issue open · fresh",
-      "width": 120
+      "sublabel": "assignee ai-teammate · label agent:dev",
+      "tag": "SEE: issue OPEN · no status labels",
+      "width": 240
     },
     {
       "id": "devleg",
@@ -51,19 +51,19 @@
       "col": 1,
       "type": "backend",
       "label": "Dev leg",
-      "sublabel": "leg=dev · guard",
-      "tag": "SEE: dev run active",
-      "width": 120
+      "sublabel": "factory-teammate.yml leg=dev · story|bug_development.json",
+      "tag": "SEE: dev run in_progress",
+      "width": 240
     },
     {
       "id": "pr",
       "lane": "l1",
-      "col": 2,
+      "col": 3,
       "type": "frontend",
       "label": "PR opened",
-      "sublabel": "body Closes #N",
-      "tag": "SEE: ai_developed",
-      "width": 120
+      "sublabel": "developTicketAndCreatePR.js · +ai_developed · body Closes #N",
+      "tag": "SEE: PR open · no ai_* labels",
+      "width": 240
     },
     {
       "id": "manual",
@@ -71,29 +71,59 @@
       "col": 0,
       "type": "external",
       "label": "Manual rework",
-      "sublabel": "human +agent:rework",
-      "tag": "SEE: rework-on-label",
-      "width": 120
+      "sublabel": "human labels PR agent:rework",
+      "tag": "SEE: agent:rework set by human",
+      "width": 240
+    },
+    {
+      "id": "crverdict",
+      "lane": "lt",
+      "col": 2,
+      "type": "external",
+      "label": "CR verdict",
+      "sublabel": "review-verdict.sh = CHANGES_REQUESTED",
+      "tag": "SEE: ai_pr_reviewed · verdict CR",
+      "width": 240
+    },
+    {
+      "id": "cisig",
+      "lane": "lt",
+      "col": 5,
+      "type": "external",
+      "label": "Red CI · DIRTY",
+      "sublabel": "checks red · mergeState DIRTY",
+      "tag": "SEE: red checks · DIRTY on PR",
+      "width": 240
     },
     {
       "id": "reworkleg",
       "lane": "l2",
-      "col": 2,
+      "col": 1,
       "type": "messagebus",
       "label": "Rework leg",
-      "sublabel": "leg=rework",
-      "tag": "SEE: agent:rework",
-      "width": 120
+      "sublabel": "leg=rework · pr_rework.json · pushReworkChanges.js",
+      "tag": "SEE: agent:rework consumed",
+      "width": 240
     },
     {
       "id": "reviewleg",
       "lane": "l2",
-      "col": 3,
+      "col": 4,
       "type": "backend",
       "label": "Review leg",
-      "sublabel": "pr_review.json",
-      "tag": "SEE: agent:review",
-      "width": 120
+      "sublabel": "leg=review · pr_review.json · +ai_pr_reviewed",
+      "tag": "SEE: agent:review armed",
+      "width": 240
+    },
+    {
+      "id": "failval",
+      "lane": "l2",
+      "col": 5,
+      "type": "security",
+      "label": "fail-validation",
+      "sublabel": "fail_validation · unarm ai_validating · red report",
+      "tag": "SEE: checks red · arm cleared",
+      "width": 240
     },
     {
       "id": "vfresh",
@@ -101,116 +131,111 @@
       "col": 3,
       "type": "security",
       "label": "validate-fresh",
-      "sublabel": "checks pending",
-      "tag": "SEE: ai_validating",
-      "width": 120
-    },
-    {
-      "id": "varmed",
-      "lane": "l3",
-      "col": 4,
-      "type": "security",
-      "label": "validate-armed",
-      "sublabel": "pr_approved mutex",
-      "tag": "SEE: armed · approved",
-      "width": 120
-    },
-    {
-      "id": "failval",
-      "lane": "l2",
-      "col": 4,
-      "type": "security",
-      "label": "fail-validation",
-      "sublabel": "red → unarm",
-      "tag": "SEE: red · rework loop",
-      "width": 120
-    },
-    {
-      "id": "merged",
-      "lane": "l4",
-      "col": 4,
-      "type": "backend",
-      "label": "Merged",
-      "sublabel": "merge_pr squash",
-      "tag": "SEE: MERGED",
-      "width": 120
+      "sublabel": "validate_pr dispatches CI · +ai_validating",
+      "tag": "SEE: ai_validating · checks pending",
+      "width": 240
     },
     {
       "id": "conflict",
       "lane": "l3",
-      "col": 5,
+      "col": 4,
       "type": "messagebus",
       "label": "conflict-rework",
-      "sublabel": "DIRTY owner",
-      "tag": "SEE: DIRTY",
-      "width": 120
+      "sublabel": "conflict_rework owns DIRTY · update_branch excluded",
+      "tag": "SEE: mergeState DIRTY",
+      "width": 240
     },
     {
-      "id": "crverdict",
-      "label": "CR verdict",
-      "sublabel": "review-verdict.sh",
-      "lane": "lt",
-      "type": "external",
-      "tag": "SEE: verdict CR",
-      "col": 1,
-      "width": 120
+      "id": "varmed",
+      "lane": "l3",
+      "col": 5,
+      "type": "security",
+      "label": "validate-armed",
+      "sublabel": "mutex ai_validating FIFO · validate_pr on PR head",
+      "tag": "SEE: pr_approved + ai_validating",
+      "width": 240
     },
     {
-      "id": "cisig",
-      "label": "Red CI · DIRTY",
-      "sublabel": "checks red · DIRTY",
-      "lane": "lt",
-      "type": "external",
-      "tag": "SEE: red · DIRTY",
-      "col": 4,
-      "width": 120
+      "id": "merged",
+      "lane": "l4",
+      "col": 5,
+      "type": "backend",
+      "label": "Merged",
+      "sublabel": "merge_pr squash → close-on-merge · close_issue",
+      "tag": "SEE: PR MERGED · issue closed",
+      "width": 240
     }
   ],
   "edges": [
     {
       "from": "issue",
-      "to": "devleg"
+      "to": "devleg",
+      "label": "guard: OPEN · ai-teammate | agent:dev"
     },
     {
       "from": "devleg",
-      "to": "pr"
+      "to": "pr",
+      "label": "developTicketAndCreatePR.js → +ai_developed"
     },
     {
       "from": "pr",
       "to": "vfresh",
-      "label": "SM tick · validate-fresh"
+      "label": "checks none|pending → validate-fresh"
     },
     {
       "from": "vfresh",
       "to": "reviewleg",
-      "label": "green → +ai_validated · review-after-dev",
-      "variant": "emphasis"
+      "label": "green → +ai_validated · review-after-dev"
     },
     {
       "from": "reviewleg",
       "to": "varmed",
-      "label": "APPROVE + green checks → +pr_approved → validate-armed (mutex free)",
-      "variant": "emphasis"
-    },
-    {
-      "from": "manual",
-      "to": "reworkleg"
+      "label": "APPROVE + green → +pr_approved"
     },
     {
       "from": "varmed",
       "to": "merged",
-      "label": "green + CLEAN → merge_pr",
-      "variant": "emphasis"
+      "label": "green + CLEAN → merge_pr squash"
+    },
+    {
+      "from": "manual",
+      "to": "reworkleg",
+      "label": "human label → rework-on-label"
     },
     {
       "from": "crverdict",
       "to": "reworkleg",
-      "label": "+agent:rework · prMachineAuthor only (guests: HUMAN)"
+      "label": "verdict CR fires rework"
     },
     {
       "from": "cisig",
       "to": "failval",
-      "label": "red → fail-validation · unarm ai_validating"
+      "label": "checks red → fail_validation · unarm",
+      "role": "error"
+    },
+    {
+      "from": "cisig",
+      "to": "conflict",
+      "label": "DIRTY → conflict_rework",
+      "role": "error"
+    },
+    {
+      "from": "reviewleg",
+      "to": "reworkleg",
+      "label": "CHANGES_REQUESTED → +agent:rework (machine authors)",
+      "role": "error"
+    },
+    {
+      "from": "failval",
+      "to": "reworkleg",
+      "label": "+agent:rework (machine PRs)",
+      "role": "error"
+    },
+    {
+      "from": "conflict",
+      "to": "reworkleg",
+      "label": "+agent:rework (machine) · HUMAN (guest)",
+      "role": "error"
     }
   ],
   "cards": [
