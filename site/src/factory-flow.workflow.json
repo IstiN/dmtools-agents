@@ -2,8 +2,8 @@
   "schema_version": 2,
   "diagram_type": "workflow",
   "meta": {
-    "title": "Factory Flow — three levels of the dmtools-agents machine loop",
-    "output": "site/factory-flow.html",
+    "title": "Factory Flow — four levels of the dmtools-agents machine loop",
+    "output": "site/index.html",
     "quality_profile": "showcase"
   },
   "lanes": [
@@ -17,15 +17,18 @@
     },
     {
       "id": "l3",
-      "label": "03 · Level 3 — Validation → Merge"
+      "label": "03 · Level 3 — Validation (mutex ai_validating)"
+    },
+    {
+      "id": "l4",
+      "label": "04 · Level 4 — Merged (terminal)"
     }
   ],
   "mainPath": [
     "issue",
     "devleg",
     "pr",
-    "vfresh",
-    "gate"
+    "vfresh"
   ],
   "nodes": [
     {
@@ -35,8 +38,8 @@
       "type": "external",
       "label": "New issue → handoff",
       "sublabel": "assign ai-teammate · label agent:dev",
-      "tag": "issues: assigned / labeled event",
-      "width": 190
+      "tag": "SEE: issue open · no status labels yet",
+      "width": 175
     },
     {
       "id": "devleg",
@@ -45,8 +48,8 @@
       "type": "backend",
       "label": "Dev leg",
       "sublabel": "factory-teammate.yml · guard → dev",
-      "tag": "story|bug_development.json",
-      "width": 210
+      "tag": "SEE: dev workflow run in_progress",
+      "width": 195
     },
     {
       "id": "pr",
@@ -55,8 +58,8 @@
       "type": "frontend",
       "label": "PR opened",
       "sublabel": "body Closes #N · head branch",
-      "tag": "+ai_developed (developTicketAndCreatePR.js)",
-      "width": 200
+      "tag": "SEE: issue ai_developed · PR no ai_* labels",
+      "width": 185
     },
     {
       "id": "manual",
@@ -65,8 +68,8 @@
       "type": "external",
       "label": "Manual rework",
       "sublabel": "human labels PR agent:rework",
-      "tag": "rule rework-on-label",
-      "width": 150
+      "tag": "SEE: agent:rework set by a human",
+      "width": 140
     },
     {
       "id": "reworkleg",
@@ -75,8 +78,8 @@
       "type": "messagebus",
       "label": "Rework leg",
       "sublabel": "leg=rework · pr_rework.json",
-      "tag": "re-review: review-threads-resolved → arm_review",
-      "width": 230
+      "tag": "SEE: agent:rework · pushReworkChanges.js → PR head",
+      "width": 215
     },
     {
       "id": "reviewleg",
@@ -85,48 +88,58 @@
       "type": "backend",
       "label": "Review leg + verdict",
       "sublabel": "leg=review · pr_review.json · review-verdict.sh",
-      "tag": "+ai_pr_reviewed · APPROVE | CHANGES_REQUESTED",
-      "width": 230
-    },
-    {
-      "id": "conflict",
-      "lane": "l3",
-      "col": 0,
-      "type": "messagebus",
-      "label": "conflict-rework",
-      "sublabel": "mergeState DIRTY → conflict_rework",
-      "tag": "report · machine PRs +agent:rework",
-      "width": 190
+      "tag": "SEE: agent:review + ai_validated on PR",
+      "width": 220
     },
     {
       "id": "vfresh",
       "lane": "l3",
-      "col": 4,
-      "type": "security",
-      "label": "validate-fresh",
-      "sublabel": "checks none|pending · red → fail-validation",
-      "tag": "validate_pr · +ai_validating · dispatch CI",
-      "width": 200
-    },
-    {
-      "id": "gate",
-      "lane": "l3",
       "col": 5,
       "type": "security",
-      "label": "validate-armed → merge",
-      "sublabel": "mutex ai_validating · green+CLEAN → merge_pr",
-      "tag": "squash · close-on-merge → close_issue",
-      "width": 200
+      "label": "validate-fresh",
+      "sublabel": "checks none|pending · red→failval",
+      "tag": "SEE: ai_validating · checks pending",
+      "width": 185
+    },
+    {
+      "id": "varmed",
+      "lane": "l3",
+      "col": 4,
+      "type": "security",
+      "label": "validate-armed",
+      "sublabel": "pr_approved · mutex ai_validating",
+      "tag": "SEE: pr_approved + ai_validating · red→failval",
+      "width": 185
     },
     {
       "id": "failval",
       "lane": "l3",
-      "col": 2,
+      "col": 0,
       "type": "security",
       "label": "fail-validation",
       "sublabel": "checks red → unarm ai_validating",
-      "tag": "report · +agent:rework on issue",
-      "width": 190
+      "tag": "SEE: checks red · arm cleared",
+      "width": 175
+    },
+    {
+      "id": "merged",
+      "lane": "l4",
+      "col": 4,
+      "type": "security",
+      "label": "Merged",
+      "sublabel": "merge_pr squash · -ai_validating",
+      "tag": "SEE: PR MERGED · issue closed",
+      "width": 175
+    },
+    {
+      "id": "conflict",
+      "lane": "l3",
+      "col": 3,
+      "type": "messagebus",
+      "label": "conflict-rework",
+      "sublabel": "DIRTY → conflict_rework",
+      "tag": "SEE: mergeState DIRTY on the PR",
+      "width": 170
     }
   ],
   "edges": [
@@ -151,29 +164,18 @@
     },
     {
       "from": "reviewleg",
-      "to": "gate",
+      "to": "varmed",
       "label": "APPROVE + green checks → +pr_approved → validate-armed (mutex free)",
       "variant": "emphasis"
     },
     {
       "from": "vfresh",
-      "to": "gate"
+      "to": "varmed",
+      "label": "pr_approved latch → armed re-validation"
     },
     {
       "from": "manual",
       "to": "reworkleg"
-    },
-    {
-      "from": "conflict",
-      "to": "reworkleg",
-      "variant": "security"
-    },
-    {
-      "from": "reworkleg",
-      "to": "pr",
-      "label": "pushReworkChanges.js pushes fixes",
-      "variant": "dashed",
-      "role": "return"
     },
     {
       "from": "reviewleg",
@@ -183,24 +185,22 @@
       "role": "error"
     },
     {
-      "from": "vfresh",
-      "to": "failval",
-      "label": "red",
-      "variant": "security",
-      "role": "error"
-    },
-    {
-      "from": "gate",
-      "to": "failval",
-      "variant": "security",
-      "role": "error"
-    },
-    {
       "from": "failval",
       "to": "reworkleg",
       "label": "+agent:rework · rework-on-red-ci (prMachineAuthor only)",
       "variant": "security",
       "role": "error"
+    },
+    {
+      "from": "varmed",
+      "to": "merged",
+      "label": "green + CLEAN → merge_pr",
+      "variant": "emphasis"
+    },
+    {
+      "from": "conflict",
+      "to": "reworkleg",
+      "variant": "security"
     }
   ],
   "cards": [
@@ -208,17 +208,16 @@
       "dot": "cyan",
       "title": "Gate guards — Levels 1–2 (full blocking conditions)",
       "items": [
-        "dev leg: issue OPEN · ¬agent:skip · assignee ai-teammate or label agent:dev · fresh handoff only (no status:In */_wip/ai_developed/ai_pr_reviewed yet)",
-        "review-after-dev: issue ai_developed + PR ai_validated · ¬ai_pr_reviewed ¬pr_approved · review-threads-resolved: ai_pr_reviewed + checks green + ALL threads resolved + stale verdict · ¬agent:review ¬ai_validating ¬pr_approved"
+        "dev leg: issue OPEN · ¬agent:skip · assignee ai-teammate or agent:dev · fresh handoff only (no status labels yet)",
+        "review-after-dev: ai_developed + ai_validated · ¬ai_pr_reviewed ¬pr_approved · re-review: ai_pr_reviewed + green + ALL threads resolved + stale verdict · ¬agent:review ¬ai_validating ¬pr_approved"
       ]
     },
     {
       "dot": "amber",
-      "title": "Gate guards — Level 3 (full blocking conditions)",
+      "title": "Gate guards — Levels 3–4 (full blocking conditions)",
       "items": [
-        "validate-fresh: checks none|pending · ¬ai_validating ¬pr_approved ¬chore:pin ¬ai_validated · ¬BEHIND · validate-armed: pr_approved + mutex ai_validating free (FIFO, oldest) · ¬BEHIND ¬DIRTY",
-        "merge-validated: ai_validating + green + CLEAN · fail-validation: ai_validating + red (CANCELLED = no verdict) · conflict-rework: mergeState DIRTY · close-on-merge: ai_developed + PR MERGED",
-        "Wedge states + recovery owners: see factory-stalls.html"
+        "validate-fresh: checks none|pending · ¬ai_validating ¬pr_approved ¬ai_validated ¬BEHIND · validate-armed: pr_approved + mutex ai_validating free (FIFO oldest) · ¬BEHIND",
+        "merge-validated: green + CLEAN · fail-validation: red (CANCELLED = no verdict) · conflict-rework: DIRTY · close-on-merge: ai_developed + issue OPEN · stalls: factory-stalls.html"
       ]
     }
   ]
