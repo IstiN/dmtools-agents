@@ -785,6 +785,84 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedPrLabelAdds.length, 1, 'ai_validating armed');
     });
 
+    test('validate_pr: skipIfGreenCi — a completed green CI run on the head stops the re-dispatch loop', function () {
+        // Dead-zone guard (fa pr-922, 2026-09-26): revalidate-armed-green
+        // re-dispatches CI when the rollup is green but the CI verdict is
+        // missing. If the head ALREADY carries a completed green dispatched
+        // run and mergeState is still BLOCKED, the unmet required check
+        // belongs to another workflow — re-running this CI every tick would
+        // loop forever. The rule's skipIfGreenCi flag makes validate_pr skip.
+        var CUR = 'eeee2222eeee2222eeee2222eeee2222eeee2222';
+        var greenRule = { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                     notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'], checks: ['green'], draft: false },
+            localAction: 'validate_pr', limit: 1, id: 'revalidate-armed-green',
+            skipIfGreenCi: true };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(922, { branch: 'fix/921', headSha: CUR,
+                                            labels: ['pr_approved', 'ai_validating'] })] },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    // Old completed green run: outside the 15-min active
+                    // window (the active guard passes) but a green cover.
+                    return { workflow_runs: [
+                        { id: 555, event: 'workflow_dispatch', head_branch: 'fix/921',
+                          head_sha: CUR, status: 'completed', conclusion: 'success',
+                          created_at: '2026-09-20T00:00:00Z' }
+                    ] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [greenRule] } });
+
+        var dispatch = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; });
+        assert.equal(dispatch.length, 0, 'no re-dispatch — green cover already on the head');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no arm churn');
+    });
+
+    test('validate_pr: skipIfGreenCi — a CANCELLED run is not a green cover (re-dispatch proceeds)', function () {
+        // The exact fa pr-922 shape: the dispatched run was concurrency-cancelled
+        // — no verdict, no green cover. The rule MUST re-dispatch.
+        var CUR = 'ffff3333ffff3333ffff3333ffff3333ffff3333';
+        var greenRule = { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                     notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'], checks: ['green'], draft: false },
+            localAction: 'validate_pr', limit: 1, id: 'revalidate-armed-green',
+            skipIfGreenCi: true };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(922, { branch: 'fix/921', headSha: CUR,
+                                            labels: ['pr_approved', 'ai_validating'] })] },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    return { workflow_runs: [
+                        { id: 556, event: 'workflow_dispatch', head_branch: 'fix/921',
+                          head_sha: CUR, status: 'completed', conclusion: 'cancelled',
+                          created_at: '2026-09-20T00:00:00Z' }
+                    ] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [greenRule] } });
+
+        var dispatch = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; });
+        assert.equal(dispatch.length, 1, 'cancelled is not a cover — CI re-dispatched');
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'arm re-applied (idempotent)');
+    });
+
     test('config order: unarm precedes silent-update (same-tick actualization)', function () {
         // Owner 2026-09-23: a BEHIND queue head with ai_validating armed
         // took 3 ticks to refresh (rule 0 skipped the armed PR, the unarm

@@ -686,7 +686,34 @@ suite('sm github source', function () {
         assert.deepEqual(r.query.labels.sort(), ['ai_validating', 'pr_approved'].sort(),
             'matches ARMED approved PRs');
         assert.deepEqual(r.query.checks, ['none'], 'only when the head carries no checks');
-        assert.equal(r.query.mutex, 'ai_validating', 'one validation at a time');
+        // Live (fa pr-922, 2026-09-26): the mutex used to self-block this rule
+        // 100% of the time — it scans ALL open PRs for ai_validating, which the
+        // rule's own target carries by definition, so the rule could never fire.
+        // Serialization is structural: the arm itself is the singleton.
+        assert.equal(r.query.mutex, undefined,
+            'no mutex — the armed target itself would hold it (dead rule)');
+        assert.equal(r.localAction, 'validate_pr', 're-dispatches CI on the head');
+    });
+
+    test('revalidate-armed-green rule exists in sm_github.json (armed, green rollup, CI verdict missing)', function () {
+        // Live dead zone (fa pr-922, 2026-09-26): armed head whose dispatched CI
+        // run was lost (racing dispatch concurrency-canceled / CLI dispatch
+        // failed silently). Every existing check green, required CI check ABSENT
+        // → rollup 'green' + REST BLOCKED. None of none/red/CLEAN/BEHIND matched
+        // any rule — frozen for hours. This rule re-dispatches CI on the head.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.rules || (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules)) || [];
+        var r = rules.filter(function (x) { return x.id === 'revalidate-armed-green'; })[0];
+        assert.ok(r, 'revalidate-armed-green present');
+        assert.deepEqual(r.query.labels.sort(), ['ai_validating', 'pr_approved'].sort(),
+            'matches ARMED approved PRs');
+        assert.deepEqual(r.query.checks, ['green'], 'fires exactly on the green-rollup dead zone');
+        assert.deepEqual((r.query.notMergeState || []).slice().sort(), ['BEHIND', 'CLEAN', 'DIRTY'],
+            'CLEAN excluded (merge-validated owns it), BEHIND/DIRTY excluded like the siblings');
+        assert.equal(r.query.mutex, undefined,
+            'no mutex — the armed target itself would hold it (dead rule)');
+        assert.equal(r.skipIfGreenCi, true,
+            'green-cover guard: a completed green CI run on the head stops the re-dispatch loop');
         assert.equal(r.localAction, 'validate_pr', 're-dispatches CI on the head');
     });
 
