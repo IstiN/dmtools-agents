@@ -24,6 +24,24 @@
           "id": "unarm-stale-validation"
         },
         {
+          "description": "Stale-arm sweeper (live: fa #999 — ai_validating held 7h with a CONCLUDED green CI and no verdict consumed; the ai_validating mutex stayed held forever. unarm-stale-validation covers BEHIND only). ai_validating + the head's dispatched validation run CONCLUDED (success or failure — CANCELLED is never a verdict) more than staleMinutes (15) ago, arm never consumed → unarm. Success side: unarm + re-latch ai_validated (complete_validation parity — the merge window re-flows; validate-armed latch-skips on the unchanged head). Failure side: the standard fail path (report + machine-only rework re-arm). Fresh conclusions (<15 min) never sweep: the check-visibility/verdict race window — the same-tick verdict rules (merge-validated / fail-validation / validated-green) own those. BEHIND excluded: unarm-stale-validation owns the moved-base recovery.",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validating"
+            ],
+            "notMergeState": [
+              "BEHIND"
+            ],
+            "draft": false
+          },
+          "localAction": "sweep_stale_validation",
+          "staleMinutes": 15,
+          "limit": 10,
+          "id": "sweep-stale-validating"
+        },
+        {
           "description": "Every open non-draft PR behind main gets a silent branch refresh with the workflow token (pushes trigger no workflows, so freshness is free); validating PRs are excluded so the validation head never moves mid-run. mergeState is BEHIND only: the prStatus deterministic override computes BEHIND from base freshness (immune to the REST BEHIND/BLOCKED flip-flop this rule used to paper over with both values), and BLOCKED is now a REAL verdict (fresh head, required checks pending/red) — updating those would no-op-clone every pending PR on every tick. Limit 20 (owner 2026-09-22): silent pushes fire no CI — refreshing every BEHIND head every tick is free and keeps PRs merge-ready, so the merge window never waits for a refresh first.",
           "source": "github",
           "query": {
@@ -62,6 +80,7 @@
             ]
           },
           "localAction": "validate_pr",
+          "skipIfValidatedHead": true,
           "limit": 1,
           "id": "validate-armed"
         },
