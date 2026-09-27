@@ -310,21 +310,40 @@ function isWorkflowBudgetExhausted(rule, effectiveConfig, workflowBudget, repoIn
 // repo-qualified cross-repo refs, but a BARE '#N' can still dangle (deleted
 // issue, or a ref pointing at a repo the qualifier missed). Anchoring a
 // dispatch on such a number 404s in the factory guard — verify existence
-// here (github_get_issue, try/catch) and let the caller degrade to a
-// PR-anchored dispatch. Forges/runtimes without the github_get_issue tool
-// skip the check and trust the scrape (legacy behavior, unchanged).
+// here and let the caller degrade to a PR-anchored dispatch.
+//
+// Bridge reality (live: dmd #266, run 36332635090 — the AUTO review dispatch
+// anchored gh-601): the sync github_get_issue tool does NOT throw on 404 —
+// it returns the REST error BODY ('{"message":"Not Found",...}'). The
+// original try/catch-only check therefore trusted any non-throwing result
+// and the dangling scrape anchored gh-<N> on the AUTO review/rework paths.
+// The result body is inspected: a real issue JSON carries its `number`; an
+// error body carries `message`. Anything unverifiable counts as missing —
+// this check only runs when the item has a PR anchor (it.prNumber), so the
+// PR-anchored fallback is always viable, while a bogus gh-<N> anchor 404s
+// the factory guard and reds the whole SM cycle. Forges/runtimes without
+// the github_get_issue tool skip the check and trust the scrape (legacy
+// behavior, unchanged).
 function localIssueExists(repoInfo, issueNumber) {
     if (typeof github_get_issue !== 'function') return true;
+    var res;
     try {
-        github_get_issue({
+        res = github_get_issue({
             workspace: repoInfo.owner,
             repository: repoInfo.repo,
             issueNumber: issueNumber
         });
-        return true;
     } catch (e) {
-        return false;
+        return false; // throwing bridges (mocks, some forges) — 404 throws
     }
+    var obj = res;
+    if (typeof res === 'string') {
+        try { obj = JSON.parse(res); } catch (e2) { obj = null; }
+    }
+    if (obj && typeof obj === 'object') {
+        return typeof obj.number === 'number' && !obj.message;
+    }
+    return false; // empty/unparseable body — unverifiable, do not anchor
 }
 
 function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBudget, item) {

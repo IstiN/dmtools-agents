@@ -181,9 +181,12 @@ function makeSmAgent(opts) {
         };
         // #544: linked-issue existence probe — a scraped #N that 404s
         // (cross-repo/dangling) must degrade to a PR-anchored dispatch.
+        // Live-bridge shape: the sync tool does NOT throw on 404 — it
+        // returns the REST error BODY; issueLookupBody simulates that.
         smMocks.github_get_issue = function (issueOpts) {
             if (opts.github.issueLookupError) throw new Error(opts.github.issueLookupError);
             if (opts.github.onIssueLookup) opts.github.onIssueLookup(issueOpts && issueOpts.issueNumber);
+            if (opts.github.issueLookupBody) return opts.github.issueLookupBody;
             return opts.github.issue || { number: issueOpts && issueOpts.issueNumber };
         };
         smMocks.github_get_pr_comments = function () {
@@ -1018,6 +1021,90 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(inputs.issue, '', 'bogus #601 anchor dropped');
         assert.equal(inputs.pr, '92');
         assert.equal(inputs.leg, 'rework');
+    });
+
+    test('auto rework: dangling scraped #N with a bridge 404 BODY (no throw) degrades to PR-anchored', function () {
+        // Live (dmd #266): the sync github_get_issue does NOT throw on 404 —
+        // it returns the REST error body. The existence probe must inspect
+        // the BODY, else the dangling scrape anchors gh-601 and the rework
+        // never touches the PR. AUTO path shape: machine-author gated, no
+        // consumeLabels (the rework leg clears the label on push).
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(93, { labels: ['agent:rework'], issueNumber: 601,
+                                     branch: 'ai/gh-266', author: 'ai-teammate' })],
+                issueLookupBody: '{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}'
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['agent:rework'], prMachineAuthor: true },
+              workflowFile: 'ai-teammate.yml',
+              inputs: { issue: '{issueNumber}', leg: 'rework',
+                        reason: 'sm: agent:rework (red CI or review CHANGES)' },
+              workflowRef: '{branch}', limit: 1, id: 'rework-on-red-ci' }
+        ] } });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'auto rework dispatches PR-anchored instead of gh-601');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.issue, '', 'bogus #601 anchor dropped — the PR under rework is the only sane anchor');
+        assert.equal(inputs.pr, '93');
+        assert.equal(inputs.leg, 'rework');
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'auto path does not consume the arm — the rework leg clears it on push');
+        assert.equal(sm.capturedTriggers[0].ref, 'ai/gh-266', 'leg still dispatches on the PR head');
+    });
+
+    test('auto review: dangling scraped #N with a bridge 404 BODY degrades to PR-anchored review', function () {
+        // Same root cause on the AUTO REVIEW leg (live: dmd #266, run
+        // 36332635090 — auto review dispatch anchored gh-601, scraped from
+        // the PR body referencing 'dm.ai #601', local issue missing). The
+        // fallback is engine-level: any issue-anchored leg on a PR-carrier
+        // item degrades to inputs.pr, and the factory guard's PR-anchored
+        // branch runs the review leg on pr-<N>.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(94, { labels: ['ai_developed'], issueNumber: 601,
+                                     branch: 'ai/gh-266' })],
+                issueLookupBody: '{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}'
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['ai_developed'] },
+              workflowFile: 'ai-teammate.yml',
+              inputs: { issue: '{issueNumber}', leg: 'review',
+                        reason: 'sm: green PR awaits review' },
+              workflowRef: '{branch}', limit: 1, id: 'review-after-dev' }
+        ] } });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'auto review dispatches PR-anchored instead of gh-601');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.issue, '');
+        assert.equal(inputs.pr, '94', 'the PR under review is the anchor');
+        assert.equal(inputs.leg, 'review', 'the guard PR-anchored branch runs the REVIEW leg by default');
+    });
+
+    test('auto review: scraped #N resolving to a REAL local issue keeps the issue anchor', function () {
+        // No regression for the healthy path: the bridge returns the issue
+        // JSON body (number present) → issue-anchored review dispatch.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(95, { labels: ['ai_developed'], issueNumber: 266,
+                                     branch: 'ai/gh-266' })],
+                issue: { number: 266, state: 'open' }
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['ai_developed'] },
+              workflowFile: 'ai-teammate.yml',
+              inputs: { issue: '{issueNumber}', leg: 'review',
+                        reason: 'sm: green PR awaits review' },
+              workflowRef: '{branch}', limit: 1, id: 'review-after-dev' }
+        ] } });
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.issue, '266', 'resolvable scrape keeps the legacy issue-anchored shape');
+        assert.equal(inputs.leg, 'review');
     });
 
     test('unarm_validation: stale validated PR drops ai_validating (refresh + re-validate follows)', function () {
