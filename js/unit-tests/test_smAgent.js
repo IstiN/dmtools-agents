@@ -1593,6 +1593,172 @@ suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', f
     });
 });
 
+suite('smAgent: red-head park + dry-run dispatch + conclusion grace (fa wave stall 2026-09-27)', function () {
+    // Live diagnosis (fa, 2026-09-27 evening): the oldest APPROVED PR was a
+    // guest whose head validation had FAILED — validate-armed kept
+    // re-dispatching CI on the unchanged red head every dup-guard window,
+    // hogging the limit-1 FIFO slot while nine green-latched approved PRs
+    // waited behind it for hours (no wave merge). Three fixes:
+    //  1. deferRedHead (validate-armed): a head whose latest concluded
+    //     dispatched verdict is FAILURE is parked — no dispatch, no arm,
+    //     the limit-1 window advances. Machine PRs re-enter on the new head
+    //     the rework leg pushes; guest PRs get one park comment per head.
+    //  2. dispatchCiWorkflow honors DRY (a dry SM tick really dispatched
+    //     CI, leaving an unarmed run whose verdict nobody could consume).
+    //  3. The dup-dispatch guard counts its 15-min grace from the prior
+    //     run's CONCLUSION, not creation.
+
+    var RULES = {
+        armed: { source: 'github', query: { type: 'pr', labels: ['pr_approved'],
+            notLabels: ['ai_validating'], notMergeState: ['BEHIND', 'DIRTY'], draft: false },
+            localAction: 'validate_pr', skipIfValidatedHead: true, deferRedHead: true,
+            limit: 1, id: 'validate-armed' }
+    };
+
+    function prItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved'], issueNumber: null, prNumber: n,
+                   draft: false, branch: 'feat/x', headSha: 'shaH', author: 'guest-human' };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+    function runsCli(opts) {
+        return function (cmd) {
+            if (cmd.command.indexOf('actions/workflows/') !== -1 && cmd.command.indexOf('/runs?') !== -1) {
+                var m = /head_sha=([^&"]+)/.exec(cmd.command);
+                if (m && m[1] === opts.run.head_sha) {
+                    return JSON.stringify({ workflow_runs: [opts.run] });
+                }
+                return JSON.stringify({ workflow_runs: [] });
+            }
+            return '';
+        };
+    }
+    function run(conclusion, headSha, createdMsAgo, updatedMsAgo) {
+        return { status: 'completed', conclusion: conclusion, head_sha: headSha,
+                 created_at: new Date(Date.now() - createdMsAgo).toISOString(),
+                 updated_at: new Date(Date.now() - updatedMsAgo).toISOString() };
+    }
+    function dispatched(cmdList) {
+        return cmdList.some(function (c) { return c.command.indexOf('gh workflow run') === 0; });
+    }
+
+    test('deferRedHead: guest PR with a red current head parks — no dispatch, no arm, one park comment', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(91, { headSha: 'shaRED' })],
+                prStatus: { checkConclusion: 'red' }
+            },
+            onCliExecute: runsCli({ run: run('failure', 'shaRED', 40 * 60000, 20 * 60000) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES.armed] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands), 'red verdict still current — CI must NOT re-dispatch on the same SHA');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no ai_validating arm — the slot is parked, not consumed');
+        assert.equal(sm.capturedPrComments.length, 1, 'guest PR gets exactly one park comment');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Validation red') !== -1, 'park marker');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('shaRED') !== -1, 'comment carries the head sha (per-head dedup key)');
+    });
+
+    test('deferRedHead: park comment is posted once per head (marker dedup)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(92, { headSha: 'shaRED' })],
+                prComments: [{ body: '🅿️ Validation red — PR parked — the current head `shaRED` failed validation earlier' }],
+                prStatus: { checkConclusion: 'red' }
+            },
+            onCliExecute: runsCli({ run: run('failure', 'shaRED', 40 * 60000, 20 * 60000) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES.armed] } });
+
+        assert.equal(sm.capturedPrComments.length, 0, 'existing marker for this head — no duplicate park comment');
+        assert.ok(!dispatched(sm.capturedCliCommands), 'still parked — still no dispatch');
+    });
+
+    test('deferRedHead: machine-authored red head defers without a park comment (rework owns the report)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(93, { headSha: 'shaRED', author: 'ai-teammate' })],
+                prStatus: { checkConclusion: 'red' }
+            },
+            onCliExecute: runsCli({ run: run('failure', 'shaRED', 40 * 60000, 20 * 60000) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES.armed] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands), 'machine PR on an unchanged red head — no wasted CI either');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no arm while the red is current');
+        assert.equal(sm.capturedPrComments.length, 0, 'machine PRs get no park comment — the fail path/rework owns reporting');
+    });
+
+    test('deferRedHead: a NEW head re-enters normally (dispatch + arm)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(94, { headSha: 'shaNEW', author: 'ai-teammate' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            // The old red run sits on the OLD sha — the new head has no verdict.
+            onCliExecute: runsCli({ run: run('failure', 'shaOLD', 40 * 60000, 20 * 60000) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES.armed] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands), 'new head — real validation dispatched');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
+            ['ai_validating'], 'armed for the fresh validation');
+    });
+
+    test('dispatchCiWorkflow honors DRY — a dry tick dispatches NO CI', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(95, { headSha: 'shaNEW' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: function () { return JSON.stringify({ workflow_runs: [] }); }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', dryRun: true,
+                                 rules: [RULES.armed] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands),
+            'live bug: the 18:24 "SM manual tick (dry)" really dispatched CI — dry must mean no side effects');
+    });
+
+    test('dup-dispatch guard grace counts from the run CONCLUSION (updated_at)', function () {
+        // Concluded 2 min ago (but created 40 min ago): within the
+        // post-conclusion visibility grace → skip re-dispatch.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(96, { labels: ['pr_approved', 'ai_validated'], headSha: 'shaG' })],
+                prStatus: { checkConclusion: 'green' }
+            },
+            onCliExecute: runsCli({ run: run('success', 'shaG', 40 * 60000, 2 * 60000) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES.armed] } });
+        assert.ok(!dispatched(sm.capturedCliCommands),
+            'verdict landed 2 min ago — inside the 15-min post-conclusion grace, no duplicate dispatch');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no arm either — the guard skipped before arming');
+
+        // Same run shape but concluded 20 min ago: grace expired → dispatch.
+        var sm2 = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(97, { headSha: 'shaG2' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: runsCli({ run: run('cancelled', 'shaG2', 45 * 60000, 20 * 60000) })
+        }));
+        sm2.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                  rules: [RULES.armed] } });
+        assert.ok(dispatched(sm2.capturedCliCommands),
+            'cancelled is no verdict and the grace expired 5 min after conclusion — re-dispatch allowed');
+    });
+});
+
 suite('smAgent: stamp check-run deep links (owner 2026-09-27)', function () {
     // Owner complaint (live on fa PR checks): bridge stamp check-runs
     // concluded with 'This check concluded as success' + the generic

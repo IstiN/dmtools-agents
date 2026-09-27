@@ -1117,6 +1117,16 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         function dispatchCiWorkflow(branchName) {
             var ciWorkflow = rule.ciWorkflow ||
                 ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml';
+            if (DRY) {
+                // Live bug (fa 2026-09-27): a DRY SM tick really dispatched
+                // CI — `gh workflow run` fired outside every dry guard. The
+                // unarmed real run then shadowed every later tick's
+                // duplicate-dispatch guard and no rule could consume its
+                // verdict (no ai_validating arm). DRY means NO side effects.
+                console.log('  🧪 [dry] validation dispatch skipped (gh workflow run ' +
+                            ciWorkflow + ' @ ' + branchName + ')');
+                return;
+            }
             cli_execute_command({
                 command: 'gh workflow run ' + ciWorkflow +
                          ' --repo ' + effectiveRepoInfo.owner + '/' +
@@ -1225,6 +1235,66 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                 ' validation — arm only, merge window proceeds on the existing green');
                     processedKeys.push(key);
                     continue;
+                }
+                // Red-current-head defer (owner 2026-09-27, live: fa wave
+                // stall — the oldest APPROVED PR was a guest whose head
+                // validation had FAILED; validate-armed kept re-dispatching
+                // CI on the unchanged red head every guard window, hogging
+                // the limit-1 FIFO slot while nine green-latched approved
+                // PRs waited behind it for hours). If THIS head's latest
+                // concluded dispatched verdict is FAILURE, the red verdict
+                // is still current — re-running CI on the same SHA cannot
+                // pass. Park the candidate: no dispatch, no arm, and the
+                // limit-1 window advances to the next approved PR.
+                // Machine-authored PRs re-enter as today: the rework leg
+                // pushes a new head and this head-SHA-keyed probe no longer
+                // matches. Guest PRs get one park comment per head (the
+                // machine cannot push for them — a human must act; the
+                // fail path has already reported the red separately).
+                if (rule.deferRedHead && vHead0 &&
+                    latestDispatchedVerdict(effectiveRepoInfo, vCiWf, vHead0) === 'failure') {
+                    var prMachineAuthor = machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, effectiveConfig);
+                    var isMachinePrForPark = !!prMachineAuthor && !!ticket.author &&
+                        String(ticket.author).toLowerCase() === String(prMachineAuthor).toLowerCase();
+                    if (!isMachinePrForPark) {
+                        var parkMarker = '🅿️ Validation red — PR parked';
+                        var alreadyParked = false;
+                        try {
+                            var parkCommentsRaw = github_get_pr_comments({
+                                workspace: effectiveRepoInfo.owner,
+                                repository: effectiveRepoInfo.repo,
+                                pullRequestId: ticket.prNumber
+                            });
+                            var parkCommentsObj = typeof parkCommentsRaw === 'string'
+                                ? JSON.parse(parkCommentsRaw) : (parkCommentsRaw || []);
+                            var parkCommentList = Array.isArray(parkCommentsObj)
+                                ? parkCommentsObj
+                                : (parkCommentsObj.comments || parkCommentsObj.items || []);
+                            alreadyParked = parkCommentList.some(function (c) {
+                                var b = String((c && c.body) || '');
+                                return b.indexOf(parkMarker) !== -1 &&
+                                    b.indexOf(String(vHead0)) !== -1;
+                            });
+                        } catch (eParkRead) { /* read failed — comment again is safe */ }
+                        if (!alreadyParked && !DRY) {
+                            try {
+                                github_create_comment({
+                                    workspace: effectiveRepoInfo.owner,
+                                    repository: effectiveRepoInfo.repo,
+                                    number: ticket.prNumber,
+                                    body: parkMarker + ' — the current head `' + vHead0 +
+                                        '` failed validation and the head has not moved. ' +
+                                        'Re-running CI on the same SHA cannot pass, so the merge ' +
+                                        'window skips this PR until the head moves (push a fix or ' +
+                                        'rebase). The failure itself is reported separately above.'
+                                });
+                            } catch (eParkComment) {
+                                console.warn('  ⚠️  park comment failed: ' + (eParkComment.message || eParkComment));
+                            }
+                        }
+                    }
+                    console.log('  🅿️  ' + key + ' red verdict still current on this head — parked, merge window advances');
+                    continue; // NOT processedKeys — the limit-1 slot must move on
                 }
                 // Superseded-head cleanup (owner 2026-09-23): any active
                 // dispatched run on an older head of THIS branch is pure
@@ -1813,7 +1883,16 @@ function hasActiveDispatchedRun(repoInfo, ciWorkflow, headSha) {
             if (r.status === 'queued' || r.status === 'in_progress' ||
                 r.status === 'waiting' || r.status === 'pending') return true;
             if (r.status === 'completed') {
-                var age = now - new Date(r.created_at).getTime();
+                // Grace from the run's CONCLUSION (updated_at), not its
+                // creation: the check-run visibility race only lasts ~15
+                // min after the verdict lands. Counting from created_at let
+                // a long-queued-then-cancelled/red run shadow re-dispatch
+                // far beyond its conclusion, and pinned the grace window to
+                // a point that had nothing to do with the verdict (live: fa
+                // wave stall 2026-09-27 — red heads could not re-validate
+                // for the whole created_at+15min span after a slow run).
+                var endTs = r.updated_at || r.created_at;
+                var age = now - new Date(endTs).getTime();
                 return age >= 0 && age < 15 * 60 * 1000;
             }
             return false;
@@ -1827,8 +1906,40 @@ function hasActiveDispatchedRun(repoInfo, ciWorkflow, headSha) {
 }
 
 
-function hasSuccessfulDispatchedRun(repoInfo, ciWorkflow, headSha) {
-    // Green-CI cover probe (rule flag skipIfGreenCi — used by
+function latestDispatchedVerdict(repoInfo, ciWorkflow, headSha) {
+    // Latest CONCLUDED verdict of a dispatched validation run on this exact
+    // head ('success' / 'failure' / ...), or null when none concluded.
+    // CANCELLED is never a verdict (a cancel leaves no signal — the
+    // dead-zone/re-dispatch rules own that state), so cancelled
+    // conclusions are skipped here. Fail CLOSED (null) on probe errors:
+    // callers must only PARK on an explicitly observed red verdict.
+    try {
+        var res = cli_execute_command({
+            command: 'gh api "repos/' + repoInfo.owner + '/' +
+                     repoInfo.repo +
+                     '/actions/workflows/' + ciWorkflow +
+                     '/runs?head_sha=' + headSha +
+                     '&event=workflow_dispatch&per_page=5"'
+        });
+        var runs = mcpParse((res || {}).output ||
+                            (res || {}).stdout || res);
+        var list = ((runs && runs.workflow_runs) || []).filter(function (r) {
+            return r.status === 'completed' && r.conclusion &&
+                r.conclusion !== 'cancelled';
+        });
+        if (!list.length) return null;
+        list.sort(function (a, b) {
+            return new Date(b.updated_at || b.created_at).getTime() -
+                   new Date(a.updated_at || a.created_at).getTime();
+        });
+        return list[0].conclusion;
+    } catch (e) {
+        console.warn('  ⚠️  verdict probe failed: ' + (e.message || e));
+        return null;
+    }
+}
+
+function hasSuccessfulDispatchedRun(repoInfo, ciWorkflow, headSha) {    // Green-CI cover probe (rule flag skipIfGreenCi — used by
     // revalidate-armed-green): a COMPLETED dispatched run with conclusion
     // 'success' on this exact head means CI already passed here. If the
     // mergeState is still BLOCKED then, the unmet required check belongs
