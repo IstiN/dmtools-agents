@@ -645,6 +645,19 @@ jobs:
           # events created with GITHUB_TOKEN do not trigger workflows.
           GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN || github.token }}
         run: |
+          # #542 mechanical guard: interpose the git push/commit guard shim at
+          # the FRONT of PATH before `dmtools run` so EVERY push path in the
+          # session is covered — both the fa agent's own shell tool (inherits
+          # the dmtools process env) and the JS pre/post-actions'
+          # cli_execute_command (PATH-resolved `git`). Refuses pushes to
+          # main/master/default branch and closing keywords in commit
+          # messages. Deliberately NOT written to $GITHUB_PATH: later workflow
+          # steps (session-branch persistence) push legitimately.
+          GIT_GUARD_BIN="${RUNNER_TEMP:-/tmp}/git-push-guard-bin"
+          mkdir -p "${GIT_GUARD_BIN}"
+          ln -sf "${GITHUB_WORKSPACE}/factory-agents/scripts/git-push-guard.sh" "${GIT_GUARD_BIN}/git"
+          export PATH="${GIT_GUARD_BIN}:${PATH}"
+          git --version  # resolves through the shim — proves the wiring
           # FULL session trace: FA_LOG_FILE tees every line fa prints to the
           # file, uploaded as an artifact below; dmtools mirrors child output
           # live to its own stderr, so the agent's work streams into the log.
