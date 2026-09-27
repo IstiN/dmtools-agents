@@ -32,7 +32,7 @@ Implement code changes based on ticket requirements including:
 
 For each such file found: **add the appropriate pattern to `.gitignore`** before finishing. The post-processing step runs `git add .` — every untracked file in the working tree will be staged and committed.
 
-DO NOT create git branches, commit, or push changes - this is handled by post-processing function
+DO NOT create git branches, commit, or push changes - this is handled by post-processing function. NEVER push to the default branch (`main`/`master`) — a git guard in your session hard-fails such pushes — and NEVER use closing keywords (`closes/fixes/resolves #N`) in commit messages; the PR body's squash-merge message owns issue closing.
 
 Write a short (no water words) development summary to outputs/response.md with the following:
   - **IMPORTANT** Any issues encountered or incomplete implementations

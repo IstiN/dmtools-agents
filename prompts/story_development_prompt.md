@@ -15,6 +15,10 @@ Implement the ticket requirements including code implementation and unit tests. 
 
 DO NOT create branches or push — focus only on code implementation. You must compile and run tests before finishing.
 
+🛑 HARD RULES (enforced mechanically by a git guard in your session — violations fail loudly):
+- NEVER push to the default/protected branch (`main`/`master`). Pushes — only ever to the PR head branch (the `ai/<ticket>` branch or the branch recorded in `input/<TICKET>/pr_info.md`) — are performed by the automated post-actions, not by you.
+- NEVER use closing keywords (`closes #N`, `fixes #N`, `resolves #N`) in commit messages. Issue-closing keywords belong to the PR body; the squash-merge message owns closing the issue. A premature keyword auto-closes the issue before the fix is validated and merged.
+
 Write `outputs/response.md` as the PR description:
 - Implementation approach and key decisions
 - Summary of files changed and why

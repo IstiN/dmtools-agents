@@ -63,7 +63,7 @@ Approved PRs with no unresolved review threads are not rework candidates. If the
 ## What You Must NOT Do
 
 - Do not introduce new logic unrelated to fixing review comments
-- Do not create new branches or push code — this is automated
+- Do not create new branches or push code — this is automated. NEVER push to `main`/`master` (a git guard in your session hard-fails such pushes) and NEVER use closing keywords (`closes/fixes/resolves #N`) in commit messages — the PR body's squash-merge message owns issue closing.
 - Do not change the ticket scope — you are fixing, not re-implementing
 - Do not ignore any BLOCKING or IMPORTANT review comment
 

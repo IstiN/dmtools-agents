@@ -171,6 +171,22 @@ echo "AI Agent Usage Name: ${AI_AGENT_USAGE_NAME}"
 # source and never returned before writing outputs/*.
 RESCUE_MARKER="$(start_output_rescue_marker)"
 
+# ── git push guard (mechanical, dmtools-agents#542) ─────────────────────────
+# Interpose a `git` shim at the front of PATH for the WHOLE agent subprocess
+# tree: the provider CLI (fa/claude/cursor/…) inherits it, so the LLM agent's
+# own shell-tool `git push` is intercepted, and the JS post-actions' pushes
+# (via cli_execute_command, PATH-resolved) go through it too. The shim
+# refuses pushes to protected branches (main/master/default) and commit
+# messages with closing keywords — prompts alone proved insufficient (the
+# gh-992 incident: crafted "(closes #992)" commit pushed straight to main).
+GIT_GUARD_DIR=""
+if [ -f "${SCRIPT_DIR}/git-push-guard.sh" ]; then
+  GIT_GUARD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/git-push-guard.XXXXXX")"
+  ln -sf "${SCRIPT_DIR}/git-push-guard.sh" "${GIT_GUARD_DIR}/git"
+  export PATH="${GIT_GUARD_DIR}:${PATH}"
+  echo "git push guard: armed (${GIT_GUARD_DIR}/git → scripts/git-push-guard.sh)"
+fi
+
 exit_code=0
 case "$PROVIDER" in
   claude-code)
@@ -203,5 +219,6 @@ esac
 # under `set -e`), so it's explicitly guarded with `|| true`.
 rescue_misplaced_outputs "$RESCUE_MARKER" || true
 rm -f "$RESCUE_MARKER"
+[ -n "${GIT_GUARD_DIR:-}" ] && rm -rf "${GIT_GUARD_DIR}" || true
 
 exit $exit_code
