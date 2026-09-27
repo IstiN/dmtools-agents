@@ -239,8 +239,35 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
 // issue number for the {issueNumber} input. Closing keywords first (GitHub's
 // own linking semantics), then a bare #N mention — the same body convention
 // findPr() relies on in the issue→pr direction. null when unlinked.
+//
+// #544: a '#N' preceded by a REPO QUALIFIER is a cross-repo reference, never
+// a local issue anchor — 'dm.ai #601', 'org/repo#N', 'org/repo #N' must NOT
+// resolve against the current repo (live: dmtools-dart PR #266 body 'Dart
+// port of dm.ai #601' scraped #601 → 'gh issue view 601' 404 → guard exit 1
+// → the whole SM cycle red every 15 min). Qualified mentions are stripped
+// before scraping; existence of what remains is verified at dispatch time
+// (smAgent localIssueExists), so dangling bare refs degrade the same way.
 function linkedIssueNumber(body) {
     var text = String(body || '');
+    // Strip repo-qualified mentions: a qualifier token (owner, repo, or
+    // owner/repo — word chars/dots/dashes, optionally slash-separated)
+    // before '#'. Only REAL qualifiers count — the token must contain a
+    // '.' or '/' ('dm.ai #601', 'org/repo#N', 'org/repo #603') or attach
+    // directly to the '#' ('word#N' is not autolinked by GitHub either);
+    // a plain English word followed by a spaced '#N' ('Related to #45')
+    // stays a LOCAL bare-mention ref. The boundary class keeps closing
+    // keywords ('Closes #123') intact — and the keyword check below is
+    // belt-and-suspenders for 'closes repo#N'.
+    text = text.replace(/(^|[^A-Za-z0-9_.\-/])([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?)([ \t]*)(#\d+)/g,
+        function (m0, boundary, qualifier, gap) {
+            if (/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)/i.test(qualifier)) {
+                return m0; // closing keyword, not a repo qualifier
+            }
+            if (gap === '' || qualifier.indexOf('.') !== -1 || qualifier.indexOf('/') !== -1) {
+                return boundary + ' '; // cross-repo mention — drop it
+            }
+            return m0; // spaced plain word — the #N stays a local ref
+        });
     var m = /(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i.exec(text);
     if (m) return parseInt(m[1], 10);
     m = /(^|[^0-9])#(\d+)([^0-9]|$)/.exec(text);

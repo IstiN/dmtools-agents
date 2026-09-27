@@ -83,6 +83,9 @@ function failSetup(tracker, ticketKey, inputFolder, message) {
             'h3. ❌ Rework Setup Failed\n\n' + truncateForComment(message)
         );
     } catch (e) {
+        // PR-anchored reworks (#544): a 'pr-N' key parses to no tracker
+        // ticket — the comment is best-effort, the failure marker file is
+        // the source of truth.
         console.error('Failed to post rework setup failure comment to ' + ticketKey + ':', e && e.toString ? e.toString() : String(e));
     }
     throw new Error(message);
@@ -93,6 +96,16 @@ function action(params) {
         var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
         var inputFolder = actualParams.inputFolderPath;
         var ticketKey = inputFolder.split('/').pop();
+        // PR-anchored rework (#544): a `pr-N` contextId makes the PR itself
+        // the anchor — the labeled PR has no local issue (guest/issue-less
+        // PR the owner labeled agent:rework). The PR number is taken
+        // directly, no findPRForTicket body/branch scrape; tracker status
+        // moves and ticket comments are skipped (a 'pr-N' key parses to no
+        // GitHub issue — comments would throw).
+        var anchorMatch = /^pr-(\d+)$/.exec(String(ticketKey || ''));
+        var jp0 = params.jobParams || params;
+        const prAnchor = (anchorMatch ? parseInt(anchorMatch[1], 10) : null) ||
+            (parseInt(jp0.prNumber || jp0.pr || '', 10) || null);
         // paramsForConfigLoad re-attaches params.ticket (sibling of jobParams in the
         // real Teammate execution path) so baseBranchResolverFnPath can key off the
         // ticket's fixVersion — see configLoader.js for details.
@@ -115,7 +128,7 @@ function action(params) {
         // already IS an "actively being worked" status (e.g. the default IN_REWORK) don't need
         // this extra transition; enable it for projects that bounce back to a "queued" status
         // instead (e.g. READY_FOR_DEVELOPMENT) so there is still a visible marker once work starts.
-        if (config.jira && config.jira.markReworkInDevelopment) {
+        if (config.jira && config.jira.markReworkInDevelopment && !prAnchor) {
             try {
                 tracker.moveToStatus(ticketKey, statuses.IN_DEVELOPMENT);
                 console.log('Moved ' + ticketKey + ' to ' + statuses.IN_DEVELOPMENT);
@@ -138,9 +151,15 @@ function action(params) {
             return { success: false, error: err };
         }
 
-        // Step 2: Find existing PR
-        var prSearchOptions = config.prSearchFn ? { prSearchFn: config.prSearchFn } : {};
-        const pr = gh.findPRForTicket(scm, ticketKey, prSearchOptions);
+        // Step 2: Find existing PR — PR-anchored (#544): the anchor IS the PR.
+        var pr;
+        if (prAnchor) {
+            console.log('PR-anchored rework: PR #' + prAnchor + ' (no ticket lookup, #544)');
+            pr = { number: prAnchor };
+        } else {
+            var prSearchOptions = config.prSearchFn ? { prSearchFn: config.prSearchFn } : {};
+            pr = gh.findPRForTicket(scm, ticketKey, prSearchOptions);
+        }
         if (!pr) {
             failSetup(
                 tracker,
@@ -233,8 +252,12 @@ function action(params) {
             console.warn('Failed to fetch questions (non-fatal):', e);
         }
 
-        // Step 8: Jira comment
-        try {
+        // Step 8: tracker comment — skipped for PR-anchored reworks (#544):
+        // a 'pr-N' key parses to no tracker ticket (the PR comment comes
+        // from the post action instead).
+        if (prAnchor) {
+            console.log('PR-anchored rework: skipping tracker comment (no ticket, #544)');
+        } else try {
             var jiraComment = 'h3. 🔧 Automated Rework Started\n\n' +
                 '*Pull Request*: [PR #' + prDetails.number + '|' + prDetails.html_url + ']\n' +
                 '*Branch*: {code}' + branchName + '{code}\n\n';
