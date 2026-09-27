@@ -78,6 +78,7 @@ var scmModule = require('./common/scm.js');
 var factoryStateModule = require('./factoryState.js');
 var buildEncodedConfigModule = require('./common/buildEncodedConfig.js');
 var machineAuthorModule = require('./common/machineAuthor.js');
+var smProviderModule = require('./common/smProvider.js');
 
 // Project config loaded once in action() — used as global default for rules without configPath
 var projectConfig = null;
@@ -1179,6 +1180,33 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                 ' — blocker is not this CI; skip re-dispatch');
                     continue;
                 }
+                // Latch-skip (owner 2026-09-27 — rule flag skipIfValidatedHead,
+                // set on validate-armed): the PR carries the ai_validated
+                // latch AND the CURRENT head still carries the
+                // completed-green dispatched validation run (head SHA ==
+                // the SHA the last green validation ran on — any silent-
+                // update refresh or push moves the SHA and this guard
+                // passes through to a real re-validation) AND the whole
+                // check rollup is green — re-running CI proves nothing.
+                // Arm ai_validating WITHOUT a dispatch; merge-validated
+                // consumes the arm on the existing green in the same tick.
+                // Dispatch-mode deployments only: the probe requires a real
+                // dispatched run (bridge-free stamped repos never match).
+                if (rule.skipIfValidatedHead && vHead0 &&
+                    (ticket.labels || []).indexOf('ai_validated') !== -1 &&
+                    hasSuccessfulDispatchedRun(effectiveRepoInfo, vCiWf, vHead0) &&
+                    validationRollupGreen(effectiveRepoInfo, ticket.prNumber)) {
+                    github_add_labels({
+                        workspace: effectiveRepoInfo.owner,
+                        repository: effectiveRepoInfo.repo,
+                        number: ticket.prNumber,
+                        labels: ['ai_validating']
+                    });
+                    console.log('  ⏭️  ' + key + ' latch-skip: head unchanged since the green' +
+                                ' validation — arm only, merge window proceeds on the existing green');
+                    processedKeys.push(key);
+                    continue;
+                }
                 // Superseded-head cleanup (owner 2026-09-23): any active
                 // dispatched run on an older head of THIS branch is pure
                 // waste — cancel before arming the fresh one.
@@ -1426,7 +1454,62 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             continue;
         }
 
-        if (rule.localAction === 'fail_validation') {
+        var sweepFailure = false;
+        if (rule.localAction === 'sweep_stale_validation') {
+            // Stale-arm sweeper (live: fa #999 — ai_validating held 7h with
+            // a concluded green CI and no verdict consumed; the ai_validating
+            // mutex stayed held forever. unarm-stale-validation covers BEHIND
+            // only). ai_validating + the head's dispatched validation run
+            // CONCLUDED (success or failure — CANCELLED is never a verdict)
+            // more than rule.staleMinutes ago (default 15 — the check-
+            // visibility/verdict race window; a fresher conclusion may still
+            // be consumed by the same-tick verdict rules) and the arm was
+            // never consumed → unarm. Success side: unarm + re-latch
+            // ai_validated (complete_validation parity — the merge window
+            // re-flows; validate-armed latch-skips on the unchanged head).
+            // Failure side: fall through to the standard fail path below
+            // (report + machine-only rework re-arm — fail_validation parity).
+            var sHead = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
+            var sCiWf = rule.ciWorkflow ||
+                ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml';
+            var sStaleMin = (typeof rule.staleMinutes === 'number' && rule.staleMinutes > 0)
+                ? rule.staleMinutes : 15;
+            var sRun = sHead ? newestDispatchedRun(effectiveRepoInfo, sCiWf, sHead) : null;
+            var sOld = false;
+            if (sRun && sRun.status === 'completed' &&
+                sRun.conclusion && sRun.conclusion !== 'cancelled') {
+                var sDone = Date.parse(sRun.updated_at || sRun.created_at || '');
+                sOld = !isNaN(sDone) && (Date.now() - sDone) > sStaleMin * 60 * 1000;
+            }
+            if (!sOld) {
+                console.log('  ⏭️  ' + key + ' sweep: no concluded-and-stale validation run' +
+                            ' on the head — arm stays');
+                continue;
+            }
+            if (sRun.conclusion === 'success') {
+                try {
+                    github_remove_label({
+                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                        number: ticket.prNumber, label: 'ai_validating'
+                    });
+                    github_add_labels({
+                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                        number: ticket.prNumber, labels: ['ai_validated']
+                    });
+                    console.log('  🧹 ' + key + ' stale arm swept (validation green, verdict never' +
+                                ' consumed) — unarmed + ai_validated re-latched');
+                    processedKeys.push(key);
+                } catch (e) {
+                    console.error('  ❌ sweep_stale_validation failed for ' + key + ': ' + (e.message || e));
+                }
+                continue;
+            }
+            sweepFailure = true; // concluded red → the standard fail path below owns it
+            console.log('  🧹 ' + key + ' stale arm swept (validation red, never consumed)' +
+                        ' — unarming + standard fail handling');
+        }
+
+        if (rule.localAction === 'fail_validation' || sweepFailure) {
             // Validation CI went red: unarm, tell the PR, and requeue the
             // machine loop by re-arming agent:rework on the linked issue
             // (the existing rework-on-red-ci rule picks it up). External
@@ -1753,6 +1836,53 @@ function hasSuccessfulDispatchedRun(repoInfo, ciWorkflow, headSha) {
         // Fail OPEN (dispatch): a probe error costs at most one extra run.
         console.warn('  ⚠️  green-cover probe failed: ' + (e.message || e));
         return false;
+    }
+}
+
+function validationRollupGreen(repoInfo, prNumber) {
+    // Latch-skip probe (rule flag skipIfValidatedHead — validate-armed):
+    // the WHOLE check rollup must be green — the dispatched run alone only
+    // covers the validation workflow; a red FOREIGN required check must
+    // force the normal validation path (the merge window gates on the full
+    // rollup too). Fail CLOSED: a probe error costs at most one redundant
+    // validation run, never a skipped one.
+    try {
+        var provider = smProviderModule.createSmProvider({
+            scm: { provider: 'github' },
+            repository: repoInfo
+        });
+        var st = provider.prStatus(prNumber);
+        return !!st && st.checkConclusion === 'green';
+    } catch (e) {
+        console.warn('  ⚠️  latch-skip rollup probe failed: ' + (e.message || e));
+        return false;
+    }
+}
+
+function newestDispatchedRun(repoInfo, ciWorkflow, headSha) {
+    // Newest dispatched CI run on this exact head (any status/conclusion),
+    // or null. Stale-arm sweeper probe — must FAIL CLOSED (null): an
+    // unwarranted unarm tears a live arm; a missed sweep retries next tick.
+    try {
+        var res = cli_execute_command({
+            command: 'gh api "repos/' + repoInfo.owner + '/' +
+                     repoInfo.repo +
+                     '/actions/workflows/' + ciWorkflow +
+                     '/runs?head_sha=' + headSha +
+                     '&event=workflow_dispatch&per_page=5"'
+        });
+        var runs = mcpParse((res || {}).output ||
+                            (res || {}).stdout || res);
+        var list = (runs && runs.workflow_runs) || [];
+        if (!list.length) return null;
+        list.sort(function (a, b) {
+            return Date.parse(b.updated_at || b.created_at || 0) -
+                   Date.parse(a.updated_at || a.created_at || 0);
+        });
+        return list[0];
+    } catch (e) {
+        console.warn('  ⚠️  stale-arm probe failed: ' + (e.message || e));
+        return null;
     }
 }
 
