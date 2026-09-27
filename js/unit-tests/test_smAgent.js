@@ -1649,10 +1649,10 @@ suite('smAgent: red-head park + dry-run dispatch + conclusion grace (fa wave sta
     test('deferRedHead: guest PR with a red current head parks — no dispatch, no arm, one park comment', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: {
-                items: [prItem(91, { headSha: 'shaRED' })],
+                items: [prItem(91, { headSha: 'ee55ff66aa' })],
                 prStatus: { checkConclusion: 'red' }
             },
-            onCliExecute: runsCli({ run: run('failure', 'shaRED', 40 * 60000, 20 * 60000) })
+            onCliExecute: runsCli({ run: run('failure', 'ee55ff66aa', 40 * 60000, 20 * 60000) })
         }));
         sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
                                  rules: [RULES.armed] } });
@@ -1661,17 +1661,17 @@ suite('smAgent: red-head park + dry-run dispatch + conclusion grace (fa wave sta
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'no ai_validating arm — the slot is parked, not consumed');
         assert.equal(sm.capturedPrComments.length, 1, 'guest PR gets exactly one park comment');
         assert.ok(sm.capturedPrComments[0].body.indexOf('Validation red') !== -1, 'park marker');
-        assert.ok(sm.capturedPrComments[0].body.indexOf('shaRED') !== -1, 'comment carries the head sha (per-head dedup key)');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('ee55ff66aa') !== -1, 'comment carries the head sha (per-head dedup key)');
     });
 
     test('deferRedHead: park comment is posted once per head (marker dedup)', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: {
-                items: [prItem(92, { headSha: 'shaRED' })],
-                prComments: [{ body: '🅿️ Validation red — PR parked — the current head `shaRED` failed validation earlier' }],
+                items: [prItem(92, { headSha: 'ee55ff66aa' })],
+                prComments: [{ body: '🅿️ Validation red — PR parked — the current head `ee55ff66aa` failed validation earlier' }],
                 prStatus: { checkConclusion: 'red' }
             },
-            onCliExecute: runsCli({ run: run('failure', 'shaRED', 40 * 60000, 20 * 60000) })
+            onCliExecute: runsCli({ run: run('failure', 'ee55ff66aa', 40 * 60000, 20 * 60000) })
         }));
         sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
                                  rules: [RULES.armed] } });
@@ -1683,10 +1683,10 @@ suite('smAgent: red-head park + dry-run dispatch + conclusion grace (fa wave sta
     test('deferRedHead: machine-authored red head defers without a park comment (rework owns the report)', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: {
-                items: [prItem(93, { headSha: 'shaRED', author: 'ai-teammate' })],
+                items: [prItem(93, { headSha: 'ee55ff66aa', author: 'ai-teammate' })],
                 prStatus: { checkConclusion: 'red' }
             },
-            onCliExecute: runsCli({ run: run('failure', 'shaRED', 40 * 60000, 20 * 60000) })
+            onCliExecute: runsCli({ run: run('failure', 'ee55ff66aa', 40 * 60000, 20 * 60000) })
         }));
         sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
                                  rules: [RULES.armed] } });
@@ -1756,6 +1756,164 @@ suite('smAgent: red-head park + dry-run dispatch + conclusion grace (fa wave sta
                                   rules: [RULES.armed] } });
         assert.ok(dispatched(sm2.capturedCliCommands),
             'cancelled is no verdict and the grace expired 5 min after conclusion — re-dispatch allowed');
+    });
+});
+
+suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', function () {
+    // Live: a guest PR cycled arm→CI red→park→silent-update→pending→re-arm
+    // every tick — the #550 red-park keys on the CURRENT head's verdict, and
+    // SM's own silent-update moved the head to a pending state, bypassing
+    // it; the validate-armed limit-1 slot stayed hostage while 10 latched
+    // PRs starved. Owner rule: 'у гостя если красное то следующий должны
+    // пробовать мержить'. Mechanism (owner spec):
+    //  1. silent-update decision point: a GUEST PR whose current head has
+    //     RED checks gets the validation_failed label (idempotent, the head
+    //     sha noted in a one-time comment).
+    //  2. validate-armed's query excludes the label (sm_github.json).
+    //  3. RESET: a head change whose LAST committer is NOT
+    //     'sm-silent-update' (an author push) removes the label; the SM's
+    //     own silent-update merges must NOT clear it. Machine-authored PRs
+    //     never get the label (fa pushes their heads).
+    //  4. validate_pr refuses to dispatch ANY validation CI while the
+    //     label is set (backstops validate-fresh too).
+
+    var RULES_VF = {
+        refresh: { source: 'github', query: { type: 'pr', mergeState: ['BEHIND'], draft: false },
+                   localAction: 'update_branch', limit: 5, id: 'silent-update-behind' },
+        armed: { source: 'github', query: { type: 'pr', labels: ['pr_approved'],
+            notLabels: ['ai_validating', 'validation_failed'],
+            notMergeState: ['BEHIND', 'DIRTY'], draft: false },
+            localAction: 'validate_pr', deferRedHead: true, limit: 1, id: 'validate-armed' }
+    };
+
+    function vfConfig(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+    function vfItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: [], prNumber: n, draft: false,
+                   branch: 'feat/vf-' + n, headSha: '11ab22cd3' + n, author: 'guest-human' };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+    function vfCli(opts) {
+        return function (cmd) {
+            var m = /\/commits\/([0-9a-fA-Z]+)"/.exec(cmd.command);
+            if (m && opts.committers && opts.committers[m[1]] !== undefined) {
+                return '"' + opts.committers[m[1]] + '"';
+            }
+            return '';
+        };
+    }
+    function vfDispatched(cmdList) {
+        return cmdList.some(function (c) { return c.command.indexOf('gh workflow run') === 0; });
+    }
+    function vfRefreshed(cmdList) {
+        return cmdList.some(function (c) { return c.command.indexOf('gh repo clone') !== -1; });
+    }
+
+    test('silent-update: guest with a RED head gets validation_failed (idempotent set, sha noted)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(201, { headSha: 'ee55ff66aa' })],
+                prStatus: { checkConclusion: 'red' }
+            },
+            onCliExecute: vfCli({})
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.indexOf('validation_failed') !== -1; }), 'park label set');
+        assert.equal(sm.capturedPrComments.length, 1, 'one park comment');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('validation_failed') !== -1, 'marker');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('ee55ff66aa') !== -1, 'head sha noted');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('NON-MACHINE push') !== -1,
+            'the comment states the author-push requirement');
+        assert.ok(vfRefreshed(sm.capturedCliCommands), 'the silent refresh itself still runs');
+    });
+
+    test('silent-update: an SM merge does NOT clear the label (last committer sm-silent-update)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(202, { labels: ['validation_failed'], headSha: 'aa11bb22cc' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({ committers: { aa11bb22cc: 'sm-silent-update' } })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'SM head movement must NOT un-park');
+        assert.equal(sm.capturedPrComments.length, 0, 'idempotent — no new comment');
+        assert.ok(vfRefreshed(sm.capturedCliCommands), 'refresh still runs');
+    });
+
+    test('silent-update: an AUTHOR PUSH clears the label and re-enters validation', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(203, { labels: ['validation_failed'], headSha: 'dd33ee44ff' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({ committers: { dd33ee44ff: 'real-dev' } })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
+            ['validation_failed'], 'label removed');
+        assert.equal(sm.capturedPrComments.length, 1, 'un-park comment');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('cleared') !== -1, 'clear marker');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('real-dev') !== -1, 'names the non-machine committer');
+        assert.ok(sm.capturedPrLabelAdds.length === 0 ||
+            !sm.capturedPrLabelAdds.some(function (a) { return a.labels.indexOf('validation_failed') !== -1; }),
+            'not re-labeled in the same pass — the fresh head gets a real validation chance');
+    });
+
+    test('silent-update: a MACHINE PR with a red head never gets the label', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(204, { author: 'ai-teammate', headSha: 'ee55ff66aa' })],
+                prStatus: { checkConclusion: 'red' }
+            },
+            onCliExecute: vfCli({})
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.indexOf('validation_failed') !== -1; }),
+            'machine-authored PRs keep the re-enter-on-new-head behavior — no label');
+        assert.equal(sm.capturedPrComments.length, 0, 'no park comment for machine PRs');
+    });
+
+    test('validate_pr: a labeled PR gets NO CI dispatch at all (validate-fresh backstop)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(205, { labels: ['pr_approved', 'validation_failed'], headSha: 'ff6600aa11' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: function () { return JSON.stringify({ workflow_runs: [] }); }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.armed] } });
+
+        assert.ok(!vfDispatched(sm.capturedCliCommands),
+            'validation_failed — NO validation CI trigger until a non-machine push clears it');
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.indexOf('ai_validating') !== -1; }), 'no arm either');
+    });
+
+    test('sm_github.json: validate-armed excludes validation_failed from the arm queue', function () {
+        var raw = file_read({ path: 'sm_github.json' });
+        var cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || cfg.rules || [];
+        var armed = rules.filter(function (r) { return r.id === 'validate-armed'; });
+        assert.equal(armed.length, 1, 'exactly one validate-armed rule');
+        var notLabels = (armed[0].query && armed[0].query.notLabels) || [];
+        assert.ok(notLabels.indexOf('validation_failed') !== -1,
+            'parked guests never enter the arm queue (query-level exclusion)');
+        assert.ok(notLabels.indexOf('ai_validating') !== -1, 'mutex exclusion preserved');
     });
 });
 
