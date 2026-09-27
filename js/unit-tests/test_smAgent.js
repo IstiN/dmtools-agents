@@ -179,6 +179,13 @@ function makeSmAgent(opts) {
         smMocks.github_get_pr = function () {
             return JSON.stringify(opts.github.pr || { number: 1, body: opts.github.prBody || '' });
         };
+        // #544: linked-issue existence probe — a scraped #N that 404s
+        // (cross-repo/dangling) must degrade to a PR-anchored dispatch.
+        smMocks.github_get_issue = function (issueOpts) {
+            if (opts.github.issueLookupError) throw new Error(opts.github.issueLookupError);
+            if (opts.github.onIssueLookup) opts.github.onIssueLookup(issueOpts && issueOpts.issueNumber);
+            return opts.github.issue || { number: issueOpts && issueOpts.issueNumber };
+        };
         smMocks.github_get_pr_comments = function () {
             return JSON.stringify(opts.github.prComments || []);
         };
@@ -935,7 +942,39 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.deepEqual(sm.capturedPrLabelRemoves[0].labels, ['agent:rework']);
     });
 
-    test('rework-on-label: PR without a linked issue is skipped (no pr-N pseudo-anchor)', function () {
+    test('rework-on-label: PR with a linked issue dispatches issue-anchored after the local-existence check (#544)', function () {
+        // The body scrape (githubSource.linkedIssueNumber) returns a number;
+        // before anchoring the dispatch smAgent verifies via github_get_issue
+        // that it is an EXISTING LOCAL issue. A resolvable one keeps the
+        // legacy issue-anchored shape byte-identical.
+        var lookedUp = [];
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(89, { labels: ['agent:rework'], issueNumber: 555, author: 'some-human' })],
+                onIssueLookup: function (n) { lookedUp.push(n); }
+            }
+        }));
+        // Wire the probe through the capture (the mock default returns success).
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['agent:rework'] },
+              workflowFile: 'ai-teammate.yml',
+              inputs: { issue: '{issueNumber}', leg: 'rework',
+                        reason: 'sm: agent:rework label on the PR (manual rework request)' },
+              consumeLabels: ['agent:rework'], limit: 1, id: 'rework-on-label' }
+        ] } });
+
+        assert.deepEqual(lookedUp, [555], 'local existence verified via github_get_issue before anchoring');
+        assert.equal(sm.capturedTriggers.length, 1, 'existing local issue → issue-anchored dispatch');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.issue, '555');
+        assert.equal(inputs.leg, 'rework');
+        assert.equal(inputs.pr || '', '', 'issue-anchored dispatch carries no pr input');
+    });
+
+    test('rework-on-label: PR without a linked issue dispatches PR-anchored (#544 owner rule 3)', function () {
+        // Guest/issue-less PR the owner labeled agent:rework — the anchor is
+        // the PR itself (inputs.pr), the factory guard runs the rework leg
+        // on pr-<N>. The request label is still consumed on dispatch.
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: { items: [prItem(91, { labels: ['agent:rework'], issueNumber: null })] }
         }));
@@ -946,8 +985,39 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
               consumeLabels: ['agent:rework'], limit: 1, id: 'rework-on-label' }
         ] } });
 
-        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch without an issue anchor');
-        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'label stays — nothing consumed');
+        assert.equal(sm.capturedTriggers.length, 1, 'PR-anchored rework dispatches for an issue-less PR');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.issue, '', 'no issue anchor — empty, never a pr-N pseudo-anchor');
+        assert.equal(inputs.pr, '91', 'the PR is the anchor');
+        assert.equal(inputs.leg, 'rework');
+        assert.equal(sm.capturedPrLabelRemoves.length, 1, 'the request label is consumed');
+        assert.equal(sm.capturedPrLabelRemoves[0].number, 91);
+        assert.deepEqual(sm.capturedPrLabelRemoves[0].labels, ['agent:rework']);
+    });
+
+    test('rework-on-label: dangling scraped #N (not a local issue) degrades to PR-anchored (#544)', function () {
+        // The bare-#N scrape survived the cross-repo filter but the number
+        // does not exist locally (deleted issue / ref to another repo the
+        // qualifier missed). github_get_issue 404 → PR-anchored fallback —
+        // the guard never sees a bogus issue number.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(92, { labels: ['agent:rework'], issueNumber: 601 })],
+                issueLookupError: 'GraphQL: Could not resolve to an issue or pull request with the number of 601'
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['agent:rework'] },
+              workflowFile: 'ai-teammate.yml',
+              inputs: { issue: '{issueNumber}', leg: 'rework' },
+              consumeLabels: ['agent:rework'], limit: 1, id: 'rework-on-label' }
+        ] } });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'fallback dispatches instead of crashing the cycle');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.issue, '', 'bogus #601 anchor dropped');
+        assert.equal(inputs.pr, '92');
+        assert.equal(inputs.leg, 'rework');
     });
 
     test('unarm_validation: stale validated PR drops ai_validating (refresh + re-validate follows)', function () {

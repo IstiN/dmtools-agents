@@ -691,7 +691,43 @@ suite('sm github source', function () {
         items.forEach(function (i) { byPr[i.prNumber] = i.issueNumber; });
         assert.equal(byPr[91], 123, 'closing keyword resolves');
         assert.equal(byPr[92], 45, 'bare #N mention resolves (findPr convention)');
-        assert.equal(byPr[93], null, 'no reference → null (dispatch skips loudly)');
+        assert.equal(byPr[93], null, 'no reference → null (dispatch falls back to PR-anchored, #544)');
+    });
+
+    test('pr rules: linked issue — cross-repo qualified #N refs resolve to null (#544)', function () {
+        // Live incident (dmtools-dart PR #266, 2026-09-27): the body
+        // 'Dart port of dm.ai #601' scraped #601 as a LOCAL anchor →
+        // 'gh issue view 601' 404 → guard exit 1 → the whole SM cycle red
+        // every 15 min. A '#N' preceded by a repo qualifier ('dm.ai #601',
+        // 'org/repo#N', 'org/repo #N') is a CROSS-repo reference and must
+        // never resolve against the current repo. Existence of a remaining
+        // bare ref is verified at dispatch time (smAgent localIssueExists).
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 201, labels: [{ name: 'agent:rework' }], draft: false,
+                      body: 'Dart port of dm.ai #601' },
+                    { number: 202, labels: [{ name: 'agent:rework' }], draft: false,
+                      body: 'Ports org/repo#602 to this codebase' },
+                    { number: 203, labels: [{ name: 'agent:rework' }], draft: false,
+                      body: 'Upstream org/repo #603 changed the API' },
+                    { number: 204, labels: [{ name: 'agent:rework' }], draft: false,
+                      body: 'Follow-up of (#604) — parenthesized local ref stays local' },
+                    { number: 205, labels: [{ name: 'agent:rework' }], draft: false,
+                      body: 'Bumps dep after dm.ai #605; fixes #78' }
+                ];
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:rework'] }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        var byPr = {};
+        items.forEach(function (i) { byPr[i.prNumber] = i.issueNumber; });
+        assert.equal(byPr[201], null, "'dm.ai #601' — repo-qualified ref is not a local anchor");
+        assert.equal(byPr[202], null, "'org/repo#602' — qualified ref without space is not local");
+        assert.equal(byPr[203], null, "'org/repo #603' — qualified ref with space is not local");
+        assert.equal(byPr[204], 604, "'(#604)' — parenthesized bare ref stays a local anchor");
+        assert.equal(byPr[205], 78, 'cross-repo mention stripped, local closing keyword still wins');
     });
 
     test('issue rules: prMachineAuthor reads the linked PR author (prStatus)', function () {

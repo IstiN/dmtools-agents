@@ -224,7 +224,7 @@
           "workflowRef": "{branch}"
         },
         {
-          "description": "Manual rework request: agent:rework label on the PR itself -> rework on demand, ANY author (a human asked explicitly). Dispatches the issue-anchored rework leg on the linked issue (closing-keyword/#N body reference); the PR label is consumed on dispatch so the next tick does not re-fire. PRs without a linked issue are skipped loudly. workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
+          "description": "Manual rework request: agent:rework label on the PR itself -> rework on demand, ANY author (owner override: a manual label by a write/admin actor fires even on guest PRs). Dispatches the issue-anchored rework leg on the linked issue when the scrape resolves to an EXISTING LOCAL issue (verified via github_get_issue); when the PR has no valid local issue (cross-repo/dangling ref, issue-less PR) falls back to a PR-anchored rework dispatch (inputs.pr, guard runs the rework leg on pr-<N>) instead of crashing (#544). The PR label is consumed on dispatch so the next tick does not re-fire. workflowRef={branch}: the leg runs on the PR head.",
           "source": "github",
           "query": {
             "type": "pr",

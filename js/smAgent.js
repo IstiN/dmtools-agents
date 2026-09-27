@@ -305,6 +305,28 @@ function isWorkflowBudgetExhausted(rule, effectiveConfig, workflowBudget, repoIn
     return workflowBudget.remaining <= 0;
 }
 
+// True when `issueNumber` resolves to an existing LOCAL issue in repoInfo
+// (#544): the body-scrape path (githubSource.linkedIssueNumber) already skips
+// repo-qualified cross-repo refs, but a BARE '#N' can still dangle (deleted
+// issue, or a ref pointing at a repo the qualifier missed). Anchoring a
+// dispatch on such a number 404s in the factory guard — verify existence
+// here (github_get_issue, try/catch) and let the caller degrade to a
+// PR-anchored dispatch. Forges/runtimes without the github_get_issue tool
+// skip the check and trust the scrape (legacy behavior, unchanged).
+function localIssueExists(repoInfo, issueNumber) {
+    if (typeof github_get_issue !== 'function') return true;
+    try {
+        github_get_issue({
+            workspace: repoInfo.owner,
+            repository: repoInfo.repo,
+            issueNumber: issueNumber
+        });
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
 function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBudget, item) {
     var workflowFile = rule.workflowFile || 'ai-teammate.yml';
     // workflowRef may reference the matched item: '{branch}' dispatches the
@@ -348,22 +370,52 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
             var it = item || {};
             // {issueNumber} on a PR-carrier item without a linked issue must
             // NOT fall back to the ticket key — dispatching issue='pr-N'
-            // breaks the factory guard's anchor validation. Skip loudly.
+            // breaks the factory guard's anchor validation.
             var needsIssue = Object.keys(rule.inputs).some(function (k) {
                 return String(rule.inputs[k]).indexOf('{issueNumber}') !== -1;
             });
-            if (needsIssue && (it.issueNumber === undefined || it.issueNumber === null)) {
-                console.log('  ⏭️  ' + ticketKey + ' skipped (rule "' + (rule.id || '') +
-                    '" needs {issueNumber} but the PR links no issue)');
-                return false;
+            // #544: the linked issue on a PR-carrier item came from a body
+            // scrape — verify it resolves to an EXISTING LOCAL issue before
+            // anchoring the dispatch on it. A cross-repo/dangling ref
+            // ('dm.ai #601') would 404 in the factory guard.
+            var issueNumber = (it.issueNumber === undefined || it.issueNumber === null)
+                ? null : it.issueNumber;
+            if (needsIssue && issueNumber !== null && it.prNumber) {
+                if (!localIssueExists(repoInfo, issueNumber)) {
+                    console.log('  ⚠️  #' + issueNumber + ' scraped from PR #' + it.prNumber +
+                        ' does not exist in ' + repoInfo.owner + '/' + repoInfo.repo +
+                        ' (cross-repo or dangling ref) — not a local anchor (#544)');
+                    issueNumber = null;
+                }
+            }
+            var prAnchoredFallback = false;
+            if (needsIssue && issueNumber === null) {
+                // #544 owner rule 3 (PR-only anchor): the labeled PR has no
+                // resolvable LOCAL issue — anchor the leg on the PR itself
+                // (inputs.pr) instead of skipping. Covers guest/issue-less
+                // PRs: a drive-by PR the owner labels agent:rework MUST be
+                // reworkable. The factory guard's PR-anchored branch runs
+                // the rework leg on pr-<N>.
+                if (it.prNumber) {
+                    prAnchoredFallback = true;
+                    console.log('  🔀 ' + ticketKey + ' links no local issue — dispatching PR-anchored instead (#544)');
+                } else {
+                    console.log('  ⏭️  ' + ticketKey + ' skipped (rule "' + (rule.id || '') +
+                        '" needs {issueNumber} but the item links no issue and has no PR anchor)');
+                    return false;
+                }
             }
             inputs = {};
             Object.keys(rule.inputs).forEach(function (k) {
                 inputs[k] = String(rule.inputs[k])
                     .replace(/\{key\}/g, String(ticketKey))
-                    .replace(/\{issueNumber\}/g, String(it.issueNumber !== undefined && it.issueNumber !== null ? it.issueNumber : ticketKey))
+                    .replace(/\{issueNumber\}/g, String(issueNumber !== null ? issueNumber : (prAnchoredFallback ? '' : ticketKey)))
                     .replace(/\{prNumber\}/g, String(it.prNumber || ''));
             });
+            if (prAnchoredFallback) {
+                inputs.issue = '';
+                inputs.pr = String(it.prNumber);
+            }
         } else {
             inputs = {
                 concurrency_key: concurrencyKey,

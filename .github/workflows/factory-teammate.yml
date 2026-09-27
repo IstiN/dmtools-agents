@@ -134,6 +134,11 @@ jobs:
           ASSIGNEES: ${{ join(github.event.issue.assignees.*.login, ' ') }}
           LABELS: ${{ join(github.event.issue.labels.*.name, ' ') }}
           ACTOR: ${{ github.event.action || github.event_name }}
+          # #544: the `labeled` event sender — the owner-override gate checks
+          # its repo permission before honoring a manual agent:rework.
+          # Empty for schedule-scan dispatches (SM ticks): the label is
+          # trusted as-is there (see rework_override_ok below).
+          SENDER: ${{ github.event.sender.login || '' }}
           INPUT_LEG: ${{ inputs.leg }}
           INPUT_REASON: ${{ inputs.reason }}
           # The assignee gate below compares against the machine login.
@@ -172,14 +177,63 @@ jobs:
           RUNNER_REWORK="$(echo "$ovr" | cut -f4)"
           echo "→ runners (from .dmtools/config.js): bug=${RUNNER_BUG:--} story=${RUNNER_STORY:--} review=${RUNNER_REVIEW:--} rework=${RUNNER_REWORK:--}"
 
-          # ── PR-anchored dispatch (#687): the PR is the anchor; only the
-          # review leg is defined for it. The agent scripts derive the PR
-          # number from the pr-N contextId; verdict + labels land on the PR.
+          # Owner override gate (#544 owner rule, issue comment 3): a MANUAL
+          # agent:rework label IS the explicit override — it fires rework on
+          # ANY PR (machine or guest, with or without a local issue). But the
+          # machine NEVER self-triggers rework on guest PRs, and a random
+          # external labeler must not burn factory tokens. Where the
+          # `labeled` event sender is known, gate the override on its repo
+          # permission (write/admin/maintain). Schedule-scan dispatches and
+          # non-labeled events carry no meaningful actor — the label is
+          # trusted as-is (the SM consumed/verified it upstream).
+          rework_override_ok() {
+            if [ "$ACTOR" != "labeled" ] || [ -z "$SENDER" ]; then
+              return 0
+            fi
+            perm="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$SENDER/permission" -q .permission 2>/dev/null || true)"
+            case "$perm" in
+              admin|maintain|write) return 0 ;;
+              *)
+                echo "::warning::agent:rework by '$SENDER' (permission: ${perm:-none}) — the owner override requires write/admin; skipping (never fails the cycle, #544)"
+                return 1
+                ;;
+            esac
+          }
+
+          # ── PR-anchored dispatch (#687): the PR is the anchor. Review was
+          # the only leg defined for it — #544 extends the branch to REWORK:
+          # a labeled PR with no resolvable LOCAL issue anchors on the PR
+          # itself (pr-<N>, owner rule 3) and the rework runner derives its
+          # context from the PR (review findings, failing checks).
           if [ -n "$PR_NUMBER" ]; then
-            state="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state -q .state)"
+            state="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state -q .state 2>/dev/null || true)"
+            if [ -z "$state" ]; then
+              # #544 rule 2: an unresolvable anchor is a warn-and-skip —
+              # never exit 1. One bad number must not stall the machine loop.
+              echo "::warning::PR #$PR_NUMBER could not be resolved in $GITHUB_REPOSITORY — skipping (clean no-op, #544)"
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             if [ "$state" != "OPEN" ]; then
               echo "run=false" >> "$GITHUB_OUTPUT"
               echo "→ PR #$PR_NUMBER is ${state} — not for the agent"
+              exit 0
+            fi
+            leg="$INPUT_LEG"
+            if [ -z "$leg" ] && echo "$INPUT_REASON" | grep -qi 'rework'; then
+              leg="rework"
+            fi
+            if [ "$leg" = "rework" ]; then
+              if ! rework_override_ok; then
+                echo "run=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "run=true" >> "$GITHUB_OUTPUT"
+              echo "runner=$RUNNER_REWORK" >> "$GITHUB_OUTPUT"
+              echo "config=factory-agents/pr_rework.json" >> "$GITHUB_OUTPUT"
+              echo "kind=rework" >> "$GITHUB_OUTPUT"
+              echo "anchor=pr-${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+              echo "→ PR-anchored REWORK of #$PR_NUMBER (reason=${INPUT_REASON:-<none>}, #544)"
               exit 0
             fi
             echo "run=true" >> "$GITHUB_OUTPUT"
@@ -212,8 +266,16 @@ jobs:
           if [ -n "$INPUT_LEG" ]; then
             echo "→ dispatch: leg=$INPUT_LEG reason=${INPUT_REASON:-<none>}"
           fi
-          # Closed issues are terminal: no agent runs on them.
-          state="$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json state -q .state)"
+          # Closed issues are terminal: no agent runs on them. #544 rule 2:
+          # a FAILED resolution (404 — missing issue or cross-repo ref like
+          # 'dm.ai #601') is a warn-and-skip, never exit 1 — one bad anchor
+          # must not turn the whole SM cycle red every 15 min.
+          state="$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json state -q .state 2>/dev/null || true)"
+          if [ -z "$state" ]; then
+            echo "::warning::issue #$NUMBER could not be resolved in $GITHUB_REPOSITORY (missing or cross-repo ref) — skipping this leg (clean no-op, #544)"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$state" != "OPEN" ]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "→ issue #$NUMBER is ${state} — not for the agent"
@@ -246,7 +308,13 @@ jobs:
             # status:In Rework = a rework leg already runs/ran — its own
             # status transition echoes back as a `labeled` event and would
             # re-derive the same leg on top of itself.
-            runner="$RUNNER_REWORK"
+            # #544: manual agent:rework is the owner override — it fires
+            # rework even from a `labeled` event, but only when the labeler
+            # has write/admin (see rework_override_ok). Without permission
+            # the override is ignored (runner stays empty → clean skip).
+            if rework_override_ok; then
+              runner="$RUNNER_REWORK"
+            fi
           elif echo "$LABELS" | grep -qw "agent:review"; then
             # status:In Review is NOT an in-flight marker here — the DEV leg
             # sets it as the "ready for review" invitation, so blocking on it
@@ -881,15 +949,23 @@ jobs:
 
       - name: Close the rework cycle (rework runs only)
         # Symmetric strip: a stale agent:rework would silently swallow every
-        # later CI-failure re-arm (and any human re-label).
+        # later CI-failure re-arm (and any human re-label). #544: on
+        # PR-anchored rework the label lives on the PR, not on an issue.
         if: always() && contains(needs.guard.outputs.runner, 'rework')
         env:
           GH_TOKEN: ${{ github.token }}
           NUMBER: ${{ inputs.issue }}
+          PR_NUMBER: ${{ inputs.pr }}
         run: |
-          gh issue edit "$NUMBER" --repo "${{ github.repository }}" \
-            --remove-label "agent:rework" || true
-          echo "→ rework cycle closed (agent:rework removed)"
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr edit "$PR_NUMBER" --repo "${{ github.repository }}" \
+              --remove-label "agent:rework" || true
+            echo "→ rework cycle closed (agent:rework removed from PR #$PR_NUMBER)"
+          else
+            gh issue edit "$NUMBER" --repo "${{ github.repository }}" \
+              --remove-label "agent:rework" || true
+            echo "→ rework cycle closed (agent:rework removed)"
+          fi
 
       - name: Persist fa project memory into the repository
         # fa project memory (.fah/memory) committed back = agent knowledge
