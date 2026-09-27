@@ -20,13 +20,23 @@
 # linked PR by the review threads.
 name: 'AI Teammate'
 
+# Run title carries the EFFECTIVE anchor (owner 2026-09-27, live: dmd run
+# 36333172145): a PR-anchored SM dispatch (#544/#687 — inputs.pr set,
+# inputs.issue empty) must title '▶ rework (SM) · pr-266', never the
+# malformed '▶ rework (SM) · gh- · gh-: '. (inputs.pr || '') guards the
+# label-event path, where inputs are null — null != '' would be TRUE and
+# render 'pr-' for ordinary issue events.
 run-name: >-
   ${{ github.event_name == 'workflow_dispatch' &&
-      format('▶ {0} (SM) · gh-{1}', github.event.inputs.leg, github.event.inputs.issue) ||
+      format('▶ {0} (SM) · {1}', github.event.inputs.leg,
+        (github.event.inputs.pr || '') != '' && format('pr-{0}', github.event.inputs.pr)
+        || format('gh-{0}', github.event.inputs.issue)) ||
       github.event.label.name == 'agent:rework' && '🔧 rework' ||
       github.event.label.name == 'agent:review' && '🔍 review' ||
       '⚒️ dev' }}
-  · gh-${{ github.event.issue.number || github.event.inputs.issue }}: ${{ github.event.issue.title }}
+  · ${{ (github.event.inputs.pr || '') != '' && format('pr-{0}', github.event.inputs.pr)
+      || format('gh-{0}', github.event.issue.number || github.event.inputs.issue) }}${{
+      github.event.issue.title && format(': {0}', github.event.issue.title) || '' }}
 
 on:
   issues:
@@ -34,21 +44,31 @@ on:
   workflow_dispatch:
     inputs:
       issue:
-        description: 'Issue number to run the agent on'
-        required: true
-        type: number
+        description: 'Issue number to run the agent on (empty for PR-anchored runs, #687)'
+        required: false
+        type: string
+        default: ''
       leg:
         description: 'Which leg to run'
         required: true
         type: choice
         options: [dev, review, rework]
       reason:
-        description: 'Why this dispatch (audit trail)'
+        description: 'Why this dispatch (audit trail, shown in logs)'
         required: false
         type: string
+      pr:
+        description: 'PR number for PR-anchored runs (#544/#687) — the SM dispatches review/rework with pr instead of issue when the PR has no resolvable LOCAL issue'
+        required: false
+        type: string
+        default: ''
 
 concurrency:
-  group: ai-teammate-issue-${{ github.event.issue.number || github.event.inputs.issue }}
+  # PR-anchored dispatches (#544/#687) carry no issue — fall back to the pr
+  # input so each PR keeps its OWN group ('ai-teammate-issue-pr-266');
+  # without it every PR-anchored run shares the empty group and serializes
+  # across unrelated PRs.
+  group: ai-teammate-issue-${{ github.event.issue.number || github.event.inputs.issue || format('pr-{0}', github.event.inputs.pr) }}
   cancel-in-progress: false
 
 permissions:
