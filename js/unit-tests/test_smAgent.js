@@ -220,6 +220,15 @@ function makeSmAgent(opts) {
             './common/scm.js': mockScmModule,
             './common/buildEncodedConfig.js': buildEncodedConfigModule,
             './common/machineAuthor.js': machineAuthorModule,
+            './common/smProvider.js': {
+                createSmProvider: function () {
+                    return {
+                        prStatus: function () {
+                            return (opts.github && opts.github.prStatus) || null;
+                        }
+                    };
+                }
+            },
             './factoryState.js': loadModule('js/factoryState.js', makeRequire({}), {}),
         }),
         smMocks
@@ -1323,6 +1332,177 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
 
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'fail-closed: no rework arm without a machine login');
         assert.equal(sm.capturedPrComments.length, 1, 'the report still posts');
+    });
+});
+
+suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', function () {
+    // Latch-skip: an approved PR whose head did NOT move since its green
+    // validation (ai_validated latch + a completed-green dispatched run on
+    // the current SHA + green rollup) must NOT re-run CI — validate-armed
+    // arms ai_validating without a dispatch and merge-validated consumes the
+    // arm on the existing green. Sweeper: an ai_validating arm whose head's
+    // validation run concluded (success or failure) staleMinutes ago and was
+    // never consumed gets unarmed — success re-latches ai_validated, failure
+    // runs the standard fail path.
+
+    var RULES = {
+        validateSkip: { source: 'github', query: { type: 'pr', labels: ['pr_approved'],
+            notLabels: ['ai_validating'], notMergeState: ['BEHIND', 'DIRTY'], draft: false },
+            localAction: 'validate_pr', skipIfValidatedHead: true, limit: 1, id: 'validate-armed' },
+        sweep: { source: 'github', query: { type: 'pr', labels: ['ai_validating'], draft: false },
+            localAction: 'sweep_stale_validation', staleMinutes: 15, limit: 10, id: 'sweep-stale-validating' }
+    };
+
+    function prItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved'], issueNumber: null, prNumber: n, draft: false };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    // Completed dispatched run 3h ago (outside every fresh-run window).
+    // The mock filters by head_sha exactly like the real API endpoint does.
+    function runsCli(opts) {
+        return function (cmd) {
+            if (cmd.command.indexOf('actions/workflows/') !== -1 && cmd.command.indexOf('/runs?') !== -1) {
+                var m = /head_sha=([^&"]+)/.exec(cmd.command);
+                if (m && m[1] === opts.run.head_sha) {
+                    return JSON.stringify({ workflow_runs: [opts.run] });
+                }
+                return JSON.stringify({ workflow_runs: [] });
+            }
+            return '';
+        };
+    }
+    function oldRun(conclusion, headSha) {
+        var t = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+        return { status: 'completed', conclusion: conclusion, head_sha: headSha,
+                 created_at: t, updated_at: t };
+    }
+    function dispatched(cmdList) {
+        return cmdList.some(function (c) { return c.command.indexOf('gh workflow run') === 0; });
+    }
+
+    test('validate-armed: latch-skip — unchanged validated head arms WITHOUT re-running CI', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(81, { labels: ['pr_approved', 'ai_validated'], branch: 'feat/v', headSha: 'sha111' })],
+                prStatus: { checkConclusion: 'green' },
+            },
+                onCliExecute: runsCli({ run: oldRun('success', 'sha111') })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.validateSkip] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands), 'NO CI re-dispatch — the existing green covers the head');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
+            ['ai_validating'], 'arm only — merge-validated consumes it on the existing green');
+    });
+
+    test('validate-armed: moved head (no green run on the new SHA) → real validation dispatched', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(82, { labels: ['pr_approved', 'ai_validated'], branch: 'feat/w', headSha: 'shaNEW' })],
+                prStatus: { checkConclusion: 'green' },
+                // The green run sits on the OLD sha — the new head has nothing.
+            },
+                onCliExecute: runsCli({ run: oldRun('success', 'shaOLD') })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.validateSkip] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands),
+            'head moved — the latch-skip must NOT apply; CI re-runs on the fresh head');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
+            ['ai_validating'], 'normal arm on dispatch');
+    });
+
+    test('validate-armed: latch-skip fails closed without the ai_validated latch', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(83, { labels: ['pr_approved'], branch: 'feat/x', headSha: 'sha111' })],
+                prStatus: { checkConclusion: 'green' },
+            },
+                onCliExecute: runsCli({ run: oldRun('success', 'sha111') })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.validateSkip] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands),
+            'no latch on record — a stray green dispatched run alone never skips validation');
+    });
+
+    test('sweep_stale_validation: concluded-green older than staleMinutes → unarm + ai_validated re-latch', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(84, { labels: ['pr_approved', 'ai_validating'], headSha: 'sha222' })],
+            },
+                onCliExecute: runsCli({ run: oldRun('success', 'sha222') })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.number + ':' + r.label; }),
+            ['84:ai_validating'], 'the stale arm is released (mutex freed)');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
+            ['ai_validated'], 'success side re-latches — the merge window re-flows via the latch-skip');
+        assert.ok(!dispatched(sm.capturedCliCommands), 'sweep never dispatches CI');
+    });
+
+    test('sweep_stale_validation: concluded-red older than staleMinutes → unarm + standard fail path', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(85, { labels: ['pr_approved', 'ai_validating'], headSha: 'sha333' })],
+                pr: { number: 85, body: 'no closing keyword' },
+            },
+                onCliExecute: runsCli({ run: oldRun('failure', 'sha333') })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.number + ':' + r.label; }),
+            ['85:ai_validating'], 'the stale arm is released');
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'failure side never latches ai_validated — the fail path owns it');
+        assert.equal(sm.capturedPrComments.length, 1,
+            'the standard fail report posts (guest PR → report only, no rework arm)');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('went red') !== -1,
+            'the report says validation went red');
+    });
+
+    test('sweep_stale_validation: fresh conclusion (< staleMinutes) → arm stays (verdict race window)', function () {
+        var t = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(86, { labels: ['pr_approved', 'ai_validating'], headSha: 'sha444' })],
+                onCliExecute: runsCli({ run: { status: 'completed', conclusion: 'success',
+                    head_sha: 'sha444', created_at: t, updated_at: t } })
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'a 2-minute-old verdict may still be consumed — no sweep');
+        assert.equal(sm.capturedPrLabelAdds.length, 0);
+    });
+
+    test('sweep_stale_validation: cancelled conclusion or no run → arm stays (no verdict to sweep)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(87, { labels: ['ai_validating'], headSha: 'sha555' })],
+            },
+                onCliExecute: runsCli({ run: oldRun('cancelled', 'sha555') })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'CANCELLED is never a verdict — nothing to sweep');
+
+        var sm2 = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(88, { labels: ['ai_validating'], headSha: 'sha666' })]
+            },
+            onCliExecute: function () { return JSON.stringify({ workflow_runs: [] }); }
+        }));
+        sm2.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+        assert.equal(sm2.capturedPrLabelRemoves.length, 0,
+            'no dispatched run on the head (dispatch lost) — revalidate-armed owns that recovery');
     });
 });
 
