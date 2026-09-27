@@ -66,6 +66,15 @@ function decideActions(state, cfg) {
     var has = function (l) { return labels.indexOf(l) !== -1; };
     var maxRounds = (cfg && cfg.maxReworkRounds) || 2;
 
+    // 'blocked' = human hold (fa #939): the official freeze switch — the
+    // reconciler skips the item ENTIRELY (no dead-letter re-fire, no branch
+    // update, no merge, no close) until a human removes the label.
+    // Engine-level, evaluated before every other decision; the SM rule
+    // engine (githubSource.matchesGuards) honors the same label.
+    if (has('blocked')) {
+        actions.push({ type: 'skip', reason: 'blocked — human hold; the machine skips this item entirely' });
+        return actions;
+    }
     if (has('needs-human')) {
         actions.push({ type: 'skip', reason: 'needs-human — waiting for a human' });
         return actions;

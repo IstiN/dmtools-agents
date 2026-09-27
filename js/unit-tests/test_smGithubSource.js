@@ -185,6 +185,85 @@ suite('sm github source', function () {
         assert.equal(items[0].key, 'pr-60');
     });
 
+    test('blocked label: a frozen mutex holder does not serialize the queue (freeze is total)', function () {
+        // The freeze must be invisible-EVERYWHERE, not just invisible-to-
+        // matches: a blocked PR holding a stale ai_validating arm must not
+        // defer the unblocked queue behind it (live: 15 PRs labeled blocked
+        // and the machine kept processing / queueing behind them).
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 70, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }, { name: 'blocked' }],
+                      head: { ref: 'ai/gh-70' }, draft: false },
+                    { number: 71, labels: [{ name: 'pr_approved' }],
+                      head: { ref: 'ai/gh-71' }, draft: false }
+                ];
+            }
+        }, {}, {
+            70: { number: 70, state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true },
+            71: { number: 71, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'],
+                     mutex: 'ai_validating' }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.length, 1, 'blocked holder is transparent — the queue flows');
+        assert.equal(items[0].key, 'pr-71');
+
+        // exclude-self recovery form: the blocked armed PR is neither a
+        // candidate nor a holder — the unblocked armed candidate fires.
+        var srcMod2 = load({
+            github_list_prs: function () {
+                return [
+                    { number: 70, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }, { name: 'blocked' }],
+                      head: { ref: 'ai/gh-70' }, draft: false },
+                    { number: 71, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }],
+                      head: { ref: 'ai/gh-71' }, draft: false }
+                ];
+            }
+        }, {}, {
+            70: { number: 70, state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true },
+            71: { number: 71, state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true }
+        });
+        var rec = srcMod2.query({
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                     checks: ['none'], notMergeState: ['BEHIND', 'DIRTY'], draft: false,
+                     mutex: 'ai_validating', mutexAmong: ['pr_approved'],
+                     mutexExcludeSelf: true }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(rec.length, 1, 'blocked holder is transparent — the armed candidate fires');
+        assert.equal(rec[0].key, 'pr-71');
+    });
+
+    test('blocked label: an issue whose linked PR is blocked is invisible too (issue-carrier)', function () {
+        // review-after-dev shape: the issue itself carries no blocked
+        // label, but a human parked its PR — the machine must not dispatch
+        // review/rework/validation against a frozen PR.
+        function mkSrc(prLabels) {
+            var statuses = {};
+            statuses[30] = { number: 30, state: 'OPEN', checks: 'green', mergeState: 'CLEAN',
+                             mergeable: true, labels: prLabels };
+            return load({
+                github_search_issues: function () {
+                    return { items: [{ number: 3, labels: [{ name: 'ai_developed' }] }] };
+                }
+            }, {
+                3: { number: 30, state: 'OPEN' }
+            }, statuses);
+        }
+        var q = { type: 'issue', labels: ['ai_developed'], notLabels: ['agent:rework'],
+                  notPrLabels: ['ai_pr_reviewed', 'pr_approved'], prLabels: ['ai_validated'] };
+
+        var parked = mkSrc(['ai_validated', 'blocked']);
+        var frozen = parked.query({ query: q }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(frozen.length, 0, 'blocked linked PR freezes the issue-carrier item');
+
+        var live = mkSrc(['ai_validated']);
+        var flowing = live.query({ query: q }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(flowing.length, 1, 'removing the label re-exposes the item unchanged');
+        assert.equal(flowing[0].key, 'gh-3');
+    });
+
     test('pr rules: label guards + checks + mergeable, PRs without issues', function () {
         var srcMod = load({
             github_list_prs: function () {

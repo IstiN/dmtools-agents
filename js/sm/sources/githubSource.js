@@ -58,10 +58,13 @@ function matchesGuards(item, rule, provider, machineAuthor) {
     if (q.notLabels && q.notLabels.some(function (l) { return labels.indexOf(l) !== -1; })) {
         return false;
     }
-    // 'blocked' = owner-controlled parking label (fa #939): the SM ignores
-    // the item ENTIRELY — no dispatch, no merge, no review, no branch
-    // updates. Global, not per-rule: applies to every rule incl. future
-    // ones. Removing the label returns the item to the queue unchanged.
+    // 'blocked' = human hold (fa #939): the machine skips the item
+    // ENTIRELY — all rules, all legs (no dispatch, no merge, no review, no
+    // branch updates) — until a human removes the label. Engine-level, not
+    // per-rule: applies to every rule incl. future ones. Both carriers:
+    // the issue's own labels AND the linked PR's labels freeze an
+    // issue-carrier item (an issue whose PR a human parked must not keep
+    // receiving review/rework dispatches).
     if (labels.indexOf('blocked') !== -1) {
         return false;
     }
@@ -137,6 +140,9 @@ function matchesGuards(item, rule, provider, machineAuthor) {
     // ai_pr_reviewed and agent:review on the PR while the rule's type is
     // issue — match/not-match must read the linked PR's labels.
     var prLs = (item.pr && item.pr.labels) || [];
+    // 'blocked' on the PR side of an issue-carrier item freezes it too —
+    // see the item-labels check at the top of this guard.
+    if (prLs.indexOf('blocked') !== -1) return false;
     if (q.prLabels && !q.prLabels.some(function (l) { return prLs.indexOf(l) !== -1; })) return false;
     if (q.notPrLabels && q.notPrLabels.some(function (l) { return prLs.indexOf(l) !== -1; })) return false;
     return true;
@@ -296,6 +302,13 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {    var q = r
         };
     });
 
+    // 'blocked' = human hold (fa #939 — documented in matchesGuards): the
+    // item is invisible to EVERY rule, so it must not even act as a mutex
+    // holder — a frozen PR's stale ai_validating arm would otherwise
+    // serialize the whole queue forever. Filtered before the mutex scan;
+    // the matchesGuards check remains the engine-level guard.
+    items = items.filter(function (it) { return it.labels.indexOf('blocked') === -1; });
+
     // Mutex (q.mutex = label): if ANY open PR holds the label, this rule
     // defers entirely. Serializes one-dispatch stages — validate-armed/
     // validate-fresh both arm ai_validating + dispatch CI; without the
@@ -369,7 +382,7 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {    var q = r
     var matched = items.filter(function (item) {
         var labels = item.labels;
         var q2 = rule.query || {};
-        if (labels.indexOf('blocked') !== -1) return false; // #939: parked by owner — see matchesGuards
+        if (labels.indexOf('blocked') !== -1) return false; // #939: human hold — filtered pre-mutex too; see matchesGuards
         if (q2.labels && !q2.labels.some(function (l) { return labels.indexOf(l) !== -1; })) return false;
         if (q2.notLabels && q2.notLabels.some(function (l) { return labels.indexOf(l) !== -1; })) return false;
         if (q2.draft === false && item.draft) return false;
