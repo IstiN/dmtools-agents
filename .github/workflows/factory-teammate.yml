@@ -219,6 +219,15 @@ jobs:
               echo "→ PR #$PR_NUMBER is ${state} — not for the agent"
               exit 0
             fi
+            # 'blocked' = human hold (fa #939): the freeze switch applies to
+            # PR-anchored legs too — a frozen PR gets no review/rework run.
+            pr_blocked="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --json labels -q '([.labels[].name] | index("blocked")) != null' 2>/dev/null || echo false)"
+            if [ "$pr_blocked" = "true" ]; then
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              echo "→ PR #$PR_NUMBER carries blocked — human hold, the machine skips it entirely"
+              exit 0
+            fi
             leg="$INPUT_LEG"
             if [ -z "$leg" ] && echo "$INPUT_REASON" | grep -qi 'rework'; then
               leg="rework"
@@ -285,6 +294,15 @@ jobs:
           if echo "$LABELS" | grep -qw "agent:skip"; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "→ issue #$NUMBER carries agent:skip — agent bypassed"
+            exit 0
+          fi
+          # 'blocked' = human hold (fa #939): the official freeze switch —
+          # no leg starts on a frozen item, whatever the event (assignment,
+          # any label echo). Same label the SM engine and the machine-SM
+          # reconciler honor; removing it returns the item to the loop.
+          if echo "$LABELS" | grep -qw "blocked"; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "→ issue #$NUMBER carries blocked — human hold, the machine skips it entirely"
             exit 0
           fi
           runner=""

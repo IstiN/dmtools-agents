@@ -199,6 +199,7 @@ The pack relies on this taxonomy (all configurable via rules):
 | `pr_approved` / `agent:rework` | review leg | verdict |
 | `needs-human` | SM / review leg | round cap exceeded or unrecoverable |
 | `rework-round-<n>` | rework leg | round counter (cap 2) |
+| `blocked` | human | **freeze switch** — the machine skips the item entirely (all rules, all legs: no dispatch, no branch refresh, no validation, no merge, no close) until a human removes the label. Honored engine-level by the SM rule source, the machine-SM reconciler, the merge bot and the teammate guard |
 
 ### Step 4 — verification (dry tick)
 ```bash

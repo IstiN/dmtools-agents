@@ -32,6 +32,31 @@ suite('machineSm decision core', function () {
         assert.equal(acts[0].type, 'skip');
     });
 
+    test('blocked is the freeze switch — the reconciler skips the item entirely (fa #939)', function () {
+        // No dead-letter re-fire, no branch update, no merge, no close —
+        // whatever the state says, a blocked item gets a single skip.
+        var dead = agent.decideActions(st(['blocked', 'agent:dev'], null), {});
+        assert.equal(dead.length, 1);
+        assert.equal(dead[0].type, 'skip');
+        assert.contains(dead[0].reason, 'blocked');
+
+        var greenApproved = { number: 7, state: 'OPEN', checkConclusion: 'green',
+                              mergeState: 'CLEAN', mergeable: true };
+        var mergeable = agent.decideActions(st(['blocked', 'pr_approved', 'ai_validating'], greenApproved), {});
+        assert.equal(mergeable.length, 1, 'a blocked approved green PR must NOT be merged');
+        assert.equal(mergeable[0].type, 'skip');
+
+        var merged = agent.decideActions(st(['blocked', 'ai_developed'],
+            { number: 9, state: 'MERGED' }), {});
+        assert.equal(merged.length, 1, 'a blocked issue is not even auto-closed');
+        assert.equal(merged[0].type, 'skip');
+
+        // Control: the same approved-green state without the label merges.
+        var live = agent.decideActions(st(['pr_approved', 'ai_validating'], greenApproved), {});
+        assert.ok(live.some(function (a) { return a.type === 'merge'; }),
+            'removing the label re-exposes the item to the normal loop');
+    });
+
     test('active run for the issue skips reconciliation', function () {
         var acts = agent.decideActions(st(['agent:dev'], null, true), {});
         assert.equal(acts[0].type, 'skip');
