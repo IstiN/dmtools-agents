@@ -486,8 +486,8 @@ suite('sm github source', function () {
         assert.deepEqual(r.query.mutexAmong, ['pr_approved']);
         assert.equal(r.query.mutexExcludeSelf, undefined,
             'global form — the candidate is not yet armed, self never appears');
-        assert.deepEqual((r.query.notLabels || []), ['ai_validating'],
-            'still targets un-armed approved PRs only');
+        assert.deepEqual((r.query.notLabels || []), ['ai_validating', 'validation_failed'],
+            'un-armed + not validation_failed — parked guests (owner 2026-09-27, fa#923) stay out of the arm queue');
     });
 
     test('pr rules: branchPrefix and draft filters', function () {

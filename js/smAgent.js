@@ -1159,6 +1159,101 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 continue;
             }
             try {
+                // Sticky validation_failed park (owner 2026-09-27, live:
+                // fa#923 — a GUEST PR cycled arm→CI red→park→silent-update
+                // →pending→re-arm every tick, defeating the #550 red-park
+                // and holding the validate-armed limit-1 slot hostage while
+                // 10 green-latched PRs starved; owner rule: 'у гостя если
+                // красное то следующий должны пробовать мержить').
+                //   SET (below): a guest whose CURRENT head has red checks
+                //     gets the label — validate-armed's query excludes it
+                //     and the validate_pr action refuses to dispatch any
+                //     validation CI for it. Machine PRs never get the
+                //     label (fa pushes their heads; they re-enter on a new
+                //     head as today).
+                //   RESET (first): when the head's LAST committer is NOT
+                //     'sm-silent-update' — an author push or any
+                //     non-machine actor — the label is removed and the PR
+                //     re-enters the queue. The SM's own silent-update
+                //     merges must NOT clear it.
+                var parkLabelVf = 'validation_failed';
+                var labelsVf = ticket.labels || [];
+                var uHead = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
+                var prMachineAuthorU = machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, effectiveConfig);
+                var isMachinePrU = !!prMachineAuthorU && !!ticket.author &&
+                    String(ticket.author).toLowerCase() === String(prMachineAuthorU).toLowerCase();
+                var unparkedThisPass = false;
+                if (labelsVf.indexOf(parkLabelVf) !== -1) {
+                    var lastCommitter = uHead ? headCommitIdentity(effectiveRepoInfo, uHead) : null;
+                    if (lastCommitter === null) {
+                        console.warn('  ⚠️  ' + key + ' ' + parkLabelVf +
+                            ': head-commit probe failed — keeping the park (fail closed)');
+                    } else if (lastCommitter !== 'sm-silent-update') {
+                        if (!DRY) {
+                            try {
+                                github_remove_label({
+                                    workspace: effectiveRepoInfo.owner,
+                                    repository: effectiveRepoInfo.repo,
+                                    number: ticket.prNumber,
+                                    label: parkLabelVf
+                                });
+                            } catch (eUnparkVf) {
+                                console.warn('  ⚠️  un-park label failed: ' + (eUnparkVf.message || eUnparkVf));
+                            }
+                            try {
+                                github_create_comment({
+                                    workspace: effectiveRepoInfo.owner,
+                                    repository: effectiveRepoInfo.repo,
+                                    number: ticket.prNumber,
+                                    body: '🅿️→▶ validation_failed cleared — the head `' + uHead +
+                                        '` was last committed by `' + lastCommitter +
+                                        '` (non-machine) — re-entering validation.'
+                                });
+                            } catch (eUnparkVfC) {
+                                console.warn('  ⚠️  un-park comment failed: ' + (eUnparkVfC.message || eUnparkVfC));
+                            }
+                        }
+                        console.log('  ▶ ' + key + ' ' + parkLabelVf +
+                            ' cleared: non-machine head movement — re-entering validation');
+                        unparkedThisPass = true;
+                    } else {
+                        console.log('  🅿️  ' + key + ' ' + parkLabelVf +
+                            ' holds — the head moved by sm-silent-update only');
+                    }
+                }
+                if (!unparkedThisPass && !isMachinePrU &&
+                    labelsVf.indexOf(parkLabelVf) === -1 &&
+                    headChecksRed(effectiveRepoInfo, ticket.prNumber)) {
+                    if (!DRY) {
+                        try {
+                            github_add_labels({
+                                workspace: effectiveRepoInfo.owner,
+                                repository: effectiveRepoInfo.repo,
+                                number: ticket.prNumber,
+                                labels: [parkLabelVf]
+                            });
+                        } catch (eParkVf) {
+                            console.warn('  ⚠️  park label failed: ' + (eParkVf.message || eParkVf));
+                        }
+                        try {
+                            github_create_comment({
+                                workspace: effectiveRepoInfo.owner,
+                                repository: effectiveRepoInfo.repo,
+                                number: ticket.prNumber,
+                                body: '🛑 validation_failed — the current head `' + uHead +
+                                    '` has failing checks. This GUEST PR is parked: no validation ' +
+                                    'CI is dispatched for it and the merge window skips it until a ' +
+                                    'NON-MACHINE push moves the head (the machine cannot fix it, and ' +
+                                    'silent-updates do not re-arm it). The failure itself is reported ' +
+                                    'separately. parked-head: ' + uHead
+                            });
+                        } catch (eParkVfC) {
+                            console.warn('  ⚠️  park comment failed: ' + (eParkVfC.message || eParkVfC));
+                        }
+                    }
+                    console.log('  🅿️  ' + key + ' head checks red on a guest PR — ' +
+                        parkLabelVf + ' set, merge window advances');
+                }
                 silentUpdateBranch(ticket.branch);
                 console.log('  ✅ ' + key + ' branch silently updated (no CI)');
                 processedKeys.push(key);
@@ -1175,6 +1270,17 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // on green; post-approval (validate-armed, sticky pr_approved)
             // merges on green. A dispatch failure leaves the marker un-armed
             // — the next tick retries (self-healing).
+            // Sticky-park backstop (owner 2026-09-27, live: fa#923): a PR
+            // carrying validation_failed gets NO CI trigger at all until a
+            // non-machine push clears the label. validate-armed's query
+            // already excludes it; this guard backstops validate-fresh and
+            // any other rule sharing this action — the label is the single
+            // source of truth. NOT processedKeys: the limit-1 slot moves on.
+            if ((ticket.labels || []).indexOf('validation_failed') !== -1) {
+                console.log('  ⏭️  ' + key + ' validation_failed — parked; NO validation CI' +
+                            ' until a non-machine push clears the label');
+                continue;
+            }
             if (!ticket.branch) {
                 console.error('  ❌ validate_pr: no head branch on ' + key + ' — skipped');
                 continue;
@@ -1986,6 +2092,48 @@ function validationRollupGreen(repoInfo, prNumber) {
     } catch (e) {
         console.warn('  ⚠️  latch-skip rollup probe failed: ' + (e.message || e));
         return false;
+    }
+}
+
+function headChecksRed(repoInfo, prNumber) {
+    // Sticky-park SET probe (owner 2026-09-27, live: fa#923): does the PR
+    // head carry a red (failure) check RIGHT NOW? Same provider status
+    // rollup the latch-skip guard uses (checkConclusion 'red'). Fail OPEN
+    // (false): a missed label costs at most one more arm cycle (the
+    // deferRedHead park still catches it), never a wrongful park.
+    try {
+        var provider = smProviderModule.createSmProvider({
+            scm: { provider: 'github' },
+            repository: repoInfo
+        });
+        var st = provider.prStatus(prNumber);
+        return !!st && st.checkConclusion === 'red';
+    } catch (e) {
+        console.warn('  ⚠️  red-rollup probe failed: ' + (e.message || e));
+        return false;
+    }
+}
+
+function headCommitIdentity(repoInfo, headSha) {
+    // Sticky-park RESET probe (owner 2026-09-27): the LAST commit's
+    // committer name. 'sm-silent-update' is the identity
+    // silentUpdateBranch sets explicitly on its merge commits — anything
+    // else means an author push / a non-machine actor moved the head and
+    // the validation_failed park must clear. Returns the committer name
+    // ('' when unknown — treated as non-machine by the caller:
+    // revalidate rather than starve), or null when the probe fails (the
+    // caller keeps the park — fail CLOSED: an SM head must never slip
+    // through on a dead probe).
+    try {
+        var res = cli_execute_command({
+            command: 'gh api "repos/' + repoInfo.owner + '/' + repoInfo.repo +
+                     '/commits/' + headSha + '" --jq ".commit.committer.name"'
+        });
+        var out = (res || {}).output || (res || {}).stdout || res;
+        return String(out == null ? '' : out).trim().replace(/^"|"$/g, '');
+    } catch (e) {
+        console.warn('  ⚠️  head-commit probe failed: ' + (e.message || e));
+        return null;
     }
 }
 

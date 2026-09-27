@@ -42,7 +42,7 @@
           "id": "sweep-stale-validating"
         },
         {
-          "description": "Every open non-draft PR behind main gets a silent branch refresh with the workflow token (pushes trigger no workflows, so freshness is free); validating PRs are excluded so the validation head never moves mid-run. mergeState is BEHIND only: the prStatus deterministic override computes BEHIND from base freshness (immune to the REST BEHIND/BLOCKED flip-flop this rule used to paper over with both values), and BLOCKED is now a REAL verdict (fresh head, required checks pending/red) — updating those would no-op-clone every pending PR on every tick. Limit 20 (owner 2026-09-22): silent pushes fire no CI — refreshing every BEHIND head every tick is free and keeps PRs merge-ready, so the merge window never waits for a refresh first.",
+          "description": "Every open non-draft PR behind main gets a silent branch refresh with the workflow token (pushes trigger no workflows, so freshness is free); validating PRs are excluded so the validation head never moves mid-run. mergeState is BEHIND only: the prStatus deterministic override computes BEHIND from base freshness (immune to the REST BEHIND/BLOCKED flip-flop this rule used to paper over with both values), and BLOCKED is now a REAL verdict (fresh head, required checks pending/red) — updating those would no-op-clone every pending PR on every tick. Limit 20 (owner 2026-09-22): silent pushes fire no CI — refreshing every BEHIND head every tick is free and keeps PRs merge-ready, so the merge window never waits for a refresh first. STICKY PARK (owner 2026-09-27, live: fa#923): before refreshing, a GUEST PR whose current head has RED checks is labeled validation_failed (idempotent, the head SHA noted in a one-time comment) — validate-armed excludes the label and no validation CI is dispatched for it at all; the label is REMOVED only when the head's LAST committer is NOT 'sm-silent-update' (an author push), so the SM's own silent-updates never re-arm a red guest. Machine-authored PRs never get the label (fa pushes their heads).",
           "source": "github",
           "query": {
             "type": "pr",
@@ -59,7 +59,7 @@
           "id": "silent-update-behind"
         },
         {
-          "description": "Post-approval merge window — OWNER FIFO RULE (2026-09-22): lead the OLDEST approved PR all the way to merge; never validate other approved PRs meanwhile (the merge moves the base — they would re-validate anyway). Advance to the next approved ONLY when the oldest is DIRTY (conflict-rework owns it) or its validation went RED (rework leg fixes it) — both free this slot while the oldest repairs. BEHIND/DIRTY excluded here: silent-update refreshes BEHIND heads first; conflicted heads can never reach CLEAN. Mutex ai_validating = one validation at a time.",
+          "description": "Post-approval merge window — OWNER FIFO RULE (2026-09-22): lead the OLDEST approved PR all the way to merge; never validate other approved PRs meanwhile (the merge moves the base — they would re-validate anyway). Advance to the next approved ONLY when the oldest is DIRTY (conflict-rework owns it) or its validation went RED (rework leg fixes it) — both free this slot while the oldest repairs. BEHIND/DIRTY excluded here: silent-update refreshes BEHIND heads first; conflicted heads can never reach CLEAN. Mutex ai_validating = one validation at a time. validation_failed excluded (owner 2026-09-27, live: fa#923 — a GUEST PR whose head went red cycles arm→CI red→silent-update→re-arm forever, holding this limit-1 slot hostage; the silent-update action labels such guests validation_failed and they stay parked until a NON-MACHINE push moves the head).",
           "source": "github",
           "query": {
             "type": "pr",
@@ -67,7 +67,8 @@
               "pr_approved"
             ],
             "notLabels": [
-              "ai_validating"
+              "ai_validating",
+              "validation_failed"
             ],
             "notMergeState": [
               "BEHIND",
