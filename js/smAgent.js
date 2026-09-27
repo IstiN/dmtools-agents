@@ -1781,6 +1781,58 @@ function validationCheckNames() {
     return null;
 }
 
+function stampLinkBlock(repoInfo, runUrl, conclusion) {
+    // Stamp deep links (owner 2026-09-27): a concluded stamp check-run
+    // created WITHOUT details_url renders 'This check concluded as …' plus
+    // the generic 'View more details on GitHub Actions' — nowhere to click
+    // through to the real run. The stamp therefore carries details_url (the
+    // failing JOB on red, the umbrella run otherwise — a stamp aggregates
+    // the whole dispatched run) and a markdown jobs table in the summary.
+    // Fail-soft everywhere: the run link alone already beats the generic
+    // landing, and a broken jobs probe must never lose the verdict stamp.
+    var block = {
+        detailsUrl: runUrl || null,
+        summary: runUrl ? ('Dispatched run: ' + runUrl)
+                        : 'Stamped by the SM tick (bridge-free mode).'
+    };
+    if (!runUrl) return block;
+    var m = /\/runs\/(\d+)/.exec(String(runUrl));
+    if (!m) return block;
+    try {
+        var res = cli_execute_command({
+            command: 'gh api repos/' + repoInfo.owner + '/' + repoInfo.repo +
+                     '/actions/runs/' + m[1] + '/jobs?per_page=100'
+        });
+        var parsed = mcpParse((res || {}).output ||
+                              (res || {}).stdout || res);
+        var jobs = (parsed && parsed.jobs) || [];
+        if (!jobs.length) return block;
+        var lines = ['| Job | Result |', '| --- | --- |'];
+        jobs.forEach(function (j) {
+            var verdict = j.conclusion ? (j.status === 'completed' ? j.conclusion : j.status)
+                                       : j.status;
+            var link = j.html_url || runUrl;
+            lines.push('| [' + String(j.name).replace(/"/g, "'") + '](' + link + ') | ' +
+                       verdict + ' |');
+        });
+        block.summary = ('Dispatched run: ' + runUrl + '\n' + lines.join('\n') +
+                         '\n_Stamped by the SM tick (bridge-free mode)._').replace(/"/g, "'");
+        // Red verdict: land the reviewer on the FAILING JOB directly, not
+        // the umbrella run (success keeps the umbrella — one click lists
+        // every job).
+        if (conclusion === 'failure') {
+            var failing = jobs.filter(function (j) {
+                return ['failure', 'timed_out', 'action_required',
+                        'startup_failure', 'stale'].indexOf(j.conclusion) !== -1;
+            })[0];
+            if (failing && failing.html_url) block.detailsUrl = failing.html_url;
+        }
+    } catch (e) {
+        console.warn('  ⚠️  stamp job-table probe failed: ' + (e.message || e));
+    }
+    return block;
+}
+
 function stampValidationChecksForModule(repoInfo, headSha, status, conclusion, runUrl) {
             var names = validationCheckNames();
             if (!names || !headSha) return;
@@ -1802,6 +1854,9 @@ function stampValidationChecksForModule(repoInfo, headSha, status, conclusion, r
                 }
             }
             try {
+                // One jobs probe per stamp, shared by every stamped check
+                // name (they all echo the same dispatched run).
+                var linkBlock = stampLinkBlock(repoInfo, runUrl, conclusion);
                 names.forEach(function (checkName) {
                     if (DRY) {
                         console.log('  🧪 [dry] stamp "' + checkName + '" ' +
@@ -1811,6 +1866,9 @@ function stampValidationChecksForModule(repoInfo, headSha, status, conclusion, r
                     // POST /repos/{o}/{r}/check-runs — head_sha is a FIELD,
                     // never a path segment (sha-in-path 404s). github_create
                     // _check_run is MCP-registry-only (not a JS-bridge tool).
+                    // details_url + the jobs table (stampLinkBlock) turn the
+                    // PR Checks-tab entry into a clickable path to the real
+                    // workflow run / failing job (owner 2026-09-27).
                     try {
                         var cmd = 'gh api -X POST repos/' + repoInfo.owner +
                                   '/' + repoInfo.repo + '/check-runs' +
@@ -1818,10 +1876,11 @@ function stampValidationChecksForModule(repoInfo, headSha, status, conclusion, r
                                   ' -f head_sha=' + headSha +
                                   ' -f status="' + status + '"' +
                                   (conclusion ? (' -f conclusion="' + conclusion + '"') : '') +
+                                  (linkBlock.detailsUrl ?
+                                      (' -f details_url="' + linkBlock.detailsUrl + '"') : '') +
                                   ' -f title="SM validation' +
                                   (conclusion ? (': ' + conclusion) : ' (tick-dispatched)') + '"' +
-                                  ' -f summary="' + (runUrl ? ('Dispatched run: ' + runUrl) :
-                                      'Stamped by the SM tick (bridge-free mode).') + '"';
+                                  ' -f summary="' + linkBlock.summary + '"';
                         cli_execute_command({ command: cmd });
                     } catch (e) {
                         console.warn('  ⚠️  stamp "' + checkName + '" on ' +

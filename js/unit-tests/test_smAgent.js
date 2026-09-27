@@ -92,6 +92,22 @@ function makeSmAgent(opts) {
             if (opts.onCliExecute) return opts.onCliExecute(cmdOpts);
             return '';
         },
+        // Bridge tools used by syncValidationChecks (stamp echo of the
+        // dispatched run). Default: delegate to the host bridge when
+        // present (preserves prior behavior); tests override via
+        // opts.github.prList / opts.github.workflowApiRuns.
+        github_list_prs: function(args) {
+            if (opts.github && opts.github.prList) return opts.github.prList;
+            return (typeof github_list_prs !== 'undefined') ? github_list_prs(args) : '[]';
+        },
+        github_list_workflow_runs: function(args) {
+            if (opts.github && opts.github.workflowApiRuns) {
+                return JSON.stringify({ workflow_runs: opts.github.workflowApiRuns });
+            }
+            return (typeof github_list_workflow_runs !== 'undefined')
+                ? github_list_workflow_runs(args)
+                : '{"workflow_runs":[]}';
+        },
         file_write: function(writeOpts) {
             if (opts.onFileWrite) opts.onFileWrite(writeOpts);
             return true;
@@ -1307,6 +1323,148 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
 
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'fail-closed: no rework arm without a machine login');
         assert.equal(sm.capturedPrComments.length, 1, 'the report still posts');
+    });
+});
+
+suite('smAgent: stamp check-run deep links (owner 2026-09-27)', function () {
+    // Owner complaint (live on fa PR checks): bridge stamp check-runs
+    // concluded with 'This check concluded as success' + the generic
+    // 'View more details on GitHub Actions' — no clickable path to the real
+    // workflow run/job. The stamp now carries details_url (failing job on
+    // red, umbrella run otherwise) + a markdown jobs table in the summary.
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    // A github PR rule whose query matches nothing — the validation-sync
+    // hook (which drives the verdict stamp) runs before the source query.
+    function syncOnlyRule() {
+        return { source: 'github', query: { type: 'pr', labels: ['no-such-label-xyz'] },
+                 localAction: 'validate_pr', limit: 1, id: 'validate-armed' };
+    }
+
+    function armedPrList() {
+        return JSON.stringify([{ number: 90, head: { sha: 'shaA', ref: 'feat/a' },
+                                 labels: [{ name: 'ai_validating' }] }]);
+    }
+
+    function concludedRun(conclusion) {
+        return [{ id: 777, event: 'workflow_dispatch', head_sha: 'shaA',
+                  status: 'completed', conclusion: conclusion,
+                  html_url: 'https://github.com/a/b/actions/runs/777',
+                  path: '.github/workflows/quality.yml' }];
+    }
+
+    function stampPosts(sm) {
+        return sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('check-runs') !== -1 && c.command.indexOf('POST') !== -1;
+        }).map(function (c) { return c.command; });
+    }
+
+    function jobsCli(jobs) {
+        return function (cmd) {
+            if (cmd.command.indexOf('/actions/runs/777/jobs') !== -1) {
+                return JSON.stringify({ jobs: jobs });
+            }
+            return '';
+        };
+    }
+
+    test('verdict stamp (green): details_url = umbrella run + markdown jobs table in the summary', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [],
+                prList: armedPrList(),
+                workflowApiRuns: concludedRun('success')
+            },
+            onCliExecute: jobsCli([
+                { name: 'Quality gate', status: 'completed', conclusion: 'success',
+                  html_url: 'https://github.com/a/b/actions/runs/777/jobs/11' },
+                { name: 'sm-liveness', status: 'completed', conclusion: 'success',
+                  html_url: 'https://github.com/a/b/actions/runs/777/jobs/12' }
+            ])
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+            validationChecks: '["Quality gate","sm-liveness"]', rules: [syncOnlyRule()] } });
+
+        var posts = stampPosts(sm);
+        assert.equal(posts.length, 2, 'one stamped check per configured validation check name');
+        posts.forEach(function (p) {
+            assert.ok(p.indexOf('-f details_url="https://github.com/a/b/actions/runs/777"') !== -1,
+                'green verdict links the umbrella dispatched run');
+            assert.ok(p.indexOf('| [Quality gate](https://github.com/a/b/actions/runs/777/jobs/11) | success |') !== -1,
+                'summary carries the real jobs table (name → result → link)');
+            assert.ok(p.indexOf('| [sm-liveness](https://github.com/a/b/actions/runs/777/jobs/12) | success |') !== -1,
+                'every job is listed');
+        });
+    });
+
+    test('verdict stamp (red): details_url = the FAILING JOB directly', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [],
+                prList: armedPrList(),
+                workflowApiRuns: concludedRun('failure')
+            },
+            onCliExecute: jobsCli([
+                { name: 'Quality gate', status: 'completed', conclusion: 'failure',
+                  html_url: 'https://github.com/a/b/actions/runs/777/jobs/21' },
+                { name: 'sm-liveness', status: 'completed', conclusion: 'success',
+                  html_url: 'https://github.com/a/b/actions/runs/777/jobs/22' }
+            ])
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+            validationChecks: '["Quality gate","sm-liveness"]', rules: [syncOnlyRule()] } });
+
+        var posts = stampPosts(sm);
+        assert.equal(posts.length, 2);
+        posts.forEach(function (p) {
+            assert.ok(p.indexOf('-f details_url="https://github.com/a/b/actions/runs/777/jobs/21"') !== -1,
+                'red verdict lands the reviewer on the failing job, not the umbrella');
+            assert.ok(p.indexOf('-f conclusion="failure"') !== -1);
+            assert.ok(p.indexOf('| [Quality gate](https://github.com/a/b/actions/runs/777/jobs/21) | failure |') !== -1,
+                'the jobs table shows which job went red');
+        });
+    });
+
+    test('verdict stamp: jobs probe failure degrades to the plain run link — never loses the stamp', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [],
+                prList: armedPrList(),
+                workflowApiRuns: concludedRun('success')
+            },
+            onCliExecute: function () { return ''; } // jobs endpoint unreadable
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+            validationChecks: '["Quality gate"]', rules: [syncOnlyRule()] } });
+
+        var posts = stampPosts(sm);
+        assert.equal(posts.length, 1, 'the stamp still posts');
+        assert.ok(posts[0].indexOf('-f details_url="https://github.com/a/b/actions/runs/777"') !== -1,
+            'details_url falls back to the dispatched run');
+        assert.ok(posts[0].indexOf('Dispatched run: https://github.com/a/b/actions/runs/777') !== -1,
+            'summary keeps at least the run link');
+    });
+
+    test('dispatch-time in_progress stamp: no run known yet — no details_url, legacy summary', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [{ key: 'pr-91', labels: ['pr_approved'], issueNumber: null,
+                                prNumber: 91, draft: false, branch: 'feat/b', headSha: 'shaB' }] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+            validationChecks: '["Quality gate"]',
+            rules: [{ source: 'github', query: { type: 'pr', labels: ['pr_approved'], draft: false },
+                      localAction: 'validate_pr', limit: 1, id: 'validate-armed' }] } });
+
+        var posts = stampPosts(sm);
+        assert.equal(posts.length, 1, 'dispatch stamps in_progress once');
+        assert.ok(posts[0].indexOf('in_progress') !== -1);
+        assert.ok(posts[0].indexOf('details_url') === -1,
+            'no run URL exists at dispatch time — nothing to link yet (the verdict stamp adds it)');
+        assert.ok(posts[0].indexOf('Stamped by the SM tick (bridge-free mode).') !== -1);
     });
 });
 
