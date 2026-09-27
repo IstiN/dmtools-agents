@@ -82,7 +82,8 @@
           "localAction": "validate_pr",
           "skipIfValidatedHead": true,
           "limit": 1,
-          "id": "validate-armed"
+          "id": "validate-armed",
+          "deferRedHead": true
         },
         {
           "description": "Armed head moved mid-validation (double silent-update, rework push): the green run no longer covers the head, checks read 'none' on it, but the ai_validating arm persists — no rule matched and the PR stalled until a manual disarm (live: dart pr-194, 15:06 — tick processed 0). Re-dispatch the CI on the CURRENT head. 'pending' never matches: that is the in-flight bridge check on this head. BEHIND/DIRTY excluded like validate-armed. MUTEX with mutexExcludeSelf (multi-arm leak fix, live: fa 2026-09-26 — 7 approved PRs held ai_validating simultaneously: 922/923/930/932/934/948/961, +1 arm per tick): this rule previously ran with NO mutex because the global mutex scan sees the rule's own armed target and self-blocks 100% of the time — and its 'structural serialization' assumption (validate-armed's mutex guarantees <=1 armed approved PR) is FALSE once heads move: silent-update / BEHIND unarm races / guest pushes keep feeding checks=none states, and each tick this rule armed one more approved PR. The exclude-self mutex (githubSource) evaluates per candidate: it defers only while ANOTHER approved PR holds ai_validating. Exactly one armed approved PR = the candidate itself = the rule fires; a second approved arm anywhere = every candidate defers and the stack drains via merge-validated / fail-validation / unarm-stale.",
