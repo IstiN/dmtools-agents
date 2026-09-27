@@ -717,6 +717,7 @@ jobs:
           echo "job marker added: $line"
 
       - name: Run agent (fa provider via runner env overrides)
+        id: run_agent
         # Hard cap just under the job's 120 min: a hung agent session must
         # FAIL the leg (the always() post-actions then run inside the
         # remaining budget and the red path re-queues) instead of the
@@ -1060,6 +1061,64 @@ jobs:
             cat .dmtools/credential-helper.log
           fi
 
+      - name: Quarantine poisoned fa session
+        # Owner RCA (dmd PR-266, 2026-09-27): the session store's dark side.
+        # A leg whose fa session hangs mid-run gets cancelled; the persist
+        # step below (always()) then SAVES the frozen session, and the
+        # restore step at the top of the NEXT leg re-loads it — three
+        # consecutive zombie legs resumed the same poisoned state (fa
+        # trace silent from the first minute of each) until the
+        # fa-sess/<anchor> branch was deleted by hand. The persist step is
+        # right that a failed run's session is valuable context — unless
+        # the session itself is the suspect. Fa streams every turn into
+        # FA_LOG_FILE, so a trace silent for the last N minutes of a
+        # failed/cancelled leg means the session stopped making progress;
+        # then: move the store aside (the persist step finds nothing and
+        # early-exits) AND delete fa-sess/<anchor> — otherwise the next
+        # leg restores the poison anyway. A leg that failed with an ACTIVE
+        # trace (a real error mid-work) keeps its session for the retry.
+        # Runs before the trace-artifact upload so the quarantined store
+        # ships with the diagnostics.
+        if: always() && (steps.run_agent.outcome == 'failure' || steps.run_agent.outcome == 'cancelled')
+        env:
+          FA_SESS_BRANCH: fa-sess/${{ needs.guard.outputs.anchor }}
+          SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+        run: |
+          FA_TRACE="${GITHUB_WORKSPACE}/.dmtools/fa-trace.log"
+          SESS_DIR="${GITHUB_WORKSPACE}/.dmtools/fa-sessions"
+          silence_limit="${FA_TRACE_QUARANTINE_SILENCE_MINUTES:-5}"
+          if [ ! -f "${FA_TRACE}" ]; then
+            echo "no fa trace — cannot judge session health; leaving the session in place"
+            exit 0
+          fi
+          mtime="$(stat -c %Y "${FA_TRACE}" 2>/dev/null || stat -f %m "${FA_TRACE}" 2>/dev/null || echo 0)"
+          age_min=$(( ( $(date +%s) - mtime ) / 60 ))
+          if [ "${age_min}" -lt "${silence_limit}" ]; then
+            echo "fa trace was active ${age_min} min ago (< ${silence_limit}) — the session was working; keeping it for the next leg"
+            exit 0
+          fi
+          echo "::warning::fa session poisoned: leg '${{ steps.run_agent.outcome }}' with the trace silent for ${age_min} min (limit ${silence_limit}) — quarantining the session and deleting ${FA_SESS_BRANCH} so the next leg starts fresh"
+          QUAR_DIR="${GITHUB_WORKSPACE}/.dmtools/fa-sessions-quarantine/run-${{ github.run_id }}-attempt-${{ github.run_attempt }}"
+          mkdir -p "$(dirname "${QUAR_DIR}")"
+          if [ -d "${SESS_DIR}" ]; then
+            mv "${SESS_DIR}" "${QUAR_DIR}"
+            echo "→ session store moved to .dmtools/fa-sessions-quarantine/ (the persist step below will find nothing)"
+          else
+            echo "→ no local session store to quarantine"
+          fi
+          { echo ""
+            echo "🧟 FA-SESSION-QUARANTINE: leg '${{ steps.run_agent.outcome }}' with the trace silent for ${age_min} min — session quarantined, ${FA_SESS_BRANCH} deleted; the next leg starts a fresh session."
+          } >> "${GITHUB_WORKSPACE}/.dmtools/run-output.txt" 2>/dev/null || true
+          # The restore step reads refs/heads/fa-sess/<anchor> — drop it, or
+          # the next leg restores the poison despite the local quarantine
+          # (the persist step early-exits on the missing dir and never
+          # overwrites the branch with anything else).
+          if git push origin --delete "${FA_SESS_BRANCH}" 2>/dev/null; then
+            echo "→ ${FA_SESS_BRANCH} deleted — the next leg starts a fresh session"
+          else
+            echo "::error::could not delete ${FA_SESS_BRANCH} — the next leg may restore the poisoned session; delete the branch manually"
+          fi
+
       - name: Upload the full fa session trace
         # AFTER the memory-persist push: the artifact must include the final
         # helper invocation of the run.
@@ -1071,6 +1130,7 @@ jobs:
             .dmtools/fa-trace.log
             .dmtools/run-output.txt
             .dmtools/credential-helper.log
+            .dmtools/fa-sessions-quarantine/**
           if-no-files-found: ignore
 
       - name: Persist fa session to its git branch
