@@ -1,0 +1,73 @@
+# Quality gate — CRAP ratchet via crap4js, pinned like crap4dart in dmd.
+#
+# Threshold policy (owner 2026-09-28): the CRAP bar is NOT lowered to pass —
+# the CURRENT measured maximum is fixed as the ratchet baseline, so the code
+# can only improve. Baseline: 4879.8 (action/developTicketAndCreatePR.js,
+# CC=116 @ 29.3% coverage). Improvements lower the max freely; any change
+# that pushes the max ABOVE the baseline fails the gate.
+#
+# Tool pin: crap4js v0.8.1 by release tag (same discipline as dmd pinning
+# crap4dart 0.9.5). Install from GitHub — the npm 'crap4js' package is an
+# unrelated third-party project.
+name: Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # Ratchet baseline — the measured repo-wide maximum CRAP (see header).
+  # Re-measure with the steps below; lower it when the code improves.
+  CRAP_THRESHOLD: '4879.8'
+  CRAP4JS_REF: 'v0.8.1'
+
+jobs:
+  crap:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install pinned tools (separate prefix — never node_modules here)
+        run: |
+          npm install --prefix "$RUNNER_TEMP/tools" --no-fund --no-audit \
+            "github:vabhzw17eg2qu4m9-bit/crap4js#${CRAP4JS_REF}" nyc@17
+
+      - name: Instrument the tree (harness eval-loads bypass nyc's hook)
+        run: |
+          "$RUNNER_TEMP/tools/node_modules/.bin/nyc" instrument --cwd . . \
+            "$RUNNER_TEMP/inst"
+          # The harness expects the consumer layout (agents/ checkout beside
+          # the cwd) and bare config names — self-symlink covers both.
+          ln -sfn "$RUNNER_TEMP/inst" "$RUNNER_TEMP/inst/agents"
+          # nyc instrument copies only .js — add the json/md/sh payloads the
+          # suite reads (configs, instructions, prompts, fixtures).
+          rsync -a --exclude '*.js' --exclude '.git' ./ "$RUNNER_TEMP/inst/"
+
+      - name: Run the unit suite for coverage (instrumented tree)
+        # The node harness is a degraded mirror of the dmtools runner
+        # (~108 known mock-gap failures, e.g. cli_execute_command stubs);
+        # the canonical green-gate is the pack-release test job. Coverage is
+        # collected regardless — a red harness must not block the ratchet.
+        # ci/run_with_coverage.js wraps the harness and dumps the Istanbul
+        # global after the run.
+        run: |
+          cd "$RUNNER_TEMP/inst"
+          FILES="$(node -e "console.log(require('./js/unit-tests/run_all.json').params.jobParams.testFiles.join(' '))")"
+          node ci/run_with_coverage.js \
+            "$RUNNER_TEMP/inst/js/unit-tests/node_testRunner.js" \
+            "$RUNNER_TEMP/cov/coverage-final.json" $FILES \
+            || echo "::warning::node harness has known mock gaps — coverage still collected"
+
+      - name: crap4js gate (ratchet — baseline ${{ env.CRAP_THRESHOLD }})
+        run: |
+          "$RUNNER_TEMP/tools/node_modules/.bin/crap4js" . \
+            --coverage "$RUNNER_TEMP/cov/coverage-final.json" \
+            --threshold "${CRAP_THRESHOLD}"
