@@ -41,6 +41,42 @@
  */
 'use strict';
 
+// ── Per-tick I/O cache ────────────────────────────────────────────────────
+// One TTL cache (60s) for the whole SM tick. Measured on a busy tick: the
+// same open-PR list was re-fetched per rule AND per issue findPr (18
+// github_list_prs calls returning the same payload in ONE tick). Routing
+// the three list sites + prStatus through this cache collapses that to a
+// single fetch per kind per repo. TTL hits change nothing observable —
+// same payload, same 60s staleness budget as the old per-provider memo
+// (the branchHead cache below), now shared across every provider instance
+// created during the tick.
+//
+// runAsync workers are FRESH isolates with an empty module cache: they
+// cannot see this holder. createSmProvider({ preseed }) re-hydrates it
+// from an args-carried snapshot() bundle — the fan-out in
+// sm/sources/githubSource.js ships the snapshot to each worker that way.
+var SM_IO_CACHE_TTL_MS = 60 * 1000;
+var _cache = { ttlMs: SM_IO_CACHE_TTL_MS, entries: {} };
+
+function ioCacheKey(owner, repo, kind, id) {
+    return owner + '/' + repo + ':' + kind + (id ? ':' + id : '');
+}
+
+function ioCacheGet(owner, repo, kind, id) {
+    var key = ioCacheKey(owner, repo, kind, id);
+    var entry = _cache.entries[key];
+    if (!entry) return undefined;
+    if (Date.now() - entry.at > _cache.ttlMs) {
+        delete _cache.entries[key];
+        return undefined;
+    }
+    return entry.data;
+}
+
+function ioCachePut(owner, repo, kind, id, data) {
+    _cache.entries[ioCacheKey(owner, repo, kind, id)] = { at: Date.now(), data: data };
+}
+
 // Ecosystem-standard MCP result parsing (see parseMcpResult in the agent
 // scripts): bridge tools may return decoded objects, JSON strings, or
 // {data: …} envelopes.
@@ -69,26 +105,57 @@ function githubProvider(cfg) {
     // Default-branch HEAD cache (one SM tick). REST mergeable_state
     // lazily recomputes to `unknown` right after a base push, so
     // behind/CLEAN is computed deterministically from base.sha vs the
-    // live branch head (github_list_branches is always current).
-    var branchHeads = {};
-    function branchHead(name) {
-        if (!(name in branchHeads)) {
-            branchHeads[name] = null;
-            if (typeof github_list_branches === 'function') {
-                try {
-                    var branches = parseMcp(github_list_branches({
-                        workspace: owner, repository: repo
-                    })) || [];
-                    for (var i = 0; i < branches.length; i++) {
-                        if (branches[i].name === name) {
-                            branchHeads[name] = branches[i].commit && branches[i].commit.sha;
-                            break;
-                        }
+    // live branch head (github_list_branches is always current). The full
+    // name→sha map rides the shared per-tick ioCache: one
+    // github_list_branches call per repo per tick instead of one per
+    // unknown base branch.
+    function branchHeadsMap() {
+        var cached = ioCacheGet(owner, repo, 'branches', null);
+        if (cached) return cached;
+        var map = {};
+        if (typeof github_list_branches === 'function') {
+            try {
+                var branches = parseMcp(github_list_branches({
+                    workspace: owner, repository: repo
+                })) || [];
+                for (var i = 0; i < branches.length; i++) {
+                    var b = branches[i];
+                    if (b && b.name) {
+                        map[b.name] = b.commit && b.commit.sha;
                     }
-                } catch (e) { /* older runtime without the tool */ }
-            }
+                }
+            } catch (e) { /* older runtime without the tool */ }
         }
-        return branchHeads[name];
+        ioCachePut(owner, repo, 'branches', null, map);
+        return map;
+    }
+    function branchHead(name) {
+        var head = branchHeadsMap()[name];
+        return head === undefined ? null : head;
+    }
+
+    // Open / merged PR lists ride the same per-tick cache (kind openPrs /
+    // mergedPrs) — findPr is called per candidate issue and per rule, and
+    // each call used to re-fetch both lists (measured: 18 github_list_prs
+    // in one idle tick, all returning the same empty payload).
+    function listOpenPrs() {
+        var cached = ioCacheGet(owner, repo, 'openPrs', null);
+        if (cached) return cached;
+        var list = asList(parseMcp(github_list_prs({
+            workspace: owner, repository: repo, state: 'open'
+        })));
+        ioCachePut(owner, repo, 'openPrs', null, list);
+        return list;
+    }
+
+    function listMergedPrs() {
+        var cached = ioCacheGet(owner, repo, 'mergedPrs', null);
+        if (cached) return cached;
+        var list = asList(parseMcp(github_list_prs({
+            workspace: owner, repository: repo, state: 'merged'
+        })));
+        ioCachePut(owner, repo, 'mergedPrs', null, list);
+        return list;
     }
     var full = owner + '/' + repo;
 
@@ -101,71 +168,8 @@ function githubProvider(cfg) {
         };
     }
 
-    return {
-        provider: 'github',
-
-        listMachineIssues: function (machineLabels, agentHandle, limit) {
-            // GitHub search ANDs multiple label: qualifiers — run one
-            // search per label (OR semantics), merge unique by number.
-            var seen = {};
-            var out = [];
-            machineLabels.forEach(function (ml) {
-                var res = parseMcp(github_search_issues({
-                    query: 'repo:' + full + ' is:issue is:open label:"' + ml + '"'
-                }));
-                asList(res).forEach(function (it) {
-                    if (seen[it.number]) return;
-                    seen[it.number] = true;
-                    out.push(ghIssueToState(it));
-                });
-                if (out.length >= (limit || 50)) return; // forEach: enough
-            });
-            var extra = parseMcp(github_search_issues({
-                query: 'repo:' + full + ' is:issue is:open assignee:' + agentHandle
-            }));
-            asList(extra).forEach(function (it) {
-                if (seen[it.number]) return;
-                seen[it.number] = true;
-                out.push(ghIssueToState(it));
-            });
-            return out.slice(0, limit || 50);
-        },
-
-        findPr: function (issueNumber, branchPrefix) {
-            var branch = branchPrefix + issueNumber;
-            var headFilter = owner + ':' + branch;
-            var list = asList(parseMcp(github_list_prs({
-                workspace: owner, repository: repo, state: 'open'
-            })));
-            var open = list.filter(function (p) {
-                return (p.head && p.head.label) === headFilter;
-            });
-            var bodyRe = new RegExp('(^|[^0-9])#' + issueNumber + '([^0-9]|$)');
-            if (!open.length) {
-                open = list.filter(function (p) {
-                    return bodyRe.test(String(p.body || ''));
-                });
-            }
-            if (open.length) {
-                return { number: open[0].number, state: 'OPEN',
-                         branch: (open[0].head && open[0].head.ref) || branch };
-            }
-            var merged = asList(parseMcp(github_list_prs({
-                workspace: owner, repository: repo, state: 'merged'
-            }))).filter(function (p) {
-                return (p.head && p.head.label) === headFilter;
-            });
-            if (merged.length) {
-                return { number: merged[0].number, state: 'MERGED', branch: branch };
-            }
-            return null;
-        },
-
-        prStatus: function (prNumber) {
-            // Java @MCPParam parity: github_get_pr takes pullRequestId —
-            // a bare `number` hit /pulls/null and 404'd silently, so every
-            // rule guard reading mergeState/checks saw UNKNOWN/none (live:
-            // the enrichment printed "finished" while returning garbage).
+    // (prStatus computation hoisted — see the memo wrapper in the contract below)
+    function computePrStatus(prNumber) {
             var pr = parseMcp(github_get_pr({
                 workspace: owner, repository: repo, pullRequestId: prNumber
             })) || {};
@@ -263,8 +267,95 @@ function githubProvider(cfg) {
                 author: (pr.user && pr.user.login) ||
                     (pr.author && (pr.author.login || pr.author.name)) || ''
             };
+    }
+
+    return {
+        provider: 'github',
+
+        listOpenPrs: listOpenPrs,
+        listMergedPrs: listMergedPrs,
+
+        snapshot: function () {
+            // Args-carried cache snapshot for the runAsync worker engines:
+            // every worker is a FRESH isolate with an empty module cache,
+            // so it cannot see this holder. The fan-out in
+            // sm/sources/githubSource.js fetches this ONCE per batch and
+            // hands it to each worker via createSmProvider({ preseed }) —
+            // a worker's first cache read then hits instead of re-fetching
+            // the same lists over the bridge.
+            return {
+                openPrs: listOpenPrs(),
+                mergedPrs: listMergedPrs(),
+                branchHeads: branchHeadsMap()
+            };
         },
 
+        listMachineIssues: function (machineLabels, agentHandle, limit) {
+            // GitHub search ANDs multiple label: qualifiers — run one
+            // search per label (OR semantics), merge unique by number.
+            var seen = {};
+            var out = [];
+            machineLabels.forEach(function (ml) {
+                var res = parseMcp(github_search_issues({
+                    query: 'repo:' + full + ' is:issue is:open label:"' + ml + '"'
+                }));
+                asList(res).forEach(function (it) {
+                    if (seen[it.number]) return;
+                    seen[it.number] = true;
+                    out.push(ghIssueToState(it));
+                });
+                if (out.length >= (limit || 50)) return; // forEach: enough
+            });
+            var extra = parseMcp(github_search_issues({
+                query: 'repo:' + full + ' is:issue is:open assignee:' + agentHandle
+            }));
+            asList(extra).forEach(function (it) {
+                if (seen[it.number]) return;
+                seen[it.number] = true;
+                out.push(ghIssueToState(it));
+            });
+            return out.slice(0, limit || 50);
+        },
+
+        findPr: function (issueNumber, branchPrefix) {
+            var branch = branchPrefix + issueNumber;
+            var headFilter = owner + ':' + branch;
+            var list = listOpenPrs();
+            var open = list.filter(function (p) {
+                return (p.head && p.head.label) === headFilter;
+            });
+            var bodyRe = new RegExp('(^|[^0-9])#' + issueNumber + '([^0-9]|$)');
+            if (!open.length) {
+                open = list.filter(function (p) {
+                    return bodyRe.test(String(p.body || ''));
+                });
+            }
+            if (open.length) {
+                return { number: open[0].number, state: 'OPEN',
+                         branch: (open[0].head && open[0].head.ref) || branch };
+            }
+            var merged = listMergedPrs().filter(function (p) {
+                return (p.head && p.head.label) === headFilter;
+            });
+            if (merged.length) {
+                return { number: merged[0].number, state: 'MERGED', branch: branch };
+            }
+            return null;
+        },
+
+        prStatus: function (prNumber) {
+            // Per-tick memo (kind prStatus, key = PR number): measured on a
+            // busy tick — three rules re-fetched prStatus 23× for the same
+            // 7 PRs (23× github_get_pr + 23× github_get_commit_check_runs,
+            // all sequential). Results are read-only for callers
+            // (githubSource assigns item.pr; matchesGuards only reads), so
+            // sharing the cached reference is safe.
+            var memo = ioCacheGet(owner, repo, 'prStatus', prNumber);
+            if (memo) return memo;
+            var out = computePrStatus(prNumber);
+            ioCachePut(owner, repo, 'prStatus', prNumber, out);
+            return out;
+        },
         lastReview: function (prNumber) {
             // REST: reviews arrive chronological, the last entry is the
             // latest verdict; commit_id pins the head it was rendered on
@@ -421,6 +512,18 @@ function gitlabProvider(cfg) {
     return {
         provider: 'gitlab',
 
+        listOpenPrs: function () {
+            // Documented gap (gitlab twin of the github contract): the
+            // runAsync fan-out is github-only for now; returning null lets
+            // callers skip the snapshot fetch the same way.
+            return null;
+        },
+
+        snapshot: function () {
+            // Documented gap — see listOpenPrs above.
+            return null;
+        },
+
         listMachineIssues: function (machineLabels, agentHandle, limit) {
             // gitlab_list_issues accepts comma-separated labels (AND on
             // GitLab); machine labels are OR semantics, so list open issues
@@ -543,11 +646,28 @@ function createSmProvider(config) {
     if (!cfg.repository || !cfg.repository.owner || !cfg.repository.repo) {
         throw new Error('smProvider: repository.owner and repository.repo are required');
     }
+    // Preseed: re-hydrate the per-tick ioCache from an args-carried
+    // snapshot() bundle — runAsync worker engines call this so their
+    // first cache read hits instead of re-fetching the lists the main
+    // engine already paid for.
+    if (cfg.preseed) {
+        if (cfg.preseed.openPrs) {
+            ioCachePut(cfg.repository.owner, cfg.repository.repo, 'openPrs', null, cfg.preseed.openPrs);
+        }
+        if (cfg.preseed.mergedPrs) {
+            ioCachePut(cfg.repository.owner, cfg.repository.repo, 'mergedPrs', null, cfg.preseed.mergedPrs);
+        }
+        if (cfg.preseed.branchHeads) {
+            ioCachePut(cfg.repository.owner, cfg.repository.repo, 'branches', null, cfg.preseed.branchHeads);
+        }
+    }
     if (provider === 'gitlab') return gitlabProvider(cfg);
     if (provider === 'github') return githubProvider(cfg);
     throw new Error('smProvider: unknown provider "' + provider + '" (github | gitlab)');
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { createSmProvider: createSmProvider };
+    // _cache is exported for the unit tests (clearing/aging the holder);
+    // production callers never touch it directly.
+    module.exports = { createSmProvider: createSmProvider, _cache: _cache };
 }
