@@ -15,13 +15,14 @@ suite('smAsync', function () {
     var THROWER = 'function(args) { throw new Error("boom-" + args); }';
     var SUM_WORKER = 'function(args) { return args.a + args.b; }';
 
-    // Sync fake of the Dart runAsync: evaluates the closure-free worker
-    // source in-process (same trick the fallback uses).
+    // Sync fake of the Dart runAsync: takes the FUNCTION object (the real
+    // runtime contract — runAsync re-serializes fn.toString() for the
+    // worker engines) and evaluates its source in-process.
     function makeFakeRunAsync(calls) {
-        var fake = function (src, args) {
-            calls.push({ src: src, args: args });
+        var fake = function (fn, args) {
+            calls.push({ src: fn.toString(), args: args });
             return {
-                wait: function () { return eval('(' + src + ')')(args); }
+                wait: function () { return fn(args); }
             };
         };
         fake.all = function (jobs) {

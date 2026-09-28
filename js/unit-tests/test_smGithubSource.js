@@ -983,8 +983,8 @@ suite('sm github source — runAsync batching', function () {
         });
         var factory = eval(
             '(function(_t_, _r_) {\n' + decl +
-            '    var fake = function (src, args) {\n' +
-            '        return { wait: function () { return eval("(" + src + ")")(args); } };\n' +
+            '    var fake = function (fn, args) {\n' +
+            '        return { wait: function () { return fn(args); } };\n' +
             '    };\n' +
             "    fake.all = function (jobs) {\n" +
             '        return { wait: function () { return jobs.map(function (j) { return j.wait(); }); } };\n' +

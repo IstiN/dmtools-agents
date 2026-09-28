@@ -3640,18 +3640,23 @@ suite('probeDispatchedState bundle (runAsync read fan-out)', function () {
     test('runAsync wired: ONE worker round returns the identical shape', function () {
         var dispatches = [];
         var cliCalls = 0;
-        // The fake eval's the worker source in THIS scope — the tool the
-        // worker calls must be lexically visible here (worker-engine parity).
-        var cli_execute_command = function () {
-            cliCalls++;
-            return { output: JSON.stringify({ workflow_runs: HEAD }) };
-        };
-        var fakeRunAsync = function (src, args) {
-            dispatches.push({ src: src, args: args });
-            return { wait: function () { return eval('(' + src + ')')(args); } };
+        // Worker-engine parity: map() evals the worker source inside the
+        // smAgent module scope and hands the FAKE the function object (the
+        // real runAsync contract — it re-serializes fn.toString() for a
+        // fresh worker engine wired with the same tool surface). The
+        // worker's cli_execute_command therefore resolves to the smAgent
+        // module mock — route the response through onCliExecute.
+        var fakeRunAsync = function (fn, args) {
+            assert.equal(typeof fn, 'function', 'runAsync receives the FUNCTION, not a string');
+            dispatches.push({ src: fn.toString(), args: args });
+            return { wait: function () { return fn(args); } };
         };
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: { items: [] },
+            onCliExecute: function () {
+                cliCalls++;
+                return { output: JSON.stringify({ workflow_runs: HEAD }) };
+            },
             runAsync: fakeRunAsync
         }));
         var probe = sm.probeDispatchedState({ owner: 'a', repo: 'b' }, 'quality.yml', 'sha1');

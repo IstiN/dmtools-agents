@@ -2065,7 +2065,9 @@ function probeDispatchedState(repoInfo, ciWorkflow, headSha) {
     // Fallback: the four existing helpers on the main engine — identical
     // shape, identical per-facet defaults.
     if (typeof runAsync === 'function') {
-        return runAsync(PROBE_WORKER_SOURCE, {
+        // runAsync takes the FUNCTION object (it re-serializes the source
+        // via fn.toString() for the worker engine).
+        return runAsync(eval('(' + PROBE_WORKER_SOURCE + ')'), {
             repo: repoInfo, ciWorkflow: ciWorkflow, headSha: headSha
         }).wait();
     }

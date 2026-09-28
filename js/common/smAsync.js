@@ -13,9 +13,13 @@
  *   map(items, workerSource, toArgs) → ordered results array
  *
  *   - workerSource is a STRING literal of a closure-free
- *     `function(args) {...}` — it is fn.toString()-serialized for the
- *     workers, so it must not capture ANY outer variable; everything it
- *     needs travels through args.
+ *     `function(args) {...}`. The Dart runtime's runAsync takes a FUNCTION
+ *     (it re-serializes via fn.toString() for the workers), so map evals
+ *     the string once and hands runAsync the function object. The string
+ *     form also guarantees closure-freeness at the call site — a real
+ *     function could accidentally capture an outer variable and silently
+ *     serialize incomplete source. Everything the worker needs travels
+ *     through args.
  *   - toArgs(item, index) builds that one JSON-able args value per item.
  *   - Results are ORDER-PRESERVING: runAsync.all(jobs).wait() resolves in
  *     dispatch order; the fallback maps sequentially.
@@ -29,19 +33,22 @@
 'use strict';
 
 function map(items, workerSource, toArgs) {
+    // One eval for both paths: runAsync needs the FUNCTION object (it
+    // re-serializes the source for the worker engines); the fallback
+    // calls it in-process.
+    var fn = eval('(' + workerSource + ')');
     if (items.length > 1 && typeof runAsync === 'function') {
         var jobs = [];
         for (var i = 0; i < items.length; i++) {
-            jobs.push(runAsync(workerSource, toArgs(items[i], i)));
+            jobs.push(runAsync(fn, toArgs(items[i], i)));
         }
         return runAsync.all(jobs).wait();
     }
     // Sequential fallback (Java/GraalJS, unit-test harness, single-item
-    // lists): DIRECT eval so the worker source runs in the CURRENT scope
-    // chain — it can see this module's `require` (workers resolve
+    // lists): the evaled worker source runs in the CURRENT scope chain —
+    // it can see this module's `require` (workers resolve
     // ./common/smProvider.js against the main script directory) and any
     // testRunner-injected mock globals shadowing the forge tools.
-    var fn = eval('(' + workerSource + ')');
     return items.map(function (it, i) { return fn(toArgs(it, i)); });
 }
 
