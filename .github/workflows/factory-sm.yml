@@ -62,6 +62,11 @@ on:
         required: false
         type: string
         default: ''
+      parallel-workers:
+        description: "OPT-IN (dmtools Dart runtime only): runAsync worker-pool size for parallel READ fan-out inside the SM tick (per-PR/issue enrichment, dispatched-CI probes). '0'/absent = runAsync not wired — the engine takes its sequential fallback (Java/GraalJS parity), zero deviation. A value parsing to int >= 2 rides jobParams.parallelWorkers."
+        required: false
+        type: string
+        default: '0'
       state-publish:
         description: "OPT-IN factory-state publishing (owner 2026-09-23): JSON object {channel:'release', repo?, tag?, asset?}. The tick uploads factory-state.json as a public prerelease asset; the board (site/factory) reads the releases/latest CDN link. Empty = off."
         required: false
@@ -176,6 +181,18 @@ jobs:
           if [ -n "$sp" ]; then
             sp_escaped=$(printf '%s' "$sp" | sed 's/"/\\"/g')
             extra="${extra},\"statePublish\":\"${sp_escaped}\""
+          fi
+          # Parallel read fan-out (OPT-IN, dmtools Dart runtime only): a
+          # value parsing to int >= 2 wires the runAsync worker pool into
+          # the SM engine (parallel enrichment/probes). '0'/absent =
+          # sequential fallback — the override gains nothing, exactly like
+          # the pre-knob behavior.
+          pw='${{ inputs.parallel-workers }}'
+          if [ -n "$pw" ]; then
+            pw_int=$(printf '%s' "$pw" | grep -E '^[0-9]+$' || true)
+            if [ -n "$pw_int" ] && [ "$pw_int" -ge 2 ]; then
+              extra="${extra},\"parallelWorkers\":${pw_int}"
+            fi
           fi
           if [ "${{ inputs.dryRun }}" = "true" ]; then
             override="{\"params\":{\"jobParams\":{\"repo\":\"${repo}\",\"dryRun\":true${extra}}}}"
