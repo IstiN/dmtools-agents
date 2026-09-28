@@ -33,12 +33,40 @@ _configure_session() {
 
 echo "⚡ Fa CLI"
 
-# ── Already installed? ────────────────────────────────────────────────────────
+# ── Already installed? (version-aware) ───────────────────────────────────────
+# The Bitrise Build Hub pool VMs keep a PERSISTENT \$HOME across jobs: a
+# manually-installed ancient fa (live: 0.1.0 on dmtools-ci while the repo
+# pins v0.1.438 — dmd PR-266 legs 2026-09-28) shadowed every run because
+# this check only tested PRESENCE. Compare against the requested version
+# and reinstall on mismatch; "latest" resolves via the release redirect.
+installed_fa_version() {
+  fa --version 2>/dev/null | awk '{print $2}' | sed 's/^v//'
+}
+requested_fa_version() {
+  local want="${FA_VERSION}"
+  if [ "${want}" = "latest" ] || [ -z "${want}" ]; then
+    want="$(curl -fsSI "https://github.com/${FA_REPO}/releases/latest" \
+      | sed -n 's/^location: .*tag\/\([^[:space:]]*\).*/\1/ip' | tr -d '\r')"
+  fi
+  echo "${want#v}"
+}
+
 if is_installed fa || is_installed fah; then
-  echo "✅ fa already installed: $(fa --version 2>/dev/null || fah --version 2>/dev/null || echo "cached")"
-  register_path "${FA_BIN_DIR}"
-  _configure_session
-  exit 0
+  HAVE="$(installed_fa_version)"
+  WANT="$(requested_fa_version)"
+  if [ -n "${WANT}" ] && [ "${HAVE}" != "${WANT}" ]; then
+    echo "🔄 fa ${HAVE} installed but ${WANT} requested — reinstalling"
+    # Remove BOTH the canonical path and wherever PATH resolves fa — the
+    # stale binary may sit outside FA_BIN_DIR (manual installs).
+    rm -f "${FA_BIN_DIR}/fa"
+    resolved="$(command -v fa 2>/dev/null || true)"
+    case "${resolved}" in "${HOME}"/*) rm -f "${resolved}" ;; esac
+  else
+    echo "✅ fa already installed: $(fa --version 2>/dev/null || fah --version 2>/dev/null || echo "cached")"
+    register_path "${FA_BIN_DIR}"
+    _configure_session
+    exit 0
+  fi
 fi
 
 if [ -x "${FA_BIN_DIR}/fa" ]; then
