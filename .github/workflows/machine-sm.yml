@@ -1,0 +1,58 @@
+# Machine SM — thin stub over the FROZEN machine loop
+# (IstiN/dmtools-agentic-workflows, reusable).
+#
+# Same freeze contract as dmtools-dart's machine-sm.yml: the workflow is
+# pinned to an immutable SHA; agent code and the dmtools CLI resolve from
+# RELEASES at run time via this repo's variables:
+#   vars.AGENTS_VERSION  — dmtools-agents release tag ('latest' default)
+#   vars.DMTOOLS_VERSION — dmtools-dart CLI release tag ('latest' default)
+# Bump a version = repo-settings edit, never a workflow edit.
+# NO caller-side concurrency: the factory owns the `machine-sm` group.
+
+name: 'Machine SM'
+
+run-name: >-
+  🧹 SM ${{
+    github.event_name == 'workflow_dispatch' && 'manual tick' ||
+    format('tick {0}', github.event.schedule || '') }}${{
+  github.event.inputs.dryRun == 'true' && ' (dry)' || '' }}
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # short ticks — the engine idles when busy
+  workflow_dispatch:
+    inputs:
+      dryRun:
+        description: 'Log the plan, perform no action'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write         # checkout + silent update-branch pushes
+  issues: write           # labels + close-issue safety net
+  pull-requests: write    # update-branch + merge
+  checks: write           # bridge-free validation stamps
+  actions: write          # workflow_dispatch on the teammate workflow
+
+jobs:
+  sm:
+    # Pinned to the immutable SHA of IstiN/dmtools-agentic-workflows main
+    # (the frozen machine-loop home; bump the SHA only together with the
+    # matching loop change).
+    uses: IstiN/dmtools-agentic-workflows/.github/workflows/factory-sm.yml@a141cea35a7cea3fc496186b0473fd78ed42f568
+    with:
+      # No .dmtools/config.js in this repo — the machine login rides the
+      # deployment-level input (#687), exactly like the factory's contract.
+      machine-author: ai-teammate
+      # This repo dispatches no CI on PR heads (docs checks only) — the SM
+      # leaves validation to the event-driven merge bot and labels.
+      ci-workflow: ''
+      # Manual ticks default to dry; cron ticks run live.
+      dryRun: ${{ github.event.inputs.dryRun || 'false' }}
+      # Silent branch updates: input channel (github.token via secrets/in
+      # blocks arrives empty through a reusable call — live-verified).
+      silent-token: ${{ github.token }}
+    secrets:
+      SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+      SILENT_GH_TOKEN: ${{ secrets.SILENT_GH_TOKEN }}
