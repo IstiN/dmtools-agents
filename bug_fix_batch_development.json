@@ -26,11 +26,11 @@
       "./agents/instructions/common/coding_guidelines.md",
       "./agents/instructions/common/input_context_reading.md",
       "./agents/instructions/bug_fix_batch_development/batch_scope.md",
-      "./agents/instructions/bug_fix_development/general_guidelines.md",
-      "./agents/instructions/bug_fix_development/tdd_approach.md",
-      "./agents/instructions/bug_fix_development/output_rules.md",
-      "./agents/instructions/bug_fix_development/formatting_rules.md",
-      "./agents/instructions/bug_fix_development/few_shots.md",
+      "./agents/instructions/bug_development/general_guidelines.md",
+      "./agents/instructions/bug_development/tdd_approach.md",
+      "./agents/instructions/bug_development/output_rules.md",
+      "./agents/instructions/bug_development/formatting_rules.md",
+      "./agents/instructions/bug_development/few_shots.md",
       "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md"
     ]
