@@ -25,11 +25,20 @@ suite('sm github source', function () {
         providerStub._status = statuses || {};
         providerStub._reviews = reviews || {};
         providerStub._threads = threads || {};
+        // The real smAsync module: the fallback path direct-evals the
+        // worker sources in ITS scope, so the forge-tool mocks (and the
+        // smProvider stub for the worker-side require) are injected here.
+        var smAsyncMod = loadModule('js/common/smAsync.js', makeRequire({
+            './common/smProvider.js': {
+                createSmProvider: function () { return providerStub; }
+            }
+        }), tools || {});
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': {
                 createSmProvider: function () { return providerStub; }
-            }
+            },
+            '../../common/smAsync.js': smAsyncMod
         }), tools);
     }
 
@@ -915,6 +924,216 @@ suite('sm github source', function () {
         assert.equal(r.skipIfGreenCi, true,
             'green-cover guard: a completed green CI run on the head stops the re-dispatch loop');
         assert.equal(r.localAction, 'validate_pr', 're-dispatches CI on the head');
+    });
+
+});
+suite('sm github source — runAsync batching', function () {
+
+    // Sequential-comparison stub (the shared `load()` helper above is
+    // scoped to the first suite — this is its twin, wired to seqStub).
+    var seqStub = {
+        findPr: function (n) { return seqStub._prs[n] || null; },
+        prStatus: function (n) { return seqStub._status[n] || null; },
+        _prs: {},
+        _status: {}
+    };
+    function loadSeq(tools) {
+        seqStub._prs = {};
+        seqStub._status = {};
+        var smAsyncMod = loadModule('js/common/smAsync.js', makeRequire({
+            './common/smProvider.js': {
+                createSmProvider: function () { return seqStub; }
+            }
+        }), tools || {});
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': {
+                createSmProvider: function () { return seqStub; }
+            },
+            '../../common/smAsync.js': smAsyncMod
+        }), tools);
+    }
+
+    // Sync fake of the Dart runAsync (same trick as test_smAsync): the
+    // worker source is eval'd in THIS scope, so `require` and the forge
+    // tools are provided here deliberately. The batch path wires the
+    // worker-side require to batchStub; the sequential comparison run
+    // goes through the shared `load()` helper whose worker-side require
+    // resolves to providerStub — each side gets its own stub state.
+    var batchCalls = [];
+    var batchStub = {
+        findPr: function (n) { return batchStub._prs[n] || null; },
+        prStatus: function (n) { return batchStub._status[n] || null; },
+        snapshotCalls: 0,
+        snapshot: function () {
+            batchStub.snapshotCalls++;
+            return { openPrs: [], mergedPrs: [], branchHeads: { main: 'basesha' } };
+        },
+        _prs: {},
+        _status: {}
+    };
+    // The fake's eval'd worker must see require + the forge tools in its
+    // LEXICAL scope — build it through an eval-wrapped factory that
+    // injects them as vars (exactly how loadModule mocks globals and how
+    // the real worker engine wires its tool wrappers).
+    function makeFakeRunAsync(tools, requireFn) {
+        var decl = 'var require = _r_;\n';
+        Object.keys(tools).forEach(function (k) {
+            decl += 'var ' + k + ' = _t_["' + k + '"];\n';
+        });
+        var factory = eval(
+            '(function(_t_, _r_) {\n' + decl +
+            '    var fake = function (src, args) {\n' +
+            '        return { wait: function () { return eval("(" + src + ")")(args); } };\n' +
+            '    };\n' +
+            "    fake.all = function (jobs) {\n" +
+            '        return { wait: function () { return jobs.map(function (j) { return j.wait(); }); } };\n' +
+            '    };\n' +
+            '    return fake;\n' +
+            '})'
+        );
+        return factory(tools, requireFn);
+    }
+    var batchRequire = makeRequire({
+        './common/smProvider.js': {
+            createSmProvider: function () { return batchStub; }
+        }
+    });
+
+    function loadBatch(tools) {
+        batchCalls = [];
+        batchStub.snapshotCalls = 0;
+        batchStub._prs = {};
+        batchStub._status = {};
+        var fakeRunAsync = makeFakeRunAsync(tools || {}, batchRequire);
+        var recordingFake = function (src, args) {
+            batchCalls.push({ src: src, args: args });
+            return fakeRunAsync(src, args);
+        };
+        recordingFake.all = fakeRunAsync.all;
+        var merged = Object.assign({ runAsync: recordingFake }, tools || {});
+        var smAsyncMod = loadModule('js/common/smAsync.js', makeRequire({
+            './common/smProvider.js': {
+                createSmProvider: function () { return batchStub; }
+            }
+        }), merged);
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': {
+                createSmProvider: function () { return batchStub; }
+            },
+            '../../common/smAsync.js': smAsyncMod
+        }), merged);
+    }
+
+    var STATUSES = {
+        10: { number: 10, state: 'OPEN', checkConclusion: 'green', mergeState: 'CLEAN' },
+        20: { number: 20, state: 'OPEN', checkConclusion: 'red', mergeState: 'BLOCKED' },
+        30: { number: 30, state: 'OPEN', checkConclusion: 'none', mergeState: 'UNKNOWN' }
+    };
+
+    test('pr rules: batch enrichment (mocked runAsync) matches the sequential path shapes/order', function () {
+        var prs = [
+            { number: 30, labels: [], body: '', head: { ref: 'ai/gh-30' } },
+            { number: 10, labels: [], body: '', head: { ref: 'ai/gh-10' } },
+            { number: 20, labels: [], body: '', head: { ref: 'ai/gh-20' } }
+        ];
+        var tools = { github_list_prs: function () { return prs; } };
+        var rule = { query: { type: 'pr', checks: ['green', 'none'] } };
+        var ctx = { repoInfo: { owner: 'a', repo: 'b' } };
+
+        // Sequential fallback (no runAsync anywhere). Stub state is set
+        // AFTER the load — the loaders reset it (mirroring `load()`).
+        var seqMod = loadSeq(tools);
+        seqStub._status = STATUSES;
+        var seqItems = seqMod.query(rule, ctx);
+
+        // Batched path (mocked runAsync in both scopes).
+        var batchMod = loadBatch(tools);
+        batchStub._status = STATUSES;
+        var batchItems = batchMod.query(rule, ctx);
+
+        assert.deepEqual(batchItems, seqItems, 'identical items through the runAsync batch');
+        assert.deepEqual(batchItems.map(function (i) { return i.prNumber; }), [10, 30],
+            'guard filtering unchanged (FIFO order, checks guard)');
+        assert.equal(batchStub.snapshotCalls, 1, 'ONE snapshot fetch for the whole batch');
+        assert.equal(batchCalls.length, 3, 'one worker dispatch per PR');
+        assert.ok(batchCalls.every(function (c) { return !!c.args.preseed; }),
+            'every worker received the preseed snapshot');
+        assert.equal(batchCalls[0].args.preseed, batchCalls[2].args.preseed,
+            'the SAME snapshot object shipped to every worker');
+    });
+
+    test('issue rules: batched search preserves dedupe and descriptor order', function () {
+        var tools = {
+            github_search_issues: function (args) {
+                if (args.query.indexOf('label:"agent:dev"') !== -1) {
+                    // newest-first API order + an overlap with the second label
+                    return { items: [
+                        { number: 9, labels: [{ name: 'agent:dev' }] },
+                        { number: 5, labels: [{ name: 'agent:dev' }, { name: 'x' }] }
+                    ] };
+                }
+                if (args.query.indexOf('label:"agent:rework"') !== -1) {
+                    return { items: [{ number: 5, labels: [{ name: 'agent:rework' }] }] };
+                }
+                return { items: [{ number: 7, labels: [] }] }; // assignee scan
+            }
+        };
+        var rule = { query: { type: 'issue', labels: ['agent:dev', 'agent:rework'], assignee: 'ai-teammate' } };
+        var ctx = { repoInfo: { owner: 'a', repo: 'b' } };
+
+        var seqItems = loadSeq(tools).query(rule, ctx);
+
+        var batchItems = loadBatch(tools).query(rule, ctx);
+
+        assert.deepEqual(batchItems, seqItems, 'identical items through the batched search merge');
+        assert.deepEqual(batchItems.map(function (i) { return i.issueNumber; }), [5, 7, 9],
+            'deduped by number (overlap across label scans kept once); final order is the FIFO sort, identical on both paths');
+        var searchDispatches = batchCalls.filter(function (c) { return !!c.args.descriptor; });
+        assert.equal(searchDispatches.length, 3, 'one worker dispatch per search descriptor');
+        assert.equal(searchDispatches[0].args.descriptor.kind, 'label');
+        assert.equal(searchDispatches[2].args.descriptor.kind, 'assignee');
+    });
+
+    test('issue rules: batched enrichment preserves OPEN/MERGED shapes', function () {
+        var tools = {
+            github_search_issues: function () {
+                return { items: [
+                    { number: 3, labels: [{ name: 'agent:dev' }] },
+                    { number: 1, labels: [{ name: 'agent:dev' }] }
+                ] };
+            }
+        };
+        var PRS = {
+            3: { number: 40, state: 'OPEN' },
+            1: { number: 10, state: 'MERGED' }
+        };
+        var STATUS = {
+            40: { number: 40, state: 'OPEN', checkConclusion: 'green',
+                  mergeState: 'CLEAN', branch: 'ai/gh-3' }
+        };
+        var rule = { query: { type: 'issue', labels: ['agent:dev'] } };
+        var ctx = { repoInfo: { owner: 'a', repo: 'b' } };
+
+        var seqMod = loadSeq(tools);
+        seqStub._prs = PRS;
+        seqStub._status = STATUS;
+        var seqItems = seqMod.query(rule, ctx);
+
+        var batchMod = loadBatch(tools);
+        batchStub._prs = PRS;
+        batchStub._status = STATUS;
+        var batchItems = batchMod.query(rule, ctx);
+
+        assert.deepEqual(batchItems, seqItems, 'identical enrichment shapes');
+        var open = batchItems.filter(function (i) { return i.issueNumber === 3; })[0];
+        var merged = batchItems.filter(function (i) { return i.issueNumber === 1; })[0];
+        assert.equal(open.prNumber, 40);
+        assert.equal(open.branch, 'ai/gh-3', 'OPEN ref: branch from prStatus');
+        assert.deepEqual(merged.pr, { number: 10, state: 'MERGED', checks: 'none',
+            mergeState: 'UNKNOWN', mergeable: null }, 'MERGED ref: placeholder shape');
+        assert.equal(batchCalls.length, 2, 'one worker dispatch per issue');
     });
 
 });
