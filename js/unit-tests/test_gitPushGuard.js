@@ -262,4 +262,19 @@ suite('gitPushGuard — shim parity (scripts/git-push-guard.sh)', function() {
         assert.contains(workflow, 'factory-agents/scripts/git-push-guard.sh');
         assert.contains(workflow, 'export PATH="${GIT_GUARD_BIN}:${PATH}"');
     });
+
+    // RCA 2026-09-28: two guard copies on PATH (factory step + run-agent.sh)
+    // resolved each other as "real git" and exec-looped forever — every git
+    // call in the session froze (child stuck in anon_pipe_read, fd 255 on
+    // the guard script). These tests pin the double-install defenses.
+    test('shim real-git resolution skips sibling guard copies', function() {
+        // Not just "$_cand_resolved != $_self_resolved" — a second copy is a
+        // DIFFERENT file, so self-comparison alone does not break the loop.
+        assert.contains(shim, '*/git-push-guard.sh) continue;;');
+    });
+
+    test('run-agent.sh does not arm a second shim when one is already on PATH', function() {
+        var runAgent = file_read({ path: 'scripts/run-agent.sh' });
+        assert.contains(runAgent, 'already armed on PATH');
+    });
 });

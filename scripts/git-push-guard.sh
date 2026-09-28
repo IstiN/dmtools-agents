@@ -49,6 +49,16 @@ for _dir in $PATH; do
     _cand="$_dir/git"
     [ -x "$_cand" ] || continue
     _cand_resolved="$(readlink -f "$_cand" 2>/dev/null || printf '%s' "$_cand")"
+    # Skip not only ourselves but ANY copy of this guard. The factory step
+    # and run-agent.sh each prepend their own shim dir (symlinks to two
+    # different copies of git-push-guard.sh), so self-comparison alone is
+    # not enough: copy A resolves copy B as "real git" and vice versa —
+    # an infinite exec ping-pong that freezes every git call in the session
+    # (RCA 2026-09-28: legs hang on `git status`, child stuck in
+    # anon_pipe_read with fd 255 on the guard script).
+    case "$_cand_resolved" in
+        */git-push-guard.sh) continue;;
+    esac
     if [ "$_cand_resolved" != "$_self_resolved" ]; then
         _real_git="$_cand"
         break

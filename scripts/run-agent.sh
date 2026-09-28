@@ -181,10 +181,23 @@ RESCUE_MARKER="$(start_output_rescue_marker)"
 # gh-992 incident: crafted "(closes #992)" commit pushed straight to main).
 GIT_GUARD_DIR=""
 if [ -f "${SCRIPT_DIR}/git-push-guard.sh" ]; then
-  GIT_GUARD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/git-push-guard.XXXXXX")"
-  ln -sf "${SCRIPT_DIR}/git-push-guard.sh" "${GIT_GUARD_DIR}/git"
-  export PATH="${GIT_GUARD_DIR}:${PATH}"
-  echo "git push guard: armed (${GIT_GUARD_DIR}/git → scripts/git-push-guard.sh)"
+  # Do not arm a second shim when one is already on PATH (the factory
+  # workflow prepends its own guard dir for the whole step): two copies
+  # would resolve each other as "real git" and exec-loop forever
+  # (RCA 2026-09-28 legs hang). The shim itself also skips sibling guard
+  # copies during real-git resolution — belt and braces.
+  _existing_git_resolved="$(readlink -f "$(command -v git 2>/dev/null)" 2>/dev/null || true)"
+  case "$_existing_git_resolved" in
+    */git-push-guard.sh)
+      echo "git push guard: already armed on PATH — skipping duplicate install"
+      ;;
+    *)
+      GIT_GUARD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/git-push-guard.XXXXXX")"
+      ln -sf "${SCRIPT_DIR}/git-push-guard.sh" "${GIT_GUARD_DIR}/git"
+      export PATH="${GIT_GUARD_DIR}:${PATH}"
+      echo "git push guard: armed (${GIT_GUARD_DIR}/git → scripts/git-push-guard.sh)"
+      ;;
+  esac
 fi
 
 exit_code=0
