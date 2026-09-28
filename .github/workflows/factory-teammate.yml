@@ -637,6 +637,7 @@ jobs:
             echo '.codegraph/'
             echo '.dmtools/fa-trace.log'
             echo '.dmtools/run-output.txt'
+            echo '.dmtools/stall-capture.log'
             echo '.dmtools/fa-sessions/'
             echo '.dmtools/copilot-sessions/'
             echo '.fah/bash_jobs/'
@@ -810,7 +811,32 @@ jobs:
             done
           ) &
           WATCHDOG_PID=$!
-          trap 'kill "${WATCHDOG_PID}" 2>/dev/null || true' EXIT
+          # Stall-capture sidecar (dmd PR-266 hang investigation 2026-09-28):
+          # the Bitrise-pool probe never catches the workload stall because
+          # it runs on an IDLE VM; this monitor rides the agent run itself.
+          # Every 20s: load, PSI io/mem, all D-state processes, and for every
+          # live git/sh/dart process the kernel wait channel (/proc wchan)
+          # plus stack and open fds — wchan names WHAT the process sleeps on
+          # (disk I/O, network, futex, pipe) which is the proof either way.
+          STALL_LOG="${GITHUB_WORKSPACE}/.dmtools/stall-capture.log"
+          : > "${STALL_LOG}"
+          (
+            while sleep 20; do
+              {
+                echo "=== $(date -u +%H:%M:%S) load=$(cut -d' ' -f1 /proc/loadavg)"
+                sed 's/^/psi_io  /' /proc/pressure/io 2>/dev/null
+                sed 's/^/psi_mem /' /proc/pressure/memory 2>/dev/null
+                ps -eo pid,ppid,state,etime,wchan:32,comm | awk 'NR==1 || $3 ~ /^D/'
+                for p in $(pgrep -x git 2>/dev/null) $(pgrep -x fa 2>/dev/null) $(pgrep -x dmtools 2>/dev/null); do
+                  echo "--- pid $p ($(cat /proc/$p/comm 2>/dev/null)) state=$(awk '{print $3}' /proc/$p/stat 2>/dev/null) wchan=$(cat /proc/$p/wchan 2>/dev/null)"
+                  echo "    syscall: $(cat /proc/$p/syscall 2>/dev/null)"
+                  cat /proc/$p/stack 2>/dev/null | sed 's/^/    stack: /'
+                done
+              } >> "${STALL_LOG}" 2>&1
+            done
+          ) &
+          STALL_MON_PID=$!
+          trap 'kill "${WATCHDOG_PID}" "${STALL_MON_PID}" 2>/dev/null || true' EXIT
           dmtools run "${RUNNER}" ${DMTOOLS_ARGS[@]+"${DMTOOLS_ARGS[@]}"} \
             --metadata '{"contextId":"${{ needs.guard.outputs.anchor }}"}' \
             --ciRunUrl "${CI_RUN_URL}" --debug 2>&1 | tee "${RUN_OUTPUT}"
@@ -1119,6 +1145,21 @@ jobs:
             echo "::error::could not delete ${FA_SESS_BRANCH} — the next leg may restore the poisoned session; delete the branch manually"
           fi
 
+      - name: Collect fa crash log (uncaught errors live outside the workspace)
+        # fa's last-resort handler appends uncaught errors (e.g. the
+        # "StreamSink is bound to a stream" abort-path crash on the hung
+        # dmd PR-266 legs) to $HOME/.fah/crash.log — outside the workspace,
+        # invisible to the artifact below. Copy it in, best-effort.
+        if: always()
+        run: |
+          mkdir -p .dmtools
+          if [ -f "${HOME}/.fah/crash.log" ]; then
+            cp "${HOME}/.fah/crash.log" .dmtools/fa-crash.log
+            echo "fa crash log collected ($(wc -l < .dmtools/fa-crash.log) lines)"
+          else
+            echo "no fa crash log (${HOME}/.fah/crash.log absent)"
+          fi
+
       - name: Upload the full fa session trace
         # AFTER the memory-persist push: the artifact must include the final
         # helper invocation of the run.
@@ -1130,6 +1171,8 @@ jobs:
             .dmtools/fa-trace.log
             .dmtools/run-output.txt
             .dmtools/credential-helper.log
+            .dmtools/stall-capture.log
+            .dmtools/fa-crash.log
             .dmtools/fa-sessions-quarantine/**
           if-no-files-found: ignore
 
