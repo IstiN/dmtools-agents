@@ -57,7 +57,7 @@ jobs:
 
       - name: Install dmtools CLI (pinned release bundle)
         env:
-          DMTOOLS_VERSION: ${{ vars.DMTOOLS_VERSION || 'v0.1.21' }}
+          DMTOOLS_VERSION: ${{ vars.DMTOOLS_VERSION || 'v0.1.22' }}
         run: |
           curl -fsSL "https://github.com/epam/dmtools-dart/releases/download/${DMTOOLS_VERSION}/install.sh" \
             -o /tmp/dmtools-install.sh
@@ -81,7 +81,7 @@ jobs:
 
       - name: Install dmtools CLI (pinned release bundle)
         env:
-          DMTOOLS_VERSION: ${{ vars.DMTOOLS_VERSION || 'v0.1.21' }}
+          DMTOOLS_VERSION: ${{ vars.DMTOOLS_VERSION || 'v0.1.22' }}
         run: |
           curl -fsSL "https://github.com/epam/dmtools-dart/releases/download/${DMTOOLS_VERSION}/install.sh" \
             -o /tmp/dmtools-install.sh
