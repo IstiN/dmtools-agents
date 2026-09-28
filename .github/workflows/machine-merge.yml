@@ -1,0 +1,46 @@
+# Machine merge bot stub — event-driven fast path (frozen machine loop).
+#
+# Same freeze contract as machine-sm.yml: pinned immutable SHA of
+# IstiN/dmtools-agentic-workflows; agents/CLI resolve from releases by
+# vars.AGENTS_VERSION / vars.DMTOOLS_VERSION.
+# The SM cron tick is best-effort (GitHub silently drops scheduled runs);
+# this workflow reacts to EVENTS so approved green PRs merge within seconds.
+# Idempotent against the SM: shared labels, first actor wins.
+name: 'Machine Merge Bot'
+
+on:
+  workflow_run:
+    workflows: ['Agent Docs']   # the only per-PR check this repo dispatches
+    types: [completed]
+  pull_request:
+    types: [labeled, synchronize, edited]
+  check_run:
+    types: [completed]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: machine-merge-bot
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    # Label events only matter for the machine latches; other PR events
+    # (synchronize/edited) always run — cheap and idempotent.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.action != 'labeled' ||
+      contains(github.event.label.name, 'ai_') ||
+      contains(github.event.label.name, 'pr_approved')
+    # Pinned to the immutable SHA of IstiN/dmtools-agentic-workflows main
+    # (same pin as machine-sm.yml — bump both together).
+    uses: IstiN/dmtools-agentic-workflows/.github/workflows/factory-merge.yml@89617d3faa760818a85b9afa4785eb2efe6ba5a8
+    with:
+      # Docs-only CI is the repo's PR check (workflow_run fallback name).
+      ci_workflow: agent-docs.yml
+    secrets:
+      SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
