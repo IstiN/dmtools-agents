@@ -94,7 +94,7 @@ install_from_github_release() {
   asset="fa-${os}-${arch}.tar.gz"
   tmp="$(mktemp -d)"
 
-  local url="https://github.com/${FA_REPO}/releases/${FA_VERSION}/download/${asset}"
+  local url="https://github.com/${FA_REPO}/releases/download/${FA_VERSION}/${asset}"
   [ "${FA_VERSION}" = "latest" ] && \
     url="https://github.com/${FA_REPO}/releases/latest/download/${asset}"
   echo "  → ${url}"
