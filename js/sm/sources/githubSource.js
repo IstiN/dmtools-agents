@@ -27,6 +27,62 @@
 
 var smProviderModule = require('../../common/smProvider.js');
 var machineAuthorModule = require('../../common/machineAuthor.js');
+var smAsyncModule = require('../../common/smAsync.js');
+
+// runAsync worker sources — STRING literals of CLOSURE-FREE functions.
+// The Dart runtime serializes them via fn.toString() and runs each on a
+// fresh, fully-wired worker engine; EVERYTHING they need travels via args
+// (the per-tick ioCache snapshot rides args.preseed — worker isolates
+// cannot see the main isolate's module-level cache). require() resolves
+// against the main script's directory snapshot, so './common/smProvider.js'
+// lands on js/common/smProvider.js. Without runAsync (Java/GraalJS parity,
+// unit-test harness) smAsync falls back to sequential in-process eval of
+// the same source — one code path, two execution strategies. READ fan-out
+// only: rule sequencing, mutex and all actions stay on the main engine.
+var PR_STATUS_WORKER_SOURCE = [
+    'function(args) {',
+    "    var mod = require('./common/smProvider.js');",
+    "    var p = mod.createSmProvider({ scm: { provider: 'github' }, repository: args.repo, preseed: args.preseed });",
+    '    return p.prStatus(args.n);',
+    '}'
+].join('\n');
+
+var ISSUE_ENRICH_WORKER_SOURCE = [
+    'function(args) {',
+    "    var mod = require('./common/smProvider.js');",
+    "    var p = mod.createSmProvider({ scm: { provider: 'github' }, repository: args.repo, preseed: args.preseed });",
+    '    var prRef = p.findPr(args.n, args.prefix);',
+    '    var pr = null;',
+    "    if (prRef && prRef.state === 'OPEN') {",
+    '        pr = p.prStatus(prRef.number);',
+    '    }',
+    '    return { prRef: prRef, pr: pr };',
+    '}'
+].join('\n');
+
+var ISSUE_SEARCH_WORKER_SOURCE = [
+    'function(args) {',
+    '    function parseMcp(result) {',
+    '        if (!result) return null;',
+    "        if (typeof result === 'string') {",
+    '            try { return JSON.parse(result); } catch (e) { return null; }',
+    '        }',
+    '        return result;',
+    '    }',
+    '    function asList(parsed) {',
+    '        if (!parsed) return [];',
+    '        if (Array.isArray(parsed)) return parsed;',
+    '        if (Array.isArray(parsed.data)) return parsed.data;',
+    '        if (Array.isArray(parsed.items)) return parsed.items;',
+    '        return [];',
+    '    }',
+    '    var d = args.descriptor;',
+    "    var query = 'repo:' + args.repo.owner + '/' + args.repo.repo +",
+    "        ' is:issue is:open ' +",
+    "        (d.kind === 'label' ? 'label:\"' + d.label + '\"' : 'assignee:' + args.assignee);",
+    '    return { descriptor: d, items: asList(parseMcp(github_search_issues({ query: query }))) };',
+    '}'
+].join('\n');
 
 function parseMcp(result) {
     if (!result) return null;
@@ -180,55 +236,97 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
     // Per-label OR search (GitHub ANDs multi-label queries). Collect ALL
     // matches — the FIFO sort at the end picks the oldest, so an early
     // per-label cut at `limit` would drop old issues behind newer ones.
-    (q.labels || []).forEach(function (ml) {
-        var res = parseMcp(github_search_issues({
-            query: 'repo:' + full + ' is:issue is:open label:"' + ml + '"'
-        }));
-        asList(res).forEach(function (it) {
-            if (seen[it.number]) return;
-            seen[it.number] = true;
-            items.push({
-                key: 'gh-' + it.number,
-                labels: issueLabels(it),
-                pr: null,
-                issueNumber: it.number,
-                prNumber: null,
-                _raw: it
-            });
-        });
+    // The scans fan out through smAsync: one runAsync worker round when
+    // parallelWorkers is wired, the identical sequential order otherwise.
+    // Merging iterates descriptor order — labels in rule order, then the
+    // assignee scan — and dedupes by number, exactly like the old inline
+    // sequence.
+    var descriptors = (q.labels || []).map(function (ml) {
+        return { kind: 'label', label: ml };
     });
-    if (q.assignee) {
-        var extra = parseMcp(github_search_issues({
-            query: 'repo:' + full + ' is:issue is:open assignee:' + q.assignee
-        }));
-        asList(extra).forEach(function (it) {
+    if (q.assignee) descriptors.push({ kind: 'assignee' });
+
+    var searchOne = function (d) {
+        var queryStr = 'repo:' + full + ' is:issue is:open ' +
+            (d.kind === 'label' ? 'label:"' + d.label + '"' : 'assignee:' + q.assignee);
+        var res = parseMcp(github_search_issues({ query: queryStr }));
+        return { descriptor: d, items: asList(res) };
+    };
+
+    var searchResults;
+    if (descriptors.length > 1) {
+        searchResults = smAsyncModule.map(descriptors, ISSUE_SEARCH_WORKER_SOURCE, function (d) {
+            return { repo: repoInfo, descriptor: d, assignee: q.assignee };
+        });
+    } else {
+        searchResults = descriptors.map(searchOne);
+    }
+
+    searchResults.forEach(function (r) {
+        r.items.forEach(function (it) {
             if (seen[it.number]) return;
             seen[it.number] = true;
-            items.push({
+            var item = {
                 key: 'gh-' + it.number,
                 labels: issueLabels(it),
                 pr: null,
                 issueNumber: it.number,
                 prNumber: null
-            });
+            };
+            // label-scan items keep the raw payload (today's shape);
+            // assignee items never carried it.
+            if (r.descriptor.kind === 'label') item._raw = it;
+            items.push(item);
         });
-    }
+    });
 
     // Linked-PR enrichment: the issue carries the state, the PR carries
-    // the CI/merge observation.
-    var enriched = items.map(function (item) {
-        var prRef = provider.findPr(item.issueNumber, branchPrefix);
-        if (prRef && prRef.state === 'OPEN') {
-            item.pr = provider.prStatus(prRef.number);
-            item.prNumber = prRef.number;
-            item.branch = (item.pr && item.pr.branch) || '';
-        } else if (prRef) {
-            item.pr = { number: prRef.number, state: prRef.state,
-                        checks: 'none', mergeState: 'UNKNOWN', mergeable: null };
-            item.prNumber = prRef.number;
-        }
-        return item;
-    });
+    // the CI/merge observation. Multi-item batches fan out through
+    // smAsync with ONE cache snapshot fetched up front and shipped to
+    // every worker via args.preseed; single-item lists keep today's
+    // sequential path with NO snapshot fetch (avoids the extra
+    // github_list_branches call for the common single-issue case).
+    var enriched;
+    if (items.length > 1) {
+        var snapshot = (typeof runAsync === 'function' && provider &&
+            typeof provider.snapshot === 'function') ? provider.snapshot() : null;
+        var enrichResults = smAsyncModule.map(items, ISSUE_ENRICH_WORKER_SOURCE, function (item) {
+            return { repo: repoInfo, n: item.issueNumber, prefix: branchPrefix, preseed: snapshot };
+        });
+        enriched = enrichResults.map(function (r, i) {
+            var item = items[i];
+            var prRef = r.prRef;
+            if (prRef && prRef.state === 'OPEN') {
+                item.pr = r.pr;
+                item.prNumber = prRef.number;
+                item.branch = (item.pr && item.pr.branch) || '';
+                // Write-back — same cross-rule memo contract as the
+                // queryPrs batch above.
+                if (provider && typeof provider.memoPrStatus === 'function') {
+                    provider.memoPrStatus(prRef.number, r.pr);
+                }
+            } else if (prRef) {
+                item.pr = { number: prRef.number, state: prRef.state,
+                            checks: 'none', mergeState: 'UNKNOWN', mergeable: null };
+                item.prNumber = prRef.number;
+            }
+            return item;
+        });
+    } else {
+        enriched = items.map(function (item) {
+            var prRef = provider.findPr(item.issueNumber, branchPrefix);
+            if (prRef && prRef.state === 'OPEN') {
+                item.pr = provider.prStatus(prRef.number);
+                item.prNumber = prRef.number;
+                item.branch = (item.pr && item.pr.branch) || '';
+            } else if (prRef) {
+                item.pr = { number: prRef.number, state: prRef.state,
+                            checks: 'none', mergeState: 'UNKNOWN', mergeable: null };
+                item.prNumber = prRef.number;
+            }
+            return item;
+        });
+    }
 
     var matched = enriched.filter(function (item) { return matchesGuards(item, rule, provider, machineAuthor); });
 
@@ -281,9 +379,15 @@ function linkedIssueNumber(body) {
 }
 
 function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {    var q = rule.query || {};
-    var prs = asList(parseMcp(github_list_prs({
-        workspace: repoInfo.owner, repository: repoInfo.repo, state: 'open'
-    })));
+    // The open-PR list rides the provider's per-tick ioCache — this site
+    // fired github_list_prs once PER RULE (measured: 18 calls, one idle
+    // tick, all the same payload). Providers without the cache contract
+    // (gitlab stub returns null) keep the direct fetch.
+    var prs = (provider && typeof provider.listOpenPrs === 'function'
+        ? provider.listOpenPrs() : null) ||
+        asList(parseMcp(github_list_prs({
+            workspace: repoInfo.owner, repository: repoInfo.repo, state: 'open'
+        })));
 
     var items = prs.map(function (p) {
         return {
@@ -369,14 +473,39 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {    var q = r
     }
 
     // PR guards that need per-PR facts (checks/merge state) resolve lazily:
-    // only when the rule actually filters on them.
+    // only when the rule actually filters on them. Multi-PR batches fan
+    // out through smAsync with ONE cache snapshot fetched up front and
+    // shipped to every worker via args.preseed; single-PR lists keep
+    // today's sequential path with NO snapshot fetch (avoids the extra
+    // github_list_branches call for the common single-PR rule).
     var needsStatus = q.checks || q.mergeState || q.notMergeState ||
         q.mergeable !== undefined || q.prChecks;
     if (needsStatus) {
-        items = items.map(function (item) {
-            item.pr = provider.prStatus(item.prNumber);
-            return item;
-        });
+        if (items.length > 1) {
+            // PR-rule batch: only the open-PR list + branch heads are
+            // needed by the prStatus worker — skip the merged-PR leg (was
+            // ~1.8s on a busy repo, zero uses in this path).
+            var prSnapshot = (typeof runAsync === 'function' && provider &&
+                typeof provider.snapshot === 'function')
+                ? provider.snapshot(['openPrs', 'branchHeads', 'prStatus']) : null;
+            var prStatuses = smAsyncModule.map(items, PR_STATUS_WORKER_SOURCE, function (item) {
+                return { repo: repoInfo, n: item.prNumber, preseed: prSnapshot };
+            });
+            items.forEach(function (item, i) {
+                item.pr = prStatuses[i];
+                // Workers cannot write back to the main isolate's cache —
+                // absorb each computed status so the NEXT batch's snapshot
+                // preseed hits instead of re-fetching the same PR per rule.
+                if (provider && typeof provider.memoPrStatus === 'function') {
+                    provider.memoPrStatus(item.prNumber, prStatuses[i]);
+                }
+            });
+        } else {
+            items = items.map(function (item) {
+                item.pr = provider.prStatus(item.prNumber);
+                return item;
+            });
+        }
     }
 
     var matched = items.filter(function (item) {

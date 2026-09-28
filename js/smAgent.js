@@ -1293,10 +1293,15 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // hosted CI runs on one PR). Ask for this head's dispatched
                 // runs first: an active one means the arm is already in
                 // flight — skip, the validation-sync loop owns the stamping.
+                // ONE probe bundle feeds every guard below (was up to 4
+                // sequential gh api rounds per candidate): a single
+                // worker round when runAsync is wired, the four helpers
+                // on the main engine otherwise.
                 var vHead0 = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
                 var vCiWf = rule.ciWorkflow ||
                     ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml';
-                if (vHead0 && hasActiveDispatchedRun(effectiveRepoInfo, vCiWf, vHead0)) {
+                var vProbe = vHead0 ? probeDispatchedState(effectiveRepoInfo, vCiWf, vHead0) : null;
+                if (vProbe && vProbe.active) {
                     console.log('  ⏭️  ' + key +
                                 ' validation already dispatching on this head — skip');
                     continue;
@@ -1308,8 +1313,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // (the unmet required check is not this workflow's) — skip
                 // instead of looping CI every tick. Rules without the flag
                 // are unaffected.
-                if (rule.skipIfGreenCi && vHead0 &&
-                    hasSuccessfulDispatchedRun(effectiveRepoInfo, vCiWf, vHead0)) {
+                if (rule.skipIfGreenCi && vProbe && vProbe.green) {
                     console.log('  ⏭️  ' + key +
                                 ' head already carries a green dispatched CI run' +
                                 ' — blocker is not this CI; skip re-dispatch');
@@ -1327,9 +1331,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // consumes the arm on the existing green in the same tick.
                 // Dispatch-mode deployments only: the probe requires a real
                 // dispatched run (bridge-free stamped repos never match).
-                if (rule.skipIfValidatedHead && vHead0 &&
+                if (rule.skipIfValidatedHead && vProbe &&
                     (ticket.labels || []).indexOf('ai_validated') !== -1 &&
-                    hasSuccessfulDispatchedRun(effectiveRepoInfo, vCiWf, vHead0) &&
+                    vProbe.green &&
                     validationRollupGreen(effectiveRepoInfo, ticket.prNumber)) {
                     github_add_labels({
                         workspace: effectiveRepoInfo.owner,
@@ -1357,8 +1361,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // matches. Guest PRs get one park comment per head (the
                 // machine cannot push for them — a human must act; the
                 // fail path has already reported the red separately).
-                if (rule.deferRedHead && vHead0 &&
-                    latestDispatchedVerdict(effectiveRepoInfo, vCiWf, vHead0) === 'failure') {
+                if (rule.deferRedHead && vProbe &&
+                    vProbe.verdict === 'failure') {
                     var prMachineAuthor = machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, effectiveConfig);
                     var isMachinePrForPark = !!prMachineAuthor && !!ticket.author &&
                         String(ticket.author).toLowerCase() === String(prMachineAuthor).toLowerCase();
@@ -1669,7 +1673,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml';
             var sStaleMin = (typeof rule.staleMinutes === 'number' && rule.staleMinutes > 0)
                 ? rule.staleMinutes : 15;
-            var sRun = sHead ? newestDispatchedRun(effectiveRepoInfo, sCiWf, sHead) : null;
+            var sProbe = sHead ? probeDispatchedState(effectiveRepoInfo, sCiWf, sHead) : null;
+            var sRun = sProbe ? sProbe.newest : null;
             var sOld = false;
             if (sRun && sRun.status === 'completed' &&
                 sRun.conclusion && sRun.conclusion !== 'cancelled') {
@@ -1970,6 +1975,108 @@ function cancelStaleDispatchedRuns(repoInfo, ciWorkflow, branch, currentSha) {
         console.warn('  ⚠️  stale-cancel probe failed: ' + (e.message || e));
         return 0;
     }
+}
+
+// ── Dispatched-CI probe bundle (read fan-out for the runAsync pool) ─────
+// Every dispatched-CI guard used to fire its own `gh api .../runs?head_sha`
+// round per matched item (measured: the validate_pr guards alone cost 2-4
+// sequential gh calls per candidate). ONE worker round now computes all
+// four facets of the head's dispatched-run state; the main-side fallback
+// (Java/GraalJS parity, unit tests) runs the same four helpers
+// sequentially and assembles the identical shape. The source is a STRING
+// literal of a CLOSURE-FREE function — fn.toString()-serialized for the
+// worker engines, direct-evaled in-process on the fallback — so it carries
+// its own mcpParse copy and takes everything via args. Per-facet defaults
+// mirror each helper's try/catch warn-and-default (fail OPEN/closed
+// exactly like today). READ-ONLY: cancelStaleDispatchedRuns stays on the
+// main engine (it is a WRITE).
+var PROBE_WORKER_SOURCE = [
+    'function(args) {',
+    '    function mcpParse(result) {',
+    '        if (!result) return null;',
+    "        if (typeof result === 'string') {",
+    '            try { return JSON.parse(result); } catch (e) { return null; }',
+    '        }',
+    '        return result;',
+    '    }',
+    '    // Defaults = each helper catch-branch: active/green fail OPEN,',
+    '    // verdict/newest fail CLOSED (null).',
+    "    var out = { active: false, verdict: null, green: false, newest: null };",
+    '    try {',
+    '        var res = cli_execute_command({',
+    "            command: 'gh api \"repos/' + args.repo.owner + '/' + args.repo.repo +",
+    "                '/actions/workflows/' + args.ciWorkflow +",
+    "                '/runs?head_sha=' + args.headSha +",
+    "                '&event=workflow_dispatch&per_page=5\"'",
+    '        });',
+    '        var parsed = mcpParse((res || {}).output || (res || {}).stdout || res);',
+    '        var list = (parsed && parsed.workflow_runs) || [];',
+    '        var now = Date.now();',
+    '    // active — hasActiveDispatchedRun semantics: any queued/in-progress/',
+    '    // waiting/pending run, or a completed one whose CONCLUSION is younger',
+    '    // than the 15-min check-visibility grace.',
+    '        out.active = list.some(function (r) {',
+    "            if (r.status === 'queued' || r.status === 'in_progress' ||",
+    "                r.status === 'waiting' || r.status === 'pending') return true;",
+    "            if (r.status === 'completed') {",
+    '                var endTs = r.updated_at || r.created_at;',
+    '                var age = now - new Date(endTs).getTime();',
+    '                return age >= 0 && age < 15 * 60 * 1000;',
+    '            }',
+    '            return false;',
+    '        });',
+    '    // green — hasSuccessfulDispatchedRun semantics: any completed run with',
+    '    // conclusion success on this head (a canceled run leaves no verdict).',
+    "        out.green = list.some(function (r) {",
+    "            return r.status === 'completed' && r.conclusion === 'success';",
+    '        });',
+    '    // verdict — latestDispatchedVerdict semantics: the newest CONCLUSION',
+    '    // of a completed non-cancelled run (CANCELLED is never a verdict).',
+    '        var concluded = list.filter(function (r) {',
+    "            return r.status === 'completed' && r.conclusion &&",
+    "                r.conclusion !== 'cancelled';",
+    '        });',
+    '        if (concluded.length) {',
+    '            concluded.sort(function (a, b) {',
+    '                return new Date(b.updated_at || b.created_at).getTime() -',
+    '                       new Date(a.updated_at || a.created_at).getTime();',
+    '            });',
+    '            out.verdict = concluded[0].conclusion;',
+    '        }',
+    '    // newest — newestDispatchedRun semantics: the newest run on this head,',
+    '    // any status/conclusion.',
+    '        if (list.length) {',
+    '            var sorted = list.slice();',
+    '            sorted.sort(function (a, b) {',
+    '                return Date.parse(b.updated_at || b.created_at || 0) -',
+    '                       Date.parse(a.updated_at || a.created_at || 0);',
+    '            });',
+    '            out.newest = sorted[0];',
+    '        }',
+    '    } catch (e) {',
+    "        console.warn('  ⚠️  dispatched-state probe failed: ' + (e.message || e));",
+    '    }',
+    '    return out;',
+    '}'
+].join('\n');
+
+function probeDispatchedState(repoInfo, ciWorkflow, headSha) {
+    // runAsync wired (jobParams.parallelWorkers >= 2): ONE worker round.
+    // Fallback: the four existing helpers on the main engine — identical
+    // shape, identical per-facet defaults.
+    if (typeof runAsync === 'function') {
+        // runAsync takes the FUNCTION object (it re-serializes the source
+        // via fn.toString() for the worker engine).
+        return runAsync(eval('(' + PROBE_WORKER_SOURCE + ')'), {
+            repo: repoInfo, ciWorkflow: ciWorkflow, headSha: headSha
+        }).wait();
+    }
+    return {
+        active: hasActiveDispatchedRun(repoInfo, ciWorkflow, headSha),
+        verdict: latestDispatchedVerdict(repoInfo, ciWorkflow, headSha),
+        green: hasSuccessfulDispatchedRun(repoInfo, ciWorkflow, headSha),
+        newest: newestDispatchedRun(repoInfo, ciWorkflow, headSha)
+    };
 }
 
 function hasActiveDispatchedRun(repoInfo, ciWorkflow, headSha) {
@@ -2576,5 +2683,6 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action: action, applyRuleOverridesForTest: applyRuleOverrides };
+    module.exports = { action: action, applyRuleOverridesForTest: applyRuleOverrides,
+        probeDispatchedState: probeDispatchedState };
 }

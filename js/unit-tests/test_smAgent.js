@@ -116,6 +116,9 @@ function makeSmAgent(opts) {
         JSON: JSON,
         eval: eval
     };
+    // runAsync fake injection (spec: probeDispatchedState delegation pin) —
+    // shadows the (absent) global inside the smAgent module scope.
+    if (opts.runAsync) smMocks.runAsync = opts.runAsync;
 
     // SCM mock: intercepts triggerWorkflow so capturedTriggers is populated
     var mockScmProvider = {
@@ -240,6 +243,7 @@ function makeSmAgent(opts) {
     return {
         action: sm.action,
         applyRuleOverridesForTest: sm.applyRuleOverridesForTest,
+        probeDispatchedState: sm.probeDispatchedState,
         capturedTriggers: capturedTriggers,
         capturedLabels: capturedLabels,
         capturedStatusMoves: capturedStatusMoves,
@@ -3578,6 +3582,149 @@ suite('smAgent: targeted mode', function() {
         });
 
         assert.equal(result.success, false, 'falls through to no-rules error without targetAgent');
+    });
+
+});
+
+suite('probeDispatchedState bundle (runAsync read fan-out)', function () {
+
+    var HEAD = [
+        { id: 2, status: 'completed', conclusion: 'failure',
+          updated_at: '2026-09-27T11:00:00Z', created_at: '2026-09-27T10:30:00Z' },
+        { id: 1, status: 'completed', conclusion: 'success',
+          updated_at: '2026-09-27T10:00:00Z', created_at: '2026-09-27T09:00:00Z' }
+    ];
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    test('fallback: assembles the four facets via the existing helpers (mocked cli)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [] },
+            onCliExecute: function () {
+                return { output: JSON.stringify({ workflow_runs: HEAD }) };
+            }
+        }));
+        var probe = sm.probeDispatchedState({ owner: 'a', repo: 'b' }, 'quality.yml', 'sha1');
+        assert.equal(probe.active, false, 'concluded runs older than the 15-min grace are not active');
+        assert.equal(probe.verdict, 'failure', 'newest concluded non-cancelled verdict');
+        assert.equal(probe.green, true, 'a completed success covers the head');
+        assert.equal(probe.newest.id, 2, 'newest run by updated_at, any conclusion');
+        assert.equal(sm.capturedCliCommands.length, 4, 'fallback: the four helpers each probe once');
+        assert.ok(sm.capturedCliCommands.every(function (c) {
+            return c.command.indexOf('runs?head_sha=sha1') !== -1;
+        }), 'all probes key on this exact head');
+    });
+
+    test('fallback: defaults mirror the per-helper warn-and-default (empty / failing cli)', function () {
+        var defaults = { active: false, verdict: null, green: false, newest: null };
+        var smEmpty = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [] },
+            onCliExecute: function () { return { output: JSON.stringify({ workflow_runs: [] }) }; }
+        }));
+        assert.deepEqual(smEmpty.probeDispatchedState({ owner: 'a', repo: 'b' }, 'q.yml', 'sha'),
+            defaults, 'no dispatched runs on the head → all defaults');
+
+        var smFail = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [] },
+            onCliExecute: function () { throw new Error('net down'); }
+        }));
+        assert.doesNotThrow(function () {
+            assert.deepEqual(smFail.probeDispatchedState({ owner: 'a', repo: 'b' }, 'q.yml', 'sha'),
+                defaults, 'a probe failure degrades to the same defaults, never throws');
+        });
+    });
+
+    test('runAsync wired: ONE worker round returns the identical shape', function () {
+        var dispatches = [];
+        var cliCalls = 0;
+        // Worker-engine parity: map() evals the worker source inside the
+        // smAgent module scope and hands the FAKE the function object (the
+        // real runAsync contract — it re-serializes fn.toString() for a
+        // fresh worker engine wired with the same tool surface). The
+        // worker's cli_execute_command therefore resolves to the smAgent
+        // module mock — route the response through onCliExecute.
+        var fakeRunAsync = function (fn, args) {
+            assert.equal(typeof fn, 'function', 'runAsync receives the FUNCTION, not a string');
+            dispatches.push({ src: fn.toString(), args: args });
+            return { wait: function () { return fn(args); } };
+        };
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [] },
+            onCliExecute: function () {
+                cliCalls++;
+                return { output: JSON.stringify({ workflow_runs: HEAD }) };
+            },
+            runAsync: fakeRunAsync
+        }));
+        var probe = sm.probeDispatchedState({ owner: 'a', repo: 'b' }, 'quality.yml', 'sha1');
+        assert.equal(dispatches.length, 1, 'exactly ONE worker dispatch');
+        assert.equal(cliCalls, 1, 'the worker computed all four facets in ONE round');
+        assert.deepEqual(probe, {
+            active: false, verdict: 'failure', green: true,
+            newest: { id: 2, status: 'completed', conclusion: 'failure',
+                      updated_at: '2026-09-27T11:00:00Z', created_at: '2026-09-27T10:30:00Z' }
+        }, 'same shape as the fallback');
+        assert.deepEqual(dispatches[0].args,
+            { repo: { owner: 'a', repo: 'b' }, ciWorkflow: 'quality.yml', headSha: 'sha1' },
+            'everything travels via args');
+    });
+
+    test('validate_pr guards consume the bundle on the fallback path (active run → no dispatch, no arm)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [{ key: 'pr-75', labels: ['pr_approved'], prNumber: 75,
+                                branch: 'ai/gh-60', headSha: 'sha60' }] },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('runs?head_sha=') !== -1) {
+                    return { output: JSON.stringify({ workflow_runs: [
+                        { id: 5, status: 'in_progress', head_sha: 'sha60' }
+                    ] }) };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'] },
+              localAction: 'validate_pr', limit: 1, id: 'validate-armed' }
+        ] } });
+
+        var probes = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('runs?head_sha=') !== -1; });
+        assert.equal(probes.length, 4, 'the fallback probe bundle ran all four helpers for the guards');
+        assert.ok(!sm.capturedCliCommands.some(function (c) {
+            return c.command.indexOf('workflow run') !== -1; }), 'no CI dispatch while a run is active');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no ai_validating arm while a run is active');
+    });
+
+    test('sweep_stale_validation consumes the bundle newest facet on the fallback path', function () {
+        var old = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [{ key: 'pr-84', labels: ['ai_validating'], prNumber: 84,
+                                headSha: 'sha222' }] },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('runs?head_sha=') !== -1) {
+                    return { output: JSON.stringify({ workflow_runs: [
+                        { id: 7, status: 'completed', conclusion: 'success',
+                          head_sha: 'sha222', created_at: old, updated_at: old }
+                    ] }) };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['ai_validating'] },
+              localAction: 'sweep_stale_validation', staleMinutes: 15, limit: 10, id: 'sweep' }
+        ] } });
+
+        var probes = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('runs?head_sha=') !== -1; });
+        assert.equal(probes.length, 4, 'the sweep reads the probe bundle (fallback: four helpers)');
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
+            ['ai_validating'], 'the stale arm is released from the bundle newest facet');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
+            ['ai_validated'], 'success side re-latches (complete_validation parity)');
     });
 
 });

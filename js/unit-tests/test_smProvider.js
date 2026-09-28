@@ -72,12 +72,15 @@ suite('smProvider', function () {
                          statusCheckRollup: rollup };
             }
         });
+        // Per-tick prStatus memo: the cache key is the PR number, so each
+        // rollup variant pins a DISTINCT number (same-number repeats return
+        // the memoized result — pinned by the memo test below).
         rollup = [{ conclusion: 'FAILURE' }];
         assert.equal(p.prStatus(7).checkConclusion, 'red');
         rollup = [{ status: 'IN_PROGRESS' }];
-        assert.equal(p.prStatus(7).checkConclusion, 'pending');
+        assert.equal(p.prStatus(8).checkConclusion, 'pending');
         rollup = [{ conclusion: 'SUCCESS' }, { conclusion: 'SKIPPED' }];
-        var st = p.prStatus(7);
+        var st = p.prStatus(9);
         assert.equal(st.checkConclusion, 'green');
         assert.equal(st.mergeState, 'CLEAN');
         assert.equal(st.mergeable, true);
@@ -108,16 +111,17 @@ suite('smProvider', function () {
         assert.equal(st.checkConclusion, 'green');
         assert.equal(st.mergeState, 'BEHIND');
 
+        // distinct numbers per variant — the prStatus memo is keyed by number
         checkBody = { total_count: 1, check_runs: [{ status: 'completed', conclusion: 'failure' }] };
-        assert.equal(p.prStatus(7).checkConclusion, 'red');
+        assert.equal(p.prStatus(8).checkConclusion, 'red');
 
         checkBody = { total_count: 1, check_runs: [{ status: 'in_progress', conclusion: null }] };
-        assert.equal(p.prStatus(7).checkConclusion, 'pending');
+        assert.equal(p.prStatus(9).checkConclusion, 'pending');
 
         // check-runs API shape: sha field name on head is `sha`.
         prBody = { state: 'OPEN', mergeable: true, head: { sha: 'zzz' } };
         checkBody = { total_count: 0, check_runs: [] };
-        assert.equal(p.prStatus(7).checkConclusion, 'none');
+        assert.equal(p.prStatus(10).checkConclusion, 'none');
     });
 
     test('github: prStatus normalizes REST lowercase state to OPEN', function () {
@@ -305,11 +309,11 @@ suite('smProvider', function () {
         var currentRest = 'behind';
         assert.equal(p.prStatus(7).mergeState, 'BEHIND');
         currentRest = 'dirty';
-        assert.equal(p.prStatus(7).mergeState, 'DIRTY');
+        assert.equal(p.prStatus(8).mergeState, 'DIRTY');
         currentRest = 'blocked';
-        assert.equal(p.prStatus(7).mergeState, 'BLOCKED');
+        assert.equal(p.prStatus(9).mergeState, 'BLOCKED');
         currentRest = 'unknown';
-        assert.equal(p.prStatus(7).mergeState, 'UNKNOWN');
+        assert.equal(p.prStatus(10).mergeState, 'UNKNOWN');
         // Neither field present: coarse bool fallback stays.
         var fb = loadProvider('github', {
             github_get_pr: function () {
@@ -471,6 +475,181 @@ suite('smProvider', function () {
         var st = p.prStatus(7);
         assert.notEqual(st.checkConclusion, 'red', 'cancelled runs are not failures — rework must not fire');
         assert.equal(st.checkConclusion, 'pending', 'nothing conclusive left — re-run validation, do not rework');
+    });
+
+    // ── per-tick ioCache + preseed (runAsync worker re-hydration) ─────────
+
+    var MOD = 'js/common/smProvider.js';
+
+    test('github: preseed openPrs/mergedPrs eliminates the github_list_prs fetch', function () {
+        var listCalls = 0;
+        var mod = loadModule(MOD, makeRequire({}, {}), {
+            github_list_prs: function () { listCalls++; return []; },
+            github_list_branches: function () { return []; }
+        });
+        var p = mod.createSmProvider({
+            scm: { provider: 'github' },
+            repository: { owner: 'mygroup', repo: 'my-repo' },
+            preseed: {
+                openPrs: [{ number: 9, head: { label: 'mygroup:ai/gh-9', ref: 'ai/gh-9' }, body: '' }],
+                mergedPrs: []
+            }
+        });
+        var found = p.findPr(9, 'ai/gh-');
+        assert.equal(found && found.number, 9, 'findPr resolves from the preseeded list');
+        assert.equal(listCalls, 0, 'preseeded lists — github_list_prs never called');
+    });
+
+    test('github: preseed branchHeads eliminates github_list_branches (deterministic base check)', function () {
+        var branchCalls = 0;
+        var mod = loadModule(MOD, makeRequire({}, {}), {
+            github_get_pr: function () {
+                return { state: 'open', mergeable: true, base: { ref: 'main', sha: 'basesha' } };
+            },
+            github_list_branches: function () { branchCalls++; return []; }
+        });
+        var p = mod.createSmProvider({
+            scm: { provider: 'github' },
+            repository: { owner: 'mygroup', repo: 'my-repo' },
+            preseed: { branchHeads: { main: 'basesha' } }
+        });
+        var st = p.prStatus(3);
+        assert.equal(st.mergeState, 'CLEAN', 'base sha matches the preseeded head — deterministic CLEAN');
+        assert.equal(branchCalls, 0, 'github_list_branches never called');
+    });
+
+    test('github: TTL hit across two provider instances (shared per-tick cache)', function () {
+        var listCalls = 0;
+        var mod = loadModule(MOD, makeRequire({}, {}), {
+            github_list_prs: function (a) {
+                listCalls++;
+                return a.state === 'open'
+                    ? [{ number: 9, head: { label: 'mygroup:ai/gh-9', ref: 'ai/gh-9' }, body: '' }]
+                    : [];
+            }
+        });
+        var p1 = mod.createSmProvider({ scm: { provider: 'github' },
+            repository: { owner: 'mygroup', repo: 'my-repo' } });
+        var p2 = mod.createSmProvider({ scm: { provider: 'github' },
+            repository: { owner: 'mygroup', repo: 'my-repo' } });
+        p1.findPr(9, 'ai/gh-');                       // open list fetched (match — merged not needed)
+        assert.equal(listCalls, 1);
+        var snap1 = p1.snapshot();                    // mergedPrs fetched here
+        var snap2 = p2.snapshot();
+        assert.equal(listCalls, 2, 'second provider instance hits the same TTL cache');
+        assert.equal(snap2.openPrs === snap1.openPrs, true, 'snapshot shares the cached payload');
+        assert.equal(p2.findPr(9, 'ai/gh-').number, 9);
+        assert.equal(listCalls, 2, 'findPr on the second instance still hits');
+    });
+
+    test('github: snapshot(kinds) skips unneeded legs (merged list unused by the PR-rule batch)', function () {
+        var listCalls = 0, branchCalls = 0;
+        var mod = loadModule(MOD, makeRequire({}, {}), {
+            github_list_prs: function (args) {
+                listCalls++;
+                return args && args.state === 'merged'
+                    ? [{ number: 3, head: { label: 'mygroup:ai/gh-3', ref: 'ai/gh-3' } }]
+                    : [];
+            },
+            github_list_branches: function () { branchCalls++; return []; }
+        });
+        var p = mod.createSmProvider({ scm: { provider: 'github' },
+            repository: { owner: 'mygroup', repo: 'my-repo' } });
+        var snap = p.snapshot(['openPrs', 'branchHeads', 'prStatus']);
+        assert.equal(listCalls, 1, 'only the OPEN list fetched — the merged leg is skipped');
+        assert.equal(branchCalls, 1, 'branch heads materialized');
+        assert.equal(snap.mergedPrs, undefined, 'omitted kinds stay out of the snapshot');
+        assert.ok(snap.prStatus && typeof snap.prStatus === 'object', 'prStatus memo leg present');
+    });
+
+    test('github: cache miss after TTL expiry re-fetches', function () {
+        var listCalls = 0;
+        var mod = loadModule(MOD, makeRequire({}, {}), {
+            github_list_prs: function () { listCalls++; return []; }
+        });
+        var p = mod.createSmProvider({ scm: { provider: 'github' },
+            repository: { owner: 'mygroup', repo: 'my-repo' } });
+        p.findPr(1, 'ai/gh-');
+        assert.equal(listCalls, 2);
+        mod._cache.ttlMs = -1; // force every entry stale
+        p.findPr(1, 'ai/gh-');
+        assert.equal(listCalls, 4, 'stale entries are re-fetched');
+        assert.equal(typeof mod._cache.entries, 'object', '_cache exposed for tests');
+    });
+
+    test('github: prStatus memo — same number fetched once per tick, per-number keys, TTL re-fetch', function () {
+        var getCalls = 0, checkCalls = 0;
+        var mod = loadModule(MOD, makeRequire({}, {}), {
+            github_get_pr: function () {
+                getCalls++;
+                return { state: 'open', mergeable: true, mergeable_state: 'clean',
+                         head: { sha: 'abc123' } };
+            },
+            github_get_commit_check_runs: function () {
+                checkCalls++;
+                return { check_runs: [{ status: 'completed', conclusion: 'success' }] };
+            }
+        });
+        var p = mod.createSmProvider({ scm: { provider: 'github' },
+            repository: { owner: 'mygroup', repo: 'my-repo' } });
+        var s1 = p.prStatus(7);
+        var s2 = p.prStatus(7);
+        assert.equal(getCalls, 1, 'github_get_pr once for two prStatus(7) calls');
+        assert.equal(checkCalls, 1, 'github_get_commit_check_runs once');
+        assert.equal(s2 === s1, true, 'memoized result is the same read-only reference');
+        p.prStatus(8);
+        assert.equal(getCalls, 2, 'per-number cache keys');
+        mod._cache.ttlMs = -1;
+        p.prStatus(7);
+        assert.equal(getCalls, 3, 'TTL expiry re-fetches');
+    });
+
+    test('github: prStatus memo rides snapshot/preseed + memoPrStatus write-back (worker round-trip)', function () {
+        var getCalls = 0;
+        function makeProvider() {
+            var mod = loadModule(MOD, makeRequire({}, {}), {
+                github_get_pr: function () {
+                    getCalls++;
+                    return { state: 'open', mergeable: true, mergeable_state: 'clean',
+                             head: { sha: 'abc123' } };
+                },
+                github_get_commit_check_runs: function () {
+                    return { check_runs: [{ status: 'completed', conclusion: 'success' }] };
+                },
+                github_list_prs: function () { return []; },
+                github_list_branches: function () { return []; }
+            });
+            return mod.createSmProvider({ scm: { provider: 'github' },
+                repository: { owner: 'mygroup', repo: 'my-repo' } });
+        }
+        // Worker side: a fresh isolate computes prStatus(7); the main
+        // engine absorbs the result via memoPrStatus and snapshots.
+        var workerProvider = makeProvider();
+        var status = workerProvider.prStatus(7);
+        workerProvider.memoPrStatus(7, status);
+        var snap = workerProvider.snapshot();
+        assert.ok(snap.prStatus && snap.prStatus['7'], 'snapshot carries the prStatus memo leg');
+
+        // Next batch's worker: fresh module state, rehydrated from preseed
+        // — the SAME status comes back with zero new fetches.
+        var before = getCalls;
+        var mainMod = loadModule(MOD, makeRequire({}, {}), {
+            github_get_pr: function () { getCalls++; return { state: 'open' }; },
+            github_get_commit_check_runs: function () { return { check_runs: [] }; },
+            github_list_prs: function () { return []; },
+            github_list_branches: function () { return []; }
+        });
+        var mainProvider = mainMod.createSmProvider({ scm: { provider: 'github' },
+            repository: { owner: 'mygroup', repo: 'my-repo' }, preseed: snap });
+        assert.equal(mainProvider.prStatus(7) === status, true,
+            'preseeded memo returns the identical read-only reference');
+        assert.equal(getCalls, before, 'no re-fetch after preseed');
+    });
+
+    test('gitlab: snapshot/listOpenPrs documented gaps return null', function () {
+        var p = loadProvider('gitlab', {});
+        assert.equal(p.snapshot(), null);
+        assert.equal(p.listOpenPrs(), null);
     });
 
 });
