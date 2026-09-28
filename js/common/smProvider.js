@@ -77,6 +77,25 @@ function ioCachePut(owner, repo, kind, id, data) {
     _cache.entries[ioCacheKey(owner, repo, kind, id)] = { at: Date.now(), data: data };
 }
 
+// Collect every non-expired entry of one kind for a repo into a plain
+// {id: data} map — the prStatus leg of snapshot(). Keys are the id tail
+// of the cache key (PR numbers as strings).
+function ioCacheCollect(owner, repo, kind) {
+    var out = {};
+    var prefix = owner + '/' + repo + ':' + kind + ':';
+    var keys = Object.keys(_cache.entries);
+    for (var i = 0; i < keys.length; i++) {
+        if (keys[i].indexOf(prefix) !== 0) continue;
+        var entry = _cache.entries[keys[i]];
+        if (Date.now() - entry.at > _cache.ttlMs) {
+            delete _cache.entries[keys[i]];
+            continue;
+        }
+        out[keys[i].substring(prefix.length)] = entry.data;
+    }
+    return out;
+}
+
 // Ecosystem-standard MCP result parsing (see parseMcpResult in the agent
 // scripts): bridge tools may return decoded objects, JSON strings, or
 // {data: …} envelopes.
@@ -275,19 +294,33 @@ function githubProvider(cfg) {
         listOpenPrs: listOpenPrs,
         listMergedPrs: listMergedPrs,
 
-        snapshot: function () {
+        // snapshot(kinds?) — kinds limits which cache legs to materialize:
+        // the queryPrs batch only needs openPrs + branchHeads, and the
+        // merged-PR list was measured at ~1.8s on a busy repo for ZERO
+        // uses in that path. Omitted kinds stay out of the preseed; a
+        // worker that then actually needs one fetches it on demand.
+        snapshot: function (kinds) {
             // Args-carried cache snapshot for the runAsync worker engines:
             // every worker is a FRESH isolate with an empty module cache,
             // so it cannot see this holder. The fan-out in
             // sm/sources/githubSource.js fetches this ONCE per batch and
             // hands it to each worker via createSmProvider({ preseed }) —
             // a worker's first cache read then hits instead of re-fetching
-            // the same lists over the bridge.
-            return {
-                openPrs: listOpenPrs(),
-                mergedPrs: listMergedPrs(),
-                branchHeads: branchHeadsMap()
-            };
+            // the same lists over the bridge. prStatus rides along so a
+            // later rule's batch inherits every status an earlier rule's
+            // workers already paid for (workers cannot write back — the
+            // main engine absorbs results via memoPrStatus, see
+            // githubSource.js — and ships them onward in the next
+            // snapshot).
+            var want = {};
+            (kinds || ['openPrs', 'mergedPrs', 'branchHeads', 'prStatus'])
+                .forEach(function (k) { want[k] = true; });
+            var out = {};
+            if (want.openPrs) out.openPrs = listOpenPrs();
+            if (want.mergedPrs) out.mergedPrs = listMergedPrs();
+            if (want.branchHeads) out.branchHeads = branchHeadsMap();
+            if (want.prStatus) out.prStatus = ioCacheCollect(owner, repo, 'prStatus');
+            return out;
         },
 
         listMachineIssues: function (machineLabels, agentHandle, limit) {
@@ -355,6 +388,18 @@ function githubProvider(cfg) {
             var out = computePrStatus(prNumber);
             ioCachePut(owner, repo, 'prStatus', prNumber, out);
             return out;
+        },
+
+        memoPrStatus: function (prNumber, data) {
+            // Main-engine write-back for the runAsync fan-out: worker
+            // engines compute prStatus in their own isolates and hand the
+            // result back through smAsync's ordered results — absorbing it
+            // here (same per-tick ioCache) makes the NEXT batch's snapshot
+            // preseed hit instead of re-fetching the same PR across rules
+            // (measured: 3 rules × 6 PRs re-fetched identically per tick
+            // without this). Read-only callers make sharing the reference
+            // safe, same as the memo itself.
+            if (data) ioCachePut(owner, repo, 'prStatus', prNumber, data);
         },
         lastReview: function (prNumber) {
             // REST: reviews arrive chronological, the last entry is the
@@ -659,6 +704,15 @@ function createSmProvider(config) {
         }
         if (cfg.preseed.branchHeads) {
             ioCachePut(cfg.repository.owner, cfg.repository.repo, 'branches', null, cfg.preseed.branchHeads);
+        }
+        if (cfg.preseed.prStatus) {
+            // {number-as-string: status} leg of snapshot() — see the
+            // github provider's memoPrStatus for the write-back side.
+            var memoIds = Object.keys(cfg.preseed.prStatus);
+            for (var mi = 0; mi < memoIds.length; mi++) {
+                ioCachePut(cfg.repository.owner, cfg.repository.repo,
+                    'prStatus', memoIds[mi], cfg.preseed.prStatus[memoIds[mi]]);
+            }
         }
     }
     if (provider === 'gitlab') return gitlabProvider(cfg);
