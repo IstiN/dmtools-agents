@@ -827,9 +827,13 @@ jobs:
                 sed 's/^/psi_io  /' /proc/pressure/io 2>/dev/null
                 sed 's/^/psi_mem /' /proc/pressure/memory 2>/dev/null
                 ps -eo pid,ppid,state,etime,wchan:32,comm | awk 'NR==1 || $3 ~ /^D/'
-                for p in $(pgrep -x git 2>/dev/null) $(pgrep -x fa 2>/dev/null) $(pgrep -x dmtools 2>/dev/null); do
+                # fa/dmtools comm names do not always match pgrep -x patterns
+                # (AOT binary renames, wrapper shells) — match the cmdline.
+                for p in $(pgrep -x git 2>/dev/null) $(pgrep -f "bin/fa" 2>/dev/null) $(pgrep -f "dmtools run" 2>/dev/null); do
                   echo "--- pid $p ($(cat /proc/$p/comm 2>/dev/null)) state=$(awk '{print $3}' /proc/$p/stat 2>/dev/null) wchan=$(cat /proc/$p/wchan 2>/dev/null)"
                   echo "    syscall: $(cat /proc/$p/syscall 2>/dev/null)"
+                  echo "    cmdline: $(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null | cut -c1-200)"
+                  ls -l /proc/$p/fd 2>/dev/null | awk '{print "    fd:", $9, $10, $11}' | head -12
                   cat /proc/$p/stack 2>/dev/null | sed 's/^/    stack: /'
                 done
               } >> "${STALL_LOG}" 2>&1
