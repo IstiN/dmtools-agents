@@ -300,6 +300,11 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
                 item.pr = r.pr;
                 item.prNumber = prRef.number;
                 item.branch = (item.pr && item.pr.branch) || '';
+                // Write-back — same cross-rule memo contract as the
+                // queryPrs batch above.
+                if (provider && typeof provider.memoPrStatus === 'function') {
+                    provider.memoPrStatus(prRef.number, r.pr);
+                }
             } else if (prRef) {
                 item.pr = { number: prRef.number, state: prRef.state,
                             checks: 'none', mergeState: 'UNKNOWN', mergeable: null };
@@ -374,9 +379,15 @@ function linkedIssueNumber(body) {
 }
 
 function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {    var q = rule.query || {};
-    var prs = asList(parseMcp(github_list_prs({
-        workspace: repoInfo.owner, repository: repoInfo.repo, state: 'open'
-    })));
+    // The open-PR list rides the provider's per-tick ioCache — this site
+    // fired github_list_prs once PER RULE (measured: 18 calls, one idle
+    // tick, all the same payload). Providers without the cache contract
+    // (gitlab stub returns null) keep the direct fetch.
+    var prs = (provider && typeof provider.listOpenPrs === 'function'
+        ? provider.listOpenPrs() : null) ||
+        asList(parseMcp(github_list_prs({
+            workspace: repoInfo.owner, repository: repoInfo.repo, state: 'open'
+        })));
 
     var items = prs.map(function (p) {
         return {
@@ -471,12 +482,24 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {    var q = r
         q.mergeable !== undefined || q.prChecks;
     if (needsStatus) {
         if (items.length > 1) {
+            // PR-rule batch: only the open-PR list + branch heads are
+            // needed by the prStatus worker — skip the merged-PR leg (was
+            // ~1.8s on a busy repo, zero uses in this path).
             var prSnapshot = (typeof runAsync === 'function' && provider &&
-                typeof provider.snapshot === 'function') ? provider.snapshot() : null;
+                typeof provider.snapshot === 'function')
+                ? provider.snapshot(['openPrs', 'branchHeads', 'prStatus']) : null;
             var prStatuses = smAsyncModule.map(items, PR_STATUS_WORKER_SOURCE, function (item) {
                 return { repo: repoInfo, n: item.prNumber, preseed: prSnapshot };
             });
-            items.forEach(function (item, i) { item.pr = prStatuses[i]; });
+            items.forEach(function (item, i) {
+                item.pr = prStatuses[i];
+                // Workers cannot write back to the main isolate's cache —
+                // absorb each computed status so the NEXT batch's snapshot
+                // preseed hits instead of re-fetching the same PR per rule.
+                if (provider && typeof provider.memoPrStatus === 'function') {
+                    provider.memoPrStatus(item.prNumber, prStatuses[i]);
+                }
+            });
         } else {
             items = items.map(function (item) {
                 item.pr = provider.prStatus(item.prNumber);
