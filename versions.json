@@ -41,7 +41,7 @@
   "retry_merge_github": "0.1.2",
   "retry_merge_test": "0.1.2",
   "sm": "0.1.2",
-  "sm_github": "0.1.2",
+  "sm_github": "0.1.3",
   "sm_merge": "0.1.2",
   "solution_description": "0.1.2",
   "story_acceptance_criteria": "0.1.2",
