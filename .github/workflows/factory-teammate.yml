@@ -738,6 +738,13 @@ jobs:
           ZAI_CODE_KEY: ${{ secrets.ZAI_CODE_KEY }}
           KIMI_REVIEW_KEY: ${{ secrets.KIMI_REVIEW_KEY }}
           SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+          # Agent-pack registry base (dm.ai #579): runners may parent packs
+          # by REGISTRY ref (`pr_review@latest`) — the resolver reads the
+          # releases base (incl. catalog.json) from this env. Callers set
+          # the repo VARIABLE to their pinned dmtools-agents release tag;
+          # unset (or empty) keeps the previous file-only behavior and the
+          # resolver fails with an explicit "no pack registry" error.
+          DMTOOLS_PACK_REGISTRY: ${{ vars.DMTOOLS_PACK_REGISTRY }}
           # gh operations inside the session must act AS the SOURCE account:
           # events created with GITHUB_TOKEN do not trigger workflows.
           GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN || github.token }}
