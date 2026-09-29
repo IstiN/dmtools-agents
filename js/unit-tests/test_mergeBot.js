@@ -23,6 +23,7 @@ function fixture(opts) {
         })
     };
     var wfCalls = [];
+    var crCalls = [];
     var mods = {
         github_list_workflow_runs: function (a) {
             wfCalls.push(a);
@@ -30,7 +31,13 @@ function fixture(opts) {
         },
         github_list_prs: function () { return JSON.stringify([{ number: pr.number }]); },
         github_get_pr: function () { return JSON.stringify(pr); },
-        github_get_commit_check_runs: function () {
+        github_get_commit_check_runs: function (a) {
+            // The Dart tool requires workspace/repository — a bare
+            // {commitSha} call dies with 'Required parameter workspace is
+            // missing' and the whole merge leg crashes (live 2026-09-29).
+            // Assert in the test body, not here: mocks run in the module
+            // scope, where `assert` is not a global.
+            crCalls.push(a);
             return JSON.stringify({ check_runs: checkRuns });
         },
         github_merge_pr: function (m) {
@@ -41,7 +48,7 @@ function fixture(opts) {
         github_remove_label: function (r) { calls.removes.push(r); return '{}'; }
     };
     var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
-    return { bot: bot, calls: calls, mods: mods, wfCalls: wfCalls };
+    return { bot: bot, calls: calls, mods: mods, wfCalls: wfCalls, crCalls: crCalls };
 }
 
 suite('mergeBot', function () {
@@ -53,6 +60,10 @@ suite('mergeBot', function () {
         assert.equal(fx.calls.merges[0].mergeMethod, 'squash');
         assert.equal(fx.calls.merges[0].pullRequestId, 42, 'Java-parity param — number broke on dmtools v0.1.18+ (pulls/null/merge → 404)');
         assert.equal(result.acted, 1);
+        assert.equal(fx.crCalls.length, 1, 'check runs fetched exactly once');
+        assert.equal(fx.crCalls[0].workspace, 'a', 'workspace is required by the Dart tool (merge leg crashed live 2026-09-29 without it)');
+        assert.equal(fx.crCalls[0].repository, 'b', 'repository is required by the Dart tool');
+        assert.equal(fx.crCalls[0].commitSha, 'deadbeef');
     });
 
     test('blocked label: bot ignores the PR even when approved + green (fa #939)', function () {
