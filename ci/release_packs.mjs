@@ -3,9 +3,12 @@
  * Agent pack release builder (dmtools-agents#441).
  *
  * Computes the affected agent set from the git diff since the last release,
- * bumps each affected agent's version in versions.json, builds every affected
+ * bumps each affected agent's version in versions.json, builds EVERY agent
  * pack with `dmtools compile` (the single implementation of the pack format —
- * dm.ai#595), validates each zip against its manifest, and writes catalog.json.
+ * dm.ai#595), validates each zip against its manifest, and writes a FULL
+ * catalog.json (every agent -> its current version): each release is a
+ * self-contained snapshot because the registry resolver resolves
+ * `<agent>@latest` against the newest release's catalog only.
  *
  * Usage:
  *   node ci/release_packs.mjs [--agents=all|name1,name2] [--bump=patch|minor|major]
@@ -137,27 +140,34 @@ function main() {
   console.log(`Affected agents (${affected.length}): ${affected.join(', ')}`);
   mkdirSync(OUT_DIR, { recursive: true });
 
+  // Bump ONLY the affected agents (incremental versioning), but BUILD and
+  // catalog EVERY agent: each release must be a self-contained snapshot.
+  // The registry resolver resolves `<agent>@latest` against the NEWEST
+  // release's catalog.json — an affected-only catalog hides every agent
+  // that was not touched by this release, and their packs are absent from
+  // the release assets too, so `@latest` AND `@<version>` both fail
+  // (live: epam/dmtools-dart machine-merge, 2026-09-29 —
+  // "Agent 'machine_merge' not found in registry catalog .../catalog.json"
+  // because the 19:07 release bumped only sm_github).
+  const agents = allAgents();
   const catalog = {};
-  for (const agent of affected) {
+  for (const agent of agents) {
     const current = versions[agent] || '0.1.0';
-    const next = bump(current, BUMP);
-    console.log(`\n=== ${agent}: ${current} -> ${next} ===`);
+    const next = affected.includes(agent) ? bump(current, BUMP) : current;
+    console.log(`\n=== ${agent}: ${current}${next !== current ? ` -> ${next}` : ' (unchanged)'} ===`);
     if (!DRY_RUN) {
       const zip = buildPack(agent, next);
       const count = validatePack(zip);
       console.log(`validated ${basename(zip)} (${count} files)`);
       versions[agent] = next;
-      catalog[agent] = next;
-    } else {
-      console.log('[dry-run] would build and validate the pack');
-      catalog[agent] = next;
     }
+    catalog[agent] = next;
   }
 
   if (!DRY_RUN) {
     writeFileSync(VERSIONS_FILE, JSON.stringify(versions, null, 2) + '\n');
     writeFileSync(join(OUT_DIR, 'catalog.json'), JSON.stringify(catalog, null, 2) + '\n');
-    console.log(`\nWrote versions.json and ${OUT_DIR}/catalog.json (${affected.length} agents)`);
+    console.log(`\nWrote versions.json and ${OUT_DIR}/catalog.json (${agents.length} agents, ${affected.length} bumped)`);
   }
 }
 
