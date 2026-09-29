@@ -103,7 +103,7 @@ function bump(version, kind) {
 function buildPack(agent, version) {
   execFileSync(
     'dmtools',
-    ['compile', `${agent}.json`, '--agent-root', ROOT, '--version', version, '--out', OUT_DIR],
+    ['compile', `${agent}.json`, '--agent-root', ROOT, '--version', version, '--out', OUT_DIR, '--include', 'instructions', '--include', 'prompts'],
     { cwd: ROOT, stdio: 'inherit' },
   );
   return join(OUT_DIR, `${agent}-${version}.zip`);
