@@ -51,7 +51,9 @@ function labelNames(pr) {
  * forever and only the SM tick's better-informed merge can land it.
  */
 function checksRollup(commitSha, pr, job, owner, name) {
-    var cr = parseMcp(github_get_commit_check_runs({ commitSha: commitSha }));
+    var cr = parseMcp(github_get_commit_check_runs({
+        workspace: owner, repository: name, commitSha: commitSha
+    }));
     var runs = cr.check_runs || cr.total_count !== undefined ? (cr.check_runs || []) : [];
     if (!runs.length && pr && Array.isArray(pr.statusCheckRollup) && pr.statusCheckRollup.length) {
         runs = pr.statusCheckRollup;
