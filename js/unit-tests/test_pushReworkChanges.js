@@ -409,12 +409,20 @@ function loadPushReworkChangesForAction(mocks, opts) {
                 readStagedDiffStat: function() { return 'M file.txt\n'; },
                 syncBranchWithBase: function() { return { success: true, updated: false }; }
             },
-            './common/feedbackLoop.js': {
-                runQualityGates: function() { return { success: true }; },
-                runPolicyGates: function() { return { success: true }; },
-                runPostPublishGates: function() { return { success: true }; },
-                resumeAgent: function(args) { resumeAgentCalls.push(args); return { attempted: false }; }
-            },
+            './common/feedbackLoop.js': (function() {
+                var fl = (opts && opts.feedbackLoop) || {
+                    runQualityGates: function() { return { success: true }; },
+                    runPolicyGates: function() { return { success: true }; },
+                    runPostPublishGates: function() { return { success: true }; },
+                    resumeAgent: function() { return { attempted: false }; }
+                };
+                var innerResume = fl.resumeAgent;
+                fl.resumeAgent = function(args) {
+                    resumeAgentCalls.push(args);
+                    return innerResume(args);
+                };
+                return fl;
+            })(),
             './common/autoStart.js': (opts && opts.autoStart) || {
                 triggerSmIfIdle: function() {},
                 triggerConfiguredWorkflowForTicket: function() { return false; }
@@ -826,5 +834,111 @@ suite('pushReworkChanges — no-op rework token guard (2026-09-21, epam/dmtools-
             !fx.ghAddLabelCalls.some(function(c) { return c.label === 'agent:rework'; }),
             'no agent:rework re-arm on the productive path'
         );
+    });
+});
+
+// ── fatal rework CLI failure must NOT be announced as completion ─────────────
+// Live pathology 2026-09-29 (IstiN/flutter_agent_harness #1052 machine loop):
+// a rework CLI command that exited non-zero (exit code 1) was announced as
+// "✅ Rework Complete" because only interruption-class failures (timeout exit
+// 124, missing output file) were detected. The loop then re-validated the
+// never-fixed head forever. A fatal CLI failure must take the honest failure
+// path: one resume attempt, then a failure comment + IN_REWORK reset — never
+// a completion announcement.
+
+suite('pushReworkChanges — fatal rework CLI failure (non-zero exit ≠ 124)', function() {
+
+    test('isFailedCliReworkResponse: exit code 1 is fatal', function() {
+        var loaded = loadPushReworkChangesForAction({});
+        assert.equal(
+            loaded.mod.isFailedCliReworkResponse(
+                'CLI Command: ./run-agent.sh "/tmp/p.txt"\n'
+                + 'Error: Command failed (exit code 1): ./run-agent.sh "/tmp/p.txt"\n'
+                + 'Output:\n=== AGENT PROMPT START ===\n'),
+            true, 'exit code 1 must classify as a fatal CLI failure');
+    });
+
+    test('isFailedCliReworkResponse: exit code 124 stays interruption-class', function() {
+        var loaded = loadPushReworkChangesForAction({});
+        assert.equal(
+            loaded.mod.isFailedCliReworkResponse(
+                'Error: Command failed (exit code 124): ./run-agent.sh'),
+            false, '124 is the interrupted/timeout class — isInterruptedReworkResponse owns it');
+    });
+
+    test('isFailedCliReworkResponse: a normal summary is not fatal', function() {
+        var loaded = loadPushReworkChangesForAction({});
+        assert.equal(
+            loaded.mod.isFailedCliReworkResponse('## Fix summary\n\nAll findings addressed.'),
+            false, 'a completion summary must never classify as fatal');
+        assert.equal(loaded.mod.isFailedCliReworkResponse(''), false);
+        assert.equal(loaded.mod.isFailedCliReworkResponse(null), false);
+    });
+
+    test('action: fatal CLI failure posts ❌, resets to IN_REWORK, never announces completion', function() {
+        var loaded = loadPushReworkChangesForAction({});
+        var fatalResponse = 'CLI Command: ./factory-agents/scripts/run-agent.sh "/tmp/dmtools_cli_prompt.txt"\n'
+            + 'Error: Command failed (exit code 1): ./factory-agents/scripts/run-agent.sh "/tmp/dmtools_cli_prompt.txt"\n'
+            + 'Output:\n=== AGENT PROMPT START ===';
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: fatalResponse
+        });
+
+        assert.equal(result.success, false, 'a fatal CLI run must not report success');
+        assert.equal(result.path, 'rework-cli-failed');
+
+        var jiraBodies = loaded.jiraPostCommentCalls.map(function(c) { return String(c.body || c.comment || ''); });
+        assert.ok(
+            jiraBodies.some(function(b) { return b.indexOf('Rework CLI Failed') !== -1; }),
+            'the failure must be posted to the ticket');
+        assert.ok(
+            !jiraBodies.some(function(b) { return b.indexOf('Rework Completed') !== -1; }),
+            'must never post the success comment');
+        assert.ok(
+            !loaded.jiraMoveToStatusCalls.some(function(c) { return c.statusName === 'In Review'; }),
+            'must never move the ticket to In Review');
+        assert.ok(
+            loaded.jiraMoveToStatusCalls.some(function(c) { return c.statusName === 'In Rework'; }),
+            'the ticket goes back to In Rework for retry');
+        assert.equal(loaded.resumeAgentCalls.length, 1, 'exactly one resume attempt');
+        assert.equal(loaded.resumeAgentCalls[0].stage, 'rework_cli_failed');
+    });
+
+    test('action: resume attempt recurses once, then takes the failure path', function() {
+        var attempts = 0;
+        var loaded = loadPushReworkChangesForAction({}, {
+            feedbackLoop: {
+                runQualityGates: function() { return { success: true }; },
+                runPolicyGates: function() { return { success: true }; },
+                runPostPublishGates: function() { return { success: true }; },
+                resumeAgent: function() {
+                    attempts += 1;
+                    return { attempted: attempts === 1 };
+                }
+            }
+        });
+        var fatalResponse = 'Error: Command failed (exit code 2): ./run-agent.sh';
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: fatalResponse
+        });
+
+        assert.equal(loaded.resumeAgentCalls.length, 2, 'resume tried once, then the recursion sees attempted=false');
+        assert.equal(result.success, false);
+        assert.equal(result.path, 'rework-cli-failed');
+    });
+
+    test('action: interruption class (124) keeps its existing resume semantics', function() {
+        var loaded = loadPushReworkChangesForAction({});
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'Error: Command failed (exit code 124): ./run-agent.sh — timed out'
+        });
+
+        assert.equal(result.path, 'rework-interrupted', '124 must still take the interrupted path');
+        assert.equal(result.success, true);
     });
 });

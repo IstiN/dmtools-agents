@@ -462,6 +462,63 @@ function isInterruptedReworkResponse(response) {
 }
 
 /**
+ * Fatal (non-interruption) CLI failure in the rework response.
+ *
+ * Live pathology 2026-09-29 (IstiN/flutter_agent_harness #1052 machine loop):
+ * a rework CLI command that exited non-zero (exit code 1) was announced as
+ * "✅ Rework Complete" because only interruption-class failures (timeout exit
+ * 124, missing output file) were detected. The loop then re-validated a head
+ * that could never go green — forever.
+ *
+ * The `Error: Command failed (exit code N)` marker is written by the
+ * CliExecutionHelper into the RAW command log; it only reaches the response
+ * when the CLI died WITHOUT writing outputs/response.md (a completed agent's
+ * response comes from the output file, which never embeds this helper
+ * marker). So seeing it here means the rework CLI run failed outright.
+ * Exit 124 stays in the interruption class — [isInterruptedReworkResponse]
+ * owns it and its resume-once semantics.
+ */
+function isFailedCliReworkResponse(response) {
+    var m = /Error: Command failed \(exit code (\d+)\)/.exec(String(response || ''));
+    if (!m) return false;
+    var code = parseInt(m[1], 10);
+    return code !== 0 && code !== 124;
+}
+
+/**
+ * Terminal handler for a fatally failed rework CLI run: surface the failure
+ * honestly instead of announcing completion. Mirrors [handleInterruptedRework]
+ * semantics (leave PR conversations open, reset the ticket for retry) but
+ * posts a failure comment and reports success:false so callers/metrics see it.
+ */
+function handleFailedReworkCli(tracker, ticketKey, branchName, customParams, statuses, error) {
+    console.warn('Rework CLI failed with a non-zero exit — surfacing the failure instead of announcing completion.');
+    try {
+        const mi = commentMarkup.forTicket(ticketKey);
+        tracker.postComment(
+            ticketKey,
+            mi.h(3, '❌ Rework CLI Failed') + '\nThe rework CLI command exited with a non-zero code. No completion is claimed; PR conversations were left open. The ticket was moved back to ' + mi.bold(statuses.IN_REWORK) + ' for retry.\n'
+                + mi.code(String(error).substring(0, 2000))
+        );
+    } catch (e) {
+        console.warn('Failed to post failed-rework comment:', e.message || e);
+    }
+    try {
+        tracker.moveToStatus(ticketKey, statuses.IN_REWORK);
+        console.log('✅ Moved', ticketKey, 'back to', statuses.IN_REWORK, 'for retry');
+    } catch (e) {
+        console.warn('Failed to move ticket back to ' + statuses.IN_REWORK + ':', e.message || e);
+    }
+    removeConfiguredLabels(tracker, ticketKey, customParams || {});
+    return {
+        success: false,
+        path: 'rework-cli-failed',
+        ticketKey: ticketKey,
+        branchName: branchName
+    };
+}
+
+/**
  * Reads input/<ticketKey>/rework_setup_failed.md, written by preCliReworkSetup's
  * failSetup() when it could not find/checkout a PR for the ticket (e.g. "no PR
  * found for ticket"). Returns the file content, or null if the file does not
@@ -697,6 +754,23 @@ function action(params) {
             return handleInterruptedRework(tracker, ticketKey, branchName, _customParams, statuses);
         }
 
+        // Fatal CLI failure (non-zero exit ≠ interruption): one resume attempt,
+        // then the honest failure path — never a "Rework Complete" announcement
+        // (live 2026-09-29: exit 1 was announced as completion, the #1052 loop).
+        if (isFailedCliReworkResponse(fixSummary)) {
+            var failedResume = tryResumeAgent({
+                ticketKey: ticketKey,
+                customParams: _customParams,
+                section: 'postAction',
+                stage: 'rework_cli_failed',
+                error: String(fixSummary).substring(0, 2000)
+            });
+            if (failedResume.attempted) {
+                return action(params);
+            }
+            return handleFailedReworkCli(tracker, ticketKey, branchName, _customParams, statuses, fixSummary);
+        }
+
         // Find PR to post comment — prefer targetRepository from config over git remote
         var repoInfo = null;
         if (config.repository && config.repository.owner && config.repository.repo) {
@@ -929,5 +1003,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, resolveCustomParams, isInterruptedReworkResponse, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview };
+    module.exports = { action, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview };
 }
