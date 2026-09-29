@@ -378,6 +378,30 @@
           "workflowRef": "{branch}"
         },
         {
+          "description": "GitHub PR: validated + reviewed (both latches) + ANY verdict pinned to an older commit + all review threads worked + the head has NO concluded checks (a push moved it after the review — silent-update/rework — so the rollup reads 'none' and every green-gated review path skips) -> RE-REVIEW FIRST (owner 2026-09-29: after ai_validated + a review, a moved head re-runs the REVIEW, never the validation; the single pre-merge validation stays in validate-armed, post-approve, on the final head). Closes the chicken-and-egg stall (live: fa pr-1076 + pr-1075, 2026-09-29 — a machine-authored PR whose head moved after its review stalled until a human label/manual dispatch, tick processed 0). checks 'none' ONLY: 'pending' is the in-flight dispatch bridge — racing it double-dispatches. threadsResolved excludes the mid-rework window (the rework leg owns open threads; its push flips them to resolved and arms THIS rule). Convergent: the fresh verdict's commit_id equals the head, so staleVerdict clears — never loops. Never on approved PRs (pr_approved is sticky — approved rework re-validates, never re-reviews). workflowRef={branch}: the leg runs on the PR head.",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validated",
+              "ai_pr_reviewed"
+            ],
+            "notLabels": [
+              "agent:review",
+              "ai_validating",
+              "pr_approved"
+            ],
+            "checks": "none",
+            "draft": false,
+            "staleVerdict": true,
+            "threadsResolved": true
+          },
+          "localAction": "arm_review",
+          "limit": 5,
+          "id": "review-stale-verdict-unchecked",
+          "workflowRef": "{branch}"
+        },
+        {
           "description": "GitHub PR: agent:review label on a PR -> review on demand (any author; consumed by the review runner) workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
           "source": "github",
           "query": {

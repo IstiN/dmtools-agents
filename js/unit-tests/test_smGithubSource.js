@@ -729,6 +729,69 @@ suite('sm github source', function () {
         assert.equal(items[0].key, 'pr-61');
     });
 
+    test('pr rules: review-stale-verdict-unchecked — validated+reviewed head with NO checks re-reviews (no green needed)', function () {
+        // Live shape (flutter_agent_harness pr-1076/pr-1075, 2026-09-29): a
+        // push (silent-update / rework) moved the head AFTER the review, so
+        // the rollup reads 'none' (BLOCKED, required checks pending) and
+        // every green-gated review path skipped — the machine-authored PR
+        // stalled until a human label. Owner rule: after ai_validated + a
+        // review, a moved head re-runs the REVIEW first; the single
+        // pre-merge validation stays in validate-armed (post-approve,
+        // final head). 'none' only — 'pending' is the in-flight dispatch
+        // bridge and must not double-dispatch.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 71, labels: [{ name: 'ai_validated' }, { name: 'ai_pr_reviewed' }], head: { ref: 'feat/a' }, draft: false },
+                    { number: 72, labels: [{ name: 'ai_validated' }, { name: 'ai_pr_reviewed' }], head: { ref: 'feat/b' }, draft: false },
+                    { number: 73, labels: [{ name: 'ai_validated' }, { name: 'ai_pr_reviewed' }], head: { ref: 'feat/c' }, draft: false },
+                    { number: 74, labels: [{ name: 'ai_validated' }, { name: 'ai_pr_reviewed' }, { name: 'pr_approved' }], head: { ref: 'feat/d' }, draft: false },
+                    { number: 75, labels: [{ name: 'ai_validated' }, { name: 'ai_pr_reviewed' }], head: { ref: 'feat/e' }, draft: false },
+                    { number: 76, labels: [{ name: 'ai_pr_reviewed' }], head: { ref: 'feat/f' }, draft: false }
+                ];
+            }
+        }, {}, {
+            71: { state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true, headSha: 'head71' },
+            72: { state: 'OPEN', checks: 'pending', mergeState: 'BLOCKED', mergeable: true, headSha: 'head72' },
+            73: { state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true, headSha: 'head73' },
+            74: { state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true, headSha: 'head74' },
+            75: { state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true, headSha: 'head75' },
+            76: { state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true, headSha: 'head76' }
+        }, {
+            71: { state: 'COMMENTED', commitId: 'old71' },
+            72: { state: 'CHANGES_REQUESTED', commitId: 'old72' },
+            73: { state: 'COMMENTED', commitId: 'old73' },
+            74: { state: 'COMMENTED', commitId: 'old74' },
+            75: { state: 'COMMENTED', commitId: 'head75' }
+            // 76: never reviewed
+        }, {
+            71: { total: 2, resolved: 2, unresolved: 0 },
+            72: { total: 2, resolved: 2, unresolved: 0 },
+            73: { total: 2, resolved: 1, unresolved: 1 },
+            74: { total: 1, resolved: 1, unresolved: 0 },
+            75: { total: 2, resolved: 2, unresolved: 0 },
+            76: { total: 1, resolved: 1, unresolved: 0 }
+        });
+        var items = srcMod.query({
+            query: {
+                type: 'pr',
+                labels: ['ai_validated', 'ai_pr_reviewed'],
+                notLabels: ['agent:review', 'ai_validating', 'pr_approved'],
+                checks: 'none', draft: false,
+                staleVerdict: true, threadsResolved: true
+            }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        // 71 validated+reviewed+resolved+stale+none → match (the stall fix);
+        // 72 checks pending (dispatch bridge in flight) → no;
+        // 73 an unresolved thread (mid-rework window) → no;
+        // 74 approved (pr_approved sticky — re-validates, never re-reviews) → no;
+        // 75 the verdict is already on the current head (converged) → no;
+        // 76 never reviewed (no ai_validated — out of the rule's scope) → no.
+        assert.equal(items.length, 1, 'only pr-71 matches: ' +
+            items.map(function (i) { return i.key; }).join(','));
+        assert.equal(items[0].key, 'pr-71');
+    });
+
     test('pr rules: prMachineAuthor — auto legs fire only on machine-authored PRs', function () {
         // Owner rule: rework-style auto legs must never fire on a
         // human-authored PR, and with no machineAuthor configured the gate
