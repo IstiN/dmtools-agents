@@ -44,3 +44,21 @@ and must **not** trigger another rework round.
   The `recommendation` field of `outputs/pr_review.json` is the verdict.
 - ❌ Re-opening a thread that the rework demonstrably fixed in this diff —
   add its id to `resolvedThreadIds` instead.
+
+## Label guard rails — the chore:pin lane (live: fa pr-1104, 2026-09-30)
+
+`chore:pin` is a trusted, **non-exclusive** factory fast-lane: several PRs
+may carry it at the same time (a release bump `chore/release-vX.Y.Z` AND a
+factory pin `chore/factory-pin-*` are both legitimate holders — they ride
+the lane independently). Reviews must therefore:
+
+- ❌ **NEVER remove `chore:pin` from any PR** — not as a "one pin" dedup,
+  not as a side-effect of closing a related PR as superseded. Removing it
+  from the release bump stranded the v1.0.494 tag behind the guest queue
+  for an hour (fa pr-1104, unlabeled 13:31:08Z while pr-1105 was closed).
+- ✅ When a PR is superseded (e.g. a workflow change already shipped via
+  another PR), close **only that PR** and leave every label on every other
+  PR untouched. Label restoration is a keeper action, not yours.
+- ✅ If you believe two `chore:pin` holders conflict, SAY SO in the review
+  comment and keep both labels — the owner resolves the lane, the machine
+  only merges.
