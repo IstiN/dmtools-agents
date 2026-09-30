@@ -106,7 +106,10 @@ jobs:
             echo "SM alive ($active active run(s)) — nothing to do"
           else
             echo "SM idle — dispatching a tick"
-            gh workflow run "${{ inputs.smWorkflow }}" -R "$GITHUB_REPOSITORY"
+            # dryRun=false is LOAD-BEARING: the SM stub's workflow_dispatch
+            # input defaults to true, and a flagless dispatch silently no-ops
+            # (live incident 2026-09-29 21:14-21:24Z, fa guard #1092).
+            gh workflow run "${{ inputs.smWorkflow }}" -R "$GITHUB_REPOSITORY" -f dryRun=false
           fi
 
   head-completeness:
