@@ -309,9 +309,16 @@ report, re-arm `agent:rework` on the linked issue), `merge-validated`
 queries are **OR**-matched — the validating rules key on `ai_validating`
 alone because it only ever lands on armed (`pr_approved`) PRs. Reviews of
 PRs born without an issue: `review-external-once` (any non-machine author,
-green checks, once — `ai_pr_reviewed` blocks re-review on later pushes)
-and `review-on-label` (`agent:review` on the PR, any author; the review
-runner consumes the label). PR-anchored factory dispatches pass `pr`
+green checks, once — `ai_pr_reviewed` blocks re-review on later pushes),
+`review-machine-unlinked` (the machine-author twin: a validated MACHINE PR
+whose branch/body carry no OPEN linked issue — `develop-done` only
+backfills open issues and `review-after-dev` rides the issue carrier, so
+without this rule such PRs starve validated-but-never-reviewed; no checks
+requirement because silent-updated heads read `none`, dedup rides the
+leg's own check run flipping the rollup to `pending`; `prMachineAuthor`
+fails closed when no machineAuthor is configured) and `review-on-label`
+(`agent:review` on the PR, any author; the review runner consumes the
+label). PR-anchored factory dispatches pass `pr`
 instead of `issue`; the anchor rides the `pr-N` contextId into the agent
 scripts (`preparePRForReview` / `postPRReviewComments`).
 
