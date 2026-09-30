@@ -387,10 +387,12 @@ jobs:
     if: needs.guard.outputs.run == 'true'
     runs-on: ${{ inputs.runner || 'ubuntu-24.04' }}
     # A real fix is a 40-80 minute agent session (gh-623 burned a full RCA +
-    # TDD cycle at exactly 61 minutes and the job was killed mid-work).
-    # The autocommit timer (300s) bounds the blast radius of a kill; this
-    # timeout bounds the bill.
-    timeout-minutes: 120
+    # TDD cycle at exactly 61 minutes and the job was killed mid-work); dev
+    # legs over Flutter sources run the analyzer + full flutter test suite
+    # and live 2-3 hours (fa gh-1077 leg was killed mid-work at exactly 110
+    # on 2026-09-30). The autocommit timer (300s) bounds the blast radius of
+    # a kill; this timeout bounds the bill.
+    timeout-minutes: 260
     # Workflow-level env is NOT supported in reusable (workflow_call)
     # workflows — the factory failed validation at startup until this
     # moved down to the job.
@@ -719,15 +721,16 @@ jobs:
 
       - name: Run agent (fa provider via runner env overrides)
         id: run_agent
-        # Hard cap just under the job's 120 min: a hung agent session must
-        # FAIL the leg (the always() post-actions then run inside the
-        # remaining budget and the red path re-queues) instead of the
-        # job-level timeout killing everything mid-post-action. NOT 45:
-        # a real fix is a 40-80 minute session (gh-623 was killed mid-work
-        # at exactly 61). Live: three consecutive dmd PR-266 legs sat
-        # in_progress 60-90 min with a brain-dead fa session (trace silent
-        # from the first minute) until manual cancel — 2026-09-27.
-        timeout-minutes: 110
+        # Hard cap under the job's 260 min: a hung agent session must FAIL
+        # the leg (the always() post-actions then run inside the remaining
+        # budget and the red path re-queues) instead of the job-level
+        # timeout killing everything mid-post-action. NOT 45: a real fix is
+        # a 40-80 minute session (gh-623 was killed mid-work at exactly 61).
+        # NOT 110: dev legs over Flutter sources run the analyzer + the
+        # full flutter test suite — fa gh-1077 was killed mid-work at
+        # exactly 110 (live flutter_tester orphans at teardown, PR step
+        # never reached) — 2026-09-30.
+        timeout-minutes: 240
         env:
           CI_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RUNNER: ${{ needs.guard.outputs.runner }}
