@@ -336,6 +336,38 @@
           "id": "review-external-once"
         },
         {
+          "description": "GitHub PR: MACHINE-authored validated PR whose review loop has no leg — the branch/body carry no OPEN linked issue (fix/*, revert/*, chore/* branches), or the linked issue closed: develop-done only backfills OPEN issues, review-after-dev rides the issue carrier, and review-external-once excludes machine authors — so such a PR starves validated-but-never-reviewed forever (live: fa #1068 validated 19h with zero review legs; #1071/#1075 in the same state, owner order 2026-09-30). PR-anchored one-time review, the machine-author twin of review-external-once. NO checks requirement (review-after-dev economy: the ai_validated latch alone qualifies — silent-update keeps the head fresh, the review covers the current diff, and the final pre-merge validation stays in validate-armed post-approve): a green-gated guard would skip silent-updated heads whose rollup reads 'none' (the exact skip that starved the trio). Dedup is structural, not green-gated: the leg runs on the PR head (workflowRef={branch}) so its check run flips the rollup to 'pending' — excluded here — until the runner latches ai_pr_reviewed at the verdict. prMachineAuthor fails CLOSED when no machineAuthor is configured (no auto legs at all). DIRTY heads are NOT excluded: a conflicted unlinked machine PR has no other path to a verdict (conflict-rework's rework re-arm needs the linked issue), and the merge window keeps it out of merges until CLEAN regardless. limit 1: same pacing as review-external-once; the trio drains over consecutive ticks.",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validated"
+            ],
+            "notLabels": [
+              "ai_pr_reviewed",
+              "pr_approved",
+              "agent:review",
+              "ai_validating"
+            ],
+            "checks": [
+              "green",
+              "none"
+            ],
+            "prMachineAuthor": true,
+            "draft": false
+          },
+          "workflowFile": "ai-teammate.yml",
+          "inputs": {
+            "issue": "",
+            "leg": "review",
+            "reason": "sm: machine PR validated but issue loop never armed a review - one-time review",
+            "pr": "{prNumber}"
+          },
+          "limit": 1,
+          "id": "review-machine-unlinked",
+          "workflowRef": "{branch}"
+        },
+        {
           "description": "GitHub PR: CHANGES_REQUESTED verdict pinned to an older commit (fixes pushed after the review) + green -> re-arm agent:review. review-on-label dispatches the runner, the runner consumes the label and re-reviews the current head; the fresh verdict's commit_id equals the head, so this never loops. Never on approved PRs (pr_approved is sticky — approved rework re-validates, never re-reviews). workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
           "source": "github",
           "query": {

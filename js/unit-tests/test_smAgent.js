@@ -643,6 +643,39 @@ suite('smAgent: sm_github.json rule hygiene', function () {
             assert.ok(!byId[id].query.prMachineAuthor, id + ': review stays open to all authors');
         });
     });
+
+    test('review-machine-unlinked: issue-less machine PRs get their one review (fa #1068 starvation)', function () {
+        // Owner order (fa 2026-09-30): #1068 sat ai_validated 19h with ZERO
+        // review legs. The three review entries all miss it: develop-done
+        // backfills OPEN linked issues only, review-after-dev rides the
+        // issue carrier, review-external-once excludes machine authors.
+        // This rule is the machine-author twin of review-external-once —
+        // author-gated (prMachineAuthor fails closed) and green-independent
+        // (silent-updated heads read checks 'none'; review-after-dev's
+        // economy: the ai_validated latch alone qualifies). Dedup is
+        // structural: workflowRef={branch} puts the leg's check run on the
+        // head, and the 'pending' rollup is excluded from the query.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+        var rule = byId['review-machine-unlinked'];
+        assert.ok(rule, 'review-machine-unlinked exists');
+        assert.equal(rule.query.type, 'pr', 'PR-anchored (no issue carrier)');
+        assert.equal(rule.query.prMachineAuthor, true, 'machine-author-gated (fail-closed)');
+        assert.deepEqual(rule.query.labels, ['ai_validated'], 'targets the validated latch');
+        ['ai_pr_reviewed', 'pr_approved', 'agent:review', 'ai_validating'].forEach(function (l) {
+            assert.ok((rule.query.notLabels || []).indexOf(l) !== -1, 'excludes ' + l);
+        });
+        assert.deepEqual(rule.query.checks, ['green', 'none'],
+            'green-independent but never pending — the running leg is its own dedup');
+        assert.equal(rule.inputs.leg, 'review', 'dispatches the review leg');
+        assert.equal(rule.inputs.pr, '{prNumber}', 'PR-anchored dispatch input');
+        assert.equal(rule.workflowRef, '{branch}', 'leg runs on the PR head (check-run dedup)');
+        assert.equal(rule.limit, 1, 'one per tick — review-external-once pacing');
+        assert.equal(rules.indexOf(rule), rules.indexOf(byId['review-external-once']) + 1,
+            'sits right after review-external-once');
+    });
 });
 
 suite('smAgent: localAction mark_developed (github machine-loop backfill)', function () {
