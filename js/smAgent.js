@@ -1171,11 +1171,13 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 //     validation CI for it. Machine PRs never get the
                 //     label (fa pushes their heads; they re-enter on a new
                 //     head as today).
-                //   RESET (first): when the head's LAST committer is NOT
-                //     'sm-silent-update' — an author push or any
-                //     non-machine actor — the label is removed and the PR
-                //     re-enters the queue. The SM's own silent-update
-                //     merges must NOT clear it.
+                //   RESET (first): the park clears only on a HUMAN push
+                //     NEWER than the validation_failed event — the label is
+                //     removed and the PR re-enters the queue. Machine
+                //     movement NEVER clears it: the SM's own silent-update
+                //     merges ('sm-silent-update' committer) and the agent
+                //     legs' pushes (machineAuthor login, e.g. the rework
+                //     WIP auto-saves on fa pr-1094) are not new work.
                 var parkLabelVf = 'validation_failed';
                 var labelsVf = ticket.labels || [];
                 var uHead = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
@@ -1185,10 +1187,26 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 var unparkedThisPass = false;
                 if (labelsVf.indexOf(parkLabelVf) !== -1) {
                     var lastCommitter = uHead ? headCommitIdentity(effectiveRepoInfo, uHead) : null;
-                    if (lastCommitter === null) {
+                    var actorVf = uHead ? headCommitActor(effectiveRepoInfo, uHead) : null;
+                    var parkedAtVf = parkedSince(effectiveRepoInfo, ticket.prNumber);
+                    var actorLoginVf = ((actorVf && actorVf.login) || '').toLowerCase();
+                    var machineLoginVf = String(prMachineAuthorU || '').toLowerCase();
+                    var machinePushVf = lastCommitter === 'sm-silent-update' ||
+                        (!!machineLoginVf && !!actorLoginVf && actorLoginVf === machineLoginVf);
+                    var freshPushVf = !!(actorVf && actorVf.date && parkedAtVf &&
+                        Date.parse(actorVf.date) > Date.parse(parkedAtVf));
+                    if (lastCommitter === null || actorVf === null || parkedAtVf === null) {
                         console.warn('  ⚠️  ' + key + ' ' + parkLabelVf +
-                            ': head-commit probe failed — keeping the park (fail closed)');
-                    } else if (lastCommitter !== 'sm-silent-update') {
+                            ': park probe failed (commit actor / park time) — keeping the park (fail closed)');
+                    } else if (machinePushVf) {
+                        console.log('  🅿️  ' + key + ' ' + parkLabelVf +
+                            ' holds — head moved by the machine (' +
+                            (lastCommitter === 'sm-silent-update' ? 'sm-silent-update' : actorLoginVf) +
+                            '); silent-updates and agent auto-saves are not new work');
+                    } else if (!freshPushVf) {
+                        console.log('  🅿️  ' + key + ' ' + parkLabelVf +
+                            ' holds — the head predates the park event (no new push since)');
+                    } else {
                         if (!DRY) {
                             try {
                                 github_remove_label({
@@ -1206,19 +1224,16 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                     repository: effectiveRepoInfo.repo,
                                     number: ticket.prNumber,
                                     body: '🅿️→▶ validation_failed cleared — the head `' + uHead +
-                                        '` was last committed by `' + lastCommitter +
-                                        '` (non-machine) — re-entering validation.'
+                                        '` was pushed by `' + (actorLoginVf || lastCommitter) +
+                                        '` (human, newer than the park event) — re-entering validation.'
                                 });
                             } catch (eUnparkVfC) {
                                 console.warn('  ⚠️  un-park comment failed: ' + (eUnparkVfC.message || eUnparkVfC));
                             }
                         }
                         console.log('  ▶ ' + key + ' ' + parkLabelVf +
-                            ' cleared: non-machine head movement — re-entering validation');
+                            ' cleared: HUMAN push newer than the park — re-entering validation');
                         unparkedThisPass = true;
-                    } else {
-                        console.log('  🅿️  ' + key + ' ' + parkLabelVf +
-                            ' holds — the head moved by sm-silent-update only');
                     }
                 }
                 if (!unparkedThisPass && !isMachinePrU &&
@@ -1243,9 +1258,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                 body: '🛑 validation_failed — the current head `' + uHead +
                                     '` has failing checks. This GUEST PR is parked: no validation ' +
                                     'CI is dispatched for it and the merge window skips it until a ' +
-                                    'NON-MACHINE push moves the head (the machine cannot fix it, and ' +
-                                    'silent-updates do not re-arm it). The failure itself is reported ' +
-                                    'separately. parked-head: ' + uHead
+                                    'HUMAN push newer than the park clears it (machine pushes — ' +
+                                    'silent-updates, agent auto-saves — never do). The failure itself ' +
+                                    'is reported separately. parked-head: ' + uHead
                             });
                         } catch (eParkVfC) {
                             console.warn('  ⚠️  park comment failed: ' + (eParkVfC.message || eParkVfC));
@@ -1278,7 +1293,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // source of truth. NOT processedKeys: the limit-1 slot moves on.
             if ((ticket.labels || []).indexOf('validation_failed') !== -1) {
                 console.log('  ⏭️  ' + key + ' validation_failed — parked; NO validation CI' +
-                            ' until a non-machine push clears the label');
+                            ' until a HUMAN push newer than the park clears it');
                 continue;
             }
             if (!ticket.branch) {
@@ -2295,6 +2310,52 @@ function headCommitIdentity(repoInfo, headSha) {
         return String(out == null ? '' : out).trim().replace(/^"|"$/g, '');
     } catch (e) {
         console.warn('  ⚠️  head-commit probe failed: ' + (e.message || e));
+        return null;
+    }
+}
+
+function headCommitActor(repoInfo, headSha) {
+    // Sticky-park RESET probe v2 (owner 2026-09-30, live fa pr-1094): the
+    // GitHub-linked account that carries the head commit plus its commit
+    // date. login = author.login || committer.login — the deployment's
+    // machineAuthor login carries every agent-leg push (the rework WIP
+    // auto-saves land as ai-teammate), so a machine push is recognizable
+    // by LOGIN, not by git name: the agent's git identity ("AI Teammate"
+    // <agent.ai.native@gmail.com>) differs from the workflow identities.
+    // Returns {login, date} or null (fail closed: the caller keeps the
+    // park — a dead probe must never un-park).
+    try {
+        var res = cli_execute_command({
+            command: 'gh api "repos/' + repoInfo.owner + '/' + repoInfo.repo +
+                     '/commits/' + headSha +
+                     '" --jq \'{login: (.author.login // .committer.login // ""), date: .committer.date}\''
+        });
+        var parsed = mcpParse((res || {}).output || (res || {}).stdout || res);
+        if (!parsed || typeof parsed !== 'object') return null;
+        return { login: String(parsed.login || ''), date: String(parsed.date || '') };
+    } catch (e) {
+        console.warn('  ⚠️  head-commit actor probe failed: ' + (e.message || e));
+        return null;
+    }
+}
+
+function parkedSince(repoInfo, prNumber) {
+    // Sticky-park RESET probe: ISO time of the newest validation_failed
+    // 'labeled' event — the park's start. The RESET requires the clearing
+    // push to be NEWER than this moment; the head that the park was set
+    // on predates the event by definition, so an old red head cannot
+    // clear its own park. Returns the ISO string or null (fail closed).
+    try {
+        var res = cli_execute_command({
+            command: 'gh api "repos/' + repoInfo.owner + '/' + repoInfo.repo +
+                     '/issues/' + prNumber +
+                     '/events?per_page=100" --jq \'[.[] | select(.event == "labeled" and .label.name == "validation_failed") | .created_at] | max // ""\''
+        });
+        var out = String((res || {}).output || (res || {}).stdout || res || '')
+            .trim().replace(/^"|"$/g, '');
+        return out || null;
+    } catch (e) {
+        console.warn('  ⚠️  park-time probe failed: ' + (e.message || e));
         return null;
     }
 }

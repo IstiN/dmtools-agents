@@ -1862,10 +1862,12 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
     //     RED checks gets the validation_failed label (idempotent, the head
     //     sha noted in a one-time comment).
     //  2. validate-armed's query excludes the label (sm_github.json).
-    //  3. RESET: a head change whose LAST committer is NOT
-    //     'sm-silent-update' (an author push) removes the label; the SM's
-    //     own silent-update merges must NOT clear it. Machine-authored PRs
-    //     never get the label (fa pushes their heads).
+    //  3. RESET (owner 2026-09-30, live fa pr-1094): the park clears only
+    //     on a HUMAN push NEWER than the park event — the head commit's
+    //     GitHub login must not be the machineAuthor (the agent legs' WIP
+    //     auto-saves land as ai-teammate) and its committer must not be
+    //     'sm-silent-update'; machine movement NEVER clears the label.
+    //     Machine-authored PRs never get the label (fa pushes their heads).
     //  4. validate_pr refuses to dispatch ANY validation CI while the
     //     label is set (backstops validate-fresh too).
 
@@ -1889,8 +1891,18 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
         return it;
     }
     function vfCli(opts) {
+        // Stub answers the three park probes keyed on command shape:
+        //   - /commits/<sha>" --jq '{login:…  → the actor probe (JSON login+date)
+        //   - /events?per_page=100            → the park-time probe (ISO string)
+        //   - /commits/<sha>" (plain)         → the committer-name probe
         return function (cmd) {
             var m = /\/commits\/([0-9a-fA-Z]+)"/.exec(cmd.command);
+            if (m && opts.actors && opts.actors[m[1]] !== undefined) {
+                return JSON.stringify(opts.actors[m[1]]);
+            }
+            if (opts.parkedAt !== undefined && cmd.command.indexOf('/events?per_page=100') !== -1) {
+                return '"' + opts.parkedAt + '"';
+            }
             if (m && opts.committers && opts.committers[m[1]] !== undefined) {
                 return '"' + opts.committers[m[1]] + '"';
             }
@@ -1920,8 +1932,8 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
         assert.equal(sm.capturedPrComments.length, 1, 'one park comment');
         assert.ok(sm.capturedPrComments[0].body.indexOf('validation_failed') !== -1, 'marker');
         assert.ok(sm.capturedPrComments[0].body.indexOf('ee55ff66aa') !== -1, 'head sha noted');
-        assert.ok(sm.capturedPrComments[0].body.indexOf('NON-MACHINE push') !== -1,
-            'the comment states the author-push requirement');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('HUMAN push') !== -1,
+            'the comment states the human-push requirement');
         assert.ok(vfRefreshed(sm.capturedCliCommands), 'the silent refresh itself still runs');
     });
 
@@ -1947,7 +1959,9 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
                 items: [vfItem(203, { labels: ['validation_failed'], headSha: 'dd33ee44ff' })],
                 prStatus: { checkConclusion: 'none' }
             },
-            onCliExecute: vfCli({ committers: { dd33ee44ff: 'real-dev' } })
+            onCliExecute: vfCli({ committers: { dd33ee44ff: 'real-dev' },
+                                  actors: { dd33ee44ff: { login: 'real-dev', date: '2026-09-30T15:00:00Z' } },
+                                  parkedAt: '2026-09-30T14:00:00Z' })
         }));
         sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
                                  rules: [RULES_VF.refresh] } });
@@ -1960,6 +1974,65 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
         assert.ok(sm.capturedPrLabelAdds.length === 0 ||
             !sm.capturedPrLabelAdds.some(function (a) { return a.labels.indexOf('validation_failed') !== -1; }),
             'not re-labeled in the same pass — the fresh head gets a real validation chance');
+    });
+
+    test('silent-update: an AGENT push (machineAuthor login) does NOT clear the label (fa pr-1094)', function () {
+        // Live: fa pr-1094's rework leg landed WIP auto-save commits as
+        // ai-teammate AFTER the park — the old reset (any non-silent-update
+        // committer) cleared the label and the red machine PR re-armed every
+        // tick. The actor probe must read the LOGIN, not the git name: the
+        // agent's identity ("AI Teammate" <agent.ai.native@gmail.com>)
+        // differs from the workflow identities but its login is the
+        // deployment's machineAuthor.
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(205, { labels: ['validation_failed'], headSha: 'aa77bb77cc' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({ committers: { aa77bb77cc: 'AI Teammate' },
+                                  actors: { aa77bb77cc: { login: 'ai-teammate', date: '2026-09-30T14:20:38Z' } },
+                                  parkedAt: '2026-09-30T14:18:03Z' })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'machine push must NOT un-park');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
+        assert.ok(vfRefreshed(sm.capturedCliCommands), 'refresh still runs');
+    });
+
+    test('silent-update: a HUMAN push OLDER than the park event does NOT clear the label', function () {
+        // The park is set ON a red head — that head predates the park event
+        // by definition. Only a push landing AFTER the park proves new work.
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(206, { labels: ['validation_failed'], headSha: 'bb88cc88dd' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({ committers: { bb88cc88dd: 'real-dev' },
+                                  actors: { bb88cc88dd: { login: 'real-dev', date: '2026-09-30T13:00:00Z' } },
+                                  parkedAt: '2026-09-30T14:00:00Z' })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'stale human head must NOT un-park');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
+    });
+
+    test('silent-update: a failed park probe keeps the label (fail closed)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(207, { labels: ['validation_failed'], headSha: 'cc99dd99ee' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({})
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'dead probes must NOT un-park');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
     });
 
     test('silent-update: a MACHINE PR with a red head never gets the label', function () {
