@@ -48,8 +48,8 @@
 #         smWorkflow: machine-sm.yml            # this repo's SM stub name
 #         ciWorkflow: ci.yml                    # this repo's CI entrypoint
 #         requiredContexts: 'Quality gate,JS engine integration (quickjs-ng),Binaries smoke gate'
-#       secrets:
-#         githubToken: ${{ github.token }}
+#   # No secrets needed: the kicker reads github.token directly (it resolves
+#   # to the CALLER's token inside a reusable workflow).
 #   # epam/dmtools-dart example overrides:
 #   #   smWorkflow: machine-sm.yml, ciWorkflow: quality.yml
 #   #   requiredContexts: 'agents-suite,static,gate'
@@ -88,15 +88,15 @@ on:
         required: false
         type: string
         default: '45'
-    secrets:
-      githubToken:
-        description: "Caller's token (github.token suffices: reads + same-repo workflow dispatch)"
+    secrets: {}
 
 jobs:
   sm-liveness:
     runs-on: ${{ inputs.runner }}
     env:
-      GH_TOKEN: ${{ secrets.githubToken }}
+      # github.token resolves to the CALLER's token inside a reusable
+      # workflow — no secret plumbing needed for reads + same-repo dispatch.
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Dispatch an SM tick if none is queued or running
         run: |
@@ -115,7 +115,9 @@ jobs:
   head-completeness:
     runs-on: ${{ inputs.runner }}
     env:
-      GH_TOKEN: ${{ secrets.githubToken }}
+      # github.token resolves to the CALLER's token inside a reusable
+      # workflow — no secret plumbing needed for reads + same-repo dispatch.
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Dispatch CI on codeless PR heads that carry no required contexts
         run: |
