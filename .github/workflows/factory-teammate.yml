@@ -922,6 +922,15 @@ jobs:
         # the label that drives the next machine step.
         #   APPROVE (+ green CI on the PR head) → pr_approved → merge
         #   CHANGES_REQUESTED / BLOCK           → agent:rework (bounded)
+        # Verdict extraction walks a fallback chain (gh-305: the old silent
+        # skip stranded the cycle post-review — no REQUEST_CHANGES → rework,
+        # no approval → merge):
+        #   pr_review.json → run output → machine-written PR comments →
+        #   machine-written issue comments → LOUD failure
+        # No verdict anywhere ⇒ ::error:: + needs-human + per-source
+        # diagnosis comment + exit 1 (the cycle is stranded; a human must
+        # label it). gh calls stay in this step; the parser
+        # (factory-agents/setup/review-verdict.sh) stays pure.
         # The CI-green gate applies to the APPROVE path only: gating rework
         # on green CI would deadlock exactly when CI is red because the code
         # needs rework. A PAT is REQUIRED for labeling (mute GITHUB_TOKEN).
@@ -930,6 +939,7 @@ jobs:
           GH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
           NUMBER: ${{ inputs.issue }}
           RUN_OUTPUT: .dmtools/run-output.txt
+          MACHINE_AUTHOR: ${{ inputs.machine-author }}
           MAX_ROUNDS: ${{ env.MAX_AUTO_REWORK_ROUNDS }}
         run: |
           if [ -z "${GH_TOKEN:-}" ]; then
@@ -949,13 +959,39 @@ jobs:
                 | .number] | first // empty'
           }
           pr="$(find_linked_pr)"
+          # Verdict fallback sources beyond the run output (gh-305): what
+          # the leg itself wrote on the PR (comments + review bodies) and
+          # on the issue. A failed fetch leaves the file absent — the
+          # parser's diagnosis reports it as `missing`, never a hard stop.
+          verdict_dir="$(mktemp -d)"
+          trap 'rm -rf "$verdict_dir"' EXIT
+          pr_comments_json="${verdict_dir}/pr_comments.json"
+          issue_comments_json="${verdict_dir}/issue_comments.json"
+          if [ -n "$pr" ]; then
+            gh pr view "$pr" --repo "$repo" --json comments,reviews \
+              --jq '[(.comments // [])[] | {author: (.author.login // ""), body}] + [(.reviews // [])[] | {author: (.author.login // ""), body}]' \
+              > "$pr_comments_json" 2>/dev/null || rm -f "$pr_comments_json"
+          fi
+          gh issue view "$NUMBER" --repo "$repo" --json comments \
+            --jq '[(.comments // [])[] | {author: (.author.login // ""), body}]' \
+            > "$issue_comments_json" 2>/dev/null || rm -f "$issue_comments_json"
+          # machineAuthor resolution order #2 (js/common/machineAuthor.js):
+          # deployments that set the per-repo .dmtools/config.js knob but
+          # not the workflow input. Best-effort — empty on miss (then only
+          # *[bot] comment authors are trusted).
+          if [ -z "${MACHINE_AUTHOR:-}" ] && [ -r .dmtools/config.js ]; then
+            MACHINE_AUTHOR="$(sed -nE 's/.*machineAuthor["'\'']?[[:space:]]*:[[:space:]]*["'\'']([A-Za-z0-9._-]+)["'\''].*/\1/p' .dmtools/config.js | head -1)"
+          fi
           # Decision (pure logic, eval-safe key=value output): decision,
           # source, override, blocking_markers, rounds_done, next_round,
-          # escalate, round_labels.
+          # escalate, round_labels, diagnosis.
           eval "$(MAX_ROUNDS="${MAX_ROUNDS}" \
             PR_REVIEW_JSON="outputs/pr_review.json" \
             PR_REVIEW_JSON_ALT="outputs/gh-${NUMBER}/pr_review.json" \
             RUN_OUTPUT="${RUN_OUTPUT}" \
+            PR_COMMENTS_JSON="${pr_comments_json}" \
+            ISSUE_COMMENTS_JSON="${issue_comments_json}" \
+            MACHINE_AUTHOR="${MACHINE_AUTHOR:-}" \
             ISSUE_LABELS="${labels}" \
             bash factory-agents/setup/review-verdict.sh decide)"
           decision="${decision:-unknown}"
@@ -1027,8 +1063,26 @@ jobs:
             exit 0
           fi
           if [ "$decision" != "approve" ]; then
-            echo "::warning::no verdict found in the run output — skipping labeling"
-            exit 0
+            # gh-305: the old `::warning:: … skipping labeling` STRANDED
+            # the cycle post-review (no REQUEST_CHANGES → rework, no
+            # approval → merge) with nothing but a warning line. Fail
+            # LOUDLY and leave a diagnosable marker: ::error:: annotation
+            # (red step), needs-human label, per-source diagnosis comment.
+            echo "::error::no verdict found in any source (pr_review.json / run output / PR comments / issue comments) — the review cycle cannot be labeled (gh-305)"
+            echo "→ diagnosis: ${diagnosis:-none}"
+            ensure_label "needs-human" "B60205"
+            gh issue edit "$NUMBER" --repo "$repo" --add-label "needs-human"
+            body_file="$(mktemp)"
+            {
+              echo "🛑 **Review verdict missing** — the review leg finished, but no verdict (APPROVE / REQUEST_CHANGES / BLOCK) was found in any source, so the cycle cannot be labeled."
+              echo ""
+              echo "Per-source diagnosis: \`${diagnosis:-n/a}\`"
+              echo ""
+              echo "_Next step (human):_ read the review leg's run output, then label \`pr_approved\` (approve) or \`agent:rework\` (changes requested) — or re-run the review leg."
+            } > "$body_file"
+            gh issue comment "$NUMBER" --repo "$repo" --body-file "$body_file"
+            rm -f "$body_file"
+            exit 1
           fi
           echo "→ review verdict: approve"
           if [ -z "$pr" ]; then

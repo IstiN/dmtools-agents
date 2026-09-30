@@ -65,6 +65,11 @@ jobs:
           echo "$HOME/.dmtools/bin" >> "$GITHUB_PATH"
 
       - name: Run the JS unit-test suite
+        env:
+          # test_reviewVerdict.js executes setup/review-verdict.sh through
+          # cli_execute_command — `bash` is not in the built-in whitelist
+          # (git/gh/npm/…), so the canonical gate extends it for the tests.
+          CLI_ALLOWED_COMMANDS: bash
         run: dmtools run js/unit-tests/run_all.json
 
   release:
