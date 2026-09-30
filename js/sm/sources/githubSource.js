@@ -108,7 +108,10 @@ function prLabels(p) {
     return (p.labels || []).map(function (l) { return (l && l.name) || l; });
 }
 
-function matchesGuards(item, rule, provider, machineAuthor) {
+// `owner` (repoInfo.owner) rides through for the release-bump form of the
+// machine-authorship gate (#1104): chore/release-v* | chore(release): from
+// the repo owner counts as machine — see common/machineAuthor.js.
+function matchesGuards(item, rule, provider, machineAuthor, owner) {
     var q = rule.query || {};
     var labels = item.labels || [];
     if (q.notLabels && q.notLabels.some(function (l) { return labels.indexOf(l) !== -1; })) {
@@ -177,16 +180,16 @@ function matchesGuards(item, rule, provider, machineAuthor) {
             ? provider.reviewThreads(item.prNumber) : null;
         if (!(th && th.total > 0 && th.unresolved === 0)) return false;
     }
-    // Machine-author gate (owner rule): auto legs (rework, …) only fire on
-    // PRs authored by the deployment's machine login. The login is
-    // repo-configured (jobParams.machineAuthor / config.machineAuthor /
-    // the factory-sm machine-author input) and never hardcoded; with none
-    // configured the gate fails CLOSED — no auto legs at all.
+    // Machine-author gate (owner rule): auto legs (rework, review, …) only
+    // fire on machine-authored PRs — the deployment's machine login, or a
+    // release-bump PR authored by the repo owner (#1104: auto_release.sh
+    // runs on the owner's RELEASE_PAT, so GitHub records the owner as the
+    // PR author; the machine login never matches those). Fail-closed: no
+    // machineAuthor configured AND not a release bump → matches nothing.
     // PR-carrier items carry `author` from the list call (free);
     // issue-carrier items read it from the enriched prStatus.
     if (q.prMachineAuthor) {
-        var prAuthor = item.author || (item.pr && item.pr.author) || '';
-        if (!(machineAuthor && prAuthor === machineAuthor)) {
+        if (!machineAuthorModule.isMachineAuthored(item, machineAuthor, owner)) {
             return false;
         }
     }
@@ -221,13 +224,14 @@ function query(rule, ctx) {
     var limit = rule.limit || 50;
 
     var machineAuthor = machineAuthorModule.resolveMachineAuthor(ctx, ctx && ctx.config);
+    var owner = repoInfo.owner || '';
     if (q.type === 'pr') {
-        return queryPrs(rule, provider, repoInfo, limit, machineAuthor);
+        return queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner);
     }
-    return queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAuthor);
+    return queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAuthor, owner);
 }
 
-function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAuthor) {
+function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAuthor, owner) {
     var q = rule.query || {};
     var full = repoInfo.owner + '/' + repoInfo.repo;
     var seen = {};
@@ -328,7 +332,7 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
         });
     }
 
-    var matched = enriched.filter(function (item) { return matchesGuards(item, rule, provider, machineAuthor); });
+    var matched = enriched.filter(function (item) { return matchesGuards(item, rule, provider, machineAuthor, owner); });
 
     // FIFO: oldest issue first — github_search_issues returns newest-first,
     // which starves the oldest ticket under limit:1 rules (the oldest
@@ -378,7 +382,7 @@ function linkedIssueNumber(body) {
     return m ? parseInt(m[2], 10) : null;
 }
 
-function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {    var q = rule.query || {};
+function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner) {    var q = rule.query || {};
     // The open-PR list rides the provider's per-tick ioCache — this site
     // fired github_list_prs once PER RULE (measured: 18 calls, one idle
     // tick, all the same payload). Providers without the cache contract
@@ -398,6 +402,7 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {    var q = r
             prNumber: p.number,
             draft: !!p.draft,
             branch: (p.head && p.head.ref) || p.headRefName || '',
+            title: p.title || '',
             // REST /pulls carries the creator under `user` (no `author`
             // key at all — live-verified); GraphQL and the unit fixtures
             // use `author`. Read both.
@@ -539,14 +544,17 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {    var q = r
         // Author guards: `notAuthors` excludes machine-authored PRs (the
         // external one-time review rule) or vice versa.
         if (q2.notAuthors && q2.notAuthors.indexOf(item.author) !== -1) return false;
-        // `notMachine` excludes the machine author without naming it here —
-        // the login is deployment-specific (machineAuthor resolved from
-        // jobParams.machineAuthor / config.machineAuthor upstream). No
-        // machineAuthor configured -> inert (every green PR is reviewable).
-        if (q2.notMachine && machineAuthor &&
-            item.author === machineAuthor) return false;
+        // `notMachine` excludes machine-authored PRs without naming the
+        // login — the deployment knob (machineAuthor) or a release-bump
+        // PR authored by the repo owner (#1104: the auto-release flow
+        // commits through the owner's RELEASE_PAT, so GitHub records the
+        // owner as the author — the review-external rules must not claim
+        // those; the prMachineAuthor rules own them). No machineAuthor
+        // configured and no owner → inert (every green PR is reviewable).
+        if (q2.notMachine &&
+            machineAuthorModule.isMachineAuthored(item, machineAuthor, owner)) return false;
         if (q2.authors && q2.authors.indexOf(item.author) === -1) return false;
-        return matchesGuards(item, rule, provider, machineAuthor);
+        return matchesGuards(item, rule, provider, machineAuthor, owner);
     });
 
     // FIFO: oldest PR first. github_list_prs returns newest-first (API

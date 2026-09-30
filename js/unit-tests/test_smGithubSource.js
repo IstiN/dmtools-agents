@@ -884,6 +884,64 @@ suite('sm github source', function () {
         assert.equal(noKnob.length, 0, 'no machineAuthor configured — gate fails closed');
     });
 
+    test('pr rules: release-bump PRs from the repo owner count as machine-authored (#1104)', function () {
+        // Owner rule 2026-09-30: auto_release.sh (fa #1093) creates
+        // chore/release-v* | chore(release): bump PRs through the owner's
+        // RELEASE_PAT, so GitHub records the OWNER as the author — the
+        // machine login never matches. The authorship gate must treat the
+        // bump shape from the repo owner as machine (review-machine-
+        // unlinked fires), everything else fails closed.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 83, draft: false, author: { login: 'IstiN' },
+                      head: { ref: 'chore/release-v1.0.494' },
+                      title: 'chore(release): v1.0.494' },
+                    { number: 84, draft: false, author: { login: 'guest-dev' },
+                      head: { ref: 'chore/release-v1.0.495' },
+                      title: 'chore(release): v1.0.495' },
+                    { number: 85, draft: false, author: { login: 'IstiN' },
+                      head: { ref: 'ai/gh-999' }, title: 'fix(#1): regular owner PR' },
+                    { number: 86, draft: false, author: { login: 'istin' },
+                      head: { ref: 'manual/bump' }, title: 'chore(release): v1.0.496' }
+                ];
+            }
+        }, {}, {
+            83: { state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true },
+            84: { state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true },
+            85: { state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true },
+            86: { state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true }
+        });
+
+        // review-machine-unlinked shape (#576): bump PRs from the owner
+        // (branch OR title form, author matched case-insensitively) get
+        // the auto review leg; a foreigner's bump and the owner's regular
+        // PR stay out.
+        var machineRule = srcMod.query({
+            query: { type: 'pr', notLabels: ['ai_pr_reviewed', 'pr_approved'],
+                     checks: ['green', 'none'], prMachineAuthor: true, draft: false }
+        }, { repoInfo: { owner: 'IstiN', repo: 'r' }, machineAuthor: 'ai-teammate' });
+        assert.equal(machineRule.map(function (i) { return i.key; }).join(','), 'pr-83,pr-86',
+            'release bumps from the owner = machine (branch form and title form)');
+
+        // review-external-once shape: notMachine now excludes the bump
+        // PRs too — the external rules must not claim what the machine
+        // rules own.
+        var extRule = srcMod.query({
+            query: { type: 'pr', notLabels: ['ai_pr_reviewed'],
+                     checks: 'green', draft: false, notMachine: true }
+        }, { repoInfo: { owner: 'IstiN', repo: 'r' }, machineAuthor: 'ai-teammate' });
+        assert.equal(extRule.map(function (i) { return i.key; }).join(','), 'pr-84,pr-85',
+            'foreign bump + owner regular PR remain external-reviewable');
+
+        // Fail-closed: no owner resolvable (repoInfo without owner) → the
+        // bump shape alone proves nothing.
+        var noOwner = srcMod.query({
+            query: { type: 'pr', checks: ['green', 'none'], prMachineAuthor: true, draft: false }
+        }, { repoInfo: { repo: 'r' }, machineAuthor: 'ai-teammate' });
+        assert.equal(noOwner.length, 0, 'no owner — release-bump gate fails closed');
+    });
+
     test('pr rules: linked issue resolves from the PR body (closing keyword, bare #N, none)', function () {
         // The manual rework rule (rework-on-label) dispatches an
         // issue-anchored leg for a PR-carrier match — the {issueNumber}

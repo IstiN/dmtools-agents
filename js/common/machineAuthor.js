@@ -38,4 +38,54 @@ function resolveMachineAuthor(jobParams, config) {
     return null;
 }
 
-module.exports = { resolveMachineAuthor: resolveMachineAuthor };
+// Release-bump PRs (the auto-release flow, fa #1093) are authored by the
+// REPO OWNER, not by the machine login: `scripts/auto_release.sh` runs in
+// CI on main and creates `chore/release-vX.Y.Z` through the owner's
+// RELEASE_PAT, so GitHub records the owner as the PR author. The
+// deployment knob (`machineAuthor`, e.g. `ai-teammate`) never matches
+// them — `prMachineAuthor` rules fired nothing and `notMachine` rules
+// kept claiming them, so every release bump stalled outside the machine
+// loop (live: fa #1104, 2026-09-30, hand-driven review leg).
+//
+// Owner rule 2026-09-30: a release-bump PR authored by the REPO OWNER
+// counts as machine-authored. Fail-closed everywhere else:
+//   - no owner resolvable → false (the shape alone proves nothing);
+//   - author != owner → false (a foreigner pushing a chore/release-v*
+//     branch is NOT machine — the auto-release flow can only ever author
+//     from repo credentials);
+//   - anything not matching the bump shape → false.
+// The shape: branch `chore/release-v*` (auto_release.sh) OR title
+// `chore(release): …` (the squash subject the bump PR carries).
+var RELEASE_BUMP_BRANCH_RE = /^chore\/release-v/;
+var RELEASE_BUMP_TITLE_RE = /^chore\(release\):/;
+
+function itemAuthor(item) {
+    return String((item && (item.author || (item.pr && item.pr.author))) || '');
+}
+
+function isMachineReleaseBump(item, owner) {
+    var author = itemAuthor(item);
+    if (!owner || !author) return false;
+    if (author.toLowerCase() !== String(owner).toLowerCase()) return false;
+    var branch = String((item && (item.branch || (item.pr && item.pr.branch))) || '');
+    var title = String((item && (item.title || (item.pr && item.pr.title))) || '');
+    return RELEASE_BUMP_BRANCH_RE.test(branch) || RELEASE_BUMP_TITLE_RE.test(title);
+}
+
+/**
+ * The single machine-authorship predicate for every author-keyed guard
+ * (`prMachineAuthor` positive gate, `notMachine` negative filter): the
+ * deployment's machine login OR a release-bump PR authored by the repo
+ * owner (see isMachineReleaseBump). Everything else — including an
+ * owner-authored PR with a non-bump shape — is NOT machine.
+ */
+function isMachineAuthored(item, machineAuthor, owner) {
+    if (machineAuthor && itemAuthor(item) === machineAuthor) return true;
+    return isMachineReleaseBump(item, owner);
+}
+
+module.exports = {
+    resolveMachineAuthor: resolveMachineAuthor,
+    isMachineReleaseBump: isMachineReleaseBump,
+    isMachineAuthored: isMachineAuthored
+};
