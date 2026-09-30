@@ -25,8 +25,15 @@ suite('factory-teammate.yml — Run agent watchdog (zombie-leg RCA 2026-09-27)',
         var rest = wf.slice(step);
         var m = rest.match(/timeout-minutes:\s*(\d+)/);
         assert.ok(m, 'step has its own timeout-minutes');
-        assert.ok(parseInt(m[1], 10) < 120 && parseInt(m[1], 10) >= 60,
-            'step timeout must sit between a real-fix session (40-80 min, gh-623) and the job cap (120): got ' + m[1]);
+        // Job cap parsed from the workflow header (was a hardcoded 120 until
+        // #582 raised it to 260 — the stale constant false-failed the suite
+        // on epam #307, live 2026-09-30).
+        var jm = wf.slice(0, step).match(/timeout-minutes:\s*(\d+)/);
+        assert.ok(jm, 'job-level timeout-minutes present');
+        var jobCap = parseInt(jm[1], 10);
+        var stepTo = parseInt(m[1], 10);
+        assert.ok(stepTo < jobCap && stepTo >= 60,
+            'step timeout must sit between a real-fix session (40-80 min, gh-623) and the job cap (' + jobCap + '): got ' + m[1]);
     });
 
     test('a fa-trace staleness watchdog runs alongside dmtools and kills it on staleness', function () {
