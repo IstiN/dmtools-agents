@@ -439,12 +439,16 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {    var q = r
     // claimed validate-armed's mutex made the arm a singleton — false once
     // heads move: silent-update / BEHIND unarm races / guest pushes keep
     // feeding checks=none states). With exclude-self the mutex is evaluated
-    // PER CANDIDATE: a candidate defers only while ANOTHER PR holds the arm
-    // (mutexAmong still scopes the holders). One armed approved PR = the
-    // candidate itself = fires; any second approved arm = every candidate
-    // defers. While a leaked stack drains (merge-validated / fail-validation
-    // / unarm-stale own the completions) the recovery rules correctly stay
-    // out of the way.
+    // PER CANDIDATE (#577): a candidate defers only while ANOTHER PR holds
+    // the arm AND the candidate itself does not (mutexAmong still scopes
+    // the holders). One armed approved PR = the candidate itself = fires;
+    // with several arms the self-holding candidates drain the stack
+    // oldest-first (a stack can also freeze the drain rules themselves —
+    // live: fa #1068+#1088 2026-09-30, both heads green-with-missing-CI +
+    // BLOCKED, so merge-validated/fail-validation/unarm-stale matched
+    // nothing and the old all-defer form deadlocked the queue ~40 min).
+    // Arming stays serialized: only the global (non-exclude-self) form
+    // adds the label, and it defers on ANY holder within mutexAmong.
     if (q.mutex) {
         var among = q.mutexAmong;
         var holdsMutex = function (it) {
@@ -454,7 +458,23 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor) {    var q = r
         };
         if (q.mutexExcludeSelf) {
             items = items.filter(function (candidate) {
-                var blocked = items.some(function (it) {
+                // #577 (fa 2026-09-30, live #1068+#1088): a candidate that
+                // itself holds the mutex occupies its own serialization slot.
+                // The old 'another holder exists' test made two armed PRs
+                // block each other forever whenever every drain rule was
+                // inapplicable (both heads green-with-missing-CI + BLOCKED +
+                // not BEHIND: revalidate-armed and dead-zone each deferred on
+                // the other, while merge-validated / fail-validation /
+                // unarm-stale could not complete the stack — the whole queue
+                // froze ~40 min until a manual unarm). Defer only when the
+                // candidate does NOT hold the mutex itself; recovery-rule
+                // candidates always self-hold (their query carries the arm
+                // label), so a leaked stack drains oldest-first instead of
+                // deadlocking. New arms still cannot leak: only the global
+                // (non-exclude-self) form arms, and it still defers on ANY
+                // holder within mutexAmong.
+                var selfHolds = holdsMutex(candidate);
+                var blocked = !selfHolds && items.some(function (it) {
                     return it.prNumber !== candidate.prNumber && holdsMutex(it);
                 });
                 if (blocked) {

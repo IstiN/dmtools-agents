@@ -454,11 +454,18 @@ suite('sm github source', function () {
         // 22 is a DEV-lane arm (no pr_approved): mutexAmong scopes it out of holders.
     });
 
-    test('pr rules: mutexExcludeSelf — recovery rule defers while ANOTHER approved PR is armed (leak shape)', function () {
-        // The exact leak shape (fa 2026-09-26: 7 armed approved PRs, +1 per
-        // tick): every candidate sees another approved holder → all defer →
-        // no second arm; the stack drains via merge-validated /
-        // fail-validation / unarm-stale.
+    test('pr rules: mutexExcludeSelf — a leaked double-arm stack DRAINS oldest-first (#577 deadlock fix)', function () {
+        // The old form asserted every candidate defers while ANOTHER
+        // approved PR is armed. Live fa #1068+#1088 (2026-09-30) broke that
+        // assumption: both heads were green-with-missing-CI + BLOCKED, so
+        // the drain rules (merge-validated wants CLEAN, fail-validation
+        // wants red, unarm-stale wants BEHIND) matched NOTHING and the
+        // all-defer recovery forms deadlocked the whole queue ~40 min until
+        // a manual unarm. New semantics: the candidate itself holding the
+        // mutex IS the holder (its own serialization slot) — recovery
+        // candidates always self-hold (their query carries the arm label),
+        // so the stack drains. The old test's checks guard (31 green vs
+        // checks:'none') stays: only 30 passes THIS rule's query.
         var srcMod = load({
             github_list_prs: function () {
                 return [
@@ -470,8 +477,6 @@ suite('sm github source', function () {
             }
         }, {}, {
             30: { number: 30, state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true },
-            // 31's green rollup would fail this rule's checks guard anyway —
-            // the mutex must defer 30 BEFORE guards even run.
             31: { number: 31, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', mergeable: true }
         });
         var items = srcMod.query({
@@ -480,7 +485,67 @@ suite('sm github source', function () {
                      mutex: 'ai_validating', mutexAmong: ['pr_approved'],
                      mutexExcludeSelf: true }
         }, { repoInfo: { owner: 'a', repo: 'b' } });
-        assert.equal(items.length, 0, 'another approved arm exists — recovery defers (no second arm)');
+        assert.equal(items.length, 1, 'self-holding candidate 30 fires despite another approved arm (#577)');
+        assert.equal(items[0].key, 'pr-30');
+    });
+
+    test('pr rules: mutexExcludeSelf — dead-zone double-arm shape: BOTH self-holders drain in FIFO order (#577)', function () {
+        // The exact live deadlock (fa 2026-09-30): two approved armed PRs,
+        // both heads green-with-missing-CI + BLOCKED — the dead-zone query.
+        // Old engine: both defer on each other, queue frozen. New engine:
+        // both self-hold → both returned, FIFO order, limit 1 dispatches
+        // the oldest per tick and the stack drains.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 30, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }],
+                      head: { ref: 'ai/gh-30' }, draft: false },
+                    { number: 31, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }],
+                      head: { ref: 'ai/gh-31' }, draft: false }
+                ];
+            }
+        }, {}, {
+            30: { number: 30, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', mergeable: true },
+            31: { number: 31, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', mergeable: true }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                     checks: ['green'], notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'], draft: false,
+                     mutex: 'ai_validating', mutexAmong: ['pr_approved'],
+                     mutexExcludeSelf: true }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.length, 2, 'no cross-blocking: both self-holders survive the mutex');
+        assert.equal(items[0].key, 'pr-30', 'oldest first');
+        assert.equal(items[1].key, 'pr-31');
+    });
+
+    test('pr rules: mutexExcludeSelf — a NON-holder candidate still defers while another PR holds (no new arms)', function () {
+        // The arming-protection half of #577: exclude-self relaxes the mutex
+        // ONLY for candidates that hold it themselves. A candidate without
+        // the arm label (would-be NEW arm) must keep deferring while any
+        // other approved PR holds — the leak protection stays with the
+        // global form AND the self-hold form.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 30, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }],
+                      head: { ref: 'ai/gh-30' }, draft: false },
+                    { number: 40, labels: [{ name: 'pr_approved' }],
+                      head: { ref: 'ai/gh-40' }, draft: false }
+                ];
+            }
+        }, {}, {
+            30: { number: 30, state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true },
+            40: { number: 40, state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['pr_approved'],
+                     checks: ['none'], notMergeState: ['BEHIND', 'DIRTY'], draft: false,
+                     mutex: 'ai_validating', mutexAmong: ['pr_approved'],
+                     mutexExcludeSelf: true }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.length, 1, 'holder 30 fires; non-holder 40 defers (no second arm)');
+        assert.equal(items[0].key, 'pr-30');
     });
 
     test('validate-armed keeps the GLOBAL mutex — exclude-self form does not leak into it', function () {
