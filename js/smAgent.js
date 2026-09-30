@@ -1180,8 +1180,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 var labelsVf = ticket.labels || [];
                 var uHead = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
                 var prMachineAuthorU = machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, effectiveConfig);
-                var isMachinePrU = !!prMachineAuthorU && !!ticket.author &&
-                    String(ticket.author).toLowerCase() === String(prMachineAuthorU).toLowerCase();
+                var isMachinePrU = machineAuthorModule.isMachineAuthored(
+                    ticket, prMachineAuthorU, effectiveRepoInfo.owner);
                 var unparkedThisPass = false;
                 if (labelsVf.indexOf(parkLabelVf) !== -1) {
                     var lastCommitter = uHead ? headCommitIdentity(effectiveRepoInfo, uHead) : null;
@@ -1364,8 +1364,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 if (rule.deferRedHead && vProbe &&
                     vProbe.verdict === 'failure') {
                     var prMachineAuthor = machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, effectiveConfig);
-                    var isMachinePrForPark = !!prMachineAuthor && !!ticket.author &&
-                        String(ticket.author).toLowerCase() === String(prMachineAuthor).toLowerCase();
+                    var isMachinePrForPark = machineAuthorModule.isMachineAuthored(
+                        ticket, prMachineAuthor, effectiveRepoInfo.owner);
                     if (!isMachinePrForPark) {
                         var parkMarker = '🅿️ Validation red — PR parked';
                         var alreadyParked = false;
@@ -1506,8 +1506,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     });
                 } catch (e7) { /* absent label is fine */ }
                 var cMachineAuthor = machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, effectiveConfig);
-                var cIsMachinePr = !!cMachineAuthor && !!ticket.author &&
-                    String(ticket.author).toLowerCase() === String(cMachineAuthor).toLowerCase();
+                var cIsMachinePr = machineAuthorModule.isMachineAuthored(
+                    ticket, cMachineAuthor, effectiveRepoInfo.owner);
                 var cLinked = null;
                 if (cIsMachinePr) {
                     try {
