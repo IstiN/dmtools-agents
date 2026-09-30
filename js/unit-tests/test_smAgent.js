@@ -1343,6 +1343,61 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'no rework arm for guests');
     });
 
+    test('conflict_rework: linked issue CLOSED — PR-anchored rework dispatch, no dead-letter label (#579)', function () {
+        // Live fa #1075 (2026-09-30): DIRTY, linked #1074 CLOSED (fixed via
+        // #1081) — the old path labelled the closed issue and the PR waited
+        // on rework forever (the issue-rework rule matches OPEN issues
+        // only). The re-arm must anchor on the PR instead.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(95, { labels: [], branch: 'fix/1074-web-shift-safety', author: 'ai-teammate',
+                                      pr: { headSha: 'deadbee' } })],
+                pr: { number: 95, labels: [], body: 'Fixes #1074 — superseded fix' },
+                issue: { number: 1074, state: 'closed' },
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [{
+            source: 'github', query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+            localAction: 'conflict_rework', limit: 1, id: 'conflict-rework' }] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'no agent:rework on a CLOSED issue — dead letter');
+        assert.equal(sm.capturedTriggers.length, 1, 'PR-anchored rework dispatched');
+        assert.equal(sm.capturedTriggers[0].workflow, 'ai-teammate.yml');
+        assert.equal(sm.capturedTriggers[0].ref, 'fix/1074-web-shift-safety', 'leg runs on the PR head');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.leg, 'rework');
+        assert.equal(inputs.pr, '95', 'PR anchor');
+        assert.equal(inputs.issue || '', '', 'no issue anchor');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('PR-anchored conflict rework') !== -1,
+            'report names the PR-anchored path');
+    });
+
+    test('conflict_rework: <n>-slug branch resolves the linked issue — OPEN issue keeps the label path (#579 grammar)', function () {
+        // The merge-trigger linkage grammar also accepts '<n>-slug'
+        // branches; 'fix/1074-web-shift-safety' resolved to nothing under
+        // the gh-<n>-only scan. An OPEN linked issue keeps the legacy
+        // issue-re-arm shape byte-identical.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(95, { labels: [], branch: 'fix/1074-web-shift-safety', author: 'ai-teammate',
+                                      pr: { headSha: 'deadbee' } })],
+                pr: { number: 95, labels: [], body: 'web shift safety fix' },
+                issue: { number: 1074, state: 'open' },
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [{
+            source: 'github', query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+            localAction: 'conflict_rework', limit: 1, id: 'conflict-rework' }] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 're-arm lands on the linked issue');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 1074, 'resolved from the <n>-slug branch');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        assert.equal(sm.capturedTriggers.length, 0, 'OPEN issue → no PR-anchored dispatch');
+    });
+
     test('fail_validation: unarms, comments, re-arms agent:rework — pr_approved is STICKY', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: {
