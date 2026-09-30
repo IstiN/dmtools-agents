@@ -134,6 +134,10 @@ function main() {
   const affected = computeAffectedSet();
   if (affected.length === 0) {
     console.log('No affected agents — nothing to release.');
+    // dist/ may not exist yet (the build below is skipped) — create it or
+    // the marker write throws ENOENT and the job fails (live: release run
+    // 2026-09-30T09:11 on a push whose BASE diff was empty).
+    mkdirSync(OUT_DIR, { recursive: true });
     writeFileSync(join(OUT_DIR, '.no-release'), 'no affected agents\n');
     return;
   }
