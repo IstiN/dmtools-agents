@@ -1521,14 +1521,48 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         if (cm) cLinked = parseInt(cm[1], 10);
                     } catch (e8) { console.warn('  ⚠️ linked-issue lookup failed: ' + (e8.message || e8)); }
                     if (!cLinked && ticket.branch) {
-                        var cbm = /(?:^|\/)gh-(\d+)$/i.exec(String(ticket.branch));
-                        if (cbm) cLinked = parseInt(cbm[1], 10);
+                        // Linkage grammar of the merge trigger: 'gh-<n>' AND
+                        // '<n>-slug' branches (#579: 'fix/1074-web-shift-safety'
+                        // resolved to nothing under the gh-<n>-only scan).
+                        var cbm = /(?:^|\/)(?:gh-(\d+)|(\d+)-[a-z0-9._-]+)$/i.exec(String(ticket.branch));
+                        if (cbm) cLinked = parseInt(cbm[1] || cbm[2], 10);
                     }
                 }
+                // The re-arm anchors on an OPEN local issue: the issue-rework
+                // rule matches open issues only, so labelling a CLOSED (fixed
+                // elsewhere) or dangling issue is a dead letter — the
+                // conflicted PR waits on rework forever (live: fa #1075 DIRTY
+                // with linked #1074 CLOSED since 2026-09-30 08:24Z, no leg
+                // ever fired). Not OPEN → PR-anchored rework dispatch below
+                // (the #544 fallback shape).
+                var cLinkedOpen = false;
+                if (cIsMachinePr && cLinked) {
+                    try {
+                        if (typeof github_get_issue === 'function') {
+                            var liRaw = github_get_issue({
+                                workspace: effectiveRepoInfo.owner,
+                                repository: effectiveRepoInfo.repo,
+                                issueNumber: cLinked
+                            });
+                            var liObj = typeof liRaw === 'string' ? JSON.parse(liRaw) : (liRaw || null);
+                            var liOk = liObj && typeof liObj === 'object' &&
+                                typeof liObj.number === 'number' && !liObj.message;
+                            cLinkedOpen = !!liOk &&
+                                String(liObj.state || 'open').toLowerCase() === 'open';
+                        } else {
+                            cLinkedOpen = true; // legacy bridges: trust the scrape
+                        }
+                    } catch (e9) { cLinkedOpen = false; }
+                }
+                var cReworkNote = (cLinked && cLinkedOpen)
+                    ? ' Rework re-queued (linked issue #' + cLinked + ' re-armed): resolve the conflicts and push — validation re-runs automatically.'
+                    : (cLinked
+                        ? ' Rework dispatched as a PR-anchored conflict rework leg (linked issue #' + cLinked + ' is not OPEN): resolve the conflicts and push — validation re-runs automatically.'
+                        : ' Rework dispatched as a PR-anchored conflict rework leg (no linked issue): resolve the conflicts and push — validation re-runs automatically.');
                 var cReport = cIsMachinePr
                     ? (marker + ' — the silent branch update could not merge main (conflict).' +
                        (headSha ? ' (head `' + headSha + '`)' : '') +
-                       (cLinked ? ' Rework re-queued (linked issue #' + cLinked + ' re-armed): resolve the conflicts and push — validation re-runs automatically.' : ' Rework re-queued: resolve the conflicts and push — validation re-runs automatically.') +
+                       cReworkNote +
                        ' (approval latch kept — no re-review after the fix)')
                     : (marker + ' — the silent branch update could not merge main (conflict).' +
                        (headSha ? ' (head `' + headSha + '`)' : '') +
@@ -1537,14 +1571,35 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
                     number: ticket.prNumber, body: cReport
                 });
-                if (cIsMachinePr && cLinked) {
+                if (cIsMachinePr && cLinked && cLinkedOpen) {
                     github_add_labels({
                         workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
                         number: cLinked, labels: ['agent:rework']
                     });
+                } else if (cIsMachinePr) {
+                    // #579: no OPEN linked issue (missing, dangling, or
+                    // already CLOSED) — anchor the rework on the PR itself,
+                    // the same leg the rework-on-label rule dispatches (#544
+                    // fallback shape). Runs once per head: the marker comment
+                    // above suppresses re-entry until the head moves.
+                    triggerWorkflow(effectiveRepoInfo, key, {
+                        id: 'conflict-rework',
+                        workflowFile: 'ai-teammate.yml',
+                        workflowRef: '{branch}',
+                        inputs: {
+                            issue: '',
+                            leg: 'rework',
+                            reason: 'sm: merge conflict with main, no OPEN linked issue - PR-anchored conflict rework',
+                            pr: '{prNumber}'
+                        }
+                    }, effectiveConfig, workflowBudget, { prNumber: ticket.prNumber, branch: ticket.branch });
                 }
                 console.log('  🔁 ' + key + ' merge conflict with main — ' +
-                    (cIsMachinePr ? 'rework re-queued' + (cLinked ? ' (issue #' + cLinked + ')' : '') : 'guest PR, report only'));
+                    (cIsMachinePr
+                        ? ((cLinked && cLinkedOpen)
+                            ? 'rework re-queued (issue #' + cLinked + ')'
+                            : 'PR-anchored rework dispatched')
+                        : 'guest PR, report only'));
                 processedKeys.push(key);
             } catch (e) {
                 console.error('  ❌ conflict_rework failed for ' + key + ': ' + (e.message || e));
