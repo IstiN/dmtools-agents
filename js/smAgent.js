@@ -1942,11 +1942,46 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     workspace: spRepo.owner, repository: spRepo.repo, perPage: 50
                 })) || {};
                 var spRunList = spRuns.workflow_runs || spRuns.workflowRuns || [];
+                var spFull = spRepo.owner + '/' + spRepo.repo;
+                // Schema 2 sources (owner 2026-10-01): recently merged PRs
+                // (merged_recent lane — GitHub merged_at is exact), the
+                // issue-side dev handoff (development lane; agent:dev =
+                // dev leg running, ai_developed hands off to the PR side),
+                // and the PREVIOUS snapshot off the factory-data branch —
+                // one extra gh call, the accumulation source for label
+                // timestamps (reviewedAt/approvedAt/validatingAt/
+                // devStartedAt). All three degrade to empty/null on any
+                // miss: a partial snapshot beats a dead tick.
+                var spMerged = [];
+                try {
+                    var spM = mcpParse(github_list_prs({
+                        workspace: spRepo.owner, repository: spRepo.repo,
+                        state: 'merged'
+                    }));
+                    spMerged = Array.isArray(spM) ? spM : [];
+                } catch (eMerged) { /* merged lane empty this tick */ }
+                var spDevs = [];
+                try {
+                    var spD = mcpParse(github_search_issues({
+                        query: 'repo:' + spFull +
+                               ' is:issue is:open label:' +
+                               factoryStateModule.DEV_LABEL
+                    }));
+                    spDevs = Array.isArray(spD) ? spD :
+                        ((spD && (spD.items || spD.data)) || []);
+                } catch (eDevs) { /* development lane empty this tick */ }
+                var spPrev = factoryStateModule.fetchPreviousState(
+                    spFull, spCfg, function (a) {
+                        return cli_execute_command(a);
+                    });
                 var spState = factoryStateModule.buildFactoryState({
                     repoInfo: spRepo,
                     prs: spPrList,
+                    mergedPrs: spMerged,
+                    devIssues: spDevs,
                     runs: spRunList,
                     checkNames: validationCheckNames() || [],
+                    prev: spPrev,
                     dryRun: DRY,
                     processed: processedKeys
                 });

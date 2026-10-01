@@ -2,7 +2,7 @@
   "schema_version": 2,
   "diagram_type": "workflow",
   "meta": {
-    "title": "Factory Flow \u2014 four levels of the dmtools-agents machine loop",
+    "title": "Factory Flow \u2014 five levels of the dmtools-agents machine loop",
     "output": "site/index.html",
     "quality_profile": "standard"
   },
@@ -26,6 +26,10 @@
     {
       "id": "l4",
       "label": "04 \u00b7 Level 4 \u2014 Merged (terminal)"
+    },
+    {
+      "id": "l5",
+      "label": "05 \u00b7 Level 5 \u2014 State publish \u2192 Factory Board (3 factories)"
     }
   ],
   "mainPath": [
@@ -169,6 +173,36 @@
       "tag": "SEE: red \u00b7 DIRTY",
       "col": 4,
       "width": 195
+    },
+    {
+      "id": "statetick",
+      "lane": "l5",
+      "col": 0,
+      "type": "backend",
+      "label": "SM tick state",
+      "sublabel": "buildFactoryState \u00b7 schema 2",
+      "tag": "SEE: tick end",
+      "width": 212
+    },
+    {
+      "id": "factorydata",
+      "lane": "l5",
+      "col": 2,
+      "type": "database",
+      "label": "factory-data branch",
+      "sublabel": "gh api PUT \u00b7 3 repos: fa / dart / agents",
+      "tag": "SEE: data/<asset>.json",
+      "width": 260
+    },
+    {
+      "id": "board",
+      "lane": "l5",
+      "col": 4,
+      "type": "frontend",
+      "label": "Factory Board",
+      "sublabel": "site/factory \u00b7 CDN read \u00b7 schema 1+2",
+      "tag": "SEE: raw.githubusercontent",
+      "width": 226
     }
   ],
   "edges": [
@@ -271,6 +305,25 @@
       "label": "DIRTY \u2192 +agent:rework",
       "role": "error",
       "toSide": "bottom"
+    },
+    {
+      "from": "merged",
+      "to": "statetick",
+      "label": "end of pass",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "statetick",
+      "to": "factorydata",
+      "label": "publishFactoryState + history",
+      "variant": "emphasis"
+    },
+    {
+      "from": "factorydata",
+      "to": "board",
+      "label": "raw CDN \u00b7 60s poll",
+      "variant": "emphasis"
     }
   ],
   "cards": [
@@ -288,6 +341,14 @@
       "items": [
         "validate-fresh: checks none|pending \u00b7 \u00acai_validating \u00acpr_approved \u00acai_validated \u00acBEHIND \u00b7 validate-armed: pr_approved + mutex ai_validating free (FIFO oldest) \u00b7 \u00acBEHIND",
         "merge-validated: green + CLEAN \u00b7 fail-validation: red (CANCELLED = no verdict) \u00b7 conflict-rework: DIRTY \u00b7 close-on-merge: ai_developed + issue OPEN \u00b7 stalls: factory-stalls.html"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Level 5 \u2014 observability (statePublish, OPT-IN per factory)",
+      "items": [
+        "tick stamps lifecycle timestamps: prCreated/mergedAt from GitHub fields; reviewedAt/approvedAt/validatingAt/devStartedAt accumulated tick-over-tick against the previous snapshot (one gh api read)",
+        "factories publishing: IstiN/flutter_agent_harness (fa-state.json), epam/dmtools-dart (dart-state.json), IstiN/dmtools-agents (agents-state.json) \u2014 all to each repo\u2019s factory-data branch; board renders schema 1 and 2"
       ]
     }
   ]
