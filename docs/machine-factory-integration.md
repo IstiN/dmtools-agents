@@ -280,6 +280,27 @@ module.exports = {
   reference them through the agents checkout mount:
   `./factory-agents/instructions/…`.
 
+### Pack launch surface (Wave 2 — self-sufficient teammate packs)
+
+The four teammate packs (`pr_review`, `pr_rework`, `story_development`,
+`bug_development`) carry their own launch contract inside the release zip
+(owner decision 2026-10-01):
+
+| Zip entry | Content | Consumers |
+|---|---|---|
+| `launch.json` | verbatim copy of the root entry config (`pr_review.json`, …) | the factory's parent-config selection (pack wins, tree copy is the fallback) |
+| `loop/verdict.sh` | verbatim copy of `setup/review-verdict.sh` | the review-verdict step (pack wins, tree copy is the fallback) — review packs only |
+
+`install.sh` / `cache.sh` deliberately stay in the dmtools-agents tree:
+they install toolchain dependencies, they do not describe the agent. The
+unpack cache lives at `~/.dmtools/packs/<agent>-<version>/` (populated by
+`dmtools run` resolving a `<agent>@latest` parent), so on fresh hosted
+runners the legacy `factory-agents/<agent>.json` tree copy serves until
+the pack is unpacked. Config-path audit: every tree reference in the four
+launch configs (`descriptionPath`, `cliCommands`, JS actions, prompts)
+already resolves INSIDE the zip — the compiler embeds the referenced
+files and the runtime resolver rewrites the paths to the pack root.
+
 ### Patching rules — `smRuleOverrides`
 
 Rules carry stable ids (`rework-on-red-ci`, `review-after-dev`,

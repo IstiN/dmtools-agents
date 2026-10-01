@@ -160,7 +160,21 @@ echo "AI Agent Provider: $PROVIDER"
 AI_AGENT_USAGE_NAME="${PROVIDER}"
 CONFIG_FILE="${CONFIG_FILE:-${AI_TEAMMATE_CONFIG_FILE:-}}"
 if [ -n "${CONFIG_FILE:-}" ]; then
-  AI_AGENT_USAGE_NAME="$(basename "${CONFIG_FILE}" .json)"
+  case "${CONFIG_FILE}" in
+    */.dmtools/packs/*)
+      # Pack launch surface (Wave 2): the config lives inside an unpacked
+      # agent pack (~/.dmtools/packs/<agent>-<v>/…, e.g. launch.json) —
+      # report usage under the AGENT NAME (the pack dir), not the file
+      # basename, so token-usage reports stay stable across the migration.
+      usage_name="${CONFIG_FILE#*/.dmtools/packs/}"
+      usage_name="${usage_name%%/*}"
+      usage_name="${usage_name%-[0-9]*}"
+      AI_AGENT_USAGE_NAME="${usage_name:-launch}"
+      ;;
+    *)
+      AI_AGENT_USAGE_NAME="$(basename "${CONFIG_FILE}" .json)"
+      ;;
+  esac
 fi
 export AI_AGENT_USAGE_NAME
 echo "AI Agent Usage Name: ${AI_AGENT_USAGE_NAME}"

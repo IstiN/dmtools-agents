@@ -97,7 +97,8 @@
         "js/unit-tests/test_teammateRunWatchdog.js",
         "js/unit-tests/test_faSessionQuarantine.js",
         "js/unit-tests/test_smAsync.js",
-        "js/unit-tests/test_instructionRefs.js"
+        "js/unit-tests/test_instructionRefs.js",
+        "js/unit-tests/test_packLaunchContract.js"
       ]
     }
   }

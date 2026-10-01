@@ -18,9 +18,17 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import {
+  readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync,
+  copyFileSync, chmodSync, mkdtempSync, rmSync, statSync, utimesSync,
+} from 'node:fs';
+import { basename, dirname, join, sep } from 'node:path';
+import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
+
+// Pack launch-surface contract (Wave 2, owner 2026-10-01): teammate packs
+// carry launch.json (+ loop/verdict.sh for review packs) inside the zip.
+import { launchExtras, mergeManifest } from './pack_launch_contract.cjs';
 
 const ROOT = process.cwd();
 const VERSIONS_FILE = join(ROOT, 'versions.json');
@@ -102,6 +110,63 @@ function bump(version, kind) {
   return `${maj}.${min}.${pat + 1}`;
 }
 
+/**
+ * Adds the launch surface (see ci/pack_launch_contract.cjs) to a compiled
+ * pack zip: unpack → copy the contract files in (verbatim) → fold them
+ * into manifest.json (sorted, sha256, mode) → rebuild the zip
+ * deterministically (manifest first, sorted entries, fixed 1980-01-01
+ * mtime — compiler parity) → refresh the .sha256 sidecar. Non-teammate
+ * packs pass through untouched.
+ */
+function augmentLaunchSurface(agent, zipPath) {
+  const extras = launchExtras(agent);
+  if (extras.length === 0) return;
+  const tmp = mkdtempSync(join(tmpdir(), 'pack-launch-'));
+  try {
+    execSync(`unzip -q -o ${JSON.stringify(zipPath)} -d ${JSON.stringify(tmp)}`);
+    const added = [];
+    for (const { entry, source } of extras) {
+      const dest = join(tmp, ...entry.split('/'));
+      mkdirSync(dirname(dest), { recursive: true });
+      copyFileSync(join(ROOT, source), dest);
+      const executable = entry.endsWith('.sh');
+      chmodSync(dest, executable ? 0o755 : 0o644);
+      added.push({
+        path: entry,
+        sha256: createHash('sha256').update(readFileSync(dest)).digest('hex'),
+        mode: executable ? '0755' : '0644',
+      });
+      console.log(`  + ${entry} (verbatim from ${source})`);
+    }
+    const manifestPath = join(tmp, 'manifest.json');
+    const manifest = mergeManifest(
+      JSON.parse(readFileSync(manifestPath, 'utf8')),
+      added,
+    );
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+    // Deterministic rebuild: every entry stamped to the compiler's fixed
+    // zip epoch, manifest.json first, then the closure sorted by path
+    // (`zip -X` drops uid/gid/extra fields but keeps the unix mode).
+    const fixedTime = new Date('1980-01-01T00:00:00Z');
+    const entries = readdirSync(tmp, { recursive: true })
+      .filter((f) => statSync(join(tmp, f)).isFile())
+      .map((f) => f.split(sep).join('/'))
+      .sort();
+    const ordered = ['manifest.json', ...entries.filter((f) => f !== 'manifest.json')];
+    for (const f of ordered) utimesSync(join(tmp, f), fixedTime, fixedTime);
+    const rebuilt = join(tmp, 'rebuilt.zip');
+    execFileSync('zip', ['-q', '-X', rebuilt, ...ordered], { cwd: tmp });
+    copyFileSync(rebuilt, zipPath);
+    writeFileSync(
+      `${zipPath}.sha256`,
+      `${createHash('sha256').update(readFileSync(zipPath)).digest('hex')}  ${basename(zipPath)}\n`,
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 /** Builds one pack via the dmtools CLI. Returns the produced zip path. */
 function buildPack(agent, version) {
   execFileSync(
@@ -161,6 +226,7 @@ function main() {
     console.log(`\n=== ${agent}: ${current}${next !== current ? ` -> ${next}` : ' (unchanged)'} ===`);
     if (!DRY_RUN) {
       const zip = buildPack(agent, next);
+      augmentLaunchSurface(agent, zip);
       const count = validatePack(zip);
       console.log(`validated ${basename(zip)} (${count} files)`);
       versions[agent] = next;
