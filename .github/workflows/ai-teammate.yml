@@ -29,6 +29,11 @@ on:
       reason:
         description: 'Why (audit trail)'
         type: string
+      pr:
+        description: 'PR number for PR-anchored runs (review leg on PRs born without an issue, #687)'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -52,6 +57,8 @@ jobs:
     uses: IstiN/dmtools-agentic-workflows/.github/workflows/factory-teammate.yml@b93dc51c1030839153c9bb86c8aa2e6b3fad82de
     with:
       issue: ${{ github.event.issue.number || github.event.inputs.issue }}
+      pr: ${{ github.event.inputs.pr || '' }}
+      machine-author: 'ai-teammate'
       leg: ${{ github.event.inputs.leg || '' }}
       reason: ${{ github.event.inputs.reason || github.event_name }}
       factory_ref: ${{ github.sha }}
