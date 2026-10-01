@@ -10,6 +10,10 @@
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+// Self-contained module load (do not rely on globals leaked by earlier test files —
+// each shard runs in its own engine).
+var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+
 /**
  * Load preCliDevelopmentSetup with controlled mocks.
  * Returns { module, calls } where calls accumulates every cli_execute_command invocation.
@@ -53,7 +57,6 @@ function loadPreCli(workingDir) {
             './common/pullRequest.js': {
                 buildOriginFetchCommand: function(refSpec) {
                     return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
-var commentMarkupModule = loadModule('js/common/commentMarkup.js');
                 },
                 ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
                     if (!branchName) return false;
