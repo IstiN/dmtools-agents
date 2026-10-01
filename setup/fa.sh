@@ -106,6 +106,13 @@ install_from_github_release() {
   mkdir -p "${FA_BIN_DIR}" "${FA_LIB_DIR}"
   cp "${tmp}/bundle/bin/fa" "${FA_BIN_DIR}/fa"
   chmod +x "${FA_BIN_DIR}/fa"
+  # version.txt next to the binary — the CLI's _packageVersion probes
+  # <exe_dir>/version.txt (installer layout); without it every binary falls
+  # back to the 0.1.0 constant and each session reinstalls forever (live:
+  # "fa 0.1.0 installed but 1.0.495 requested — reinstalling" loop, 2026-10-01).
+  if [ -f "${tmp}/bundle/version.txt" ]; then
+    cp "${tmp}/bundle/version.txt" "${FA_BIN_DIR}/version.txt"
+  fi
   # Shared libs load from ../lib relative to the binary — same layout the
   # release bundle and install_local.sh produce.
   if [ -d "${tmp}/bundle/lib" ]; then
