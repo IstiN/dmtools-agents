@@ -66,5 +66,5 @@
   "test_cases_generator": "0.1.16",
   "unblock_resolved_dependencies": "0.1.16",
   "workflow_failure_reporter": "0.1.16",
-  "versions": "0.1.16"
+  "versions": "0.1.17"
 }
