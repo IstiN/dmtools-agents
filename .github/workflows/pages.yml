@@ -31,7 +31,8 @@ jobs:
       - name: Stage site
         run: |
           mkdir -p _site
-          rsync -a site/ _site/ --exclude 'index.visual-check*'
+          rsync -a site/ _site/ --exclude 'index.visual-check*' \
+            --exclude 'factory/visual-check'
 
       - uses: actions/configure-pages@v5
 

@@ -50,6 +50,10 @@ jobs:
       ci-workflow: ''
       # Manual ticks default to dry; cron ticks run live.
       dryRun: ${{ github.event.inputs.dryRun || 'false' }}
+      # Factory-state snapshot → factory-data branch (board: site/factory,
+      # third tab; fa machine-sm.yml parity — transport lives in
+      # js/factoryState.js, publishing is opt-in per factory).
+      state-publish: '{"channel":"release","tag":"factory-data","asset":"agents-state.json"}'
       # Silent branch updates: input channel (github.token via secrets/in
       # blocks arrives empty through a reusable call — live-verified).
       silent-token: ${{ github.token }}

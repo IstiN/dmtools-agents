@@ -30,29 +30,47 @@ suite('factoryState — lanes', function () {
     assert.equal(lane, 'review');
   });
 
-  test('no machine labels → fresh', function () {
-    assert.equal(fsModule.laneOf({ labels: [{ name: 'dependencies' }] }), 'fresh');
-    assert.equal(fsModule.laneOf({ labels: [] }), 'fresh');
+  test('no machine labels → pr_created (schema 2 rename of schema 1 fresh)', function () {
+    assert.equal(fsModule.laneOf({ labels: [{ name: 'dependencies' }] }), 'pr_created');
+    assert.equal(fsModule.laneOf({ labels: [] }), 'pr_created');
   });
 
   test('string labels tolerated (list_prs shape drift)', function () {
     assert.equal(fsModule.laneOf({ labels: ['ai_validating'] }), 'validating');
   });
+
+  test('LANE_ORDER is the pipeline order (schema 2)', function () {
+    assert.deepEqual(fsModule.LANE_ORDER, ['development', 'pr_created', 'review',
+      'approved_queue', 'validating', 'merged_recent']);
+  });
+
+  test('LANE_ENTERED_AT maps every lane to its entering timestamp', function () {
+    assert.equal(fsModule.LANE_ENTERED_AT.development, 'devStartedAt');
+    assert.equal(fsModule.LANE_ENTERED_AT.pr_created, 'prCreated');
+    assert.equal(fsModule.LANE_ENTERED_AT.review, 'reviewedAt');
+    assert.equal(fsModule.LANE_ENTERED_AT.approved_queue, 'approvedAt');
+    assert.equal(fsModule.LANE_ENTERED_AT.validating, 'validatingAt');
+    assert.equal(fsModule.LANE_ENTERED_AT.merged_recent, 'mergedAt');
+  });
 });
 
-// ── buildFactoryState ────────────────────────────────────────────────────────
+// ── buildFactoryState (schema 2) ─────────────────────────────────────────────
 
 suite('factoryState — buildFactoryState', function () {
   var PRS = [
     { number: 817, title: 'fix(hub): relay', labels: [
         { name: 'pr_approved' }, { name: 'ai_validating' }],
-      head: { ref: 'fix/794', sha: 'sha817' }, user: { login: 'bot' } },
+      head: { ref: 'fix/794', sha: 'sha817' }, user: { login: 'bot' },
+      created_at: '2026-10-01T06:00:00Z' },
     { number: 828, title: 'feat(tui): transcript', labels: [
         { name: 'pr_approved' }, { name: 'ai_validated' }],
-      head: { ref: 'ai/807', sha: 'sha828' }, user: { login: 'bot' } },
+      head: { ref: 'ai/807', sha: 'sha828' }, user: { login: 'bot' },
+      created_at: '2026-10-01T08:30:00Z' },
     { number: 860, title: 'fix(tests): nightly', labels: [{ name: 'ai_pr_reviewed' }],
-      head: { ref: 'ai/809', sha: 'sha860' }, user: { login: 'bot' } },
-    { number: 870, title: 'chore: x', labels: [], head: { ref: 'x', sha: 'sha870' } }
+      head: { ref: 'ai/809', sha: 'sha860' }, user: { login: 'bot' },
+      created_at: '2026-10-01T09:00:00Z' },
+    { number: 870, title: 'chore: x', labels: [], head: { ref: 'x', sha: 'sha870' },
+      created_at: '2026-10-01T12:40:00Z' }
   ];
   var RUNS = [
     { event: 'workflow_dispatch', head_sha: 'sha817', status: 'completed',
@@ -62,40 +80,231 @@ suite('factoryState — buildFactoryState', function () {
       created_at: '2026-09-23T17:49:00Z', html_url: 'http://run/2' }
   ];
 
-  test('lanes populated per labels; approved FIFO positions 1-based', function () {
-    var st = fsModule.buildFactoryState({
+  function build(opts) {
+    return fsModule.buildFactoryState(Object.assign({
       repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' },
-      prs: PRS, runs: RUNS, checkNames: ['Quality gate'], now: '2026-09-23T18:00:00Z'
-    });
-    assert.equal(st.schema, 1);
+      prs: PRS, runs: RUNS, checkNames: ['Quality gate'],
+      now: '2026-10-01T13:00:00Z'
+    }, opts || {}));
+  }
+
+  test('schema 2; lanes populated per labels; approved FIFO 1-based', function () {
+    var st = build();
+    assert.equal(st.schema, 2);
     assert.equal(st.repo, 'IstiN/flutter_agent_harness');
     assert.deepEqual(st.lanes.validating.map(function (c) { return c.pr; }), [817]);
     assert.deepEqual(st.lanes.approved_queue.map(function (c) { return c.pr; }), [828]);
     assert.equal(st.lanes.approved_queue[0].queuePos, 1);
     assert.deepEqual(st.lanes.review.map(function (c) { return c.pr; }), [860]);
-    assert.deepEqual(st.lanes.fresh.map(function (c) { return c.pr; }), [870]);
+    assert.deepEqual(st.lanes.pr_created.map(function (c) { return c.pr; }), [870]);
     assert.equal(st.counts.validating, 1);
     assert.equal(st.counts.approved_queue, 1);
+    // schema 2 lanes present (empty) even without issue/merged inputs
+    assert.deepEqual(st.lanes.development, []);
+    assert.deepEqual(st.lanes.merged_recent, []);
+    assert.equal(st.counts.development, 0);
+    assert.equal(st.counts.merged_recent, 0);
   });
 
   test('head verdict: terminal non-cancelled wins over active', function () {
-    var st = fsModule.buildFactoryState({
-      repoInfo: { owner: 'o', repo: 'r' }, prs: PRS, runs: RUNS,
-      now: '2026-09-23T18:00:00Z'
-    });
+    var st = build();
     assert.equal(st.lanes.validating[0].checks.verdict, 'failure');
     assert.equal(st.lanes.validating[0].checks.url, 'http://run/1');
     // 828 has an ACTIVE dispatched run → in_progress verdict
     assert.equal(st.lanes.approved_queue[0].checks.verdict, 'in_progress');
   });
 
+  test('prCreated is the GitHub created_at field (exact from snapshot 1)', function () {
+    var st = build();
+    assert.equal(st.lanes.pr_created[0].prCreated, '2026-10-01T12:40:00Z');
+    assert.equal(st.lanes.validating[0].prCreated, '2026-10-01T06:00:00Z');
+  });
+
   test('empty repo → all lanes empty, counts zeroed', function () {
-    var st = fsModule.buildFactoryState({
-      repoInfo: { owner: 'o', repo: 'r' }, prs: [], runs: [],
-      now: '2026-09-23T18:00:00Z'
-    });
-    assert.equal(st.counts.fresh, 0);
+    var st = build({ prs: [], runs: [] });
+    assert.equal(st.counts.pr_created, 0);
     assert.deepEqual(st.lanes.validating, []);
+  });
+
+  test('without a previous snapshot label timestamps stay null (honest unknowns)', function () {
+    var st = build();
+    var card = st.lanes.validating[0];
+    assert.ok(!('reviewedAt' in card) && !card.reviewedAt);
+    assert.ok(!card.approvedAt);
+    assert.ok(!card.validatingAt);
+    // prCreated still exact — GitHub-native field
+    assert.equal(card.prCreated, '2026-10-01T06:00:00Z');
+  });
+});
+
+// ── schema 2 — timestamp accumulation (previous snapshot) ────────────────────
+
+suite('factoryState — lifecycle timestamps (accumulation)', function () {
+  var NOW = '2026-10-01T13:10:00Z';
+  function pr(n, labels, extra) {
+    return Object.assign({ number: n, title: 't' + n, labels: labels,
+      head: { ref: 'b' + n, sha: 'sha' + n }, user: { login: 'bot' },
+      created_at: '2026-10-01T0' + n + ':00:00Z' }, extra || {});
+  }
+  function lbl(names) {
+    return names.map(function (n) { return { name: n }; });
+  }
+
+  test('carried stamps survive; new transitions stamp the tick time', function () {
+    var prev = {
+      schema: 2, lanes: {
+        review: [{ pr: 11, labels: ['ai_pr_reviewed'],
+          reviewedAt: '2026-10-01T09:00:00Z' }],
+        pr_created: [{ pr: 12, labels: [] }]
+      }
+    };
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prev: prev,
+      prs: [
+        pr(11, lbl(['ai_pr_reviewed'])),                 // still review — carry
+        pr(12, lbl(['ai_pr_reviewed']))                  // moved pr_created→review
+      ], runs: []
+    });
+    assert.equal(st.lanes.review[0].pr, 11);
+    assert.equal(st.lanes.review[0].reviewedAt, '2026-10-01T09:00:00Z',
+      'unchanged card keeps its exact history');
+    assert.equal(st.lanes.review[1].pr, 12);
+    assert.equal(st.lanes.review[1].reviewedAt, NOW,
+      'transition witnessed between ticks stamps the tick time');
+  });
+
+  test('label removal clears its stamp (rework cycle resets the clock)', function () {
+    var prev = { lanes: { review: [{ pr: 21, labels: ['ai_pr_reviewed'],
+      reviewedAt: '2026-10-01T09:00:00Z' }] } };
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prev: prev,
+      prs: [pr(21, lbl(['agent:rework']))], runs: []
+    });
+    var card = st.lanes.pr_created[0];
+    assert.ok(!card.reviewedAt, 'ai_pr_reviewed gone → stamp dropped');
+  });
+
+  test('approvedAt + validatingAt accumulate through the arm transition', function () {
+    var prev = { lanes: { approved_queue: [{ pr: 31,
+      labels: ['pr_approved'], approvedAt: '2026-10-01T10:00:00Z' }] } };
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prev: prev,
+      prs: [pr(31, lbl(['pr_approved', 'ai_validating']))], runs: []
+    });
+    var card = st.lanes.validating[0];
+    assert.equal(card.approvedAt, '2026-10-01T10:00:00Z', 'carried');
+    assert.equal(card.validatingAt, NOW, 'arm witnessed this tick');
+  });
+});
+
+// ── schema 2 — merged_recent lane ────────────────────────────────────────────
+
+suite('factoryState — merged_recent (24h window)', function () {
+  var NOW = '2026-10-01T13:10:00Z';
+  function merged(n, mergedAt) {
+    return { number: n, title: 'm' + n, labels: [],
+      head: { ref: 'b' + n, sha: 'sha' + n }, user: { login: 'bot' },
+      created_at: '2026-09-29T08:00:00Z', merged_at: mergedAt };
+  }
+
+  test('merged within 24h land (newest first); older drops out', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      mergedPrs: [merged(41, '2026-09-30T01:00:00Z'),   // >24h — dropped
+                  merged(42, '2026-10-01T12:00:00Z'),
+                  merged(43, '2026-10-01T09:00:00Z')],
+      prs: [], runs: []
+    });
+    assert.deepEqual(st.lanes.merged_recent.map(function (c) { return c.pr; }),
+      [42, 43], 'inside the window, newest merged first');
+    assert.equal(st.counts.merged_recent, 2);
+    assert.equal(st.lanes.merged_recent[0].mergedAt, '2026-10-01T12:00:00Z');
+    assert.equal(st.lanes.merged_recent[0].prCreated, '2026-09-29T08:00:00Z');
+  });
+
+  test('merged card inherits label stamps from its open life (cross-lane carry)', function () {
+    var prev = { lanes: { validating: [{ pr: 51,
+      labels: ['pr_approved', 'ai_validating'],
+      approvedAt: '2026-10-01T07:00:00Z', validatingAt: '2026-10-01T08:00:00Z' }] } };
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prev: prev,
+      mergedPrs: [merged(51, '2026-10-01T09:30:00Z')], prs: [], runs: []
+    });
+    var card = st.lanes.merged_recent[0];
+    assert.equal(card.approvedAt, '2026-10-01T07:00:00Z');
+    assert.equal(card.validatingAt, '2026-10-01T08:00:00Z');
+    assert.equal(card.mergedAt, '2026-10-01T09:30:00Z');
+  });
+});
+
+// ── schema 2 — development lane (issue side) ─────────────────────────────────
+
+suite('factoryState — development lane (dev leg, issue side)', function () {
+  var NOW = '2026-10-01T13:10:00Z';
+  function issue(n, labels) {
+    return { number: n, title: 'issue ' + n, labels: lbl(labels),
+      user: { login: 'ba' }, html_url: 'http://issues/' + n };
+  }
+  function lbl(names) {
+    return names.map(function (x) { return { name: x }; });
+  }
+
+  test('agent:dev without ai_developed → development; ai_developed hands off', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      devIssues: [issue(61, ['agent:dev']),
+                  issue(62, ['agent:dev', 'ai_developed'])],
+      prs: [], runs: []
+    });
+    assert.deepEqual(st.lanes.development.map(function (c) { return c.issue; }), [61]);
+    assert.equal(st.lanes.development[0].title, 'issue 61');
+    assert.equal(st.lanes.development[0].url, 'http://issues/61');
+    assert.equal(st.counts.development, 1);
+  });
+
+  test('devStartedAt: carried while running, stamped on first sighting', function () {
+    var prev = { lanes: { development: [{ issue: 61, labels: ['agent:dev'],
+      devStartedAt: '2026-10-01T05:00:00Z' }] } };
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prev: prev,
+      devIssues: [issue(61, ['agent:dev']), issue(63, ['agent:dev'])],
+      prs: [], runs: []
+    });
+    var byIssue = {};
+    st.lanes.development.forEach(function (c) { byIssue[c.issue] = c; });
+    assert.equal(byIssue[61].devStartedAt, '2026-10-01T05:00:00Z', 'carried');
+    assert.equal(byIssue[63].devStartedAt, NOW, 'new handoff stamped this tick');
+  });
+
+  test('no previous snapshot → devStartedAt null (not a lying now)', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      devIssues: [issue(61, ['agent:dev'])], prs: [], runs: []
+    });
+    assert.ok(!st.lanes.development[0].devStartedAt);
+  });
+});
+
+// ── fetchPreviousState (accumulation source) ─────────────────────────────────
+
+suite('factoryState — fetchPreviousState', function () {
+  test('probes the data branch and parses; miss → null', function () {
+    var seen = [];
+    var exec = function (a) {
+      seen.push(a.command);
+      if (a.command.indexOf('Not Found') >= 0) throw new Error('Not Found');
+      return { output: JSON.stringify({ schema: 2, lanes: { review: [] } }) };
+    };
+    var prev = fsModule.fetchPreviousState('o/r',
+      { tag: 'factory-data', asset: 'fa-state.json' }, exec);
+    assert.ok(prev && prev.lanes, 'parsed snapshot returned');
+    assert.equal(seen[0],
+      'gh api repos/o/r/contents/data/fa-state.json?ref=factory-data --jq .content | base64 -d',
+      'one gh probe against the data branch');
+
+    var miss = fsModule.fetchPreviousState('o/r',
+      { asset: 'fa-state.json' }, function () { throw new Error('Not Found'); });
+    assert.equal(miss, null, 'any miss degrades to null');
   });
 });
 
