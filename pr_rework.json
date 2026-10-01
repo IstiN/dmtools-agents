@@ -39,8 +39,9 @@
       "./agents/instructions/pr_rework/tdd_approach.md",
       "./agents/instructions/pr_rework/formatting_rules.md",
       "./agents/instructions/pr_rework/output_rules.md",
+      "./agents/instructions/common/github_comment_format.md",
       "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md"
-    ]
+]
   }
 }
