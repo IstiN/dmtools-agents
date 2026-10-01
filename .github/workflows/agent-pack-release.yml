@@ -18,11 +18,14 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      # Docs-only / CI-only changes never cut a release.
+      # CI-only changes never cut a release. NOTE: '**.md' is deliberately
+      # NOT ignored — agent instruction packs ship .md files (instructions/
+      # joined the default agents in a57b3ba); ignoring them let runner
+      # configs reference pack files the published zips never carried
+      # (live: 2026-10-01 dev-leg failure, story_development-0.1.11).
       - '.github/**'
       - 'docs/**'
       - 'site/**'
-      - '**.md'
   workflow_dispatch:
     inputs:
       agents:
