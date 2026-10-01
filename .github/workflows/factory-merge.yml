@@ -94,9 +94,21 @@ jobs:
           path: factory-agents
           persist-credentials: false
 
+      - name: Resolve dmtools CLI version (latest -> current tag)
+        # 'latest' resolves to the current release tag (owner mandate 2026-10-01).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DMTOOLS_VERSION: ${{ vars.DMTOOLS_VERSION || 'v0.1.16' }}
+        run: |
+          if [ "${DMTOOLS_VERSION}" = "latest" ]; then
+            TAG="$(gh release view --repo epam/dmtools-dart --json tagName --jq .tagName)"
+            echo "DMTOOLS_VERSION=${TAG}" >> "$GITHUB_ENV"
+            echo "::notice::dmtools CLI: latest resolved to ${TAG}"
+          fi
+
       - name: Install dmtools CLI (pinned release bundle)
         env:
-          DMTOOLS_VERSION: ${{ vars.DMTOOLS_VERSION || 'v0.1.16' }}
+          DMTOOLS_VERSION: ${{ env.DMTOOLS_VERSION || vars.DMTOOLS_VERSION || 'v0.1.16' }}
         run: |
           curl -fsSL "https://github.com/epam/dmtools-dart/releases/download/${DMTOOLS_VERSION}/install.sh" \
             -o /tmp/dmtools-install.sh

@@ -463,6 +463,19 @@ jobs:
             ~/lib
           key: fa-${{ env.FA_VERSION }}-${{ runner.os }}-${{ runner.arch }}
 
+      - name: Resolve dmtools CLI version (latest -> current tag)
+        # 'latest' (or empty) resolves to the current release tag so the
+        # version-locked install.sh URL keeps working; owner mandate
+        # 2026-10-01: machine legs always track the latest CLI/agents.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${DMTOOLS_VERSION:-}" = "latest" ]; then
+            TAG="$(gh release view --repo epam/dmtools-dart --json tagName --jq .tagName)"
+            echo "DMTOOLS_VERSION=${TAG}" >> "$GITHUB_ENV"
+            echo "::notice::dmtools CLI: latest resolved to ${TAG}"
+          fi
+
       - name: Cache dmtools CLI (by version)
         uses: actions/cache@v6
         with:
