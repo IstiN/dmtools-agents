@@ -52,43 +52,12 @@ permissions:
   contents: write # publish the GitHub Release + commit versions.json
 
 jobs:
-  test:
-    # The JS unit-test suite is the release gate — a red suite blocks any release.
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Resolve dmtools CLI version (latest -> current tag)
-        # 'latest' resolves to the current release tag (owner mandate 2026-10-01).
-        env:
-          GH_TOKEN: ${{ github.token }}
-          DMTOOLS_VERSION: ${{ vars.DMTOOLS_VERSION || 'v0.1.22' }}
-        run: |
-          if [ "${DMTOOLS_VERSION}" = "latest" ]; then
-            TAG="$(gh release view --repo epam/dmtools-dart --json tagName --jq .tagName)"
-            echo "DMTOOLS_VERSION=${TAG}" >> "$GITHUB_ENV"
-            echo "::notice::dmtools CLI: latest resolved to ${TAG}"
-          fi
-
-      - name: Install dmtools CLI (pinned release bundle)
-        env:
-          DMTOOLS_VERSION: ${{ env.DMTOOLS_VERSION || vars.DMTOOLS_VERSION || 'v0.1.22' }}
-        run: |
-          curl -fsSL "https://github.com/epam/dmtools-dart/releases/download/${DMTOOLS_VERSION}/install.sh" \
-            -o /tmp/dmtools-install.sh
-          bash /tmp/dmtools-install.sh "${DMTOOLS_VERSION}"
-          echo "$HOME/.dmtools/bin" >> "$GITHUB_PATH"
-
-      - name: Run the JS unit-test suite
-        env:
-          # test_reviewVerdict.js executes setup/review-verdict.sh through
-          # cli_execute_command — `bash` is not in the built-in whitelist
-          # (git/gh/npm/…), so the canonical gate extends it for the tests.
-          CLI_ALLOWED_COMMANDS: bash
-        run: dmtools run js/unit-tests/run_all.json
-
   release:
-    needs: test
+    # The JS unit-test suite is NOT re-run here (owner 2026-10-01): quality.yml
+    # runs it on every PR and main's protection is strict (required `crap` +
+    # up-to-date), so every commit reaching main already passed the suite on a
+    # current head. The release only computes the affected set, compiles,
+    # validates and publishes.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
