@@ -1401,8 +1401,18 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
     test('fail_validation: unarms, comments, re-arms agent:rework — pr_approved is STICKY', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: {
-                items: [prItem(72, { labels: ['pr_approved', 'ai_validating'], author: 'ai-teammate' })],
-                pr: { number: 72, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #503 — boot cost' }
+                items: [prItem(72, { labels: ['pr_approved', 'ai_validating'], author: 'ai-teammate', headSha: 'sha72' })],
+                pr: { number: 72, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #503 — boot cost' },
+                // Failed-run link (owner 2026-10-01): the RED run on this
+                // exact head must land in the report; the green one must not.
+                workflowApiRuns: [
+                    { id: 601, event: 'workflow_dispatch', head_sha: 'sha72', status: 'completed',
+                      conclusion: 'failure', html_url: 'https://github.com/a/b/actions/runs/601',
+                      created_at: '2026-10-01T10:00:00Z', updated_at: '2026-10-01T10:05:00Z' },
+                    { id: 600, event: 'workflow_dispatch', head_sha: 'sha72', status: 'completed',
+                      conclusion: 'success', html_url: 'https://github.com/a/b/actions/runs/600',
+                      created_at: '2026-10-01T09:00:00Z', updated_at: '2026-10-01T09:05:00Z' }
+                ]
             }
         }));
         sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
@@ -1419,6 +1429,12 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedPrComments.length, 1, 'PR report comment');
         assert.ok(sm.capturedPrComments[0].body.indexOf('Validation CI went red') !== -1);
         assert.ok(sm.capturedPrComments[0].body.indexOf('no re-review') !== -1);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Failed run: https://github.com/a/b/actions/runs/601') !== -1,
+            'report links the red run on this head — the reader skips the runs-tab hunt');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('runs/600') === -1,
+            'a green run on the same head is never linked');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('\u26a0\ufe0f') !== -1,
+            'the \u26a0\ufe0f marker stays (an SM PR comment, not site UI)');
         assert.equal(sm.capturedPrLabelAdds.length, 1);
         assert.equal(sm.capturedPrLabelAdds[0].number, 503, 're-arm lands on the linked issue');
         assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
@@ -1463,13 +1479,15 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
 
     test('fail_validation: external PR (no linked issue) — report only', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
-            github: { items: [prItem(73, { labels: ['pr_approved', 'ai_validating'], author: 'ai-teammate' })],
+            github: { items: [prItem(73, { labels: ['pr_approved', 'ai_validating'], author: 'ai-teammate', headSha: 'sha73' })],
                       pr: { number: 73, labels: ['pr_approved', 'ai_validating'], body: 'no link' } }
         }));
         sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
 
         assert.equal(sm.capturedPrComments.length, 1);
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'no issue to re-arm');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Failed run') === -1,
+            'EMPTY run list (mock default) → no link line — the report still posts, nothing crashes');
         assert.ok(!sm.capturedPrLabelRemoves.some(function (r) { return r.label === 'pr_approved'; }),
             'pr_approved is sticky even without a linked issue — approval survives CI red');
     });
@@ -1481,8 +1499,13 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         // machine-only too.
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: {
-                items: [prItem(99, { labels: ['pr_approved', 'ai_validating'], branch: 'ai/gh-191', author: 'someguest' })],
-                pr: { number: 99, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #191 — guest contribution' }
+                items: [prItem(99, { labels: ['pr_approved', 'ai_validating'], branch: 'ai/gh-191', author: 'someguest', headSha: 'sha99' })],
+                pr: { number: 99, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #191 — guest contribution' },
+                workflowApiRuns: [
+                    { id: 701, event: 'workflow_dispatch', head_sha: 'sha99', status: 'completed',
+                      conclusion: 'timed_out', html_url: 'https://github.com/a/b/actions/runs/701',
+                      created_at: '2026-10-01T11:00:00Z', updated_at: '2026-10-01T11:40:00Z' }
+                ]
             }
         }));
         sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
@@ -1496,6 +1519,8 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
             'the report tells the guest to fix and push');
         assert.ok(sm.capturedPrComments[0].body.indexOf('re-runs automatically') !== -1,
             'validation re-runs on their push — guests keep the validate leg');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Failed run: https://github.com/a/b/actions/runs/701') !== -1,
+            'the GUEST report links its red run too (timed_out counts) — the guest sees WHERE it went red');
     });
 
     test('fail_validation: machineAuthor unconfigured — fail-closed, no rework arm at all', function () {
