@@ -12,7 +12,7 @@
 # ZAI_CODE_KEY / KIMI_REVIEW_KEY when the fa/zai runners are used.
 name: AI Teammate
 
-run-name: 'teammate: ${{ github.event_name }} #${{ github.event.issue.number || github.event.inputs.issue }} ${{ github.event.inputs.leg || '' }}'
+run-name: "teammate: ${{ github.event_name }} #${{ github.event.issue.number || github.event.inputs.issue }} ${{ github.event.inputs.leg }}"
 
 on:
   issues:
