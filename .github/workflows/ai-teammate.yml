@@ -16,7 +16,13 @@ run-name: "teammate: ${{ github.event_name }} #${{ github.event.issue.number || 
 
 on:
   issues:
-    types: [assigned, labeled]
+    # assigned only — labeled REMOVED (2026-10-01): every label echo (the dev
+    # leg's own status:In Development, SM backfills) spawned a queued twin run
+    # behind the per-issue concurrency group (live dmd gh-317/gh-318); the
+    # in-run dedupe cannot act — workflow-level concurrency holds the whole
+    # run pending before any job starts. Leg dispatching is dispatch-only
+    # (SM workflow_dispatch; manual rework override #544 = dispatch leg=rework).
+    types: [assigned]
   workflow_dispatch:
     inputs:
       issue:
