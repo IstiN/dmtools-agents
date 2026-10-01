@@ -114,13 +114,27 @@ jobs:
           if [ -f dist/.no-release ]; then echo "released=false" >> "$GITHUB_OUTPUT"; else echo "released=true" >> "$GITHUB_OUTPUT"; fi
 
       - name: Commit bumped versions.json
+        # Pushes with the OWNER PAT (SOURCE_GITHUB_TOKEN): main is protected
+        # (ruleset 24301268 — required `crap`, strict) and a GITHUB_TOKEN
+        # push is declined by the protected-branch hook (live: 2026-10-01).
+        # The repo owner passes. Rebase first so a main move mid-release is
+        # a recoverable race, not a hard failure; the token is scrubbed from
+        # the remote URL afterwards.
         if: steps.build.outputs.released == 'true' && inputs.dry_run != true
+        env:
+          PUSH_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          origin_url="https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git remote set-url origin "$origin_url"
+          git fetch origin main
+          git rebase origin/main
           git add versions.json
           git diff --cached --quiet || git commit -m "chore(release): bump agent versions [skip ci]"
-          git push
+          git push origin HEAD:main
+          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
 
       - name: Publish the GitHub Release
         if: steps.build.outputs.released == 'true' && inputs.dry_run != true
