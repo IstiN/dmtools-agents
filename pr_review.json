@@ -139,8 +139,9 @@
       "./agents/instructions/pr_review/output_rules.md",
       "./agents/instructions/pr_review/formatting_rules.md",
       "./agents/instructions/pr_review/few_shots.md",
+      "./agents/instructions/common/github_comment_format.md",
       "./agents/instructions/common/dmtools_cli.md",
       "./agents/prompts/bash_tools.md"
-    ]
+]
   }
 }
