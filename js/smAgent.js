@@ -1845,12 +1845,22 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // this block: no approval exists to unarm. (Supersedes the
                 // fa pr-750 unarm fix: the validate↔fail burn it patched is
                 // now closed by the latch itself.)
-                var report = isMachinePr
+                // Failed-run link (owner 2026-10-01): the report says CI
+                // went red — link the exact red run(s) on this head so the
+                // reader (a guest especially) never hunts the runs tab.
+                // Graceful '' on any miss (no head SHA, empty run list,
+                // tool error): the report posts without the link and
+                // NOTHING else in this action changes.
+                var failedRunsLine = failedRunLinksLine(effectiveRepoInfo,
+                    rule.ciWorkflow || ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
+                    (ticket.pr && ticket.pr.headSha) || ticket.headSha);
+                var report = (isMachinePr
                     ? ('⚠️ Validation CI went red on the head — merge aborted, rework re-queued.' +
                        (linked ? ' (linked issue #' + linked + ' re-armed)' : '') +
                        ' (approval latch kept — no re-review after fixes)')
                     : '⚠️ Validation CI went red on the head. Guest PR: fix the findings and push — ' +
-                      'validation re-runs automatically; auto-rework is reserved for the machine account.';
+                      'validation re-runs automatically; auto-rework is reserved for the machine account.')
+                    + (failedRunsLine ? '\n' + failedRunsLine : '');
                 github_create_comment({
                     workspace: effectiveRepoInfo.owner,
                     repository: effectiveRepoInfo.repo,
@@ -2180,6 +2190,46 @@ var PROBE_WORKER_SOURCE = [
     '    return out;',
     '}'
 ].join('\n');
+
+/**
+ * The 'Failed run: <url>' report line for fail_validation (owner
+ * 2026-10-01): the newest 1-3 TERMINAL RED (failure/timed_out) dispatched
+ * runs of `ciWorkflow` on THIS exact head — the same list source and shape
+ * the verdict stamps and factoryState's headVerdict read
+ * (github_list_workflow_runs; REST is newest-first, sorted explicitly
+ * anyway). Both report variants (machine + guest) append it so the reader
+ * sees WHERE it went red without hunting the runs tab. Graceful by
+ * contract: missing head SHA, empty list, or any tool error → '' — the
+ * report posts without the link and never dies.
+ */
+function failedRunLinksLine(repoInfo, ciWorkflow, headSha) {
+    if (!repoInfo || !ciWorkflow || !headSha) return '';
+    try {
+        var runs = mcpParse(github_list_workflow_runs({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            workflowId: ciWorkflow, perPage: 50
+        })) || {};
+        var list = runs.workflow_runs || runs.workflowRuns || [];
+        var red = list.filter(function (r) {
+            return r && r.event === 'workflow_dispatch' &&
+                r.head_sha === headSha &&
+                r.status === 'completed' &&
+                (r.conclusion === 'failure' || r.conclusion === 'timed_out');
+        });
+        red.sort(function (a, b) {
+            return new Date(b.updated_at || b.created_at).getTime() -
+                   new Date(a.updated_at || a.created_at).getTime();
+        });
+        var urls = red.slice(0, 3).map(function (r) { return r.html_url; })
+            .filter(function (u) { return !!u; });
+        if (!urls.length) return '';
+        return (urls.length === 1 ? 'Failed run: ' : 'Failed runs: ') +
+               urls.join(', ');
+    } catch (e) {
+        console.warn('  ⚠️  failed-run link lookup failed: ' + (e.message || e));
+        return '';
+    }
+}
 
 function probeDispatchedState(repoInfo, ciWorkflow, headSha) {
     // runAsync wired (jobParams.parallelWorkers >= 2): ONE worker round.
@@ -2851,5 +2901,6 @@ function action(params) {
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { action: action, applyRuleOverridesForTest: applyRuleOverrides,
-        probeDispatchedState: probeDispatchedState };
+        probeDispatchedState: probeDispatchedState,
+        failedRunLinksLine: failedRunLinksLine };
 }
