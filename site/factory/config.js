@@ -1,47 +1,68 @@
 /*
- * Factory board — ALL deployment knobs live here.
+ * Factory Board v2 — ALL deployment knobs live here.
  * Copy the folder, edit this file, host it. Nothing else to touch.
+ *
+ * Data: each factory's SM tick publishes a schema-2 state snapshot to its
+ * repo's `factory-data` branch (jobParams.statePublish in machine-sm.yml):
+ *   https://raw.githubusercontent.com/<O/R>/factory-data/data/<asset>.json
+ * The board also renders schema 1 snapshots (the lane set before
+ * 2026-10-01) — old history files never break it.
  */
 window.FACTORY_BOARD_CONFIG = {
   // Refresh cadence (ms). The data itself is a tick snapshot (10 min cadence);
   // 60s polling just picks the new snapshot up promptly.
   refreshMs: 60000,
 
-  // Branding
+  // Branding (the logo is an inline SVG in index.html — no emoji anywhere)
   title: 'Factory Board',
-  logo: '🏭',
 
-  // One entry per factory. stateUrl = the release-asset CDN link the SM
-  // tick publishes (public, token-free, no rate limits).
+  // One entry per factory. stateUrl = the factory-data branch CDN link the
+  // SM tick publishes (public, token-free, no rate limits).
   //   asset name = cfg.statePublish.asset of that factory
   //   accent     = CSS color for the tab + lane highlights (style knob)
+  //   repo is NOT needed here — the snapshot itself carries st.repo and the
+  //   board links cards against it (schema 1 bug: links went to
+  //   github.com/undefined/pull/N when repo was read from this config).
   factories: [
     {
       id: 'fa',
       name: 'flutter_agent_harness',
       stateUrl: 'https://raw.githubusercontent.com/IstiN/flutter_agent_harness/factory-data/data/fa-state.json',
-      accent: '#4f8cff'
+      accent: '#22d3ee'
     },
     {
       id: 'dart',
       name: 'dmtools-dart',
       stateUrl: 'https://raw.githubusercontent.com/epam/dmtools-dart/factory-data/data/dart-state.json',
-      accent: '#33b077'
+      accent: '#34d399'
+    },
+    {
+      id: 'agents',
+      name: 'dmtools-agents',
+      stateUrl: 'https://raw.githubusercontent.com/IstiN/dmtools-agents/factory-data/data/agents-state.json',
+      accent: '#a78bfa'
     }
   ],
 
-  // Lane rendering order + titles (add/remove/rename freely)
+  // Lane rendering order + titles — the PIPELINE order (schema 2). A card
+  // moves left→right exactly once per stage. Schema 1 snapshots map onto it:
+  // `fresh` renders as `pr_created`; development/merged_recent stay empty.
   lanes: [
-    { id: 'validating',     title: 'Validating (mutex)' },
-    { id: 'approved_queue', title: 'Approved queue (FIFO)' },
-    { id: 'review',         title: 'Review' },
-    { id: 'fresh',          title: 'Fresh' }
+    { id: 'development',    title: 'Development',          icon: 'dev' },
+    { id: 'pr_created',     title: 'PR created',           icon: 'pr' },
+    { id: 'review',         title: 'Review',               icon: 'review' },
+    { id: 'approved_queue', title: 'Approved queue · FIFO', icon: 'queue' },
+    { id: 'validating',     title: 'Validating · mutex',   icon: 'validate' },
+    { id: 'merged_recent',  title: 'Merged · 24h',         icon: 'merged' }
   ],
 
   // Labels highlighted as badges on cards (the rest stay subtle)
   badgeLabels: ['pr_approved', 'ai_validated', 'ai_pr_reviewed', 'ai_validating',
-                'dependencies', 'agent:review', 'github_actions'],
+                'dependencies', 'agent:dev', 'agent:review', 'agent:rework',
+                'github_actions'],
 
-  // Repo link base for PR links
-  prUrl: function (repo, n) { return 'https://github.com/' + repo + '/pull/' + n; }
+  // Repo link base for PR/issue links (n = number; kind = 'pull'|'issues')
+  prUrl: function (repo, n, kind) {
+    return 'https://github.com/' + repo + '/' + (kind || 'pull') + '/' + n;
+  }
 };
