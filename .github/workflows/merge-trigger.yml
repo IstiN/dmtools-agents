@@ -1,0 +1,30 @@
+# Merge Trigger — thin stub over the canonical pr_approved merge bot
+# (dmtools-agentic-workflows). Event triggers stay repo-side: this repo's
+# validation CI is `Quality` and it fires on PR heads automatically
+# (pull_request trigger), so the bot only merges CLEAN, green PRs.
+name: Merge Trigger
+
+run-name: 'Merge Trigger : Quality passed → merge pr_approved issues'
+
+on:
+  workflow_run:
+    workflows: ['Quality']
+    types: [completed]
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+
+jobs:
+  merge-trigger:
+    uses: IstiN/dmtools-agentic-workflows/.github/workflows/factory-merge-trigger.yml@9bc5c9532f1be5abda5ccaf937367fd00183d212
+    with:
+      runner: ubuntu-24.04
+      remove_pr_label: true
+      map_pr_labels: true
+      gh_branch_pattern: true
+    secrets: inherit

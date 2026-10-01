@@ -1,163 +1,34 @@
-# SM kicker factory leg — REUSABLE workflow (dmtools-agents factory pack, top-level: GitHub requires reusable workflows at the .github/workflows root — no subdirectories).
-#
-# A tiny watchdog (two jobs, seconds each, ~zero runner cost) ported from
-# flutter_agent_harness `.github/workflows/sm-kicker.yml` so every machine
-# repo gets it from the pack instead of keeping a drifting local copy.
-#
-# Why it exists: machine repos run dispatch-only CI (ci.yml `on.push` fires
-# nothing on PR heads) and the Machine SM is the sole trigger. Two gaps
-# leave a PR BLOCKED forever with zero required-check contexts on its head:
-#
-#   1. SM dead: the cron tick missed/failed and nothing re-arms it.
-#      Fix: if no SM run is queued/running/in-progress — dispatch one tick
-#      and die.
-#
-#   2. Head completeness: pushes WITHOUT code changes (pure main-merge
-#      commits — the SM's own silent update-branch, or a manual
-#      "merge main into branch") fire no workflows by design, yet the
-#      strict `up-to-date` protection demands FRESH required checks on
-#      the new head SHA. The SM's validate-fresh/armed rules don't count
-#      a no-code rebase as "validation due", so the contexts never appear.
-#      Fix: if a PR head is a codeless merge commit (2 parents, 0 files
-#      vs first parent) and carries NEITHER of the required check contexts
-#      NOR an active CI run — dispatch the CI workflow on that head.
-#
-# Code-bearing pushes (dev/rework/WIP) are deliberately NOT touched here:
-# their validation schedule stays owned by the SM ("intermediate pushes
-# are free"). The schedule leg re-checks open PRs every 30 min to also
-# cover bot pushes made with GITHUB_TOKEN (those fire no events at all).
-#
-# Caller stub (flutter_agent_harness example):
-#   name: SM kicker
-#   on:
-#     push: {branches-ignore: [main]}
-#     schedule: [{cron: '13,43 * * * *'}]
-#     workflow_dispatch:
-#   permissions: {actions: write, contents: read, pull-requests: read, checks: read}
-#   concurrency:
-#     # Global group, but NO cancel-in-progress (fa #911, 2026-09-25):
-#     # a push on ANY PR branch used to kill the in-flight kicker for every
-#     # other branch, stamping CANCELLED check-runs on random heads. The
-#     # kicker jobs are seconds-cheap watchdogs — let them queue.
-#     group: sm-kicker
-#     cancel-in-progress: false
-#   jobs:
-#     kicker:
-#       uses: IstiN/dmtools-agents/.github/workflows/factory-sm-kicker.yml@<ref>
-#       with:
-#         smWorkflow: machine-sm.yml            # this repo's SM stub name
-#         ciWorkflow: ci.yml                    # this repo's CI entrypoint
-#         requiredContexts: 'Quality gate,JS engine integration (quickjs-ng),Binaries smoke gate'
-#   # No secrets needed: the kicker reads github.token directly (it resolves
-#   # to the CALLER's token inside a reusable workflow).
-#   # epam/dmtools-dart example overrides:
-#   #   smWorkflow: machine-sm.yml, ciWorkflow: quality.yml
-#   #   requiredContexts: 'agents-suite,static,gate'
-#
-# Concurrency note: the group lives in the CALLER's job definition (GitHub
-# attaches job-level concurrency to the reusable job) — keep the
-# no-cancel-in-progress discipline from fa #911 there.
+# SM kicker — thin stub over the canonical watchdog in the factory home.
+# All logic (sm-liveness + head-completeness) lives in
+# IstiN/dmtools-agentic-workflows/.github/workflows/factory-sm-kicker.yml.
+# This repo's validation CI is `Quality` (display name "Quality") and its
+# required context is the `crap` job.
+name: SM kicker
 
-name: 'Factory · SM kicker'
+run-name: '🥁 kicker ${{ github.event_name }} ${{ github.ref_name }}'
 
 on:
-  workflow_call:
-    inputs:
-      runner:
-        description: 'Runner label for the watchdog jobs (seconds-cheap; hosted is fine)'
-        required: false
-        type: string
-        default: 'ubuntu-24.04'
-      smWorkflow:
-        description: "File name of this repo's Machine SM stub to liveness-kick"
-        required: false
-        type: string
-        default: 'machine-sm.yml'
-      ciWorkflow:
-        description: "File name of this repo's CI entrypoint to dispatch on codeless heads"
-        required: false
-        type: string
-        default: 'ci.yml'
-      requiredContexts:
-        description: 'Comma-separated required check-run names guarding PR mergeability'
-        required: false
-        type: string
-        default: 'Quality gate,JS engine integration (quickjs-ng),Binaries smoke gate'
-      graceSeconds:
-        description: 'Re-check window before dispatching CI (a dispatch may be in flight from the SM chain)'
-        required: false
-        type: string
-        default: '45'
-    secrets: {}
+  push:
+    branches-ignore: [main]
+  schedule:
+    - cron: '13,43 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+  checks: read
+
+concurrency:
+  group: sm-kicker
+  cancel-in-progress: false
 
 jobs:
-  sm-liveness:
-    runs-on: ${{ inputs.runner }}
-    env:
-      # github.token resolves to the CALLER's token inside a reusable
-      # workflow — no secret plumbing needed for reads + same-repo dispatch.
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - name: Dispatch an SM tick if none is queued or running
-        run: |
-          active=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${{ inputs.smWorkflow }}/runs?per_page=1" \
-            --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued" or .status == "waiting" or .status == "pending")] | length')
-          if [ "${active:-0}" -gt 0 ]; then
-            echo "SM alive ($active active run(s)) — nothing to do"
-          else
-            echo "SM idle — dispatching a tick"
-            # dryRun=false is LOAD-BEARING: the SM stub's workflow_dispatch
-            # input defaults to true, and a flagless dispatch silently no-ops
-            # (live incident 2026-09-29 21:14-21:24Z, fa guard #1092).
-            gh workflow run "${{ inputs.smWorkflow }}" -R "$GITHUB_REPOSITORY" -f dryRun=false
-          fi
-
-  head-completeness:
-    runs-on: ${{ inputs.runner }}
-    env:
-      # github.token resolves to the CALLER's token inside a reusable
-      # workflow — no secret plumbing needed for reads + same-repo dispatch.
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - name: Dispatch CI on codeless PR heads that carry no required contexts
-        run: |
-          req='${{ inputs.requiredContexts }}'
-          ci_wf='${{ inputs.ciWorkflow }}'
-          grace='${{ inputs.graceSeconds }}'
-          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            if [ "$GITHUB_REF_TYPE" != "branch" ]; then echo "tag push — skip"; exit 0; fi
-            branches=("${GITHUB_REF_NAME}")
-          else
-            mapfile -t branches < <(gh pr list -R "$GITHUB_REPOSITORY" --state open --json headRefName --jq '.[].headRefName')
-            echo "scanning ${#branches[@]} open PR branch(es)"
-          fi
-          for b in "${branches[@]}"; do
-            sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$b" --jq .sha 2>/dev/null) || { echo "$b: no head, skip"; continue; }
-            read -r parents files < <(gh api "repos/$GITHUB_REPOSITORY/commits/$sha" --jq '"\(.parents | length) \(.files | length)"')
-            if [ "$parents" != "2" ] || [ "${files:-1}" != "0" ]; then
-              echo "$b: code-bearing head — SM owns validation, skip"
-              continue
-            fi
-            ci=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$sha&event=workflow_dispatch" \
-              --jq "[.workflow_runs[] | select(.name == \"$ci_wf\" and (.status == \"in_progress\" or .status == \"queued\" or .status == \"waiting\" or .status == \"pending\"))] | length")
-            if [ "${ci:-0}" -gt 0 ]; then
-              echo "$b: CI already active on ${sha:0:9} — skip"
-              continue
-            fi
-            found=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs?per_page=100" \
-              --jq '[.check_runs[].name] | join("\n")' | grep -Fxc -f <(printf '%s\n' "${req//,//$'\n'}") || true)
-            if [ "${found:-0}" -gt 0 ]; then
-              echo "$b: ${sha:0:9} already has required contexts — skip"
-              continue
-            fi
-            # grace re-check: a CI dispatch may be in flight from the SM/chain
-            sleep "$grace"
-            ci=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$sha&event=workflow_dispatch" \
-              --jq "[.workflow_runs[] | select(.name == \"$ci_wf\")] | length")
-            if [ "${ci:-0}" -gt 0 ]; then
-              echo "$b: CI appeared during grace window — skip"
-              continue
-            fi
-            echo "$b: codeless head ${sha:0:9} with zero required contexts — dispatching CI"
-            gh workflow run "$ci_wf" -R "$GITHUB_REPOSITORY" --ref "$b"
-          done
+  kicker:
+    uses: IstiN/dmtools-agentic-workflows/.github/workflows/factory-sm-kicker.yml@f0fe78c6225b99ca350f8354af112db937699b61
+    with:
+      sm_workflow: machine-sm.yml
+      ci_workflow: quality.yml
+      ci_display_name: Quality
+      required_contexts: crap

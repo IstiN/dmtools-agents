@@ -1,0 +1,58 @@
+# AI Teammate — thin stub over the factory home (dmtools-agentic-workflows),
+# SELF-HOSTED ENGINE: this repo IS the dmtools-agents engine, so factory_ref
+# rides the triggering commit — the factory always executes the exact tree
+# under development.
+#
+# ALL logic lives in IstiN/dmtools-agentic-workflows/.github/workflows/
+# factory-teammate.yml (guard, legs, verdict, sessions, memory). This file
+# carries the repository event triggers + the call only.
+#
+# Gate: the loop starts when a human ASSIGNS an issue to `ai-teammate`.
+# Secrets via `secrets: inherit`: SOURCE_GITHUB_TOKEN (present), plus
+# ZAI_CODE_KEY / KIMI_REVIEW_KEY when the fa/zai runners are used.
+name: AI Teammate
+
+run-name: 'teammate: ${{ github.event_name }} #${{ github.event.issue.number || github.event.inputs.issue }} ${{ github.event.inputs.leg || '' }}'
+
+on:
+  issues:
+    types: [assigned, labeled]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: 'Issue number (for dispatch runs)'
+        type: string
+      leg:
+        description: 'Which leg to run'
+        type: choice
+        options: [dev, review, rework]
+      reason:
+        description: 'Why (audit trail)'
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: ai-teammate-${{ github.event.issue.number || github.event.inputs.issue }}
+  cancel-in-progress: false
+
+jobs:
+  teammate:
+    # Assignment gate: issues must be ASSIGNED to ai-teammate; dispatch
+    # runs reach the factory even with empty gate outputs.
+    if: >-
+      (github.event_name == 'issues' &&
+       contains(github.event.issue.assignees.*.login, 'ai-teammate')) ||
+      (github.event_name == 'issues' &&
+       github.event.label.name == 'pr_approved') ||
+      github.event_name == 'workflow_dispatch'
+    uses: IstiN/dmtools-agentic-workflows/.github/workflows/factory-teammate.yml@b93dc51c1030839153c9bb86c8aa2e6b3fad82de
+    with:
+      issue: ${{ github.event.issue.number || github.event.inputs.issue }}
+      leg: ${{ github.event.inputs.leg || '' }}
+      reason: ${{ github.event.inputs.reason || github.event_name }}
+      factory_ref: ${{ github.sha }}
+    secrets: inherit
