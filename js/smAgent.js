@@ -1089,8 +1089,24 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                          // on the same branch produced a branch-into-itself
                          // merge commit (dart gh-191, 14:08) that moved the head
                          // past a green validation for no reason.
-                         ' && ! git merge-base --is-ancestor FETCH_HEAD HEAD' +
-                         ' || exit 0' +
+                         //
+                         // ROOT FIX (fa 2026-10-01): the old form
+                         //   clone && fetch && ! ancestor || exit 0 && merge...
+                         // left-associates as
+                         //   (clone && fetch && !ancestor) || (exit 0 && merge...)
+                         // so a CLONE/NETWORK failure took the `|| exit 0`
+                         // branch, exited 0, and the reconcile logged
+                         // "branch silently updated" while the head NEVER
+                         // moved — the PR stayed BEHIND forever (live: fa
+                         // #1128 cohort parked since 2026-09-13; pr-1133's
+                         // visible clone failure was the rare case that
+                         // escaped the mask). The no-op skip must scope to
+                         // the ancestor check ONLY: failures now propagate,
+                         // the caller logs 'update_branch failed', and the
+                         // next tick retries (self-healing by design).
+                         ' && if git merge-base --is-ancestor FETCH_HEAD HEAD; then' +
+                         ' echo "silent-update: already up to date"' +
+                         ' && exit 0; fi' +
                          ' && git -c user.name=sm-silent-update' +
                          ' -c user.email=sm-silent-update@users.noreply.github.com' +
                          ' merge --no-edit FETCH_HEAD' +

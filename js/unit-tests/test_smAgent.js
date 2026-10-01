@@ -1953,6 +1953,35 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
         assert.ok(vfRefreshed(sm.capturedCliCommands), 'refresh still runs');
     });
 
+    test('silent-update: clone/fetch failures are not masked as success (root fix 2026-10-01)', function () {
+        // Live: fa approved cohort parked BEHIND since 2026-09-13 — the old
+        // chain `clone && fetch && ! ancestor || exit 0 && merge…` swallowed
+        // CLONE/NETWORK failures via `|| exit 0` (left-associative shell),
+        // the tick logged "branch silently updated", and the head never
+        // moved. The no-op skip must scope to the ancestor check only.
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(204, { labels: ['validation_failed'], headSha: 'ff44556677' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({ committers: { ff44556677: 'sm-silent-update' } })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        var refresh = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh repo clone') !== -1;
+        })[0];
+        assert.ok(refresh, 'refresh command captured');
+        assert.ok(
+            refresh.command.indexOf('if git merge-base --is-ancestor FETCH_HEAD HEAD') !== -1,
+            'no-op skip must scope to the ancestor check (if/then), not mask failures');
+        assert.ok(refresh.command.indexOf('|| exit 0') === -1,
+            'the old failure-masking `|| exit 0` must be gone');
+        assert.ok(refresh.command.indexOf('sm-silent-update') !== -1,
+            'machine committer identity preserved (sticky-park depends on it)');
+    });
+
     test('silent-update: an AUTHOR PUSH clears the label and re-enters validation', function () {
         var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
             github: {
