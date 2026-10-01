@@ -38,7 +38,7 @@ jobs:
       contains(github.event.label.name, 'pr_approved')
     # Pinned to the immutable SHA of IstiN/dmtools-agentic-workflows main
     # (same pin as machine-sm.yml — bump both together).
-    uses: IstiN/dmtools-agentic-workflows/.github/workflows/factory-merge.yml@f59104948fec3e8dc5fe5b26fa92e538f73a5019
+    uses: IstiN/dmtools-agentic-workflows/.github/workflows/factory-merge.yml@a75dc140b3ea7b2af29def0f6296c1fd3cec4373
     with:
       # Docs-only CI is the repo's PR check (workflow_run fallback name).
       ci_workflow: agent-docs.yml
