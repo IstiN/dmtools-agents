@@ -17,10 +17,25 @@
  * Uses: file_read(), suite(), test(), assert
  */
 
+// #591 moved factory-teammate.yml's canonical home to
+// IstiN/dmtools-agentic-workflows — when this checkout carries no local
+// copy there is nothing to pin here and the whole suite skips.
+var wf = (function () {
+    try {
+        return file_read({ path: '.github/workflows/factory-teammate.yml' });
+    } catch (e) {
+        return null;
+    }
+})();
+var q = wf === null ? -1 : wf.indexOf('Quarantine poisoned fa session');
+
+if (wf === null) {
+    suite('factory-teammate.yml — poisoned fa session quarantine (SKIPPED: canonical home is dmtools-agentic-workflows, #591)', function () {
+        test('no local workflow copy — nothing to pin', function () { assert.ok(true); });
+    });
+} else {
 suite('factory-teammate.yml — poisoned fa session quarantine (owner RCA 2026-09-27)', function () {
 
-    var wf = file_read({ path: '.github/workflows/factory-teammate.yml' });
-    var q = wf.indexOf('Quarantine poisoned fa session');
     assert.ok(q !== -1, 'quarantine step present');
 
     test('the Run agent step exposes an id the quarantine can gate on', function () {
@@ -65,3 +80,4 @@ suite('factory-teammate.yml — poisoned fa session quarantine (owner RCA 2026-0
             'order: quarantine → artifact upload → persist (persist must find the store already gone)');
     });
 });
+}

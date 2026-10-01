@@ -258,9 +258,19 @@ suite('gitPushGuard — shim parity (scripts/git-push-guard.sh)', function() {
         var runAgent = file_read({ path: 'scripts/run-agent.sh' });
         assert.contains(runAgent, 'git-push-guard.sh');
         assert.contains(runAgent, 'export PATH="${GIT_GUARD_DIR}:${PATH}"');
-        var workflow = file_read({ path: '.github/workflows/factory-teammate.yml' });
-        assert.contains(workflow, 'factory-agents/scripts/git-push-guard.sh');
-        assert.contains(workflow, 'export PATH="${GIT_GUARD_BIN}:${PATH}"');
+        // #591: factory-teammate.yml's canonical home is
+        // dmtools-agentic-workflows — the workflow wiring is only
+        // pinnable when a local copy exists in this checkout.
+        var workflow = null;
+        try {
+            workflow = file_read({ path: '.github/workflows/factory-teammate.yml' });
+        } catch (e) {
+            workflow = null;
+        }
+        if (workflow !== null) {
+            assert.contains(workflow, 'factory-agents/scripts/git-push-guard.sh');
+            assert.contains(workflow, 'export PATH="${GIT_GUARD_BIN}:${PATH}"');
+        }
     });
 
     // RCA 2026-09-28: two guard copies on PATH (factory step + run-agent.sh)

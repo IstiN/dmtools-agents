@@ -47,8 +47,24 @@ _sha256() {
 
 _config_slug() {
   local config="${AI_TEAMMATE_CONFIG_FILE:-${CONFIG_FILE:-}}"
-  config="${config##*/}"
-  config="${config%.json}"
+  case "${config}" in
+    */.dmtools/packs/*)
+      # Pack launch surface (Wave 2, owner 2026-10-01): the config is a
+      # file inside an UNPACKED agent pack (~/.dmtools/packs/<agent>-<v>/,
+      # e.g. its launch.json). The stable identity is the AGENT NAME (the
+      # pack dir), not the file basename — launch.json would collapse
+      # every agent into "launch" and merge dev-write with dev-review
+      # sessions. The version tail starts with a digit, so the strip below
+      # never eats a dash inside an agent name.
+      config="${config#*/.dmtools/packs/}"
+      config="${config%%/*}"
+      config="${config%-[0-9]*}"
+      ;;
+    *)
+      config="${config##*/}"
+      config="${config%.json}"
+      ;;
+  esac
   _slug "${config:-unknown}"
 }
 
