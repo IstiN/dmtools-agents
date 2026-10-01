@@ -15,6 +15,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:  # the Machine SM / sm-kicker dispatch validation runs
 
 permissions:
   contents: read
