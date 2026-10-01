@@ -129,10 +129,13 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           origin_url="https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git remote set-url origin "$origin_url"
-          git fetch origin main
-          git rebase origin/main
+          # Commit FIRST (the compile step already rewrote versions.json in
+          # the tree — an unstaged tracked file makes rebase refuse), then
+          # rebase onto current main, then push.
           git add versions.json
           git diff --cached --quiet || git commit -m "chore(release): bump agent versions [skip ci]"
+          git fetch origin main
+          git rebase origin/main
           git push origin HEAD:main
           git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
 
