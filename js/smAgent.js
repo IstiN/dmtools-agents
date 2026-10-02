@@ -1211,9 +1211,62 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         (!!machineLoginVf && !!actorLoginVf && actorLoginVf === machineLoginVf);
                     var freshPushVf = !!(actorVf && actorVf.date && parkedAtVf &&
                         Date.parse(actorVf.date) > Date.parse(parkedAtVf));
+                    // Head-change without its own red verdict (dmtools-
+                    // agents#633, live fa#1139 2026-10-02): the park's
+                    // verdict belongs to the sha in the park comment. A
+                    // silent rebase moves the head to a sha that has NEVER
+                    // been validated — the red the park punished is void
+                    // (the rebase literally merged main in: exactly the
+                    // medicine for a moved-base red, live fa#1114 —
+                    // parked red, re-validated green, merged). Clear the
+                    // park and let validate-armed give the NEW head its
+                    // first verdict; if it is genuinely content-red the
+                    // fail-validation path re-parks it one CI cycle later.
+                    // Guards: park comment sha must be known AND differ,
+                    // and the sha-keyed dispatched-verdict probe must NOT
+                    // report 'failure' for the current head (fail closed:
+                    // probe error keeps the park, same as parkedSince).
+                    var parkedHeadVf = parkedHeadSha(effectiveRepoInfo, ticket.prNumber);
+                    var headChangedNoVerdictVf = !!uHead && parkedHeadVf !== null &&
+                        parkedHeadVf !== '' && uHead !== parkedHeadVf &&
+                        latestDispatchedVerdict(effectiveRepoInfo,
+                            rule.ciWorkflow || ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
+                            uHead) !== 'failure';
                     if (lastCommitter === null || actorVf === null || parkedAtVf === null) {
                         console.warn('  ⚠️  ' + key + ' ' + parkLabelVf +
                             ': park probe failed (commit actor / park time) — keeping the park (fail closed)');
+                    } else if (headChangedNoVerdictVf) {
+                        if (!DRY) {
+                            try {
+                                github_remove_label({
+                                    workspace: effectiveRepoInfo.owner,
+                                    repository: effectiveRepoInfo.repo,
+                                    number: ticket.prNumber,
+                                    label: parkLabelVf
+                                });
+                            } catch (eUnparkHc) {
+                                console.warn('  ⚠️  un-park label failed: ' + (eUnparkHc.message || eUnparkHc));
+                            }
+                            try {
+                                github_create_comment({
+                                    workspace: effectiveRepoInfo.owner,
+                                    repository: effectiveRepoInfo.repo,
+                                    number: ticket.prNumber,
+                                    body: '🅿️→▶ validation_failed cleared — the park was set on head `' +
+                                        parkedHeadVf + '`, but the head is now `' + uHead +
+                                        '` (silent refresh merged main in) and this head has no red ' +
+                                        'verdict of its own. The old verdict does not transfer across ' +
+                                        'sha changes — re-entering validation for a first verdict.'
+                                });
+                            } catch (eUnparkHcC) {
+                                console.warn('  ⚠️  un-park comment failed: ' + (eUnparkHcC.message || eUnparkHcC));
+                            }
+                        }
+                        console.log('  ▶ ' + key + ' ' + parkLabelVf +
+                            ' cleared: head changed to ' + uHead.slice(0, 8) +
+                            ' since the park (' + parkedHeadVf.slice(0, 8) +
+                            ') and carries no red verdict — re-validating');
+                        unparkedThisPass = true;
                     } else if (machinePushVf) {
                         console.log('  🅿️  ' + key + ' ' + parkLabelVf +
                             ' holds — head moved by the machine (' +
@@ -1874,9 +1927,35 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         number: linked,
                         labels: ['agent:rework']
                     });
+                } else if (!isMachinePr) {
+                    // GUEST PRs get the validation_failed PARK LABEL
+                    // (dmtools-agents#1179 mirror, live fa 2026-10-02: 11
+                    // manual mitigations in one night — the report-only
+                    // branch left the PR eligible for validate-armed, which
+                    // re-selected it as the OLDEST approved candidate every
+                    // tick and froze the whole FIFO behind a red guest
+                    // head). The label is exactly what the sticky-park rule
+                    // would set; the un-park path (human push newer than
+                    // the park) clears it, so a guest fix still re-enters
+                    // validation. Machine PRs never get the label: their
+                    // rework cycle pushes a new head and validate-armed's
+                    // notLabels:[validation_failed] would lock them out of
+                    // the re-validation the rework exists for.
+                    try {
+                        github_add_labels({
+                            workspace: effectiveRepoInfo.owner,
+                            repository: effectiveRepoInfo.repo,
+                            number: ticket.prNumber,
+                            labels: ['validation_failed']
+                        });
+                    } catch (eGuestPark) {
+                        console.warn('  ⚠️  guest park label failed: ' +
+                            (eGuestPark.message || eGuestPark));
+                    }
                 }
                 console.log('  🔁 ' + key + ' validation failed — ' +
-                    (isMachinePr ? 'rework re-queued' + (linked ? ' (issue #' + linked + ')' : '') : 'guest PR, report only'));
+                    (isMachinePr ? 'rework re-queued' + (linked ? ' (issue #' + linked + ')' : '')
+                                 : 'guest PR, parked (validation_failed) + reported'));
                 processedKeys.push(key);
             } catch (e) {
                 console.error('  ❌ fail_validation failed for ' + key + ': ' + (e.message || e));
@@ -2457,6 +2536,37 @@ function parkedSince(repoInfo, prNumber) {
         return out || null;
     } catch (e) {
         console.warn('  ⚠️  park-time probe failed: ' + (e.message || e));
+        return null;
+    }
+}
+
+function parkedHeadSha(repoInfo, prNumber) {
+    // Sticky-park RESET probe v2 (dmtools-agents#633, live fa#1139
+    // 2026-10-02): the head sha the NEWEST park comment recorded
+    // ('parked-head: <sha>'). The park verdict is only valid for THAT
+    // sha; a silent rebase moves the head to a sha that has never been
+    // validated, and the sticky park must not outlive its verdict.
+    // Returns the 40-hex sha or '' when no park comment is found.
+    // Probe failure returns null (fail closed: no sha → no head-change
+    // clear; the human-push RESET path still applies).
+    try {
+        var res = github_get_pr_comments({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            pullRequestId: prNumber
+        });
+        var obj = typeof res === 'string' ? JSON.parse(res) : (res || []);
+        var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+        var sha = '';
+        list.forEach(function (c) {
+            var b = String((c && c.body) || '');
+            if (b.indexOf('parked-head: ') === -1) return;
+            var tail = b.slice(b.lastIndexOf('parked-head: ') + 13);
+            var m = /^([0-9a-f]{40})/.exec(tail.trim());
+            if (m) sha = m[1];
+        });
+        return sha;
+    } catch (e) {
+        console.warn('  ⚠️  park-head probe failed: ' + (e.message || e));
         return null;
     }
 }
