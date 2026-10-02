@@ -203,6 +203,7 @@ function githubProvider(cfg) {
                 })) || {};
                 rollup = (cr.check_runs || []).map(function (r) {
                     return {
+                        name: r.name || null,
                         conclusion: r.conclusion ? String(r.conclusion).toUpperCase() : null,
                         status: r.status ? String(r.status).toUpperCase() : null
                     };
@@ -215,17 +216,39 @@ function githubProvider(cfg) {
             // dart gh-191, twice on 2026-09-22 after manual run cleanups).
             // A cancelled check is ignored; if nothing conclusive remains,
             // the rollup reads pending/none and validate-fresh re-runs CI.
-            var red = false, pending = false, ignored = 0;
-            // (all-cancelled still counts as 'no verdict yet': see CANCELLED note above)
+            var red = false, pending = false, ignored = 0, bookkept = 0;
+            // Bookkeeping checks are NOT verdicts (dmtools-agents#628):
+            // sm-kicker fires on EVERY non-main push (timer auto-commit,
+            // silent refresh) and the runner wake-up probe stamps its own
+            // success — a head carrying only these folds 'green', so the
+            // validation lane (checks none|pending) never fires and the PR
+            // dead-zones (live: dart #332, born green from a timer-pushed
+            // branch, 3 ticks processed 0). Same handling as CANCELLED:
+            // ignore; the trailing rule then reports 'pending' and
+            // validate-fresh dispatches the real CI on the head.
+            var BOOKKEEPING_CHECK_PREFIXES = ['kicker /', 'Wake-up probe'];
+            // (all-cancelled/bookkeeping still counts as 'no verdict yet')
             rollup.forEach(function (c) {
                 var concl = c.conclusion;
                 var status = c.status;
+                var cname = String((c && (c.name || c.context)) || '');
+                for (var bi = 0; bi < BOOKKEEPING_CHECK_PREFIXES.length; bi++) {
+                    if (cname.indexOf(BOOKKEEPING_CHECK_PREFIXES[bi]) === 0) { bookkept++; return; }
+                }
                 if (concl === 'CANCELLED') { ignored++; return; }
                 if (concl === 'FAILURE' || concl === 'TIMED_OUT') red = true;
                 else if (!concl || status === 'QUEUED' || status === 'IN_PROGRESS' ||
                          status === 'WAITING' || status === 'PENDING') pending = true;
             });
-            if (rollup.length > 0 && red === false && pending === false && ignored > 0) pending = true;
+            // Cancelled still forces 'no verdict yet' even next to green
+            // (a cancelled validation IS the missing verdict). Bookkeeping
+            // checks must NOT: green validation + kicker noise stays green,
+            // or every pushed-branch PR would re-validate forever. A head
+            // with ONLY bookkeeping checks has no verdict at all → pending,
+            // which is exactly what validate-fresh (none|pending) arms on.
+            var realCount = rollup.length - ignored - bookkept;
+            if (ignored > 0) pending = true;
+            if (realCount === 0 && bookkept > 0) pending = true;
             // Live shape: github_get_pr returns the REST body, where the
             // field is `mergeable_state` with lowercase values (clean,
             // dirty, blocked, behind, has_hooks, draft, unknown) — the
