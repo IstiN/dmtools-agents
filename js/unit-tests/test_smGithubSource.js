@@ -1073,7 +1073,7 @@ suite('sm github source', function () {
         assert.ok(r, 'revalidate-armed present');
         assert.deepEqual(r.query.labels.sort(), ['ai_validating', 'pr_approved'].sort(),
             'matches ARMED approved PRs');
-        assert.deepEqual(r.query.checks, ['none'], 'only when the head carries no checks');
+        assert.deepEqual(r.query.checks, ['none', 'pending'], 'no checks OR a cancelled-only rollup (dmtools-agents#632: pending with nothing in flight is the lost-run state too; validate_pr\'s duplicate-dispatch probe guards live runs)');
         // Live multi-arm leak (fa 2026-09-26 — 7 approved PRs armed at once,
         // +1/tick): a plain mutex self-blocks this rule (its own target carries
         // ai_validating), so it shipped mutex-less on a false "structural

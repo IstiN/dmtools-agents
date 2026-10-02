@@ -1492,7 +1492,7 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
             'pr_approved is sticky even without a linked issue — approval survives CI red');
     });
 
-    test('fail_validation: GUEST PR (owner rule 2026-09-21) — report only, never a rework arm', function () {
+    test('fail_validation: GUEST PR (owner rule 2026-09-21) — report + PARK (validation_failed), never a rework arm', function () {
         // Guest = any account other than the machine login: they get review
         // + validation only. A guest 'Fixes #191' body must not arm rework on
         // a (possibly machine) linked issue; the ai/gh-<n> branch fallback is
@@ -1512,8 +1512,12 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
 
         assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.number + ':' + r.label; }),
             ['99:ai_validating'], 'ai_validating still disarms');
-        assert.equal(sm.capturedPrLabelAdds.length, 0,
-            'NO agent:rework arm for a guest PR — not via the body link, not via the branch fallback');
+        // dmtools-agents#1179 fix: guests now get the PARK LABEL — the
+        // report-only branch used to leave the red guest as the OLDEST
+        // validate-armed candidate (FIFO froze behind it, live fa
+        // 2026-10-02: 11 manual mitigations in one night).
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number + ':' + a.labels.join(','); }),
+            ['99:validation_failed'], 'GUEST PR parked via validation_failed');
         assert.equal(sm.capturedPrComments.length, 1);
         assert.ok(sm.capturedPrComments[0].body.indexOf('Guest PR') !== -1,
             'the report tells the guest to fix and push');
@@ -1534,8 +1538,12 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         }));
         sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.fail] } });
 
-        assert.equal(sm.capturedPrLabelAdds.length, 0, 'fail-closed: no rework arm without a machine login');
         assert.equal(sm.capturedPrComments.length, 1, 'the report still posts');
+        // With no machine login EVERY PR is a guest — the #1179 park label
+        // is the guest treatment, so it fires here too (fail-closed applies
+        // to the machine-only rework arm, not to the guest park).
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number + ':' + a.labels.join(','); }),
+            ['77:validation_failed'], 'guest park fires without a machine login');
     });
 });
 
@@ -1665,10 +1673,16 @@ suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', f
 
         assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.number + ':' + r.label; }),
             ['85:ai_validating'], 'the stale arm is released');
-        assert.equal(sm.capturedPrLabelAdds.length, 0,
+        // #1179: the fail path now also PARKS the red guest (validation_failed
+        // on the PR) — ai_validated is still never latched on the red side.
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.indexOf('ai_validated') !== -1; }),
             'failure side never latches ai_validated — the fail path owns it');
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.indexOf('validation_failed') !== -1; }),
+            'the standard fail path parks the red guest (dmtools-agents#1179)');
         assert.equal(sm.capturedPrComments.length, 1,
-            'the standard fail report posts (guest PR → report only, no rework arm)');
+            'the standard fail report posts (guest PR → report + park, no rework arm)');
         assert.ok(sm.capturedPrComments[0].body.indexOf('went red') !== -1,
             'the report says validation went red');
     });
@@ -2104,6 +2118,95 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
             return a.labels.indexOf('validation_failed') !== -1; }),
             'machine-authored PRs keep the re-enter-on-new-head behavior — no label');
         assert.equal(sm.capturedPrComments.length, 0, 'no park comment for machine PRs');
+    });
+
+    // dmtools-agents#633 (live fa#1139 2026-10-02): the park verdict belongs
+    // to the sha the park comment recorded. A silent rebase moves the head to
+    // a sha that has NEVER been validated — the park must not outlive its
+    // verdict, or a moved-base red (fixed by the very rebase) parks the PR
+    // forever (fa#1114 was the same red, hand-cleared, re-validated GREEN,
+    // merged).
+    var OLD_HEAD = 'aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00';
+    var NEW_HEAD = '99887766554433221100ffeeddccbbaa99887766';
+
+    test('silent-update: head changed since the park with NO own verdict — park clears (rebase medicine)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(206, { labels: ['validation_failed'], headSha: NEW_HEAD })],
+                prComments: [{ body: '🛑 parked-head: ' + OLD_HEAD }],
+                prStatus: { checkConclusion: 'none' }
+            },
+            // Even the HARDEST case clears: the new head was pushed by the
+            // machine itself (sm-silent-update committer, machine actor
+            // login, STALE date — neither human nor fresh). The sha change
+            // is the verdict.
+            onCliExecute: (function () {
+                var base = vfCli({ parkedAt: '2026-10-01T00:00:00Z' });
+                return function (cmd) {
+                    var m = /\/commits\/([0-9a-fA-F]+)"/.exec(cmd.command);
+                    if (m && m[1] === NEW_HEAD &&
+                        cmd.command.indexOf('login') !== -1) {
+                        // machine actor, push OLDER than the park event —
+                        // neither human nor fresh on purpose
+                        return JSON.stringify({ login: 'ai-teammate',
+                            date: '2026-09-30T00:00:00Z' });
+                    }
+                    if (m && m[1] === NEW_HEAD) return '"sm-silent-update"';
+                    return base(cmd);
+                };
+            })()
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
+            return r.label === 'validation_failed'; }),
+            'the park does not survive its own sha');
+        assert.ok(sm.capturedPrComments.some(function (c) {
+            return c.body.indexOf('no red verdict of its own') !== -1; }),
+            'the un-park comment explains the sha-change rationale');
+        assert.ok(vfRefreshed(sm.capturedCliCommands), 'the silent refresh itself still runs');
+    });
+
+    test('silent-update: head changed BUT carries its OWN red verdict — park holds', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(207, { labels: ['validation_failed'], headSha: NEW_HEAD })],
+                prComments: [{ body: '🛑 parked-head: ' + OLD_HEAD }],
+                prStatus: { checkConclusion: 'red' }
+            },
+            onCliExecute: function (cmd) {
+                // The dispatched-verdict probe answers for the NEW head.
+                if (cmd.command.indexOf('/runs?head_sha=' + NEW_HEAD) !== -1) {
+                    return JSON.stringify({ workflow_runs: [
+                        { head_sha: NEW_HEAD, status: 'completed', conclusion: 'failure',
+                          updated_at: '2026-10-02T00:00:00Z' }
+                    ] });
+                }
+                return vfCli({ parkedAt: '2026-10-01T00:00:00Z' })(cmd);
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'a fresh red verdict on the new head re-justifies the park');
+    });
+
+    test('silent-update: same head as the park — holds (the park sha still matches)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(208, { labels: ['validation_failed'], headSha: OLD_HEAD })],
+                prComments: [{ body: '🛑 parked-head: ' + OLD_HEAD }],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({ parkedAt: '2026-10-01T00:00:00Z' })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'no sha change — the human-push RESET path remains the only exit');
     });
 
     test('validate_pr: a labeled PR gets NO CI dispatch at all (validate-fresh backstop)', function () {
