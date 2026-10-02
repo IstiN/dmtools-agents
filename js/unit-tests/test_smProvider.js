@@ -86,6 +86,34 @@ suite('smProvider', function () {
         assert.equal(st.mergeable, true);
     });
 
+    test('github: prStatus ignores bookkeeping checks — kicker-green born heads stay pending (#628)', function () {
+        var rollup;
+        var p = loadProvider('github', {
+            github_get_pr: function () {
+                return { state: 'OPEN', mergeable: true, mergeStateStatus: 'CLEAN',
+                         statusCheckRollup: rollup };
+            }
+        });
+        // Live shape (dart #332): timer auto-commit pushed the branch before
+        // the PR existed, sm-kicker + the wake-up probe stamped green on the
+        // sha — naive fold says 'green', the validation lane (none|pending)
+        // never fires, and the PR dead-zones with no rule matching.
+        rollup = [{ name: 'kicker / head-completeness', conclusion: 'SUCCESS' },
+                  { name: 'kicker / sm-liveness', conclusion: 'SUCCESS' },
+                  { name: 'Wake-up probe (bitrise-runner-dmtools-ci)', conclusion: 'SUCCESS' }];
+        assert.equal(p.prStatus(21).checkConclusion, 'pending');
+        // Bookkeeping must not mask a real verdict either way:
+        rollup = [{ name: 'kicker / sm-liveness', conclusion: 'SUCCESS' },
+                  { name: 'Quality gate', conclusion: 'FAILURE' }];
+        assert.equal(p.prStatus(22).checkConclusion, 'red');
+        rollup = [{ name: 'kicker / sm-liveness', conclusion: 'SUCCESS' },
+                  { name: 'Quality gate', conclusion: 'SUCCESS' }];
+        assert.equal(p.prStatus(23).checkConclusion, 'green');
+        // StatusContext items carry `context`, not `name`:
+        rollup = [{ context: 'kicker / sm-liveness', conclusion: 'SUCCESS' }];
+        assert.equal(p.prStatus(24).checkConclusion, 'pending');
+    });
+
     test('github: prStatus uses pullRequestId + REST check-runs rollup (live shape)', function () {
         // Live bug: `number` hit /pulls/null (404) and statusCheckRollup is
         // GraphQL-only — guards saw UNKNOWN/none forever. The REST path is
