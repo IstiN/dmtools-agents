@@ -33,11 +33,13 @@ function loadDevelopBugAndCreatePR(mocks) {
         allMocks
     );
 var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+var gitStagingModule = loadModule('js/common/gitStaging.js');
 
     var mod = loadModule(
         'js/developBugAndCreatePR.js',
         makeRequire({
             './config.js': configModule,
+            './common/gitStaging.js': gitStagingModule,
             './configLoader.js': configLoaderModule,
             './common/outputFiles.js': outputFiles,
             './developTicketAndCreatePR.js': { action: function() { return { success: true, path: 'delegated' }; } }
@@ -231,6 +233,97 @@ suite('developBugAndCreatePR', function() {
             { key: 'TS-1303', statusName: 'Done' }
         ]);
         assert.contains(loaded.comments[0].comment, 'Bug Already Fixed');
+    });
+
+    test('git add never stages machine-local .dmtools runtime logs (gh-628)', function() {
+        // Live 2026-10-03 (ai/gh-628): the machine's runtime files live
+        // INSIDE the committed .dmtools/ directory, and broad `git add`
+        // staging swept .dmtools/credential-helper.log (the credential
+        // helper's serving trace) into three ticket-branch commits. The
+        // status-check staging pathspec must exclude them like
+        // copilot-sessions.
+        var loaded = loadDevelopBugAndCreatePR();
+        loaded.mod.action({
+            ticket: {
+                key: 'TS-1299',
+                fields: { summary: 'staging hygiene', description: '', labels: [] }
+            },
+            metadata: { contextId: 'bug_development' },
+            jobParams: {
+                customParams: { removeLabel: 'sm_bug_development_triggered' }
+            }
+        });
+        var addCall = loaded.commands.filter(function(c) {
+            return c.indexOf('git add . --') === 0;
+        })[0];
+        assert.ok(addCall, 'staging command executed — commands: ' + JSON.stringify(loaded.commands));
+        assert.contains(addCall, ':!.dmtools/credential-helper.log',
+            'credential-serving trace never staged');
+        assert.contains(addCall, ':!.dmtools/fa-trace.log', 'fa trace log never staged');
+        assert.contains(addCall, ':!.dmtools/run-output.txt', 'fa run output never staged');
+        assert.contains(addCall, ':!.dmtools/stall-capture.log', 'stall capture never staged');
+        assert.contains(addCall, ':!.dmtools/fa-sessions', 'session store never staged');
+        assert.contains(addCall, ':!.dmtools-session-output.log',
+            'timer CLI-stdout snapshot never staged');
+        var rmCalls = loaded.commands.filter(function(c) {
+            return c.indexOf('git rm -r --cached --ignore-unmatch') === 0;
+        });
+        assert.equal(rmCalls.length, 1, 'exactly one untrack-cleanup command');
+        assert.contains(rmCalls[0], '.dmtools/credential-helper.log',
+            'already-tracked credential-helper.log is untracked (poisoned-branch self-heal)');
+        assert.contains(rmCalls[0], '.dmtools/fa-sessions',
+            'session store untracked too — untrack list must not drift from staging exclusions (gh-628)');
+    });
+
+    test('untracked machine-local runtime artifacts alone do not count as git changes (gh-628)', function() {
+        // gh-628 review round 1: `git rm -r --cached` self-healing leaves the
+        // runtime logs on disk as UNTRACKED files (target repos carry no
+        // matching .gitignore entries). The raw `git status --porcelain`
+        // filter only skipped factory-kit, so hasGitChanges became
+        // permanently true — every interrupted leg ran the recovery push and
+        // posted a false "Partial analysis work was saved" comment. A status
+        // that reports ONLY machine-runtime artifacts must count as "no
+        // changes".
+        var cmds = [];
+        var loaded = loadDevelopBugAndCreatePR({
+            cli_execute_command: function(args) {
+                cmds.push(args.command);
+                if (args.command === 'git status --porcelain') {
+                    return '?? .dmtools/copilot-sessions/\n' +
+                        '?? .dmtools/credential-helper.log\n' +
+                        '?? .dmtools/fa-trace.log\n' +
+                        '?? .dmtools/run-output.txt\n' +
+                        '?? .dmtools/stall-capture.log\n' +
+                        '?? .dmtools/fa-sessions/\n' +
+                        '?? .dmtools-session-output.log\n';
+                }
+                if (args.command.indexOf('gh pr list --head ') === 0) return '';
+                if (args.command === 'git branch --show-current') return 'ai/TS-1305\n';
+                return '';
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: {
+                key: 'TS-1305',
+                fields: { summary: 'runtime-only status noise', description: '', labels: [] }
+            },
+            metadata: { contextId: 'bug_development' },
+            jobParams: {
+                customParams: { removeLabel: 'sm_bug_development_triggered' }
+            }
+        });
+
+        assert.equal(result.path, 'interrupted');
+        assert.notOk(cmds.some(function(c) { return c.indexOf('git checkout -B') === 0; }),
+            'recovery push must not run — untracked runtime logs are not work');
+        assert.notOk(cmds.some(function(c) { return c.indexOf('git commit') === 0; }),
+            'nothing to commit — runtime-only status must not produce a commit');
+        assert.notOk(cmds.some(function(c) { return c.indexOf('git push') === 0; }),
+            'nothing to push — runtime-only status must not produce a push');
+        assert.ok(loaded.comments.length === 1 && loaded.comments[0].comment.indexOf('No partial work was produced.') !== -1,
+            'comment must honestly report no partial work — got: ' +
+            (loaded.comments[0] ? loaded.comments[0].comment : '(none)'));
     });
 
 });
