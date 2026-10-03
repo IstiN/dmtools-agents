@@ -54,7 +54,7 @@ jobs:
       (github.event_name == 'issues' &&
        github.event.label.name == 'pr_approved') ||
       github.event_name == 'workflow_dispatch'
-    uses: IstiN/dmtools-agentic-workflows/.github/workflows/factory-teammate.yml@f47d52bec6886a3c68b1d6e86bb4402d1267bb5c
+    uses: IstiN/dmtools-agentic-workflows/.github/workflows/factory-teammate.yml@2b4b83558f2e27c97b7d46cfb7beeca4ae7dfda7
     with:
       issue: ${{ github.event.issue.number || github.event.inputs.issue }}
       pr: ${{ github.event.inputs.pr || '' }}
