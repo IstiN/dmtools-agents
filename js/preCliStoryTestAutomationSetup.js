@@ -76,9 +76,11 @@ function isAncestorRef(ancestor, descendant, workingDir) {
 }
 
 function alignBranchWithBase(storyKey, branchName, baseBranch, workingDir, inputFolder) {
-    // Make sure remote refs are fresh before any merge/ancestor decision.
+    // Make sure remote refs are fresh before any merge/ancestor decision —
+    // targeted: just this branch and its base (owner rule 2026-10-03).
     try {
-        runGit(prHelper.buildOriginFetchCommand('--prune'), workingDir);
+        var targetedFetch = prHelper.buildTargetedOriginFetchCommand([branchName, baseBranch]);
+        if (targetedFetch) runGit(targetedFetch, workingDir);
     } catch (e) {
         console.warn('Could not fetch remote branches during align:', e);
     }
@@ -169,7 +171,8 @@ function checkoutBranch(storyKey, config, inputFolder) {
     }
 
     try {
-        runGit(prHelper.buildOriginFetchCommand('--prune'), workingDir);
+        var setupFetch = prHelper.buildTargetedOriginFetchCommand([branchName, config.git.baseBranch]);
+        if (setupFetch) runGit(setupFetch, workingDir);
     } catch (e) {
         console.warn('Could not fetch remote branches:', e);
     }
