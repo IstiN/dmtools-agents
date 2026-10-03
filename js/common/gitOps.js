@@ -121,11 +121,17 @@ function checkoutPRBranch(branchName, workingDir, baseBranch) {
     cmd('git config user.email "' + GIT_CONFIG.AUTHOR_EMAIL + '"');
 
     // 1. Snapshot local state so a dirty tree can never block the switch below.
-    var dirty = cleanCommandOutput(cmd('git status --porcelain') || '').trim();
+    // factory-kit excluded: the factory workflow's nested machine-infra repo
+    // (git init inside the workspace) is a gitlink `git add -A` cannot stage
+    // (exit 128, live gh-1000 timer auto-commits failing all session long).
+    var dirty = cleanCommandOutput(cmd('git status --porcelain') || '')
+        .split('\n')
+        .filter(function (line) { return line.trim() && !/^(\?\?|A )\s+factory-kit(\/|$)/.test(line); })
+        .join('\n').trim();
     var stashed = false;
     if (dirty) {
         console.log('Working tree has local changes — stashing before branch switch');
-        cmd('git add -A');
+        cmd('git add -A -- ":!factory-kit" ":!factory-kit/**"');
         try {
             cmd('git stash push -u -m "preflight-checkout-' + branchName + '"');
             stashed = true;
