@@ -214,9 +214,15 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
         }
 
         // Stage all changes
-        console.log('Staging changes...');
+        // `:!factory-kit` — the factory workflow's kit step materializes a
+        // NESTED git repo at $GITHUB_WORKSPACE/factory-kit (git init + one
+        // sparse checkout); staging a gitlink that "does not have a commit
+        // checked out" fails the whole add with exit 128 and kills the PR
+        // post-action (live gh-1000, 2026-10-03: dev leg green, "Git
+        // operations failed" — no PR). Excluded like copilot-sessions.
         runCmd({
             command: 'git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**"'
+                + ' ":!factory-kit" ":!factory-kit/**"'
         });
 
         // Check if there are changes to commit
