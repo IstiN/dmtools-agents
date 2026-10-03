@@ -115,7 +115,11 @@ function autoCommitAndPush(customParams, ticketKey) {
 
     try {
         cli_execute_command({
-            command: 'git add -A -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**"',
+            // `:!factory-kit`: the factory workflow's nested machine-infra
+            // repo (when a pin still lands it in the workspace) is a gitlink
+            // a bare `git add -A` cannot stage — exit 128 kills the timer
+            // (live: fa gh-1044 leg 2026-10-03, clip 1791017320716).
+            command: 'git add -A -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**" ":!factory-kit" ":!factory-kit/**"',
             workingDirectory: workingDir
         });
     } catch (e) {
