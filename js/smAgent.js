@@ -1361,9 +1361,50 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // any other rule sharing this action — the label is the single
             // source of truth. NOT processedKeys: the limit-1 slot moves on.
             if ((ticket.labels || []).indexOf('validation_failed') !== -1) {
-                console.log('  ⏭️  ' + key + ' validation_failed — parked; NO validation CI' +
-                            ' until a HUMAN push newer than the park clears it');
-                continue;
+                // Park RESET (dmtools-agents, live fa 2026-10-03): the
+                // human-push unpark probe lives in update_branch — but that
+                // rule only matches BEHIND PRs, so a guest PR whose head is
+                // NOT behind (fix commit on the same base) NEVER runs it
+                // and the park outlives any human push (live: vendor pushed
+                // 16:01 to five parked PRs; two hours later not one label
+                // cleared — update_branch never fired for any of them).
+                // Same identity rules as update_branch's RESET, fail closed:
+                // only a NON-machine push NEWER than the newest park event
+                // clears the label and lets this dispatch proceed.
+                var vprActor = headCommitActor(effectiveRepoInfo, ticket.headSha);
+                var vprParkedAt = parkedSince(effectiveRepoInfo, ticket.prNumber);
+                var vprMachineLogin = String(machineAuthorModule.resolveMachineAuthor(
+                    RUN_JOB_PARAMS, effectiveConfig) || '').toLowerCase();
+                var vprActorLogin = ((vprActor && vprActor.login) || '').toLowerCase();
+                var vprMachinePush = vprActorLogin === 'sm-silent-update' ||
+                    (!!vprMachineLogin && vprActorLogin === vprMachineLogin);
+                var vprFreshPush = !!(vprActor && vprActor.date && vprParkedAt &&
+                    Date.parse(vprActor.date) > Date.parse(vprParkedAt));
+                if (vprActor !== null && vprParkedAt !== null && vprFreshPush && !vprMachinePush) {
+                    if (!DRY) {
+                        try {
+                            github_remove_label({ workspace: effectiveRepoInfo.owner,
+                                repository: effectiveRepoInfo.repo,
+                                number: ticket.prNumber, label: 'validation_failed' });
+                        } catch (eVfClr) {
+                            console.warn('  ⚠️  un-park label failed: ' + (eVfClr.message || eVfClr));
+                        }
+                        try {
+                            github_create_comment({ workspace: effectiveRepoInfo.owner,
+                                repository: effectiveRepoInfo.repo, number: ticket.prNumber,
+                                body: '🅿️→▶ validation_failed cleared — human push by `' +
+                                    (vprActorLogin || 'unknown') + '` at ' + vprActor.date +
+                                    ' is newer than the park (' + vprParkedAt +
+                                    '). Re-entering validation (update_branch RESET never ' +
+                                    'ran: the head is not BEHIND — live fa 2026-10-03).' });
+                        } catch (eVfSay) {}
+                    }
+                    console.log('  ▶ ' + key + ' park cleared (fresh human push) — validation proceeds');
+                } else {
+                    console.log('  ⏭️  ' + key + ' validation_failed — parked; NO validation CI' +
+                                ' until a HUMAN push newer than the park clears it');
+                    continue;
+                }
             }
             if (!ticket.branch) {
                 console.error('  ❌ validate_pr: no head branch on ' + key + ' — skipped');
