@@ -94,6 +94,7 @@
         "js/unit-tests/test_ciCheckMirror.js",
         "js/unit-tests/test_gitPushGuard.js",
         "js/unit-tests/test_aiTeammateTemplate.js",
+        "js/unit-tests/test_workflowLint.js",
         "js/unit-tests/test_teammateRunWatchdog.js",
         "js/unit-tests/test_faSessionQuarantine.js",
         "js/unit-tests/test_smAsync.js",

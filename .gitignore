@@ -16,3 +16,6 @@ dist/
 
 # local integration-testing credentials — never commit
 dmtools.env
+
+# dmtools runtime artifacts (credential traces, helper logs)
+.dmtools/*.log
