@@ -125,7 +125,9 @@ function checkoutBranch(ticketKey, config) {
     }
 
     try {
-        runGit(prHelper.buildOriginFetchCommand('--prune'), workingDir);
+        var targetedFetch = prHelper.buildTargetedOriginFetchCommand(
+            [branchName, (config.git && config.git.baseBranch) || 'main']);
+        if (targetedFetch) runGit(targetedFetch, workingDir);
     } catch (e) {
         console.warn('Could not fetch remote branches:', e);
     }

@@ -59,7 +59,9 @@ function checkoutAutomationBranch(ticketKey, config) {
     }
 
     try {
-        runInRepo(prHelper.buildOriginFetchCommand('--prune'), workingDir);
+        var targetedFetch = prHelper.buildTargetedOriginFetchCommand(
+            [branchName, (config.git && config.git.baseBranch) || 'main']);
+        if (targetedFetch) runInRepo(targetedFetch, workingDir);
     } catch (e) {
         console.warn('Could not fetch remote branches:', e);
     }
