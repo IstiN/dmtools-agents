@@ -36,7 +36,16 @@ on:
         default: ''
 
 permissions:
-  contents: read
+  # The factory (factory-teammate.yml@e611e5f) requests this set and a
+  # reusable workflow cannot RAISE rights above its caller — the stub must
+  # grant the ceiling or every dispatch startup-fails (live dmtools-agents
+  # 2026-10-03: 'requesting actions: write, contents: write, issues: write,
+  # pull-requests: write, but is only allowed contents: read' — the issue-
+  # driven dev lane never ran in this repo).
+  actions: write
+  contents: write
+  issues: write
+  pull-requests: write
   issues: write
   pull-requests: write
 
