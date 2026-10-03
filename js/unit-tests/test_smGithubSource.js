@@ -1087,6 +1087,19 @@ suite('sm github source', function () {
         assert.equal(r.localAction, 'validate_pr', 're-dispatches CI on the head');
     });
 
+    test('rule order: merge-validated precedes sweep-stale-validating (#637 aftermath)', function () {
+        // Live fa pr-1174 (2026-10-03): with the sweep FIRST, every arm older
+        // than staleMinutes (15) was swept before the merge rule could act —
+        // at night tick cadence (~20 min, kicker cron slippage) that looped
+        // arm→sweep→arm forever on a green merge-ready head. Array order IS
+        // execution order (smAgent's rules loop).
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.rules || (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules)) || [];
+        var ids = rules.map(function (x) { return x.id; });
+        assert.ok(ids.indexOf('merge-validated') < ids.indexOf('sweep-stale-validating'),
+            'merge-validated must consume a green armed head before the staleness sweep eats the arm');
+    });
+
     test('revalidate-armed-green rule exists in sm_github.json (armed, green rollup, CI verdict missing)', function () {
         // Live dead zone (fa pr-922, 2026-09-26): armed head whose dispatched CI
         // run was lost (racing dispatch concurrency-canceled / CLI dispatch
