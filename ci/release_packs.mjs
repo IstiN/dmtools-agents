@@ -54,12 +54,15 @@ const SHARED_PREFIXES = ['js/', 'instructions/', 'prompts/', 'scripts/'];
  */
 const FACTORY_SETUP_LEGS = ['bug_development', 'story_development', 'pr_review', 'pr_rework'];
 
-/** True when any changed file lives under setup/ (a factory-setup-only release). */
+/** True when any changed file lives under setup/ or the builder itself. */
 function setupTouched() {
   if (AGENTS_INPUT) return true; // explicit dispatch: always ship a fresh asset
   const changed = changedFiles();
   if (changed === null) return true;
-  return changed.some((f) => f.startsWith('setup/'));
+  // setup/ content or THIS builder — either way the factory-setup asset
+  // must re-ship (live: the builder-only diff cut no release and the
+  // factory-setup asset never landed, 2026-10-03).
+  return changed.some((f) => f.startsWith('setup/') || f === 'ci/release_packs.mjs');
 }
 
 /** Builds dist/factory-setup-<datestamp>.zip + .sha256 sidecar. */
