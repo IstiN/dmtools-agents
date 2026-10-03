@@ -271,3 +271,77 @@ suite('developTicketAndCreatePR > failure recovery', function () {
     });
 
 });
+
+suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
+    var realLoadProjectConfig = configLoaderModule.loadProjectConfig;
+
+    test('git add excludes the factory-kit nested repo — a gitlink without a commit must not kill staging (gh-1000)', function () {
+        // Live 2026-10-03 (fa gh-1000): the factory workflow materializes a
+        // NESTED git repo at $GITHUB_WORKSPACE/factory-kit; the PR
+        // post-action's `git add .` tried to stage that gitlink and died
+        // with exit 128 ("'factory-kit/' does not have a commit checked
+        // out") AFTER a fully green dev leg — no PR, ticket rolled back.
+        // The staging pathspec must exclude factory-kit like it excludes
+        // copilot-sessions.
+        var staging = null;
+        var commands = [];
+        var base = noChangesGitCommandMock('TS-9', 'ai/TS-9');
+        // This repo's test .dmtools/config.js carries no git section; the
+        // production one always does. Wrap the real loader to guarantee the
+        // git defaults the staging path reads (resolvePRTargetBranch).
+        var loaderWithGitDefaults = Object.assign({}, configLoaderModule, {
+            loadProjectConfig: function (p) {
+                var c = realLoadProjectConfig(p) || {};
+                if (!c.git) c.git = { baseBranch: 'main' };
+                return c;
+            }
+        });
+        var mod = loadModule(
+            'js/developTicketAndCreatePR.js',
+            makeRequire({
+                './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
+                './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
+                './common/submodules.js': { pushManagedSubmodules: function () {} },
+                './common/feedbackLoop.js': {
+                    runQualityGates: function () { return { success: true }; },
+                    runPolicyGates: function () { return { success: true }; },
+                    runPostPublishGates: function () { return { success: true }; },
+                    resumeAgent: function () { return { attempted: false }; }
+                },
+                './common/autoStart.js': { triggerSmIfIdle: function () { } },
+                './common/outputFiles.js': { readOutputFile: function () { return null; } },
+                './cacheToReleases.js': {},
+                './configLoader.js': loaderWithGitDefaults,
+                './config.js': configModule,
+                './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
+                './common/commentMarkup.js': commentMarkupModule
+            }),
+            {
+                cli_execute_command: function (args) {
+                    commands.push(args.command);
+                    if (args.command.indexOf('git add . --') === 0) {
+                        staging = args.command;
+                        throw new Error('staging probe reached');
+                    }
+                    return base(args);
+                },
+                jira_post_comment: function () {},
+                jira_move_to_status: function () {},
+                jira_remove_label: function () {}
+            }
+        );
+
+        mod.action({
+            ticket: { key: 'TS-9', fields: { summary: 'staging hygiene', description: '', labels: [] } },
+            metadata: { contextId: 'sm_story_development' },
+            customParams: {}
+        });
+
+        assert.ok(staging, 'staging command executed — commands seen: ' + JSON.stringify(commands));
+        assert.ok(staging.indexOf(':!factory-kit') !== -1,
+            'staging excludes factory-kit gitlink — found: ' + staging);
+        assert.ok(staging.indexOf(':!.dmtools/copilot-sessions') !== -1,
+            'copilot-sessions exclusion preserved');
+    });
+
+});
