@@ -6,6 +6,7 @@ cacheBasicGithub/
 # dmtools local run artifacts
 .dmtools-logs/
 .dmtools-target-workingdir
+.dmtools/credential-helper.log
 cacheBasic*/
 outputs/
 input/

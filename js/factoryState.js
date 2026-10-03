@@ -1,6 +1,7 @@
 /**
  * Factory state — snapshot builder + branch publisher (owner 2026-09-23;
- * schema 2 lifecycle-timestamps owner 2026-10-01).
+ * schema 2 lifecycle-timestamps owner 2026-10-01; v3 history + backlog +
+ * optional tokens owner 2026-10-03 — all additive, schema stays 2).
  *
  * The SM tick already computes the entire machine state every pass (labels,
  * armed PR, verdicts, queue). This module renders that state as JSON and
@@ -106,19 +107,161 @@ var MERGED_WINDOW_MS = 24 * 60 * 60 * 1000;   // merged_recent retention
 var DEV_LABEL = 'agent:dev';                  // dev-leg handoff (machine label)
 var DEV_DONE_LABEL = 'ai_developed';          // dev leg produced a green PR
 
+// ── v3 additions (owner 2026-10-03; all additive — schema stays 2) ──────────
+// 1. card.history  — accumulated per-card state timeline [{state, at}]
+//    (same tick-over-tick mechanism as the schema 2 timestamps: carried
+//    forward, appended when the tick witnesses a transition). Feeds the
+//    board's details drawer + state timings.
+// 2. backlog       — open issues as board lanes, bucketed by the machine's
+//    own signals: 'blocked' label (owner hold) > assigned to the machine
+//    author (in dev) > agent:dev (queued) > inbox.
+// 3. card.tokens   — OPTIONAL per-leg token usage rows [{leg, at, prompt,
+//    completion, total}] (fa's bench reports them; factories that don't,
+//    render "—" board-side — the schema never requires the key).
+
+var BLOCKED_LABEL = 'blocked';                // owner hold — freeze switch
+var BACKLOG_BUCKETS = ['in_dev', 'queued', 'blocked', 'inbox'];
+var DEFAULT_MACHINE_AUTHOR = 'ai-teammate';   // machineAuthor deployment knob
+var HISTORY_CAP = 24;                         // bound snapshot growth
+var DEFAULT_TOKENS_FILE = 'outputs/token_usage/factory_tokens.json';
+
 /**
- * Index the previous snapshot for timestamp carry: pr-N → card across ALL
+ * Backlog bucket for an open issue — deterministic read of the machine's
+ * signals, first match wins: the 'blocked' label is the freeze switch (the
+ * reconciler skips blocked items entirely), assignment to the machine
+ * author means the machine owns it (in dev), the agent:dev label alone is
+ * a queued handoff, everything else is inbox.
+ */
+function backlogBucket(issue, machineAuthor) {
+    if (hasLabel(issue, BLOCKED_LABEL)) return 'blocked';
+    var assigned = ((issue && issue.assignees) || []).some(function (a) {
+        return a && a.login === machineAuthor;
+    }) || !!(issue && issue.assignee && issue.assignee.login === machineAuthor);
+    if (assigned) return 'in_dev';
+    if (hasLabel(issue, DEV_LABEL)) return 'queued';
+    return 'inbox';
+}
+
+/**
+ * Next per-card history: carried forward; appended when this tick
+ * witnesses a transition (state key changed, or a brand-new card appeared
+ * between ticks); the terminal entry (merged) takes the exact GitHub
+ * merged_at instead of the tick time. Without ANY previous snapshot the
+ * first entry carries no `at` — honest unknown, exactly like the schema 2
+ * label timestamps.
+ */
+function nextHistory(prevCard, prevKey, key, now, hasPrev, terminalAt) {
+    var h = ((prevCard && prevCard.history) || []).slice();
+    if (terminalAt) {
+        h.push({ state: key, at: terminalAt });
+        return capHistory(h);
+    }
+    if (!hasPrev) {
+        if (!h.length) h.push({ state: key });
+        return capHistory(h);
+    }
+    if (prevKey !== key) h.push({ state: key, at: now });
+    return capHistory(h);
+}
+
+function capHistory(h) {
+    return h.length > HISTORY_CAP ? h.slice(h.length - HISTORY_CAP) : h;
+}
+
+function normTokenRow(r) {
+    var prompt = +r.prompt || 0;
+    var completion = +r.completion || 0;
+    return {
+        leg: r.leg == null ? null : String(r.leg),
+        at: r.at == null ? null : String(r.at),
+        prompt: prompt,
+        completion: completion,
+        total: +r.total || (prompt + completion)
+    };
+}
+
+/**
+ * Normalize the optional tokens input into a map keyed 'pr-N'/'issue-N'
+ * → rows sorted by `at` ascending. Accepts either the map form (what the
+ * factory-published tokens file holds) or an array of rows carrying
+ * pr/issue fields. Bad shapes degrade to an empty map — tokens are
+ * decorative, never fatal.
+ */
+function normalizeTokens(input) {
+    var map = {};
+    if (Array.isArray(input)) {
+        input.forEach(function (r) {
+            if (!r) return;
+            var key = r.pr != null ? 'pr-' + r.pr
+                : (r.issue != null ? 'issue-' + r.issue : null);
+            if (!key) return;
+            (map[key] = map[key] || []).push(normTokenRow(r));
+        });
+    } else if (input && typeof input === 'object') {
+        Object.keys(input).forEach(function (k) {
+            if (!Array.isArray(input[k])) return;
+            map[k] = input[k].map(normTokenRow);
+        });
+    }
+    Object.keys(map).forEach(function (k) {
+        map[k].sort(function (a, b) {
+            return String(a.at || '').localeCompare(String(b.at || ''));
+        });
+    });
+    return map;
+}
+
+/**
+ * Read the OPTIONAL factory-published per-leg token usage file (path from
+ * statePublish.tokensFile, default outputs/token_usage/factory_tokens.json
+ * in the tick's checkout). Any miss — file absent, reader throws, invalid
+ * JSON, values not arrays → null; the tick publishes without tokens and
+ * the board renders "—". Never fails the tick.
+ */
+function readTokensFile(path, readFn) {
+    if (!path || typeof readFn !== 'function') return null;
+    try {
+        var parsed = JSON.parse(String(readFn(path) || ''));
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            return null;
+        }
+        var out = {};
+        Object.keys(parsed).forEach(function (k) {
+            if (Array.isArray(parsed[k])) out[k] = parsed[k];
+        });
+        return Object.keys(out).length ? out : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * Index the previous snapshot for timestamp/history carry: pr-N → card across ALL
  * lanes (a PR that merged since the last tick was an open card then — its
- * label stamps must ride the merged card), issue-N → development card.
+ * label stamps must ride the merged card), issue-N → development card OR
+ * backlog card (both carry the shared history + devStartedAt since v3).
+ * The parallel *Lane/*State maps record WHICH state key each card sat in —
+ * the v3 history accumulator appends on key change.
  */
 function prevIndex(prev) {
-    var ix = { pr: {}, issue: {} };
+    var ix = { pr: {}, issue: {}, prLane: {}, issueState: {} };
     var lanes = (prev && prev.lanes) || {};
     Object.keys(lanes).forEach(function (laneId) {
         (lanes[laneId] || []).forEach(function (c) {
             if (!c) return;
-            if (c.pr != null) ix.pr[c.pr] = c;
-            if (c.issue != null) ix.issue[c.issue] = c;
+            if (c.pr != null) { ix.pr[c.pr] = c; ix.prLane[c.pr] = laneId; }
+            if (c.issue != null) {
+                ix.issue[c.issue] = c;
+                if (!ix.issueState[c.issue]) ix.issueState[c.issue] = laneId;
+            }
+        });
+    });
+    var backlog = (prev && prev.backlog) || {};
+    BACKLOG_BUCKETS.forEach(function (bucket) {
+        (backlog[bucket] || []).forEach(function (c) {
+            if (!c || c.issue == null) return;
+            ix.issue[c.issue] = c;             // backlog card wins: it owns
+            ix.issueState[c.issue] = bucket;   // the issue-state history
         });
     });
     return ix;
@@ -163,26 +306,63 @@ function iso(ts) {
 }
 
 /**
+ * Issue-side card (development lane and/or backlog twin) — one shape for
+ * both; `extra` merges the lane-specific fields. The history array is
+ * shared by reference: lane card and backlog card always tell the same
+ * story in the drawer.
+ */
+function issueCard(it, extra, tmap, issueHistory) {
+    var card = {
+        issue: it.number,
+        title: it.title,
+        author: it.user && it.user.login,
+        assignee: firstAssignee(it),
+        labels: (it.labels || []).map(function (l) {
+            return l && l.name || l;
+        }),
+        url: it.html_url,
+        history: issueHistory[it.number] || []
+    };
+    var tokens = tmap['issue-' + it.number];
+    if (tokens) card.tokens = tokens;
+    Object.keys(extra || {}).forEach(function (k) { card[k] = extra[k]; });
+    return card;
+}
+
+function firstAssignee(it) {
+    var a = (it.assignees || [])[0];
+    return (a && a.login) || (it.assignee && it.assignee.login) || null;
+}
+
+/**
  * Build the state snapshot from data the tick already has (or can fetch in
  * one pass). `prs` = open PRs (github_list_prs shape: {number,title,labels,
  * head{ref,sha},user{login},created_at}). `mergedPrs` = recently merged PRs
  * (github_list_prs state:'merged' — merged_at set; filtered to the 24h
- * window here). `devIssues` = open issues carrying the dev handoff
- * (github_search_issues items). `runs` = dispatched ci runs for the repo.
- * `checkNames` = the stamped required checks (jobParams.validationChecks).
- * `prev` = the previous published snapshot (parsed) or null — the timestamp
- * accumulation source (see the schema 2 note above).
+ * window here). `issues` = ALL open issues (github_search_issues items,
+ * v3 backlog source; the pre-v3 `devIssues` — the agent:dev-only subset —
+ * is still accepted and feeds the development lane alone). `machineAuthor`
+ * = the deployment's machine login (assignee marking machine-managed
+ * issues). `tokens` = OPTIONAL per-leg token usage (map keyed
+ * 'pr-N'/'issue-N', or rows carrying pr/issue fields). `runs` = dispatched
+ * ci runs for the repo. `checkNames` = the stamped required checks
+ * (jobParams.validationChecks). `prev` = the previous published snapshot
+ * (parsed) or null — the timestamp AND history accumulation source (see
+ * the schema 2 note above).
  */
 function buildFactoryState(input) {
     var prs = input.prs || [];
     var mergedPrs = input.mergedPrs || [];
-    var devIssues = input.devIssues || [];
+    var issues = input.issues || input.devIssues || [];
     var runs = input.runs || [];
     var checkNames = input.checkNames || [];
     var now = input.now || new Date().toISOString();
     var nowMs = Date.parse(now);
     var hasPrev = !!(input.prev && input.prev.lanes);
     var pix = prevIndex(input.prev);
+    var machineAuthor = input.machineAuthor || DEFAULT_MACHINE_AUTHOR;
+    var tmap = normalizeTokens(input.tokens);
+    var issueHistory = {};   // issue-N → shared history (lane + backlog twin)
 
     // per-head dispatched run verdicts (newest-first list assumed, same as
     // syncValidationChecks)
@@ -213,37 +393,49 @@ function buildFactoryState(input) {
     }
 
     var lanes = {}; LANE_ORDER.forEach(function (l) { lanes[l] = []; });
+    var backlog = {}; BACKLOG_BUCKETS.forEach(function (b) { backlog[b] = []; });
 
-    // issue-side development cards (dev leg running; ai_developed hands the
-    // ticket to the PR side — those leave the lane)
-    devIssues.forEach(function (it) {
-        if (hasLabel(it, DEV_DONE_LABEL)) return;
+    // issue-side cards (v3: one pass over ALL open issues feeds BOTH the
+    // development lane and the backlog buckets — single source, one shared
+    // history per issue). ai_developed hands the ticket to the PR side —
+    // those leave the lane; they stay in the backlog only while blocked.
+    var devStartedAtByIssue = {};
+    issues.forEach(function (it) {
+        if (it == null || it.number == null) return;
+        var inDev = hasLabel(it, DEV_LABEL) && !hasLabel(it, DEV_DONE_LABEL);
+        var bucket = backlogBucket(it, machineAuthor);
+        if (hasLabel(it, DEV_DONE_LABEL) && bucket !== 'blocked') return;
         var prevCard = pix.issue[it.number];
-        var card = {
-            issue: it.number,
-            title: it.title,
-            author: it.user && it.user.login,
-            labels: (it.labels || []).map(function (l) {
-                return l && l.name || l;
-            }),
-            url: it.html_url,
-            checks: null,
-            queuePos: null,
-            _now: now
-        };
         // devStartedAt: carried while the leg keeps running; the first
         // snapshot that sees the handoff stamps it (tick-cadence exact).
-        if (hasLabel(it, DEV_LABEL)) {
+        if (inDev) {
             if (prevCard && prevCard.devStartedAt) {
-                card.devStartedAt = prevCard.devStartedAt;
+                devStartedAtByIssue[it.number] = prevCard.devStartedAt;
             } else if (hasPrev) {
-                card.devStartedAt = now;
+                devStartedAtByIssue[it.number] = now;
             }
         }
-        delete card._now;
-        lanes.development.push(card);
+        issueHistory[it.number] = nextHistory(
+            prevCard, pix.issueState[it.number], bucket, now, hasPrev);
+        if (inDev) {
+            lanes.development.push(issueCard(it, {
+                checks: null, queuePos: null,
+                devStartedAt: devStartedAtByIssue[it.number]
+            }, tmap, issueHistory));
+        }
+        // the backlog twin carries devStartedAt too — prevIndex resolves an
+        // issue to its BACKLOG card, so the next tick's carry reads it here
+        var twinExtra = { bucket: bucket };
+        if (devStartedAtByIssue[it.number]) {
+            twinExtra.devStartedAt = devStartedAtByIssue[it.number];
+        }
+        (backlog[bucket] = backlog[bucket] || []).push(
+            issueCard(it, twinExtra, tmap, issueHistory));
     });
     lanes.development.sort(function (a, b) { return a.issue - b.issue; });
+    BACKLOG_BUCKETS.forEach(function (b) {
+        (backlog[b] || []).sort(function (x, y) { return x.issue - y.issue; });
+    });
 
     // open PR cards
     prs.map(function (pr) {
@@ -263,13 +455,15 @@ function buildFactoryState(input) {
             queuePos: null,
             _now: now
         };
+        var lane = laneOf({ labels: card.labels });
         mergeLabelTimestamps(card, pix.pr[pr.number], hasPrev);
+        card.history = nextHistory(pix.pr[pr.number], pix.prLane[pr.number],
+            lane, now, hasPrev);
+        if (tmap['pr-' + pr.number]) card.tokens = tmap['pr-' + pr.number];
         delete card._now;
-        return card;
-    }).sort(function (a, b) { return a.pr - b.pr; })
-      .forEach(function (card) {
-          lanes[laneOf({ labels: card.labels })].push(card);
-      });
+        return { lane: lane, card: card };
+    }).sort(function (a, b) { return a.card.pr - b.card.pr; })
+      .forEach(function (e) { lanes[e.lane].push(e.card); });
 
     // recently merged PRs (terminal lane) — GitHub fields carry the ends,
     // the accumulated label stamps ride over from the card's open life
@@ -294,6 +488,11 @@ function buildFactoryState(input) {
             _now: now
         };
         carryTimestamps(card, prevCard);
+        // the merge is the terminal history entry — stamped with the exact
+        // GitHub merged_at, not the tick time
+        card.history = nextHistory(prevCard, pix.prLane[pr.number],
+            'merged_recent', now, true, card.mergedAt || now);
+        if (tmap['pr-' + pr.number]) card.tokens = tmap['pr-' + pr.number];
         delete card._now;
         return card;
     }).sort(function (a, b) {
@@ -318,6 +517,10 @@ function buildFactoryState(input) {
         lanes: lanes,
         counts: LANE_ORDER.reduce(function (m, l) {
             m[l] = (lanes[l] || []).length; return m;
+        }, {}),
+        backlog: backlog,
+        backlogCounts: BACKLOG_BUCKETS.reduce(function (m, b) {
+            m[b] = (backlog[b] || []).length; return m;
         }, {})
     };
 }
@@ -532,11 +735,20 @@ module.exports = {
     prevIndex: prevIndex,
     mergeLabelTimestamps: mergeLabelTimestamps,
     carryTimestamps: carryTimestamps,
+    backlogBucket: backlogBucket,
+    nextHistory: nextHistory,
+    normalizeTokens: normalizeTokens,
+    readTokensFile: readTokensFile,
     LANE_ORDER: LANE_ORDER,
     LANE_ORDER_V1: LANE_ORDER_V1,
     TS_BY_LABEL: TS_BY_LABEL,
     LANE_ENTERED_AT: LANE_ENTERED_AT,
+    BACKLOG_BUCKETS: BACKLOG_BUCKETS,
     DEV_LABEL: DEV_LABEL,
     DEV_DONE_LABEL: DEV_DONE_LABEL,
+    BLOCKED_LABEL: BLOCKED_LABEL,
+    DEFAULT_MACHINE_AUTHOR: DEFAULT_MACHINE_AUTHOR,
+    HISTORY_CAP: HISTORY_CAP,
+    DEFAULT_TOKENS_FILE: DEFAULT_TOKENS_FILE,
     DEFAULT_TAG: DEFAULT_TAG
 };
