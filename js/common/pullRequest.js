@@ -229,9 +229,17 @@ function ensureRemoteBranchRef(runCommand, workingDir, branchName) {
 }
 
 function readTrackedStatus(runCommand, workingDir) {
-    return cleanCommandOutput(
+    var status = cleanCommandOutput(
         runCommand('git status --porcelain --ignore-submodules=dirty', workingDir) || ''
     );
+    // factory-kit/ is the factory workflow's machine-infra nested repo
+    // (git init inside the workspace — awf factory-teammate.yml), not agent
+    // work; as an untracked gitlink it must not fail the working-tree-clean
+    // gate before the origin sync (live gh-1000 2026-10-03: staging was
+    // fixed, then THIS gate tripped on "?? factory-kit/").
+    return status.split('\n')
+        .filter(function (line) { return !/^(\?\?|A )\s+factory-kit(\/|$)/.test(line); })
+        .join('\n');
 }
 
 function readStagedDiffStat(runCommand, workingDir) {
