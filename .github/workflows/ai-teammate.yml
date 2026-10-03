@@ -46,8 +46,6 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
-  issues: write
-  pull-requests: write
 
 concurrency:
   group: ai-teammate-${{ github.event.issue.number || github.event.inputs.issue }}
