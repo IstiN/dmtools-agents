@@ -53,10 +53,12 @@ function action(params) {
             console.warn('Failed to configure git author:', e);
         }
 
-        // Fetch latest remote state
+        // Fetch latest remote state — target branch only (owner 2026-10-03:
+        // blanket fetches are banned; feature-branch checks use ls-remote).
         try {
-            cli_execute_command({ command: prHelper.buildOriginFetchCommand('--prune') });
-            console.log('Fetched remote');
+            var baseFetch = prHelper.buildTargetedOriginFetchCommand([config.git.baseBranch]);
+            if (baseFetch) cli_execute_command({ command: baseFetch });
+            console.log('Fetched target branch:', config.git.baseBranch);
         } catch (e) {
             console.warn('Could not fetch remote branches:', e);
         }

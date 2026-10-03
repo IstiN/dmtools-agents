@@ -44,8 +44,14 @@ function _switchToBranch(branchName, cmd) {
         return cleanCommandOutput(cmd('git branch --list "' + branchName + '"') || '').trim() !== '';
     };
 
-    // Update remote refs; blobless repos already have the commit graph
-    cmd(prHelper.buildOriginFetchCommand('--prune'));
+    // Targeted fetch of just this branch (owner rule 2026-10-03: blanket
+    // `fetch origin --prune` cost 134s on big repos; the base branch is
+    // fetched explicitly by ensureRemoteBranchRef in checkoutPRBranch).
+    // Forced remote-tracking refspec (+refs/heads/<b>:refs/remotes/origin/<b>)
+    // — a plain '<branch>:<branch>' refspec would try to update the local
+    // branch ref and fails when HEAD is on that branch.
+    var targetedFetch = prHelper.buildTargetedOriginFetchCommand([branchName]);
+    if (targetedFetch) cmd(targetedFetch);
 
     if (localBranchExists()) {
         cmd('git checkout ' + branchName);
@@ -53,10 +59,6 @@ function _switchToBranch(branchName, cmd) {
         // local and remote branches diverge and 'git pull' fails with
         // "Need to specify how to reconcile divergent branches".
         // The remote is always the source of truth for an existing PR branch.
-        // NOTE: fetch with explicit remote-tracking refspec (+refs/heads/<b>:refs/remotes/origin/<b>)
-        // — a plain '<branch>:<branch>' refspec would try to update the local branch ref
-        // and fails when HEAD is currently on that branch ("Refusing to fetch into current branch").
-        cmd(prHelper.buildOriginFetchCommand('+refs/heads/' + branchName + ':refs/remotes/origin/' + branchName));
         cmd('git reset --hard origin/' + branchName);
     } else {
         const remoteBranch = cleanCommandOutput(cmd('git ls-remote --heads origin ' + branchName) || '');
