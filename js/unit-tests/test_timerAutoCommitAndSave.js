@@ -9,6 +9,8 @@
  * Uses: loadModule(), makeRequire(), assert, test(), suite()
  */
 
+var gitStagingModule = loadModule('js/common/gitStaging.js');
+
 function loadTimer(mocks, opts) {
     opts = opts || {};
     var uploadRawFileCalls = [];
@@ -44,6 +46,7 @@ function loadTimer(mocks, opts) {
 
     var requireFn = makeRequire({
         './common/releaseArtefacts.js': releaseArtefactsMock,
+        './common/gitStaging.js': gitStagingModule,
         './configLoader.js': configLoaderMock
     });
 
@@ -124,11 +127,57 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
             currentCliOutput: ''
         });
         assert.ok(cliCalls.length >= 4, 'should call status, add, commit, push');
-        assert.contains(cliCalls[1], 'git rm -r --ignore-unmatch .dmtools/copilot-sessions');
+        assert.contains(cliCalls[1], 'git rm -r --cached --ignore-unmatch .dmtools/copilot-sessions');
         assert.contains(cliCalls[2], 'git add -A');
         assert.contains(cliCalls[3], 'git commit');
         assert.contains(cliCalls[3], 'PROJ-123');
         assert.contains(cliCalls[4], 'git push');
+    });
+
+    test('never stages machine-local .dmtools runtime logs — credential-helper.log leaked onto ai/gh-628 (gh-628)', function() {
+        // Live 2026-10-03 (ai/gh-628 dev legs): the machine's runtime files
+        // live INSIDE the committed .dmtools/ directory (config.js,
+        // runners/), so the directory itself cannot be ignored — and the
+        // timer's `git add -A` swept .dmtools/credential-helper.log (the
+        // credential-helper's serving trace) into three WIP commits. The
+        // add pathspec must exclude the runtime logs the same way it
+        // excludes copilot-sessions, and the rm cleanup must untrack
+        // already-poisoned branches.
+        var cliCalls = [];
+        var m = loadTimer({
+            cli_execute_command: function(args) {
+                cliCalls.push(args.command);
+                if (args.command.indexOf('git status') !== -1) return 'M file.txt\n';
+                return '';
+            }
+        });
+        m.action({
+            ticket: { key: 'PROJ-123' },
+            jobParams: {
+                customParams: {
+                    targetRepository: { workingDir: '/some/dir' }
+                },
+                metadata: { contextId: 'sf_story_development' }
+            },
+            currentCliOutput: ''
+        });
+        var rmCalls = cliCalls.filter(function(c) { return c.indexOf('git rm -r --cached --ignore-unmatch') === 0; });
+        assert.equal(rmCalls.length, 1, 'exactly one untrack-cleanup command');
+        assert.contains(rmCalls[0], '.dmtools/credential-helper.log',
+            'already-tracked credential-helper.log is untracked (poisoned-branch self-heal)');
+        assert.contains(rmCalls[0], '.dmtools/fa-sessions',
+            'session store untracked too — untrack list must not drift from staging exclusions (gh-628)');
+        assert.contains(rmCalls[0], '.dmtools/fa-trace.log', 'fa runtime trace untracked');
+        var addCall = cliCalls.filter(function(c) { return c.indexOf('git add -A') === 0; })[0];
+        assert.ok(addCall, 'staging command present');
+        assert.contains(addCall, ':!.dmtools/credential-helper.log',
+            'credential-serving trace never staged');
+        assert.contains(addCall, ':!.dmtools/fa-trace.log', 'fa trace log never staged');
+        assert.contains(addCall, ':!.dmtools/run-output.txt', 'fa run output never staged');
+        assert.contains(addCall, ':!.dmtools/stall-capture.log', 'stall capture never staged');
+        assert.contains(addCall, ':!.dmtools/fa-sessions', 'session store never staged');
+        assert.contains(addCall, ':!.dmtools-session-output.log',
+            'the timer\'s own CLI-stdout snapshot (crash-leftover) never staged');
     });
 
     test('refuses to commit/push when HEAD is on baseBranch', function() {

@@ -5,6 +5,7 @@
 // Declared once at module scope — every loader below references it in its
 // makeRequire() map, so it must exist before any of them run.
 var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+var gitStagingModule = loadModule('js/common/gitStaging.js');
 
 function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
     return loadModule(
@@ -22,6 +23,7 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': { readOutputFile: function () { return null; } },
             './cacheToReleases.js': {},
+            './common/gitStaging.js': gitStagingModule,
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } }
@@ -60,6 +62,7 @@ function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks) {
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': { readOutputFile: function () { return null; } },
             './cacheToReleases.js': {},
+            './common/gitStaging.js': gitStagingModule,
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } }
@@ -311,6 +314,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 './common/autoStart.js': { triggerSmIfIdle: function () { } },
                 './common/outputFiles.js': { readOutputFile: function () { return null; } },
                 './cacheToReleases.js': {},
+                './common/gitStaging.js': gitStagingModule,
                 './configLoader.js': loaderWithGitDefaults,
                 './config.js': configModule,
                 './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
@@ -342,6 +346,85 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
             'staging excludes factory-kit gitlink — found: ' + staging);
         assert.ok(staging.indexOf(':!.dmtools/copilot-sessions') !== -1,
             'copilot-sessions exclusion preserved');
+    });
+
+    test('git add never stages machine-local .dmtools runtime logs (gh-628)', function () {
+        // Live 2026-10-03 (ai/gh-628): .dmtools/credential-helper.log — the
+        // credential helper's serving trace — was swept into three commits
+        // on the ticket branch by broad `git add` staging. The runtime logs
+        // live next to COMMITTED files (config.js, runners/), so the
+        // post-action's staging pathspec must exclude them explicitly, the
+        // same way it excludes copilot-sessions; the rm cleanup untracks
+        // already-poisoned branches.
+        var staging = null;
+        var cleanup = null;
+        var base = noChangesGitCommandMock('TS-9', 'ai/TS-9');
+        var realLoadProjectConfig = configLoaderModule.loadProjectConfig;
+        // Same loader wrapper as the factory-kit test: guarantee the git
+        // defaults the staging path (resolvePRTargetBranch) reads.
+        var loaderWithGitDefaults = Object.assign({}, configLoaderModule, {
+            loadProjectConfig: function (p) {
+                var c = realLoadProjectConfig(p) || {};
+                if (!c.git) c.git = { baseBranch: 'main' };
+                return c;
+            }
+        });
+        var mod = loadModule(
+            'js/developTicketAndCreatePR.js',
+            makeRequire({
+                './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
+                './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
+                './common/submodules.js': { pushManagedSubmodules: function () {} },
+                './common/feedbackLoop.js': {
+                    runQualityGates: function () { return { success: true }; },
+                    runPolicyGates: function () { return { success: true }; },
+                    runPostPublishGates: function () { return { success: true }; },
+                    resumeAgent: function () { return { attempted: false }; }
+                },
+                './common/autoStart.js': { triggerSmIfIdle: function () { } },
+                './common/outputFiles.js': { readOutputFile: function () { return null; } },
+                './cacheToReleases.js': {},
+                './common/gitStaging.js': gitStagingModule,
+                './configLoader.js': loaderWithGitDefaults,
+                './config.js': configModule,
+                './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
+                './common/commentMarkup.js': commentMarkupModule
+            }),
+            {
+                cli_execute_command: function (args) {
+                    if (args.command.indexOf('git rm -r --cached --ignore-unmatch') === 0) {
+                        cleanup = args.command;
+                        return '';
+                    }
+                    if (args.command.indexOf('git add . --') === 0) {
+                        staging = args.command;
+                        throw new Error('staging probe reached');
+                    }
+                    return base(args);
+                },
+                jira_post_comment: function () {},
+                jira_move_to_status: function () {},
+                jira_remove_label: function () {}
+            }
+        );
+
+        mod.action({
+            ticket: { key: 'TS-9', fields: { summary: 'staging hygiene', description: '', labels: [] } },
+            metadata: { contextId: 'sm_story_development' },
+            customParams: {}
+        });
+
+        assert.ok(staging, 'staging command executed');
+        assert.contains(staging, ':!.dmtools/credential-helper.log',
+            'credential-serving trace never staged');
+        assert.contains(staging, ':!.dmtools/fa-sessions', 'session store never staged');
+        assert.contains(staging, ':!.dmtools-session-output.log',
+            'timer CLI-stdout snapshot never staged');
+        assert.ok(cleanup, 'untrack-cleanup command executed');
+        assert.contains(cleanup, '.dmtools/credential-helper.log',
+            'already-tracked credential-helper.log is untracked');
+        assert.contains(cleanup, '.dmtools/fa-sessions',
+            'session store untracked too — untrack list must not drift from staging exclusions (gh-628)');
     });
 
 });
