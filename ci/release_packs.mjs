@@ -20,9 +20,9 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync,
-  copyFileSync, chmodSync, mkdtempSync, rmSync, statSync, utimesSync,
+  copyFileSync, cpSync, chmodSync, mkdtempSync, rmSync, statSync, utimesSync,
 } from 'node:fs';
-import { basename, dirname, join, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 
@@ -40,6 +40,63 @@ const DRY_RUN = hasFlag('--dry-run');
 
 /** Directory prefixes whose change affects every agent (shared runtime code). */
 const SHARED_PREFIXES = ['js/', 'instructions/', 'prompts/', 'scripts/'];
+
+/**
+ * The factory-setup asset (owner mandate 2026-10-03: "no factory-agents tree
+ * checkout in the factory") — the workflow glue the factory needs at run
+ * time, shipped as a release zip so awf's factory-teammate.yml never clones
+ * the dmtools-agents tree:
+ *   setup/    — the whole toolbelt (install.sh, cache.sh, review-verdict.sh,
+ *               fa-session.sh, per-tool installers, _common.sh)
+ *   scripts/git-push-guard.sh — the guard fallback (kit stays primary)
+ *   configs/  — the four leg entry configs the guard job names as its
+ *               parent-config fallback (pack launch.json stays primary)
+ */
+const FACTORY_SETUP_LEGS = ['bug_development', 'story_development', 'pr_review', 'pr_rework'];
+
+/** True when any changed file lives under setup/ (a factory-setup-only release). */
+function setupTouched() {
+  if (AGENTS_INPUT) return true; // explicit dispatch: always ship a fresh asset
+  const changed = changedFiles();
+  if (changed === null) return true;
+  return changed.some((f) => f.startsWith('setup/'));
+}
+
+/** Builds dist/factory-setup-<datestamp>.zip + .sha256 sidecar. */
+function buildFactorySetup() {
+  const stamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14); // YYYYMMDDHHMMSS
+  mkdirSync(OUT_DIR, { recursive: true });
+  const zipPath = resolve(OUT_DIR, `factory-setup-${stamp}.zip`);
+  const staging = mkdtempSync(join(tmpdir(), 'factory-setup-'));
+  try {
+    mkdirSync(join(staging, 'configs'), { recursive: true });
+    cpSync(join(ROOT, 'setup'), join(staging, 'setup'), { recursive: true });
+    mkdirSync(join(staging, 'scripts'), { recursive: true });
+    copyFileSync(join(ROOT, 'scripts', 'git-push-guard.sh'), join(staging, 'scripts', 'git-push-guard.sh'));
+    for (const leg of FACTORY_SETUP_LEGS) {
+      copyFileSync(join(ROOT, `${leg}.json`), join(staging, 'configs', `${leg}.json`));
+    }
+    // Plain integrity inventory (not a dmtools agent-pack manifest — this is
+    // workflow glue, never resolved by the agent pack registry).
+    const sums = [];
+    const walk = (dir, rel) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const relPath = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) walk(join(dir, e.name), relPath);
+        else sums.push(`${createHash('sha256').update(readFileSync(join(dir, e.name))).digest('hex')}  ${relPath}`);
+      }
+    };
+    walk(staging, '');
+    writeFileSync(join(staging, 'SHA256SUMS'), `${sums.sort().join('\n')}\n`);
+    execSync(`cd ${JSON.stringify(staging)} && zip -q -r ${JSON.stringify(zipPath)} .`);
+    const digest = createHash('sha256').update(readFileSync(zipPath)).digest('hex');
+    writeFileSync(`${zipPath}.sha256`, `${digest}  ${basename(zipPath)}\n`);
+    console.log(`built ${basename(zipPath)} (${sums.length} files)`);
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
+  return zipPath;
+}
 
 function arg(name) {
   // Support both "--flag value" and "--flag=value".
@@ -197,8 +254,9 @@ function validatePack(zipPath) {
 function main() {
   const versions = readVersions();
   const affected = computeAffectedSet();
-  if (affected.length === 0) {
-    console.log('No affected agents — nothing to release.');
+  const setupOnly = setupTouched();
+  if (affected.length === 0 && !setupOnly) {
+    console.log('No affected agents and no setup change — nothing to release.');
     // dist/ may not exist yet (the build below is skipped) — create it or
     // the marker write throws ENOENT and the job fails (live: release run
     // 2026-09-30T09:11 on a push whose BASE diff was empty).
@@ -206,7 +264,7 @@ function main() {
     writeFileSync(join(OUT_DIR, '.no-release'), 'no affected agents\n');
     return;
   }
-  console.log(`Affected agents (${affected.length}): ${affected.join(', ')}`);
+  console.log(`Affected agents (${affected.length}): ${affected.join(', ') || '<none — factory-setup-only>'}`);
   mkdirSync(OUT_DIR, { recursive: true });
 
   // Bump ONLY the affected agents (incremental versioning), but BUILD and
@@ -224,20 +282,26 @@ function main() {
     const current = versions[agent] || '0.1.0';
     const next = affected.includes(agent) ? bump(current, BUMP) : current;
     console.log(`\n=== ${agent}: ${current}${next !== current ? ` -> ${next}` : ' (unchanged)'} ===`);
-    if (!DRY_RUN) {
+    if (!DRY_RUN && affected.length > 0) {
       const zip = buildPack(agent, next);
       augmentLaunchSurface(agent, zip);
       const count = validatePack(zip);
       console.log(`validated ${basename(zip)} (${count} files)`);
       versions[agent] = next;
     }
-    catalog[agent] = next;
+    catalog[agent] = affected.length > 0 ? versions[agent] : current;
   }
 
   if (!DRY_RUN) {
-    writeFileSync(VERSIONS_FILE, JSON.stringify(versions, null, 2) + '\n');
+    if (affected.length > 0) {
+      writeFileSync(VERSIONS_FILE, JSON.stringify(versions, null, 2) + '\n');
+    }
+    // The factory-setup asset rides EVERY release (self-contained snapshot,
+    // same rule as the agent packs) — the factory downloads it by tag, so a
+    // stale asset on a fresh tag would silently pin old workflow glue.
+    buildFactorySetup();
     writeFileSync(join(OUT_DIR, 'catalog.json'), JSON.stringify(catalog, null, 2) + '\n');
-    console.log(`\nWrote versions.json and ${OUT_DIR}/catalog.json (${agents.length} agents, ${affected.length} bumped)`);
+    console.log(`\nWrote ${OUT_DIR}/catalog.json (${agents.length} agents, ${affected.length} bumped, factory-setup shipped)`);
   }
 }
 
