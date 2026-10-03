@@ -189,6 +189,24 @@ function fetchAdditionalHistoryForMergeBase(runCommand, workingDir, baseBranch, 
     return false;
 }
 
+/**
+ * Targeted origin fetch: ONLY the named branches, with forced remote-tracking
+ * refspecs (owner rule 2026-10-03: never blanket-fetch — `fetch origin --prune`
+ * pulled every ref of a big repo for 134s; legs need the target branch and the
+ * issue branch, nothing else. Agents that want history fetch it themselves).
+ *
+ * @param {string[]} branches - branch names to fetch
+ * @returns {string|null} the git command, or null when no safe names remain
+ */
+function buildTargetedOriginFetchCommand(branches) {
+    var list = (branches || []).filter(function (b) { return b && isSafeRefName(b); });
+    if (!list.length) return null;
+    var refspecs = list.map(function (b) {
+        return '+refs/heads/' + b + ':refs/remotes/origin/' + b;
+    });
+    return 'git -c fetch.recurseSubmodules=no fetch origin ' + refspecs.join(' ');
+}
+
 function buildOriginFetchCommand(refSpec) {
     return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
 }
@@ -518,6 +536,7 @@ module.exports = {
     sanitizeTitle: sanitizeTitle,
     sanitizeCommitMessage: sanitizeCommitMessage,
     buildOriginFetchCommand: buildOriginFetchCommand,
+    buildTargetedOriginFetchCommand: buildTargetedOriginFetchCommand,
     ensureRemoteBranchRef: ensureRemoteBranchRef,
     readTrackedStatus: readTrackedStatus,
     readStagedDiffStat: readStagedDiffStat,
