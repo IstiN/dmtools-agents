@@ -232,7 +232,8 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
     }
 
     try {
-        runCmd({ command: prHelper.buildOriginFetchCommand('--prune') });
+        var targetedFetch = prHelper.buildTargetedOriginFetchCommand([branchName, rebaseBase]);
+        if (targetedFetch) runCmd({ command: targetedFetch });
     } catch (e) {
         console.warn('Could not fetch remote branches:', e);
     }
