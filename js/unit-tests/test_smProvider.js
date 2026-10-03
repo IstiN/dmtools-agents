@@ -112,6 +112,20 @@ suite('smProvider', function () {
         // StatusContext items carry `context`, not `name`:
         rollup = [{ context: 'kicker / sm-liveness', conclusion: 'SUCCESS' }];
         assert.equal(p.prStatus(24).checkConclusion, 'pending');
+        // dmtools-agents#635 (live fa pr-1174): the Machine Merge Bot's OWN
+        // check on the head must not shadow the verdict — queued/running
+        // 'merge / merge' next to green is still GREEN (the bot waited on
+        // itself and merge-validated never matched), and bookkeeping-only
+        // heads stay pending.
+        rollup = [{ name: 'merge / merge', status: 'QUEUED', conclusion: null },
+                  { name: 'Quality gate', conclusion: 'SUCCESS' },
+                  { name: 'JS engine integration (quickjs-ng)', conclusion: 'SUCCESS' },
+                  { name: 'Binaries smoke gate', conclusion: 'SUCCESS' }];
+        assert.equal(p.prStatus(25).checkConclusion, 'green',
+            'queued merge-lane check never demotes a green validation rollup');
+        rollup = [{ name: 'merge / merge', conclusion: 'SUCCESS' }];
+        assert.equal(p.prStatus(26).checkConclusion, 'pending',
+            'merge-lane bookkeeping alone is still no verdict');
     });
 
     test('github: prStatus uses pullRequestId + REST check-runs rollup (live shape)', function () {
