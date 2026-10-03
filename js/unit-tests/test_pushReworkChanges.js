@@ -17,6 +17,7 @@
 // closure below — a latent defect masked in run_all.json by another test file
 // leaking the same sloppy-mode global, but breaking isolated per-file runs).
 var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+var gitStagingModule = loadModule('js/common/gitStaging.js');
 
 function makeOutputFiles(fileMap) {
     return loadModule('js/common/outputFiles.js', makeRequire({
@@ -75,6 +76,7 @@ function loadPushReworkChangesModule(fileMap) {
     var mod = loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/gitStaging.js': gitStagingModule,
             './configLoader.js': { loadProjectConfig: function() { return {}; } },
             './common/scm.js': { createScm: function() { return scm; } },
             './common/submodules.js': {},
@@ -228,6 +230,7 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/gitStaging.js': gitStagingModule,
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
             './common/scm.js': {},
@@ -385,6 +388,8 @@ suite('pushReworkChanges.commitAndPush — base-branch safety invariant', functi
         assert.equal(rmCalls.length, 1, 'exactly one untrack-cleanup command');
         assert.contains(rmCalls[0], '.dmtools/credential-helper.log',
             'already-tracked credential-helper.log is untracked (poisoned-branch self-heal)');
+        assert.contains(rmCalls[0], '.dmtools/fa-sessions',
+            'session store untracked too — untrack list must not drift from staging exclusions (gh-628)');
     });
 });
 
@@ -437,6 +442,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
     var mod = loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/gitStaging.js': gitStagingModule,
             './configLoader.js': {
                 loadProjectConfig: function() { return baseConfig(opts && opts.config); },
                 resolveInstructions: function() { return { jobParamPatch: {} }; },
@@ -635,6 +641,7 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
     return loadModule(
         'js/pushReworkChanges.js',
         makeRequire({
+            './common/gitStaging.js': gitStagingModule,
             './configLoader.js': configLoaderModule,
             './common/scm.js': { createScm: function() { return {}; } },
             './common/submodules.js': { pushManagedSubmodules: function() {} },

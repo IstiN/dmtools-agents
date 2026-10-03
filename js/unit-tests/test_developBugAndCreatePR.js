@@ -33,11 +33,13 @@ function loadDevelopBugAndCreatePR(mocks) {
         allMocks
     );
 var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+var gitStagingModule = loadModule('js/common/gitStaging.js');
 
     var mod = loadModule(
         'js/developBugAndCreatePR.js',
         makeRequire({
             './config.js': configModule,
+            './common/gitStaging.js': gitStagingModule,
             './configLoader.js': configLoaderModule,
             './common/outputFiles.js': outputFiles,
             './developTicketAndCreatePR.js': { action: function() { return { success: true, path: 'delegated' }; } }
@@ -269,6 +271,59 @@ suite('developBugAndCreatePR', function() {
         assert.equal(rmCalls.length, 1, 'exactly one untrack-cleanup command');
         assert.contains(rmCalls[0], '.dmtools/credential-helper.log',
             'already-tracked credential-helper.log is untracked (poisoned-branch self-heal)');
+        assert.contains(rmCalls[0], '.dmtools/fa-sessions',
+            'session store untracked too — untrack list must not drift from staging exclusions (gh-628)');
+    });
+
+    test('untracked machine-local runtime artifacts alone do not count as git changes (gh-628)', function() {
+        // gh-628 review round 1: `git rm -r --cached` self-healing leaves the
+        // runtime logs on disk as UNTRACKED files (target repos carry no
+        // matching .gitignore entries). The raw `git status --porcelain`
+        // filter only skipped factory-kit, so hasGitChanges became
+        // permanently true — every interrupted leg ran the recovery push and
+        // posted a false "Partial analysis work was saved" comment. A status
+        // that reports ONLY machine-runtime artifacts must count as "no
+        // changes".
+        var cmds = [];
+        var loaded = loadDevelopBugAndCreatePR({
+            cli_execute_command: function(args) {
+                cmds.push(args.command);
+                if (args.command === 'git status --porcelain') {
+                    return '?? .dmtools/copilot-sessions/\n' +
+                        '?? .dmtools/credential-helper.log\n' +
+                        '?? .dmtools/fa-trace.log\n' +
+                        '?? .dmtools/run-output.txt\n' +
+                        '?? .dmtools/stall-capture.log\n' +
+                        '?? .dmtools/fa-sessions/\n' +
+                        '?? .dmtools-session-output.log\n';
+                }
+                if (args.command.indexOf('gh pr list --head ') === 0) return '';
+                if (args.command === 'git branch --show-current') return 'ai/TS-1305\n';
+                return '';
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: {
+                key: 'TS-1305',
+                fields: { summary: 'runtime-only status noise', description: '', labels: [] }
+            },
+            metadata: { contextId: 'bug_development' },
+            jobParams: {
+                customParams: { removeLabel: 'sm_bug_development_triggered' }
+            }
+        });
+
+        assert.equal(result.path, 'interrupted');
+        assert.notOk(cmds.some(function(c) { return c.indexOf('git checkout -B') === 0; }),
+            'recovery push must not run — untracked runtime logs are not work');
+        assert.notOk(cmds.some(function(c) { return c.indexOf('git commit') === 0; }),
+            'nothing to commit — runtime-only status must not produce a commit');
+        assert.notOk(cmds.some(function(c) { return c.indexOf('git push') === 0; }),
+            'nothing to push — runtime-only status must not produce a push');
+        assert.ok(loaded.comments.length === 1 && loaded.comments[0].comment.indexOf('No partial work was produced.') !== -1,
+            'comment must honestly report no partial work — got: ' +
+            (loaded.comments[0] ? loaded.comments[0].comment : '(none)'));
     });
 
 });

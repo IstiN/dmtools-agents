@@ -5,6 +5,7 @@
 // Declared once at module scope — every loader below references it in its
 // makeRequire() map, so it must exist before any of them run.
 var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+var gitStagingModule = loadModule('js/common/gitStaging.js');
 
 function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
     return loadModule(
@@ -22,6 +23,7 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': { readOutputFile: function () { return null; } },
             './cacheToReleases.js': {},
+            './common/gitStaging.js': gitStagingModule,
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } }
@@ -60,6 +62,7 @@ function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks) {
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': { readOutputFile: function () { return null; } },
             './cacheToReleases.js': {},
+            './common/gitStaging.js': gitStagingModule,
             './configLoader.js': configLoaderModule,
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } }
@@ -311,6 +314,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 './common/autoStart.js': { triggerSmIfIdle: function () { } },
                 './common/outputFiles.js': { readOutputFile: function () { return null; } },
                 './cacheToReleases.js': {},
+                './common/gitStaging.js': gitStagingModule,
                 './configLoader.js': loaderWithGitDefaults,
                 './config.js': configModule,
                 './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
@@ -380,6 +384,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 './common/autoStart.js': { triggerSmIfIdle: function () { } },
                 './common/outputFiles.js': { readOutputFile: function () { return null; } },
                 './cacheToReleases.js': {},
+                './common/gitStaging.js': gitStagingModule,
                 './configLoader.js': loaderWithGitDefaults,
                 './config.js': configModule,
                 './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
@@ -418,6 +423,8 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
         assert.ok(cleanup, 'untrack-cleanup command executed');
         assert.contains(cleanup, '.dmtools/credential-helper.log',
             'already-tracked credential-helper.log is untracked');
+        assert.contains(cleanup, '.dmtools/fa-sessions',
+            'session store untracked too — untrack list must not drift from staging exclusions (gh-628)');
     });
 
 });

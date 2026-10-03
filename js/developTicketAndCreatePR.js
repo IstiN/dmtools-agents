@@ -15,6 +15,7 @@ const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js')
 var cacheToReleases = require('./cacheToReleases.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 const commentMarkup = require('./common/commentMarkup.js');
+const gitStaging = require('./common/gitStaging.js');
 
 function hasPrApprovedLabel(ticket) {
     var labels = (ticket && ticket.fields && ticket.fields.labels) ? ticket.fields.labels : [];
@@ -199,16 +200,12 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
         });
 
         try {
-            // gh-628: machine-local runtime logs (the credential helper's
-            // serving trace, fa trace/run logs, stall capture, the timer's
-            // CLI-stdout snapshot) live inside the committed .dmtools/
-            // directory — untrack them on already-poisoned branches; the
-            // staging pathspec below keeps them out going forward.
+            // gh-628: machine-local runtime logs live inside the committed
+            // .dmtools/ directory — untrack them on already-poisoned
+            // branches; the staging pathspec below keeps them out going
+            // forward. Shared canonical list: js/common/gitStaging.js.
             runCmd({
-                command: 'git rm -r --cached --ignore-unmatch .dmtools/copilot-sessions' +
-                    ' .dmtools/credential-helper.log .dmtools/fa-trace.log' +
-                    ' .dmtools/run-output.txt .dmtools/stall-capture.log' +
-                    ' .dmtools-session-output.log'
+                command: gitStaging.buildUntrackCommand()
             });
         } catch (cleanupErr) {
             console.warn('Could not remove tracked Copilot session cache before staging:', cleanupErr);
@@ -221,18 +218,11 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
         // checked out" fails the whole add with exit 128 and kills the PR
         // post-action (live gh-1000, 2026-10-03: dev leg green, "Git
         // operations failed" — no PR). Excluded like copilot-sessions.
-        // `:!.dmtools/...` runtime logs — gh-628: .dmtools/credential-
-        // helper.log (the credential helper's serving trace) was swept into
-        // three ticket-branch commits by this very add; the runtime logs
-        // sit next to COMMITTED files (config.js, runners/), so the
-        // directory itself cannot be ignored — exclude each by pathspec.
+        // `:!.dmtools/...` runtime logs (gh-628) — excluded by pathspec
+        // because they live next to COMMITTED .dmtools/ files.
         runCmd({
-            command: 'git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**"'
-                + ' ":!.dmtools/credential-helper.log" ":!.dmtools/fa-trace.log"'
-                + ' ":!.dmtools/run-output.txt" ":!.dmtools/stall-capture.log"'
-                + ' ":!.dmtools/fa-sessions" ":!.dmtools/fa-sessions/**"'
-                + ' ":!.dmtools-session-output.log"'
-                + ' ":!factory-kit" ":!factory-kit/**"'
+            command: 'git add . -- ' + gitStaging.buildStagingPathspecs() +
+                ' ":!factory-kit" ":!factory-kit/**"'
         });
 
         // Check if there are changes to commit
@@ -242,7 +232,7 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
 
         if (!statusOutput || !statusOutput.trim()) {
             // No uncommitted changes — but check if the agent already committed its work
-            221.             // (the CLI agent sometimes commits itself before postJSAction runs)
+            // (the CLI agent sometimes commits itself before postJSAction runs)
             var originRef = baseBranch ? 'origin/' + baseBranch : 'origin/main';
             var aheadOutput = '';
             try {

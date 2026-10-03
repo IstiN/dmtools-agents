@@ -44,6 +44,7 @@ function loadTimer(mocks, opts) {
 
     var requireFn = makeRequire({
         './common/releaseArtefacts.js': releaseArtefactsMock,
+        './common/gitStaging.js': gitStagingModule,
         './configLoader.js': configLoaderMock
     });
 
@@ -162,6 +163,8 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
         assert.equal(rmCalls.length, 1, 'exactly one untrack-cleanup command');
         assert.contains(rmCalls[0], '.dmtools/credential-helper.log',
             'already-tracked credential-helper.log is untracked (poisoned-branch self-heal)');
+        assert.contains(rmCalls[0], '.dmtools/fa-sessions',
+            'session store untracked too — untrack list must not drift from staging exclusions (gh-628)');
         assert.contains(rmCalls[0], '.dmtools/fa-trace.log', 'fa runtime trace untracked');
         var addCall = cliCalls.filter(function(c) { return c.indexOf('git add -A') === 0; })[0];
         assert.ok(addCall, 'staging command present');

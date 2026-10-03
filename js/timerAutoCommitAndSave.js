@@ -17,6 +17,7 @@
  */
 
 var releaseArtefacts = require('./common/releaseArtefacts.js');
+var gitStaging = require('./common/gitStaging.js');
 var configLoader = require('./configLoader.js');
 
 function cleanCommandOutput(output) {
@@ -111,14 +112,10 @@ function autoCommitAndPush(customParams, ticketKey) {
             // .dmtools/credential-helper.log — the credential helper's
             // serving trace — into three commits on ai/gh-628). Pathspec
             // exclusion alone cannot help a TRACKED file's changes, so the
-            // cleanup removes them from the index; --ignore-unmatch
-            // tolerates every name being absent. One command (the old
-            // copilot-sessions cleanup merged in) keeps the call count
-            // identical for the tests.
-            command: 'git rm -r --cached --ignore-unmatch .dmtools/copilot-sessions' +
-                ' .dmtools/credential-helper.log .dmtools/fa-trace.log' +
-                ' .dmtools/run-output.txt .dmtools/stall-capture.log' +
-                ' .dmtools-session-output.log',
+            // cleanup removes them from the index. Shared canonical list:
+            // js/common/gitStaging.js. One command (the old copilot-sessions
+            // cleanup merged in) keeps the call count identical for tests.
+            command: gitStaging.buildUntrackCommand(),
             workingDirectory: workingDir
         });
     } catch (cleanupErr) {
@@ -140,12 +137,10 @@ function autoCommitAndPush(customParams, ticketKey) {
             // `.dmtools-session-output.log` is this timer's own CLI-stdout
             // snapshot at the job root — a crash mid-upload leaves it
             // behind, and the next broad add would commit the full session
-            // log into the ticket branch.
-            command: 'git add -A -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**"' +
-                ' ":!.dmtools/credential-helper.log" ":!.dmtools/fa-trace.log"' +
-                ' ":!.dmtools/run-output.txt" ":!.dmtools/stall-capture.log"' +
-                ' ":!.dmtools/fa-sessions" ":!.dmtools/fa-sessions/**"' +
-                ' ":!.dmtools-session-output.log" ":!factory-kit" ":!factory-kit/**"',
+            // log into the ticket branch. Shared canonical list:
+            // js/common/gitStaging.js.
+            command: 'git add -A -- ' + gitStaging.buildStagingPathspecs() +
+                ' ":!factory-kit" ":!factory-kit/**"',
             workingDirectory: workingDir
         });
     } catch (e) {
