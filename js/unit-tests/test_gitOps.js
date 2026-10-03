@@ -15,6 +15,13 @@ function loadGitOps(mocks) {
             '../config.js': configModule,
             'config': configModule,
             './pullRequest.js': {
+                buildTargetedOriginFetchCommand: function(branches) {
+                    var list = (branches || []).filter(function(b) { return b; });
+                    if (!list.length) return null;
+                    return 'git -c fetch.recurseSubmodules=no fetch origin ' + list.map(function(b) {
+                        return '+refs/heads/' + b + ':refs/remotes/origin/' + b;
+                    }).join(' ');
+                },
                 buildOriginFetchCommand: function(refSpec) {
                     return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
                 },
