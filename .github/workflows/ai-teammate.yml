@@ -10,6 +10,16 @@
 # Gate: the loop starts when a human ASSIGNS an issue to `ai-teammate`.
 # Secrets via `secrets: inherit`: SOURCE_GITHUB_TOKEN (present), plus
 # ZAI_CODE_KEY / KIMI_REVIEW_KEY when the fa/zai runners are used.
+#
+# gh-676 (2026-10-03): while this file was unparseable (#669 residue —
+# duplicate permission keys, fixed in #671), GitHub kept a stale push-event
+# registration: every machine-sm state-publish push to `factory-data`
+# spawned an instant-fail event=push run with zero jobs ("the phantom").
+# This comment block is the standard cure — a no-op touch of the file: the
+# default-branch blob change forces GitHub to re-index the registration
+# from the real triggers below. There is NO push trigger by design; the
+# trigger set (issues + workflow_dispatch only) and the duplicate-key
+# ban are guarded by js/unit-tests/test_workflowLint.js.
 name: AI Teammate
 
 run-name: "teammate: ${{ github.event_name }} #${{ github.event.issue.number || github.event.inputs.issue }} ${{ github.event.inputs.leg }}"
