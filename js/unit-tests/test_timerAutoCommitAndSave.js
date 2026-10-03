@@ -9,6 +9,8 @@
  * Uses: loadModule(), makeRequire(), assert, test(), suite()
  */
 
+var gitStagingModule = loadModule('js/common/gitStaging.js');
+
 function loadTimer(mocks, opts) {
     opts = opts || {};
     var uploadRawFileCalls = [];
