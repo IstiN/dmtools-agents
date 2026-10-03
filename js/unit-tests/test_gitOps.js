@@ -94,7 +94,7 @@ suite('gitOps.checkoutPRBranch', function() {
 
         var result = gitOps.checkoutPRBranch('feature/x');
 
-        var stashIdx = commands.indexOf('git add -A');
+        var stashIdx = commands.indexOf('git add -A -- ":!factory-kit" ":!factory-kit/**"');
         var pushIdx = commands.indexOf('git stash push -u -m "preflight-checkout-feature/x"');
         var checkoutIdx = commands.indexOf('git checkout feature/x');
         var popIdx = commands.indexOf('git stash pop');
