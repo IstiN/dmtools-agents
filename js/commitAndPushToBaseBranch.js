@@ -102,7 +102,8 @@ function action(params) {
         }
 
         var message = (opts.commitMessage || 'Update {ticketKey} artifacts').split('{ticketKey}').join(ticketKey);
-        runCmd({ command: 'git add -A' });
+        // `:!factory-kit` — nested machine-infra gitlink must not die on add -A (#648 class)
+        runCmd({ command: 'git add -A -- ":!factory-kit" ":!factory-kit/**"' });
         runCmd({ command: 'git commit -m "' + message.replace(/"/g, '\\"') + '" --no-verify' });
         runCmd({ command: 'git pull --rebase origin ' + baseBranch });
         runCmd({ command: 'git push origin HEAD:' + baseBranch });
