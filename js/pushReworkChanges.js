@@ -231,7 +231,8 @@ function commitAndPush(ticketKey, config, customParams) {
         console.warn('Could not remove tracked Copilot session cache before staging:', cleanupErr);
     }
 
-    cmd('git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**"');
+    // `:!factory-kit` — nested machine-infra gitlink must not kill rework staging (#648 class)
+    cmd('git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**" ":!factory-kit" ":!factory-kit/**"');
 
     const status = prHelper.readStagedDiffStat(cmd, workingDir);
 
