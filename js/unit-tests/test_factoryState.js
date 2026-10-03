@@ -382,6 +382,36 @@ suite('factoryState — v3 card history (accumulation)', function () {
     assert.equal(h[2].at, '2026-10-03T09:30:00Z', 'GitHub field, not tick time');
   });
 
+  test('merged card rebuilt tick-over-tick: terminal entry NOT duplicated (real timeline survives)', function () {
+    // merged cards are RE-DERIVED from the previous snapshot every tick
+    // while they sit in the 24h merged_recent window — the terminalAt
+    // path must not append a second merged_recent entry per tick, or
+    // HISTORY_CAP (24) evicts the card's real pipeline timeline within
+    // ~4h at the 10-min cadence.
+    var prev = { lanes: { validating: [{ pr: 17,
+      labels: ['pr_approved', 'ai_validating'],
+      history: [{ state: 'pr_created' },
+                { state: 'validating', at: '2026-10-03T08:00:00Z' }] }] } };
+    var merged = { number: 17, title: 't17', labels: [],
+      head: { ref: 'b17', sha: 'sha17' }, user: { login: 'bot' },
+      created_at: '2026-10-03T05:00:00Z', merged_at: '2026-10-03T09:30:00Z' };
+    var st = null;
+    for (var i = 0; i < 31; i++) {   // > HISTORY_CAP ticks in the window
+      st = fsModule.buildFactoryState({
+        repoInfo: { owner: 'o', repo: 'r' },
+        now: '2026-10-03T13:10:00Z',
+        prev: st || prev, mergedPrs: [merged], prs: [], runs: []
+      });
+    }
+    var h = st.lanes.merged_recent[0].history;
+    assert.deepEqual(h.map(function (e) { return e.state; }),
+      ['pr_created', 'validating', 'merged_recent'],
+      'real pipeline timeline must survive repeated ticks');
+    var terminals = h.filter(function (e) { return e.state === 'merged_recent'; });
+    assert.equal(terminals.length, 1, 'exactly one terminal entry');
+    assert.equal(terminals[0].at, '2026-10-03T09:30:00Z');
+  });
+
   test('history is capped (snapshot cannot grow unbounded)', function () {
     var long = [];
     for (var i = 0; i < 40; i++) long.push({ state: 'review', at: NOW });
@@ -425,6 +455,21 @@ suite('factoryState — v3 backlog (issue lanes)', function () {
                     issue(23, ['agent:dev'])]);
     assert.deepEqual(st.backlog.in_dev.map(function (c) { return c.issue; }), [22]);
     assert.deepEqual(st.backlog.queued.map(function (c) { return c.issue; }), [23]);
+  });
+
+  test('unconfigured machineAuthor (null) → no assignment bucketing (no silent default)', function () {
+    // resolveMachineAuthor returns null on purpose when a deployment has
+    // no machineAuthor knob — that must NOT collapse into the hardcoded
+    // 'ai-teammate' login, or an issue assigned to a same-named user
+    // lands in "In dev · assigned" without the deployment opting in.
+    var st = build([issue(29, [], { assignees: [{ login: 'ai-teammate' }] })],
+      { machineAuthor: null });
+    assert.deepEqual(st.backlog.inbox.map(function (c) { return c.issue; }), [29],
+      'null knob = no assignment bucketing');
+    var optIn = build([issue(29, [], { assignees: [{ login: 'ai-teammate' }] })],
+      { machineAuthor: 'ai-teammate' });
+    assert.deepEqual(optIn.backlog.in_dev.map(function (c) { return c.issue; }), [29],
+      'explicit knob still buckets');
   });
 
   test('plain open issue → inbox; card carries title, assignee, labels, url', function () {
@@ -481,6 +526,19 @@ suite('factoryState — v3 backlog (issue lanes)', function () {
       history: long }] } };
     var st = build([issue(28, [])], { prev: prev });
     assert.ok(st.backlog.inbox[0].history.length <= 24);
+  });
+
+  test('backlog buckets cap at BACKLOG_CAP newest (snapshot bounded, counts honest)', function () {
+    // github_search_issues returns ONE page (no perPage) — an over-page
+    // repo truncates at the source, so the snapshot must present a
+    // bounded, self-consistent view: counts == what the snapshot holds.
+    var many = [];
+    for (var i = 1; i <= 60; i++) many.push(issue(i, []));
+    var st = build(many);
+    assert.equal(st.backlog.inbox.length, 50, 'capped per bucket');
+    assert.equal(st.backlogCounts.inbox, 50, 'counts match the snapshot');
+    assert.equal(st.backlog.inbox[0].issue, 11, 'oldest dropped…');
+    assert.equal(st.backlog.inbox[49].issue, 60, '…newest kept');
   });
 });
 

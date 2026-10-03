@@ -43,6 +43,17 @@
   // bars render identically no matter when the screenshot is taken.
   var FIXTURE = null;
   try { FIXTURE = new URLSearchParams(location.search).get('fixture'); } catch (eF) {}
+  // same-origin only: ?fixture= must never turn this board into a renderer
+  // for arbitrary remote JSON (attacker-controlled cards under our origin).
+  // Relative paths (visual-check) and same-origin absolute URLs pass; any
+  // other scheme/host is dropped and the live snapshot loads instead.
+  try {
+    if (FIXTURE && (/^[a-z][a-z0-9+.-]*:/i.test(FIXTURE) ||
+                    FIXTURE.lastIndexOf('//', 0) === 0) &&
+        FIXTURE.indexOf(location.origin + '/') !== 0) {
+      FIXTURE = null;
+    }
+  } catch (eFx) { FIXTURE = null; }
   var NOW_OVERRIDE = null;   // ms; set in fixture mode after the load
   // ?drawer=pr-817 → open that card's drawer once the board renders
   var DEEP_LINK = null;
@@ -92,6 +103,13 @@
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  // href allowlist: esc() escapes markup but NOT url schemes, so a crafted
+  // `javascript:`/`data:` value in a snapshot (or ?fixture= json) must fall
+  // back to the config-built link — only real http(s) URLs pass through.
+  function safeHref(u, fallback) {
+    return /^https?:\/\//i.test(u) ? u : fallback;
   }
 
   function nowMs() {
@@ -169,8 +187,9 @@
     var seg = function (n, cls) {
       return n ? '<span class="seg ' + cls + '" style="flex:' + n + '"></span>' : '';
     };
-    return '<div class="lane-bar" role="img" aria-label="' + s.total + ' of ' +
-      s.total + '">' +
+    return '<div class="lane-bar" role="img" aria-label="' + s.total + ' items: ' +
+      s.done + ' done, ' + s.inflight + ' in flight, ' + s.queued + ' queued' +
+      (s.blocked ? ', ' + s.blocked + ' blocked' : '') + '">' +
       seg(s.done, 'seg-done') + seg(s.inflight, 'seg-inflight') +
       seg(s.queued, 'seg-queued') + seg(s.blocked, 'seg-blocked') +
       '</div>';
@@ -259,17 +278,24 @@
     return (c.pr != null ? 'pr-' + c.pr : 'issue-' + c.issue) + '@' + laneId;
   }
 
+  // badge row shared by cardHtml + drawerHeaderHtml — one styling path, so
+  // label tweaks (hot set, blocked class) can never land in one and miss
+  // the other.
+  function badgesHtml(c) {
+    var hot = CFG.badgeLabels || [];
+    return (c.labels || []).map(function (l) {
+      return '<span class="lbl' + (hot.indexOf(l) >= 0 ? ' hot' : '') +
+             (l === 'blocked' ? ' lbl-blocked' : '') + '">' + esc(l) + '</span>';
+    }).join('');
+  }
+
   function cardHtml(c, laneId) {
     var isIssue = c.issue != null;
     var num = isIssue ? c.issue : c.pr;
     var href = isIssue
-      ? (c.url || CFG.prUrl(c.repo, num, 'issues'))
+      ? safeHref(c.url, CFG.prUrl(c.repo, num, 'issues'))
       : CFG.prUrl(c.repo, num);
-    var hot = CFG.badgeLabels || [];
-    var badges = (c.labels || []).map(function (l) {
-      return '<span class="lbl' + (hot.indexOf(l) >= 0 ? ' hot' : '') +
-             (l === 'blocked' ? ' lbl-blocked' : '') + '">' + esc(l) + '</span>';
-    }).join('');
+    var badges = badgesHtml(c);
     var checks = c.checks
       ? '<span class="checks"><span class="dot ' + verdictClass(c.checks.verdict) +
         '"></span><span>' + esc(c.checks.verdict) + ' · ' + esc(ago(c.checks.at)) +
@@ -278,8 +304,15 @@
     var pos = c.queuePos ? '<span class="pos">#' + esc(c.queuePos) + '</span>' : '';
     var who = isIssue && c.assignee
       ? '<span class="author">@' + esc(c.assignee) + '</span>' : '';
-    // age in the CURRENT lane (schema 2 timestamps; null on schema 1)
+    // age in the CURRENT lane (schema 2 timestamps; null on schema 1).
+    // Backlog columns have no LANE_ENTERED_AT field — fall back to the
+    // newest history entry (stamped on every bucket transition); the
+    // first-ever entry may carry no `at` — honest unknown, no chip.
     var enteredAt = c[LANE_ENTERED_AT[laneId]];
+    if (!enteredAt && c.history && c.history.length) {
+      var last = c.history[c.history.length - 1];
+      enteredAt = last.at || null;
+    }
     var age = enteredAt
       ? '<span class="age" title="in this state since ' +
         esc(clockTime(enteredAt)) + '">' + esc(ago(enteredAt)) + '</span>'
@@ -370,13 +403,9 @@
     var isIssue = c.issue != null;
     var num = isIssue ? c.issue : c.pr;
     var href = isIssue
-      ? (c.url || CFG.prUrl(ctx.repo, num, 'issues'))
+      ? safeHref(c.url, CFG.prUrl(ctx.repo, num, 'issues'))
       : CFG.prUrl(ctx.repo, num);
-    var hot = CFG.badgeLabels || [];
-    var badges = (c.labels || []).map(function (l) {
-      return '<span class="lbl' + (hot.indexOf(l) >= 0 ? ' hot' : '') +
-             (l === 'blocked' ? ' lbl-blocked' : '') + '">' + esc(l) + '</span>';
-    }).join('');
+    var badges = badgesHtml(c);
     return '<div class="drawer-head">' +
       '<div class="drawer-titleline">' +
       '<span class="pr">' + (isIssue ? '#' : '!') + esc(num) + '</span>' +
@@ -523,8 +552,15 @@
     var backlogSummary = (CFG.backlogColumns || []).map(function (c) {
       return (bc[c.id] || 0) + ' ' + c.id.replace('_', '-');
     }).join(' · ');
-    document.getElementById('backlog-pill').textContent =
-      'issues: ' + backlogSummary;
+    // pre-v3 snapshots carry no backlog section — absent data renders as
+    // absent (hidden pill), never as a lying "issues: 0 …" empty backlog
+    var pill = document.getElementById('backlog-pill');
+    if (st.backlog) {
+      pill.hidden = false;
+      pill.textContent = 'issues: ' + backlogSummary;
+    } else {
+      pill.hidden = true;
+    }
     document.getElementById('repo-pill').textContent = st.repo || '';
     document.getElementById('schema-pill').textContent =
       'schema ' + (st.schema || 1);
@@ -537,8 +573,17 @@
       var list = lanes[l.id] ||
                  (LANE_ALIASES[l.id] ? (lanes[LANE_ALIASES[l.id]] || []) : []);
       list.forEach(function (c) {
-        if (c && c.pr != null) boardIndex['pr-' + c.pr + '@' + l.id] =
-          { item: c, repo: st_repo, laneId: l.id };
+        if (!c) return;
+        // index BOTH card kinds: the development lane holds ISSUE cards
+        // (data-key="issue-N@development") — they must open the drawer
+        // exactly like their backlog twins, not fall through to GitHub nav
+        if (c.pr != null) {
+          boardIndex['pr-' + c.pr + '@' + l.id] =
+            { item: c, repo: st_repo, laneId: l.id };
+        } else if (c.issue != null) {
+          boardIndex['issue-' + c.issue + '@' + l.id] =
+            { item: c, repo: st_repo, laneId: l.id };
+        }
       });
       return laneHtml(f, l, list);
     }).join('');

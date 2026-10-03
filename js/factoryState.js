@@ -121,9 +121,15 @@ var DEV_DONE_LABEL = 'ai_developed';          // dev leg produced a green PR
 
 var BLOCKED_LABEL = 'blocked';                // owner hold — freeze switch
 var BACKLOG_BUCKETS = ['in_dev', 'queued', 'blocked', 'inbox'];
-var DEFAULT_MACHINE_AUTHOR = 'ai-teammate';   // machineAuthor deployment knob
+var DEFAULT_MACHINE_AUTHOR = 'ai-teammate';   // back-compat/tests only — an
+                                              // unset machineAuthor means NO
+                                              // assignment bucketing (null)
 var HISTORY_CAP = 24;                         // bound snapshot growth
 var DEFAULT_TOKENS_FILE = 'outputs/token_usage/factory_tokens.json';
+var BACKLOG_CAP = 50;                         // per bucket — github_search_issues
+                                              // returns ONE page (no perPage),
+                                              // so the snapshot stays bounded
+                                              // and backlogCounts stay honest
 
 /**
  * Backlog bucket for an open issue — deterministic read of the machine's
@@ -134,9 +140,13 @@ var DEFAULT_TOKENS_FILE = 'outputs/token_usage/factory_tokens.json';
  */
 function backlogBucket(issue, machineAuthor) {
     if (hasLabel(issue, BLOCKED_LABEL)) return 'blocked';
-    var assigned = ((issue && issue.assignees) || []).some(function (a) {
-        return a && a.login === machineAuthor;
-    }) || !!(issue && issue.assignee && issue.assignee.login === machineAuthor);
+    // a null/absent machineAuthor (the deployment never configured the
+    // knob) opts OUT of assignment bucketing entirely — no hardcoded
+    // login is ever consulted
+    var assigned = !!machineAuthor && (
+        ((issue && issue.assignees) || []).some(function (a) {
+            return a && a.login === machineAuthor;
+        }) || !!(issue && issue.assignee && issue.assignee.login === machineAuthor));
     if (assigned) return 'in_dev';
     if (hasLabel(issue, DEV_LABEL)) return 'queued';
     return 'inbox';
@@ -153,7 +163,13 @@ function backlogBucket(issue, machineAuthor) {
 function nextHistory(prevCard, prevKey, key, now, hasPrev, terminalAt) {
     var h = ((prevCard && prevCard.history) || []).slice();
     if (terminalAt) {
-        h.push({ state: key, at: terminalAt });
+        // dedupe: merged cards are re-derived from the previous snapshot
+        // every tick inside the 24h merged_recent window — without this
+        // guard each tick appends a second terminal entry and HISTORY_CAP
+        // evicts the card's real timeline within ~4h at 10-min cadence.
+        if (!h.length || h[h.length - 1].state !== key) {
+            h.push({ state: key, at: terminalAt });
+        }
         return capHistory(h);
     }
     if (!hasPrev) {
@@ -340,7 +356,10 @@ function firstAssignee(it) {
  * head{ref,sha},user{login},created_at}). `mergedPrs` = recently merged PRs
  * (github_list_prs state:'merged' — merged_at set; filtered to the 24h
  * window here). `issues` = ALL open issues (github_search_issues items,
- * v3 backlog source; the pre-v3 `devIssues` — the agent:dev-only subset —
+ * v3 backlog source; ONE search page — no perPage knob — so backlog
+ * buckets cap at BACKLOG_CAP, newest kept, and `backlogCounts` report
+ * exactly what the snapshot holds; the pre-v3 `devIssues` — the
+ * agent:dev-only subset —
  * is still accepted and feeds the development lane alone). `machineAuthor`
  * = the deployment's machine login (assignee marking machine-managed
  * issues). `tokens` = OPTIONAL per-leg token usage (map keyed
@@ -360,7 +379,10 @@ function buildFactoryState(input) {
     var nowMs = Date.parse(now);
     var hasPrev = !!(input.prev && input.prev.lanes);
     var pix = prevIndex(input.prev);
-    var machineAuthor = input.machineAuthor || DEFAULT_MACHINE_AUTHOR;
+    // null when the deployment has no machineAuthor knob — a deliberate
+    // "unconfigured" state: no assignment bucketing (backlogBucket opts out),
+    // never a hardcoded login (DEFAULT_MACHINE_AUTHOR is back-compat only)
+    var machineAuthor = input.machineAuthor || null;
     var tmap = normalizeTokens(input.tokens);
     var issueHistory = {};   // issue-N → shared history (lane + backlog twin)
 
@@ -433,8 +455,19 @@ function buildFactoryState(input) {
             issueCard(it, twinExtra, tmap, issueHistory));
     });
     lanes.development.sort(function (a, b) { return a.issue - b.issue; });
+    // BACKLOG_CAP: github_search_issues returns a single page (no perPage
+    // knob), so an over-page repo truncates silently at the source. The
+    // per-bucket cap bounds the published snapshot regardless of repo AND
+    // keeps backlogCounts self-consistent with what the snapshot holds
+    // (newest kept — issue numbers are monotonic).
     BACKLOG_BUCKETS.forEach(function (b) {
-        (backlog[b] || []).sort(function (x, y) { return x.issue - y.issue; });
+        (backlog[b] = backlog[b] || []).sort(function (x, y) {
+            return x.issue - y.issue;
+        });
+        if (backlog[b].length > BACKLOG_CAP) {
+            backlog[b] = backlog[b]
+                .slice(backlog[b].length - BACKLOG_CAP);
+        }
     });
 
     // open PR cards
@@ -750,5 +783,6 @@ module.exports = {
     DEFAULT_MACHINE_AUTHOR: DEFAULT_MACHINE_AUTHOR,
     HISTORY_CAP: HISTORY_CAP,
     DEFAULT_TOKENS_FILE: DEFAULT_TOKENS_FILE,
+    BACKLOG_CAP: BACKLOG_CAP,
     DEFAULT_TAG: DEFAULT_TAG
 };

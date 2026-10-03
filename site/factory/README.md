@@ -134,9 +134,17 @@ a deterministic read of the machine's own signals, first match wins:
 | bucket | signal |
 | --- | --- |
 | `blocked` | the `blocked` label — owner hold, its own visually distinct column |
-| `in_dev` | assigned to the machine author (the `machineAuthor` deployment knob) |
+| `in_dev` | assigned to the machine author (the `machineAuthor` deployment knob; unconfigured → no assignment bucketing at all) |
 | `queued` | `agent:dev` label, not assigned |
 | `inbox` | everything else (no label/assignee) |
+
+**Page limit**: the search tool returns a single page (no `perPage` knob),
+so a repo with more open issues than one page truncates at the source. Each
+bucket is additionally capped at `BACKLOG_CAP` (50, newest kept) in
+`js/factoryState.js` — the published snapshot stays bounded, and
+`backlogCounts` always equal what the snapshot actually holds (a truncated
+lane never masquerades as an empty one). A deployment with more issues than
+that should narrow the query instead.
 
 Issues carrying `ai_developed` have handed off to the PR side — they leave
 the backlog (unless blocked). Backlog issues share one history array with
