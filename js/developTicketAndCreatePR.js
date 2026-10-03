@@ -51,23 +51,16 @@ function generateUniqueBranchName(branchPrefix, ticketKey) {
 
     // Check if base branch exists locally or remotely
     try {
-        // Fetch latest remote branches without pulling
-        try {
-            runCmd({
-                command: prHelper.buildOriginFetchCommand('--prune')
-            });
-        } catch (fetchError) {
-            console.warn('Could not fetch remote branches:', fetchError);
-        }
-
+        // No blanket fetch (owner rule 2026-10-03): the remote pattern check
+        // below queries the remote directly via ls-remote.
         // Check local branches
         const localBranches = runCmd({
             command: 'git branch --list "*' + baseBranchName + '*"'
         }) || '';
 
-        // Check remote branches
+        // Check remote branches — direct remote query, no fetch needed
         const remoteBranches = runCmd({
-            command: 'git branch --remotes --list "origin/' + baseBranchName + '*"'
+            command: 'git ls-remote --heads origin "' + baseBranchName + '*"'
         }) || '';
 
         const allBranches = localBranches + '\n' + remoteBranches;
