@@ -150,7 +150,32 @@ function githubProvider(cfg) {
     }
     function branchHead(name) {
         var head = branchHeadsMap()[name];
-        return head === undefined ? null : head;
+        if (head !== undefined) return head;
+        // dmtools-agents#639 (live fa pr-1174, 2026-10-03): github_list_branches
+        // returns only page 1 (GitHub default 30; the tool has no perPage —
+        // Java parity). On repos with more branches than that (one
+        // 'ai/gh-*' per PR) 'main' falls off the page, this probe returns
+        // null, the deterministic mergeState override NEVER runs, and
+        // mergeState stays raw REST ('UNSTABLE') — merge-validated
+        // (mergeState CLEAN) could not match ANYTHING. Single-branch probe
+        // via gh api (cli_execute_command is whitelisted; the SM's own
+        // probes already ride it). Fail-null keeps the old behavior.
+        var cached = ioCacheGet(owner, repo, 'branchHead:' + name, null);
+        if (cached !== null && cached !== undefined) return cached;
+        try {
+            var res = cli_execute_command({
+                command: 'gh api "repos/' + owner + '/' + repo +
+                         '/branches/' + encodeURIComponent(name) +
+                         '" --jq .commit.sha'
+            });
+            var out = String((res || {}).output || (res || {}).stdout || res || '')
+                .trim().replace(/^"|"$/g, '');
+            if (/^[0-9a-f]{40}$/.test(out)) {
+                ioCachePut(owner, repo, 'branchHead:' + name, null, out);
+                return out;
+            }
+        } catch (eHeadProbe) { /* probe failed — null (override skips, pre-#639 behavior) */ }
+        return null;
     }
 
     // Open / merged PR lists ride the same per-tick cache (kind openPrs /
