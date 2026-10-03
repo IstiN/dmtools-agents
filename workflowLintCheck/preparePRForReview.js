@@ -1,0 +1,212 @@
+/**
+ * Prepare PR for Review Action (preCliJSAction for pr_review agent)
+ * 1. Finds PR associated with the ticket
+ * 2. Checks out the PR branch
+ * 3. Writes input folder: pr_info.md, pr_diff.txt, pr_discussions.md, pr_discussions_raw.json
+ * 4. Posts "Review Started" comment to Jira
+ */
+
+var configLoader = require('./configLoader.js');
+const gh = require('./common/githubHelpers.js');
+const gitOps = require('./common/gitOps.js');
+const commentMarkup = require('./common/commentMarkup.js');
+const fetchParentContextToInput = require('./fetchParentContextToInput.js');
+
+function action(params) {
+    try {
+        const inputFolder = params.inputFolderPath;
+        const ticketKey = inputFolder.split('/').pop();
+        // PR-anchored review (issue #687): a `pr-N` contextId makes the PR
+        // itself the anchor — no ticket lookup, no ticket comments. Covers
+        // PRs born without an issue and on-demand PR reviews (agent:review).
+        var jp = params.jobParams || params;
+        var anchorMatch = /^pr-(\d+)$/.exec(String(ticketKey || ''));
+        const prAnchor = (anchorMatch ? parseInt(anchorMatch[1], 10) : null) ||
+            (parseInt(jp.prNumber || jp.pr || '', 10) || null);
+        const noTicket = !!prAnchor;
+        var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var scm = configLoader.createScm(config);
+
+        console.log('=== Preparing PR for review:', ticketKey, '===');
+        console.log('Input folder:', inputFolder);
+        console.log('Configured repository:', config.repository && config.repository.owner && config.repository.repo
+            ? config.repository.owner + '/' + config.repository.repo
+            : '(fallback to git remote)');
+        console.log('Configured working directory:', config.workingDir || '(not set)');
+        console.log('Configured base branch:', config.git && config.git.baseBranch ? config.git.baseBranch : '(not set)');
+
+        // Step 1: GitHub repo info — prefer targetRepository from config over git remote
+        var repoInfo = null;
+        if (config.repository && config.repository.owner && config.repository.repo) {
+            repoInfo = { owner: config.repository.owner, repo: config.repository.repo };
+            console.log('Using targetRepository from config:', repoInfo.owner + '/' + repoInfo.repo);
+        } else {
+            console.log('Target repository not configured, resolving from git remote...');
+            repoInfo = scm.getRemoteRepoInfo();
+        }
+        if (!repoInfo) {
+            const err = 'Could not determine GitHub repository from git remote';
+            console.error('PR review setup failed at repository resolution:', err);
+            try { jira_post_comment({ key: ticketKey, comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Setup Failed') + '\n\n' + err + '\n\n_Review cancelled — no PR to review._' }); } catch (e) {}
+            return false;
+        }
+        console.log('Resolved repository:', repoInfo.owner + '/' + repoInfo.repo);
+
+        // Step 2: Find PR
+        var pr;
+        if (prAnchor) {
+            console.log('PR-anchored review: PR #' + prAnchor + ' (no ticket lookup)');
+            pr = { number: prAnchor };
+        } else {
+            console.log('Searching for open PR associated with ticket:', ticketKey);
+            var prSearchOptions = config.prSearchFn ? { prSearchFn: config.prSearchFn } : {};
+            pr = gh.findPRForTicket(scm, ticketKey, prSearchOptions);
+        }
+        if (!pr) {
+            console.warn('No open PR found for ticket:', ticketKey);
+            if (!noTicket) {
+                try {
+                    jira_post_comment({
+                        key: ticketKey,
+                        comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Setup Failed') + '\n\n' +
+                            'Could not find an open Pull Request associated with ' + commentMarkup.forTicket(ticketKey).bold(ticketKey) + '.\n\n' +
+                            'Please ensure:\n' +
+                            '* A PR has been created with the ticket key in the title or branch name\n' +
+                            '* The PR is open and accessible\n\n' +
+                            '_Review cancelled — no PR to review._'
+                    });
+                } catch (e) {}
+            }
+            return false;
+        }
+        console.log('Found PR candidate #' + pr.number + ' with title: ' + (pr.title || '(no title)'));
+        console.log('PR head branch:', pr.head && pr.head.ref ? pr.head.ref : '(missing)');
+
+        // Step 3: PR details
+        console.log('Fetching details for PR #' + pr.number + '...');
+        const prDetails = gh.getPRDetails(scm, pr.number);
+        if (!prDetails) {
+            console.error('Failed to fetch PR details for PR #' + pr.number);
+            if (!noTicket) {
+                try {
+                    jira_post_comment({
+                        key: ticketKey,
+                        comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Setup Failed') + '\n\nCould not fetch details for PR #' + pr.number + '.\n\n_Review cancelled._'
+                    });
+                } catch (e) {}
+            }
+            return false;
+        }
+        console.log('Loaded PR details for #' + prDetails.number +
+            ' | head=' + (prDetails.head && prDetails.head.ref ? prDetails.head.ref : '(missing)') +
+            ' | base=' + (prDetails.base && prDetails.base.ref ? prDetails.base.ref : '(missing)') +
+            ' | changed_files=' + (prDetails.changed_files || 0));
+
+        // Step 4: Checkout PR branch
+        const branchName = prDetails.head ? prDetails.head.ref : null;
+        try {
+            if (branchName) {
+                console.log('Checking out PR branch:', branchName, 'workingDir:', config.workingDir || '(default)');
+                gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
+                console.log('Checkout completed for branch:', branchName);
+            } else {
+                console.warn('PR details did not include a head branch; checkout skipped');
+            }
+        } catch (e) {
+            console.warn('Could not checkout PR branch:', e);
+        }
+
+        // Step 5: Diff + discussions (human-readable + raw with IDs)
+        const baseBranch = prDetails.base ? prDetails.base.ref : config.git.baseBranch;
+        console.log('Generating PR diff with base branch:', baseBranch, 'and head branch:', branchName || '(missing)');
+        const diff = gitOps.getPRDiff(baseBranch, branchName || (prDetails.head && prDetails.head.ref), config.workingDir);
+        console.log('Loaded PR diff characters:', diff ? diff.length : 0);
+
+        console.log('Fetching PR discussions...');
+        const discussionData = gh.fetchDiscussionsAndRawData(scm, pr.number);
+        console.log('Fetched PR discussions markdown characters:', discussionData && discussionData.markdown ? discussionData.markdown.length : 0);
+        console.log('Fetched PR discussion threads:', discussionData && discussionData.rawThreads ? discussionData.rawThreads.length : 0);
+
+        // Step 6: Write all context files
+        console.log('Writing PR context files to:', inputFolder);
+        gitOps.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
+        console.log('PR context files written successfully');
+
+        // Step 6.5: Detect failed CI checks
+        var headSha = prDetails.head ? prDetails.head.sha : null;
+        console.log('Detecting failed checks for head SHA:', headSha || '(missing)');
+        var failedChecks = gh.detectFailedChecks(scm, headSha, inputFolder, config.scm && config.scm.jenkinsBasePath);
+        console.log('Detected failed checks:', failedChecks.length);
+
+        // Step 7: Ticket comment (issue-anchored runs only — a PR-anchored
+        // review has no ticket to notify; the PR comment comes from the
+        // post action).
+        if (!noTicket) {
+            try {
+                var m = commentMarkup.forTicket(ticketKey);
+            var jiraComment = m.h(3, '🔍 Automated PR Review Started') + '\n\n' +
+                m.bold('Pull Request') + ': ' + m.link('PR #' + prDetails.number, prDetails.html_url) + '\n' +
+                m.bold('Branch') + ': ' + m.code(branchName || 'unknown') + '\n' +
+                m.bold('Files Changed') + ': ' + (prDetails.changed_files || 0) + '\n\n';
+
+            if (failedChecks.length > 0) {
+                jiraComment += m.panel(null,
+                    '⚠️ ' + m.bold('CI checks failing') + ' — ' + failedChecks.length + ' check(s) did not pass:\n' +
+                    failedChecks.map(function(c) { return '* ' + m.code(c.name); }).join('\n') +
+                    '\nError logs: ' + m.code('ci_failures.md') + ' (summary) and ' + m.code('ci_failures_full.log') + ' (full logs).',
+                    'bgColor=#FFEBE6|borderColor=#DE350B') + '\n\n';
+            }
+
+            jiraComment += 'AI Code Reviewer is analyzing the pull request for:\n' +
+                '* 🔒 Security vulnerabilities\n' +
+                '* 🏗️ Code quality & OOP principles\n' +
+                '* ✅ Task alignment with requirements\n' +
+                '* 🧪 Testing adequacy\n\n' +
+                '_Review results will be posted shortly..._';
+
+            jira_post_comment({ key: ticketKey, comment: jiraComment });
+            console.log('Posted "review started" comment to Jira ticket:', ticketKey);
+            } catch (e) {
+                console.warn('Failed to post review started comment:', e);
+            }
+        }
+
+        console.log('✅ PR review setup completed — PR #' + prDetails.number);
+
+        // Enrich input with [BA]/[SA]/[VD] context from parent siblings
+        // (ticket-anchored runs only — no parent context without a ticket).
+        if (!noTicket) {
+            try {
+                fetchParentContextToInput.action(params);
+            } catch (e) {
+                console.warn('fetchParentContextToInput failed (non-fatal):', e);
+            }
+        }
+
+        return {
+            success: true,
+            prNumber: prDetails.number,
+            prUrl: prDetails.html_url,
+            branchName: branchName,
+            owner: repoInfo.owner,
+            repo: repoInfo.repo
+        };
+
+    } catch (error) {
+        console.error('❌ Error in preparePRForReview:', error);
+        if (!noTicket) {
+            try {
+                const ticketKey = params.inputFolderPath.split('/').pop();
+                jira_post_comment({
+                    key: ticketKey,
+                    comment: commentMarkup.forTicket(ticketKey).h(3, '❌ PR Review Setup Error') + '\n\n' + commentMarkup.forTicket(ticketKey).code(error.toString())
+                });
+            } catch (e) {}
+        }
+        return false;
+    }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { action };
+}

@@ -1,0 +1,13 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "js/unit-tests/integration_gitlab_scm_smoke.js",
+    "jobParams": {
+      "workspace": "example-group",
+      "repository": "example-project",
+      "pullRequestId": "1",
+      "workflowLimit": 5
+    }
+  }
+}
+

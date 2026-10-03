@@ -1,0 +1,16 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "js/integration-tests/testFetchParentContext_dmtools.js",
+    "jobParams": {
+      "inputFolderPath": "outputs/input-auto",
+      "ticketKey": "TS-728",
+      "customParams": {
+        "parentContextFetch": {
+          "enabled": true,
+          "resolveFieldNames": true
+        }
+      }
+    }
+  }
+}

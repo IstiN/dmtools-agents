@@ -1,0 +1,4139 @@
+/**
+ * Unit tests for js/smAgent.js
+ *
+ * Tests JQL interpolation, config loading, rule dispatch, and label skipping.
+ *
+ * Uses: configModule, configLoaderModule, loadModule(), makeRequire(), assert, test(), suite()
+ */
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Create a smAgent instance with full mock injection.
+ *
+ * The key design: a fresh configLoader is created per test using the SAME
+ * file_read mock, so config discovery paths are fully controlled by fileMap.
+ *
+ * file_read mock strategy:
+ *   - Paths containing ".dmtools/config" → only accessible if listed in fileMap
+ *     (ensures "no config" tests don't accidentally load the real project config)
+ *   - All other paths → forwarded to the real file_read (for agent JSON configs etc.)
+ *
+ * @param {Object} opts
+ *   fileMap        - { path: content } for config file discovery (config paths only)
+ *   tickets        - tickets returned by jira_search_by_jql (default: [])
+ *   fullTicket     - ticket returned by jira_get_ticket
+ *   onTrigger      - fn(owner, repo, workflow, inputs, ref) called on triggerWorkflow
+ *   onAddLabel     - fn(opts) called on jira_add_label
+ *   onMoveStatus   - fn(opts) called on jira_move_to_status
+ *   workflowRuns   - { queued: [], in_progress: [] } active workflow runs by status
+ */
+function makeSmAgent(opts) {
+    opts = opts || {};
+
+    var capturedTriggers = [];
+    var capturedLabels = [];
+    var capturedStatusMoves = [];
+    var capturedJqls = [];
+    var capturedCliCommands = [];
+    var capturedCloses = [];
+    var capturedPrMerges = [];
+    var capturedPrLabelAdds = [];
+    var capturedPrLabelRemoves = [];
+    var capturedPrComments = [];
+    var capturedEnvSets = [];
+    var capturedScmConfigs = [];
+
+    // Controlled file_read: config discovery paths from fileMap only; other paths from disk.
+    var fileReadMock = function(readOpts) {
+        var p = readOpts.path;
+        var isConfigDiscovery = p.indexOf('.dmtools/config') !== -1;
+
+        if (opts.fileMap && opts.fileMap.hasOwnProperty(p)) {
+            return opts.fileMap[p];
+        }
+        // Block config discovery for paths not in fileMap (so tests control exactly which config loads)
+        if (isConfigDiscovery) return null;
+
+        // Forward agent JSON / JS reads to disk
+        // Try with agents/ prefix first (submodule layout), then without (standalone)
+        try {
+            var result = file_read(readOpts);
+            if (result) return result;
+        } catch (e) {}
+        if (p.indexOf('agents/') === 0) {
+            try { return file_read({ path: p.substring('agents/'.length) }); } catch (e) {}
+        }
+        return null;
+    };
+
+    var jiraSearchMock = function(searchOpts) {
+        capturedJqls.push(searchOpts.jql);
+        return opts.tickets || [];
+    };
+
+    var smMocks = {
+        file_read: fileReadMock,
+        jira_search_by_jql: jiraSearchMock,
+        jira_get_ticket: function(key) {
+            return opts.fullTicket || { key: key, fields: { labels: [], summary: 'Test ticket' } };
+        },
+        jira_add_label: function(labelOpts) {
+            capturedLabels.push(labelOpts);
+            if (opts.onAddLabel) opts.onAddLabel(labelOpts);
+        },
+        jira_remove_label: function() {},
+        jira_move_to_status: function(moveOpts) {
+            capturedStatusMoves.push(moveOpts);
+            if (opts.onMoveStatus) opts.onMoveStatus(moveOpts);
+        },
+        cli_execute_command: function(cmdOpts) {
+            capturedCliCommands.push(cmdOpts);
+            if (opts.onCliExecute) return opts.onCliExecute(cmdOpts);
+            return '';
+        },
+        // Bridge tools used by syncValidationChecks (stamp echo of the
+        // dispatched run). Default: delegate to the host bridge when
+        // present (preserves prior behavior); tests override via
+        // opts.github.prList / opts.github.workflowApiRuns.
+        github_list_prs: function(args) {
+            if (opts.github && opts.github.prList) return opts.github.prList;
+            return (typeof github_list_prs !== 'undefined') ? github_list_prs(args) : '[]';
+        },
+        github_list_workflow_runs: function(args) {
+            if (opts.github && opts.github.workflowApiRuns) {
+                return JSON.stringify({ workflow_runs: opts.github.workflowApiRuns });
+            }
+            return (typeof github_list_workflow_runs !== 'undefined')
+                ? github_list_workflow_runs(args)
+                : '{"workflow_runs":[]}';
+        },
+        file_write: function(writeOpts) {
+            if (opts.onFileWrite) opts.onFileWrite(writeOpts);
+            return true;
+        },
+        encodeURIComponent: encodeURIComponent,
+        JSON: JSON,
+        eval: eval
+    };
+    // runAsync fake injection (spec: probeDispatchedState delegation pin) —
+    // shadows the (absent) global inside the smAgent module scope.
+    if (opts.runAsync) smMocks.runAsync = opts.runAsync;
+
+    // SCM mock: intercepts triggerWorkflow so capturedTriggers is populated
+    var mockScmProvider = {
+        triggerWorkflow: function(owner, repo, workflow, inputs, ref) {
+            capturedTriggers.push({ owner: owner, repo: repo, workflow: workflow, inputs: inputs, ref: ref });
+            if (opts.onTrigger) opts.onTrigger(owner, repo, workflow, inputs, ref);
+        },
+        listPrs: function() { return '[]'; },
+        getPr: function() { return '{}'; },
+        getPrComments: function() { return '[]'; },
+        addComment: function() {},
+        replyToThread: function() {},
+        resolveThread: function() {},
+        mergePr: function() {},
+        addLabel: function() {},
+        removeLabel: function() {},
+        fetchDiscussions: function() { return { markdown: '', rawThreads: [] }; },
+        listWorkflowRuns: function(status) {
+            var byStatus = opts.workflowRuns || {};
+            return JSON.stringify({ workflow_runs: byStatus[status] || [] });
+        },
+        getRemoteRepoInfo: function() { return null; }
+    };
+    var mockScmModule = {
+        createScm: function(config) { capturedScmConfigs.push(config); return mockScmProvider; }
+    };
+
+    // CRITICAL: create a fresh configLoader using the SAME file_read mock.
+    // If we reuse the global configLoaderModule, it calls the real file_read and
+    // would load the actual .dmtools/config.js regardless of what fileMap says.
+    var freshConfigLoader = loadModule(
+        'js/configLoader.js',
+        makeRequire({ './config.js': configModule, './common/scm.js': mockScmModule }),
+        { file_read: fileReadMock }
+    );
+
+    var buildEncodedConfigModule = loadModule(
+        'js/common/buildEncodedConfig.js',
+        makeRequire({ '../configLoader.js': freshConfigLoader }),
+        { file_read: fileReadMock, encodeURIComponent: encodeURIComponent, JSON: JSON }
+    );
+
+    // The jira state source, stubbed to the mocked jira_search_by_jql
+    // (mirrors js/sm/sources/jiraSource.js against the same global mock).
+    // NOTE: the stub closes over jiraSearchMock (makeSmAgent's scope) —
+    // the test file's own jira_search_by_jql global is the REAL bridge tool
+    // (mocks only shadow globals inside loadModule'd modules).
+    var jiraSourceStub = {
+        query: function (rule, ctx) {
+            var tickets = jiraSearchMock({ jql: (ctx && ctx.jql) || rule.jql, fields: ['key', 'labels'] }) || [];
+            return (Array.isArray(tickets) ? tickets : []).map(function (t) {
+                return { key: t.key,
+                         labels: (t.fields && t.fields.labels) || t.labels || [],
+                         pr: null, issueNumber: null, prNumber: null };
+            });
+        }
+    };
+    // Optional github source stub: opts.github = { items: [...], pr: {...} } —
+    // for close-on-merge (localAction) and PR-lifecycle (#687) rule tests.
+    if (opts.github) {
+        jiraSourceStub = {
+            query: function () { return opts.github.items; }
+        };
+        smMocks.github_close_issue = function (closeOpts) {
+            capturedCloses.push(closeOpts);
+        };
+        // #687 PR-lifecycle localActions: capture every GitHub mutation.
+        smMocks.github_merge_pr = function (mergeOpts) {
+            capturedPrMerges.push(mergeOpts);
+            return opts.github.mergeResult !== undefined
+                ? opts.github.mergeResult
+                : JSON.stringify({ merged: true, sha: 'deadbeef', message: 'Pull Request successfully merged' });
+        };
+        smMocks.github_add_labels = function (labelOpts) { capturedPrLabelAdds.push(labelOpts); };
+        smMocks.github_remove_label = function (remOpts) { capturedPrLabelRemoves.push(remOpts); };
+        smMocks.github_create_comment = function (cOpts) { capturedPrComments.push(cOpts); };
+        smMocks.github_get_pr = function () {
+            return JSON.stringify(opts.github.pr || { number: 1, body: opts.github.prBody || '' });
+        };
+        // #544: linked-issue existence probe — a scraped #N that 404s
+        // (cross-repo/dangling) must degrade to a PR-anchored dispatch.
+        // Live-bridge shape: the sync tool does NOT throw on 404 — it
+        // returns the REST error BODY; issueLookupBody simulates that.
+        smMocks.github_get_issue = function (issueOpts) {
+            if (opts.github.issueLookupError) throw new Error(opts.github.issueLookupError);
+            if (opts.github.onIssueLookup) opts.github.onIssueLookup(issueOpts && issueOpts.issueNumber);
+            if (opts.github.issueLookupBody) return opts.github.issueLookupBody;
+            return opts.github.issue || { number: issueOpts && issueOpts.issueNumber };
+        };
+        smMocks.github_get_pr_comments = function () {
+            return JSON.stringify(opts.github.prComments || []);
+        };
+        smMocks.set_env_variable = function (name, value) {
+            capturedEnvSets.push({ name: name, value: value });
+        };
+    }
+    var machineAuthorModule = loadModule(
+        'js/common/machineAuthor.js', makeRequire({}), {}
+    );
+    var sm = loadModule(
+        'js/smAgent.js',
+        makeRequire({
+            './configLoader.js': freshConfigLoader,
+            './sm/sourceResolver.js': { resolve: function () { return jiraSourceStub; } },
+            './common/scm.js': mockScmModule,
+            './common/buildEncodedConfig.js': buildEncodedConfigModule,
+            './common/machineAuthor.js': machineAuthorModule,
+            './common/smProvider.js': {
+                createSmProvider: function () {
+                    return {
+                        prStatus: function () {
+                            return (opts.github && opts.github.prStatus) || null;
+                        }
+                    };
+                }
+            },
+            './factoryState.js': loadModule('js/factoryState.js', makeRequire({}), {}),
+        }),
+        smMocks
+    );
+
+    return {
+        action: sm.action,
+        applyRuleOverridesForTest: sm.applyRuleOverridesForTest,
+        probeDispatchedState: sm.probeDispatchedState,
+        capturedTriggers: capturedTriggers,
+        capturedLabels: capturedLabels,
+        capturedStatusMoves: capturedStatusMoves,
+        capturedJqls: capturedJqls,
+        capturedCliCommands: capturedCliCommands,
+        capturedCloses: capturedCloses,
+        capturedPrMerges: capturedPrMerges,
+        capturedPrLabelAdds: capturedPrLabelAdds,
+        capturedPrLabelRemoves: capturedPrLabelRemoves,
+        capturedPrComments: capturedPrComments,
+        capturedEnvSets: capturedEnvSets,
+        capturedScmConfigs: capturedScmConfigs
+    };
+}
+
+/** Minimal sm.json-style rule */
+function makeRule(jql, overrides) {
+    var base = {
+        description: 'test rule',
+        jql: jql,
+        configFile: 'agents/test.json'
+    };
+    if (overrides) {
+        for (var k in overrides) {
+            if (overrides.hasOwnProperty(k)) base[k] = overrides[k];
+        }
+    }
+    return base;
+}
+
+/** Base jobParams with owner/repo */
+function baseParams(owner, repo, rules) {
+    return {
+        jobParams: {
+            owner: owner || 'test-org',
+            repo: repo || 'test-repo',
+            rules: rules || []
+        }
+    };
+}
+
+/** JSON string for a minimal agent config with postJSAction */
+var MINIMAL_AGENT_CONFIG = JSON.stringify({
+    name: 'JSRunner',
+    params: {
+        postJSAction: 'js/unit-tests/_fixtures/noop.js',
+        customParams: {}
+    }
+});
+
+suite('sm.json rule ordering', function() {
+    test('failed test case bug creation runs before bug development consumes workflow cap', function() {
+        var config = JSON.parse(file_read({ path: 'sm.json' }));
+        var rules = config.params.jobParams.rules;
+        var indexByDescription = {};
+
+        rules.forEach(function(rule, index) {
+            indexByDescription[rule.description] = index;
+        });
+
+        var failedTcBulk = indexByDescription['Failed Test Cases → create or link bugs in batch'];
+        var bugDevelopment = indexByDescription['Backlog / To Do / Ready For Development / In Development / In Rework Bugs → trigger bug_development'];
+
+        assert.ok(failedTcBulk >= 0, 'failed TC bulk creation rule exists');
+        assert.ok(bugDevelopment >= 0, 'bug development rule exists');
+        assert.ok(
+            failedTcBulk < bugDevelopment,
+            'failed TC bug creation must be prioritized before bug development uses maxTriggeredWorkflows'
+        );
+    });
+
+    test('bug development has a cooldown to avoid Copilot rate-limit retry storms', function() {
+        var config = JSON.parse(file_read({ path: 'sm.json' }));
+        var rules = config.params.jobParams.rules;
+        var bugDevelopment = null;
+
+        rules.forEach(function(rule) {
+            if (rule.description === 'Backlog / To Do / Ready For Development / In Development / In Rework Bugs → trigger bug_development') {
+                bugDevelopment = rule;
+            }
+        });
+
+        assert.ok(bugDevelopment, 'bug development rule exists');
+        assert.contains(bugDevelopment.jql, 'updated <= -15m');
+        assert.equal(bugDevelopment.limit, 1, 'bug development should retry one ticket per SM cycle to avoid Copilot rate-limit bursts');
+        assert.equal(bugDevelopment.concurrencyKey, 'bug_development', 'bug development should use shared active-run detection across SM cycles');
+    });
+
+    test('recover merged PR runs before pr_rework so In Rework tickets with merged PR are recovered first', function() {
+        var config = JSON.parse(file_read({ path: 'sm.json' }));
+        var rules = config.params.jobParams.rules;
+        var indexByDescription = {};
+
+        rules.forEach(function(rule, index) {
+            indexByDescription[rule.description] = index;
+        });
+
+        var recoverMerged = indexByDescription['Review/Rework/Blocked Stories & Bugs with already merged PR → recover Merged status'];
+        var prRework = indexByDescription['In Rework Stories & Bugs → trigger pr_rework'];
+
+        assert.ok(recoverMerged >= 0, 'recover merged PR rule exists');
+        assert.ok(prRework >= 0, 'pr_rework rule exists');
+        assert.ok(
+            recoverMerged < prRework,
+            'recover_merged_pr must run before pr_rework to avoid starting rework on tickets whose PR is already merged'
+        );
+    });
+
+    test('stuck test case recovery has a cooldown to avoid racing active automation', function() {
+        var config = JSON.parse(file_read({ path: 'sm.json' }));
+        var rules = config.params.jobParams.rules;
+        var stuckRecovery = null;
+
+        rules.forEach(function(rule) {
+            if (rule.description === 'Stuck In Development Test Cases → recover (check PR, route to Rework/Review/Backlog)') {
+                stuckRecovery = rule;
+            }
+        });
+
+        assert.ok(stuckRecovery, 'stuck test case recovery rule exists');
+        assert.contains(stuckRecovery.jql, 'updated <= -15m');
+        assert.equal(stuckRecovery.localExecution, true, 'recovery should stay local execution');
+    });
+});
+
+// ── JQL interpolation ─────────────────────────────────────────────────────────
+
+suite('smAgent: JQL interpolation', function() {
+
+    test('replaces {jiraProject} with project from config', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "MYPROJ", parentTicket: "MYPROJ-1" }, repository: { owner: "test-org", repo: "test-repo" } };'
+            }
+        });
+
+        sm.action(baseParams('test-org', 'test-repo', [
+            makeRule("project = {jiraProject} AND issuetype = 'Story'")
+        ]));
+
+        assert.equal(sm.capturedJqls.length, 1, 'one JQL was executed');
+        assert.contains(sm.capturedJqls[0], 'project = MYPROJ', 'project placeholder replaced');
+        assert.notContains(sm.capturedJqls[0], '{jiraProject}', 'placeholder removed');
+    });
+
+    test('replaces {parentTicket} with parentTicket from config', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "PROJ", parentTicket: "PROJ-99" }, repository: { owner: "o", repo: "r" } };'
+            }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND parent = {parentTicket}")
+        ]));
+
+        assert.contains(sm.capturedJqls[0], 'parent = PROJ-99', 'parentTicket placeholder replaced');
+    });
+
+    test('leaves JQL unchanged when no config file found', function() {
+        var sm = makeSmAgent({ fileMap: {} }); // no config file
+
+        sm.action(baseParams('test-org', 'test-repo', [
+            makeRule("project = HARDCODED AND issuetype = 'Bug'")
+        ]));
+
+        assert.equal(sm.capturedJqls.length, 1);
+        assert.contains(sm.capturedJqls[0], 'project = HARDCODED', 'hardcoded JQL preserved');
+    });
+
+    test('multiple rules each get JQL interpolated', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "MULTI", parentTicket: "MULTI-1" }, repository: { owner: "o", repo: "r" } };'
+            }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Backlog'"),
+            makeRule("project = {jiraProject} AND status = 'In Review'"),
+            makeRule("project = {jiraProject} AND parent = {parentTicket}")
+        ]));
+
+        assert.equal(sm.capturedJqls.length, 3);
+        assert.contains(sm.capturedJqls[0], 'project = MULTI');
+        assert.contains(sm.capturedJqls[1], 'project = MULTI');
+        assert.contains(sm.capturedJqls[2], 'parent = MULTI-1');
+    });
+
+});
+
+// ── Config overrides ──────────────────────────────────────────────────────────
+
+suite('smAgent: config repository override', function() {
+
+    test('uses repository from config when provided', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { repository: { owner: "config-org", repo: "config-repo" }, jira: { project: "P" } };'
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        sm.action({
+            jobParams: {
+                owner: 'params-org',   // should be overridden
+                repo: 'params-repo',   // should be overridden
+                rules: [makeRule("project = {jiraProject} AND status = 'Backlog'")]
+            }
+        });
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        assert.equal(sm.capturedTriggers[0].owner, 'config-org', 'config owner used');
+        assert.equal(sm.capturedTriggers[0].repo, 'config-repo', 'config repo used');
+    });
+
+    test('uses params owner/repo when no config file', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'T-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('param-owner', 'param-repo', [
+            makeRule("project = FIXED AND status = 'Ready'")
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        assert.equal(sm.capturedTriggers[0].owner, 'param-owner');
+        assert.equal(sm.capturedTriggers[0].repo, 'param-repo');
+    });
+
+});
+
+// ── smRules override ──────────────────────────────────────────────────────────
+
+suite('smAgent: smRules override from config', function() {
+
+    test('uses smRules from config when provided — ignores params.rules', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js':
+                    'module.exports = {' +
+                    '  repository: { owner: "o", repo: "r" },' +
+                    '  jira: { project: "PROJ" },' +
+                    '  smRules: [{' +
+                    '    jql: "project = {jiraProject} AND status = \'Custom\'",' +
+                    '    configFile: "agents/custom.json",' +
+                    '    description: "custom rule from config"' +
+                    '  }]' +
+                    '};'
+            }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = SHOULD_NOT_RUN AND status = 'Backlog'") // should be ignored
+        ]));
+
+        assert.equal(sm.capturedJqls.length, 1, 'only config rules ran');
+        assert.contains(sm.capturedJqls[0], "status = 'Custom'", 'config rule JQL used');
+        assert.notContains(sm.capturedJqls[0], 'SHOULD_NOT_RUN', 'params rule ignored');
+    });
+
+    test('uses params.rules when config smRules is null', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js':
+                    'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" }, smRules: null };'
+            }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Params Rule'")
+        ]));
+
+        assert.equal(sm.capturedJqls.length, 1);
+        assert.contains(sm.capturedJqls[0], "status = 'Params Rule'", 'params rule used');
+    });
+
+});
+
+// ── Ticket dispatch ───────────────────────────────────────────────────────────
+
+
+suite('smRuleOverrides: id-based patching (github rules)', function() {
+  test('patches a github rule by its stable id', function() {
+    var patched = makeSmAgent({}).applyRuleOverridesForTest(
+      [{ id: 'rework-on-red-ci', limit: 1, description: 'x' }],
+      { 'rework-on-red-ci': { limit: 5, enabled: false } });
+    assert.equal(patched[0].limit, 5, 'limit patched');
+    assert.equal(patched[0].enabled, false, 'enabled patched');
+    assert.equal(patched[0].description, 'x', 'untouched keys preserved');
+  });
+  test('configFile keys still work (jira rules)', function() {
+    var patched = makeSmAgent({}).applyRuleOverridesForTest(
+      [{ configFile: 'agents/sm.json' }], { 'agents/sm.json': { enabled: false } });
+    assert.equal(patched[0].enabled, false, 'configFile match');
+  });
+  test('unmatched rules pass through untouched', function() {
+    var patched = makeSmAgent({}).applyRuleOverridesForTest(
+      [{ id: 'other' }], { 'rework-on-red-ci': { limit: 5 } });
+    assert.equal(patched[0].limit, undefined, 'no patch applied');
+  });
+});
+
+suite('smAgent: localAction close_issue (github close-on-merge)', function () {
+
+    test('closes the issue when the linked PR is MERGED; no workflow dispatch', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'gh-155', labels: ['ai_developed', 'pr_approved'], issueNumber: 155, prNumber: 157,
+                      pr: { number: 157, state: 'MERGED', checks: 'none', mergeState: 'UNKNOWN', mergeable: null } }
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'GitHub: linked PR merged → close the issue',
+            source: 'github',
+            query: { type: 'issue', labels: ['ai_developed'], prState: 'MERGED' },
+            localAction: 'close_issue',
+            limit: 5,
+            id: 'close-on-merge'
+        }]));
+
+        assert.equal(sm.capturedCloses.length, 1, 'issue closed exactly once');
+        assert.equal(sm.capturedCloses[0].number, 155, 'closes the matching issue');
+        assert.equal(sm.capturedCloses[0].workspace, 'epam', 'owner from rule context');
+        assert.equal(sm.capturedCloses[0].repository, 'dmtools-dart', 'repo from rule context');
+        assert.equal(sm.capturedTriggers.length, 0, 'no workflow dispatched for a localAction rule');
+        assert.equal(sm.capturedLabels.length, 0, 'no label churn');
+    });
+
+    test('localAction rule is valid without configFile or inputs', function () {
+        // Smoke: the validation branch must not skip such rules (no crash, no dispatch).
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "a", repo: "b" } };' },
+            github: { items: [] }
+        });
+
+        sm.action(baseParams('a', 'b', [{
+            source: 'github',
+            query: { type: 'issue', labels: ['ai_developed'], prState: 'MERGED' },
+            localAction: 'close_issue',
+            id: 'close-on-merge'
+        }]));
+
+        assert.equal(sm.capturedCloses.length, 0, 'nothing to close');
+        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch');
+    });
+});
+
+suite('smAgent: sm_github.json rule hygiene', function () {
+
+    test('every deployed github rule passes the validator (source + query + dispatch shape)', function () {
+        // Live regression (#458 follow-up): the develop-done rule shipped
+        // without `source: github` and the validator silently skipped it
+        // ("jql and configFile are required" — classic-rule branch). Pin
+        // the hygiene of every rule in the deployed config.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        assert.ok(rules.length >= 10, 'expected the full rule set, got ' + rules.length);
+        rules.forEach(function (r) {
+            assert.equal(r.source, 'github', r.id + ' must declare source: github');
+            assert.ok(r.query, r.id + ' needs a query object');
+            assert.ok(r.configFile || r.inputs || r.localAction,
+                r.id + ' needs configFile, inputs, or localAction');
+        });
+    });
+
+    test('rework policy: auto gated on machine author, manual via PR label (any author), review ungated', function () {
+        // Owner rule (fa run 35520284127 — auto rework fired on a
+        // foreign-authored PR and was cancelled): AUTO rework only on
+        // machine-authored PRs; MANUAL rework via the agent:rework PR label
+        // on any author; REVIEW stays for all PRs.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+
+        var auto = byId['rework-on-red-ci'];
+        assert.ok(auto, 'rework-on-red-ci exists');
+        assert.equal(auto.query.prMachineAuthor, true,
+            'auto rework is machine-author-gated (fail-closed when unconfigured)');
+
+        var manual = byId['rework-on-label'];
+        assert.ok(manual, 'rework-on-label exists (manual PR-label request)');
+        assert.equal(manual.query.type, 'pr', 'manual request lives on the PR');
+        assert.ok((manual.query.labels || []).indexOf('agent:rework') !== -1);
+        assert.ok(!manual.query.prMachineAuthor, 'manual rework is NOT author-gated');
+        assert.ok((manual.consumeLabels || []).indexOf('agent:rework') !== -1,
+            'the PR request label is consumed on dispatch (no re-fire)');
+
+        ['review-after-dev', 'review-external-once', 'review-on-label'].forEach(function (id) {
+            assert.ok(byId[id], id + ' exists');
+            assert.ok(!byId[id].query.prMachineAuthor, id + ': review stays open to all authors');
+        });
+    });
+
+    test('review-machine-unlinked: issue-less machine PRs get their one review (fa #1068 starvation)', function () {
+        // Owner order (fa 2026-09-30): #1068 sat ai_validated 19h with ZERO
+        // review legs. The three review entries all miss it: develop-done
+        // backfills OPEN linked issues only, review-after-dev rides the
+        // issue carrier, review-external-once excludes machine authors.
+        // This rule is the machine-author twin of review-external-once —
+        // author-gated (prMachineAuthor fails closed) and green-independent
+        // (silent-updated heads read checks 'none'; review-after-dev's
+        // economy: the ai_validated latch alone qualifies). Dedup is
+        // structural: workflowRef={branch} puts the leg's check run on the
+        // head, and the 'pending' rollup is excluded from the query.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+        var rule = byId['review-machine-unlinked'];
+        assert.ok(rule, 'review-machine-unlinked exists');
+        assert.equal(rule.query.type, 'pr', 'PR-anchored (no issue carrier)');
+        assert.equal(rule.query.prMachineAuthor, true, 'machine-author-gated (fail-closed)');
+        assert.deepEqual(rule.query.labels, ['ai_validated'], 'targets the validated latch');
+        ['ai_pr_reviewed', 'pr_approved', 'agent:review', 'ai_validating'].forEach(function (l) {
+            assert.ok((rule.query.notLabels || []).indexOf(l) !== -1, 'excludes ' + l);
+        });
+        assert.deepEqual(rule.query.checks, ['green', 'none'],
+            'green-independent but never pending — the running leg is its own dedup');
+        assert.equal(rule.inputs.leg, 'review', 'dispatches the review leg');
+        assert.equal(rule.inputs.pr, '{prNumber}', 'PR-anchored dispatch input');
+        assert.equal(rule.workflowRef, '{branch}', 'leg runs on the PR head (check-run dedup)');
+        assert.equal(rule.limit, 1, 'one per tick — review-external-once pacing');
+        assert.equal(rules.indexOf(rule), rules.indexOf(byId['review-external-once']) + 1,
+            'sits right after review-external-once');
+    });
+});
+
+suite('smAgent: localAction mark_developed (github machine-loop backfill)', function () {
+
+    test('labels the issue ai_developed when its green PR is open; no dispatch', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'gh-701', labels: ['in progress'], issueNumber: 701, prNumber: 724,
+                      pr: { number: 724, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true, labels: [] } }
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'dev done backfill',
+            source: 'github',
+            // Mirrors the live rule: NO `in progress` requirement (issues
+            // whose dev leg predates the status-label convention — live:
+            // fa #503 / PR #676 — must still backfill) + prMachineAuthor so
+            // external PRs never enter the review loop through here.
+            query: { type: 'issue', notLabels: ['ai_developed', 'agent:rework'],
+                     prState: 'OPEN', prChecks: 'green', prMachineAuthor: true },
+            localAction: 'mark_developed',
+            limit: 5,
+            id: 'develop-done'
+        }]));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'exactly one label add');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 701, 'labels the ISSUE number');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['ai_developed']);
+        assert.equal(sm.capturedTriggers.length, 0, 'localAction never dispatches workflows');
+    });
+
+    test('nothing to backfill — no label churn, no dispatch', function () {
+        // The source-level notLabels guard is covered by test_smGithubSource;
+        // here the stub returns items verbatim, so an empty feed is the
+        // convention for guard-side cases (see the close_issue suite).
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "a", repo: "b" } };' },
+            github: { items: [] }
+        });
+
+        sm.action(baseParams('a', 'b', [{
+            source: 'github',
+            query: { type: 'issue', labels: ['in progress'], notLabels: ['ai_developed'], prState: 'OPEN' },
+            localAction: 'mark_developed',
+            id: 'develop-done'
+        }]));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no label churn');
+        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch');
+    });
+});
+
+suite('smAgent: PR lifecycle localActions (#687)', function () {
+
+    var RULES = {
+        update: { source: 'github', query: { type: 'pr', labels: ['pr_approved'], mergeState: 'BEHIND' },
+                  localAction: 'update_branch', limit: 5, id: 'silent-update-behind' },
+        validate: { source: 'github', query: { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'], notMergeState: 'BEHIND', draft: false },
+                    localAction: 'validate_pr', limit: 1, id: 'validate-armed' },
+        merge: { source: 'github', query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'green', mergeState: 'CLEAN' },
+                 localAction: 'merge_pr', limit: 1, id: 'merge-validated' },
+        fail: { source: 'github', query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'red' },
+                localAction: 'fail_validation', limit: 1, id: 'fail-validation' },
+        unarm: { source: 'github', query: { type: 'pr', labels: ['ai_validating'], mergeState: ['BEHIND', 'BLOCKED'], draft: false },
+                 localAction: 'unarm_validation', limit: 1, id: 'unarm-stale-validation' }
+    };
+
+    function prItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved'], issueNumber: null, prNumber: n, draft: false };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    test('update_branch: git merge push (workflow token — no CI, no bot-blocked APIs)', function () {
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            github: { items: [prItem(681, { branch: 'feat/x' })] }
+        }));
+        var params = { jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            silentToken: 'SILENT-TOKEN', sourceToken: 'PAT-TOKEN', rules: [RULES.update] } };
+
+        sm.action(params);
+
+        assert.equal(sm.capturedCliCommands.length, 1, 'one update command');
+        // A git merge push, not the GitHub update-branch APIs: GraphQL
+        // updatePullRequestBranch and the PUT REST endpoint both block
+        // github-actions[bot] (live-verified); a plain push on the runner
+        // checkout is allowed and triggers no workflows.
+        var cmd = sm.capturedCliCommands[0].command;
+        assert.ok(cmd.indexOf('gh repo clone ') === 0, 'clones via gh (whitelisted, GH_TOKEN)');
+        assert.ok(cmd.indexOf('epam/dmtools-dart') !== -1, 'clones the TARGET repo');
+        assert.ok(cmd.indexOf('--branch feat/x') !== -1, 'single-branch clone of the head ref');
+        assert.ok(cmd.indexOf('merge --no-edit FETCH_HEAD') !== -1, 'merges fetched main');
+        assert.equal(cmd.slice(-'git push https://x-access-token:${GH_TOKEN}@github.com/epam/dmtools-dart.git feat/x'.length),
+            'git push https://x-access-token:${GH_TOKEN}@github.com/epam/dmtools-dart.git feat/x');
+        // No env swap: the push rides the checkout's stored credentials.
+        assert.equal(sm.capturedEnvSets.length, 0, 'no token swap');
+    });
+
+    test('update_branch: branch-less ticket is skipped loudly', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), { github: { items: [prItem(9)] } }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.update] } });
+        assert.equal(sm.capturedCliCommands.length, 0, 'no command without a branch name');
+    });
+
+    test('validate_pr: dispatches the CI workflow on the head + ai_validating label on the PR', function () {
+        // Dispatch-only CI: no push ever fires CI — the SM is the only
+        // trigger. The PAT update-branch dance is retired.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(70, { branch: 'ai/gh-50' })] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+            silentToken: 'SILENT', sourceToken: 'PAT', rules: [RULES.validate] } });
+
+        assert.equal(sm.capturedCliCommands.length, 1, 'one dispatch command');
+        assert.equal(sm.capturedCliCommands[0].command,
+            'gh workflow run quality.yml --repo a/b --ref ai/gh-50');
+        assert.equal(sm.capturedEnvSets.length, 0, 'no PAT swap — dispatch rides the ambient token');
+        assert.equal(sm.capturedPrLabelAdds.length, 1);
+        assert.equal(sm.capturedPrLabelAdds[0].number, 70);
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['ai_validating']);
+    });
+
+    test('validate_pr: jobParams.ciWorkflow overrides the default (per-repo CI file)', function () {
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(76, { branch: 'ai/gh-9' })] }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [RULES.validate] } });
+
+        assert.equal(sm.capturedCliCommands[0].command,
+            'gh workflow run ci.yml --repo IstiN/flutter_agent_harness --ref ai/gh-9');
+    });
+
+    test('validate_pr: cancels in-flight validations on superseded heads before arming', function () {
+        // Owner 2026-09-23: a branch that moves after dispatch makes the
+        // old runs useless — cancel them, scoped to THIS branch only (a
+        // run on the current head or on another branch is untouchable).
+        var CUR = 'cccc1111cccc1111cccc1111cccc1111cccc1111';
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(82, { branch: 'ai/gh-77', headSha: CUR })] },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=') !== -1) return { workflow_runs: [] };
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [
+                        { id: 111, event: 'workflow_dispatch', head_branch: 'ai/gh-77',
+                          head_sha: 'aaaa0000aaaa', status: 'in_progress' },
+                        { id: 222, event: 'workflow_dispatch', head_branch: 'ai/gh-77',
+                          head_sha: CUR, status: 'queued' },
+                        { id: 333, event: 'workflow_dispatch', head_branch: 'other/branch',
+                          head_sha: 'bbbb0000bbbb', status: 'in_progress' },
+                        { id: 444, event: 'workflow_dispatch', head_branch: 'ai/gh-77',
+                          head_sha: 'dddd0000dddd', status: 'completed' }
+                    ] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [RULES.validate] } });
+
+        var cancels = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('/cancel') !== -1; }).map(function (c) {
+            return c.command; });
+        assert.equal(cancels.length, 1, 'exactly the superseded-head run is cancelled');
+        assert.ok(cancels[0].indexOf('/actions/runs/111/cancel') !== -1, 'run 111 (old head, this branch)');
+        var dispatch = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; });
+        assert.equal(dispatch.length, 1, 'arm still proceeds after the cleanup');
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'ai_validating armed');
+    });
+
+    test('validate_pr: skipIfGreenCi — a completed green CI run on the head stops the re-dispatch loop', function () {
+        // Dead-zone guard (fa pr-922, 2026-09-26): revalidate-armed-green
+        // re-dispatches CI when the rollup is green but the CI verdict is
+        // missing. If the head ALREADY carries a completed green dispatched
+        // run and mergeState is still BLOCKED, the unmet required check
+        // belongs to another workflow — re-running this CI every tick would
+        // loop forever. The rule's skipIfGreenCi flag makes validate_pr skip.
+        var CUR = 'eeee2222eeee2222eeee2222eeee2222eeee2222';
+        var greenRule = { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                     notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'], checks: ['green'], draft: false },
+            localAction: 'validate_pr', limit: 1, id: 'revalidate-armed-green',
+            skipIfGreenCi: true };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(922, { branch: 'fix/921', headSha: CUR,
+                                            labels: ['pr_approved', 'ai_validating'] })] },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    // Old completed green run: outside the 15-min active
+                    // window (the active guard passes) but a green cover.
+                    return { workflow_runs: [
+                        { id: 555, event: 'workflow_dispatch', head_branch: 'fix/921',
+                          head_sha: CUR, status: 'completed', conclusion: 'success',
+                          created_at: '2026-09-20T00:00:00Z' }
+                    ] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [greenRule] } });
+
+        var dispatch = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; });
+        assert.equal(dispatch.length, 0, 'no re-dispatch — green cover already on the head');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no arm churn');
+    });
+
+    test('validate_pr: skipIfGreenCi — a CANCELLED run is not a green cover (re-dispatch proceeds)', function () {
+        // The exact fa pr-922 shape: the dispatched run was concurrency-cancelled
+        // — no verdict, no green cover. The rule MUST re-dispatch.
+        var CUR = 'ffff3333ffff3333ffff3333ffff3333ffff3333';
+        var greenRule = { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                     notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'], checks: ['green'], draft: false },
+            localAction: 'validate_pr', limit: 1, id: 'revalidate-armed-green',
+            skipIfGreenCi: true };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(922, { branch: 'fix/921', headSha: CUR,
+                                            labels: ['pr_approved', 'ai_validating'] })] },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    return { workflow_runs: [
+                        { id: 556, event: 'workflow_dispatch', head_branch: 'fix/921',
+                          head_sha: CUR, status: 'completed', conclusion: 'cancelled',
+                          created_at: '2026-09-20T00:00:00Z' }
+                    ] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [greenRule] } });
+
+        var dispatch = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; });
+        assert.equal(dispatch.length, 1, 'cancelled is not a cover — CI re-dispatched');
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'arm re-applied (idempotent)');
+    });
+
+    test('config order: unarm precedes silent-update (same-tick actualization)', function () {
+        // Owner 2026-09-23: a BEHIND queue head with ai_validating armed
+        // took 3 ticks to refresh (rule 0 skipped the armed PR, the unarm
+        // rule ran last, update+re-arm followed next ticks). unarm MUST
+        // run before the update rule so BEHIND+armed is resolved in one
+        // tick; stale runs are cancelled by validate_pr (agents#519).
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (function dig(o) {
+            if (o && typeof o === 'object') {
+                if (Array.isArray(o.rules)) return o.rules;
+                for (var k in o) { var r = dig(o[k]); if (r) return r; }
+            }
+            return null;
+        })(cfg);
+        var gh = rules.filter(function (r) { return r.source === 'github'; });
+        var idx = function (id) {
+            return gh.map(function (r) { return r.id; }).indexOf(id);
+        };
+        assert.ok(idx('unarm-stale-validation') < idx('silent-update-behind'),
+                  'unarm-stale-validation must precede silent-update-behind');
+    });
+
+    test('validate_pr: dispatch failure leaves the marker un-armed (next tick retries)', function () {
+        // Self-healing: a failed dispatch (bad workflow name, transient
+        // API error) must not arm ai_validating — the rule re-matches on
+        // the next tick and retries.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(72, { branch: 'feat/x' })] },
+            onCliExecute: function () {
+                throw new Error('Command execution failed (exit code 1): workflow not found');
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.validate] } });
+
+        assert.equal(sm.capturedCliCommands.length, 1, 'dispatch attempted');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no marker without a dispatched run');
+    });
+
+    test('validate_pr: branch-less ticket is skipped loudly', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), { github: { items: [prItem(78)] } }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.validate] } });
+        assert.equal(sm.capturedCliCommands.length, 0, 'no branch — no dispatch target');
+        assert.equal(sm.capturedPrLabelAdds.length, 0);
+    });
+
+    test('rework-on-label: manual PR rework — any author, consumes the PR label on dispatch', function () {
+        // Owner rule: rework fires on ANY PR when a human labels the PR
+        // agent:rework; only the AUTO path (agent:rework armed on the issue
+        // by verdict/CI) is machine-author-gated. The PR label is consumed
+        // at dispatch — the issue-anchored rework runner's removeLabels
+        // never reaches PR labels, so without consumption every later tick
+        // re-fires.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(90, { labels: ['agent:rework'], issueNumber: 732, author: 'some-human' })] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['agent:rework'] },
+              workflowFile: 'ai-teammate.yml',
+              inputs: { issue: '{issueNumber}', leg: 'rework',
+                        reason: 'sm: agent:rework label on the PR (manual rework request)' },
+              consumeLabels: ['agent:rework'], limit: 1, id: 'rework-on-label' }
+        ] } });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'manual rework dispatches for any author');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.issue, '732', 'issue-anchored dispatch on the linked issue');
+        assert.equal(inputs.leg, 'rework');
+        assert.equal(sm.capturedPrLabelRemoves.length, 1, 'the request label is consumed');
+        assert.equal(sm.capturedPrLabelRemoves[0].number, 90);
+        assert.deepEqual(sm.capturedPrLabelRemoves[0].labels, ['agent:rework']);
+    });
+
+    test('rework-on-label: PR with a linked issue dispatches issue-anchored after the local-existence check (#544)', function () {
+        // The body scrape (githubSource.linkedIssueNumber) returns a number;
+        // before anchoring the dispatch smAgent verifies via github_get_issue
+        // that it is an EXISTING LOCAL issue. A resolvable one keeps the
+        // legacy issue-anchored shape byte-identical.
+        var lookedUp = [];
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(89, { labels: ['agent:rework'], issueNumber: 555, author: 'some-human' })],
+                onIssueLookup: function (n) { lookedUp.push(n); }
+            }
+        }));
+        // Wire the probe through the capture (the mock default returns success).
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['agent:rework'] },
+              workflowFile: 'ai-teammate.yml',
+              inputs: { issue: '{issueNumber}', leg: 'rework',
+                        reason: 'sm: agent:rework label on the PR (manual rework request)' },
+              consumeLabels: ['agent:rework'], limit: 1, id: 'rework-on-label' }
+        ] } });
+
+        assert.deepEqual(lookedUp, [555], 'local existence verified via github_get_issue before anchoring');
+        assert.equal(sm.capturedTriggers.length, 1, 'existing local issue → issue-anchored dispatch');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.issue, '555');
+        assert.equal(inputs.leg, 'rework');
+        assert.equal(inputs.pr || '', '', 'issue-anchored dispatch carries no pr input');
+    });
+
+    test('rework-on-label: PR without a linked issue dispatches PR-anchored (#544 owner rule 3)', function () {
+        // Guest/issue-less PR the owner labeled agent:rework — the anchor is
+        // the PR itself (inputs.pr), the factory guard runs the rework leg
+        // on pr-<N>. The request label is still consumed on dispatch.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(91, { labels: ['agent:rework'], issueNumber: null })] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['agent:rework'] },
+              workflowFile: 'ai-teammate.yml',
+              inputs: { issue: '{issueNumber}', leg: 'rework' },
+              consumeLabels: ['agent:rework'], limit: 1, id: 'rework-on-label' }
+        ] } });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'PR-anchored rework dispatches for an issue-less PR');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.issue, '', 'no issue anchor — empty, never a pr-N pseudo-anchor');
+        assert.equal(inputs.pr, '91', 'the PR is the anchor');
+        assert.equal(inputs.leg, 'rework');
+        assert.equal(sm.capturedPrLabelRemoves.length, 1, 'the request label is consumed');
+        assert.equal(sm.capturedPrLabelRemoves[0].number, 91);
+        assert.deepEqual(sm.capturedPrLabelRemoves[0].labels, ['agent:rework']);
+    });
+
+    test('rework-on-label: dangling scraped #N (not a local issue) degrades to PR-anchored (#544)', function () {
+        // The bare-#N scrape survived the cross-repo filter but the number
+        // does not exist locally (deleted issue / ref to another repo the
+        // qualifier missed). github_get_issue 404 → PR-anchored fallback —
+        // the guard never sees a bogus issue number.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(92, { labels: ['agent:rework'], issueNumber: 601 })],
+                issueLookupError: 'GraphQL: Could not resolve to an issue or pull request with the number of 601'
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['agent:rework'] },
+              workflowFile: 'ai-teammate.yml',
+              inputs: { issue: '{issueNumber}', leg: 'rework' },
+              consumeLabels: ['agent:rework'], limit: 1, id: 'rework-on-label' }
+        ] } });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'fallback dispatches instead of crashing the cycle');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.issue, '', 'bogus #601 anchor dropped');
+        assert.equal(inputs.pr, '92');
+        assert.equal(inputs.leg, 'rework');
+    });
+
+    test('auto rework: dangling scraped #N with a bridge 404 BODY (no throw) degrades to PR-anchored', function () {
+        // Live (dmd #266): the sync github_get_issue does NOT throw on 404 —
+        // it returns the REST error body. The existence probe must inspect
+        // the BODY, else the dangling scrape anchors gh-601 and the rework
+        // never touches the PR. AUTO path shape: machine-author gated, no
+        // consumeLabels (the rework leg clears the label on push).
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(93, { labels: ['agent:rework'], issueNumber: 601,
+                                     branch: 'ai/gh-266', author: 'ai-teammate' })],
+                issueLookupBody: '{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}'
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['agent:rework'], prMachineAuthor: true },
+              workflowFile: 'ai-teammate.yml',
+              inputs: { issue: '{issueNumber}', leg: 'rework',
+                        reason: 'sm: agent:rework (red CI or review CHANGES)' },
+              workflowRef: '{branch}', limit: 1, id: 'rework-on-red-ci' }
+        ] } });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'auto rework dispatches PR-anchored instead of gh-601');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.issue, '', 'bogus #601 anchor dropped — the PR under rework is the only sane anchor');
+        assert.equal(inputs.pr, '93');
+        assert.equal(inputs.leg, 'rework');
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'auto path does not consume the arm — the rework leg clears it on push');
+        assert.equal(sm.capturedTriggers[0].ref, 'ai/gh-266', 'leg still dispatches on the PR head');
+    });
+
+    test('auto review: dangling scraped #N with a bridge 404 BODY degrades to PR-anchored review', function () {
+        // Same root cause on the AUTO REVIEW leg (live: dmd #266, run
+        // 36332635090 — auto review dispatch anchored gh-601, scraped from
+        // the PR body referencing 'dm.ai #601', local issue missing). The
+        // fallback is engine-level: any issue-anchored leg on a PR-carrier
+        // item degrades to inputs.pr, and the factory guard's PR-anchored
+        // branch runs the review leg on pr-<N>.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(94, { labels: ['ai_developed'], issueNumber: 601,
+                                     branch: 'ai/gh-266' })],
+                issueLookupBody: '{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}'
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['ai_developed'] },
+              workflowFile: 'ai-teammate.yml',
+              inputs: { issue: '{issueNumber}', leg: 'review',
+                        reason: 'sm: green PR awaits review' },
+              workflowRef: '{branch}', limit: 1, id: 'review-after-dev' }
+        ] } });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'auto review dispatches PR-anchored instead of gh-601');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.issue, '');
+        assert.equal(inputs.pr, '94', 'the PR under review is the anchor');
+        assert.equal(inputs.leg, 'review', 'the guard PR-anchored branch runs the REVIEW leg by default');
+    });
+
+    test('auto review: scraped #N resolving to a REAL local issue keeps the issue anchor', function () {
+        // No regression for the healthy path: the bridge returns the issue
+        // JSON body (number present) → issue-anchored review dispatch.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(95, { labels: ['ai_developed'], issueNumber: 266,
+                                     branch: 'ai/gh-266' })],
+                issue: { number: 266, state: 'open' }
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['ai_developed'] },
+              workflowFile: 'ai-teammate.yml',
+              inputs: { issue: '{issueNumber}', leg: 'review',
+                        reason: 'sm: green PR awaits review' },
+              workflowRef: '{branch}', limit: 1, id: 'review-after-dev' }
+        ] } });
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.issue, '266', 'resolvable scrape keeps the legacy issue-anchored shape');
+        assert.equal(inputs.leg, 'review');
+    });
+
+    test('unarm_validation: stale validated PR drops ai_validating (refresh + re-validate follows)', function () {
+        // Live deadlock (fa pr-744): armed + validated green, then base
+        // moved → BEHIND. silent-update-behind excludes ai_validating,
+        // merge-validated needs CLEAN — nothing ever touched the PR again.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(74, { labels: ['pr_approved', 'ai_validating'] })] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.unarm] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }), ['ai_validating']);
+        assert.equal(sm.capturedPrMerges.length, 0, 'no merge on a stale head');
+        assert.equal(sm.capturedTriggers.length, 0, 'localAction never dispatches');
+    });
+
+    test('merge_pr: squash-merge + clears ai_validating, pr_approved and ai_validated', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(71, { labels: ['pr_approved', 'ai_validating'] })],
+                pr: { number: 71, labels: ['pr_approved', 'ai_validating'] }
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.merge] } });
+
+        assert.equal(sm.capturedPrMerges.length, 1);
+        assert.equal(sm.capturedPrMerges[0].pullRequestId, 71);
+        assert.equal(sm.capturedPrMerges[0].mergeMethod, 'squash');
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
+            ['ai_validating', 'pr_approved', 'ai_validated']);
+    });
+
+    test('merge_pr: un-approved green head latches ai_validated instead of merging', function () {
+        // Dispatch-only CI armed the validation PRE-review (validate-fresh):
+        // green + CLEAN but no sticky pr_approved yet — merge is refused,
+        // the latch flips, review-after-dev picks the head up.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(77, { labels: ['ai_validating'] })],
+                pr: { number: 77, labels: ['ai_validating'] }
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.merge] } });
+
+        assert.equal(sm.capturedPrMerges.length, 0, 'never merges without pr_approved');
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }), ['ai_validating']);
+        assert.equal(sm.capturedPrLabelAdds.length, 1);
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['ai_validated']);
+    });
+
+    test('merge_pr: refused merge (405 body, no thrown error) keeps the armed markers (fa pr-753)', function () {
+        // The HTTP layer returns the raw body for error statuses (Java
+        // parity) — github_merge_pr does NOT throw on a 405. Clearing the
+        // markers on a refused merge orphaned fa pr-753 (logged
+        // "squash-merged", PR stayed open and unarmed).
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(753, { labels: ['pr_approved', 'ai_validating'] })],
+                pr: { number: 753, labels: ['pr_approved', 'ai_validating'] },
+                mergeResult: JSON.stringify({ message: 'Pull Request is not mergeable', merged: false })
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.merge] } });
+
+        assert.equal(sm.capturedPrMerges.length, 1, 'merge attempted');
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'markers must survive a refused merge — unarm-stale/refresh/re-validate self-heals');
+    });
+
+    test('merge_pr: non-JSON body also counts as refusal', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(754, { labels: ['pr_approved', 'ai_validating'] })],
+                pr: { number: 754, labels: ['pr_approved', 'ai_validating'] },
+                mergeResult: 'Bad Gateway'
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.merge] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0);
+    });
+
+    test('complete_validation: green pre-review head latches ai_validated', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(79, { labels: ['ai_validating'] })] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [{
+            source: 'github',
+            query: { type: 'pr', labels: ['ai_validating'], notLabels: ['pr_approved'], checks: 'green' },
+            localAction: 'complete_validation', limit: 1, id: 'validated-green'
+        }] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }), ['ai_validating']);
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (r) { return r.labels; }), [['ai_validated']]);
+        assert.equal(sm.capturedPrMerges.length, 0);
+    });
+
+    test('conflict_rework: machine DIRTY PR — comments with head sha, re-arms agent:rework, pr_approved STICKY', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(95, { labels: ['pr_approved', 'ai_validating'], branch: 'ai/gh-91', author: 'ai-teammate',
+                                      pr: { headSha: 'deadbee' } })],
+                pr: { number: 95, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #91 — thing' },
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [{
+            source: 'github', query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+            localAction: 'conflict_rework', limit: 1, id: 'conflict-rework' }] } });
+
+        assert.equal(sm.capturedPrComments.length, 1, 'conflict report comment');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Merge conflict with main') !== -1);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('deadbee') !== -1, 'comment carries the head sha (per-head dedup key)');
+        assert.equal(sm.capturedPrLabelAdds.length, 1);
+        assert.equal(sm.capturedPrLabelAdds[0].number, 91, 're-arm lands on the linked issue');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) { return r.label === 'ai_validating'; }),
+            'ai_validating disarmed');
+        assert.ok(!sm.capturedPrLabelRemoves.some(function (r) { return r.label === 'pr_approved'; }),
+            'pr_approved is STICKY — the conflicted fix re-validates, never re-reviews');
+    });
+
+    test('conflict_rework: already reported for THIS head — silent skip (once per head)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(95, { labels: [], branch: 'ai/gh-91', author: 'ai-teammate',
+                                      pr: { headSha: 'deadbee' } })],
+                pr: { number: 95, labels: [], body: 'Fixes #91 — thing' },
+                prComments: [
+                    { body: '⚠️ Merge conflict with main — the silent branch update could not merge main (conflict). (head `deadbee`)' }
+                ]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [{
+            source: 'github', query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+            localAction: 'conflict_rework', limit: 1, id: 'conflict-rework' }] } });
+
+        assert.equal(sm.capturedPrComments.length, 0, 'no duplicate comment for the same head');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no duplicate rework arm for the same head');
+        // A comment for a DIFFERENT head must NOT suppress: new head = new report.
+        var sm2 = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(95, { labels: [], branch: 'ai/gh-91', author: 'ai-teammate',
+                                      pr: { headSha: 'cafe123' } })],
+                pr: { number: 95, labels: [], body: 'Fixes #91 — thing' },
+                prComments: [
+                    { body: '⚠️ Merge conflict with main — ... (head `deadbee`)' }
+                ]
+            }
+        }));
+        sm2.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [{
+            source: 'github', query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+            localAction: 'conflict_rework', limit: 1, id: 'conflict-rework' }] } });
+        assert.equal(sm2.capturedPrComments.length, 1, 'moved head re-reports');
+        assert.equal(sm2.capturedPrLabelAdds.length, 1, 'moved head re-arms rework');
+    });
+
+    test('conflict_rework: GUEST DIRTY PR — report only, never a rework arm', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(96, { labels: [], branch: 'fix/773-thing', author: 'someguest',
+                                      pr: { headSha: 'ab12cd' } })],
+                pr: { number: 96, labels: [], body: 'Fixes #773 — guest' },
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [{
+            source: 'github', query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+            localAction: 'conflict_rework', limit: 1, id: 'conflict-rework' }] } });
+
+        assert.equal(sm.capturedPrComments.length, 1);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Guest PR') !== -1);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('rebase onto main') !== -1);
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no rework arm for guests');
+    });
+
+    test('conflict_rework: linked issue CLOSED — PR-anchored rework dispatch, no dead-letter label (#579)', function () {
+        // Live fa #1075 (2026-09-30): DIRTY, linked #1074 CLOSED (fixed via
+        // #1081) — the old path labelled the closed issue and the PR waited
+        // on rework forever (the issue-rework rule matches OPEN issues
+        // only). The re-arm must anchor on the PR instead.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(95, { labels: [], branch: 'fix/1074-web-shift-safety', author: 'ai-teammate',
+                                      pr: { headSha: 'deadbee' } })],
+                pr: { number: 95, labels: [], body: 'Fixes #1074 — superseded fix' },
+                issue: { number: 1074, state: 'closed' },
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [{
+            source: 'github', query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+            localAction: 'conflict_rework', limit: 1, id: 'conflict-rework' }] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'no agent:rework on a CLOSED issue — dead letter');
+        assert.equal(sm.capturedTriggers.length, 1, 'PR-anchored rework dispatched');
+        assert.equal(sm.capturedTriggers[0].workflow, 'ai-teammate.yml');
+        assert.equal(sm.capturedTriggers[0].ref, 'fix/1074-web-shift-safety', 'leg runs on the PR head');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.leg, 'rework');
+        assert.equal(inputs.pr, '95', 'PR anchor');
+        assert.equal(inputs.issue || '', '', 'no issue anchor');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('PR-anchored conflict rework') !== -1,
+            'report names the PR-anchored path');
+    });
+
+    test('conflict_rework: <n>-slug branch resolves the linked issue — OPEN issue keeps the label path (#579 grammar)', function () {
+        // The merge-trigger linkage grammar also accepts '<n>-slug'
+        // branches; 'fix/1074-web-shift-safety' resolved to nothing under
+        // the gh-<n>-only scan. An OPEN linked issue keeps the legacy
+        // issue-re-arm shape byte-identical.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(95, { labels: [], branch: 'fix/1074-web-shift-safety', author: 'ai-teammate',
+                                      pr: { headSha: 'deadbee' } })],
+                pr: { number: 95, labels: [], body: 'web shift safety fix' },
+                issue: { number: 1074, state: 'open' },
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [{
+            source: 'github', query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+            localAction: 'conflict_rework', limit: 1, id: 'conflict-rework' }] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 're-arm lands on the linked issue');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 1074, 'resolved from the <n>-slug branch');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        assert.equal(sm.capturedTriggers.length, 0, 'OPEN issue → no PR-anchored dispatch');
+    });
+
+    test('fail_validation: unarms, comments, re-arms agent:rework — pr_approved is STICKY', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(72, { labels: ['pr_approved', 'ai_validating'], author: 'ai-teammate', headSha: 'sha72' })],
+                pr: { number: 72, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #503 — boot cost' },
+                // Failed-run link (owner 2026-10-01): the RED run on this
+                // exact head must land in the report; the green one must not.
+                workflowApiRuns: [
+                    { id: 601, event: 'workflow_dispatch', head_sha: 'sha72', status: 'completed',
+                      conclusion: 'failure', html_url: 'https://github.com/a/b/actions/runs/601',
+                      created_at: '2026-10-01T10:00:00Z', updated_at: '2026-10-01T10:05:00Z' },
+                    { id: 600, event: 'workflow_dispatch', head_sha: 'sha72', status: 'completed',
+                      conclusion: 'success', html_url: 'https://github.com/a/b/actions/runs/600',
+                      created_at: '2026-10-01T09:00:00Z', updated_at: '2026-10-01T09:05:00Z' }
+                ]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
+
+        // Owner rule 2026-09 (token budget): after the first approval the
+        // loop NEVER re-reviews — validation red re-arms rework only; the
+        // fixed head re-validates via validate-armed and merges. Keeping
+        // pr_approved armed would previously burn the workflow cap (fa
+        // pr-750) — that loop is now closed by the latch semantics
+        // themselves (validate-armed dispatches instead of PAT-pushing).
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.number + ':' + r.label; }),
+            ['72:ai_validating'],
+            'only ai_validating is unarmed — pr_approved sticks for the re-validated head');
+        assert.equal(sm.capturedPrComments.length, 1, 'PR report comment');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Validation CI went red') !== -1);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('no re-review') !== -1);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Failed run: https://github.com/a/b/actions/runs/601') !== -1,
+            'report links the red run on this head — the reader skips the runs-tab hunt');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('runs/600') === -1,
+            'a green run on the same head is never linked');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('\u26a0\ufe0f') !== -1,
+            'the \u26a0\ufe0f marker stays (an SM PR comment, not site UI)');
+        assert.equal(sm.capturedPrLabelAdds.length, 1);
+        assert.equal(sm.capturedPrLabelAdds[0].number, 503, 're-arm lands on the linked issue');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+    });
+
+    test('fail_validation: branch-name fallback when the body lacks a closing keyword (fa pr-750)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(750, { labels: ['pr_approved', 'ai_validating'], branch: 'ai/gh-746', author: 'ai-teammate' })],
+                pr: { number: 750, labels: ['pr_approved', 'ai_validating'],
+                      body: '### What changed\n\nFixes the Play Store rejection (gh-746) by ...' }
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'issue found via the ai/gh-<n> branch convention');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 746);
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        // Sticky approval: no pr_approved removal anywhere (PR or issue).
+        assert.ok(!sm.capturedPrLabelRemoves.some(function (r) { return r.label === 'pr_approved'; }),
+            'pr_approved is never disarmed — rework re-validates, never re-reviews');
+    });
+
+    test('review-on-label: no re-dispatch while the stub run is active (dup guard)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(80, { labels: ['agent:review'] })] },
+            workflowRuns: { in_progress: [
+                // Stub-titled run for a DIFFERENT key — must not block.
+                { name: '\u25b6 review (SM) \u00b7 pr-79', id: 1, updated_at: new Date().toISOString() },
+                { name: '\u25b6 review (SM) \u00b7 pr-80', id: 2, updated_at: new Date().toISOString() }
+            ] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['agent:review'] },
+              workflowFile: 'ai-teammate.yml',
+              inputs: { issue: '', leg: 'review', reason: 'sm: agent:review label on PR', pr: '{prNumber}' },
+              id: 'review-on-label' }
+        ] } });
+        assert.equal(sm.capturedTriggers.length, 0,
+            'active stub-titled run for the same key blocks the re-dispatch');
+    });
+
+    test('fail_validation: external PR (no linked issue) — report only', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(73, { labels: ['pr_approved', 'ai_validating'], author: 'ai-teammate', headSha: 'sha73' })],
+                      pr: { number: 73, labels: ['pr_approved', 'ai_validating'], body: 'no link' } }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
+
+        assert.equal(sm.capturedPrComments.length, 1);
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no issue to re-arm');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Failed run') === -1,
+            'EMPTY run list (mock default) → no link line — the report still posts, nothing crashes');
+        assert.ok(!sm.capturedPrLabelRemoves.some(function (r) { return r.label === 'pr_approved'; }),
+            'pr_approved is sticky even without a linked issue — approval survives CI red');
+    });
+
+    test('fail_validation: GUEST PR (owner rule 2026-09-21) — report + PARK (validation_failed), never a rework arm', function () {
+        // Guest = any account other than the machine login: they get review
+        // + validation only. A guest 'Fixes #191' body must not arm rework on
+        // a (possibly machine) linked issue; the ai/gh-<n> branch fallback is
+        // machine-only too.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(99, { labels: ['pr_approved', 'ai_validating'], branch: 'ai/gh-191', author: 'someguest', headSha: 'sha99' })],
+                pr: { number: 99, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #191 — guest contribution' },
+                workflowApiRuns: [
+                    { id: 701, event: 'workflow_dispatch', head_sha: 'sha99', status: 'completed',
+                      conclusion: 'timed_out', html_url: 'https://github.com/a/b/actions/runs/701',
+                      created_at: '2026-10-01T11:00:00Z', updated_at: '2026-10-01T11:40:00Z' }
+                ]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.number + ':' + r.label; }),
+            ['99:ai_validating'], 'ai_validating still disarms');
+        // dmtools-agents#1179 fix: guests now get the PARK LABEL — the
+        // report-only branch used to leave the red guest as the OLDEST
+        // validate-armed candidate (FIFO froze behind it, live fa
+        // 2026-10-02: 11 manual mitigations in one night).
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number + ':' + a.labels.join(','); }),
+            ['99:validation_failed'], 'GUEST PR parked via validation_failed');
+        assert.equal(sm.capturedPrComments.length, 1);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Guest PR') !== -1,
+            'the report tells the guest to fix and push');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('re-runs automatically') !== -1,
+            'validation re-runs on their push — guests keep the validate leg');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Failed run: https://github.com/a/b/actions/runs/701') !== -1,
+            'the GUEST report links its red run too (timed_out counts) — the guest sees WHERE it went red');
+    });
+
+    test('fail_validation: machineAuthor unconfigured — fail-closed, no rework arm at all', function () {
+        // machineAuthor.js invariant: with no machine login configured every
+        // machine-keyed guard is inert/fail-closed. Red CI then reports only.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(77, { labels: ['pr_approved', 'ai_validating'], author: 'ai-teammate' })],
+                pr: { number: 77, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #55' }
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.fail] } });
+
+        assert.equal(sm.capturedPrComments.length, 1, 'the report still posts');
+        // With no machine login EVERY PR is a guest — the #1179 park label
+        // is the guest treatment, so it fires here too (fail-closed applies
+        // to the machine-only rework arm, not to the guest park).
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number + ':' + a.labels.join(','); }),
+            ['77:validation_failed'], 'guest park fires without a machine login');
+    });
+});
+
+suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', function () {
+    // Latch-skip: an approved PR whose head did NOT move since its green
+    // validation (ai_validated latch + a completed-green dispatched run on
+    // the current SHA + green rollup) must NOT re-run CI — validate-armed
+    // arms ai_validating without a dispatch and merge-validated consumes the
+    // arm on the existing green. Sweeper: an ai_validating arm whose head's
+    // validation run concluded (success or failure) staleMinutes ago and was
+    // never consumed gets unarmed — success re-latches ai_validated, failure
+    // runs the standard fail path.
+
+    var RULES = {
+        validateSkip: { source: 'github', query: { type: 'pr', labels: ['pr_approved'],
+            notLabels: ['ai_validating'], notMergeState: ['BEHIND', 'DIRTY'], draft: false },
+            localAction: 'validate_pr', skipIfValidatedHead: true, limit: 1, id: 'validate-armed' },
+        sweep: { source: 'github', query: { type: 'pr', labels: ['ai_validating'], draft: false },
+            localAction: 'sweep_stale_validation', staleMinutes: 15, limit: 10, id: 'sweep-stale-validating' }
+    };
+
+    function prItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved'], issueNumber: null, prNumber: n, draft: false };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    // Completed dispatched run 3h ago (outside every fresh-run window).
+    // The mock filters by head_sha exactly like the real API endpoint does.
+    function runsCli(opts) {
+        return function (cmd) {
+            if (cmd.command.indexOf('actions/workflows/') !== -1 && cmd.command.indexOf('/runs?') !== -1) {
+                var m = /head_sha=([^&"]+)/.exec(cmd.command);
+                if (m && m[1] === opts.run.head_sha) {
+                    return JSON.stringify({ workflow_runs: [opts.run] });
+                }
+                return JSON.stringify({ workflow_runs: [] });
+            }
+            return '';
+        };
+    }
+    function oldRun(conclusion, headSha) {
+        var t = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+        return { status: 'completed', conclusion: conclusion, head_sha: headSha,
+                 created_at: t, updated_at: t };
+    }
+    function dispatched(cmdList) {
+        return cmdList.some(function (c) { return c.command.indexOf('gh workflow run') === 0; });
+    }
+
+    test('validate-armed: latch-skip — unchanged validated head arms WITHOUT re-running CI', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(81, { labels: ['pr_approved', 'ai_validated'], branch: 'feat/v', headSha: 'sha111' })],
+                prStatus: { checkConclusion: 'green' },
+            },
+                onCliExecute: runsCli({ run: oldRun('success', 'sha111') })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.validateSkip] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands), 'NO CI re-dispatch — the existing green covers the head');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
+            ['ai_validating'], 'arm only — merge-validated consumes it on the existing green');
+    });
+
+    test('validate-armed: moved head (no green run on the new SHA) → real validation dispatched', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(82, { labels: ['pr_approved', 'ai_validated'], branch: 'feat/w', headSha: 'shaNEW' })],
+                prStatus: { checkConclusion: 'green' },
+                // The green run sits on the OLD sha — the new head has nothing.
+            },
+                onCliExecute: runsCli({ run: oldRun('success', 'shaOLD') })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.validateSkip] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands),
+            'head moved — the latch-skip must NOT apply; CI re-runs on the fresh head');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
+            ['ai_validating'], 'normal arm on dispatch');
+    });
+
+    test('validate-armed: latch-skip fails closed without the ai_validated latch', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(83, { labels: ['pr_approved'], branch: 'feat/x', headSha: 'sha111' })],
+                prStatus: { checkConclusion: 'green' },
+            },
+                onCliExecute: runsCli({ run: oldRun('success', 'sha111') })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.validateSkip] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands),
+            'no latch on record — a stray green dispatched run alone never skips validation');
+    });
+
+    test('sweep_stale_validation: concluded-green older than staleMinutes → unarm + ai_validated re-latch', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(84, { labels: ['pr_approved', 'ai_validating'], headSha: 'sha222' })],
+            },
+                onCliExecute: runsCli({ run: oldRun('success', 'sha222') })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.number + ':' + r.label; }),
+            ['84:ai_validating'], 'the stale arm is released (mutex freed)');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
+            ['ai_validated'], 'success side re-latches — the merge window re-flows via the latch-skip');
+        assert.ok(!dispatched(sm.capturedCliCommands), 'sweep never dispatches CI');
+    });
+
+    test('sweep_stale_validation: concluded-red older than staleMinutes → unarm + standard fail path', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(85, { labels: ['pr_approved', 'ai_validating'], headSha: 'sha333' })],
+                pr: { number: 85, body: 'no closing keyword' },
+            },
+                onCliExecute: runsCli({ run: oldRun('failure', 'sha333') })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.number + ':' + r.label; }),
+            ['85:ai_validating'], 'the stale arm is released');
+        // #1179: the fail path now also PARKS the red guest (validation_failed
+        // on the PR) — ai_validated is still never latched on the red side.
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.indexOf('ai_validated') !== -1; }),
+            'failure side never latches ai_validated — the fail path owns it');
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.indexOf('validation_failed') !== -1; }),
+            'the standard fail path parks the red guest (dmtools-agents#1179)');
+        assert.equal(sm.capturedPrComments.length, 1,
+            'the standard fail report posts (guest PR → report + park, no rework arm)');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('went red') !== -1,
+            'the report says validation went red');
+    });
+
+    test('sweep_stale_validation: fresh conclusion (< staleMinutes) → arm stays (verdict race window)', function () {
+        var t = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(86, { labels: ['pr_approved', 'ai_validating'], headSha: 'sha444' })],
+                onCliExecute: runsCli({ run: { status: 'completed', conclusion: 'success',
+                    head_sha: 'sha444', created_at: t, updated_at: t } })
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'a 2-minute-old verdict may still be consumed — no sweep');
+        assert.equal(sm.capturedPrLabelAdds.length, 0);
+    });
+
+    test('sweep_stale_validation: cancelled conclusion or no run → arm stays (no verdict to sweep)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(87, { labels: ['ai_validating'], headSha: 'sha555' })],
+            },
+                onCliExecute: runsCli({ run: oldRun('cancelled', 'sha555') })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'CANCELLED is never a verdict — nothing to sweep');
+
+        var sm2 = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(88, { labels: ['ai_validating'], headSha: 'sha666' })]
+            },
+            onCliExecute: function () { return JSON.stringify({ workflow_runs: [] }); }
+        }));
+        sm2.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+        assert.equal(sm2.capturedPrLabelRemoves.length, 0,
+            'no dispatched run on the head (dispatch lost) — revalidate-armed owns that recovery');
+    });
+});
+
+suite('smAgent: red-head park + dry-run dispatch + conclusion grace (fa wave stall 2026-09-27)', function () {
+    // Live diagnosis (fa, 2026-09-27 evening): the oldest APPROVED PR was a
+    // guest whose head validation had FAILED — validate-armed kept
+    // re-dispatching CI on the unchanged red head every dup-guard window,
+    // hogging the limit-1 FIFO slot while nine green-latched approved PRs
+    // waited behind it for hours (no wave merge). Three fixes:
+    //  1. deferRedHead (validate-armed): a head whose latest concluded
+    //     dispatched verdict is FAILURE is parked — no dispatch, no arm,
+    //     the limit-1 window advances. Machine PRs re-enter on the new head
+    //     the rework leg pushes; guest PRs get one park comment per head.
+    //  2. dispatchCiWorkflow honors DRY (a dry SM tick really dispatched
+    //     CI, leaving an unarmed run whose verdict nobody could consume).
+    //  3. The dup-dispatch guard counts its 15-min grace from the prior
+    //     run's CONCLUSION, not creation.
+
+    var RULES = {
+        armed: { source: 'github', query: { type: 'pr', labels: ['pr_approved'],
+            notLabels: ['ai_validating'], notMergeState: ['BEHIND', 'DIRTY'], draft: false },
+            localAction: 'validate_pr', skipIfValidatedHead: true, deferRedHead: true,
+            limit: 1, id: 'validate-armed' }
+    };
+
+    function prItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved'], issueNumber: null, prNumber: n,
+                   draft: false, branch: 'feat/x', headSha: 'shaH', author: 'guest-human' };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+    function runsCli(opts) {
+        return function (cmd) {
+            if (cmd.command.indexOf('actions/workflows/') !== -1 && cmd.command.indexOf('/runs?') !== -1) {
+                var m = /head_sha=([^&"]+)/.exec(cmd.command);
+                if (m && m[1] === opts.run.head_sha) {
+                    return JSON.stringify({ workflow_runs: [opts.run] });
+                }
+                return JSON.stringify({ workflow_runs: [] });
+            }
+            return '';
+        };
+    }
+    function run(conclusion, headSha, createdMsAgo, updatedMsAgo) {
+        return { status: 'completed', conclusion: conclusion, head_sha: headSha,
+                 created_at: new Date(Date.now() - createdMsAgo).toISOString(),
+                 updated_at: new Date(Date.now() - updatedMsAgo).toISOString() };
+    }
+    function dispatched(cmdList) {
+        return cmdList.some(function (c) { return c.command.indexOf('gh workflow run') === 0; });
+    }
+
+    test('deferRedHead: guest PR with a red current head parks — no dispatch, no arm, one park comment', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(91, { headSha: 'ee55ff66aa' })],
+                prStatus: { checkConclusion: 'red' }
+            },
+            onCliExecute: runsCli({ run: run('failure', 'ee55ff66aa', 40 * 60000, 20 * 60000) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES.armed] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands), 'red verdict still current — CI must NOT re-dispatch on the same SHA');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no ai_validating arm — the slot is parked, not consumed');
+        assert.equal(sm.capturedPrComments.length, 1, 'guest PR gets exactly one park comment');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Validation red') !== -1, 'park marker');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('ee55ff66aa') !== -1, 'comment carries the head sha (per-head dedup key)');
+    });
+
+    test('deferRedHead: park comment is posted once per head (marker dedup)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(92, { headSha: 'ee55ff66aa' })],
+                prComments: [{ body: '🅿️ Validation red — PR parked — the current head `ee55ff66aa` failed validation earlier' }],
+                prStatus: { checkConclusion: 'red' }
+            },
+            onCliExecute: runsCli({ run: run('failure', 'ee55ff66aa', 40 * 60000, 20 * 60000) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES.armed] } });
+
+        assert.equal(sm.capturedPrComments.length, 0, 'existing marker for this head — no duplicate park comment');
+        assert.ok(!dispatched(sm.capturedCliCommands), 'still parked — still no dispatch');
+    });
+
+    test('deferRedHead: machine-authored red head defers without a park comment (rework owns the report)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(93, { headSha: 'ee55ff66aa', author: 'ai-teammate' })],
+                prStatus: { checkConclusion: 'red' }
+            },
+            onCliExecute: runsCli({ run: run('failure', 'ee55ff66aa', 40 * 60000, 20 * 60000) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES.armed] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands), 'machine PR on an unchanged red head — no wasted CI either');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no arm while the red is current');
+        assert.equal(sm.capturedPrComments.length, 0, 'machine PRs get no park comment — the fail path/rework owns reporting');
+    });
+
+    test('deferRedHead: a NEW head re-enters normally (dispatch + arm)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(94, { headSha: 'shaNEW', author: 'ai-teammate' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            // The old red run sits on the OLD sha — the new head has no verdict.
+            onCliExecute: runsCli({ run: run('failure', 'shaOLD', 40 * 60000, 20 * 60000) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES.armed] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands), 'new head — real validation dispatched');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
+            ['ai_validating'], 'armed for the fresh validation');
+    });
+
+    test('dispatchCiWorkflow honors DRY — a dry tick dispatches NO CI', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(95, { headSha: 'shaNEW' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: function () { return JSON.stringify({ workflow_runs: [] }); }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', dryRun: true,
+                                 rules: [RULES.armed] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands),
+            'live bug: the 18:24 "SM manual tick (dry)" really dispatched CI — dry must mean no side effects');
+    });
+
+    test('dup-dispatch guard grace counts from the run CONCLUSION (updated_at)', function () {
+        // Concluded 2 min ago (but created 40 min ago): within the
+        // post-conclusion visibility grace → skip re-dispatch.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(96, { labels: ['pr_approved', 'ai_validated'], headSha: 'shaG' })],
+                prStatus: { checkConclusion: 'green' }
+            },
+            onCliExecute: runsCli({ run: run('success', 'shaG', 40 * 60000, 2 * 60000) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES.armed] } });
+        assert.ok(!dispatched(sm.capturedCliCommands),
+            'verdict landed 2 min ago — inside the 15-min post-conclusion grace, no duplicate dispatch');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no arm either — the guard skipped before arming');
+
+        // Same run shape but concluded 20 min ago: grace expired → dispatch.
+        var sm2 = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(97, { headSha: 'shaG2' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: runsCli({ run: run('cancelled', 'shaG2', 45 * 60000, 20 * 60000) })
+        }));
+        sm2.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                  rules: [RULES.armed] } });
+        assert.ok(dispatched(sm2.capturedCliCommands),
+            'cancelled is no verdict and the grace expired 5 min after conclusion — re-dispatch allowed');
+    });
+});
+
+suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', function () {
+    // Live: a guest PR cycled arm→CI red→park→silent-update→pending→re-arm
+    // every tick — the #550 red-park keys on the CURRENT head's verdict, and
+    // SM's own silent-update moved the head to a pending state, bypassing
+    // it; the validate-armed limit-1 slot stayed hostage while 10 latched
+    // PRs starved. Owner rule: 'у гостя если красное то следующий должны
+    // пробовать мержить'. Mechanism (owner spec):
+    //  1. silent-update decision point: a GUEST PR whose current head has
+    //     RED checks gets the validation_failed label (idempotent, the head
+    //     sha noted in a one-time comment).
+    //  2. validate-armed's query excludes the label (sm_github.json).
+    //  3. RESET (owner 2026-09-30, live fa pr-1094): the park clears only
+    //     on a HUMAN push NEWER than the park event — the head commit's
+    //     GitHub login must not be the machineAuthor (the agent legs' WIP
+    //     auto-saves land as ai-teammate) and its committer must not be
+    //     'sm-silent-update'; machine movement NEVER clears the label.
+    //     Machine-authored PRs never get the label (fa pushes their heads).
+    //  4. validate_pr refuses to dispatch ANY validation CI while the
+    //     label is set (backstops validate-fresh too).
+
+    var RULES_VF = {
+        refresh: { source: 'github', query: { type: 'pr', mergeState: ['BEHIND'], draft: false },
+                   localAction: 'update_branch', limit: 5, id: 'silent-update-behind' },
+        armed: { source: 'github', query: { type: 'pr', labels: ['pr_approved'],
+            notLabels: ['ai_validating', 'validation_failed'],
+            notMergeState: ['BEHIND', 'DIRTY'], draft: false },
+            localAction: 'validate_pr', deferRedHead: true, limit: 1, id: 'validate-armed' }
+    };
+
+    function vfConfig(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+    function vfItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: [], prNumber: n, draft: false,
+                   branch: 'feat/vf-' + n, headSha: '11ab22cd3' + n, author: 'guest-human' };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+    function vfCli(opts) {
+        // Stub answers the three park probes keyed on command shape:
+        //   - /commits/<sha>" --jq '{login:…  → the actor probe (JSON login+date)
+        //   - /events?per_page=100            → the park-time probe (ISO string)
+        //   - /commits/<sha>" (plain)         → the committer-name probe
+        return function (cmd) {
+            var m = /\/commits\/([0-9a-fA-Z]+)"/.exec(cmd.command);
+            if (m && opts.actors && opts.actors[m[1]] !== undefined) {
+                return JSON.stringify(opts.actors[m[1]]);
+            }
+            if (opts.parkedAt !== undefined && cmd.command.indexOf('/events?per_page=100') !== -1) {
+                return '"' + opts.parkedAt + '"';
+            }
+            if (m && opts.committers && opts.committers[m[1]] !== undefined) {
+                return '"' + opts.committers[m[1]] + '"';
+            }
+            return '';
+        };
+    }
+    function vfDispatched(cmdList) {
+        return cmdList.some(function (c) { return c.command.indexOf('gh workflow run') === 0; });
+    }
+    function vfRefreshed(cmdList) {
+        return cmdList.some(function (c) { return c.command.indexOf('gh repo clone') !== -1; });
+    }
+
+    test('silent-update: guest with a RED head gets validation_failed (idempotent set, sha noted)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(201, { headSha: 'ee55ff66aa' })],
+                prStatus: { checkConclusion: 'red' }
+            },
+            onCliExecute: vfCli({})
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.indexOf('validation_failed') !== -1; }), 'park label set');
+        assert.equal(sm.capturedPrComments.length, 1, 'one park comment');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('validation_failed') !== -1, 'marker');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('ee55ff66aa') !== -1, 'head sha noted');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('HUMAN push') !== -1,
+            'the comment states the human-push requirement');
+        assert.ok(vfRefreshed(sm.capturedCliCommands), 'the silent refresh itself still runs');
+    });
+
+    test('silent-update: an SM merge does NOT clear the label (last committer sm-silent-update)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(202, { labels: ['validation_failed'], headSha: 'aa11bb22cc' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({ committers: { aa11bb22cc: 'sm-silent-update' } })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'SM head movement must NOT un-park');
+        assert.equal(sm.capturedPrComments.length, 0, 'idempotent — no new comment');
+        assert.ok(vfRefreshed(sm.capturedCliCommands), 'refresh still runs');
+    });
+
+    test('silent-update: clone/fetch failures are not masked as success (root fix 2026-10-01)', function () {
+        // Live: fa approved cohort parked BEHIND since 2026-09-13 — the old
+        // chain `clone && fetch && ! ancestor || exit 0 && merge…` swallowed
+        // CLONE/NETWORK failures via `|| exit 0` (left-associative shell),
+        // the tick logged "branch silently updated", and the head never
+        // moved. The no-op skip must scope to the ancestor check only.
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(204, { labels: ['validation_failed'], headSha: 'ff44556677' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({ committers: { ff44556677: 'sm-silent-update' } })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        var refresh = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh repo clone') !== -1;
+        })[0];
+        assert.ok(refresh, 'refresh command captured');
+        assert.ok(
+            refresh.command.indexOf('if git merge-base --is-ancestor FETCH_HEAD HEAD') !== -1,
+            'no-op skip must scope to the ancestor check (if/then), not mask failures');
+        assert.ok(refresh.command.indexOf('|| exit 0') === -1,
+            'the old failure-masking `|| exit 0` must be gone');
+        assert.ok(refresh.command.indexOf('sm-silent-update') !== -1,
+            'machine committer identity preserved (sticky-park depends on it)');
+    });
+
+    test('silent-update: an AUTHOR PUSH clears the label and re-enters validation', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(203, { labels: ['validation_failed'], headSha: 'dd33ee44ff' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({ committers: { dd33ee44ff: 'real-dev' },
+                                  actors: { dd33ee44ff: { login: 'real-dev', date: '2026-09-30T15:00:00Z' } },
+                                  parkedAt: '2026-09-30T14:00:00Z' })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
+            ['validation_failed'], 'label removed');
+        assert.equal(sm.capturedPrComments.length, 1, 'un-park comment');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('cleared') !== -1, 'clear marker');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('real-dev') !== -1, 'names the non-machine committer');
+        assert.ok(sm.capturedPrLabelAdds.length === 0 ||
+            !sm.capturedPrLabelAdds.some(function (a) { return a.labels.indexOf('validation_failed') !== -1; }),
+            'not re-labeled in the same pass — the fresh head gets a real validation chance');
+    });
+
+    test('silent-update: an AGENT push (machineAuthor login) does NOT clear the label (fa pr-1094)', function () {
+        // Live: fa pr-1094's rework leg landed WIP auto-save commits as
+        // ai-teammate AFTER the park — the old reset (any non-silent-update
+        // committer) cleared the label and the red machine PR re-armed every
+        // tick. The actor probe must read the LOGIN, not the git name: the
+        // agent's identity ("AI Teammate" <agent.ai.native@gmail.com>)
+        // differs from the workflow identities but its login is the
+        // deployment's machineAuthor.
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(205, { labels: ['validation_failed'], headSha: 'aa77bb77cc' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({ committers: { aa77bb77cc: 'AI Teammate' },
+                                  actors: { aa77bb77cc: { login: 'ai-teammate', date: '2026-09-30T14:20:38Z' } },
+                                  parkedAt: '2026-09-30T14:18:03Z' })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'machine push must NOT un-park');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
+        assert.ok(vfRefreshed(sm.capturedCliCommands), 'refresh still runs');
+    });
+
+    test('silent-update: a HUMAN push OLDER than the park event does NOT clear the label', function () {
+        // The park is set ON a red head — that head predates the park event
+        // by definition. Only a push landing AFTER the park proves new work.
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(206, { labels: ['validation_failed'], headSha: 'bb88cc88dd' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({ committers: { bb88cc88dd: 'real-dev' },
+                                  actors: { bb88cc88dd: { login: 'real-dev', date: '2026-09-30T13:00:00Z' } },
+                                  parkedAt: '2026-09-30T14:00:00Z' })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'stale human head must NOT un-park');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
+    });
+
+    test('silent-update: a failed park probe keeps the label (fail closed)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(207, { labels: ['validation_failed'], headSha: 'cc99dd99ee' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({})
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'dead probes must NOT un-park');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
+    });
+
+    test('silent-update: a MACHINE PR with a red head never gets the label', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(204, { author: 'ai-teammate', headSha: 'ee55ff66aa' })],
+                prStatus: { checkConclusion: 'red' }
+            },
+            onCliExecute: vfCli({})
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.indexOf('validation_failed') !== -1; }),
+            'machine-authored PRs keep the re-enter-on-new-head behavior — no label');
+        assert.equal(sm.capturedPrComments.length, 0, 'no park comment for machine PRs');
+    });
+
+    // dmtools-agents#633 (live fa#1139 2026-10-02): the park verdict belongs
+    // to the sha the park comment recorded. A silent rebase moves the head to
+    // a sha that has NEVER been validated — the park must not outlive its
+    // verdict, or a moved-base red (fixed by the very rebase) parks the PR
+    // forever (fa#1114 was the same red, hand-cleared, re-validated GREEN,
+    // merged).
+    var OLD_HEAD = 'aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00';
+    var NEW_HEAD = '99887766554433221100ffeeddccbbaa99887766';
+
+    test('silent-update: head changed since the park with NO own verdict — park clears (rebase medicine)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(206, { labels: ['validation_failed'], headSha: NEW_HEAD })],
+                prComments: [{ body: '🛑 parked-head: ' + OLD_HEAD }],
+                prStatus: { checkConclusion: 'none' }
+            },
+            // Even the HARDEST case clears: the new head was pushed by the
+            // machine itself (sm-silent-update committer, machine actor
+            // login, STALE date — neither human nor fresh). The sha change
+            // is the verdict.
+            onCliExecute: (function () {
+                var base = vfCli({ parkedAt: '2026-10-01T00:00:00Z' });
+                return function (cmd) {
+                    var m = /\/commits\/([0-9a-fA-F]+)"/.exec(cmd.command);
+                    if (m && m[1] === NEW_HEAD &&
+                        cmd.command.indexOf('login') !== -1) {
+                        // machine actor, push OLDER than the park event —
+                        // neither human nor fresh on purpose
+                        return JSON.stringify({ login: 'ai-teammate',
+                            date: '2026-09-30T00:00:00Z' });
+                    }
+                    if (m && m[1] === NEW_HEAD) return '"sm-silent-update"';
+                    return base(cmd);
+                };
+            })()
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
+            return r.label === 'validation_failed'; }),
+            'the park does not survive its own sha');
+        assert.ok(sm.capturedPrComments.some(function (c) {
+            return c.body.indexOf('no red verdict of its own') !== -1; }),
+            'the un-park comment explains the sha-change rationale');
+        assert.ok(vfRefreshed(sm.capturedCliCommands), 'the silent refresh itself still runs');
+    });
+
+    test('silent-update: head changed BUT carries its OWN red verdict — park holds', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(207, { labels: ['validation_failed'], headSha: NEW_HEAD })],
+                prComments: [{ body: '🛑 parked-head: ' + OLD_HEAD }],
+                prStatus: { checkConclusion: 'red' }
+            },
+            onCliExecute: function (cmd) {
+                // The dispatched-verdict probe answers for the NEW head.
+                if (cmd.command.indexOf('/runs?head_sha=' + NEW_HEAD) !== -1) {
+                    return JSON.stringify({ workflow_runs: [
+                        { head_sha: NEW_HEAD, status: 'completed', conclusion: 'failure',
+                          updated_at: '2026-10-02T00:00:00Z' }
+                    ] });
+                }
+                return vfCli({ parkedAt: '2026-10-01T00:00:00Z' })(cmd);
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'a fresh red verdict on the new head re-justifies the park');
+    });
+
+    test('silent-update: same head as the park — holds (the park sha still matches)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(208, { labels: ['validation_failed'], headSha: OLD_HEAD })],
+                prComments: [{ body: '🛑 parked-head: ' + OLD_HEAD }],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({ parkedAt: '2026-10-01T00:00:00Z' })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'no sha change — the human-push RESET path remains the only exit');
+    });
+
+    test('validate_pr: a labeled PR gets NO CI dispatch at all (validate-fresh backstop)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(205, { labels: ['pr_approved', 'validation_failed'], headSha: 'ff6600aa11' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: function () { return JSON.stringify({ workflow_runs: [] }); }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.armed] } });
+
+        assert.ok(!vfDispatched(sm.capturedCliCommands),
+            'validation_failed — NO validation CI trigger until a non-machine push clears it');
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.indexOf('ai_validating') !== -1; }), 'no arm either');
+    });
+
+    test('sm_github.json: validate-armed excludes validation_failed from the arm queue', function () {
+        var raw = file_read({ path: 'sm_github.json' });
+        var cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || cfg.rules || [];
+        var armed = rules.filter(function (r) { return r.id === 'validate-armed'; });
+        assert.equal(armed.length, 1, 'exactly one validate-armed rule');
+        var notLabels = (armed[0].query && armed[0].query.notLabels) || [];
+        assert.ok(notLabels.indexOf('validation_failed') !== -1,
+            'parked guests never enter the arm queue (query-level exclusion)');
+        assert.ok(notLabels.indexOf('ai_validating') !== -1, 'mutex exclusion preserved');
+    });
+
+    test('sm_github.json: park-reset matches parked PRs regardless of merge state (live fa 2026-10-03)', function () {
+        // The RESET probe lives inside update_branch, but silent-update-
+        // behind only matches BEHIND — five parked fa PRs with fresh 16:01
+        // vendor pushes (heads NOT behind) sat frozen for two hours because
+        // no rule ever ran the probe. park-reset closes the hole.
+        var raw = file_read({ path: 'sm_github.json' });
+        var cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || cfg.rules || [];
+        var reset = rules.filter(function (r) { return r.id === 'park-reset'; });
+        assert.equal(reset.length, 1, 'exactly one park-reset rule');
+        var q = reset[0].query || {};
+        assert.equal(q.type, 'pr', 'PR-anchored');
+        assert.ok((q.labels || []).indexOf('validation_failed') !== -1, 'matches parked PRs');
+        assert.equal(q.mergeState, undefined, 'NO merge-state filter — non-BEHIND parked heads reach the RESET probe');
+        assert.equal(reset[0].localAction, 'update_branch', 'rides the existing RESET probe inside update_branch');
+        assert.ok((q.notLabels || []).indexOf('ai_validating') !== -1, 'never touches a validating PR mid-run');
+    });
+
+    test('validate_pr backstop: a FRESH HUMAN push on a parked PR clears the label and dispatches (live fa 2026-10-03)', function () {
+        // Defense-in-depth for any rule that reaches validate_pr with a
+        // parked PR (validate-fresh has no validation_failed exclusion):
+        // the action itself must self-heal on a fresh non-machine push
+        // instead of parking forever — update_branch's RESET never ran for
+        // non-BEHIND heads (the hole park-reset closes at the query level).
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(210, { labels: ['pr_approved', 'validation_failed'], headSha: 'cc11992200' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({
+                actors: { cc11992200: { login: 'guest-human', date: '2026-10-03T16:01:10Z' } },
+                parkedAt: '2026-10-03T08:15:00Z'
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [{
+            source: 'github', query: { type: 'pr', labels: ['pr_approved'],
+                notLabels: ['ai_validating'], notMergeState: ['BEHIND', 'DIRTY'], draft: false },
+            localAction: 'validate_pr', deferRedHead: true, limit: 1, id: 'validate-armed-no-vf' }] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
+            ['validation_failed'], 'park label cleared by the action-level probe');
+        assert.ok(vfDispatched(sm.capturedCliCommands), 'validation CI dispatched for the fresh head');
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.indexOf('ai_validating') !== -1; }), 'armed');
+        assert.ok(sm.capturedPrComments.some(function (c) {
+            return c.body.indexOf('cleared') !== -1; }), 'un-park comment posted');
+    });
+
+    test('validate_pr backstop: a MACHINE push never clears the park (actor login, not git name)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(211, { labels: ['pr_approved', 'validation_failed'], headSha: 'dd22113344' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({
+                actors: { dd22113344: { login: 'ai-teammate', date: '2026-10-03T16:01:10Z' } },
+                parkedAt: '2026-10-03T08:15:00Z'
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [{
+            source: 'github', query: { type: 'pr', labels: ['pr_approved'],
+                notLabels: ['ai_validating'], notMergeState: ['BEHIND', 'DIRTY'], draft: false },
+            localAction: 'validate_pr', deferRedHead: true, limit: 1, id: 'validate-armed-no-vf' }] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'machine push must NOT un-park');
+        assert.ok(!vfDispatched(sm.capturedCliCommands), 'no CI while parked');
+    });
+
+    test('validate_pr backstop: a STALE human push (older than the park event) keeps the park', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(212, { labels: ['pr_approved', 'validation_failed'], headSha: 'ee33445566' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({
+                actors: { ee33445566: { login: 'guest-human', date: '2026-10-03T07:00:00Z' } },
+                parkedAt: '2026-10-03T08:15:00Z'
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [{
+            source: 'github', query: { type: 'pr', labels: ['pr_approved'],
+                notLabels: ['ai_validating'], notMergeState: ['BEHIND', 'DIRTY'], draft: false },
+            localAction: 'validate_pr', deferRedHead: true, limit: 1, id: 'validate-armed-no-vf' }] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'the parked head predates the park — no clear');
+        assert.ok(!vfDispatched(sm.capturedCliCommands), 'no CI while parked');
+    });
+});
+
+suite('smAgent: stamp check-run deep links (owner 2026-09-27)', function () {
+    // Owner complaint (live on fa PR checks): bridge stamp check-runs
+    // concluded with 'This check concluded as success' + the generic
+    // 'View more details on GitHub Actions' — no clickable path to the real
+    // workflow run/job. The stamp now carries details_url (failing job on
+    // red, umbrella run otherwise) + a markdown jobs table in the summary.
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    // A github PR rule whose query matches nothing — the validation-sync
+    // hook (which drives the verdict stamp) runs before the source query.
+    function syncOnlyRule() {
+        return { source: 'github', query: { type: 'pr', labels: ['no-such-label-xyz'] },
+                 localAction: 'validate_pr', limit: 1, id: 'validate-armed' };
+    }
+
+    function armedPrList() {
+        return JSON.stringify([{ number: 90, head: { sha: 'shaA', ref: 'feat/a' },
+                                 labels: [{ name: 'ai_validating' }] }]);
+    }
+
+    function concludedRun(conclusion) {
+        return [{ id: 777, event: 'workflow_dispatch', head_sha: 'shaA',
+                  status: 'completed', conclusion: conclusion,
+                  html_url: 'https://github.com/a/b/actions/runs/777',
+                  path: '.github/workflows/quality.yml' }];
+    }
+
+    function stampPosts(sm) {
+        return sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('check-runs') !== -1 && c.command.indexOf('POST') !== -1;
+        }).map(function (c) { return c.command; });
+    }
+
+    function jobsCli(jobs) {
+        return function (cmd) {
+            if (cmd.command.indexOf('/actions/runs/777/jobs') !== -1) {
+                return JSON.stringify({ jobs: jobs });
+            }
+            return '';
+        };
+    }
+
+    test('verdict stamp (green): details_url = umbrella run + markdown jobs table in the summary', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [],
+                prList: armedPrList(),
+                workflowApiRuns: concludedRun('success')
+            },
+            onCliExecute: jobsCli([
+                { name: 'Quality gate', status: 'completed', conclusion: 'success',
+                  html_url: 'https://github.com/a/b/actions/runs/777/jobs/11' },
+                { name: 'sm-liveness', status: 'completed', conclusion: 'success',
+                  html_url: 'https://github.com/a/b/actions/runs/777/jobs/12' }
+            ])
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+            validationChecks: '["Quality gate","sm-liveness"]', rules: [syncOnlyRule()] } });
+
+        var posts = stampPosts(sm);
+        assert.equal(posts.length, 2, 'one stamped check per configured validation check name');
+        posts.forEach(function (p) {
+            assert.ok(p.indexOf('-f details_url="https://github.com/a/b/actions/runs/777"') !== -1,
+                'green verdict links the umbrella dispatched run');
+            assert.ok(p.indexOf('| [Quality gate](https://github.com/a/b/actions/runs/777/jobs/11) | success |') !== -1,
+                'summary carries the real jobs table (name → result → link)');
+            assert.ok(p.indexOf('| [sm-liveness](https://github.com/a/b/actions/runs/777/jobs/12) | success |') !== -1,
+                'every job is listed');
+        });
+    });
+
+    test('verdict stamp (red): details_url = the FAILING JOB directly', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [],
+                prList: armedPrList(),
+                workflowApiRuns: concludedRun('failure')
+            },
+            onCliExecute: jobsCli([
+                { name: 'Quality gate', status: 'completed', conclusion: 'failure',
+                  html_url: 'https://github.com/a/b/actions/runs/777/jobs/21' },
+                { name: 'sm-liveness', status: 'completed', conclusion: 'success',
+                  html_url: 'https://github.com/a/b/actions/runs/777/jobs/22' }
+            ])
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+            validationChecks: '["Quality gate","sm-liveness"]', rules: [syncOnlyRule()] } });
+
+        var posts = stampPosts(sm);
+        assert.equal(posts.length, 2);
+        posts.forEach(function (p) {
+            assert.ok(p.indexOf('-f details_url="https://github.com/a/b/actions/runs/777/jobs/21"') !== -1,
+                'red verdict lands the reviewer on the failing job, not the umbrella');
+            assert.ok(p.indexOf('-f conclusion="failure"') !== -1);
+            assert.ok(p.indexOf('| [Quality gate](https://github.com/a/b/actions/runs/777/jobs/21) | failure |') !== -1,
+                'the jobs table shows which job went red');
+        });
+    });
+
+    test('verdict stamp: jobs probe failure degrades to the plain run link — never loses the stamp', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [],
+                prList: armedPrList(),
+                workflowApiRuns: concludedRun('success')
+            },
+            onCliExecute: function () { return ''; } // jobs endpoint unreadable
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+            validationChecks: '["Quality gate"]', rules: [syncOnlyRule()] } });
+
+        var posts = stampPosts(sm);
+        assert.equal(posts.length, 1, 'the stamp still posts');
+        assert.ok(posts[0].indexOf('-f details_url="https://github.com/a/b/actions/runs/777"') !== -1,
+            'details_url falls back to the dispatched run');
+        assert.ok(posts[0].indexOf('Dispatched run: https://github.com/a/b/actions/runs/777') !== -1,
+            'summary keeps at least the run link');
+    });
+
+    test('dispatch-time in_progress stamp: no run known yet — no details_url, legacy summary', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [{ key: 'pr-91', labels: ['pr_approved'], issueNumber: null,
+                                prNumber: 91, draft: false, branch: 'feat/b', headSha: 'shaB' }] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+            validationChecks: '["Quality gate"]',
+            rules: [{ source: 'github', query: { type: 'pr', labels: ['pr_approved'], draft: false },
+                      localAction: 'validate_pr', limit: 1, id: 'validate-armed' }] } });
+
+        var posts = stampPosts(sm);
+        assert.equal(posts.length, 1, 'dispatch stamps in_progress once');
+        assert.ok(posts[0].indexOf('in_progress') !== -1);
+        assert.ok(posts[0].indexOf('details_url') === -1,
+            'no run URL exists at dispatch time — nothing to link yet (the verdict stamp adds it)');
+        assert.ok(posts[0].indexOf('Stamped by the SM tick (bridge-free mode).') !== -1);
+    });
+});
+
+suite('smAgent: ticket dispatch', function() {
+
+    test('triggers workflow for each ticket found', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [
+                { key: 'P-1', fields: { labels: [] } },
+                { key: 'P-2', fields: { labels: [] } },
+                { key: 'P-3', fields: { labels: [] } }
+            ]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'")
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 3, 'one trigger per ticket');
+        assert.equal(sm.capturedTriggers[0].owner, 'o');
+        assert.equal(sm.capturedTriggers[0].workflow, 'ai-teammate.yml');
+    });
+
+    test('global maxTriggeredWorkflows caps dispatches across all rules', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [
+                { key: 'P-1', fields: { labels: [] } },
+                { key: 'P-2', fields: { labels: [] } },
+                { key: 'P-3', fields: { labels: [] } }
+            ]
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'"),
+            makeRule("project = {jiraProject} AND status = 'In Review'")
+        ]);
+        params.jobParams.maxTriggeredWorkflows = 1;
+
+        sm.action(params);
+
+        assert.equal(sm.capturedTriggers.length, 1, 'only one workflow dispatch allowed for whole run');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.concurrency_key, 'P-1', 'first ticket dispatched, others deferred');
+    });
+
+    test('global maxTriggeredWorkflows counts already active workflows before dispatch', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [
+                { key: 'P-1', fields: { labels: [] } }
+            ],
+            workflowRuns: {
+                in_progress: [
+                    { id: 1001, name: 'agents/bug_development.json : bug_development', status: 'in_progress' }
+                ]
+            }
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'", {
+                addLabel: 'sm_bulk_bugs_creation_triggered',
+                targetStatus: 'Bug Creation'
+            })
+        ]);
+        params.jobParams.maxTriggeredWorkflows = 1;
+
+        sm.action(params);
+
+        assert.equal(sm.capturedTriggers.length, 0, 'active workflow consumes the only global slot');
+        assert.equal(sm.capturedLabels.length, 0, 'trigger label must not be added when cap is full');
+        assert.equal(sm.capturedStatusMoves.length, 0, 'ticket should not move when no workflow slot is available');
+    });
+
+    test('global maxTriggeredWorkflows ignores stale queued workflows before dispatch', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [
+                { key: 'P-1', fields: { labels: [] } }
+            ],
+            workflowRuns: {
+                queued: [
+                    {
+                        id: 1002,
+                        name: 'AI Teammate',
+                        status: 'queued',
+                        created_at: '2020-01-01T00:00:00Z',
+                        updated_at: '2020-01-01T00:00:00Z'
+                    }
+                ]
+            }
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'")
+        ]);
+        params.jobParams.maxTriggeredWorkflows = 1;
+
+        sm.action(params);
+
+        assert.equal(sm.capturedTriggers.length, 1, 'stale queued workflow should not consume the global slot');
+    });
+
+    test('maxWorkflowsPerRun alias also limits dispatches', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [
+                { key: 'P-1', fields: { labels: [] } },
+                { key: 'P-2', fields: { labels: [] } }
+            ]
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'")
+        ]);
+        params.jobParams.maxWorkflowsPerRun = 1;
+
+        sm.action(params);
+
+        assert.equal(sm.capturedTriggers.length, 1, 'alias field limits dispatches');
+    });
+
+    test('encodes ticket key in triggered workflow inputs', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-42', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", { configFile: 'agents/story_development.json' })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.concurrency_key, 'P-42', 'concurrency key set to ticket key');
+        assert.equal(inputs.display_key, 'P-42', 'workflow display key set to ticket key');
+        assert.equal(inputs.input_jql, 'key = P-42', 'workflow input JQL set to ticket key');
+        assert.equal(inputs.config_file, 'agents/story_development.json', 'config_file passed');
+        assert.ok(inputs.encoded_config, 'encoded_config present');
+
+        var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
+        assert.contains(decoded.params.inputJql, 'P-42', 'ticket key in inputJql');
+    });
+
+    test('uses rule concurrencyKey override while preserving ticket inputJql', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-42', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/bulk_bugs_creation.json',
+                concurrencyKey: 'bulk_bugs_creation'
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.concurrency_key, 'bulk_bugs_creation', 'rule concurrency key used');
+        assert.equal(inputs.display_key, 'P-42', 'workflow display key preserves ticket key');
+        assert.equal(inputs.input_jql, 'key = P-42', 'workflow input JQL remains ticket-specific');
+
+        var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
+        assert.contains(decoded.params.inputJql, 'P-42', 'ticket key still used for agent input');
+    });
+
+    test('interpolates project placeholders from target agent params into encoded config', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js':
+                    'module.exports = { jira: { project: "DMC", parentTicket: "DMC-101" }, repository: { owner: "o", repo: "r" } };',
+                'agents/test_cases_generator.json': JSON.stringify({
+                    name: 'TestCasesGenerator',
+                    params: {
+                        existingTestCasesJql: "project = {jiraProject} AND issuetype = 'Test Case'",
+                        relatedStoriesJql: "parent = {parentTicket}"
+                    }
+                })
+            },
+            tickets: [{ key: 'DMC-857', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", { configFile: 'agents/test_cases_generator.json' })
+        ]));
+
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
+        assert.equal(decoded.params.existingTestCasesJql, "project = DMC AND issuetype = 'Test Case'");
+        assert.equal(decoded.params.relatedStoriesJql, 'parent = DMC-101');
+    });
+
+    test('no triggers when no tickets found', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: []
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}")
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 0);
+    });
+
+    test('uses workflowFile from rule when provided', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'T-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule('project = X', {
+                workflowFile: 'custom-workflow.yml',
+                workflowRef: 'develop'
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers[0].workflow, 'custom-workflow.yml');
+        assert.equal(sm.capturedTriggers[0].ref, 'develop');
+    });
+
+    test('workflowRef {branch} placeholder dispatches on the PR head (PR-linked runs)', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: { items: [{ key: 'pr-42', labels: ['pr_approved'], issueNumber: null,
+                                prNumber: 42, draft: false, branch: 'ai/gh-42' }] }
+        });
+
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [
+            makeRule('project = X', { source: 'github', id: 'review-after-dev-test',
+              query: { type: 'pr', labels: ['pr_approved'], draft: false },
+              inputs: { pr: '{prNumber}', leg: 'review' },
+              workflowRef: '{branch}' })
+        ] } });
+
+        if (!sm.capturedTriggers.length) throw new Error('NO TRIGGER CAPTURED');
+        assert.equal(sm.capturedTriggers[0].ref, 'ai/gh-42',
+            '{branch} must expand to the item head ref so the run links to the PR');
+    });
+
+    test('workflowRef {branch} falls back to main when the item has no branch', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: { items: [{ key: 'pr-43', labels: ['pr_approved'], issueNumber: null,
+                                prNumber: 43, draft: false }] }
+        });
+
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', rules: [
+            makeRule('project = X', { source: 'github', id: 'review-after-dev-test',
+              query: { type: 'pr', labels: ['pr_approved'], draft: false },
+              inputs: { pr: '{prNumber}', leg: 'review' },
+              workflowRef: '{branch}' })
+        ] } });
+
+        if (!sm.capturedTriggers.length) throw new Error('NO TRIGGER CAPTURED (fallback)');
+        assert.equal(sm.capturedTriggers[0].ref, 'main',
+            'empty expansion must fall back to main, never dispatch on an empty ref');
+    });
+
+    test('skips dispatch when matching workflow is already active', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-42', fields: { labels: [] } }],
+            workflowRuns: {
+                in_progress: [
+                    { name: 'agents/pr_rework.json : P-42', status: 'in_progress' }
+                ]
+            }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/pr_rework.json',
+                addLabel: 'sm_story_rework_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 0, 'duplicate active workflow should not be dispatched');
+        assert.equal(sm.capturedLabels.length, 0, 'skip label should not be added for skipped duplicate');
+    });
+
+    test('skips dispatch when a stub-titled GitHub run is in flight (display_title precedence)', function() {
+        // Live bug (gh-702 review dispatched twice): the workflow-runs API
+        // returns name='AI Teammate' (the WORKFLOW name) and display_title
+        //='▶ review (SM) · gh-42' — name-first made the stub-title match
+        // dead code, so the in-flight run never suppressed the next tick.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-42', fields: { labels: [] } }],
+            workflowRuns: {
+                in_progress: [
+                    { name: 'AI Teammate', display_title: '▶ review (SM) · P-42', status: 'in_progress' }
+                ]
+            }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/pr_rework.json',
+                addLabel: 'sm_story_rework_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 0, 'in-flight stub-titled run must suppress the re-dispatch');
+    });
+
+    test('in-flight guard resolves the scm against the TARGET repo, not the engine checkout', function() {
+        // Live bug (flutter_agent_harness gh-691 review dispatched twice):
+        // the rule config carried no repository, so createScm fell back to
+        // git-remote autodetect — the ENGINE checkout (IstiN/dmtools-agents)
+        // — and the guard listed workflow runs in the wrong repo, never
+        // seeing the in-flight review in flutter_agent_harness.
+        // createTargetScm pins every scm client to the rule's effective repo.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" } };' },
+            tickets: [{ key: 'P-42', fields: { labels: [] } }],
+            workflowRuns: {
+                in_progress: [
+                    { name: 'AI Teammate', display_title: '▶ review (SM) · P-42', status: 'in_progress' }
+                ]
+            }
+        });
+
+        sm.action(baseParams('target-org', 'target-repo', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/pr_rework.json',
+                addLabel: 'sm_story_rework_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 0, 'in-flight run suppresses the re-dispatch');
+        assert.ok(sm.capturedScmConfigs.length > 0, 'scm client was created');
+        sm.capturedScmConfigs.forEach(function(cfg) {
+            assert.ok(cfg && cfg.repository, 'every createScm config carries repository');
+            assert.equal(cfg.repository.owner, 'target-org', 'guard lists runs in the TARGET org');
+            assert.equal(cfg.repository.repo, 'target-repo', 'guard lists runs in the TARGET repo');
+        });
+    });
+
+});
+
+// ── localTeammate execution mode ────────────────────────────────────────────
+
+// runTeammateLocally() issues two cli_execute_command calls per ticket: the actual
+// run-teammate-local.sh invocation, plus a best-effort `rm -f` cleanup of the temp
+// encoded-config file. Filter to just the script invocations for assertions below.
+function localRunCommands(sm) {
+    return sm.capturedCliCommands.filter(function(c) {
+        return c.command.indexOf('run-teammate-local.sh') !== -1;
+    });
+}
+
+suite('smAgent: localTeammate execution mode', function() {
+
+    test('runs local script instead of dispatching a workflow', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'", {
+                configFile: 'agents/story_development.json',
+                localTeammate: true
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 0, 'no GitHub Actions workflow should be dispatched');
+        var runs = localRunCommands(sm);
+        assert.equal(runs.length, 1, 'exactly one local run invoked');
+        var cmd = runs[0].command;
+        assert.ok(cmd.indexOf('scripts/run-teammate-local.sh') !== -1, 'invokes run-teammate-local.sh');
+        assert.ok(cmd.indexOf('--config-file agents/story_development.json') !== -1, 'passes config file');
+        assert.ok(cmd.indexOf('--ticket P-1') !== -1, 'passes ticket key');
+    });
+
+    test('passes --base-branch from config.git.baseBranch (e.g. repos defaulting to master)', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" }, git: { baseBranch: "master" } };'
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'", {
+                configFile: 'agents/story_development.json',
+                localTeammate: true
+            })
+        ]));
+
+        var runs = localRunCommands(sm);
+        assert.equal(runs.length, 1, 'exactly one local run invoked');
+        assert.ok(runs[0].command.indexOf('--base-branch master') !== -1,
+            'passes the project-configured base branch instead of silently defaulting to "main"');
+    });
+
+    test('adds rule labels after a successful local run', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };',
+                // Stub the target config without a matching removeLabel so
+                // ruleTargetSelfManagesLabel() is false and the label IS
+                // re-added after the local run (hermetic — no disk read).
+                'agents/story_development.json': JSON.stringify({
+                    params: { customParams: {} }
+                })
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/story_development.json',
+                localTeammate: true,
+                addLabel: 'sm_story_development_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedLabels.length, 1);
+        assert.equal(sm.capturedLabels[0].label, 'sm_story_development_triggered');
+    });
+
+    test('does not add rule labels when the local run throws', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }],
+            onCliExecute: function() { throw new Error('script failed'); }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/story_development.json',
+                localTeammate: true,
+                addLabel: 'sm_story_development_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedLabels.length, 0, 'no label added when the local run fails');
+    });
+
+    // Regression test for a real production bug: pr_review.json/pr_rework.json's own
+    // postJSAction removes its addLabel (sm_story_review_triggered / sm_story_rework_triggered)
+    // as part of completing, to let a ticket cycle between In Review <-> In Rework. Since
+    // runTeammateLocally() runs that entire job synchronously, re-adding the label afterward
+    // would immediately undo that cleanup and permanently stick the ticket (no stale-label
+    // recovery exists for local rules) — this is exactly what happened to SOHO-131.
+    test('does not re-add the label after a local run when the target job self-manages it', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };',
+                'agents/pr_review.json': JSON.stringify({
+                    params: { customParams: { removeLabel: 'sm_story_review_triggered' } }
+                })
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/pr_review.json',
+                localTeammate: true,
+                addLabel: 'sm_story_review_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedLabels.length, 0,
+            'smAgent must not re-add a label the target job manages/removes itself');
+    });
+
+    test('does not re-add any addLabels when the target job self-manages one of them via removeLabels', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };',
+                'agents/pr_rework.json': JSON.stringify({
+                    params: { customParams: { removeLabels: ['sm_story_rework_triggered', 'sm_story_review_triggered'] } }
+                })
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/pr_rework.json',
+                localTeammate: true,
+                addLabel: 'sm_story_rework_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedLabels.length, 0,
+            'smAgent must not re-add sm_story_rework_triggered either, since pr_rework.json manages it');
+    });
+
+    test('still adds the label for a non-self-managing local rule (unaffected by the self-managing check)', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };',
+                'agents/story_solution.json': JSON.stringify({ params: { customParams: {} } })
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/story_solution.json',
+                localTeammate: true,
+                addLabel: 'sm_story_solution_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedLabels.length, 1, 'label is still added when the target job does not self-manage it');
+        assert.equal(sm.capturedLabels[0].label, 'sm_story_solution_triggered');
+    });
+
+    test('respects skipIfLabel without checking GitHub Actions run state', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-1', fields: { labels: ['sm_story_development_triggered'] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/story_development.json',
+                localTeammate: true,
+                skipIfLabel: 'sm_story_development_triggered'
+            })
+        ]));
+
+        assert.equal(localRunCommands(sm).length, 0, 'labelled ticket should be skipped, not run locally');
+    });
+
+    test('processes tickets one at a time regardless of maxTriggeredWorkflows', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [
+                { key: 'P-1', fields: { labels: [] } },
+                { key: 'P-2', fields: { labels: [] } },
+                { key: 'P-3', fields: { labels: [] } }
+            ]
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/story_development.json',
+                localTeammate: true
+            })
+        ]);
+        // A tight global cap must not throttle localTeammate rules — they run
+        // synchronously in-process, so there is no outstanding-workflow budget to spend.
+        params.jobParams.maxTriggeredWorkflows = 1;
+
+        var result = sm.action(params);
+
+        assert.equal(localRunCommands(sm).length, 3, 'all three tickets should run locally, uncapped');
+        assert.equal(result.processed, 3);
+    });
+
+    test('writes the encoded config to a temp file and passes its path', function() {
+        var writtenFiles = [];
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-7', fields: { labels: [] } }],
+            onFileWrite: function(writeOpts) { writtenFiles.push(writeOpts); }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/story_development.json',
+                localTeammate: true
+            })
+        ]));
+
+        assert.equal(writtenFiles.length, 1, 'encoded config should be written once');
+        assert.ok(writtenFiles[0].path.indexOf('P-7') !== -1, 'temp file name includes the ticket key');
+        var cmd = sm.capturedCliCommands[0].command;
+        assert.ok(cmd.indexOf('--encoded-config-file') !== -1, 'passes the encoded config file path');
+    });
+
+});
+
+suite('smAgent: forceLocalTeammate CLI override', function() {
+
+    test('switches a default-dispatch rule to local execution', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject} AND status = 'Ready'", {
+                configFile: 'agents/story_development.json'
+            })
+        ]);
+        params.jobParams.forceLocalTeammate = true;
+
+        sm.action(params);
+
+        assert.equal(sm.capturedTriggers.length, 0, 'no GitHub Actions workflow should be dispatched');
+        assert.equal(localRunCommands(sm).length, 1, 'rule runs locally instead of dispatching');
+    });
+
+    test('leaves localExecution:true rules untouched', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };',
+                'agents/test.json': MINIMAL_AGENT_CONFIG
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", { localExecution: true })
+        ]);
+        params.jobParams.forceLocalTeammate = true;
+
+        sm.action(params);
+
+        assert.equal(localRunCommands(sm).length, 0, 'localExecution rules do not go through run-teammate-local.sh');
+        assert.equal(sm.capturedTriggers.length, 0, 'localExecution rules never dispatch either');
+    });
+
+    test('respects an explicit localTeammate:false opt-out', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configFile: 'agents/story_development.json',
+                localTeammate: false
+            })
+        ]);
+        params.jobParams.forceLocalTeammate = true;
+
+        sm.action(params);
+
+        assert.equal(localRunCommands(sm).length, 0, 'opted-out rule must not run locally');
+        assert.equal(sm.capturedTriggers.length, 1, 'opted-out rule dispatches as normal');
+    });
+
+    test('is a no-op when not set (default remote dispatch)', function() {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { jira: { project: "P" }, repository: { owner: "o", repo: "r" } };' },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        var params = baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", { configFile: 'agents/story_development.json' })
+        ]);
+        // forceLocalTeammate intentionally omitted
+
+        sm.action(params);
+
+        assert.equal(sm.capturedTriggers.length, 1, 'default behavior still dispatches to GitHub Actions');
+        assert.equal(localRunCommands(sm).length, 0);
+    });
+
+});
+
+// ── localExecution module loading ─────────────────────────────────────────────
+
+suite('smAgent: localExecution module loading', function() {
+
+    test('local post action can require common/scm.js', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                'agents/local_scm_test.json': JSON.stringify({
+                    name: 'JSRunner',
+                    params: {
+                        postJSAction: 'js/unit-tests/_fixtures/local_scm_check.js'
+                    }
+                }),
+                'js/unit-tests/_fixtures/local_scm_check.js':
+                    'var scmModule = require("./common/scm.js");\n' +
+                    'function action(params) {\n' +
+                    '  if (!scmModule || typeof scmModule.createScm !== "function") throw new Error("createScm missing");\n' +
+                    '  return { success: true, action: "scm ok" };\n' +
+                    '}\n' +
+                    'module.exports = { action: action };'
+            },
+            tickets: [{ key: 'T-1', fields: { labels: [] } }],
+            fullTicket: { key: 'T-1', fields: { labels: [], summary: 'Ticket' } }
+        });
+
+        var result = sm.action(baseParams('o', 'r', [
+            makeRule('project = X', {
+                configFile: 'agents/local_scm_test.json',
+                localExecution: true
+            })
+        ]));
+
+        assert.equal(result.processed, 1, 'local action processed ticket');
+        assert.deepEqual(result.processedKeys, ['T-1']);
+    });
+
+});
+
+// ── skipIfLabel ───────────────────────────────────────────────────────────────
+
+suite('smAgent: skipIfLabel', function() {
+
+    test('skips ticket that already has the label', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [
+                { key: 'T-1', fields: { labels: ['sm_triggered'] } },
+                { key: 'T-2', fields: { labels: [] } }
+            ]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { skipIfLabel: 'sm_triggered' })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'only T-2 triggered');
+        assert.equal(sm.capturedTriggers[0].owner, 'o');
+        // Check which ticket was triggered
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.contains(inputs.encoded_config, 'T-2', 'T-2 was triggered, not T-1');
+    });
+
+    test('adds label after successful trigger', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'T-10', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { addLabel: 'sm_dev_triggered' })
+        ]));
+
+        assert.equal(sm.capturedLabels.length, 1);
+        assert.equal(sm.capturedLabels[0].key, 'T-10');
+        assert.equal(sm.capturedLabels[0].label, 'sm_dev_triggered');
+    });
+
+    test('does not recover trigger label when explicitly disabled', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [
+                { key: 'T-1', fields: { labels: ['sm_triggered'] } }
+            ]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", {
+                skipIfLabel: 'sm_triggered',
+                addLabel: 'sm_triggered',
+                recoverStaleTriggerLabel: false
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 0, 'no trigger for skipped ticket');
+        assert.equal(sm.capturedLabels.length, 0, 'no label added for skipped ticket');
+    });
+
+    test('recovers stale trigger label by default when no active workflow exists', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [
+                { key: 'T-1', fields: { labels: ['sm_triggered'] } }
+            ],
+            workflowRuns: {
+                queued: [],
+                in_progress: []
+            }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", {
+                skipIfLabel: 'sm_triggered',
+                addLabel: 'sm_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'stale label should not deadlock ticket');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.contains(inputs.encoded_config, 'T-1', 'T-1 was retriggered');
+    });
+
+    test('uses shared concurrencyKey when checking active workflow for stale label recovery', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [
+                { key: 'T-1', fields: { labels: ['sm_bulk_bugs_creation_triggered'] } }
+            ],
+            workflowRuns: {
+                queued: [
+                    {
+                        display_title: 'agents/bulk_bugs_creation.json : T-1 : bulk_bugs_creation',
+                        status: 'queued'
+                    }
+                ],
+                in_progress: []
+            }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", {
+                configFile: 'agents/bulk_bugs_creation.json',
+                concurrencyKey: 'bulk_bugs_creation',
+                skipIfLabel: 'sm_bulk_bugs_creation_triggered',
+                addLabel: 'sm_bulk_bugs_creation_triggered',
+                recoverStaleTriggerLabel: true
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 0, 'active shared-concurrency run should prevent relaunch');
+    });
+
+    test('skips ticket that has any skipIfLabels entry', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [
+                { key: 'TOLD-1', fields: { labels: ['sm_story_acceptance_criterias_triggered'] } },
+                { key: 'TNEW-2', fields: { labels: ['sm_story_acceptance_criteria_triggered'] } },
+                { key: 'TOPEN-3', fields: { labels: [] } }
+            ]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", {
+                skipIfLabels: [
+                    'sm_story_acceptance_criteria_triggered',
+                    'sm_story_acceptance_criterias_triggered'
+                ]
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'only unlabeled ticket triggered');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.contains(inputs.encoded_config, 'TOPEN-3', 'TOPEN-3 was triggered');
+    });
+
+    test('adds all configured addLabels after successful trigger', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'T-20', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", {
+                addLabel: 'primary_label',
+                addLabels: ['secondary_label']
+            })
+        ]));
+
+        assert.equal(sm.capturedLabels.length, 2);
+        assert.equal(sm.capturedLabels[0].label, 'primary_label');
+        assert.equal(sm.capturedLabels[1].label, 'secondary_label');
+    });
+
+    // The self-managing skip only applies to localTeammate (synchronous) rules — for the
+    // async workflow_dispatch path the label really is the only in-flight guard (the actual
+    // job runs later on a GitHub Actions runner and clears it on completion), so it must
+    // still be added right after a successful dispatch even if the target config also
+    // happens to declare a matching removeLabel.
+    test('still adds the label after an async dispatch even if the target config declares a matching removeLabel', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                'agents/pr_review.json': JSON.stringify({
+                    params: { customParams: { removeLabel: 'sm_story_review_triggered' } }
+                })
+            },
+            tickets: [{ key: 'T-21', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", {
+                configFile: 'agents/pr_review.json',
+                addLabel: 'sm_story_review_triggered'
+            })
+        ]));
+
+        assert.equal(sm.capturedLabels.length, 1,
+            'async dispatch must still add its idempotency label regardless of the self-managing check');
+    });
+
+});
+
+// ── Rule enabled flag ─────────────────────────────────────────────────────────
+
+suite('smAgent: rule enabled flag', function() {
+
+    test('skips rule with enabled: false', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'T-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { enabled: false })
+        ]));
+
+        assert.equal(sm.capturedJqls.length, 0, 'JQL not executed for disabled rule');
+        assert.equal(sm.capturedTriggers.length, 0);
+    });
+
+    test('runs rule with enabled: true (explicit)', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: []
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { enabled: true })
+        ]));
+
+        assert.equal(sm.capturedJqls.length, 1, 'enabled rule executed');
+    });
+
+    test('limit caps tickets processed', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [
+                { key: 'T-1', fields: { labels: [] } },
+                { key: 'T-2', fields: { labels: [] } },
+                { key: 'T-3', fields: { labels: [] } }
+            ]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { limit: 2 })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 2, 'only 2 tickets processed (limit: 2)');
+    });
+
+    test('limit applies after skipped tickets so stale labels do not starve later tickets', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [
+                { key: 'TSKIP-1', fields: { labels: ['sm_triggered'] } },
+                { key: 'TOPEN-2', fields: { labels: [] } }
+            ]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { skipIfLabel: 'sm_triggered', limit: 1 })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'one non-skipped ticket should be triggered');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.contains(inputs.encoded_config, 'TOPEN-2', 'limit should not be consumed by skipped ticket');
+    });
+
+});
+
+// ── additionalInstructions injection ─────────────────────────────────────────
+
+suite('smAgent: additionalInstructions in encoded_config', function() {
+
+    test('injects additionalInstructions from config into encoded_config', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js':
+                    'module.exports = {' +
+                    '  jira: { project: "P" },' +
+                    '  repository: { owner: "o", repo: "r" },' +
+                    '  additionalInstructions: {' +
+                    '    story_development: ["https://my-wiki/pages/123", "./custom/rules.md"]' +
+                    '  }' +
+                    '};'
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", { configFile: 'agents/story_development.json' })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
+        assert.ok(decoded.params.additionalInstructions, 'additionalInstructions present in encoded_config');
+        assert.equal(decoded.params.additionalInstructions.length, 2);
+        assert.contains(decoded.params.additionalInstructions[0], 'my-wiki', 'first instruction');
+    });
+
+    test('no additionalInstructions field in encoded_config when not configured', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'T-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { configFile: 'agents/story_development.json' })
+        ]));
+
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
+        assert.notOk(decoded.params.additionalInstructions, 'no additionalInstructions when not configured');
+        assert.ok(decoded.params.agentParams, 'agentParams present');
+        // The story_development agent now keeps its default instructions in cliPrompts,
+        // not in agentParams.instructions, so we verify the default cliPrompts survive.
+        var storyDevRaw = file_read({ path: 'agents/story_development.json' }) ||
+                          file_read({ path: 'story_development.json' });
+        var storyDevJson = JSON.parse(storyDevRaw);
+        var defaultCliPrompts = storyDevJson.params.cliPrompts;
+        assert.ok(Array.isArray(decoded.params.cliPrompts) && decoded.params.cliPrompts.length > 0,
+            'default cliPrompts preserved');
+        assert.deepEqual(decoded.params.cliPrompts, defaultCliPrompts,
+            'default cliPrompts match the agent JSON');
+    });
+
+    test('injects cliPrompts and agent/job param patches from config into encoded_config', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js':
+                    'module.exports = {' +
+                    '  jira: { project: "P" },' +
+                    '  repository: { owner: "o", repo: "r" },' +
+                    '  cliPromptOverrides: {' +
+                    '    story_development: "./.dmtools/prompts/main.md"' +
+                    '  },' +
+                    '  cliPrompts: {' +
+                    '    story_development: ["./.dmtools/prompts/role.md", "./.dmtools/prompts/focus.md"]' +
+                    '  },' +
+                    '  agentParamPatches: {' +
+                    '    story_development: { aiRole: "Senior Engineer", customFlag: true }' +
+                    '  },' +
+                    '  jobParamPatches: {' +
+                    '    story_development: { confluencePages: ["./.dmtools/instructions/project.md"], isGenerateNew: false }' +
+                    '  }' +
+                    '};'
+            },
+            tickets: [{ key: 'P-2', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", { configFile: 'agents/story_development.json' })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
+        assert.equal(decoded.params.cliPrompt, './.dmtools/prompts/main.md');
+        // cliPrompts = agent JSON cliPrompts + config cliPrompts (role, focus)
+        var storyDevRaw = file_read({ path: 'agents/story_development.json' }) ||
+                          file_read({ path: 'story_development.json' });
+        var storyDevJson = JSON.parse(storyDevRaw);
+        var expectedCliPrompts = storyDevJson.params.cliPrompts.concat([
+            './.dmtools/prompts/role.md',
+            './.dmtools/prompts/focus.md'
+        ]);
+        assert.deepEqual(decoded.params.cliPrompts, expectedCliPrompts);
+        assert.equal(decoded.params.agentParams.aiRole, 'Senior Engineer');
+        assert.equal(decoded.params.agentParams.customFlag, true);
+        assert.deepEqual(decoded.params.confluencePages, ['./.dmtools/instructions/project.md']);
+        assert.equal(decoded.params.isGenerateNew, false);
+    });
+
+    test('inputJql in encoded_config is always the real ticket key, not the agent JSON placeholder', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'P-99', fields: { labels: [] } }]
+        });
+
+        // story_questions.json has inputJql: "key = JD-82" — must NOT appear in encoded_config
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { configFile: 'agents/story_questions.json' })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
+        assert.equal(decoded.params.inputJql, 'key = P-99', 'inputJql must be the real ticket, not agent JSON default');
+    });
+
+    test('agentParams is always present in encoded_config (never null)', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'T-42', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { configFile: 'agents/story_questions.json' })
+        ]));
+
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
+        assert.ok(decoded.params.agentParams !== null && decoded.params.agentParams !== undefined,
+            'agentParams must always be present to prevent NPE in Teammate.java');
+    });
+
+    test('primitive and array params from agent JSON are copied to encoded_config', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'T-5', fields: { labels: [] } }]
+        });
+
+        // story_questions.json has skipAIProcessing:true, alwaysPostComments:true, cliCommands, cliPrompts
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { configFile: 'agents/story_questions.json' })
+        ]));
+
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
+        assert.equal(decoded.params.skipAIProcessing, true, 'skipAIProcessing copied from agent JSON');
+        assert.equal(decoded.params.alwaysPostComments, true, 'alwaysPostComments copied from agent JSON');
+        assert.ok(Array.isArray(decoded.params.cliCommands) && decoded.params.cliCommands.length > 0,
+            'cliCommands array copied from agent JSON');
+        assert.ok(Array.isArray(decoded.params.cliPrompts) && decoded.params.cliPrompts.length > 0,
+            'cliPrompts array copied from agent JSON');
+    });
+
+});
+
+// ── targetStatus ──────────────────────────────────────────────────────────────
+
+suite('smAgent: targetStatus', function() {
+
+    test('moves ticket to targetStatus before triggering workflow', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'T-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { targetStatus: 'In Development' })
+        ]));
+
+        assert.equal(sm.capturedStatusMoves.length, 1);
+        assert.equal(sm.capturedStatusMoves[0].key, 'T-1');
+        assert.equal(sm.capturedStatusMoves[0].statusName, 'In Development');
+        assert.equal(sm.capturedTriggers.length, 1, 'workflow also triggered');
+    });
+
+});
+
+// ── Per-rule configPath (multi-project) ───────────────────────────────────────
+
+suite('smAgent: per-rule configPath (multi-project)', function() {
+
+    test('rule with configPath uses its own jiraProject for JQL', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                'projects/web/.dmtools/config.js':
+                    'module.exports = { jira: { project: "WEB", parentTicket: "WEB-1" }, repository: { owner: "web-org", repo: "web-repo" } };'
+            }
+        });
+
+        sm.action(baseParams('global-org', 'global-repo', [
+            makeRule("project = {jiraProject} AND status = 'Ready'", {
+                configPath: 'projects/web/.dmtools/config.js'
+            })
+        ]));
+
+        assert.equal(sm.capturedJqls.length, 1);
+        assert.contains(sm.capturedJqls[0], 'project = WEB', 'per-rule jiraProject used');
+        assert.notContains(sm.capturedJqls[0], 'global', 'global config not used in JQL');
+    });
+
+    test('rule with configPath triggers workflow against its own repo', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                'projects/web/.dmtools/config.js':
+                    'module.exports = { jira: { project: "WEB" }, repository: { owner: "web-org", repo: "web-repo" } };'
+            },
+            tickets: [{ key: 'WEB-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('global-org', 'global-repo', [
+            makeRule("project = {jiraProject}", {
+                configPath: 'projects/web/.dmtools/config.js'
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        assert.equal(sm.capturedTriggers[0].owner, 'web-org', 'web-org used for trigger');
+        assert.equal(sm.capturedTriggers[0].repo, 'web-repo', 'web-repo used for trigger');
+    });
+
+    test('mixed rules: some with configPath, some using global', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js':
+                    'module.exports = { jira: { project: "GLOBAL", parentTicket: "GLOBAL-1" }, repository: { owner: "global-org", repo: "global-repo" } };',
+                'projects/mobile/.dmtools/config.js':
+                    'module.exports = { jira: { project: "MOBILE" }, repository: { owner: "mobile-org", repo: "mobile-repo" } };'
+            }
+        });
+
+        sm.action(baseParams('global-org', 'global-repo', [
+            makeRule("project = {jiraProject} AND status = 'Backlog'"),
+            makeRule("project = {jiraProject} AND status = 'Ready'", {
+                configPath: 'projects/mobile/.dmtools/config.js'
+            })
+        ]));
+
+        assert.equal(sm.capturedJqls.length, 2);
+        assert.contains(sm.capturedJqls[0], 'project = GLOBAL', 'global rule uses global config');
+        assert.contains(sm.capturedJqls[1], 'project = MOBILE', 'per-rule config used for mobile');
+    });
+
+    test('per-rule configPath is propagated to encoded_config customParams', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                'projects/web/.dmtools/config.js':
+                    'module.exports = { jira: { project: "WEB" }, repository: { owner: "web-org", repo: "web-repo" } };'
+            },
+            tickets: [{ key: 'WEB-5', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = {jiraProject}", {
+                configPath: 'projects/web/.dmtools/config.js'
+            })
+        ]));
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        var decoded = JSON.parse(decodeURIComponent(inputs.encoded_config));
+        assert.ok(decoded.params.customParams, 'customParams present');
+        assert.equal(decoded.params.customParams.configPath, 'projects/web/.dmtools/config.js',
+            'configPath propagated downstream');
+    });
+
+    test('rule with configPath that fails to load falls back to global config', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "GLOBAL" }, repository: { owner: "g-org", repo: "g-repo" } };'
+            }
+        });
+
+        sm.action(baseParams('g-org', 'g-repo', [
+            makeRule("project = {jiraProject}", {
+                configPath: 'nonexistent/path/config.js'  // doesn't exist in fileMap
+            })
+        ]));
+
+        assert.equal(sm.capturedJqls.length, 1);
+        assert.contains(sm.capturedJqls[0], 'project = GLOBAL', 'falls back to global when configPath fails');
+    });
+
+});
+
+// ── agentConfigsDir — config.js owns agent paths ─────────────────────────────
+
+suite('smAgent: agentConfigsDir (config.js owns agent paths)', function() {
+
+    test('short configFile resolved against agentConfigsDir', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js':
+                    'module.exports = {' +
+                    '  jira: { project: "P" },' +
+                    '  repository: { owner: "o", repo: "r" },' +
+                    '  agentConfigsDir: "projects/demo",' +
+                    '  smRules: [{ jql: "project = {jiraProject}", configFile: "StoryAgent.json" }]' +
+                    '};'
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', [])); // rules from config (smRules override)
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.config_file, 'projects/demo/StoryAgent.json',
+            'short configFile prefixed with agentConfigsDir');
+    });
+
+    test('full configFile path (contains "/") is NOT modified by agentConfigsDir', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js':
+                    'module.exports = {' +
+                    '  jira: { project: "P" },' +
+                    '  repository: { owner: "o", repo: "r" },' +
+                    '  agentConfigsDir: "projects/demo",' +
+                    '  smRules: [{ jql: "project = {jiraProject}", configFile: "agents/story_development.json" }]' +
+                    '};'
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', []));
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.config_file, 'agents/story_development.json',
+            'full path left unchanged');
+    });
+
+    test('agentConfigsDir config discovery: sm.json can use agentConfigsDir instead of configPath', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                'projects/alpha/.dmtools/config.js':
+                    'module.exports = {' +
+                    '  jira: { project: "ALPHA" },' +
+                    '  repository: { owner: "test-org", repo: "alpha-repo" },' +
+                    '  agentConfigsDir: "projects/alpha",' +
+                    '  smRules: [{ jql: "project = {jiraProject}", configFile: "StoryAgent.json" }]' +
+                    '};'
+            },
+            tickets: [{ key: 'ALPHA-5', fields: { labels: [] } }]
+        });
+
+        // sm.json passes agentConfigsDir instead of configPath — no configPath needed
+        sm.action({ jobParams: { agentConfigsDir: 'projects/alpha' } });
+
+        assert.equal(sm.capturedTriggers.length, 1);
+        assert.equal(sm.capturedTriggers[0].owner, 'test-org');
+        assert.equal(sm.capturedTriggers[0].repo, 'alpha-repo');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.contains(sm.capturedJqls[0], 'project = ALPHA', 'ALPHA project from config');
+        assert.equal(inputs.config_file, 'projects/alpha/StoryAgent.json',
+            'short configFile resolved to full path');
+    });
+
+    test('agentConfigsDir trailing slash is stripped', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js':
+                    'module.exports = {' +
+                    '  jira: { project: "P" },' +
+                    '  repository: { owner: "o", repo: "r" },' +
+                    '  agentConfigsDir: "projects/demo/",' + // trailing slash
+                    '  smRules: [{ jql: "project = {jiraProject}", configFile: "ReviewAgent.json" }]' +
+                    '};'
+            },
+            tickets: [{ key: 'P-1', fields: { labels: [] } }]
+        });
+
+        sm.action(baseParams('o', 'r', []));
+
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.config_file, 'projects/demo/ReviewAgent.json',
+            'no double slash from trailing agentConfigsDir slash');
+    });
+
+});
+
+// ── Targeted mode ─────────────────────────────────────────────────────────────
+
+suite('smAgent: targeted mode', function() {
+
+    test('targetTicket + targetAgent bypasses all rules and dispatches exactly that ticket', function() {
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "JD" }, repository: { owner: "o", repo: "r" } };'
+            },
+            tickets: [{ key: 'JD-123', fields: { labels: [] } }]
+        });
+
+        sm.action({
+            jobParams: {
+                targetTicket: 'JD-123',
+                targetAgent: 'agents/story_solution.json'
+            }
+        });
+
+        assert.equal(sm.capturedJqls.length, 1, 'exactly one JQL executed');
+        assert.equal(sm.capturedJqls[0], 'key = JD-123', 'JQL targets exact ticket');
+        assert.equal(sm.capturedTriggers.length, 1, 'one workflow triggered');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.config_file, 'agents/story_solution.json', 'correct agent used');
+        assert.contains(inputs.input_jql, 'JD-123', 'input_jql contains ticket key');
+    });
+
+    test('inherits localExecution and concurrencyKey from matching rule', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'P-7', fields: { labels: [] } }]
+        });
+
+        // sm.json has a rule for bulk_bugs_creation with localExecution=false and concurrencyKey
+        // Use story_solution rule which exists in sm.json
+        sm.action({
+            jobParams: {
+                targetTicket: 'P-7',
+                targetAgent: 'agents/story_solution.json',
+                rules: [
+                    {
+                        description: 'Story solution rule',
+                        jql: "project = TEST AND status = 'Solution Architecture'",
+                        configFile: 'agents/story_solution.json',
+                        skipIfLabel: 'sm_story_solution_triggered',
+                        addLabel: 'sm_story_solution_triggered',
+                        enabled: true
+                    }
+                ],
+                owner: 'o',
+                repo: 'r'
+            }
+        });
+
+        assert.equal(sm.capturedJqls.length, 1, 'only targeted JQL ran');
+        assert.equal(sm.capturedJqls[0], 'key = P-7', 'JQL overridden to ticket key');
+        // addLabel is inherited, skipIfLabel is stripped
+        assert.equal(sm.capturedTriggers.length, 1, 'workflow triggered');
+    });
+
+    test('strips skipIfLabel from inherited rule so label on ticket does not block run', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'X-9', fields: { labels: ['sm_story_solution_triggered'] } }]
+        });
+
+        sm.action({
+            jobParams: {
+                targetTicket: 'X-9',
+                targetAgent: 'agents/story_solution.json',
+                rules: [
+                    {
+                        description: 'Story solution rule',
+                        jql: "project = TEST AND status = 'Solution Architecture'",
+                        configFile: 'agents/story_solution.json',
+                        skipIfLabel: 'sm_story_solution_triggered',
+                        enabled: true
+                    }
+                ],
+                owner: 'o',
+                repo: 'r'
+            }
+        });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'skipIfLabel stripped — run proceeds');
+    });
+
+    test('falls back to minimal synthetic rule when no matching rule found', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'Z-1', fields: { labels: [] } }]
+        });
+
+        sm.action({
+            jobParams: {
+                targetTicket: 'Z-1',
+                targetAgent: 'agents/story_solution.json',
+                rules: [], // no rules — no match possible
+                owner: 'o',
+                repo: 'r'
+            }
+        });
+
+        assert.equal(sm.capturedJqls.length, 1, 'synthetic rule JQL ran');
+        assert.equal(sm.capturedJqls[0], 'key = Z-1', 'synthetic JQL correct');
+        assert.equal(sm.capturedTriggers.length, 1, 'workflow triggered via synthetic rule');
+    });
+
+    test('matches rule by configFile regardless of agents/ prefix', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'M-2', fields: { labels: [] } }]
+        });
+
+        sm.action({
+            jobParams: {
+                targetTicket: 'M-2',
+                targetAgent: 'story_solution.json',  // no agents/ prefix
+                rules: [
+                    {
+                        description: 'Story solution rule',
+                        jql: "project = TEST AND status = 'Solution Architecture'",
+                        configFile: 'agents/story_solution.json', // has agents/ prefix
+                        enabled: true
+                    }
+                ],
+                owner: 'o',
+                repo: 'r'
+            }
+        });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'rule matched despite agents/ prefix mismatch');
+    });
+
+    test('targeted mode disables workflow cap', function() {
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: 'T-5', fields: { labels: [] } }]
+        });
+
+        sm.action({
+            jobParams: {
+                targetTicket: 'T-5',
+                targetAgent: 'agents/pr_review.json',
+                maxTriggeredWorkflows: 0,
+                rules: [],
+                owner: 'o',
+                repo: 'r'
+            }
+        });
+
+        assert.equal(sm.capturedTriggers.length, 1, 'trigger not blocked by workflow cap');
+    });
+
+    test('targeted mode does not trigger when targetTicket is missing', function() {
+        var sm = makeSmAgent({ fileMap: {}, tickets: [] });
+
+        var result = sm.action({
+            jobParams: {
+                targetAgent: 'agents/story_solution.json',
+                owner: 'o',
+                repo: 'r',
+                rules: []
+            }
+        });
+
+        assert.equal(result.success, false, 'fails without rules when no targetTicket');
+    });
+
+    test('targeted mode does not trigger when targetAgent is missing', function() {
+        var sm = makeSmAgent({ fileMap: {}, tickets: [] });
+
+        var result = sm.action({
+            jobParams: {
+                targetTicket: 'P-1',
+                owner: 'o',
+                repo: 'r',
+                rules: []
+            }
+        });
+
+        assert.equal(result.success, false, 'falls through to no-rules error without targetAgent');
+    });
+
+});
+
+suite('probeDispatchedState bundle (runAsync read fan-out)', function () {
+
+    var HEAD = [
+        { id: 2, status: 'completed', conclusion: 'failure',
+          updated_at: '2026-09-27T11:00:00Z', created_at: '2026-09-27T10:30:00Z' },
+        { id: 1, status: 'completed', conclusion: 'success',
+          updated_at: '2026-09-27T10:00:00Z', created_at: '2026-09-27T09:00:00Z' }
+    ];
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    test('fallback: assembles the four facets via the existing helpers (mocked cli)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [] },
+            onCliExecute: function () {
+                return { output: JSON.stringify({ workflow_runs: HEAD }) };
+            }
+        }));
+        var probe = sm.probeDispatchedState({ owner: 'a', repo: 'b' }, 'quality.yml', 'sha1');
+        assert.equal(probe.active, false, 'concluded runs older than the 15-min grace are not active');
+        assert.equal(probe.verdict, 'failure', 'newest concluded non-cancelled verdict');
+        assert.equal(probe.green, true, 'a completed success covers the head');
+        assert.equal(probe.newest.id, 2, 'newest run by updated_at, any conclusion');
+        assert.equal(sm.capturedCliCommands.length, 4, 'fallback: the four helpers each probe once');
+        assert.ok(sm.capturedCliCommands.every(function (c) {
+            return c.command.indexOf('runs?head_sha=sha1') !== -1;
+        }), 'all probes key on this exact head');
+    });
+
+    test('fallback: defaults mirror the per-helper warn-and-default (empty / failing cli)', function () {
+        var defaults = { active: false, verdict: null, green: false, newest: null };
+        var smEmpty = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [] },
+            onCliExecute: function () { return { output: JSON.stringify({ workflow_runs: [] }) }; }
+        }));
+        assert.deepEqual(smEmpty.probeDispatchedState({ owner: 'a', repo: 'b' }, 'q.yml', 'sha'),
+            defaults, 'no dispatched runs on the head → all defaults');
+
+        var smFail = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [] },
+            onCliExecute: function () { throw new Error('net down'); }
+        }));
+        assert.doesNotThrow(function () {
+            assert.deepEqual(smFail.probeDispatchedState({ owner: 'a', repo: 'b' }, 'q.yml', 'sha'),
+                defaults, 'a probe failure degrades to the same defaults, never throws');
+        });
+    });
+
+    test('runAsync wired: ONE worker round returns the identical shape', function () {
+        var dispatches = [];
+        var cliCalls = 0;
+        // Worker-engine parity: map() evals the worker source inside the
+        // smAgent module scope and hands the FAKE the function object (the
+        // real runAsync contract — it re-serializes fn.toString() for a
+        // fresh worker engine wired with the same tool surface). The
+        // worker's cli_execute_command therefore resolves to the smAgent
+        // module mock — route the response through onCliExecute.
+        var fakeRunAsync = function (fn, args) {
+            assert.equal(typeof fn, 'function', 'runAsync receives the FUNCTION, not a string');
+            dispatches.push({ src: fn.toString(), args: args });
+            return { wait: function () { return fn(args); } };
+        };
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [] },
+            onCliExecute: function () {
+                cliCalls++;
+                return { output: JSON.stringify({ workflow_runs: HEAD }) };
+            },
+            runAsync: fakeRunAsync
+        }));
+        var probe = sm.probeDispatchedState({ owner: 'a', repo: 'b' }, 'quality.yml', 'sha1');
+        assert.equal(dispatches.length, 1, 'exactly ONE worker dispatch');
+        assert.equal(cliCalls, 1, 'the worker computed all four facets in ONE round');
+        assert.deepEqual(probe, {
+            active: false, verdict: 'failure', green: true,
+            newest: { id: 2, status: 'completed', conclusion: 'failure',
+                      updated_at: '2026-09-27T11:00:00Z', created_at: '2026-09-27T10:30:00Z' }
+        }, 'same shape as the fallback');
+        assert.deepEqual(dispatches[0].args,
+            { repo: { owner: 'a', repo: 'b' }, ciWorkflow: 'quality.yml', headSha: 'sha1' },
+            'everything travels via args');
+    });
+
+    test('validate_pr guards consume the bundle on the fallback path (active run → no dispatch, no arm)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [{ key: 'pr-75', labels: ['pr_approved'], prNumber: 75,
+                                branch: 'ai/gh-60', headSha: 'sha60' }] },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('runs?head_sha=') !== -1) {
+                    return { output: JSON.stringify({ workflow_runs: [
+                        { id: 5, status: 'in_progress', head_sha: 'sha60' }
+                    ] }) };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'] },
+              localAction: 'validate_pr', limit: 1, id: 'validate-armed' }
+        ] } });
+
+        var probes = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('runs?head_sha=') !== -1; });
+        assert.equal(probes.length, 4, 'the fallback probe bundle ran all four helpers for the guards');
+        assert.ok(!sm.capturedCliCommands.some(function (c) {
+            return c.command.indexOf('workflow run') !== -1; }), 'no CI dispatch while a run is active');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no ai_validating arm while a run is active');
+    });
+
+    test('sweep_stale_validation consumes the bundle newest facet on the fallback path', function () {
+        var old = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [{ key: 'pr-84', labels: ['ai_validating'], prNumber: 84,
+                                headSha: 'sha222' }] },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('runs?head_sha=') !== -1) {
+                    return { output: JSON.stringify({ workflow_runs: [
+                        { id: 7, status: 'completed', conclusion: 'success',
+                          head_sha: 'sha222', created_at: old, updated_at: old }
+                    ] }) };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [
+            { source: 'github', query: { type: 'pr', labels: ['ai_validating'] },
+              localAction: 'sweep_stale_validation', staleMinutes: 15, limit: 10, id: 'sweep' }
+        ] } });
+
+        var probes = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('runs?head_sha=') !== -1; });
+        assert.equal(probes.length, 4, 'the sweep reads the probe bundle (fallback: four helpers)');
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
+            ['ai_validating'], 'the stale arm is released from the bundle newest facet');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
+            ['ai_validated'], 'success side re-latches (complete_validation parity)');
+    });
+
+});

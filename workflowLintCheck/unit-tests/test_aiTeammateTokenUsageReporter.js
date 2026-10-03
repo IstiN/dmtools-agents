@@ -1,0 +1,479 @@
+/**
+ * Unit tests for aiTeammateTokenUsageReporter.js
+ */
+
+function loadReporter(overrides) {
+    var configLoaderMock = {
+        loadProjectConfig: function() {
+            return { repository: { owner: 'IstiN', repo: 'trackstate' } };
+        }
+    };
+    var globals = Object.assign({
+        file_write: function() {},
+        github_list_workflow_runs: function() { return JSON.stringify({ workflow_runs: [] }); }
+    }, overrides || {});
+    return loadModule('js/aiTeammateTokenUsageReporter.js', makeRequire({ './configLoader.js': configLoaderMock }), globals);
+}
+
+suite('aiTeammateTokenUsageReporter parsing', function() {
+
+    test('parses suffixed token counts', function() {
+        var reporter = loadReporter();
+        assert.equal(reporter.parseNumberWithSuffix('2.9m'), 2900000);
+        assert.equal(reporter.parseNumberWithSuffix('9.4k'), 9400);
+        assert.equal(reporter.parseNumberWithSuffix('1700'), 1700);
+    });
+
+    test('parses CommandLineUtils token summary line', function() {
+        var reporter = loadReporter();
+        var parsed = reporter.parseTokensLine('[INFO] CommandLineUtils - Tokens    ↑ 2.9m • ↓ 9.4k • 2.8m (cached) • 1.7k (reasoning)');
+
+        assert.equal(parsed.readTokens, 2900000);
+        assert.equal(parsed.writeTokens, 9400);
+        assert.equal(parsed.cachedTokens, 2800000);
+        assert.equal(parsed.reasoningTokens, 1700);
+    });
+
+    test('extracts and sums token usage attempts with request metadata', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            '[INFO] CommandLineUtils - Requests  1 Premium (27m 2s)',
+            '[INFO] CommandLineUtils - Tokens    ↑ 2.9m • ↓ 9.4k • 2.8m (cached) • 1.7k (reasoning)',
+            'Feedback loop: resuming agent for rework_missing_outputs attempt 1/2',
+            'Copilot rate limit detected; retrying in 90s (attempt 2/2)',
+            'Command failed (exit code 124): ./agents/scripts/run-agent.sh',
+            '[INFO] CommandLineUtils - Requests  2 Premium (30m 0s)',
+            '[INFO] CommandLineUtils - Tokens    ↑ 3.1m • ↓ 10k • 3m (cached) • 2k (reasoning)'
+        ].join('\n'));
+
+        assert.equal(usage.requests, 3);
+        assert.equal(usage.requestTier, 'Premium');
+        assert.equal(usage.requestDuration, '30m 0s');
+        assert.equal(usage.readTokens, 6000000);
+        assert.equal(usage.writeTokens, 19400);
+        assert.equal(usage.cachedTokens, 5800000);
+        assert.equal(usage.reasoningTokens, 3700);
+        assert.equal(usage.samples, 2);
+        assert.equal(usage.resumeDetected, true);
+        assert.equal(usage.attempts.length, 2);
+        assert.equal(usage.attempts[0].attemptIndex, 1);
+        assert.equal(usage.attempts[1].attemptIndex, 2);
+        assert.equal(usage.resumeStages[0], 'rework_missing_outputs 1/2');
+        assert.equal(usage.feedbackLoopCount, 1);
+        assert.equal(usage.rateLimitRetryCount, 1);
+        assert.equal(usage.rateLimitDetected, true);
+        assert.equal(usage.timeoutCount, 1);
+    });
+
+    test('extracts agent and ticket key from ai-teammate run title', function() {
+        var reporter = loadReporter();
+        var parsed = reporter.extractAgentAndKey({
+            display_title: 'agents/bug_development.json : TS-1307 : bug_development'
+        });
+
+        assert.equal(parsed.configFile, 'agents/bug_development.json');
+        assert.equal(parsed.agent, 'bug_development');
+        assert.equal(parsed.ticketKey, 'TS-1307');
+    });
+
+    test('calculates workflow run duration from GitHub timestamps', function() {
+        var reporter = loadReporter();
+        var seconds = reporter.calculateDurationSeconds({
+            run_started_at: '2026-06-01T05:00:00Z',
+            updated_at: '2026-06-01T05:27:02Z'
+        });
+
+        assert.equal(seconds, 1622);
+        assert.equal(reporter.formatDuration(seconds), '27m 2s');
+    });
+
+    test('lists completed workflow runs across MCP pages', function() {
+        var calls = [];
+        var reporter = loadReporter({
+            github_list_workflow_runs: function(workspace, repository, status, workflowId, perPage, page) {
+                calls.push({ workspace: workspace, repository: repository, status: status, workflowId: workflowId, perPage: perPage, page: page });
+                if (page === 1) {
+                    return JSON.stringify({ workflow_runs: [
+                        { id: 1, status: 'completed', created_at: '2026-06-01T00:00:00Z' },
+                        { id: 2, status: 'completed', created_at: '2026-05-31T00:00:00Z' }
+                    ] });
+                }
+                if (page === 2) {
+                    return JSON.stringify({ workflow_runs: [
+                        { id: 3, status: 'completed', created_at: '2026-05-30T00:00:00Z' }
+                    ] });
+                }
+                return JSON.stringify({ workflow_runs: [] });
+            }
+        });
+
+        var runs = reporter.listCompletedRuns({
+            workspace: 'IstiN',
+            repository: 'trackstate',
+            workflowId: 'ai-teammate.yml',
+            statuses: ['completed'],
+            perStatusLimit: 2,
+            maxPages: 10
+        });
+
+        assert.equal(runs.length, 3);
+        assert.equal(calls.length, 2);
+        assert.equal(calls[0].page, 1);
+        assert.equal(calls[1].page, 2);
+    });
+
+    test('builds aggregate and attempt CSV with resume columns', function() {
+        var reporter = loadReporter();
+        var aggregateCsv = reporter.buildCsv([{
+            runId: '1',
+            runNumber: 10,
+            createdAt: '2026-06-01T00:00:00Z',
+            day: '2026-06-01',
+            conclusion: 'success',
+            agent: 'pr_rework',
+            ticketKey: 'TS-1',
+            configFile: 'agents/pr_rework.json',
+            title: 'agents/pr_rework.json : TS-1 : TS-1',
+            durationSeconds: 1622,
+            duration: '27m 2s',
+            requests: 3,
+            readTokens: 6000000,
+            writeTokens: 19400,
+            cachedTokens: 5800000,
+            reasoningTokens: 3700,
+            samples: 2,
+            resumeDetected: true,
+            resumeStages: 'rework_missing_outputs 1/2',
+            feedbackLoopCount: 1,
+            rateLimitRetryCount: 1,
+            rateLimitDetected: true,
+            timeoutCount: 1,
+            url: 'https://example.test/run/1'
+        }]);
+        var attemptsCsv = reporter.buildAttemptsCsv([{
+            runId: '1',
+            runNumber: 10,
+            createdAt: '2026-06-01T00:00:00Z',
+            day: '2026-06-01',
+            conclusion: 'success',
+            durationSeconds: 1622,
+            duration: '27m 2s',
+            agent: 'pr_rework',
+            ticketKey: 'TS-1',
+            attemptIndex: 2,
+            resumeDetected: true,
+            feedbackLoopCount: 1,
+            rateLimitRetryCount: 1,
+            rateLimitDetected: true,
+            timeoutCount: 1,
+            requests: 2,
+            readTokens: 3100000,
+            writeTokens: 10000,
+            cachedTokens: 3000000,
+            reasoningTokens: 2000,
+            rawTokensLine: 'Tokens ↑ 3.1m',
+            url: 'https://example.test/run/1'
+        }]);
+
+        assert.contains(aggregateCsv.split('\n')[0], 'resumeDetected');
+        assert.contains(aggregateCsv.split('\n')[0], 'durationSeconds');
+        assert.contains(aggregateCsv.split('\n')[0], 'feedbackLoopCount');
+        assert.contains(aggregateCsv.split('\n')[0], 'rateLimitRetryCount');
+        assert.contains(aggregateCsv.split('\n')[0], 'timeoutCount');
+        assert.contains(aggregateCsv, 'rework_missing_outputs 1/2');
+        assert.contains(attemptsCsv.split('\n')[0], 'attemptIndex');
+        assert.contains(attemptsCsv.split('\n')[0], 'rateLimitDetected');
+        assert.contains(attemptsCsv, 'pr_rework,TS-1,2,true');
+    });
+
+    test('builds HTML with loop KPIs and chart tooltips', function() {
+        var reporter = loadReporter();
+        var summary = reporter.buildSummary([{
+            createdAt: '2026-06-01T00:00:00Z',
+            startedAt: '2026-06-01T00:00:00Z',
+            updatedAt: '2026-06-01T00:27:02Z',
+            day: '2026-06-01',
+            agent: 'pr_rework',
+            readTokens: 100,
+            writeTokens: 10,
+            cachedTokens: 50,
+            reasoningTokens: 5,
+            samples: 2,
+            resumeDetected: true,
+            feedbackLoopCount: 1,
+            rateLimitRetryCount: 1,
+            rateLimitDetected: true,
+            timeoutCount: 1,
+            durationSeconds: 1622
+        }], 1);
+        var html = reporter.buildHtml([{
+            createdAt: '2026-06-01T00:00:00Z',
+            agent: 'pr_rework',
+            ticketKey: 'TS-1',
+            conclusion: 'success',
+            samples: 2,
+            resumeDetected: true,
+            feedbackLoopCount: 1,
+            rateLimitRetryCount: 1,
+            timeoutCount: 1,
+            durationSeconds: 1622,
+            duration: '27m 2s',
+            readTokens: 100,
+            writeTokens: 10,
+            cachedTokens: 50,
+            reasoningTokens: 5,
+            runNumber: 10,
+            url: 'https://example.test/run/1'
+        }], summary);
+
+        assert.contains(html, '<span>Loops</span><b>1</b>');
+        assert.contains(html, '<span>Limit Retries</span><b>1</b>');
+        assert.contains(html, '<span>Timeouts</span><b>1</b>');
+        assert.contains(html, 'fails with limits');
+        assert.contains(html, '<span>Avg Duration</span><b>27m 2s</b>');
+        assert.contains(html, '<span>Runner Time</span><b>27m 2s</b>');
+        assert.contains(html, '<span>Max Runners</span><b>1</b>');
+        assert.contains(html, '<h2>Daily Runner Time</h2>');
+        assert.contains(html, '<h2>Runner Time By Agent</h2>');
+        assert.contains(html, '>27m 2s</td>');
+        assert.contains(html, 'id="chartTooltip"');
+        assert.contains(html, 'function showTip');
+    });
+
+    test('escapes script-breaking characters in embedded JSON payload', function() {
+        var reporter = loadReporter();
+        var summary = reporter.buildSummary([{
+            createdAt: '2026-06-01T00:00:00Z',
+            startedAt: '2026-06-01T00:00:00Z',
+            updatedAt: '2026-06-01T00:27:02Z',
+            day: '2026-06-01',
+            agent: 'pr_rework',
+            readTokens: 100,
+            writeTokens: 10,
+            cachedTokens: 50,
+            reasoningTokens: 5,
+            samples: 1,
+            resumeDetected: false,
+            feedbackLoopCount: 0,
+            rateLimitRetryCount: 0,
+            rateLimitDetected: false,
+            timeoutCount: 0,
+            durationSeconds: 60
+        }], 1);
+        var malicious = "';alert(1);//<script>alert(2)</script>" + '\u2028' + '\u2029';
+        var html = reporter.buildHtml([{
+            createdAt: '2026-06-01T00:00:00Z',
+            agent: malicious,
+            ticketKey: malicious,
+            conclusion: 'success',
+            samples: 1,
+            resumeDetected: false,
+            feedbackLoopCount: 0,
+            rateLimitRetryCount: 0,
+            timeoutCount: 0,
+            durationSeconds: 60,
+            duration: '1m 0s',
+            readTokens: 10,
+            writeTokens: 1,
+            cachedTokens: 5,
+            reasoningTokens: 0,
+            runNumber: 1,
+            url: malicious
+        }], summary);
+
+        var dataOpen = 'const DATA=JSON.parse("';
+        var start = html.indexOf(dataOpen);
+        assert.notEqual(start, -1, 'JSON.parse DATA declaration missing');
+        var payloadStart = start + dataOpen.length;
+        var payloadEnd = html.indexOf('");', payloadStart);
+        assert.notEqual(payloadEnd, -1, 'JSON.parse DATA declaration not closed');
+        var payload = html.substring(payloadStart, payloadEnd);
+
+        assert.notContains(payload, '<script>', 'payload contains raw <script>');
+        assert.notContains(payload, '</script>', 'payload contains raw </script>');
+        assert.notContains(payload, "'", 'payload contains raw single quote');
+        assert.notContains(payload, '\u2028', 'payload contains raw U+2028');
+        assert.notContains(payload, '\u2029', 'payload contains raw U+2029');
+        assert.contains(payload, '\\u003c', 'payload does not escape <');
+        assert.contains(payload, '\\u003e', 'payload does not escape >');
+        assert.contains(payload, '\\u0027', 'payload does not escape single quote');
+        assert.contains(payload, '\\u2028', 'payload does not escape U+2028');
+        assert.contains(payload, '\\u2029', 'payload does not escape U+2029');
+    });
+
+    test('action reuses cached run usage and writes cache progress', function() {
+        var writes = {};
+        var logDownloads = [];
+        var cachedRow = {
+            runId: '1',
+            runNumber: 10,
+            createdAt: '2026-06-01T00:00:00Z',
+            startedAt: '2026-06-01T00:00:00Z',
+            updatedAt: '2026-06-01T00:01:00Z',
+            day: '2026-06-01',
+            conclusion: 'success',
+            agent: 'pr_review',
+            ticketKey: 'TS-1',
+            configFile: 'agents/pr_review.json',
+            title: 'agents/pr_review.json : TS-1 : TS-1',
+            durationSeconds: 60,
+            duration: '1m 0s',
+            requests: 0,
+            readTokens: 100,
+            writeTokens: 10,
+            cachedTokens: 90,
+            reasoningTokens: 5,
+            samples: 1,
+            resumeDetected: false,
+            resumeStages: '',
+            feedbackLoopCount: 0,
+            rateLimitRetryCount: 0,
+            rateLimitDetected: false,
+            timeoutCount: 0,
+            url: 'https://example.test/run/1'
+        };
+        var reporter = loadReporter({
+            file_read: function(args) {
+                if (args.path === 'outputs/token_usage/ai_teammate_token_usage_cache.json') {
+                    return JSON.stringify({ version: 1, entries: { '1': { row: cachedRow, attemptRows: [] } } });
+                }
+                return '';
+            },
+            file_write: function(args) { writes[args.path] = args.content; },
+            github_list_workflow_runs: function() {
+                return JSON.stringify({ workflow_runs: [
+                    { id: 1, status: 'completed', conclusion: 'success', run_number: 10, created_at: '2026-06-01T00:00:00Z', run_started_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:01:00Z', display_title: 'agents/pr_review.json : TS-1 : TS-1', html_url: 'https://example.test/run/1' },
+                    { id: 2, status: 'completed', conclusion: 'success', run_number: 11, created_at: '2026-06-01T00:02:00Z', run_started_at: '2026-06-01T00:02:00Z', updated_at: '2026-06-01T00:03:00Z', display_title: 'agents/pr_rework.json : TS-2 : TS-2', html_url: 'https://example.test/run/2' }
+                ] });
+            },
+            github_get_workflow_run_logs: function(args) {
+                logDownloads.push(args.runId);
+                return '[INFO] CommandLineUtils - Tokens    ↑ 2k • ↓ 20 • 1k (cached) • 3 (reasoning)';
+            }
+        });
+
+        var result = reporter.action({
+            jobParams: {
+                customParams: {
+                    workspace: 'IstiN',
+                    repository: 'trackstate',
+                    outputDir: 'outputs/token_usage',
+                    maxPages: 1
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(logDownloads.length, 1);
+        assert.equal(logDownloads[0], '2');
+        assert.contains(writes['outputs/token_usage/ai_teammate_token_usage_cache.json'], '"1"');
+        assert.contains(writes['outputs/token_usage/ai_teammate_token_usage_cache.json'], '"2"');
+        assert.equal(result.summary.cache.hits, 1);
+        assert.equal(result.summary.cache.logDownloads, 1);
+    });
+
+    test('maxLogDownloads zero skips uncached log downloads', function() {
+        var logDownloads = [];
+        var reporter = loadReporter({
+            file_read: function() {
+                return JSON.stringify({ version: 1, entries: {} });
+            },
+            github_list_workflow_runs: function() {
+                return JSON.stringify({ workflow_runs: [
+                    { id: 1, status: 'completed', conclusion: 'success', run_number: 10, created_at: '2026-06-01T00:00:00Z', run_started_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:01:00Z', display_title: 'agents/pr_review.json : TS-1 : TS-1', html_url: 'https://example.test/run/1' }
+                ] });
+            },
+            github_get_workflow_run_logs: function(args) {
+                logDownloads.push(args.runId);
+                return '[INFO] CommandLineUtils - Tokens    ↑ 2k • ↓ 20 • 1k (cached) • 3 (reasoning)';
+            }
+        });
+
+        var result = reporter.action({
+            jobParams: {
+                customParams: {
+                    workspace: 'IstiN',
+                    repository: 'trackstate',
+                    outputDir: 'outputs/token_usage',
+                    maxPages: 1,
+                    maxLogDownloads: 0
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(logDownloads.length, 0);
+        assert.equal(result.summary.cache.logDownloads, 0);
+        assert.equal(result.summary.cache.stoppedByDownloadLimit, true);
+    });
+
+    test('cacheOnly writes report from cache without listing or downloading logs', function() {
+        var writes = {};
+        var listCalls = 0;
+        var logDownloads = [];
+        var cachedRow = {
+            runId: '1',
+            runNumber: 10,
+            createdAt: '2026-06-01T00:00:00Z',
+            startedAt: '2026-06-01T00:00:00Z',
+            updatedAt: '2026-06-01T00:01:00Z',
+            day: '2026-06-01',
+            conclusion: 'success',
+            agent: 'pr_review',
+            ticketKey: 'TS-1',
+            configFile: 'agents/pr_review.json',
+            title: 'agents/pr_review.json : TS-1 : TS-1',
+            durationSeconds: 60,
+            duration: '1m 0s',
+            requests: 0,
+            readTokens: 100,
+            writeTokens: 10,
+            cachedTokens: 90,
+            reasoningTokens: 5,
+            samples: 1,
+            resumeDetected: false,
+            resumeStages: '',
+            feedbackLoopCount: 0,
+            rateLimitRetryCount: 0,
+            rateLimitDetected: false,
+            timeoutCount: 0,
+            url: 'https://example.test/run/1'
+        };
+        var reporter = loadReporter({
+            file_read: function(args) {
+                if (args.path === 'outputs/token_usage/ai_teammate_token_usage_cache.json') {
+                    return JSON.stringify({ version: 1, entries: { '1': { row: cachedRow, attemptRows: [] }, '2': { noUsage: true } } });
+                }
+                return '';
+            },
+            file_write: function(args) { writes[args.path] = args.content; },
+            github_list_workflow_runs: function() {
+                listCalls += 1;
+                return JSON.stringify({ workflow_runs: [] });
+            },
+            github_get_workflow_run_logs: function(args) {
+                logDownloads.push(args.runId);
+                return '';
+            }
+        });
+
+        var result = reporter.action({
+            jobParams: {
+                customParams: {
+                    workspace: 'IstiN',
+                    repository: 'trackstate',
+                    outputDir: 'outputs/token_usage',
+                    cacheOnly: true
+                }
+            }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.cacheOnly, true);
+        assert.equal(listCalls, 0);
+        assert.equal(logDownloads.length, 0);
+        assert.equal(result.summary.totalRuns, 2);
+        assert.equal(result.summary.runsWithTokens, 1);
+        assert.contains(writes['outputs/token_usage/ai_teammate_token_usage.html'], 'Daily Token Trend');
+    });
+});

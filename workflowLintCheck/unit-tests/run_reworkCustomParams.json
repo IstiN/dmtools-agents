@@ -1,0 +1,12 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "js/unit-tests/testRunner.js",
+    "jobParams": {
+      "testFiles": [
+        "js/unit-tests/test_postPRReviewComments.js",
+        "js/unit-tests/test_reworkCustomParams.js"
+      ]
+    }
+  }
+}

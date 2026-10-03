@@ -1,0 +1,11 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "js/unit-tests/testRunner.js",
+    "jobParams": {
+      "testFiles": [
+        "js/integration-tests/test_bulk_bugs_failed_reason_tp.js"
+      ]
+    }
+  }
+}

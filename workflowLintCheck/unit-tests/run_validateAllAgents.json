@@ -1,0 +1,12 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "js/agentValidator.js",
+    "jobParams": {
+      "mode": "validateAll",
+      "agentJsonDir": ".",
+      "mockCli": true,
+      "mockActions": true
+    }
+  }
+}

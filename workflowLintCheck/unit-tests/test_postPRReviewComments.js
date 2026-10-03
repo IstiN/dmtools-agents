@@ -1,0 +1,972 @@
+/**
+ * Unit tests for js/postPRReviewComments.js.
+ */
+var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+
+
+var githubHelpersStub = {
+    findPRForTicket: function() { return null; },
+    findMergedPRForTicket: function() { return null; }
+};
+
+/**
+ * Load the real js/common/trackers.js with tool mocks, pinning the provider via
+ * customParams so tests stay deterministic even when the runner process has
+ * DEFAULT_TRACKER set (env probing would otherwise outrank a silent config).
+ * A customParams.trackerProvider in the tested params still wins, so provider
+ * dispatch itself remains testable.
+ */
+function makeTrackersModule(toolMocks) {
+    var realTrackers = loadModule(
+        'js/common/trackers.js',
+        makeRequire({ '../config.js': configModule }),
+        toolMocks || {}
+    );
+    return {
+        createTracker: function(config, customParams) {
+            return realTrackers.createTracker(
+                config,
+                Object.assign({ trackerProvider: 'jira' }, customParams || {})
+            );
+        },
+        extractTicketKey: realTrackers.extractTicketKey
+    };
+}
+
+function loadPostPRReviewComments(mocks) {
+    var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
+            './common/commentMarkup.js': commentMarkupModule
+        }), {
+        file_read: (mocks && mocks.file_read) || function() { return null; }
+    });
+    return loadModule(
+        'js/postPRReviewComments.js',
+        makeRequire({
+            './common/machineAuthor.js': machineAuthorModule,
+            './config.js': configModule,
+            './common/scm.js': { createScm: function() { return {}; } },
+            './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
+            './configLoader.js': configLoaderModule,
+            './common/outputFiles.js': outputFiles,
+            './common/githubHelpers.js': githubHelpersStub,
+            './common/trackers.js': makeTrackersModule({}),
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+        ,
+            './common/commentMarkup.js': commentMarkupModule
+        }),
+        {
+            file_read: (mocks && mocks.file_read) || function() { return null; }
+        }
+    );
+}
+
+suite('postPRReviewComments', function() {
+    test('merges pr_review jobParamPatches into runtime customParams', function() {
+        var mod = loadPostPRReviewComments();
+
+        var customParams = mod.resolveCustomParams(
+            {
+                jobParams: {
+                    customParams: {
+                        removeLabel: 'sm_story_review_triggered',
+                        targetRepository: { owner: 'IstiN', repo: 'trackstate' }
+                    }
+                }
+            },
+            {
+                jobParamPatches: {
+                    pr_review: {
+                        customParams: {
+                            autoStartRework: true,
+                            autoStartReworkConfigFile: 'agents/pr_rework.json',
+                            removeLabel: 'from_patch'
+                        }
+                    }
+                }
+            }
+        );
+
+        assert.equal(customParams.autoStartRework, true);
+        assert.equal(customParams.autoStartReworkConfigFile, 'agents/pr_rework.json');
+        assert.equal(customParams.removeLabel, 'sm_story_review_triggered');
+        assert.deepEqual(customParams.targetRepository, { owner: 'IstiN', repo: 'trackstate' });
+    });
+
+    test('detects line present in added side of PR diff', function() {
+        var mod = loadPostPRReviewComments();
+        var diff =
+            'diff --git a/lib/example.dart b/lib/example.dart\n' +
+            'index 1111111..2222222 100644\n' +
+            '--- a/lib/example.dart\n' +
+            '+++ b/lib/example.dart\n' +
+            '@@ -10,2 +10,3 @@ class Example {\n' +
+            ' context line\n' +
+            '+new line\n' +
+            ' another context\n';
+
+        assert.equal(mod.isLinePresentInDiff(diff, 'lib/example.dart', 11), true);
+        assert.equal(mod.isLinePresentInDiff(diff, 'lib/example.dart', 99), false);
+    });
+
+    test('deleted file lines are available on the LEFT side', function() {
+        var mod = loadPostPRReviewComments();
+        var diff =
+            'diff --git a/.codegraph/.gitignore b/.codegraph/.gitignore\n' +
+            'deleted file mode 100644\n' +
+            'index 1111111..0000000\n' +
+            '--- a/.codegraph/.gitignore\n' +
+            '+++ /dev/null\n' +
+            '@@ -1,2 +0,0 @@\n' +
+            '-index\n' +
+            '-cache\n';
+
+        assert.equal(mod.isLinePresentInDiff(diff, '.codegraph/.gitignore', 1), true);
+        assert.equal(mod.isLinePresentInDiff(diff, '.codegraph/.gitignore', 1, 'LEFT'), true);
+        assert.equal(mod.isLinePresentInDiff(diff, '.codegraph/.gitignore', 1, 'RIGHT'), false);
+    });
+
+    test('countReviewThreads counts rawThreads from scm.fetchDiscussions', function() {
+        var mod = loadPostPRReviewComments();
+        var scm = {
+            fetchDiscussions: function() {
+                return { rawThreads: { threads: [{ id: 1 }, { id: 2 }, { id: 3 }] } };
+            }
+        };
+        assert.equal(mod.countReviewThreads(scm, 42), 3);
+    });
+
+    test('countReviewThreads returns 0 when fetchDiscussions throws', function() {
+        var mod = loadPostPRReviewComments();
+        var scm = {
+            fetchDiscussions: function() {
+                throw new Error('graphql failure');
+            }
+        };
+        assert.equal(mod.countReviewThreads(scm, 42), 0);
+    });
+
+    test('countReviewThreads returns 0 when rawThreads are missing', function() {
+        var mod = loadPostPRReviewComments();
+        var scm = { fetchDiscussions: function() { return {}; } };
+        assert.equal(mod.countReviewThreads(scm, 42), 0);
+    });
+
+    test('detects submodule pointer changes in PR diff', function() {
+        var mod = loadPostPRReviewComments();
+        var diff =
+            'diff --git a/trackstate-setup b/trackstate-setup\n' +
+            'index bab3e4453..20a4bc2a1 160000\n' +
+            '--- a/trackstate-setup\n' +
+            '+++ b/trackstate-setup\n' +
+            '@@ -1 +1 @@\n' +
+            '-Subproject commit bab3e445305c78295b72f1fa4fe5e85f12055546\n' +
+            '+Subproject commit 20a4bc2a11e528d173e9fbe046b1ee31514e9259\n';
+
+        assert.equal(mod.isSubmodulePathInDiff(diff, 'trackstate-setup'), true);
+        assert.equal(mod.isSubmodulePathInDiff(diff, 'lib/example.dart'), false);
+    });
+
+    test('maps comments on submodule content to the submodule diff line as inline threads', function() {
+        var mod = loadPostPRReviewComments();
+        var diff =
+            'diff --git a/trackstate-setup b/trackstate-setup\n' +
+            'index bab3e4453..20a4bc2a1 160000\n' +
+            '--- a/trackstate-setup\n' +
+            '+++ b/trackstate-setup\n' +
+            '@@ -1 +1 @@\n' +
+            '-Subproject commit bab3e445305c78295b72f1fa4fe5e85f12055546\n' +
+            '+Subproject commit 20a4bc2a11e528d173e9fbe046b1ee31514e9259\n';
+        var calls = [];
+        var scm = {
+            getPrDiff: function() { return diff; },
+            addInlineComment: function(prId, path, line, text, startLine, side) {
+                calls.push({ prId: prId, path: path, line: line, text: text, startLine: startLine, side: side });
+            }
+        };
+
+        mod.postInlineComment(scm, 1930, { path: 'trackstate-setup', line: 7, body: 'description issue' }, 'TS-1383', null);
+
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].path, 'trackstate-setup');
+        assert.equal(calls[0].line, 1);
+        assert.equal(calls[0].side, 'RIGHT');
+        assert.equal(calls[0].startLine, null);
+        assert.ok(calls[0].text.indexOf('trackstate-setup:7') !== -1);
+        assert.ok(calls[0].text.indexOf('description issue') !== -1);
+    });
+
+    test('maps comments on files inside a submodule to the submodule diff line', function() {
+        var mod = loadPostPRReviewComments();
+        var diff =
+            'diff --git a/trackstate-setup b/trackstate-setup\n' +
+            'index bab3e4453..20a4bc2a1 160000\n' +
+            '--- a/trackstate-setup\n' +
+            '+++ b/trackstate-setup\n' +
+            '@@ -1 +1 @@\n' +
+            '-Subproject commit bab3e445305c78295b72f1fa4fe5e85f12055546\n' +
+            '+Subproject commit 20a4bc2a11e528d173e9fbe046b1ee31514e9259\n';
+        var calls = [];
+        var scm = {
+            getPrDiff: function() { return diff; },
+            addInlineComment: function(prId, path, line, text, startLine, side) {
+                calls.push({ prId: prId, path: path, line: line, text: text, startLine: startLine, side: side });
+            }
+        };
+
+        mod.postInlineComment(scm, 1930, { path: 'trackstate-setup/README.md', line: 12, body: 'readme issue' }, 'TS-1383', null);
+
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].path, 'trackstate-setup');
+        assert.equal(calls[0].line, 1);
+        assert.ok(calls[0].text.indexOf('trackstate-setup/README.md:12') !== -1);
+    });
+
+    // ── Regression guard: body held a comment-file path instead of text ──
+    // The agent is instructed to reference comment text via `comment` (a path
+    // to outputs/pr_review_comments/*.md), never inline in `body`. A prompt/
+    // schema mismatch once caused the model to duplicate that path into
+    // `body`, and since `body` takes priority, the raw path got posted as the
+    // GitHub comment (observed in production). resolveCommentFileReference +
+    // postInlineComment must detect and correct this instead of publishing
+    // the literal path.
+    suite('resolveCommentFileReference — comment-file-path-in-body regression guard', function() {
+        test('resolves a bare comment-file path into its real file content', function() {
+            var mod = loadPostPRReviewComments({
+                file_read: function(opts) {
+                    var p = opts && (opts.path || opts);
+                    if (p === 'outputs/pr_review_comments/comment1_analytics_confirm.md') {
+                        return 'Analytics event should fire on confirm, not on image select.';
+                    }
+                    return null;
+                }
+            });
+
+            var resolved = mod.resolveCommentFileReference(
+                'outputs/pr_review_comments/comment1_analytics_confirm.md', 'TS-1139', null
+            );
+
+            assert.equal(resolved, 'Analytics event should fire on confirm, not on image select.');
+        });
+
+        test('does not treat ordinary inline comment text as a file reference', function() {
+            var mod = loadPostPRReviewComments();
+
+            assert.equal(mod.resolveCommentFileReference('This is a real inline comment.', 'TS-1139', null), null);
+            assert.equal(mod.resolveCommentFileReference('outputs/pr_review_comments/ mentioned mid-sentence', 'TS-1139', null), null);
+            assert.equal(mod.resolveCommentFileReference(null, 'TS-1139', null), null);
+        });
+
+        test('postInlineComment posts the real file content, not the raw path, when body holds a comment-file reference', function() {
+            var mod = loadPostPRReviewComments({
+                file_read: function(opts) {
+                    var p = opts && (opts.path || opts);
+                    if (p === 'outputs/pr_review_comments/comment1_analytics_confirm.md') {
+                        return 'Analytics event should fire on confirm, not on image select.';
+                    }
+                    return null;
+                }
+            });
+            var diff =
+                'diff --git a/src/AiAutofillModal.tsx b/src/AiAutofillModal.tsx\n' +
+                'index 1111111..2222222 100644\n' +
+                '--- a/src/AiAutofillModal.tsx\n' +
+                '+++ b/src/AiAutofillModal.tsx\n' +
+                '@@ -166,3 +166,4 @@ function AiAutofillModal() {\n' +
+                ' context line\n' +
+                '+  onAddImage();\n' +
+                ' another context\n' +
+                ' more context\n';
+            var calls = [];
+            var scm = {
+                getPrDiff: function() { return diff; },
+                addInlineComment: function(prId, path, line, text, startLine, side) {
+                    calls.push({ prId: prId, path: path, line: line, text: text, startLine: startLine, side: side });
+                }
+            };
+
+            mod.postInlineComment(scm, 1139, {
+                path: 'src/AiAutofillModal.tsx',
+                line: 169,
+                comment: 'outputs/pr_review_comments/comment1_analytics_confirm.md',
+                body: 'outputs/pr_review_comments/comment1_analytics_confirm.md'
+            }, 'TS-1139', null);
+
+            assert.equal(calls.length, 1);
+            assert.equal(calls[0].text, 'Analytics event should fire on confirm, not on image select.');
+            assert.notEqual(calls[0].text, 'outputs/pr_review_comments/comment1_analytics_confirm.md');
+        });
+    });
+
+    // ── action(): !isApproved + no-PR guard (issue #311) ──────────────────────
+    // postPRReviewComments must not move the Jira ticket to In Rework, nor
+    // auto-trigger a pr_rework cycle (markForSmStoryRework/triggerSmIfIdle), when
+    // the review recommendation isn't a clean approval but no open PR could ever
+    // be matched to the ticket. Only the GitHub-comment-posting step (Step 4) was
+    // previously guarded with `if (prNumber && repoInfo)`; the Jira status
+    // transition (Step 7) and the SM/rework auto-trigger (Step 12) were not.
+    suite('action — !isApproved + no-PR guard (#311)', function() {
+
+        function loadPostPRReviewCommentsForAction(opts) {
+            opts = opts || {};
+            var jiraAddLabelCalls = [];
+            var jiraMoveToStatusCalls = [];
+            var jiraPostCommentCalls = [];
+            var triggerSmIfIdleCalls = [];
+            var scmAddLabelCalls = [];
+
+            var scm = {
+                listPrs: function() { return opts.openPrs || []; },
+                getRemoteRepoInfo: function() { return opts.repoInfo !== undefined ? opts.repoInfo : null; },
+                addLabel: function(number, label) { scmAddLabelCalls.push({ number: number, label: label }); },
+                fetchDiscussions: function() { return { rawThreads: { threads: [] } }; }
+            };
+
+            var outputFiles = {
+                readOutputFileDetailed: function() {
+                    return { content: JSON.stringify(opts.reviewData), path: 'outputs/pr_review.json' };
+                },
+                readOutputFile: function() { return null; }
+            };
+
+            var defaultMocks = {
+                file_read: function(args) {
+                    var p = args && (args.path || args);
+                    if (p && p.indexOf('pr_info.md') !== -1) {
+                        return opts.prInfoContent || null;
+                    }
+                    return null;
+                },
+                jira_add_label: function(args) { jiraAddLabelCalls.push(args); },
+                jira_move_to_status: function(args) { jiraMoveToStatusCalls.push(args); },
+                jira_post_comment: function(args) { jiraPostCommentCalls.push(args); },
+                jira_remove_label: function() {},
+                jira_assign_ticket_to: function() {}
+            };
+
+            var mergedMocks = Object.assign({}, defaultMocks, opts.mocks || {});
+
+            var mod = loadModule(
+                'js/postPRReviewComments.js',
+                makeRequire({
+            './common/machineAuthor.js': machineAuthorModule,
+                    './config.js': configModule,
+                    './common/scm.js': { createScm: function() { return scm; } },
+                    './common/autoStart.js': {
+                        triggerConfiguredWorkflowForTicket: function() { return false; },
+                        triggerSmIfIdle: function(args) { triggerSmIfIdleCalls.push(args); }
+                    },
+                    './configLoader.js': {
+                        loadProjectConfig: function() { return opts.config || {}; },
+                        resolveInstructions: function() { return { jobParamPatch: {} }; }
+                    },
+                    './common/outputFiles.js': outputFiles,
+                    './common/githubHelpers.js': githubHelpersStub,
+                    './common/trackers.js': makeTrackersModule(mergedMocks),
+                    './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+                    './common/commentMarkup.js': commentMarkupModule
+                }),
+                mergedMocks
+            );
+
+            return {
+                mod: mod,
+                jiraAddLabelCalls: jiraAddLabelCalls,
+                jiraMoveToStatusCalls: jiraMoveToStatusCalls,
+                jiraPostCommentCalls: jiraPostCommentCalls,
+                triggerSmIfIdleCalls: triggerSmIfIdleCalls,
+                scmAddLabelCalls: scmAddLabelCalls
+            };
+        }
+
+        test('no PR found: does NOT move to In Rework, does NOT mark/trigger SM rework, posts "could not attach" comment instead', function() {
+            var loaded = loadPostPRReviewCommentsForAction({
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                },
+                repoInfo: null,
+                openPrs: []
+            });
+
+            var result = loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1'
+            });
+
+            assert.equal(result.success, true);
+            assert.equal(result.githubCommentsPosted, false);
+
+            assert.equal(
+                loaded.jiraMoveToStatusCalls.length, 0,
+                'must NOT move the ticket to In Rework when no PR was found'
+            );
+            assert.equal(
+                loaded.jiraAddLabelCalls.filter(function(c) { return c.label === 'sm_story_rework_triggered'; }).length, 0,
+                'must NOT mark for SM story rework when no PR was found'
+            );
+            assert.equal(
+                loaded.jiraAddLabelCalls.filter(function(c) { return c.label === 'agent:rework'; }).length, 0,
+                'must NOT arm agent:rework when no PR was found'
+            );
+            assert.equal(
+                loaded.triggerSmIfIdleCalls.length, 0,
+                'must NOT trigger SM when no PR was found (nothing to rework)'
+            );
+
+            assert.ok(
+                loaded.jiraPostCommentCalls.some(function(c) {
+                    return c.comment.indexOf('PR Review Could Not Be Attached') !== -1;
+                }),
+                'should post the new "could not attach" comment explaining the ticket was left unchanged'
+            );
+        });
+
+        test('regression: !isApproved WITH a PR found still moves to In Rework and triggers SM rework as before', function() {
+            var loaded = loadPostPRReviewCommentsForAction({
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                },
+                repoInfo: { owner: 'IstiN', repo: 'dmtools-agents' },
+                prInfoContent: '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n'
+            });
+
+            var result = loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1'
+            });
+
+            assert.equal(result.success, true);
+            assert.equal(result.githubCommentsPosted, true);
+
+            assert.ok(
+                loaded.jiraMoveToStatusCalls.some(function(c) { return c.statusName === 'In Rework'; }),
+                'should still move the ticket to In Rework when a PR was found'
+            );
+            assert.equal(
+                loaded.jiraAddLabelCalls.filter(function(c) { return c.label === 'sm_story_rework_triggered'; }).length, 1,
+                'should still mark for SM story rework when a PR was found'
+            );
+            // Live pathology (fa gh-746 — 24 review rounds, zero reworks):
+            // no SM rule reads sm_story_rework_triggered; the rework rule
+            // matches agent:rework. The SM marker alone was a dead contract.
+            assert.equal(
+                loaded.jiraAddLabelCalls.filter(function(c) { return c.label === 'agent:rework'; }).length, 1,
+                'should arm agent:rework so the SM rework rule can dispatch (gh-746)'
+            );
+            // And the linked PR gets ai_pr_reviewed — review-after-dev reads
+            // notPrLabels on the PR, so an issue-only marker re-dispatched a
+            // review every tick on the same head.
+            assert.ok(
+                loaded.scmAddLabelCalls.some(function(c) { return c.number === 42 && c.label === 'ai_pr_reviewed'; }),
+                'should label the linked PR ai_pr_reviewed: ' + JSON.stringify(loaded.scmAddLabelCalls)
+            );
+            assert.equal(
+                loaded.triggerSmIfIdleCalls.length, 1,
+                'should still trigger SM when a PR was found'
+            );
+            assert.equal(
+                loaded.jiraPostCommentCalls.some(function(c) {
+                    return c.comment.indexOf('PR Review Could Not Be Attached') !== -1;
+                }),
+                false,
+                'must not post the "could not attach" comment when a PR was found'
+            );
+        });
+
+        test('github provider: ticket operations dispatch to github_* tools, jira_* stay untouched (#414)', function() {
+            var ghCommentCalls = [];
+            var ghAddLabelCalls = [];
+            var ghRemoveLabelCalls = [];
+            var jiraCalls = [];
+
+            var loaded = loadPostPRReviewCommentsForAction({
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                },
+                repoInfo: null,
+                openPrs: [],
+                mocks: {
+                    github_create_comment: function(args) { ghCommentCalls.push(args); return '{}'; },
+                    github_add_labels: function(args) { ghAddLabelCalls.push(args); return '{}'; },
+                    github_remove_label: function(args) { ghRemoveLabelCalls.push(args); return '{}'; },
+                    jira_post_comment: function(args) { jiraCalls.push(args); },
+                    jira_add_label: function(args) { jiraCalls.push(args); },
+                    jira_move_to_status: function(args) { jiraCalls.push(args); },
+                    jira_remove_label: function(args) { jiraCalls.push(args); },
+                    jira_assign_ticket_to: function(args) { jiraCalls.push(args); }
+                }
+            });
+
+            var result = loaded.mod.action({
+                ticket: { key: 'IstiN/fah-git-test#7', fields: { labels: [] } },
+                response: 'Review content',
+                inputFolderPath: 'input/IstiN/fah-git-test#7',
+                customParams: { trackerProvider: 'github' }
+            });
+
+            assert.equal(result.success, true);
+            assert.equal(jiraCalls.length, 0, 'no jira_* tool must be called on a github deployment: ' + JSON.stringify(jiraCalls));
+
+            assert.ok(
+                ghCommentCalls.some(function(c) {
+                    return c.pullRequestId === 7 && c.text.indexOf('Automated PR Review Completed') !== -1;
+                }),
+                'review summary should be posted via github_create_comment: ' + JSON.stringify(ghCommentCalls)
+            );
+            assert.ok(
+                ghCommentCalls.some(function(c) {
+                    return c.pullRequestId === 7 && c.text.indexOf('PR Review Could Not Be Attached') !== -1;
+                }),
+                'the could-not-attach comment should be posted via github_create_comment'
+            );
+            assert.ok(
+                ghAddLabelCalls.some(function(c) {
+                    return c.number === 7 && c.labels && c.labels.indexOf('ai_pr_reviewed') !== -1;
+                }),
+                'ai_pr_reviewed should be added via github_add_labels: ' + JSON.stringify(ghAddLabelCalls)
+            );
+            assert.ok(
+                ghRemoveLabelCalls.some(function(c) { return c.number === 7 && c.label === 'pr_review_wip'; }),
+                'the WIP label should be removed via github_remove_label: ' + JSON.stringify(ghRemoveLabelCalls)
+            );
+        });
+    });
+
+    // ── action(): opt-in formal GitHub PR review (Approve/Request Changes) ────
+    // customParams.formalGithubReview enables a native GitHub review decision via
+    // scm.submitReview/listReviews/dismissReview, entirely additive to — and never
+    // touching — the pr_approved label lifecycle (addLabel/removeLabel).
+    suite('action — formal GitHub PR review (opt-in)', function() {
+
+        function loadPostPRReviewCommentsForFormalReview(opts) {
+            opts = opts || {};
+            var addLabelCalls = [];
+            var submitReviewCalls = [];
+            var dismissReviewCalls = [];
+
+            var scm = {
+                listPrs: function() { return opts.openPrs || []; },
+                getRemoteRepoInfo: function() { return opts.repoInfo !== undefined ? opts.repoInfo : { owner: 'IstiN', repo: 'dmtools-agents' }; },
+                addLabel: function(prId, label) { addLabelCalls.push({ prId: prId, label: label }); },
+                removeLabel: function() {},
+                fetchDiscussions: function() { return { rawThreads: { threads: [] } }; },
+                submitReview: function(prId, event, body) {
+                    submitReviewCalls.push({ prId: prId, event: event, body: body });
+                },
+                listReviews: function() { return opts.existingReviews || []; },
+                dismissReview: function(prId, reviewId, message) {
+                    dismissReviewCalls.push({ prId: prId, reviewId: reviewId, message: message });
+                }
+            };
+
+            var outputFiles = {
+                readOutputFileDetailed: function() {
+                    return { content: JSON.stringify(opts.reviewData), path: 'outputs/pr_review.json' };
+                },
+                readOutputFile: function(p) {
+                    if (opts.generalMdContent && p && String(p).indexOf('pr_review_general.md') !== -1) {
+                        return opts.generalMdContent;
+                    }
+                    return null;
+                }
+            };
+
+            var formalMocks = {
+                file_read: function(args) {
+                    var p = args && (args.path || args);
+                    if (p && p.indexOf('pr_info.md') !== -1) {
+                        return opts.prInfoContent || '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n';
+                    }
+                    return null;
+                },
+                jira_add_label: function() {},
+                jira_move_to_status: function() {},
+                jira_post_comment: function() {},
+                jira_remove_label: function() {},
+                jira_assign_ticket_to: function() {}
+            };
+
+            var mod = loadModule(
+                'js/postPRReviewComments.js',
+                makeRequire({
+            './common/machineAuthor.js': machineAuthorModule,
+                    './config.js': configModule,
+                    './common/scm.js': { createScm: function() { return scm; } },
+                    './common/autoStart.js': {
+                        triggerConfiguredWorkflowForTicket: function() { return false; },
+                        triggerSmIfIdle: function() {}
+                    },
+                    './configLoader.js': {
+                        loadProjectConfig: function() { return opts.config || {}; },
+                        resolveInstructions: function() { return { jobParamPatch: {} }; }
+                    },
+                    './common/outputFiles.js': outputFiles,
+                    './common/githubHelpers.js': githubHelpersStub,
+                    './common/trackers.js': makeTrackersModule(formalMocks),
+                    './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+                    './common/commentMarkup.js': commentMarkupModule
+                }),
+                formalMocks
+            );
+
+            return {
+                mod: mod,
+                addLabelCalls: addLabelCalls,
+                submitReviewCalls: submitReviewCalls,
+                dismissReviewCalls: dismissReviewCalls
+            };
+        }
+
+        test('disabled by default: does not submit a formal review when customParams.formalGithubReview is not set', function() {
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                }
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1'
+            });
+
+            assert.equal(loaded.submitReviewCalls.length, 0, 'must not submit a formal review when the opt-in flag is off');
+            assert.equal(loaded.dismissReviewCalls.length, 0, 'must not dismiss a review when the opt-in flag is off');
+        });
+
+        test('project config.js formalGithubReview=true enables it without customParams', function() {
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                config: { formalGithubReview: true },
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    generalComment: 'Config-driven blocking issue.',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                }
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1'
+            });
+
+            assert.equal(loaded.submitReviewCalls.length, 1, 'project config default must enable the formal review');
+            assert.equal(loaded.submitReviewCalls[0].event, 'REQUEST_CHANGES');
+        });
+
+        test('customParams.formalGithubReview=false overrides config.js true', function() {
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                config: { formalGithubReview: true },
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    generalComment: 'Should never be submitted.',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                }
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1',
+                customParams: { formalGithubReview: false }
+            });
+
+            assert.equal(loaded.submitReviewCalls.length, 0, 'explicit per-run false must beat the project default');
+        });
+
+        test('enabled + REQUEST_CHANGES: submits a formal Request Changes review, and still adds no pr_approved label', function() {
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    generalComment: 'Blocking issue found in file X.',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                }
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1',
+                customParams: { formalGithubReview: true }
+            });
+
+            assert.equal(loaded.submitReviewCalls.length, 1, 'should submit exactly one formal review');
+            assert.equal(loaded.submitReviewCalls[0].event, 'REQUEST_CHANGES');
+            assert.equal(loaded.submitReviewCalls[0].body, 'Blocking issue found in file X.');
+            assert.equal(loaded.dismissReviewCalls.length, 0);
+            assert.equal(
+                loaded.addLabelCalls.filter(function(c) { return c.label === 'pr_approved'; }).length, 0,
+                'must not touch the pr_approved label logic'
+            );
+        });
+
+        test('enabled + APPROVE: dismisses prior CHANGES_REQUESTED, submits a formal APPROVE review, and still adds the pr_approved label', function() {
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                reviewData: {
+                    recommendation: 'APPROVE',
+                    issueCounts: { blocking: 0, important: 0, suggestions: 0 },
+                    inlineComments: []
+                },
+                existingReviews: [
+                    { id: 111, state: 'CHANGES_REQUESTED' },
+                    { id: 222, state: 'APPROVED' }
+                ]
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1',
+                customParams: { formalGithubReview: true }
+            });
+
+            assert.equal(loaded.dismissReviewCalls.length, 1, 'should dismiss exactly the CHANGES_REQUESTED review');
+            assert.equal(loaded.dismissReviewCalls[0].reviewId, 111);
+            assert.equal(loaded.submitReviewCalls.length, 1, 'must submit a formal APPROVE review when approving');
+            assert.equal(loaded.submitReviewCalls[0].event, 'APPROVE');
+            assert.ok(
+                loaded.submitReviewCalls[0].body && String(loaded.submitReviewCalls[0].body).length > 0,
+                'APPROVE review carries a body'
+            );
+            assert.equal(
+                loaded.addLabelCalls.filter(function(c) { return c.label === 'pr_approved'; }).length, 1,
+                'pr_approved label lifecycle on approve must be unchanged'
+            );
+        });
+
+        test('APPROVE body resolves a generalComment FILE PATH to its content (#720 live bug)', function() {
+            // Live bug (flutter_agent_harness #720): the model followed the
+            // file-path contract (generalComment = 'outputs/pr_review_general.md'),
+            // postGeneralComment read the file correctly, but the formal APPROVE
+            // review posted the literal PATH as its body.
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                reviewData: {
+                    recommendation: 'APPROVE',
+                    generalComment: 'outputs/pr_review_general.md',
+                    issueCounts: { blocking: 0, important: 0, suggestions: 0 },
+                    inlineComments: []
+                },
+                generalMdContent: '## Automated Code Review — APPROVE\n\nSolid work.',
+                existingReviews: []
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1',
+                customParams: { formalGithubReview: true }
+            });
+
+            assert.equal(loaded.submitReviewCalls.length, 1, 'exactly one formal review');
+            assert.equal(loaded.submitReviewCalls[0].event, 'APPROVE');
+            assert.equal(
+                loaded.submitReviewCalls[0].body,
+                '## Automated Code Review — APPROVE\n\nSolid work.',
+                'the review body must be the file CONTENT, never the outputs/ path'
+            );
+        });
+
+        test('PR-anchored EXTERNAL PR + APPROVE: pr_approved arms the merge pipeline for any author (owner rule)', function() {
+            // Owner rule: external PRs get auto-APPROVE (pr_approved →
+            // validate → merge); only auto-REWORK stays machine-gated.
+            // Previously the pr_approved arming was machineAuthor-gated and
+            // external PRs were "verdict only, merge left to maintainers".
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                config: { machineAuthor: 'ai-teammate' },
+                prInfoContent: '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: feat/external\n- **Author**: some-human\n',
+                reviewData: {
+                    recommendation: 'APPROVE',
+                    issueCounts: { blocking: 0, important: 0, suggestions: 0 },
+                    inlineComments: []
+                }
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'pr-42', fields: { labels: [] } },
+                response: 'review content',
+                inputFolderPath: 'input/pr-42'
+            });
+
+            assert.ok(
+                loaded.addLabelCalls.some(function(c) { return c.prId === 42 && c.label === 'pr_approved'; }),
+                'external PR approved → pr_approved armed: ' + JSON.stringify(loaded.addLabelCalls)
+            );
+        });
+
+        test('PR-anchored EXTERNAL PR + REQUEST_CHANGES: no agent:rework re-arm (auto rework stays machine-gated)', function() {
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                config: { machineAuthor: 'ai-teammate' },
+                prInfoContent: '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: feat/external\n- **Author**: some-human\n',
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                }
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'pr-42', fields: { labels: [] } },
+                response: 'review content',
+                inputFolderPath: 'input/pr-42'
+            });
+
+            assert.ok(
+                !loaded.addLabelCalls.some(function(c) { return c.label === 'agent:rework'; }),
+                'external PR: rework is NEVER auto-armed — the human author fixes it: ' + JSON.stringify(loaded.addLabelCalls)
+            );
+            assert.ok(
+                !loaded.addLabelCalls.some(function(c) { return c.label === 'pr_approved'; }),
+                'no pr_approved on a rejected review'
+            );
+        });
+
+        test('enabled + scm without submitReview support (e.g. non-GitHub provider): skips gracefully, no error thrown', function() {
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                }
+            });
+            delete loaded.mod; // not used further
+
+            // Re-load with an scm lacking submitReview entirely.
+            var addLabelCalls = [];
+            var mod2 = loadModule(
+                'js/postPRReviewComments.js',
+                makeRequire({
+            './common/machineAuthor.js': machineAuthorModule,
+                    './config.js': configModule,
+                    './common/scm.js': {
+                        createScm: function() {
+                            return {
+                                listPrs: function() { return []; },
+                                getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; },
+                                addLabel: function(prId, label) { addLabelCalls.push({ prId: prId, label: label }); },
+                                removeLabel: function() {},
+                                fetchDiscussions: function() { return { rawThreads: { threads: [] } }; }
+                            };
+                        }
+                    },
+                    './common/autoStart.js': {
+                        triggerConfiguredWorkflowForTicket: function() { return false; },
+                        triggerSmIfIdle: function() {}
+                    },
+                    './configLoader.js': {
+                        loadProjectConfig: function() { return {}; },
+                        resolveInstructions: function() { return { jobParamPatch: {} }; }
+                    },
+                    './common/outputFiles.js': {
+                        readOutputFileDetailed: function() {
+                            return {
+                                content: JSON.stringify({
+                                    recommendation: 'REQUEST_CHANGES',
+                                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                                    inlineComments: []
+                                }),
+                                path: 'outputs/pr_review.json'
+                            };
+                        },
+                        readOutputFile: function() { return null; }
+                    },
+                    './common/githubHelpers.js': githubHelpersStub,
+                    './common/trackers.js': makeTrackersModule({
+                        jira_add_label: function() {},
+                        jira_move_to_status: function() {},
+                        jira_post_comment: function() {},
+                        jira_remove_label: function() {},
+                        jira_assign_ticket_to: function() {}
+                    }),
+                    './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+                ,
+            './common/commentMarkup.js': commentMarkupModule
+        }),
+                {
+                    file_read: function(args) {
+                        var p = args && (args.path || args);
+                        if (p && p.indexOf('pr_info.md') !== -1) {
+                            return '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n';
+                        }
+                        return null;
+                    },
+                    jira_add_label: function() {},
+                    jira_move_to_status: function() {},
+                    jira_post_comment: function() {},
+                    jira_remove_label: function() {},
+                    jira_assign_ticket_to: function() {}
+                }
+            );
+
+            var result = mod2.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1',
+                customParams: { formalGithubReview: true }
+            });
+
+            assert.equal(result.success, true, 'action must still succeed when the scm provider lacks submitReview');
+        });
+    });
+
+    suite('parseDiffLineInfo', function() {
+        test('prefers RIGHT over LEFT for a single-line replacement at the same line number', function() {
+            var mod = loadPostPRReviewComments();
+
+            // Classic single-line replacement: old and new content share the
+            // same line number (5) inside the hunk. A finding about the
+            // current code must anchor on RIGHT (the new line), not LEFT
+            // (the removed line), even though the '-' line is encountered
+            // first while scanning the diff.
+            var diffText =
+                'diff --git a/foo.js b/foo.js\n' +
+                'index e96d9d1..988d518 100644\n' +
+                '--- a/foo.js\n' +
+                '+++ b/foo.js\n' +
+                '@@ -2,7 +2,7 @@ function greet() {\n' +
+                ' \tconst a = 1;\n' +
+                ' \tconst b = 2;\n' +
+                ' \tconst label = "before";\n' +
+                '-\tconst greeting = "helo";\n' +
+                '+\tconst greeting = "hello";\n' +
+                ' \n' +
+                ' \treturn greeting;\n';
+
+            var info = mod.parseDiffLineInfo(diffText, 'foo.js', 5);
+
+            assert.equal(info.present, true);
+            assert.equal(info.side, 'RIGHT', 'a same-numbered replacement must resolve to RIGHT, not LEFT');
+        });
+
+        test('still resolves LEFT for a pure removal (no matching + at the same line)', function() {
+            var mod = loadPostPRReviewComments();
+
+            var diffText =
+                'diff --git a/foo.js b/foo.js\n' +
+                'index e96d9d1..988d518 100644\n' +
+                '--- a/foo.js\n' +
+                '+++ b/foo.js\n' +
+                '@@ -2,2 +2,1 @@ function greet() {\n' +
+                ' \tconst a = 1;\n' +
+                '-\tconst unused = 2;\n';
+
+            var info = mod.parseDiffLineInfo(diffText, 'foo.js', 3);
+
+            assert.equal(info.present, true);
+            assert.equal(info.side, 'LEFT', 'a pure removal with no matching added line must still resolve to LEFT');
+        });
+    });
+});
+

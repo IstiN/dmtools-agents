@@ -1,0 +1,7 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "js/unit-tests/integration_probe_globals.js"
+  }
+}
+

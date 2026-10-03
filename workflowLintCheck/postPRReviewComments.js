@@ -1,0 +1,1300 @@
+/**
+ * Post PR Review Comments Action
+ * PostJSAction that:
+ * 1. Reads outputs/pr_review.json with structured review data
+ * 2. Posts general review comment to GitHub PR using github_add_pr_comment
+ * 3. Posts inline code comments to GitHub PR using github_add_inline_comment
+ * 4. Posts a formatted review summary to the ticket (Jira/ADO/GitHub via common/trackers.js)
+ * 5. Updates ticket status based on review outcome
+ * 6. Adds labels to indicate review completion
+ */
+
+const { LABELS, STATUSES, resolveStatuses } = require('./config.js');
+var scmModule = require('./common/scm.js');
+var trackersModule = require('./common/trackers.js');
+var autoStart = require('./common/autoStart.js');
+var configLoader = require('./configLoader.js');
+var machineAuthorModule = require('./common/machineAuthor.js');
+var outputFiles = require('./common/outputFiles.js');
+const tokenUsageComment = require('./common/tokenUsageComment.js');
+var gh = require('./common/githubHelpers.js');
+const commentMarkup = require('./common/commentMarkup.js');
+
+var RESUME_MARKER = 'outputs/.pr-review-missing-output-resume-attempted';
+
+/**
+ * Derive project key from customParams.configPath or customParams.projectKey.
+ * e.g. ".dmtools/configs/myproject.js" → "myproject"
+ */
+function deriveProjectKey(customParams) {
+    if (!customParams) return '';
+    if (customParams.projectKey) return customParams.projectKey;
+    var cp = customParams.configPath || '';
+    if (!cp) return '';
+    var base = cp.substring(cp.lastIndexOf('/') + 1).replace(/\.js$/, '');
+    return (base && base !== 'config') ? base : '';
+}
+
+/**
+ * Returns true if the Jira ticket has the pr_approved label.
+ */
+function hasPrApprovedLabel(ticket) {
+    var labels = (ticket && ticket.fields && ticket.fields.labels) ? ticket.fields.labels : [];
+    return labels.indexOf(LABELS.PR_APPROVED) !== -1;
+}
+
+/**
+ * Count open review threads / general comments on a PR.
+ * Used as a safety valve: after many review rounds, an APPROVE with remaining
+ * suggestions is allowed so the loop terminates.
+ */
+function countReviewThreads(scm, pullRequestId) {
+    var count = 0;
+    try {
+        var discussions = scm.fetchDiscussions(pullRequestId);
+        if (discussions && discussions.rawThreads && discussions.rawThreads.threads) {
+            count += discussions.rawThreads.threads.length;
+        }
+    } catch (e) {
+        console.warn('Could not count review threads:', e.message || e);
+    }
+    return count;
+}
+
+function markForSmStoryRework(tracker, ticketKey) {
+    try {
+        tracker.addLabel(ticketKey, 'sm_story_rework_triggered');
+        console.log('✅ Added SM rework label: sm_story_rework_triggered');
+    } catch (e) {
+        console.warn('⚠️ Failed to add SM rework label:', e.message || e);
+        return false;
+    }
+    // GitHub machine loop (live pathology: fa gh-746 — 24 review rounds,
+    // zero reworks): no SM rule reads sm_story_rework_triggered — the
+    // rework-on-red-ci rule matches agent:rework (prMachineAuthor-gated).
+    // Arm the live label so the SM can actually dispatch the rework leg;
+    // it also blocks review-after-dev (notLabels agent:rework), stopping
+    // the every-tick re-review loop on the same unchanged head.
+    try {
+        tracker.addLabel(ticketKey, 'agent:rework');
+        console.log('✅ Armed agent:rework on', ticketKey, '— SM will dispatch the rework leg');
+        return true;
+    } catch (e2) {
+        console.warn('⚠️ Failed to arm agent:rework:', e2.message || e2);
+        return false;
+    }
+}
+
+function resolveCustomParams(params, config) {
+    var merged = {};
+    var patch = configLoader.resolveInstructions(
+        'pr_review',
+        null,
+        config
+    ).jobParamPatch;
+    if (patch && patch.customParams) {
+        Object.assign(merged, patch.customParams);
+    }
+    Object.assign(
+        merged,
+        (params.jobParams && params.jobParams.customParams) ||
+            params.customParams ||
+            {}
+    );
+    return merged;
+}
+
+/**
+ * Read and parse outputs/pr_review.json
+ * @returns {Object|null} Parsed review data or null on error
+ */
+function readReviewJson(ticketKey, workingDir) {
+    try {
+        const review = outputFiles.readOutputFileDetailed('pr_review.json', {
+            ticketKey: ticketKey,
+            workingDir: workingDir
+        });
+        const raw = review ? review.content : null;
+        if (!raw || raw.trim() === '') {
+            console.warn('outputs/pr_review.json is empty');
+            return null;
+        }
+        const parsed = JSON.parse(raw);
+        if (!parsed.__sourcePath && review && review.path) {
+            parsed.__sourcePath = review.path;
+        }
+        console.log('Parsed pr_review.json:', JSON.stringify(parsed, null, 2));
+        return parsed;
+    } catch (error) {
+        console.error('Failed to read/parse outputs/pr_review.json:', error);
+        return null;
+    }
+}
+
+/**
+ * Read markdown file content
+ * @param {string} filePath - Path to markdown file
+ * @returns {string} File content or empty string on error
+ */
+function readMarkdownFile(filePath, ticketKey, workingDir) {
+    if (!filePath) {
+        return '';
+    }
+    try {
+        const content = outputFiles.readOutputFile(filePath, {
+            ticketKey: ticketKey,
+            workingDir: workingDir
+        });
+        if (content && content.trim() !== '') {
+            return content;
+        }
+    } catch (error) {
+        console.warn('Could not read file ' + filePath + ':', error);
+    }
+    return '';
+}
+
+/**
+ * Defense-in-depth guard: the agent is instructed (instructions/pr_review/output_rules.md,
+ * few_shots.md) to reference comment text via the `comment` field (a path to a
+ * .md file under outputs/), never inline in `body`. If a
+ * prompt/schema inconsistency ever causes the model to duplicate that path
+ * into `body` instead of the actual comment text (observed in production),
+ * posting it verbatim would silently publish a broken review comment
+ * containing just a file path. Detect that shape and resolve it to the real
+ * file content instead of trusting `body` blindly.
+ *
+ * The same shape holds for `generalComment`: the contract carries the PATH
+ * to outputs/pr_review_general.md (postGeneralComment reads the file), and
+ * the formal-review path must resolve it too — live bug: an APPROVE review
+ * landed with the literal string "outputs/pr_review_general.md" as its body
+ * (flutter_agent_harness #720).
+ */
+function resolveCommentFileReference(value, ticketKey, workingDir) {
+    if (typeof value !== 'string') return null;
+    var trimmed = value.trim();
+    if (!/^(outputs\/)?(pr_review_comments\/)?[\w.\-]+\.md$/.test(trimmed)) {
+        return null;
+    }
+    var content = readMarkdownFile(trimmed, ticketKey, workingDir);
+    return content || null;
+}
+
+function writeFile(path, content) {
+    try {
+        file_write({ path: path, content: content });
+    } catch (e) {
+        file_write(path, content);
+    }
+}
+
+function attemptResumeIfReviewOutputsMissing(ticketKey) {
+    if (readReviewJson()) {
+        return false;
+    }
+
+    try {
+        var marker = file_read({ path: RESUME_MARKER });
+        if (marker && marker.trim()) {
+            console.warn('Review output resume already attempted once — skipping');
+            return false;
+        }
+    } catch (e) {}
+
+    console.log('Mandatory PR review outputs are missing. Attempting one resume run to write them.');
+    writeFile(RESUME_MARKER, new Date().toISOString() + '\n');
+
+    var recoveryPrompt =
+        'RESUME TASK: The previous PR review run ended without writing mandatory review output files.\n\n' +
+        'Do not rework product code. Read input/' + ticketKey + '/pr_info.md, pr_diff.txt, pr_discussions.md, ' +
+        'pr_discussions_raw.json when present, ci_failures.md and ci_failures_full.log when present, and the current PR context.\n\n' +
+        'Write these files before stopping:\n' +
+        '1. outputs/pr_review.json with fields recommendation, generalComment, resolvedThreadIds, inlineComments, issueCounts.\n' +
+        '2. outputs/pr_review_general.md with a short GitHub Markdown review summary.\n' +
+        '3. outputs/pr_review_comments/*.md for every inline comment; reference each via the "comment" field in pr_review.json.\n' +
+        '   Never put comment text inline in the JSON (no "body" field).\n\n' +
+        'Do NOT write outputs/response.md.\n\n' +
+        'If you found a BLOCK or REQUEST_CHANGES result, still write the files. Do not return only plain text.\n' +
+        'If the finding is not on a changed diff line, put it in outputs/pr_review_general.md and leave inlineComments empty.\n' +
+        'Validate outputs/pr_review.json as parseable JSON before stopping.\n' +
+        'Ticket: ' + ticketKey + '\n';
+
+    var promptFile = 'outputs/.pr-review-resume-prompt.md';
+    writeFile(promptFile, recoveryPrompt);
+
+    try {
+        var resumeResult = cli_execute_command({
+            // `--continue` alone resumes the most recent session in this directory;
+            // pairing it with `--resume` is rejected by the Copilot CLI as mutually
+            // exclusive ("cannot be used with option '--continue'"), which made this
+            // recovery run fail deterministically before ever reaching the agent.
+            command: 'bash agents/scripts/run-agent.sh --continue ' + promptFile
+        });
+        console.log('Review output resume run output:', (resumeResult || '').substring(0, 500));
+        return true;
+    } catch (e) {
+        console.error('Review output resume run failed:', e);
+        return false;
+    }
+}
+
+function handleMissingReviewData(params, config, customParams, tracker) {
+    var ticketKey = params.ticket.key;
+    console.error('Failed to read pr_review.json after resume attempt');
+
+    try {
+        const mm = commentMarkup.forTicket(ticketKey);
+        tracker.postComment(
+            ticketKey,
+            mm.h(3, '⚠️ PR Review Output Missing') + '\n\n' +
+                'The PR review agent completed without writing ' + mm.code('outputs/pr_review.json') + '. ' +
+                'A resume was attempted once, but mandatory outputs are still missing. ' +
+                'The SM trigger label was cleared so the review can retry.'
+        );
+    } catch (e) {
+        console.warn('Could not post missing review output comment:', e);
+    }
+
+    var removeLabel = customParams && customParams.removeLabel;
+    if (removeLabel) {
+        try {
+            tracker.removeLabel(ticketKey, removeLabel);
+            console.log('Removed SM label after missing review output:', removeLabel);
+        } catch (e) {
+            console.warn('Could not remove SM label after missing review output:', e);
+        }
+    }
+
+    try {
+        var scm = scmModule.createScm(config);
+        autoStart.triggerSmIfIdle({ config: config, customParams: customParams, scm: scm });
+    } catch (e) {
+        console.warn('Could not trigger SM after missing review output:', e);
+    }
+
+    return {
+        success: true,
+        action: 'missing_review_outputs',
+        error: 'No review data found in pr_review.json'
+    };
+}
+
+/**
+ * Extract owner and repo from git remote URL
+ * @returns {Object|null} {owner, repo} or null on error
+ */
+function getGitHubRepoInfo() {
+    try {
+        const rawOutput = cli_execute_command({
+            command: 'git config --get remote.origin.url'
+        }) || '';
+
+        // cli_execute_command may append shell wrapper lines (Script done, COMMAND_EXIT_CODE=...)
+        // Take only the first non-empty line that looks like a URL
+        const remoteUrl = rawOutput.split('\n')
+            .map(function(l) { return l.trim(); })
+            .filter(function(l) { return l.indexOf('github.com') !== -1; })[0] || '';
+
+        // Parse GitHub URL (https://github.com/owner/repo.git or git@github.com:owner/repo.git)
+        const match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/?#\s]+)/);
+        if (!match) {
+            console.error('Could not parse GitHub URL from:', remoteUrl);
+            return null;
+        }
+
+        const owner = match[1];
+        const repo = match[2].replace(/\.git$/, '');
+
+        console.log('GitHub repo:', owner + '/' + repo);
+        return { owner: owner, repo: repo };
+
+    } catch (error) {
+        console.error('Failed to get GitHub repo info:', error);
+        return null;
+    }
+}
+
+function postGeneralComment(scm, pullRequestId, commentPath, ticketKey, workingDir) {
+    try {
+        const comment = readMarkdownFile(commentPath, ticketKey, workingDir);
+        if (!comment) {
+            console.warn('No general comment content found at', commentPath);
+            return false;
+        }
+        console.log('Posting general review comment to PR #' + pullRequestId);
+        scm.addComment(pullRequestId, comment);
+        console.log('✅ Posted general review comment');
+        return true;
+    } catch (error) {
+        console.error('Failed to post general comment:', error);
+        return false;
+    }
+}
+
+function parseDiffLineInfo(diffText, filePath, targetLine) {
+    // Returns { present: true/false, side: 'RIGHT'|'LEFT'|null }.
+    if (!diffText || !filePath || !targetLine) return { present: true, side: null };
+
+    var lineNumber = parseInt(targetLine, 10);
+    if (!lineNumber) return { present: true, side: null };
+
+    var currentFile = null;
+    var oldFile = null;
+    var oldLine = null;
+    var newLine = null;
+    var lines = String(diffText).split(/\r?\n/);
+    // Deferred LEFT match: a removed line ('-') at the target line number.
+    // We don't return immediately on a LEFT match because a same-numbered
+    // added line ('+') can appear later in the same replace block (the
+    // common "-old\n+new" single-line replacement pattern) and RIGHT should
+    // win — the finding is about the current/new code, not the removed one.
+    var pendingLeftMatch = null;
+
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+
+        if (line.indexOf('diff --git ') === 0) {
+            currentFile = null;
+            oldFile = null;
+            oldLine = null;
+            newLine = null;
+            pendingLeftMatch = null;
+            continue;
+        }
+
+        if (line.indexOf('--- a/') === 0) {
+            oldFile = line.substring('--- a/'.length);
+            if (oldFile === '/dev/null') oldFile = null;
+            continue;
+        }
+
+        if (line.indexOf('+++ b/') === 0) {
+            currentFile = line.substring('+++ b/'.length);
+            continue;
+        }
+        if (line.indexOf('+++ /dev/null') === 0) {
+            // Deleted files have +++ /dev/null; use the old path so comments can be anchored.
+            currentFile = oldFile;
+            continue;
+        }
+
+        if (currentFile !== filePath) continue;
+
+        var hunk = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+        if (hunk) {
+            oldLine = parseInt(hunk[1], 10);
+            newLine = parseInt(hunk[2], 10);
+            continue;
+        }
+
+        if (oldLine === null || newLine === null) continue;
+
+        if (line.indexOf('+') === 0) {
+            if (newLine === lineNumber) return { present: true, side: 'RIGHT' };
+            newLine++;
+        } else if (line.indexOf('-') === 0) {
+            if (oldLine === lineNumber && !pendingLeftMatch) {
+                pendingLeftMatch = { present: true, side: 'LEFT' };
+            }
+            oldLine++;
+        } else if (line.indexOf(' ') === 0) {
+            // Context lines exist on both sides; prefer RIGHT (new version).
+            if (newLine === lineNumber) return { present: true, side: 'RIGHT' };
+            if (oldLine === lineNumber) return { present: true, side: 'LEFT' };
+            oldLine++;
+            newLine++;
+        } else if (line === '\\ No newline at end of file') {
+            continue;
+        } else {
+            oldLine++;
+            newLine++;
+        }
+    }
+
+    if (pendingLeftMatch) return pendingLeftMatch;
+    return { present: false, side: null };
+}
+
+function isFileDeletedInDiff(diffText, filePath) {
+    if (!diffText || !filePath) return false;
+    var lines = String(diffText).split(/\r?\n/);
+    var currentFile = null;
+    var oldFile = null;
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (line.indexOf('--- a/') === 0) {
+            oldFile = line.substring('--- a/'.length);
+            if (oldFile === '/dev/null') oldFile = null;
+        } else if (line.indexOf('+++ b/') === 0) {
+            currentFile = line.substring('+++ b/'.length);
+        } else if (line.indexOf('+++ /dev/null') === 0) {
+            currentFile = oldFile;
+        } else if (line.indexOf('diff --git ') === 0) {
+            currentFile = null;
+            oldFile = null;
+        }
+        if (currentFile === filePath && line.indexOf('deleted file mode') === 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function isLinePresentInDiff(diffText, filePath, targetLine, side) {
+    var info = parseDiffLineInfo(diffText, filePath, targetLine);
+    if (!info.present) return false;
+    if (!side) return true;
+    return info.side === side;
+}
+
+/**
+ * Returns true if the PR diff contains a submodule pointer change for `filePath`
+ * (e.g. "Subproject commit ...").
+ */
+function isSubmodulePathInDiff(diffText, filePath) {
+    if (!diffText || !filePath) return false;
+    var lines = String(diffText).split(/\r?\n/);
+    var escaped = filePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var segmentRe = new RegExp('diff --git a/' + escaped + '(?:\\s+b/' + escaped + '(?:\\s|$))?');
+    var inSegment = false;
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (line.indexOf('diff --git ') === 0) {
+            inSegment = segmentRe.test(line);
+            continue;
+        }
+        if (inSegment && line.indexOf('Subproject commit') !== -1) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * For comments targeting a file inside a submodule (e.g. "trackstate-setup/README.md:7")
+ * when the parent PR diff only contains the submodule pointer change, map the comment
+ * to the submodule path itself (e.g. "trackstate-setup"). Returns the submodule path or
+ * null if no matching submodule segment exists.
+ */
+function findSubmodulePathForFile(diffText, filePath) {
+    if (!diffText || !filePath) return null;
+    var parts = filePath.split('/');
+    for (var i = parts.length; i > 0; i--) {
+        var candidate = parts.slice(0, i).join('/');
+        if (isSubmodulePathInDiff(diffText, candidate)) {
+            return candidate;
+        }
+    }
+    return null;
+}
+
+/**
+ * Returns true if the submodule segment for `filePath` contains a new pointer
+ * ("+Subproject commit ..."), i.e. the submodule was updated rather than deleted.
+ */
+function submoduleHasNewPointer(diffText, filePath) {
+    if (!diffText || !filePath) return false;
+    var lines = String(diffText).split(/\r?\n/);
+    var escaped = filePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var segmentRe = new RegExp('diff --git a/' + escaped + '(?:\\s+b/' + escaped + '(?:\\s|$))?');
+    var inSegment = false;
+    for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (line.indexOf('diff --git ') === 0) {
+            inSegment = segmentRe.test(line);
+            continue;
+        }
+        if (inSegment && line.indexOf('+Subproject commit') === 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function postFallbackInlineComment(scm, pullRequestId, filePath, line, commentText) {
+    var lineRef = filePath + (line ? ':' + line : '');
+    scm.addComment(pullRequestId, '📍 **`' + lineRef + '`**\n\n' + commentText);
+    console.log('✅ Posted fallback PR comment for ' + lineRef);
+}
+
+function postInlineComment(scm, pullRequestId, inlineComment, ticketKey, workingDir) {
+    // Accept both spec formats:
+    //   old spec: { file, comment: "path/to/file.md" }
+    //   agent output: { path, body: "inline text" }
+    var filePath = inlineComment.path || inlineComment.file;
+    var commentText = inlineComment.body || readMarkdownFile(inlineComment.comment, ticketKey, workingDir);
+
+    // Defense-in-depth: if body ended up holding a comment-file path instead
+    // of actual text (see resolveCommentFileReference doc comment), resolve
+    // it to the real file content rather than posting the raw path.
+    var resolvedFromBody = resolveCommentFileReference(commentText, ticketKey, workingDir);
+    if (resolvedFromBody) {
+        console.warn('inlineComment.body looked like a comment-file path (' + commentText + ') — reading its content instead of posting the path literally');
+        commentText = resolvedFromBody;
+    }
+
+    try {
+        if (!commentText) {
+            console.warn('No comment content found for inline comment on', filePath);
+            return false;
+        }
+        if (!filePath) {
+            console.warn('No file path found for inline comment');
+            return false;
+        }
+
+        console.log('Posting inline comment on ' + filePath + ':' + inlineComment.line);
+
+        var diffText = null;
+        try {
+            diffText = scm.getPrDiff(pullRequestId, workingDir);
+        } catch (diffError) {
+            console.warn('Could not fetch PR diff for inline comment validation:', diffError.message || diffError);
+        }
+
+        if (diffText === null || diffText === '') {
+            console.warn('PR diff unavailable; falling back to general PR comment on ' + filePath + ':' + inlineComment.line);
+            postFallbackInlineComment(scm, pullRequestId, filePath, inlineComment.line, commentText);
+            return true;
+        }
+
+        var requestedSide = inlineComment.side || null;
+        var effectivePath = filePath;
+        var effectiveLine = inlineComment.line;
+        var startLine = inlineComment.startLine || null;
+        var lineInfo = parseDiffLineInfo(diffText, effectivePath, effectiveLine);
+        var submodulePath = null;
+
+        if (!lineInfo.present) {
+            submodulePath = findSubmodulePathForFile(diffText, filePath);
+            if (submodulePath) {
+                console.log('Comment target ' + filePath + ':' + inlineComment.line +
+                    ' is inside submodule ' + submodulePath +
+                    '; mapping to submodule diff line 1 to create a review thread');
+                effectivePath = submodulePath;
+                effectiveLine = 1;
+                startLine = null;
+                lineInfo = parseDiffLineInfo(diffText, effectivePath, effectiveLine);
+                // Submodule updates expose both old and new pointers; anchor on the new side
+                // so the review thread appears on the updated submodule line.
+                requestedSide = (lineInfo.side === 'LEFT' && submoduleHasNewPointer(diffText, effectivePath))
+                    ? 'RIGHT'
+                    : (lineInfo.side || 'RIGHT');
+                if (submodulePath !== filePath || inlineComment.line != 1) {
+                    commentText = '📍 **`' + filePath + ':' + inlineComment.line + '`** (submodule content line)\n\n' + commentText;
+                }
+            }
+        }
+
+        if (!requestedSide) {
+            if (lineInfo.present) {
+                requestedSide = lineInfo.side;
+            } else if (isFileDeletedInDiff(diffText, effectivePath)) {
+                requestedSide = 'LEFT';
+            }
+        }
+
+        if (!lineInfo.present) {
+            console.warn('Inline comment line is not present in PR diff; falling back to PR comment on ' + filePath + ':' + inlineComment.line);
+            postFallbackInlineComment(scm, pullRequestId, filePath, inlineComment.line, commentText);
+            return true;
+        }
+
+        if (inlineComment.side && lineInfo.side !== inlineComment.side) {
+            console.warn('Inline comment line is not present on requested side ' + inlineComment.side + '; falling back to PR comment on ' + filePath + ':' + inlineComment.line);
+            postFallbackInlineComment(scm, pullRequestId, filePath, inlineComment.line, commentText);
+            return true;
+        }
+
+        scm.addInlineComment(
+            pullRequestId, effectivePath, effectiveLine, commentText,
+            startLine, requestedSide
+        );
+
+        console.log('✅ Posted inline comment on ' + effectivePath + ':' + effectiveLine +
+            (effectivePath !== filePath || effectiveLine !== inlineComment.line ?
+                ' (mapped from ' + filePath + ':' + inlineComment.line + ')' : ''));
+        return true;
+
+    } catch (error) {
+        // 422 = line not in diff hunk — fall back to a regular PR comment so nothing is lost
+        console.warn('Inline comment failed (line not in diff?), falling back to PR comment on ' + filePath + ':' + inlineComment.line);
+        try {
+            postFallbackInlineComment(scm, pullRequestId, filePath, inlineComment.line, commentText);
+            return true;
+        } catch (fallbackError) {
+            console.error('Failed to post fallback PR comment for ' + filePath + ':', fallbackError);
+            return false;
+        }
+    }
+}
+
+function resolveApprovedThreads(scm, pullRequestId, resolvedThreadIds) {
+    if (!resolvedThreadIds || resolvedThreadIds.length === 0) return;
+    console.log('Resolving ' + resolvedThreadIds.length + ' fixed review thread(s)...');
+    resolvedThreadIds.forEach(function(threadId) {
+        try {
+            scm.resolveThread(pullRequestId, { threadId: threadId });
+            console.log('✅ Resolved thread', threadId);
+        } catch (e) {
+            console.warn('Failed to resolve thread ' + threadId + ':', e.message || e);
+        }
+    });
+}
+
+/**
+ * Opt-in native GitHub PR review (formal Approve/Request Changes decision via the
+ * real GitHub Review API), entirely additive to — and independent from — the
+ * pr_approved label lifecycle managed elsewhere in this file. Enabled via
+ * customParams.formalGithubReview = true.
+ *
+ * When AI does not approve (recommendation !== APPROVE, i.e. isApproved === false):
+ *   formally requests changes on the PR (scm.submitReview(..., 'REQUEST_CHANGES', ...)).
+ * When AI approves (isApproved === true):
+ *   dismisses any prior formally-requested-changes review left on the PR so the
+ *   PR is no longer blocked by our own earlier "Request Changes" decision, then
+ *   submits a formal APPROVE review (providers may reject approvals from the
+ *   PR author — that rejection is logged, never fatal: the label lifecycle
+ *   stays the source of truth in that case).
+ *
+ * Never touches LABELS.PR_APPROVED or any Jira/GitHub label.
+ */
+function applyFormalGithubReview(scm, pullRequestId, isApproved, recommendation, generalComment, ticketKey, workingDir) {
+    if (typeof scm.submitReview !== 'function') {
+        console.warn('formalGithubReview: SCM provider does not support submitReview — skipping');
+        return;
+    }
+    // generalComment follows the file-path contract (postGeneralComment
+    // reads it via readMarkdownFile): resolve path → CONTENT before
+    // submitting, or the review body is the literal "outputs/..." string
+    // (live: flutter_agent_harness #720 APPROVE body was the file path).
+    var generalContent = resolveCommentFileReference(generalComment, ticketKey, workingDir) || generalComment;
+    var approveBody = (generalContent && String(generalContent).trim())
+        ? generalContent
+        : 'AI review approves this pull request.';
+    try {
+        if (isApproved) {
+            // Dismiss our own earlier "Request Changes" first (GitHub keeps
+            // blocking the PR until it is dismissed). Providers without a
+            // review listing (GitLab) skip the pass — approving over a stale
+            // requested-changes comment is still a net approval.
+            if (typeof scm.listReviews === 'function') {
+                var reviews = [];
+                try {
+                    reviews = scm.listReviews(pullRequestId) || [];
+                } catch (listErr) {
+                    console.warn('formalGithubReview: failed to list existing reviews:', listErr.message || listErr);
+                }
+                var priorChangesRequested = reviews.filter(function(r) {
+                    return r && r.state === 'CHANGES_REQUESTED';
+                });
+                priorChangesRequested.forEach(function(r) {
+                    try {
+                        scm.dismissReview(pullRequestId, r.id, 'Superseded — issues addressed, AI review now approves.');
+                        console.log('✅ Dismissed prior formal Request Changes review', r.id);
+                    } catch (dismissErr) {
+                        console.warn('formalGithubReview: failed to dismiss review ' + r.id + ':', dismissErr.message || dismissErr);
+                    }
+                });
+            }
+            try {
+                scm.submitReview(pullRequestId, 'APPROVE', approveBody);
+                console.log('✅ Submitted formal APPROVE review');
+            } catch (approveErr) {
+                // GitHub/GitLab refuse approvals from the PR/MR AUTHOR. When
+                // the reviewing identity is the same bot that opened the PR,
+                // the label lifecycle stays the source of truth — do not fail
+                // the whole review action over it.
+                console.warn('formalGithubReview: formal APPROVE rejected (own-PR restriction?):', approveErr.message || approveErr);
+            }
+        } else {
+            var body = (generalContent && String(generalContent).trim())
+                ? generalContent
+                : ('AI review returned ' + recommendation + '. See PR comments for details.');
+            scm.submitReview(pullRequestId, 'REQUEST_CHANGES', body);
+            console.log('✅ Submitted formal Request Changes review');
+        }
+    } catch (e) {
+        console.warn('formalGithubReview: failed to apply formal review:', e.message || e);
+    }
+}
+
+/**
+ * Post review results to the ticket (Jira/ADO/GitHub depending on the probed provider)
+ * @param {Object} tracker - trackers.js provider instance
+ * @param {string} ticketKey - Ticket key
+ * @param {string} reviewContent - Review content (from outputs/response.md)
+ * @param {Object} reviewData - Parsed pr_review.json data
+ * @param {string} prUrl - PR URL for linking
+ */
+function postReviewToJira(tracker, ticketKey, reviewContent, reviewData, prUrl) {
+    try {
+        const m = commentMarkup.forTicket(ticketKey);
+        let comment = m.h(2, '🔍 Automated PR Review Completed') + '\n\n';
+
+        // Add outcome badge
+        // Normalize: LLM sometimes returns "APPROVED" instead of "APPROVE"
+        const recommendation = (reviewData.recommendation || reviewData.verdict || 'REQUEST_CHANGES').replace(/^APPROVED$/, 'APPROVE');
+        if (recommendation === 'APPROVE') {
+            comment += m.panel(null, '✅ ' + m.bold('APPROVED') + ' - AI review passed. Awaiting required reviewer approval to merge.', 'bgColor=#E3FCEF|borderColor=#00875A') + '\n\n';
+        } else if (recommendation === 'BLOCK') {
+            comment += m.panel(null, '🚨 ' + m.bold('BLOCKED') + ' - Critical issues must be fixed before merge', 'bgColor=#FFEBE6|borderColor=#DE350B') + '\n\n';
+        } else {
+            comment += m.panel(null, '⚠️ ' + m.bold('CHANGES REQUESTED') + ' - Issues found, ticket returned to In Rework', 'bgColor=#FFF7E6|borderColor=#FF991F') + '\n\n';
+        }
+
+        // Add issue summary
+        const issueCounts = reviewData.issueCounts || { blocking: 0, important: 0, suggestions: 0 };
+        comment += m.h(3, 'Issue Summary') + '\n';
+        comment += '* 🚨 Blocking Issues: ' + m.bold(String(issueCounts.blocking)) + '\n';
+        comment += '* ⚠️ Important Issues: ' + m.bold(String(issueCounts.important)) + '\n';
+        comment += '* 💡 Suggestions: ' + m.bold(String(issueCounts.suggestions)) + '\n\n';
+
+        if (prUrl) {
+            comment += m.h(3, 'Pull Request') + '\n';
+            comment += m.link('View PR on GitHub', prUrl) + '\n\n';
+        }
+
+        comment += '----\n';
+        comment += '_Generated by AI Code Reviewer with focus on security, code quality, and OOP principles_';
+
+        tracker.postComment(ticketKey, comment);
+
+        console.log('✅ Posted review results to ticket', ticketKey);
+
+    } catch (error) {
+        console.error('Failed to post review to tracker:', error);
+    }
+}
+
+/**
+ * Main action function
+ * Posts review results to GitHub and Jira, updates ticket
+ *
+ * @param {Object} params - Parameters from Teammate job
+ * @param {Object} params.ticket - Jira ticket object
+ * @param {string} params.response - Jira-formatted review from outputs/response.md
+ * @param {string} params.inputFolderPath - Path to input folder
+ * @returns {Object} Result object
+ */
+function action(params) {
+    try {
+        // PR-anchored review (issue #687): no ticket hydration — the PR is
+        // the anchor. Verdict + labels land on the PR itself; ticket-side
+        // steps (statuses, tracker labels) are skipped via an early return.
+        var jp = params.jobParams || params;
+        var folderKey = String((params.inputFolderPath || '').split('/').pop() || '');
+        var anchorMatch = /^pr-(\d+)$/.exec(folderKey);
+        var prAnchor = (anchorMatch ? parseInt(anchorMatch[1], 10) : null) ||
+            (parseInt(jp.prNumber || jp.pr || '', 10) || null);
+        const ticketKey = prAnchor ? ('pr-' + prAnchor) : params.ticket.key;
+        const jiraReview = params.response || '';
+        var config = configLoader.loadProjectConfig(params.jobParams || params);
+        var machineAuthor = machineAuthorModule.resolveMachineAuthor(jp, config);
+        var workingDir = config.workingDir || null;
+        var scm = scmModule.createScm(config);
+        var labels = (params.ticket && params.ticket.fields && params.ticket.fields.labels) ? params.ticket.fields.labels : [];
+
+        console.log('=== Processing PR review results for', ticketKey, '===');
+
+        // Resolve customParams and probe the tracker provider once for the whole run:
+        // the same script then works unchanged on Jira / ADO / GitHub deployments.
+        const customParams = resolveCustomParams(params, config);
+        var tracker = trackersModule.createTracker(config, customParams);
+
+        // Step 1: Read structured review data
+        let reviewData = readReviewJson(ticketKey, workingDir);
+        if (!reviewData) {
+            attemptResumeIfReviewOutputsMissing(ticketKey);
+            reviewData = readReviewJson(ticketKey, workingDir);
+        }
+        if (!reviewData) {
+            return handleMissingReviewData(params, config, customParams, tracker);
+        }
+
+        console.log('Review recommendation:', reviewData.recommendation);
+        console.log('Issue counts:', JSON.stringify(reviewData.issueCounts));
+
+        // Resolve statuses — project-wide overrides via .dmtools/config.js's jira.statuses,
+        // plus legacy per-invocation overrides via customParams.customStatuses
+        const statuses = resolveStatuses(customParams, config.jira && config.jira.statuses);
+
+        // Step 2: Extract PR info from input folder or find PR using MCP
+        let prNumber = null;
+        let prUrl = null;
+        let prBranch = null;
+        let prAuthor = null;
+
+        // Try to get repo info — prefer targetRepository from config over git remote
+        var repoInfo = null;
+        if (config.repository && config.repository.owner && config.repository.repo) {
+            repoInfo = { owner: config.repository.owner, repo: config.repository.repo };
+            console.log('Using targetRepository from config:', repoInfo.owner + '/' + repoInfo.repo);
+        } else {
+            repoInfo = scm.getRemoteRepoInfo();
+        }
+        // PR-anchored runs know the PR number outright.
+        if (prAnchor) prNumber = prAnchor;
+        if (!repoInfo) {
+            console.warn('Could not get GitHub repo info - skipping GitHub comments');
+        }
+
+        try {
+            // First try to read from input/pr_info.md (if exists)
+            const inputFolder = params.inputFolderPath || ('input/' + ticketKey);
+            const prInfo = file_read({
+                path: inputFolder + '/pr_info.md'
+            });
+
+            if (prInfo) {
+                // Extract PR number and URL — format: - **PR #**: 13
+                const numberMatch = prInfo.match(/\*\*PR #\*\*:\s*(\d+)/);
+                const urlMatch = prInfo.match(/\*\*URL\*\*:\s*(https:\/\/[^\s]+)/);
+                const branchMatch = prInfo.match(/\*\*Branch\*\*:\s*([^\s\n]+)/);
+
+                if (numberMatch) {
+                    prNumber = parseInt(numberMatch[1], 10);
+                }
+                if (urlMatch) {
+                    prUrl = urlMatch[1];
+                }
+                if (branchMatch) {
+                    prBranch = branchMatch[1];
+                }
+                if (prAnchor) {
+                    // Author line (written by writePRContext) decides whether an
+                    // approve may arm the machine merge pipeline.
+                    var authorMatch = prInfo.match(/\*\*Author\*\*:\s*([^\s\n]+)/);
+                    if (authorMatch) prAuthor = authorMatch[1];
+                }
+                console.log('Found PR info in input folder: #' + prNumber);
+            }
+        } catch (error) {
+            console.warn('Could not read PR info from input folder:', error);
+        }
+
+        // Fallback: If no PR number found, search for PR using MCP tools
+        if (!prNumber && repoInfo) {
+            console.log('PR number not found in input folder, searching GitHub...');
+            var prSearchOptions = config.prSearchFn ? { prSearchFn: config.prSearchFn } : {};
+            const pr = gh.findPRForTicket(scm, ticketKey, prSearchOptions);
+            if (pr) {
+                prNumber = pr.number;
+                prUrl = pr.html_url;
+                prBranch = pr.head && pr.head.ref ? pr.head.ref : null;
+                console.log('Found PR via GitHub search: #' + prNumber);
+            } else {
+                console.warn('Could not find PR for ticket', ticketKey);
+            }
+        } else if (!prNumber) {
+             console.warn('PR number not found and cannot search without repo info');
+        }
+
+        // Step 3: Get GitHub repo info (already done above)
+
+        // Normalize: LLM sometimes returns "APPROVED" instead of "APPROVE"
+        const recommendation = (reviewData.recommendation || reviewData.verdict || 'REQUEST_CHANGES').replace(/^APPROVED$/, 'APPROVE');
+
+        // Determine if truly approved — block approval when there are open issues/suggestions
+        // unless customParams.allowApproveWithSuggestions = true is explicitly set.
+        // Default behaviour: ANY non-zero issue count (blocking, important, or suggestions)
+        // overrides the agent's APPROVE verdict and forces the ticket back to rework.
+        const issueCounts = reviewData.issueCounts || { blocking: 0, important: 0, suggestions: 0 };
+        const hasOpenIssues = (issueCounts.blocking || 0) > 0 ||
+                              (issueCounts.important || 0) > 0 ||
+                              (issueCounts.suggestions || 0) > 0;
+        const allowApproveWithSuggestions = customParams && customParams.allowApproveWithSuggestions === true;
+
+        // Safety valve: after many review rounds, force-approve an APPROVE verdict
+        // even if suggestions remain, so the review/rework loop cannot run forever.
+        var forceApproveDueToThreadLimit = false;
+        var reviewThreadCount = 0;
+        var maxThreadLimit = customParams && customParams.maxReviewThreadsBeforeForceApprove;
+        if (recommendation === 'APPROVE' && hasOpenIssues && !allowApproveWithSuggestions &&
+            prNumber && repoInfo && maxThreadLimit && maxThreadLimit > 0) {
+            try {
+                reviewThreadCount = countReviewThreads(scm, prNumber);
+                if (reviewThreadCount >= maxThreadLimit) {
+                    forceApproveDueToThreadLimit = true;
+                    console.warn(
+                        '⚠️ PR has ' + reviewThreadCount + ' review threads (>= limit ' + maxThreadLimit + '). ' +
+                        'Forcing APPROVE despite remaining suggestions to break the review loop.'
+                    );
+                }
+            } catch (e) {
+                console.warn('Could not apply review-thread limit:', e.message || e);
+            }
+        }
+
+        const isApproved = recommendation === 'APPROVE' &&
+                           (!hasOpenIssues || allowApproveWithSuggestions || forceApproveDueToThreadLimit);
+
+        if (recommendation === 'APPROVE' && hasOpenIssues && !allowApproveWithSuggestions && !forceApproveDueToThreadLimit) {
+            console.warn(
+                '⚠️ Agent returned APPROVE but there are open issues ' +
+                '(blocking=' + issueCounts.blocking + ', important=' + issueCounts.important +
+                ', suggestions=' + issueCounts.suggestions + '). ' +
+                'Overriding to REQUEST_CHANGES. Set allowApproveWithSuggestions=true in customParams to allow.'
+            );
+        }
+
+        // Step 4: Post all comments to GitHub PR (always, regardless of outcome)
+        if (prNumber && repoInfo) {
+            console.log('Posting review to GitHub PR #' + prNumber + ' (recommendation: ' + recommendation + ')');
+
+            // Post general comment
+            if (reviewData.generalComment) {
+                postGeneralComment(scm, prNumber, reviewData.generalComment, ticketKey, workingDir);
+            }
+
+            // Post inline comments
+            if (reviewData.inlineComments && Array.isArray(reviewData.inlineComments) && reviewData.inlineComments.length > 0) {
+                console.log('Posting ' + reviewData.inlineComments.length + ' inline comments');
+
+                reviewData.inlineComments.forEach(function(inlineComment, index) {
+                    console.log('Processing inline comment ' + (index + 1) + '/' + reviewData.inlineComments.length);
+                    postInlineComment(scm, prNumber, inlineComment, ticketKey, workingDir);
+                });
+            }
+
+            // Resolve threads that were fully fixed in this rework
+            resolveApprovedThreads(scm, prNumber, reviewData.resolvedThreadIds);
+
+            console.log('✅ Posted all review comments to GitHub PR');
+
+            // Step 5: Two-state outcome
+            if (isApproved) {
+                // STATE 1: APPROVE → label PR and Jira ticket; SM will retry merge when CI passes.
+                // Owner rule: auto-APPROVE applies to EXTERNAL PRs too —
+                // pr_approved arms the SM merge pipeline (validate → merge)
+                // for any author. Only auto-REWORK stays machine-author-gated
+                // (the re-arm below).
+                try {
+                    scm.addLabel(prNumber, LABELS.PR_APPROVED);
+                    console.log('✅ Added pr_approved label to GitHub PR #' + prNumber);
+                } catch (labelErr) {
+                    console.warn('Failed to add pr_approved label to GitHub PR:', labelErr);
+                }
+            } else {
+                // STATE 2: REQUEST_CHANGES / BLOCK → do NOT merge
+                console.log('PR has issues (' + recommendation + ') - will NOT merge, returning ticket to In Development');
+            }
+
+            // Opt-in: formal review decision (Approve / Request Changes via the
+            // real Review API), independent of the pr_approved label logic above.
+            // Resolution chain (first explicit win):
+            //   1. agent customParams.formalGithubReview (true/false, per run)
+            //   2. project .dmtools/config.js formalGithubReview (project default)
+            //   3. false (off — historical behavior)
+            var formalReviewEnabled =
+                (customParams && typeof customParams.formalGithubReview === 'boolean')
+                    ? customParams.formalGithubReview
+                    : !!(config && config.formalGithubReview === true);
+            if (formalReviewEnabled) {
+                applyFormalGithubReview(scm, prNumber, isApproved, recommendation, reviewData.generalComment, ticketKey, workingDir);
+            }
+
+        } else {
+            console.warn('No PR number or repo info - skipping GitHub comments and merge');
+        }
+
+        // ── PR-anchored runs end here (#687): verdict + labels live on the
+        // PR; the ticket-side steps below (tracker statuses/labels, ticket
+        // comments) assume a hydrated ticket this run does not have.
+        if (prAnchor) {
+            try { scm.addLabel(prNumber, LABELS.AI_PR_REVIEWED); } catch (e) {
+                console.warn('Failed to add ai_pr_reviewed to PR #' + prNumber + ':', e.message || e);
+            }
+            // Consume the on-demand trigger so the label never loops.
+            try { scm.removeLabel(prNumber, 'agent:review'); } catch (e2) {
+                console.warn('No agent:review label to remove from PR #' + prNumber);
+            }
+            if (!isApproved) {
+                // Machine-authored: re-arm the rework loop on the linked
+                // issue; external: the verdict comment is the whole report.
+                if (prAuthor === machineAuthor) {
+                    try {
+                        var prRaw = github_get_pr({
+                            workspace: repoInfo.owner, repository: repoInfo.repo, pullRequestId: prNumber
+                        });
+                        var prObj = typeof prRaw === 'string' ? JSON.parse(prRaw) : (prRaw || {});
+                        var lm = /(?:closes|fixes|resolves)\s+#(\d+)/i.exec(String(prObj.body || ''));
+                        if (lm) {
+                            scm.addLabel(parseInt(lm[1], 10), 'agent:rework');
+                            console.log('Re-armed agent:rework on linked issue #' + lm[1]);
+                        }
+                    } catch (e3) {
+                        console.warn('Linked-issue rework re-arm failed:', e3.message || e3);
+                    }
+                }
+            }
+            console.log('✅ PR-anchored review complete — PR #' + prNumber + ' (' + recommendation + ')');
+            return { success: true, prNumber: prNumber, recommendation: recommendation };
+        }
+
+        // Step 6: Post review to the ticket (merge is handled by SM/required reviewers, not by this agent)
+        postReviewToJira(tracker, ticketKey, jiraReview, reviewData, prUrl);
+
+        // Step 7: Update ticket status based on outcome
+        try {
+            if (isApproved) {
+                // Approved → add pr_approved label to the ticket and stay in In Review for SM retry-merge
+                tracker.addLabel(ticketKey, LABELS.PR_APPROVED);
+                console.log('✅ Added pr_approved label to ticket — SM will retry merge');
+            } else if (prNumber && repoInfo) {
+                // Has issues, and there is an actual PR to rework → move to In Rework for focused fixes
+                tracker.moveToStatus(ticketKey, statuses.IN_REWORK);
+                console.log('✅ Ticket moved to', statuses.IN_REWORK);
+            } else {
+                // Has issues, but no PR was ever matched to this ticket — moving to In Rework
+                // would start a rework cycle with nothing to rework. Leave the status alone
+                // and surface this explicitly instead of silently transitioning the ticket.
+                try {
+                    tracker.postComment(
+                        ticketKey,
+                        commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Could Not Be Attached') + '\n\n' +
+                            'The review analysis completed, but no open Pull Request could be matched to this ticket. ' +
+                            'The ticket status was left unchanged (not moved to ' + statuses.IN_REWORK + ') since there is no PR to rework.'
+                    );
+                } catch (commentError) {
+                    console.warn('Could not post PR-review-could-not-be-attached comment:', commentError);
+                }
+                console.warn('⚠️ No PR found for', ticketKey, '— leaving ticket status unchanged');
+            }
+        } catch (statusError) {
+            console.warn('Could not update ticket status/label:', statusError);
+        }
+
+        // Step 8: Add review label
+        try {
+            tracker.addLabel(ticketKey, LABELS.AI_PR_REVIEWED);
+        } catch (error) {
+            console.warn('Failed to add ai_pr_reviewed label:', error);
+        }
+        // PR-side marker too (#750 pathology): the SM's review-after-dev rule
+        // reads notPrLabels on the PR — an issue-anchored review that only
+        // labels the ticket leaves the PR unmarked and the rule re-dispatches
+        // a review every tick on the same unchanged head.
+        if (prNumber && repoInfo) {
+            try {
+                scm.addLabel(prNumber, LABELS.AI_PR_REVIEWED);
+            } catch (prLabelError) {
+                console.warn('Failed to add ai_pr_reviewed to PR #' + prNumber + ':', prLabelError.message || prLabelError);
+            }
+        }
+
+        // Step 9: Remove WIP label if present
+        const wipLabel = params.metadata && params.metadata.contextId
+            ? params.metadata.contextId + '_wip'
+            : 'pr_review_wip';
+
+        try {
+            tracker.removeLabel(ticketKey, wipLabel);
+            console.log('Removed WIP label:', wipLabel);
+        } catch (error) {
+            console.warn('Failed to remove WIP label:', error);
+        }
+
+        // Step 10: Remove SM idempotency label (via customParams)
+        const removeLabel = customParams && customParams.removeLabel;
+        if (removeLabel) {
+            try {
+                tracker.removeLabel(ticketKey, removeLabel);
+                console.log('✅ Removed SM label:', removeLabel);
+            } catch (e) {}
+        }
+
+        // Step 11: Assign back to initiator
+        try {
+            if (params.initiator) {
+                tracker.assignTo(ticketKey, params.initiator);
+                console.log('✅ Assigned ticket back to initiator');
+            }
+        } catch (error) {
+            console.warn('Failed to assign ticket:', error);
+        }
+
+        // Step 12: Auto-start pr_rework when changes were requested (opt-in via customParams).
+        // Only when there's an actual PR to rework — with no PR found, there's nothing for a
+        // rework cycle to act on, so don't mark for SM rework or trigger SM.
+        var reworkStarted = false;
+        if (!isApproved && prNumber && repoInfo) {
+            const autoStartRework = customParams && customParams.autoStartRework;
+            const reworkConfigFile = customParams && customParams.autoStartReworkConfigFile;
+            if (autoStartRework && reworkConfigFile) {
+                // Skip if ticket already has pr_approved label (merge in progress)
+                if (hasPrApprovedLabel(params.ticket)) {
+                    console.log('ℹ️ autoStartRework: skipped — ticket has pr_approved label');
+                } else {
+                    try {
+                        reworkStarted = autoStart.triggerConfiguredWorkflowForTicket({
+                            ticketKey: ticketKey,
+                            customParams: customParams,
+                            config: config,
+                            configFile: reworkConfigFile,
+                            label: 'pr_rework',
+                            scm: scm,
+                            stripKeys: [
+                                'removeLabel',
+                                'autoStartRework',
+                                'autoStartReworkConfigFile'
+                            ]
+                        });
+                    } catch (e) {
+                        console.warn('⚠️ autoStartRework trigger failed:', e.message || e);
+                    }
+                }
+            }
+            if (!reworkStarted) {
+                markForSmStoryRework(tracker, ticketKey);
+                autoStart.triggerSmIfIdle({ config: config, customParams: customParams, scm: scm });
+            }
+        }
+
+        // Step 13: On-approved triggers (opt-in via customParams.onApproved)
+        if (isApproved && customParams && customParams.onApproved) {
+            var onApproved = customParams.onApproved;
+
+            // 13a: Trigger Bitrise build (e.g. build_ios_simulator)
+            if (onApproved.bitriseBuild) {
+                try {
+                    var bb = onApproved.bitriseBuild;
+                    var envVars = (bb.envVars || []).slice();
+                    // Always pass the ticket key so the build can reference it
+                    envVars.push({ mapped_to: 'TICKET_KEY', value: ticketKey, is_expand: false });
+                    if (prUrl) {
+                        envVars.push({ mapped_to: 'PR_URL', value: prUrl, is_expand: false });
+                    }
+                    bitrise_trigger_build({
+                        appSlug: bb.appSlug,
+                        workflowId: bb.workflowId,
+                        branch: prBranch || bb.branch || 'develop',
+                        commitMessage: ticketKey + ' — triggered by AI PR review approval',
+                        envVars: JSON.stringify(envVars)
+                    });
+                    console.log('✅ Triggered Bitrise build:', bb.workflowId, 'branch:', prBranch || bb.branch || 'develop', 'for', ticketKey);
+                } catch (e) {
+                    console.warn('⚠️ Bitrise build trigger failed:', e.message || e);
+                }
+            }
+
+            // 13b: Trigger TestCasesGenerator via GitHub Actions (only once per ticket)
+            if (onApproved.testCasesGenerator) {
+                try {
+                    var tcg = onApproved.testCasesGenerator;
+                    var aiRepoCfg = customParams.aiRepository;
+                    var aiOwner = (aiRepoCfg && aiRepoCfg.owner) || (config.repository && config.repository.owner);
+                    var aiRepo  = (aiRepoCfg && aiRepoCfg.repo)  || (config.repository && config.repository.repo);
+                    var projectKey = deriveProjectKey(customParams);
+
+                    // Guard: skip if tests were already generated for this ticket
+                    var alreadyGenerated = labels.indexOf(LABELS.AI_TESTS_GENERATED) !== -1;
+                    if (alreadyGenerated) {
+                        console.log('ℹ️ TestCasesGenerator skipped — label "' + LABELS.AI_TESTS_GENERATED + '" already present on ' + ticketKey + ' (tests generated in a previous cycle)');
+                    } else if (aiOwner && aiRepo) {
+                        var tcgStarted = autoStart.triggerConfiguredWorkflowForTicket({
+                            ticketKey: ticketKey,
+                            customParams: customParams,
+                            config: config,
+                            configFile: tcg.configFile,
+                            workflowFile: tcg.workflow || 'ai-teammate.yml',
+                            scm: scm
+                        });
+                        if (!tcgStarted) {
+                            console.log('ℹ️ TestCasesGenerator not started for', ticketKey,
+                                '[config=' + tcg.configFile + ']');
+                        } else {
+                            // Mark ticket so subsequent approvals skip re-generation
+                            try {
+                                tracker.addLabel(ticketKey, LABELS.AI_TESTS_GENERATED);
+                                console.log('✅ Added label "' + LABELS.AI_TESTS_GENERATED + '" to ' + ticketKey);
+                            } catch (labelErr) {
+                                console.warn('⚠️ Could not add ai_tests_generated label:', labelErr.message || labelErr);
+                            }
+                        }
+                    } else {
+                        console.warn('⚠️ TestCasesGenerator: aiRepository owner/repo not set — skipping');
+                    }
+                } catch (e) {
+                    console.warn('⚠️ TestCasesGenerator trigger failed:', e.message || e);
+                }
+            }
+        }
+
+        // SM fallback for approved PRs — SM needs to merge via pr_approved flow
+        if (isApproved) {
+            autoStart.triggerSmIfIdle({ config: config, customParams: customParams, scm: scm });
+        }
+
+        console.log('✅ PR review workflow completed:', isApproved ? 'APPROVED' : 'CHANGES REQUESTED');
+
+        // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
+        // wrote outputs/*_usage.json during the agent run.
+        try {
+            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
+        } catch (e) {
+            console.warn('Failed to post token usage comments:', e);
+        }
+
+        return {
+            success: true,
+            message: isApproved ? 'PR approved — awaiting reviewer merge' : 'Changes requested, ticket returned to In Development',
+            recommendation: recommendation,
+            issueCounts: reviewData.issueCounts,
+            githubCommentsPosted: !!(prNumber && repoInfo)
+        };
+
+    } catch (error) {
+        console.error('❌ Error in postPRReviewComments:', error);
+
+        // Try to post the error to the ticket via the probed tracker provider
+        try {
+            if (params && params.ticket && params.ticket.key) {
+                var errorTracker = (typeof tracker !== 'undefined' && tracker) ? tracker : null;
+                if (!errorTracker) {
+                    try {
+                        errorTracker = trackersModule.createTracker(
+                            configLoader.loadProjectConfig(params.jobParams || params));
+                    } catch (trackerError) {
+                        console.error('Failed to create tracker for error comment:', trackerError);
+                    }
+                }
+                if (errorTracker) {
+                    var em = commentMarkup.forTicket(params.ticket.key);
+                    errorTracker.postComment(
+                        params.ticket.key,
+                        em.h(3, '❌ PR Review Error') + '\n\n' +
+                            em.code(error.toString()) + '\n\n' +
+                            'Please check the workflow logs for details.'
+                    );
+                }
+            }
+        } catch (commentError) {
+            console.error('Failed to post error comment:', commentError);
+        }
+
+        return {
+            success: false,
+            error: error.toString()
+        };
+    }
+}
+
+// Export for dmtools standalone execution
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        action,
+        resolveCustomParams,
+        isLinePresentInDiff,
+        countReviewThreads,
+        postInlineComment,
+        postGeneralComment,
+        resolveApprovedThreads,
+        parseDiffLineInfo,
+        isFileDeletedInDiff,
+        isSubmodulePathInDiff,
+        findSubmodulePathForFile,
+        submoduleHasNewPointer,
+        resolveCommentFileReference
+    };
+}

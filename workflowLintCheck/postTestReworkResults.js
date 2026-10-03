@@ -1,0 +1,611 @@
+/**
+ * Post Test Rework Results Action (postJSAction for pr_test_automation_rework)
+ * After cursor agent fixes test issues and re-runs the test:
+ * 1. Reads outputs/test_automation_result.json (new test result after fixes)
+ * 2. Stages testing/ folder, commits, force-pushes to existing PR branch
+ * 3. Replies to and resolves PR review threads (from outputs/review_replies.json)
+ * 4. Posts PR comment with fix summary
+ * 5. If test passed  → moves to In Review - Passed
+ * 6. If test failed  → moves to In Review - Failed (bug may have changed)
+ * 7. Posts Jira comment, removes WIP label
+ */
+
+var configLoader = require('./configLoader.js');
+var autoStart = require('./common/autoStart.js');
+var feedbackLoop = require('./common/feedbackLoop.js');
+var prHelper = require('./common/pullRequest.js');
+const { GIT_CONFIG, LABELS } = require('./config.js');
+var tokenUsageComment = require('./common/tokenUsageComment.js');
+
+function cleanCommandOutput(output) {
+    if (!output) return '';
+    return output.split('\n').filter(function(line) {
+        return line.indexOf('Script started') === -1 &&
+               line.indexOf('Script done') === -1 &&
+               line.indexOf('COMMAND=') === -1 &&
+               line.indexOf('COMMAND_EXIT_CODE=') === -1;
+    }).join('\n').trim();
+}
+
+function readFile(path) {
+    try {
+        const content = file_read({ path: path });
+        return (content && content.trim()) ? content : null;
+    } catch (e) {
+        console.warn('Could not read file ' + path + ':', e);
+        return null;
+    }
+}
+
+function readResultJson() {
+    try {
+        const raw = readFile('outputs/test_automation_result.json');
+        if (!raw) return null;
+        return JSON.parse(raw);
+    } catch (e) {
+        console.error('Failed to parse test_automation_result.json:', e);
+        return null;
+    }
+}
+
+function findTestPRForTicket(scm, ticketKey) {
+    try {
+        const branchName = 'test/' + ticketKey;
+        const openPRs = scm.listPrs('open') || [];
+        const match = openPRs.filter(function(pr) {
+            return pr.head && pr.head.ref && pr.head.ref === branchName;
+        });
+        if (match.length > 0) return match[0];
+        console.warn('No open test PR found for branch', branchName);
+        return null;
+    } catch (e) {
+        console.error('Failed to find PR:', e);
+        return null;
+    }
+}
+
+function updatePullRequestBody(scm, prNumber, ticketKey, testStatus, bodyContent) {
+    if (!bodyContent) return false;
+
+    try {
+        const body = '## ' + ticketKey + ' Result: ' + testStatus.toUpperCase() + '\n\n' +
+            '**Latest rework result:** `' + testStatus.toUpperCase() + '`\n\n' +
+            '---\n\n' + bodyContent;
+        if (scm.updatePrBody) {
+            scm.updatePrBody(prNumber, body);
+            console.log('✅ Updated PR/MR body with latest test rework result');
+            return true;
+        }
+        console.warn('SCM provider does not support updatePrBody — posting summary comment only');
+        return false;
+    } catch (e) {
+        console.warn('Failed to update PR body with latest rework result:', e.message || e);
+        return false;
+    }
+}
+
+function isMergeInProgress() {
+    try {
+        cli_execute_command({ command: 'git rev-parse --quiet --verify MERGE_HEAD' });
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function isSubmodulePath(path) {
+    try {
+        const stageOutput = cleanCommandOutput(
+            cli_execute_command({ command: 'git ls-files --stage -- "' + path + '"' }) || ''
+        );
+        return stageOutput.split('\n').some(function(line) {
+            return line.trim().indexOf('160000 ') !== -1;
+        });
+    } catch (e) {
+        return false;
+    }
+}
+
+function stageUnmergedPaths(config) {
+    const unmerged = cleanCommandOutput(
+        cli_execute_command({ command: 'git diff --name-only --diff-filter=U' }) || ''
+    ).split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
+
+    if (unmerged.length === 0) return;
+
+    console.log('Staging ' + unmerged.length + ' unmerged path(s):', unmerged.join(', '));
+    unmerged.forEach(function(f) {
+        cli_execute_command({ command: 'git add -- "' + f + '"' });
+    });
+
+    // If the agent left conflict markers in a resolved file, fall back to a deterministic side.
+    const diffCheck = cleanCommandOutput(
+        cli_execute_command({ command: 'git diff --cached --check' }) || ''
+    );
+    const filesWithMarkers = [];
+    diffCheck.split('\n').forEach(function(line) {
+        const match = line.match(/^(.+?):\d+:\s+conflict marker/);
+        if (match) {
+            const path = match[1].trim();
+            if (filesWithMarkers.indexOf(path) === -1) filesWithMarkers.push(path);
+        }
+    });
+
+    if (filesWithMarkers.length > 0) {
+        console.warn('⚠️ Conflict markers remain in ' + filesWithMarkers.length + ' file(s); auto-resolving');
+        filesWithMarkers.forEach(function(f) {
+            if (f.indexOf('testing/') === 0) {
+                console.log('  Keeping test-branch version for', f);
+                cli_execute_command({ command: 'git checkout --ours -- "' + f + '"' });
+            } else {
+                console.log('  Keeping main version for', f);
+                cli_execute_command({ command: 'git checkout --theirs -- "' + f + '"' });
+            }
+            cli_execute_command({ command: 'git add -- "' + f + '"' });
+        });
+    }
+
+    var stillUnmerged = cleanCommandOutput(
+        cli_execute_command({ command: 'git diff --name-only --diff-filter=U' }) || ''
+    ).split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
+
+    if (stillUnmerged.length > 0) {
+        // Submodule conflicts cannot be resolved with `git add` or marker cleanup.
+        // For rework branches we always want the base-branch (origin/main) submodule
+        // state; feature work should not change submodules directly.
+        const submoduleConflicts = stillUnmerged.filter(function(f) { return isSubmodulePath(f); });
+        if (submoduleConflicts.length > 0) {
+            console.warn('⚠️ Submodule merge conflict(s); adopting origin/' + ((config.git && config.git.baseBranch) || 'main') + ' version:', submoduleConflicts.join(', '));
+            submoduleConflicts.forEach(function(f) {
+                cli_execute_command({ command: 'git checkout --theirs -- "' + f + '"' });
+                cli_execute_command({ command: 'git add -- "' + f + '"' });
+            });
+        }
+    }
+
+    stillUnmerged = cleanCommandOutput(
+        cli_execute_command({ command: 'git diff --name-only --diff-filter=U' }) || ''
+    ).trim();
+    if (stillUnmerged) {
+        throw new Error('Unable to resolve merge conflicts: ' + stillUnmerged);
+    }
+}
+
+function commitIfNeeded(ticketKey, passed, config) {
+    const statusOutput = prHelper.readStagedDiffStat(function(command) {
+        return cli_execute_command({ command: command });
+    });
+    const mergeInProgress = isMergeInProgress();
+
+    if (!statusOutput.trim() && !mergeInProgress) {
+        console.warn('No changes to commit in testing/ — pushing existing commits only');
+        return false;
+    }
+
+    const result = passed ? 'fix' : 'update';
+    const reworkCommitMsg = configLoader.formatTemplate(config.formats.commitMessage.testRework, {ticketKey: ticketKey, result: result});
+    cli_execute_command({
+        command: 'git commit -m "' + reworkCommitMsg.replace(/"/g, '\\"') + '"'
+    });
+    console.log('✅ Committed rework changes');
+    return true;
+}
+
+function commitAndPush(ticketKey, passed, config, prIsDirty) {
+    const branchName = cleanCommandOutput(
+        cli_execute_command({ command: 'git branch --show-current' }) || ''
+    );
+    if (!branchName) throw new Error('Could not determine current git branch');
+
+    // Guard: refuse to push directly to main — rework must be on test/ branch
+    if (branchName === 'main' || branchName === 'master') {
+        throw new Error('Refusing to commit rework directly to "' + branchName + '". Expected test/' + ticketKey + ' branch. preCliJSAction may have failed to checkout the correct branch.');
+    }
+
+    const baseBranch = (config.git && config.git.baseBranch) || 'main';
+    console.log('Current branch:', branchName, '| base:', baseBranch, '| PR dirty:', !!prIsDirty);
+
+    cli_execute_command({ command: 'git config user.name "' + config.git.authorName + '"' });
+    cli_execute_command({ command: 'git config user.email "' + config.git.authorEmail + '"' });
+
+    try {
+        cli_execute_command({ command: 'git fetch origin ' + baseBranch });
+    } catch (e) {
+        console.warn('Could not fetch origin/' + baseBranch + ':', e);
+    }
+
+    var mergeInProgress = isMergeInProgress();
+
+    if (!mergeInProgress && prIsDirty) {
+        // Commit any test fixes first so the working tree/index is clean for the merge.
+        cli_execute_command({ command: 'git add testing/' });
+        commitIfNeeded(ticketKey, passed, config);
+        console.log('PR is dirty — starting merge of origin/' + baseBranch);
+        try {
+            cli_execute_command({ command: 'git merge origin/' + baseBranch + ' --no-commit --no-ff' });
+        } catch (e) {
+            // Conflicts are expected for a dirty PR.
+        }
+    }
+
+    // Stage test fixes and any resolved conflict files.
+    cli_execute_command({ command: 'git add testing/' });
+    stageUnmergedPaths(config);
+
+    // Commit. If a merge is in progress this creates the merge commit.
+    commitIfNeeded(ticketKey, passed, config);
+
+    // Get local HEAD SHA to verify push actually succeeded
+    const localSha = cleanCommandOutput(
+        cli_execute_command({ command: 'git rev-parse HEAD' }) || ''
+    ).substring(0, 40);
+
+    try {
+        cli_execute_command({ command: 'git push -u origin ' + branchName });
+    } catch (e) {
+        console.log('Normal push failed, force pushing...');
+        cli_execute_command({ command: 'git push -u origin ' + branchName + ' --force' });
+    }
+
+    // Verify push succeeded by checking remote SHA matches local HEAD
+    const remoteCheck = cleanCommandOutput(
+        cli_execute_command({ command: 'git ls-remote --heads origin ' + branchName }) || ''
+    );
+    if (!remoteCheck.trim()) throw new Error('Branch not found on remote after push');
+
+    const remoteSha = remoteCheck.split(/\s+/)[0] || '';
+    if (localSha && remoteSha && !remoteSha.startsWith(localSha.substring(0, 10))) {
+        throw new Error('Push rejected: local HEAD ' + localSha.substring(0, 10) + ' does not match remote ' + remoteSha.substring(0, 10) + '. Branch protection may have blocked the push.');
+    }
+
+    console.log('✅ Pushed to remote branch:', branchName);
+    return branchName;
+}
+
+function createPRIfMissing(scm, branchName, ticketKey, config) {
+    try {
+        const openPRs = scm.listPrs('open') || [];
+        const existing = openPRs.filter(function(pr) {
+            return pr.head && pr.head.ref === branchName;
+        });
+        if (existing.length > 0) {
+            console.log('PR already exists: #' + existing[0].number);
+            return existing[0];
+        }
+
+        console.log('No open PR/MR found — creating one...');
+        var ticket;
+        try { ticket = jira_get_ticket({ key: ticketKey }); } catch (e) { ticket = null; }
+        const summary = ticket && ticket.fields ? (ticket.fields.summary || ticketKey) : ticketKey;
+        const prTitle = ticketKey + ' ' + summary;
+
+        const prResult = prHelper.createPullRequest({
+            scm: scm,
+            title: prTitle,
+            branchName: branchName,
+            baseBranch: config.git.baseBranch,
+            bodyContent: 'Auto-created PR after test rework.\n\nTicket: ' + ticketKey
+        });
+        if (prResult && prResult.success) {
+            console.log('✅ Created PR for', branchName, ':', prResult.prUrl || '(URL unknown)');
+            // Re-fetch so downstream code gets a consistent PR shape from the SCM.
+            const refreshed = findTestPRForTicket(scm, ticketKey);
+            if (refreshed) return refreshed.pr;
+            // Fallback: build minimal shape from URL if the SCM response differs.
+            var prNumber = null;
+            if (prResult.prUrl) {
+                var m = prResult.prUrl.match(/\/pull\/(\d+)$/);
+                if (m) prNumber = parseInt(m[1], 10);
+            }
+            return { number: prNumber, html_url: prResult.prUrl, head: { ref: branchName } };
+        }
+        console.warn('Could not create PR/MR:', prResult && prResult.error);
+        return null;
+    } catch (e) {
+        console.warn('createPRIfMissing error:', e);
+        return null;
+    }
+}
+
+function resolveCustomParams(params, actualParams, config) {
+    var merged = {};
+    var patch = configLoader.resolveInstructions(
+        'pr_test_automation_rework',
+        null,
+        config
+    ).jobParamPatch;
+    if (patch && patch.customParams) {
+        Object.assign(merged, patch.customParams);
+    }
+    Object.assign(
+        merged,
+        (actualParams && actualParams.customParams) ||
+            (params.jobParams && params.jobParams.customParams) ||
+            params.customParams ||
+            {}
+    );
+    return merged;
+}
+
+function postThreadReplies(scm, pullRequestId) {
+    const repliesJson = readFile('outputs/review_replies.json');
+    if (!repliesJson) {
+        console.warn('outputs/review_replies.json not found — skipping thread replies');
+        return 0;
+    }
+
+    let data;
+    try {
+        data = JSON.parse(repliesJson);
+    } catch (e) {
+        console.warn('Failed to parse review_replies.json:', e);
+        return 0;
+    }
+
+    const replies = (data && data.replies) ? data.replies : [];
+    if (replies.length === 0) return 0;
+
+    let posted = 0;
+    let resolved = 0;
+    replies.forEach(function(item) {
+        const thread = {
+            rootCommentId: item.inReplyToId,
+            threadId: item.threadId || item.discussionId
+        };
+        const replyText = item.reply ? String(item.reply).trim() : '';
+
+        // Only post a reply when the agent explicitly wrote one AND we have the
+        // identifiers needed to reply inside the existing review thread. Without
+        // rootCommentId GitHub's SCM fallback creates a generic issue comment,
+        // which is what produces the huge "✅ Addressed." comment floods.
+        if (replyText && item.inReplyToId) {
+            try {
+                scm.replyToThread(pullRequestId, thread, replyText);
+                posted++;
+            } catch (e) {
+                console.warn('Failed to reply to comment #' + item.inReplyToId + ':', e);
+            }
+        } else if (replyText) {
+            console.log('Skipping reply for thread without rootCommentId — would become a generic issue comment');
+        }
+
+        if (item.threadId) {
+            try {
+                scm.resolveThread(pullRequestId, { threadId: item.threadId });
+                resolved++;
+            } catch (e) {
+                console.warn('Failed to resolve thread', item.threadId + ':', e);
+            }
+        }
+    });
+
+    console.log('Resolved ' + resolved + '/' + replies.length + ' review thread(s); posted ' + posted + ' explicit reply(ies)');
+    return posted;
+}
+
+function action(params) {
+    const actualParams = params.ticket ? params : (params.jobParams || params);
+    const ticketKey = actualParams.ticket.key;
+    var config = configLoader.loadProjectConfig(params.jobParams || params);
+    var jiraConfig = config.jira;
+    var scm = configLoader.createScm(config);
+    const customParams = resolveCustomParams(params, actualParams, config);
+    const removeLabel = customParams && customParams.removeLabel;
+    const wipLabel = actualParams.metadata && actualParams.metadata.contextId
+        ? actualParams.metadata.contextId + '_wip'
+        : 'pr_test_automation_rework_wip';
+
+    function releaseLock() {
+        try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
+        if (removeLabel) {
+            try {
+                jira_remove_label({ key: ticketKey, label: removeLabel });
+                console.log('✅ Removed SM label:', removeLabel);
+            } catch (e) {}
+        }
+    }
+
+    try {
+        const fixSummary = actualParams.response || '_(No fix summary)_';
+        console.log('=== Processing test rework results for', ticketKey, '===');
+
+        // Step 1: Read new test result
+        const result = readResultJson();
+        if (!result || !result.status) {
+            const errMsg = !result
+                ? 'Could not read outputs/test_automation_result.json — file missing or empty.'
+                : 'outputs/test_automation_result.json is missing required "status" field (got: ' + JSON.stringify(result) + '). The agent must write { "status": "passed" | "failed", ... }.';
+            console.error(errMsg);
+            try {
+                jira_post_comment({
+                    key: ticketKey,
+                    comment: 'h3. ⚠️ Rework Error\n\n' + errMsg + '\n\nCheck CI logs for the agent output.'
+                });
+            } catch (e) {}
+            releaseLock();
+            return { success: false, error: errMsg };
+        }
+
+        const rawStatus = result.status.toLowerCase();
+        const testStatus = (rawStatus === 'pass' || rawStatus === 'passed') ? 'passed' :
+                           (rawStatus === 'fail' || rawStatus === 'failed') ? 'failed' :
+                           rawStatus;
+        const passed = testStatus === 'passed';
+        console.log('Re-run result:', result.status, '→ normalized:', testStatus);
+
+        // Step 2: Configure git + commit/push testing/ only
+        try {
+            cli_execute_command({ command: 'git config user.name "' + config.git.authorName + '"' });
+            cli_execute_command({ command: 'git config user.email "' + config.git.authorEmail + '"' });
+        } catch (e) {}
+
+        var gateResult = feedbackLoop.runQualityGates({
+            ticketKey: ticketKey,
+            customParams: customParams,
+            section: 'qualityGates'
+        });
+        if (!gateResult.success) {
+            throw new Error('Quality gate failed before test rework publish: ' + gateResult.failedGate + '\n' + gateResult.error);
+        }
+        var policyResult = feedbackLoop.runPolicyGates({
+            ticketKey: ticketKey,
+            customParams: customParams,
+            section: 'policyGates'
+        });
+        if (!policyResult.success) {
+            throw new Error('Policy gate failed before test rework publish: ' + policyResult.failedGate + '\n' + policyResult.error);
+        }
+
+        // Step 2.5: Determine whether the test PR is dirty so the git step can merge main.
+        var pr = findTestPRForTicket(scm, ticketKey);
+        var prIsDirty = false;
+        if (pr) {
+            prIsDirty = (pr.mergeable_state === 'dirty' || pr.mergeStateStatus === 'DIRTY' || pr.mergeable === false);
+            if (prIsDirty) {
+                console.log('PR #' + pr.number + ' is dirty — will merge origin/' + ((config.git && config.git.baseBranch) || 'main'));
+            }
+        }
+
+        let branchName;
+        try {
+            branchName = commitAndPush(ticketKey, passed, config, prIsDirty);
+        } catch (e) {
+            console.error('Git operations failed:', e);
+            var resume = feedbackLoop.resumeAgent({
+                ticketKey: ticketKey,
+                customParams: customParams,
+                section: 'postAction',
+                stage: 'test_rework_git_operations',
+                error: e.toString()
+            });
+            if (resume.attempted) {
+                return action(params);
+            }
+            jira_post_comment({
+                key: ticketKey,
+                comment: 'h3. ❌ Rework Push Failed\n\n{code}' + e.toString() + '{code}'
+            });
+            releaseLock();
+            return { success: false, error: e.toString() };
+        }
+
+        // Step 3: Ensure PR exists; create if missing (e.g. preCliJSAction failed to create it)
+        if (!pr && branchName) {
+            pr = createPRIfMissing(scm, branchName, ticketKey, config);
+        }
+
+        if (pr) {
+            postThreadReplies(scm, pr.number);
+
+            // Post PR comment with fix summary + new test result (GitHub Markdown from pr_body.md)
+            try {
+                const statusEmoji = passed ? '✅' : '❌';
+                const prBodyContent = readFile('outputs/pr_body.md') || fixSummary;
+                updatePullRequestBody(scm, pr.number, ticketKey, testStatus, prBodyContent);
+                const prComment = '## 🔧 Test Rework Complete — ' + ticketKey + '\n\n' +
+                    '**Re-run result**: ' + statusEmoji + ' ' + testStatus.toUpperCase() + '\n\n' +
+                    '---\n\n' + prBodyContent;
+                scm.addComment(pr.number, prComment);
+                console.log('✅ Posted rework summary to PR');
+            } catch (e) {
+                console.warn('Failed to post PR comment:', e);
+            }
+        } else {
+            console.warn('No PR/MR found — skipping source-control comment');
+        }
+
+        // Step 4: Move ticket to In Review - Passed or In Review - Failed
+        // Bug creation/linking is handled by the bug_creation agent when TC reaches Failed status
+        const targetStatus = passed ? jiraConfig.statuses.IN_REVIEW_PASSED : jiraConfig.statuses.IN_REVIEW_FAILED;
+        try {
+            jira_move_to_status({ key: ticketKey, statusName: targetStatus });
+            console.log('✅ Moved', ticketKey, 'to', targetStatus);
+        } catch (e) {
+            console.warn('Failed to move ticket status:', e);
+        }
+
+        // Step 6: Post Jira comment
+        try {
+            const statusEmoji = passed ? '✅' : '❌';
+            let comment = 'h3. 🔧 Test Rework Completed\n\n';
+            comment += '*Re-run result*: ' + statusEmoji + ' *' + testStatus.toUpperCase() + '*\n';
+            comment += '*Branch*: {code}' + branchName + '{code}\n';
+            if (pr) comment += '*Pull Request*: ' + pr.html_url + '\n';
+            comment += '\n' + fixSummary;
+            jira_post_comment({ key: ticketKey, comment: comment });
+        } catch (e) {
+            console.warn('Failed to post Jira comment:', e);
+        }
+
+        // Step 7 & 8: Remove WIP label + SM idempotency label
+        releaseLock();
+
+        var autoStarted = false;
+        if (customParams && customParams.autoStartReview && customParams.autoStartReviewConfigFile) {
+            try {
+                autoStarted = autoStart.triggerConfiguredWorkflowForTicket({
+                    ticketKey: ticketKey,
+                    customParams: customParams,
+                    config: config,
+                    configFile: customParams.autoStartReviewConfigFile,
+                    label: 'pr_test_automation_review',
+                    stripKeys: [
+                        'removeLabel',
+                        'autoStartReview',
+                        'autoStartReviewConfigFile'
+                    ]
+                });
+            } catch (e) {
+                console.warn('⚠️ autoStartReview trigger failed:', e.message || e);
+            }
+        }
+        if (!autoStarted) {
+            autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
+        }
+
+        console.log('✅ Test rework complete — re-run:', testStatus, '→', targetStatus);
+
+        // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
+        // wrote outputs/*_usage.json during the agent run.
+        try {
+            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
+        } catch (e) {
+            console.warn('Failed to post token usage comments:', e);
+        }
+
+        return {
+            success: true,
+            testStatus: testStatus,
+            jiraStatus: targetStatus,
+            ticketKey: ticketKey
+        };
+
+    } catch (error) {
+        console.error('❌ Error in postTestReworkResults:', error);
+        try {
+            const key = (params.ticket || (params.jobParams && params.jobParams.ticket) || {}).key;
+            if (key) {
+                var resume = feedbackLoop.resumeAgent({
+                    ticketKey: key,
+                    customParams: customParams,
+                    section: 'postAction',
+                    stage: 'test_rework_post_action',
+                    error: error.toString()
+                });
+                if (resume.attempted) {
+                    return action(params);
+                }
+                jira_post_comment({
+                    key: key,
+                    comment: 'h3. ❌ Test Rework Error\n\n{code}' + error.toString() + '{code}'
+                });
+            }
+        } catch (e) {}
+        releaseLock();
+        return { success: false, error: error.toString() };
+    }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { action, resolveCustomParams };
+}
