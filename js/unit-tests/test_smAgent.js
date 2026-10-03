@@ -2237,6 +2237,97 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
             'parked guests never enter the arm queue (query-level exclusion)');
         assert.ok(notLabels.indexOf('ai_validating') !== -1, 'mutex exclusion preserved');
     });
+
+    test('sm_github.json: park-reset matches parked PRs regardless of merge state (live fa 2026-10-03)', function () {
+        // The RESET probe lives inside update_branch, but silent-update-
+        // behind only matches BEHIND — five parked fa PRs with fresh 16:01
+        // vendor pushes (heads NOT behind) sat frozen for two hours because
+        // no rule ever ran the probe. park-reset closes the hole.
+        var raw = file_read({ path: 'sm_github.json' });
+        var cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || cfg.rules || [];
+        var reset = rules.filter(function (r) { return r.id === 'park-reset'; });
+        assert.equal(reset.length, 1, 'exactly one park-reset rule');
+        var q = reset[0].query || {};
+        assert.equal(q.type, 'pr', 'PR-anchored');
+        assert.ok((q.labels || []).indexOf('validation_failed') !== -1, 'matches parked PRs');
+        assert.equal(q.mergeState, undefined, 'NO merge-state filter — non-BEHIND parked heads reach the RESET probe');
+        assert.equal(reset[0].localAction, 'update_branch', 'rides the existing RESET probe inside update_branch');
+        assert.ok((q.notLabels || []).indexOf('ai_validating') !== -1, 'never touches a validating PR mid-run');
+    });
+
+    test('validate_pr backstop: a FRESH HUMAN push on a parked PR clears the label and dispatches (live fa 2026-10-03)', function () {
+        // Defense-in-depth for any rule that reaches validate_pr with a
+        // parked PR (validate-fresh has no validation_failed exclusion):
+        // the action itself must self-heal on a fresh non-machine push
+        // instead of parking forever — update_branch's RESET never ran for
+        // non-BEHIND heads (the hole park-reset closes at the query level).
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(210, { labels: ['pr_approved', 'validation_failed'], headSha: 'cc11992200' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({
+                actors: { cc11992200: { login: 'guest-human', date: '2026-10-03T16:01:10Z' } },
+                parkedAt: '2026-10-03T08:15:00Z'
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [{
+            source: 'github', query: { type: 'pr', labels: ['pr_approved'],
+                notLabels: ['ai_validating'], notMergeState: ['BEHIND', 'DIRTY'], draft: false },
+            localAction: 'validate_pr', deferRedHead: true, limit: 1, id: 'validate-armed-no-vf' }] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
+            ['validation_failed'], 'park label cleared by the action-level probe');
+        assert.ok(vfDispatched(sm.capturedCliCommands), 'validation CI dispatched for the fresh head');
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.indexOf('ai_validating') !== -1; }), 'armed');
+        assert.ok(sm.capturedPrComments.some(function (c) {
+            return c.body.indexOf('cleared') !== -1; }), 'un-park comment posted');
+    });
+
+    test('validate_pr backstop: a MACHINE push never clears the park (actor login, not git name)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(211, { labels: ['pr_approved', 'validation_failed'], headSha: 'dd22113344' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({
+                actors: { dd22113344: { login: 'ai-teammate', date: '2026-10-03T16:01:10Z' } },
+                parkedAt: '2026-10-03T08:15:00Z'
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [{
+            source: 'github', query: { type: 'pr', labels: ['pr_approved'],
+                notLabels: ['ai_validating'], notMergeState: ['BEHIND', 'DIRTY'], draft: false },
+            localAction: 'validate_pr', deferRedHead: true, limit: 1, id: 'validate-armed-no-vf' }] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'machine push must NOT un-park');
+        assert.ok(!vfDispatched(sm.capturedCliCommands), 'no CI while parked');
+    });
+
+    test('validate_pr backstop: a STALE human push (older than the park event) keeps the park', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(212, { labels: ['pr_approved', 'validation_failed'], headSha: 'ee33445566' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({
+                actors: { ee33445566: { login: 'guest-human', date: '2026-10-03T07:00:00Z' } },
+                parkedAt: '2026-10-03T08:15:00Z'
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [{
+            source: 'github', query: { type: 'pr', labels: ['pr_approved'],
+                notLabels: ['ai_validating'], notMergeState: ['BEHIND', 'DIRTY'], draft: false },
+            localAction: 'validate_pr', deferRedHead: true, limit: 1, id: 'validate-armed-no-vf' }] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'the parked head predates the park — no clear');
+        assert.ok(!vfDispatched(sm.capturedCliCommands), 'no CI while parked');
+    });
 });
 
 suite('smAgent: stamp check-run deep links (owner 2026-09-27)', function () {

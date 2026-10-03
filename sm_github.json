@@ -74,6 +74,24 @@
           "id": "silent-update-behind"
         },
         {
+          "description": "Sticky-park RESET for NON-BEHIND heads (dmtools-agents, live fa 2026-10-03): the human-push unpark probe lives inside update_branch, but silent-update-behind only matches mergeState BEHIND — a guest PR whose fix commit lands on the SAME base (not behind) NEVER runs the RESET and the park outlives any human push (live: vendor pushed 16:01 to five parked approved PRs; 2h later not one label cleared, the whole approved FIFO frozen). This rule routes every parked non-validating PR through update_branch's RESET probe regardless of merge state: a NON-machine push NEWER than the newest park event clears the label (then validate-armed picks the PR up on a later pass — this rule never dispatches CI itself); machine pushes and stale heads keep the park (fail closed). The silent branch refresh inside the action is a no-op for a non-BEHIND head (git merge reports up-to-date, no push).",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "validation_failed"
+            ],
+            "notLabels": [
+              "ai_validating",
+              "blocked"
+            ],
+            "draft": false
+          },
+          "localAction": "update_branch",
+          "limit": 10,
+          "id": "park-reset"
+        },
+        {
           "description": "Post-approval merge window — OWNER FIFO RULE (2026-09-22): lead the OLDEST approved PR all the way to merge; never validate other approved PRs meanwhile (the merge moves the base — they would re-validate anyway). Advance to the next approved ONLY when the oldest is DIRTY (conflict-rework owns it) or its validation went RED (rework leg fixes it) — both free this slot while the oldest repairs. BEHIND/DIRTY excluded here: silent-update refreshes BEHIND heads first; conflicted heads can never reach CLEAN. Mutex ai_validating = one validation at a time. validation_failed excluded (owner 2026-09-27, live: fa#923 — a GUEST PR whose head went red cycles arm→CI red→silent-update→re-arm forever, holding this limit-1 slot hostage; the silent-update action labels such guests validation_failed and they stay parked until a NON-MACHINE push moves the head).",
           "source": "github",
           "query": {
