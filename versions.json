@@ -1,7 +1,7 @@
 {
   "ai_teammate_token_usage_reporter": "0.1.17",
   "bug_creation": "0.1.17",
-  "bug_development": "0.1.17",
+  "bug_development": "0.1.18",
   "bug_done_check": "0.1.17",
   "bug_fix_batch_coordinator": "0.1.17",
   "bug_fix_batch_development": "0.1.17",
