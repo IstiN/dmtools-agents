@@ -285,14 +285,20 @@ function main() {
     const current = versions[agent] || '0.1.0';
     const next = affected.includes(agent) ? bump(current, BUMP) : current;
     console.log(`\n=== ${agent}: ${current}${next !== current ? ` -> ${next}` : ' (unchanged)'} ===`);
-    if (!DRY_RUN && affected.length > 0) {
+    if (!DRY_RUN) {
+      // ALWAYS build every agent zip — a factory-setup-only release is a
+      // RELEASE too and must stay a self-contained snapshot. Skipping the
+      // build on an empty affected set shipped a catalog that advertised
+      // packs the release never carried, and the registry resolver 404'd
+      // on `@latest` (live: fa SM tick 2026-10-03T08:49, sm_github-0.1.18
+      // in catalog, zip absent from agents-rel-20261003-084425).
       const zip = buildPack(agent, next);
       augmentLaunchSurface(agent, zip);
       const count = validatePack(zip);
       console.log(`validated ${basename(zip)} (${count} files)`);
       versions[agent] = next;
     }
-    catalog[agent] = affected.length > 0 ? versions[agent] : current;
+    catalog[agent] = versions[agent];
   }
 
   if (!DRY_RUN) {
