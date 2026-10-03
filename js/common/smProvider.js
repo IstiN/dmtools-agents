@@ -226,7 +226,15 @@ function githubProvider(cfg) {
             // branch, 3 ticks processed 0). Same handling as CANCELLED:
             // ignore; the trailing rule then reports 'pending' and
             // validate-fresh dispatches the real CI on the head.
-            var BOOKKEEPING_CHECK_PREFIXES = ['kicker /', 'Wake-up probe'];
+            // 'merge /' joined the list for dmtools-agents#635 (live fa
+            // pr-1174, 2026-10-02): the Machine Merge Bot stamps its own
+            // check-run on the head it is EVALUATING — a queued/in-flight
+            // 'merge / merge' made the rollup read pending, so the bot
+            // waited on itself and merge-validated (checks:green) never
+            // matched either: armed → sweep → re-arm loop with a green,
+            // merge-ready head. The merge lane's check is machine
+            // bookkeeping, not a validation verdict.
+            var BOOKKEEPING_CHECK_PREFIXES = ['kicker /', 'Wake-up probe', 'merge /'];
             // (all-cancelled/bookkeeping still counts as 'no verdict yet')
             rollup.forEach(function (c) {
                 var concl = c.conclusion;
