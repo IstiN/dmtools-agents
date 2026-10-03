@@ -106,7 +106,19 @@ function autoCommitAndPush(customParams, ticketKey) {
 
     try {
         cli_execute_command({
-            command: 'git rm -r --ignore-unmatch .dmtools/copilot-sessions',
+            // Untrack machine-local runtime logs that older/poisoned
+            // branches may already carry (gh-628: the timer itself swept
+            // .dmtools/credential-helper.log — the credential helper's
+            // serving trace — into three commits on ai/gh-628). Pathspec
+            // exclusion alone cannot help a TRACKED file's changes, so the
+            // cleanup removes them from the index; --ignore-unmatch
+            // tolerates every name being absent. One command (the old
+            // copilot-sessions cleanup merged in) keeps the call count
+            // identical for the tests.
+            command: 'git rm -r --cached --ignore-unmatch .dmtools/copilot-sessions' +
+                ' .dmtools/credential-helper.log .dmtools/fa-trace.log' +
+                ' .dmtools/run-output.txt .dmtools/stall-capture.log' +
+                ' .dmtools-session-output.log',
             workingDirectory: workingDir
         });
     } catch (cleanupErr) {
@@ -119,7 +131,21 @@ function autoCommitAndPush(customParams, ticketKey) {
             // repo (when a pin still lands it in the workspace) is a gitlink
             // a bare `git add -A` cannot stage — exit 128 kills the timer
             // (live: fa gh-1044 leg 2026-10-03, clip 1791017320716).
-            command: 'git add -A -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**" ":!factory-kit" ":!factory-kit/**"',
+            // `:!.dmtools/...` runtime logs (gh-628): the machine's runtime
+            // artifacts live INSIDE the committed .dmtools/ directory
+            // (config.js, runners/), so the directory itself cannot be
+            // ignored — the credential helper's serving trace, fa trace and
+            // run logs, the watchdog stall capture and the session store
+            // must be excluded by pathspec, exactly like copilot-sessions.
+            // `.dmtools-session-output.log` is this timer's own CLI-stdout
+            // snapshot at the job root — a crash mid-upload leaves it
+            // behind, and the next broad add would commit the full session
+            // log into the ticket branch.
+            command: 'git add -A -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**"' +
+                ' ":!.dmtools/credential-helper.log" ":!.dmtools/fa-trace.log"' +
+                ' ":!.dmtools/run-output.txt" ":!.dmtools/stall-capture.log"' +
+                ' ":!.dmtools/fa-sessions" ":!.dmtools/fa-sessions/**"' +
+                ' ":!.dmtools-session-output.log" ":!factory-kit" ":!factory-kit/**"',
             workingDirectory: workingDir
         });
     } catch (e) {

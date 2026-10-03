@@ -213,7 +213,16 @@ function action(params) {
         let hasGitChanges = false;
         try {
             try {
-                cli_execute_command({ command: 'git rm -r --ignore-unmatch .dmtools/copilot-sessions' });
+                cli_execute_command({
+                    // gh-628: untrack machine-local runtime logs carried by
+                    // already-poisoned branches (the timer's broad add swept
+                    // .dmtools/credential-helper.log onto ai/gh-628); the
+                    // staging pathspec below keeps them out going forward.
+                    command: 'git rm -r --cached --ignore-unmatch .dmtools/copilot-sessions' +
+                        ' .dmtools/credential-helper.log .dmtools/fa-trace.log' +
+                        ' .dmtools/run-output.txt .dmtools/stall-capture.log' +
+                        ' .dmtools-session-output.log'
+                });
             } catch (cleanupErr) {
                 console.warn('Could not remove tracked Copilot session cache before checking status:', cleanupErr);
             }
@@ -223,7 +232,17 @@ function action(params) {
             // leg after a green dev run (same class as gh-1000 on the story
             // flow, #648). Excluded like copilot-sessions; the status filter
             // below skips its `?? factory-kit/` line too.
-            cli_execute_command({ command: 'git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**" ":!factory-kit" ":!factory-kit/**"' });
+            // `:!.dmtools/...` runtime logs — gh-628: .dmtools/credential-
+            // helper.log (the credential helper's serving trace) was swept
+            // into three ticket-branch commits by a broad add; the runtime
+            // logs sit next to COMMITTED files (config.js, runners/), so the
+            // directory itself cannot be ignored — exclude each by pathspec.
+            cli_execute_command({ command: 'git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**"' +
+                ' ":!.dmtools/credential-helper.log" ":!.dmtools/fa-trace.log"' +
+                ' ":!.dmtools/run-output.txt" ":!.dmtools/stall-capture.log"' +
+                ' ":!.dmtools/fa-sessions" ":!.dmtools/fa-sessions/**"' +
+                ' ":!.dmtools-session-output.log"' +
+                ' ":!factory-kit" ":!factory-kit/**"' });
             const rawStatus = cli_execute_command({ command: 'git status --porcelain' }) || '';
             const statusLines = rawStatus.split('\n').filter(function(l) {
                 return l.trim() &&

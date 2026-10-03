@@ -343,6 +343,49 @@ suite('pushReworkChanges.commitAndPush — base-branch safety invariant', functi
             mod.commitAndPush('PROJ-123', baseConfig(), {});
         }, 'must refuse to commit/push without a known expected branch');
     });
+
+    test('staging never includes machine-local .dmtools runtime logs (gh-628)', function() {
+        // Live 2026-10-03 (ai/gh-628): .dmtools/credential-helper.log — the
+        // credential helper's serving trace — was swept into three
+        // ticket-branch commits by broad `git add` staging. Rework legs
+        // commit to the SAME ai/* branches, so the rework staging pathspec
+        // must exclude the runtime logs like copilot-sessions, and the rm
+        // cleanup must untrack already-poisoned branches.
+        var commands = [];
+        var mod = loadPushReworkChangesForCommitAndPush({
+            file_read: function(args) {
+                if (args.path.indexOf('pr_info.md') !== -1) {
+                    return '**Branch**: `bug/PROJ-123` → `develop`';
+                }
+                return null;
+            },
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+                if (args.command.indexOf('git ls-remote --heads origin bug/PROJ-123') === 0) {
+                    return 'abc123\trefs/heads/bug/PROJ-123\n';
+                }
+                return '';
+            }
+        });
+
+        mod.commitAndPush('PROJ-123', baseConfig(), {});
+
+        var addCall = commands.filter(function(c) { return c.indexOf('git add . --') === 0; })[0];
+        assert.ok(addCall, 'staging command executed — commands: ' + JSON.stringify(commands));
+        assert.contains(addCall, ':!.dmtools/credential-helper.log',
+            'credential-serving trace never staged');
+        assert.contains(addCall, ':!.dmtools/fa-trace.log', 'fa trace log never staged');
+        assert.contains(addCall, ':!.dmtools/run-output.txt', 'fa run output never staged');
+        assert.contains(addCall, ':!.dmtools/stall-capture.log', 'stall capture never staged');
+        assert.contains(addCall, ':!.dmtools/fa-sessions', 'session store never staged');
+        assert.contains(addCall, ':!.dmtools-session-output.log',
+            'timer CLI-stdout snapshot never staged');
+        var rmCalls = commands.filter(function(c) { return c.indexOf('git rm -r --cached --ignore-unmatch') === 0; });
+        assert.equal(rmCalls.length, 1, 'exactly one untrack-cleanup command');
+        assert.contains(rmCalls[0], '.dmtools/credential-helper.log',
+            'already-tracked credential-helper.log is untracked (poisoned-branch self-heal)');
+    });
 });
 
 // ── action(): rework_setup_failed.md guard (issue #310) ──────────────────────

@@ -233,4 +233,42 @@ suite('developBugAndCreatePR', function() {
         assert.contains(loaded.comments[0].comment, 'Bug Already Fixed');
     });
 
+    test('git add never stages machine-local .dmtools runtime logs (gh-628)', function() {
+        // Live 2026-10-03 (ai/gh-628): the machine's runtime files live
+        // INSIDE the committed .dmtools/ directory, and broad `git add`
+        // staging swept .dmtools/credential-helper.log (the credential
+        // helper's serving trace) into three ticket-branch commits. The
+        // status-check staging pathspec must exclude them like
+        // copilot-sessions.
+        var loaded = loadDevelopBugAndCreatePR();
+        loaded.mod.action({
+            ticket: {
+                key: 'TS-1299',
+                fields: { summary: 'staging hygiene', description: '', labels: [] }
+            },
+            metadata: { contextId: 'bug_development' },
+            jobParams: {
+                customParams: { removeLabel: 'sm_bug_development_triggered' }
+            }
+        });
+        var addCall = loaded.commands.filter(function(c) {
+            return c.indexOf('git add . --') === 0;
+        })[0];
+        assert.ok(addCall, 'staging command executed — commands: ' + JSON.stringify(loaded.commands));
+        assert.contains(addCall, ':!.dmtools/credential-helper.log',
+            'credential-serving trace never staged');
+        assert.contains(addCall, ':!.dmtools/fa-trace.log', 'fa trace log never staged');
+        assert.contains(addCall, ':!.dmtools/run-output.txt', 'fa run output never staged');
+        assert.contains(addCall, ':!.dmtools/stall-capture.log', 'stall capture never staged');
+        assert.contains(addCall, ':!.dmtools/fa-sessions', 'session store never staged');
+        assert.contains(addCall, ':!.dmtools-session-output.log',
+            'timer CLI-stdout snapshot never staged');
+        var rmCalls = loaded.commands.filter(function(c) {
+            return c.indexOf('git rm -r --cached --ignore-unmatch') === 0;
+        });
+        assert.equal(rmCalls.length, 1, 'exactly one untrack-cleanup command');
+        assert.contains(rmCalls[0], '.dmtools/credential-helper.log',
+            'already-tracked credential-helper.log is untracked (poisoned-branch self-heal)');
+    });
+
 });

@@ -199,8 +199,16 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
         });
 
         try {
+            // gh-628: machine-local runtime logs (the credential helper's
+            // serving trace, fa trace/run logs, stall capture, the timer's
+            // CLI-stdout snapshot) live inside the committed .dmtools/
+            // directory — untrack them on already-poisoned branches; the
+            // staging pathspec below keeps them out going forward.
             runCmd({
-                command: 'git rm -r --ignore-unmatch .dmtools/copilot-sessions'
+                command: 'git rm -r --cached --ignore-unmatch .dmtools/copilot-sessions' +
+                    ' .dmtools/credential-helper.log .dmtools/fa-trace.log' +
+                    ' .dmtools/run-output.txt .dmtools/stall-capture.log' +
+                    ' .dmtools-session-output.log'
             });
         } catch (cleanupErr) {
             console.warn('Could not remove tracked Copilot session cache before staging:', cleanupErr);
@@ -213,8 +221,17 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
         // checked out" fails the whole add with exit 128 and kills the PR
         // post-action (live gh-1000, 2026-10-03: dev leg green, "Git
         // operations failed" — no PR). Excluded like copilot-sessions.
+        // `:!.dmtools/...` runtime logs — gh-628: .dmtools/credential-
+        // helper.log (the credential helper's serving trace) was swept into
+        // three ticket-branch commits by this very add; the runtime logs
+        // sit next to COMMITTED files (config.js, runners/), so the
+        // directory itself cannot be ignored — exclude each by pathspec.
         runCmd({
             command: 'git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**"'
+                + ' ":!.dmtools/credential-helper.log" ":!.dmtools/fa-trace.log"'
+                + ' ":!.dmtools/run-output.txt" ":!.dmtools/stall-capture.log"'
+                + ' ":!.dmtools/fa-sessions" ":!.dmtools/fa-sessions/**"'
+                + ' ":!.dmtools-session-output.log"'
                 + ' ":!factory-kit" ":!factory-kit/**"'
         });
 
