@@ -292,6 +292,36 @@ suite('smProvider', function () {
         }).prStatus(7).mergeState, 'CLEAN');
     });
 
+    test('github: branchHead falls back to a single-branch gh probe when page 1 misses main (#639)', function () {
+        // Live fa pr-1174 (2026-10-03): github_list_branches returns page 1
+        // only (30 branches — no perPage param, Java parity); on fa the
+        // 'ai/gh-*' fleet pushes 'main' off the page, the override never
+        // ran, mergeState stayed raw 'UNSTABLE', and merge-validated
+        // (mergeState CLEAN) matched NOTHING all night.
+        var probeCmds = [];
+        var p = loadProvider('github', {
+            github_get_pr: function () {
+                return { state: 'OPEN', mergeable: true, mergeable_state: 'unstable',
+                    base: { ref: 'main', sha: 'aa11' + 'bb22cc33dd44ee55ff66aa77bb88cc99dd00' },
+                    head: { sha: 'h' } };
+            },
+            github_get_commit_check_runs: function () { return { check_runs: [] }; },
+            // page 1 without 'main' — the #639 reality
+            github_list_branches: function () {
+                return [{ name: 'ai/gh-1', commit: { sha: 'x' } }];
+            },
+            cli_execute_command: function (args) {
+                probeCmds.push(args.command);
+                return 'aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00';
+            }
+        });
+        assert.equal(p.prStatus(31).mergeState, 'CLEAN',
+            'the gh-api probe rescues the override: fresh base stays CLEAN despite the truncated list');
+        assert.ok(probeCmds.some(function (c) {
+            return c.indexOf('/branches/main') !== -1; }),
+            'the single-branch probe fired for main');
+    });
+
     test('github: prStatus preserves BLOCKED on a fresh base (dart #195 deadlock)', function () {
         // Live: dart #195 sat armed (ai_validating) on a fresh head whose
         // required checks were pending — REST reported mergeable_state
