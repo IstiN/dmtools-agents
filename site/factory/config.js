@@ -56,6 +56,16 @@ window.FACTORY_BOARD_CONFIG = {
     { id: 'merged_recent',  title: 'Merged · 24h',         icon: 'merged' }
   ],
 
+  // v3: backlog columns — open issues from the same snapshot's `backlog`
+  // section (bucket ids come from factoryState.js backlogBucket). Order is
+  // the flow: assigned → queued → owner-held → unsorted inbox.
+  backlogColumns: [
+    { id: 'in_dev',  title: 'In dev · assigned',     icon: 'dev' },
+    { id: 'queued',  title: 'agent:dev queued',      icon: 'queue' },
+    { id: 'blocked', title: 'Blocked · owner hold',  icon: 'blocked' },
+    { id: 'inbox',   title: 'Inbox',                 icon: 'inbox' }
+  ],
+
   // Labels highlighted as badges on cards (the rest stay subtle)
   badgeLabels: ['pr_approved', 'ai_validated', 'ai_pr_reviewed', 'ai_validating',
                 'dependencies', 'agent:dev', 'agent:review', 'agent:rework',

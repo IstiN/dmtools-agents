@@ -276,12 +276,353 @@ suite('factoryState — development lane (dev leg, issue side)', function () {
     assert.equal(byIssue[63].devStartedAt, NOW, 'new handoff stamped this tick');
   });
 
+  test('devStartedAt carries through the BACKLOG prev card (prevIndex resolves issues there)', function () {
+    var prev = { lanes: { development: [] }, backlog: { in_dev: [
+      { issue: 64, title: 'i64', labels: ['agent:dev'], bucket: 'in_dev',
+        assignee: 'ai-teammate', devStartedAt: '2026-10-02T05:00:00Z',
+        history: [{ state: 'in_dev', at: '2026-10-02T05:00:00Z' }] }
+    ] } };
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prev: prev,
+      machineAuthor: 'ai-teammate', prs: [], runs: [],
+      issues: [{ number: 64, title: 'issue 64', labels: [{ name: 'agent:dev' }],
+        user: { login: 'ba' }, html_url: 'http://issues/64',
+        assignees: [{ login: 'ai-teammate' }] }]
+    });
+    assert.equal(st.lanes.development[0].devStartedAt, '2026-10-02T05:00:00Z',
+      'carry must survive prevIndex resolving the issue to its backlog twin');
+    assert.equal(st.backlog.in_dev[0].devStartedAt, '2026-10-02T05:00:00Z');
+  });
+
   test('no previous snapshot → devStartedAt null (not a lying now)', function () {
     var st = fsModule.buildFactoryState({
       repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
       devIssues: [issue(61, ['agent:dev'])], prs: [], runs: []
     });
     assert.ok(!st.lanes.development[0].devStartedAt);
+  });
+});
+
+// ── v3 — card history (accumulated state timeline) ──────────────────────────
+
+suite('factoryState — v3 card history (accumulation)', function () {
+  var NOW = '2026-10-03T13:10:00Z';
+  function pr(n, labels) {
+    return { number: n, title: 't' + n, labels: (labels || []).map(function (x) {
+        return { name: x };
+      }), head: { ref: 'b' + n, sha: 'sha' + n }, user: { login: 'bot' },
+      created_at: '2026-10-03T0' + n + ':00:00Z' };
+  }
+
+  test('first snapshot without prev: current state known, since-when unknown', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      prs: [pr(11, ['ai_pr_reviewed'])], runs: []
+    });
+    var h = st.lanes.review[0].history;
+    assert.equal(h.length, 1);
+    assert.equal(h[0].state, 'review');
+    assert.ok(!h[0].at, 'no lying timestamp before the tick can witness one');
+  });
+
+  test('new card between ticks: entry stamped with the tick time', function () {
+    var prev = { lanes: { pr_created: [] } };   // hasPrev, but card 12 unseen
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prev: prev,
+      prs: [pr(12, ['ai_pr_reviewed'])], runs: []
+    });
+    var h = st.lanes.review[0].history;
+    assert.equal(h.length, 1);
+    assert.equal(h[0].state, 'review');
+    assert.equal(h[0].at, NOW);
+  });
+
+  test('witnessed transition appends; earlier entries ride along', function () {
+    var prev = { lanes: {
+      pr_created: [{ pr: 13, labels: [], history: [{ state: 'pr_created' }] }],
+      review: []
+    } };
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prev: prev,
+      prs: [pr(13, ['ai_pr_reviewed'])], runs: []
+    });
+    var h = st.lanes.review[0].history;
+    assert.equal(h.length, 2);
+    assert.equal(h[0].state, 'pr_created');
+    assert.ok(!h[0].at, 'carried entry keeps its honest unknown start');
+    assert.equal(h[1].state, 'review');
+    assert.equal(h[1].at, NOW);
+  });
+
+  test('unchanged card keeps its history verbatim', function () {
+    var prev = { lanes: { review: [{ pr: 14, labels: ['ai_pr_reviewed'],
+      reviewedAt: '2026-10-03T09:00:00Z',
+      history: [{ state: 'pr_created' }, { state: 'review', at: '2026-10-03T09:00:00Z' }] }] } };
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prev: prev,
+      prs: [pr(14, ['ai_pr_reviewed'])], runs: []
+    });
+    assert.deepEqual(st.lanes.review[0].history, prev.lanes.review[0].history);
+  });
+
+  test('merged card appends merged_recent stamped with the exact merged_at', function () {
+    var prev = { lanes: { validating: [{ pr: 15,
+      labels: ['pr_approved', 'ai_validating'],
+      history: [{ state: 'pr_created' }, { state: 'validating', at: '2026-10-03T08:00:00Z' }] }] } };
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prev: prev,
+      mergedPrs: [{ number: 15, title: 't15', labels: [],
+        head: { ref: 'b15', sha: 'sha15' }, user: { login: 'bot' },
+        created_at: '2026-10-03T05:00:00Z', merged_at: '2026-10-03T09:30:00Z' }],
+      prs: [], runs: []
+    });
+    var h = st.lanes.merged_recent[0].history;
+    assert.equal(h.length, 3);
+    assert.equal(h[2].state, 'merged_recent');
+    assert.equal(h[2].at, '2026-10-03T09:30:00Z', 'GitHub field, not tick time');
+  });
+
+  test('merged card rebuilt tick-over-tick: terminal entry NOT duplicated (real timeline survives)', function () {
+    // merged cards are RE-DERIVED from the previous snapshot every tick
+    // while they sit in the 24h merged_recent window — the terminalAt
+    // path must not append a second merged_recent entry per tick, or
+    // HISTORY_CAP (24) evicts the card's real pipeline timeline within
+    // ~4h at the 10-min cadence.
+    var prev = { lanes: { validating: [{ pr: 17,
+      labels: ['pr_approved', 'ai_validating'],
+      history: [{ state: 'pr_created' },
+                { state: 'validating', at: '2026-10-03T08:00:00Z' }] }] } };
+    var merged = { number: 17, title: 't17', labels: [],
+      head: { ref: 'b17', sha: 'sha17' }, user: { login: 'bot' },
+      created_at: '2026-10-03T05:00:00Z', merged_at: '2026-10-03T09:30:00Z' };
+    var st = null;
+    for (var i = 0; i < 31; i++) {   // > HISTORY_CAP ticks in the window
+      st = fsModule.buildFactoryState({
+        repoInfo: { owner: 'o', repo: 'r' },
+        now: '2026-10-03T13:10:00Z',
+        prev: st || prev, mergedPrs: [merged], prs: [], runs: []
+      });
+    }
+    var h = st.lanes.merged_recent[0].history;
+    assert.deepEqual(h.map(function (e) { return e.state; }),
+      ['pr_created', 'validating', 'merged_recent'],
+      'real pipeline timeline must survive repeated ticks');
+    var terminals = h.filter(function (e) { return e.state === 'merged_recent'; });
+    assert.equal(terminals.length, 1, 'exactly one terminal entry');
+    assert.equal(terminals[0].at, '2026-10-03T09:30:00Z');
+  });
+
+  test('history is capped (snapshot cannot grow unbounded)', function () {
+    var long = [];
+    for (var i = 0; i < 40; i++) long.push({ state: 'review', at: NOW });
+    var prev = { lanes: { pr_created: [{ pr: 16, labels: [], history: long }] } };
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prev: prev,
+      prs: [pr(16, ['ai_pr_reviewed'])], runs: []
+    });
+    assert.ok(st.lanes.review[0].history.length <= 24, 'capped at 24');
+  });
+});
+
+// ── v3 — backlog (issue lanes) ───────────────────────────────────────────────
+
+suite('factoryState — v3 backlog (issue lanes)', function () {
+  var NOW = '2026-10-03T13:10:00Z';
+  function issue(n, labels, extra) {
+    return Object.assign({ number: n, title: 'issue ' + n,
+      labels: (labels || []).map(function (x) { return { name: x }; }),
+      user: { login: 'ba' }, html_url: 'http://issues/' + n }, extra || {});
+  }
+  var AI = 'ai-teammate';
+
+  function build(issues, opts) {
+    return fsModule.buildFactoryState(Object.assign({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      issues: issues, machineAuthor: AI, prs: [], runs: []
+    }, opts || {}));
+  }
+
+  test('blocked label wins over assignment and agent:dev (owner hold)', function () {
+    var st = build([issue(21, ['blocked', 'agent:dev'],
+      { assignees: [{ login: AI }] })]);
+    assert.deepEqual(st.backlog.blocked.map(function (c) { return c.issue; }), [21]);
+    assert.equal(st.backlogCounts.blocked, 1);
+    assert.deepEqual(st.backlogCounts.in_dev, 0);
+  });
+
+  test('assigned to the machine author → in_dev; agent:dev unlabeled → queued', function () {
+    var st = build([issue(22, ['agent:dev'], { assignees: [{ login: AI }] }),
+                    issue(23, ['agent:dev'])]);
+    assert.deepEqual(st.backlog.in_dev.map(function (c) { return c.issue; }), [22]);
+    assert.deepEqual(st.backlog.queued.map(function (c) { return c.issue; }), [23]);
+  });
+
+  test('unconfigured machineAuthor (null) → no assignment bucketing (no silent default)', function () {
+    // resolveMachineAuthor returns null on purpose when a deployment has
+    // no machineAuthor knob — that must NOT collapse into the hardcoded
+    // 'ai-teammate' login, or an issue assigned to a same-named user
+    // lands in "In dev · assigned" without the deployment opting in.
+    var st = build([issue(29, [], { assignees: [{ login: 'ai-teammate' }] })],
+      { machineAuthor: null });
+    assert.deepEqual(st.backlog.inbox.map(function (c) { return c.issue; }), [29],
+      'null knob = no assignment bucketing');
+    var optIn = build([issue(29, [], { assignees: [{ login: 'ai-teammate' }] })],
+      { machineAuthor: 'ai-teammate' });
+    assert.deepEqual(optIn.backlog.in_dev.map(function (c) { return c.issue; }), [29],
+      'explicit knob still buckets');
+  });
+
+  test('plain open issue → inbox; card carries title, assignee, labels, url', function () {
+    var st = build([issue(24, [], { assignees: [{ login: 'human' }],
+      title: 'inbox card' })]);
+    var c = st.backlog.inbox[0];
+    assert.equal(c.issue, 24);
+    assert.equal(c.title, 'inbox card');
+    assert.equal(c.assignee, 'human');
+    assert.equal(c.url, 'http://issues/24');
+    assert.equal(c.bucket, 'inbox');
+  });
+
+  test('agent:dev issues ALSO feed the development lane (single source)', function () {
+    var st = build([issue(25, ['agent:dev'], { assignees: [{ login: AI }] })]);
+    assert.deepEqual(st.lanes.development.map(function (c) { return c.issue; }), [25]);
+    assert.deepEqual(st.backlog.in_dev.map(function (c) { return c.issue; }), [25]);
+  });
+
+  test('ai_developed hands off: leaves development lane AND gets no machine bucket', function () {
+    var st = build([issue(26, ['agent:dev', 'ai_developed'])]);
+    assert.deepEqual(st.lanes.development, []);
+    assert.deepEqual(st.backlog.queued, [], 'ai_developed is PR-side now');
+    assert.deepEqual(st.backlog.inbox, []);
+  });
+
+  test('issue history accumulates over bucket changes (shared by lane + backlog)', function () {
+    var prev = { lanes: {}, backlog: { inbox: [
+      { issue: 27, labels: [], bucket: 'inbox', history: [{ state: 'inbox' }] }
+    ] } };
+    var st = build([issue(27, ['agent:dev'])], { prev: prev });
+    var hBacklog = st.backlog.queued[0].history;
+    assert.equal(hBacklog.length, 2);
+    assert.equal(hBacklog[0].state, 'inbox');
+    assert.equal(hBacklog[1].state, 'queued');
+    assert.equal(hBacklog[1].at, NOW);
+    assert.deepEqual(st.lanes.development[0].history, hBacklog,
+      'lane card and backlog card share one history');
+  });
+
+  test('no issues input → backlog present but empty (schema stable)', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prs: [], runs: []
+    });
+    assert.deepEqual(st.backlog, { in_dev: [], queued: [], blocked: [], inbox: [] });
+    assert.deepEqual(st.backlogCounts,
+      { in_dev: 0, queued: 0, blocked: 0, inbox: 0 });
+  });
+
+  test('backlog history capped identically', function () {
+    var long = [];
+    for (var i = 0; i < 40; i++) long.push({ state: 'inbox', at: NOW });
+    var prev = { backlog: { inbox: [{ issue: 28, labels: [], bucket: 'inbox',
+      history: long }] } };
+    var st = build([issue(28, [])], { prev: prev });
+    assert.ok(st.backlog.inbox[0].history.length <= 24);
+  });
+
+  test('backlog buckets cap at BACKLOG_CAP newest (snapshot bounded, counts honest)', function () {
+    // github_search_issues returns ONE page (no perPage) — an over-page
+    // repo truncates at the source, so the snapshot must present a
+    // bounded, self-consistent view: counts == what the snapshot holds.
+    var many = [];
+    for (var i = 1; i <= 60; i++) many.push(issue(i, []));
+    var st = build(many);
+    assert.equal(st.backlog.inbox.length, 50, 'capped per bucket');
+    assert.equal(st.backlogCounts.inbox, 50, 'counts match the snapshot');
+    assert.equal(st.backlog.inbox[0].issue, 11, 'oldest dropped…');
+    assert.equal(st.backlog.inbox[49].issue, 60, '…newest kept');
+  });
+});
+
+// ── v3 — tokens (optional per-leg usage) ─────────────────────────────────────
+
+suite('factoryState — v3 tokens (optional per-leg usage)', function () {
+  var NOW = '2026-10-03T13:10:00Z';
+  function pr(n) {
+    return { number: n, title: 't' + n, labels: [],
+      head: { ref: 'b' + n, sha: 'sha' + n }, user: { login: 'bot' },
+      created_at: '2026-10-03T06:00:00Z' };
+  }
+  var TOKENS = {
+    'pr-31': [
+      { leg: 'story_development', at: '2026-10-03T07:00:00Z',
+        prompt: 1000, completion: 500, total: 1500 },
+      { leg: 'pr_review', at: '2026-10-03T09:00:00Z',
+        prompt: 2000, completion: 800, total: 2800 }
+    ]
+  };
+
+  test('tokens map attaches to the matching PR card', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      prs: [pr(31), pr(32)], tokens: TOKENS, runs: []
+    });
+    var withT = st.lanes.pr_created.filter(function (c) { return c.pr === 31; })[0];
+    var without = st.lanes.pr_created.filter(function (c) { return c.pr === 32; })[0];
+    assert.equal(withT.tokens.length, 2);
+    assert.equal(withT.tokens[1].total, 2800);
+    assert.ok(!('tokens' in without), 'additive schema — unmatched cards stay clean');
+  });
+
+  test('token rows keyed by issue attach to backlog cards', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prs: [], runs: [],
+      machineAuthor: 'ai-teammate',
+      issues: [{ number: 33, title: 'i33', labels: [], user: { login: 'ba' },
+        html_url: 'http://issues/33', assignees: [{ login: 'ai-teammate' }] }],
+      tokens: { 'issue-33': [{ leg: 'dev', at: '2026-10-03T07:00:00Z',
+        prompt: 10, completion: 5, total: 15 }] }
+    });
+    assert.equal(st.backlog.in_dev[0].tokens.length, 1);
+  });
+
+  test('array-form tokens input (rows carry pr/issue fields) is normalized', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prs: [pr(34)], runs: [],
+      tokens: [{ pr: 34, leg: 'rework', at: '2026-10-03T08:00:00Z',
+        prompt: 1, completion: 2, total: 3 }]
+    });
+    var card = st.lanes.pr_created[0];
+    assert.equal(card.tokens.length, 1);
+    assert.equal(card.tokens[0].leg, 'rework');
+  });
+
+  test('rows sort by `at` ascending inside a key', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prs: [pr(35)], runs: [],
+      tokens: { 'pr-35': [
+        { leg: 'late', at: '2026-10-03T10:00:00Z', prompt: 1, completion: 1, total: 2 },
+        { leg: 'early', at: '2026-10-03T07:00:00Z', prompt: 1, completion: 1, total: 2 }
+      ] }
+    });
+    assert.equal(st.lanes.pr_created[0].tokens[0].leg, 'early');
+    assert.equal(st.lanes.pr_created[0].tokens[1].leg, 'late');
+  });
+});
+
+// ── v3 — readTokensFile (optional factory-published usage feed) ──────────────
+
+suite('factoryState — readTokensFile', function () {
+  test('parses the map from file content', function () {
+    var map = fsModule.readTokensFile('outputs/token_usage/factory_tokens.json',
+      function () { return '{"pr-31":[{"leg":"dev","at":"t","prompt":1,"completion":2,"total":3}]}'; });
+    assert.ok(map && map['pr-31'] && map['pr-31'][0].total === 3);
+  });
+
+  test('missing file / reader throws / invalid JSON → null (never fails the tick)', function () {
+    assert.equal(fsModule.readTokensFile('x', function () { throw new Error('nope'); }), null);
+    assert.equal(fsModule.readTokensFile('x', function () { return 'not json'; }), null);
+    assert.equal(fsModule.readTokensFile('x', function () { return '{"pr-1":42}'; }), null,
+      'map values must be arrays');
+    assert.equal(fsModule.readTokensFile(null, function () { return '{}'; }), null);
   });
 });
 
