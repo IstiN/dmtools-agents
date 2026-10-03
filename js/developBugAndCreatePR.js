@@ -217,10 +217,17 @@ function action(params) {
             } catch (cleanupErr) {
                 console.warn('Could not remove tracked Copilot session cache before checking status:', cleanupErr);
             }
-            cli_execute_command({ command: 'git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**"' });
+            // `:!factory-kit` — the factory workflow's kit step materializes a
+            // NESTED git repo at $GITHUB_WORKSPACE/factory-kit; staging that
+            // unstaged gitlink dies exit 128 and kills the whole bug/rework
+            // leg after a green dev run (same class as gh-1000 on the story
+            // flow, #648). Excluded like copilot-sessions; the status filter
+            // below skips its `?? factory-kit/` line too.
+            cli_execute_command({ command: 'git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**" ":!factory-kit" ":!factory-kit/**"' });
             const rawStatus = cli_execute_command({ command: 'git status --porcelain' }) || '';
             const statusLines = rawStatus.split('\n').filter(function(l) {
                 return l.trim() &&
+                       !/^(\?\?|A )\s+factory-kit(\/|$)/.test(l) &&
                        l.indexOf('Script started') === -1 &&
                        l.indexOf('Script done') === -1;
             });
