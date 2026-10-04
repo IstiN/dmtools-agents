@@ -17,6 +17,8 @@ dist/
 # local integration-testing credentials — never commit
 dmtools.env
 
+# dmtools runtime artifacts (credential traces, helper logs)
+.dmtools/*.log
 # machine-local fa/dmtools runtime artifacts — never commit (gh-628: the
 # timer auto-commit swept credential-helper.log onto ai/gh-628 three times;
 # these live next to COMMITTED .dmtools/config.js, so the dir stays tracked)
