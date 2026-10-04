@@ -1550,6 +1550,11 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedPrLabelAdds.length, 1);
         assert.equal(sm.capturedPrLabelAdds[0].number, 503, 're-arm lands on the linked issue');
         assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        // Owner directive 2026-10-04 changed the GUEST path only: the
+        // machine-author issue-linked re-arm stays exactly as it was — no
+        // PR-anchored agent:rework label ever lands on the PR itself.
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) { return a.number === 72; }),
+            'machine PR path unchanged — issue re-arm, no PR label');
     });
 
     test('fail_validation: branch-name fallback when the body lacks a closing keyword (fa pr-750)', function () {
@@ -1589,7 +1594,7 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
             'active stub-titled run for the same key blocks the re-dispatch');
     });
 
-    test('fail_validation: external PR (no linked issue) — report only', function () {
+    test('fail_validation: external PR (no linked issue) — report + PR-anchored rework arm', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: { items: [prItem(73, { labels: ['pr_approved', 'ai_validating'], author: 'ai-teammate', headSha: 'sha73' })],
                       pr: { number: 73, labels: ['pr_approved', 'ai_validating'], body: 'no link' } }
@@ -1597,18 +1602,24 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
 
         assert.equal(sm.capturedPrComments.length, 1);
-        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no issue to re-arm');
+        // 2026-10-04: no linked issue → the rework leg arms PR-ANCHORED
+        // (the #544 pr-<n> dispatch); the report-only branch used to leave
+        // these heads motionless until a human ticked the SM.
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number + ':' + a.labels.join(','); }),
+            ['73:agent:rework'], 'no issue to re-arm — agent:rework lands on the PR itself');
         assert.ok(sm.capturedPrComments[0].body.indexOf('Failed run') === -1,
             'EMPTY run list (mock default) → no link line — the report still posts, nothing crashes');
         assert.ok(!sm.capturedPrLabelRemoves.some(function (r) { return r.label === 'pr_approved'; }),
             'pr_approved is sticky even without a linked issue — approval survives CI red');
     });
 
-    test('fail_validation: GUEST PR (owner rule 2026-09-21) — report + PARK (validation_failed), never a rework arm', function () {
+    test('fail_validation: GUEST PR (owner rule 2026-09-21) — report + PARK (validation_failed) + PR-anchored rework (2026-10-04)', function () {
         // Guest = any account other than the machine login: they get review
         // + validation only. A guest 'Fixes #191' body must not arm rework on
         // a (possibly machine) linked issue; the ai/gh-<n> branch fallback is
-        // machine-only too.
+        // machine-only too. Owner directive 2026-10-04 SUPERSEDES the old
+        // 'never a rework arm' for VALIDATION-RED: the rework leg now arms
+        // PR-anchored so a red guest head never sits motionless.
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: {
                 items: [prItem(99, { labels: ['pr_approved', 'ai_validating'], branch: 'ai/gh-191', author: 'someguest', headSha: 'sha99' })],
@@ -1624,17 +1635,24 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
 
         assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.number + ':' + r.label; }),
             ['99:ai_validating'], 'ai_validating still disarms');
-        // dmtools-agents#1179 fix: guests now get the PARK LABEL — the
+        // dmtools-agents#1179 fix: guests get the PARK LABEL first — the
         // report-only branch used to leave the red guest as the OLDEST
         // validate-armed candidate (FIFO froze behind it, live fa
         // 2026-10-02: 11 manual mitigations in one night).
+        // Owner directive 2026-10-04: THEN agent:rework arms on the PR
+        // itself — the rework-on-label rule dispatches the pr-99 anchored
+        // leg; its fresh head clears the park via the #633 head-change
+        // reset and validate-armed re-runs CI.
         assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number + ':' + a.labels.join(','); }),
-            ['99:validation_failed'], 'GUEST PR parked via validation_failed');
+            ['99:validation_failed', '99:agent:rework'],
+            'GUEST PR parked via validation_failed, then rework armed PR-anchored (never on issue #191)');
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) { return a.number === 191; }),
+            "a guest 'Fixes #191' body must never arm rework on the machine issue — PR-anchored only");
         assert.equal(sm.capturedPrComments.length, 1);
         assert.ok(sm.capturedPrComments[0].body.indexOf('Guest PR') !== -1,
-            'the report tells the guest to fix and push');
-        assert.ok(sm.capturedPrComments[0].body.indexOf('re-runs automatically') !== -1,
-            'validation re-runs on their push — guests keep the validate leg');
+            'the report still addresses the guest');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('rework agent is armed') !== -1,
+            'the report says the rework agent is armed on the PR (2026-10-04)');
         assert.ok(sm.capturedPrComments[0].body.indexOf('Failed run: https://github.com/a/b/actions/runs/701') !== -1,
             'the GUEST report links its red run too (timed_out counts) — the guest sees WHERE it went red');
     });
@@ -1653,9 +1671,13 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedPrComments.length, 1, 'the report still posts');
         // With no machine login EVERY PR is a guest — the #1179 park label
         // is the guest treatment, so it fires here too (fail-closed applies
-        // to the machine-only rework arm, not to the guest park).
+        // to the machine-only ISSUE rework arm, not to the guest park).
+        // 2026-10-04: the guest PR-anchored rework arm is author-agnostic —
+        // it lands on the PR regardless, so the fail-closed posture loses
+        // nothing (the PR anchors its own rework leg).
         assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number + ':' + a.labels.join(','); }),
-            ['77:validation_failed'], 'guest park fires without a machine login');
+            ['77:validation_failed', '77:agent:rework'],
+            'guest park fires without a machine login, then rework arms PR-anchored');
     });
 });
 
@@ -1794,7 +1816,7 @@ suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', f
             return a.labels.indexOf('validation_failed') !== -1; }),
             'the standard fail path parks the red guest (dmtools-agents#1179)');
         assert.equal(sm.capturedPrComments.length, 1,
-            'the standard fail report posts (guest PR → report + park, no rework arm)');
+            'the standard fail report posts (guest PR → report + park + PR-anchored rework arm, 2026-10-04)');
         assert.ok(sm.capturedPrComments[0].body.indexOf('went red') !== -1,
             'the report says validation went red');
     });

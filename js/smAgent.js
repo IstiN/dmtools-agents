@@ -2171,9 +2171,17 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // PRs without a linked issue get the report only.
             // Owner rule 2026-09-21: auto-REWORK is machine-author-ONLY.
             // Accounts other than the machine login are guests: they get
-            // review + validation and NEVER a rework arm (they fix their
-            // own findings; the SM re-validates on their push). A guest
-            // "fixes #<n>" body must not arm rework on a machine ticket.
+            // review + validation and no rework arm on their own findings
+            // (they fix their own review findings; the SM re-validates on
+            // their push). A guest "fixes #<n>" body must not arm rework
+            // on a machine ticket.
+            // SUPERSEDED 2026-10-04 (owner directive, live: the
+            // report-only branch left red guest heads parked motionless
+            // until a human fired machine-sm.yml manually): VALIDATION-RED
+            // now arms rework for guests too — PR-anchored on the PR
+            // itself, never on a (possibly machine) linked issue. REVIEW
+            // findings on guests remain owner/coordinator-owned: the
+            // 2026-09-21 machine-only rule still holds everywhere else.
             try {
                 try {
                     github_remove_label({
@@ -2199,8 +2207,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // Fallback (live: fa pr-750 — body said "Fixes the Play Store
                     // rejection (gh-746)", no closing keyword): machine PRs carry
                     // the issue in the branch name (ai/gh-<n>). Guest branches
-                    // get nothing — the owner rule keeps auto-rework
-                    // machine-only, so the fallback must be too.
+                    // get nothing — issue RESOLUTION stays machine-only; a
+                    // guest's rework arm lands on the PR itself (below,
+                    // 2026-10-04), never on a machine issue.
                     if (!linked && ticket.branch) {
                         var bm = /(?:^|\/)gh-(\d+)$/i.exec(String(ticket.branch));
                         if (bm) linked = parseInt(bm[1], 10);
@@ -2227,8 +2236,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     ? ('⚠️ Validation CI went red on the head — merge aborted, rework re-queued.' +
                        (linked ? ' (linked issue #' + linked + ' re-armed)' : '') +
                        ' (approval latch kept — no re-review after fixes)')
-                    : '⚠️ Validation CI went red on the head. Guest PR: fix the findings and push — ' +
-                      'validation re-runs automatically; auto-rework is reserved for the machine account.')
+                    : '⚠️ Validation CI went red on the head. Guest PR: the rework agent is armed ' +
+                      'on this PR (owner directive 2026-10-04) — it fixes the findings and pushes; ' +
+                      'your own push re-runs validation just the same.')
                     + (failedRunsLine ? '\n' + failedRunsLine : '');
                 github_create_comment({
                     workspace: effectiveRepoInfo.owner,
@@ -2243,35 +2253,68 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         number: linked,
                         labels: ['agent:rework']
                     });
-                } else if (!isMachinePr) {
-                    // GUEST PRs get the validation_failed PARK LABEL
-                    // (dmtools-agents#1179 mirror, live fa 2026-10-02: 11
-                    // manual mitigations in one night — the report-only
-                    // branch left the PR eligible for validate-armed, which
-                    // re-selected it as the OLDEST approved candidate every
-                    // tick and froze the whole FIFO behind a red guest
-                    // head). The label is exactly what the sticky-park rule
-                    // would set; the un-park path (human push newer than
-                    // the park) clears it, so a guest fix still re-enters
-                    // validation. Machine PRs never get the label: their
-                    // rework cycle pushes a new head and validate-armed's
-                    // notLabels:[validation_failed] would lock them out of
-                    // the re-validation the rework exists for.
+                } else {
+                    if (!isMachinePr) {
+                        // GUEST PRs get the validation_failed PARK LABEL
+                        // (dmtools-agents#1179 mirror, live fa 2026-10-02: 11
+                        // manual mitigations in one night — the report-only
+                        // branch left the PR eligible for validate-armed, which
+                        // re-selected it as the OLDEST approved candidate every
+                        // tick and froze the whole FIFO behind a red guest
+                        // head). The label is exactly what the sticky-park rule
+                        // would set; the un-park path (human push newer than
+                        // the park) clears it, so a guest fix still re-enters
+                        // validation. Machine PRs never get the label: their
+                        // rework cycle pushes a new head and validate-armed's
+                        // notLabels:[validation_failed] would lock them out of
+                        // the re-validation the rework exists for.
+                        try {
+                            github_add_labels({
+                                workspace: effectiveRepoInfo.owner,
+                                repository: effectiveRepoInfo.repo,
+                                number: ticket.prNumber,
+                                labels: ['validation_failed']
+                            });
+                        } catch (eGuestPark) {
+                            console.warn('  ⚠️  guest park label failed: ' +
+                                (eGuestPark.message || eGuestPark));
+                        }
+                    }
+                    // Owner directive 2026-10-04 (supersedes the 2026-09-21
+                    // machine-only rework rule for VALIDATION-RED ONLY): a
+                    // red guest head must not sit parked and motionless
+                    // until a human ticks the SM (live: agents#696,
+                    // dart#342). Arm the rework leg PR-ANCHORED — the
+                    // rework-on-label rule dispatches the pr-<N> anchored
+                    // leg (see the #544 PR-only-anchor dispatch above), the
+                    // rework agent fixes the findings and pushes a NEW
+                    // head, and the park's head-change reset (dmtools-
+                    // agents#633: a head with no red verdict of its own is
+                    // never parked) clears validation_failed so
+                    // validate-armed re-runs CI on the fixed head. Also
+                    // covers machine PRs with NO linked issue (previously
+                    // report-only, equally stall-prone). Never lands on a
+                    // linked issue: that path stays machine-author-only.
+                    // Review findings on guests remain owner/coordinator-
+                    // owned — this arm is validation-red only.
                     try {
                         github_add_labels({
                             workspace: effectiveRepoInfo.owner,
                             repository: effectiveRepoInfo.repo,
                             number: ticket.prNumber,
-                            labels: ['validation_failed']
+                            labels: ['agent:rework']
                         });
-                    } catch (eGuestPark) {
-                        console.warn('  ⚠️  guest park label failed: ' +
-                            (eGuestPark.message || eGuestPark));
+                        console.log('  🔁 guest pr-' + ticket.prNumber +
+                            ' validation red — agent:rework armed on the PR (owner directive 2026-10-04)');
+                    } catch (eGuestRework) {
+                        console.warn('  ⚠️  guest rework arm failed: ' +
+                            (eGuestRework.message || eGuestRework));
                     }
                 }
                 console.log('  🔁 ' + key + ' validation failed — ' +
-                    (isMachinePr ? 'rework re-queued' + (linked ? ' (issue #' + linked + ')' : '')
-                                 : 'guest PR, parked (validation_failed) + reported'));
+                    (isMachinePr && linked ? 'rework re-queued (issue #' + linked + ')'
+                     : isMachinePr ? 'no linked issue — rework armed PR-anchored'
+                     : 'guest PR, parked (validation_failed) + agent:rework armed on the PR'));
                 processedKeys.push(key);
             } catch (e) {
                 console.error('  ❌ fail_validation failed for ' + key + ': ' + (e.message || e));

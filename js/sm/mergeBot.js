@@ -19,12 +19,17 @@
  * dispatches workflows, never arms labels beyond the two latches above —
  * it only CONCLUDES stages whose evidence is already on the PR.
  *
+ * One exception (owner rule 2026-10-04): a deferred approved PR with
+ * acted==0 at end-of-run fires a single machine-sm.yml tick (self-heal) —
+ * see the END-OF-RUN SELF-TICK block in action().
+ *
  * jsrunner contract: repo comes from params.jobParams.repo
  * ("owner/name") or GH_REPO; tools are the global snake_case bridge.
  */
 
 /* global github_list_prs, github_get_pr, github_get_commit_check_runs,
-   github_merge_pr, github_add_labels, github_remove_label */
+   github_list_workflow_runs, github_merge_pr, github_add_labels,
+   github_remove_label, cli_execute_command */
 
 function parseMcp(raw) {
     if (raw === null || raw === undefined) return {};
@@ -149,6 +154,7 @@ function action(params) {
     var prs = parseMcp(github_list_prs({ workspace: owner, repository: name, state: 'open' }));
     var list = Array.isArray(prs) ? prs : (prs.pullRequests || prs.items || []);
     var acted = 0;
+    var deferredApproved = false;
 
     // Oldest first — FIFO, same fairness as the SM's merge rule (#687).
     list.sort(function (a, b) { return (a.number || 0) - (b.number || 0); });
@@ -174,6 +180,7 @@ function action(params) {
             // for hours while the queue was healthy).
             if (approved && labels.indexOf('agent:review') === -1) {
                 say('⏳ pr-' + pr.number + ' approved — FIFO-queued (awaiting validate-armed turn)');
+                deferredApproved = true;
             }
             continue; // mid-review: SM owns it
         }
@@ -220,6 +227,27 @@ function action(params) {
                 say('✅ pr-' + pr.number + ' validated (no approval yet) — ai_validated latched, review follows');
                 acted++;
             } catch (e) { say('⚠️ pr-' + pr.number + ' latch failed: ' + (e.message || e)); }
+        }
+    }
+
+    // END-OF-RUN SELF-TICK (owner rule 2026-10-04; live: agents#696,
+    // dart#342 — the bot logged the defer line, exited acted:0, the repo
+    // went event-quiet, and the validate-armed turn never came until a
+    // human fired machine-sm.yml manually). A deferred approved PR with
+    // acted==0 means NOTHING consumed this turn and no action of ours will
+    // generate the events that re-drive the queue — fire ONE real SM tick
+    // so the oldest approved PR gets its validate-armed turn. Not fired
+    // when acted>0 (a merge/latch/unarm is motion — its events carry the
+    // conveyor) nor when no deferred-approved was seen (nothing waits on a
+    // turn). jobParams.selfTick=false disables the dispatch.
+    if (deferredApproved && acted === 0 && job.selfTick !== false) {
+        try {
+            cli_execute_command({
+                command: 'gh workflow run machine-sm.yml -F dryRun=false'
+            });
+            say('🔁 deferred approved → SM tick dispatched (self-heal)');
+        } catch (eTick) {
+            say('⚠️ self-tick dispatch failed: ' + ((eTick && eTick.message) || eTick));
         }
     }
 
