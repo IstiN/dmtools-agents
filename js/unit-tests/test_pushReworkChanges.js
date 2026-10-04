@@ -605,6 +605,77 @@ suite('pushReworkChanges.commitAndPush — base-branch safety invariant', functi
             'should push to the expected PR branch');
     });
 
+    test('rework commit never carries a CI-skip token, even when the template has one (gh-711)', function() {
+        // Live fa queue 2026-10-04 (gh-711, fa #1212/#1217/#1221/#1222/#1223/#1225):
+        // rework legs pushed fixes whose commit message carried [skip ci]
+        // (project-configured template, "correct" for CI-noise). On a
+        // validation-bound branch the push then triggered NO CI — the
+        // ruleset-required check never registered on the new head and
+        // mergeStateStatus stayed BLOCKED with green latches until a
+        // manual ci.yml dispatch. A rework push must always re-trigger CI.
+        var commands = [];
+        var mod = loadPushReworkChangesForCommitAndPush({
+            file_read: function(args) {
+                if (args.path.indexOf('pr_info.md') !== -1) {
+                    return '**Branch**: `bug/PROJ-123` → `develop`';
+                }
+                return null;
+            },
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+                if (args.command.indexOf('git ls-remote --heads origin bug/PROJ-123') === 0) {
+                    return 'abc123\trefs/heads/bug/PROJ-123\n';
+                }
+                return '';
+            }
+        });
+
+        var cfg = baseConfig({ formats: { commitMessage: {
+            rework: '{ticketKey} Rework: address PR review comments [skip ci]'
+        } } });
+        mod.commitAndPush('PROJ-123', cfg, {});
+
+        var commitCmd = commands.filter(function(c) { return c.indexOf('git commit') !== -1; })[0];
+        assert.ok(commitCmd, 'should commit when there are staged changes');
+        assert.notContains(commitCmd.toLowerCase(), 'skip ci',
+            'rework commit must not carry [skip ci] — the required check would never register on the new head');
+        assert.notContains(commitCmd.toLowerCase(), 'ci skip',
+            'rework commit must not carry [ci skip] either (same GitHub skip directive)');
+    });
+
+    test('CI-skip strip is case-insensitive and removes the whole bracket token (gh-711)', function() {
+        var commands = [];
+        var mod = loadPushReworkChangesForCommitAndPush({
+            file_read: function(args) {
+                if (args.path.indexOf('pr_info.md') !== -1) {
+                    return '**Branch**: `bug/PROJ-123` → `develop`';
+                }
+                return null;
+            },
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+                if (args.command.indexOf('git ls-remote --heads origin bug/PROJ-123') === 0) {
+                    return 'abc123\trefs/heads/bug/PROJ-123\n';
+                }
+                return '';
+            }
+        });
+
+        var cfg = baseConfig({ formats: { commitMessage: {
+            rework: '{ticketKey} Rework: address PR review comments [SKIP CI]'
+        } } });
+        mod.commitAndPush('PROJ-123', cfg, {});
+
+        var commitCmd = commands.filter(function(c) { return c.indexOf('git commit') !== -1; })[0];
+        assert.ok(commitCmd, 'should commit when there are staged changes');
+        assert.notContains(commitCmd.toLowerCase(), 'skip ci',
+            'upper-case [SKIP CI] must be stripped too — GitHub skip directives are case-insensitive');
+        assert.notContains(commitCmd, '[SKIP CI]',
+            'the bracket token must be removed entirely, not just lower-cased');
+    });
+
     test('refuses outright when pr_info.md is missing (no PR to push to)', function() {
         var mod = loadPushReworkChangesForCommitAndPush({
             file_read: function() { throw new Error('File does not exist'); }
