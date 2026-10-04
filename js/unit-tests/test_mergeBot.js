@@ -346,3 +346,99 @@ suite('mergeBot', function () {
         assert.equal(fx.calls.merges.length + fx.calls.adds.length + fx.calls.removes.length, 0);
     });
 });
+
+suite('mergeBot: red-holder diagnostic (owner directive 2026-10-04: red yields the slot)', function () {
+    // When an approved PR is deferred as FIFO-queued AND the ai_validating
+    // holder (approved scope) has a CONCLUDED-RED validation, the bot logs
+    // '🚨 pr-N holds slot with concluded-red validation — fail path should
+    // free it' — diagnostic ONLY, never an action. Live fa 11:0x: #1194
+    // held a concluded-red arm while #1215..#1223 queued 40+ min.
+
+    function multiPrFixture(prs) {
+        prs = prs || [];
+        var calls = { merges: [], adds: [], removes: [] };
+        var byNumber = {};
+        prs.forEach(function (p) { byNumber[p.number] = p; });
+        var byHead = {};
+        prs.forEach(function (p) { byHead[p.headSha] = p; });
+        var labelObjs = function (p) {
+            return (p.labels || []).map(function (n) { return { name: n }; });
+        };
+        var mods = {
+            github_list_workflow_runs: function () {
+                return JSON.stringify({ workflow_runs: [] });
+            },
+            github_list_prs: function () {
+                return JSON.stringify(prs.map(function (p) {
+                    return { number: p.number, labels: labelObjs(p), head: { sha: p.headSha } };
+                }));
+            },
+            github_get_pr: function (a) {
+                var p = byNumber[a.pullRequestId] || prs[0];
+                return JSON.stringify({
+                    number: p.number, state: 'OPEN', draft: false, mergeable: true,
+                    mergeable_state: p.mergeableState || 'clean',
+                    head: { sha: p.headSha }, labels: labelObjs(p)
+                });
+            },
+            github_get_commit_check_runs: function (a) {
+                var p = byHead[a.commitSha] || {};
+                return JSON.stringify({ check_runs: p.checkRuns || [] });
+            },
+            github_merge_pr: function (m) { calls.merges.push(m); return JSON.stringify({ merged: true }); },
+            github_add_labels: function (a) { calls.adds.push(a); return '{}'; },
+            github_remove_label: function (r) { calls.removes.push(r); return '{}'; }
+        };
+        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+        return { bot: bot, calls: calls };
+    }
+
+    var RED = [{ status: 'COMPLETED', conclusion: 'FAILURE' }];
+    var PENDING = [{ status: 'IN_PROGRESS', conclusion: null }];
+
+    test('FIFO-queued deferral + concluded-red holder → 🚨 line, diagnostic only', function () {
+        var fx = multiPrFixture([
+            { number: 1194, labels: ['pr_approved', 'ai_validating', 'ai_pr_reviewed'],
+              headSha: 'sha1194', checkRuns: RED },
+            { number: 1215, labels: ['pr_approved', 'ai_validated'], headSha: 'sha1215' },
+            { number: 1216, labels: ['pr_approved', 'ai_validated'], headSha: 'sha1216' }
+        ]);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+
+        var alarms = result.log.filter(function (l) {
+            return l.indexOf('holds slot with concluded-red validation') !== -1;
+        });
+        assert.equal(alarms.length, 1,
+            'exactly one alarm per run even with several queued PRs: ' + JSON.stringify(result.log));
+        assert.ok(alarms[0].indexOf('pr-1194') !== -1, 'the alarm names the HOLDER');
+        assert.equal(fx.calls.merges.length + fx.calls.adds.length + fx.calls.removes.length, 0,
+            'diagnostic only — the bot never unarms/dispatches (SM owns the fail path)');
+        assert.equal(result.acted, 0);
+        assert.equal(result.log.filter(function (l) { return l.indexOf('FIFO-queued') !== -1; }).length, 2,
+            'both queued PRs still get their operator line');
+    });
+
+    test('holder validation IN FLIGHT (pending) → no alarm', function () {
+        var fx = multiPrFixture([
+            { number: 1194, labels: ['pr_approved', 'ai_validating'],
+              headSha: 'sha1194', checkRuns: PENDING },
+            { number: 1215, labels: ['pr_approved', 'ai_validated'], headSha: 'sha1215' }
+        ]);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.ok(!result.log.some(function (l) {
+            return l.indexOf('concluded-red') !== -1;
+        }), 'an in-flight validation is not a concluded red — silence');
+    });
+
+    test('unapproved (dev-lane) holder → no alarm (mutexAmong parity)', function () {
+        var fx = multiPrFixture([
+            { number: 900, labels: ['ai_validating', 'ai_developed'],
+              headSha: 'sha900', checkRuns: RED },
+            { number: 1215, labels: ['pr_approved', 'ai_validated'], headSha: 'sha1215' }
+        ]);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.ok(!result.log.some(function (l) {
+            return l.indexOf('concluded-red') !== -1;
+        }), 'a dev-lane arm does not hold the merge-window slot (owner rule 2026-09-22, fa #801)');
+    });
+});

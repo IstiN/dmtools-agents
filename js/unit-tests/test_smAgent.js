@@ -43,6 +43,7 @@ function makeSmAgent(opts) {
     var capturedPrComments = [];
     var capturedEnvSets = [];
     var capturedScmConfigs = [];
+    var capturedIoCacheDrops = [];
 
     // Controlled file_read: config discovery paths from fileMap only; other paths from disk.
     var fileReadMock = function(readOpts) {
@@ -180,7 +181,15 @@ function makeSmAgent(opts) {
     // for close-on-merge (localAction) and PR-lifecycle (#687) rule tests.
     if (opts.github) {
         jiraSourceStub = {
-            query: function () { return opts.github.items; }
+            // items may be a FUNCTION (owner directive 2026-10-04 same-tick
+            // tests): called per rule query, returning that rule's live
+            // candidate list — models the engine's re-query after a
+            // mid-tick label mutation (ioCache drop).
+            query: function (rule, ctx) {
+                return typeof opts.github.items === 'function'
+                    ? opts.github.items(rule, ctx)
+                    : opts.github.items;
+            }
         };
         smMocks.github_close_issue = function (closeOpts) {
             capturedCloses.push(closeOpts);
@@ -239,6 +248,12 @@ function makeSmAgent(opts) {
                             return (opts.github && opts.github.prStatus) || null;
                         }
                     };
+                },
+                // ioCacheDrop spy (owner directive 2026-10-04): the same-tick
+                // slot-yield tests assert fail_validation/unarm drop the
+                // cached open-PR list after mutating labels.
+                ioCacheDrop: function (o, r, kind, id) {
+                    capturedIoCacheDrops.push({ owner: o, repo: r, kind: kind, id: id });
                 }
             },
             './factoryState.js': loadModule('js/factoryState.js', makeRequire({}), {}),
@@ -261,7 +276,8 @@ function makeSmAgent(opts) {
         capturedPrLabelRemoves: capturedPrLabelRemoves,
         capturedPrComments: capturedPrComments,
         capturedEnvSets: capturedEnvSets,
-        capturedScmConfigs: capturedScmConfigs
+        capturedScmConfigs: capturedScmConfigs,
+        capturedIoCacheDrops: capturedIoCacheDrops
     };
 }
 
@@ -1740,6 +1756,35 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
             'override MAX=1 with one prior arm (N=1 >= 1) → no agent:rework');
         assert.ok(sm.capturedPrComments[0].body.indexOf('rework attempts exhausted (1/1)') !== -1,
             'the report counts against the OVERRIDE max');
+    });
+
+    test('fail_validation: #701 × #703 composition — ONE guest report carries the guest-arm marker AND the red-head marker', function () {
+        // Review #703 blocker (semantic re-integration): the guest FIX cap
+        // (#701) and the red-head RE-VALIDATION history (#703) live on the
+        // SAME red and must appear in the SAME report — the guest cap arms
+        // the fix path, the red-head skip gates re-validation of a failed
+        // head. First guest red on a fresh head: arm 1/2 + red 1/3.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(96, { labels: ['pr_approved', 'ai_validating'], branch: 'feat/z', author: 'someguest', headSha: 'dead0096aa' })],
+                pr: { number: 96, labels: ['pr_approved', 'ai_validating'], body: 'guest fix' },
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
+
+        assert.equal(sm.capturedPrComments.length, 1, 'ONE composed report, not one per feature');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('🔁 guest rework arm 1/2 (owner directive 2026-10-04)') !== -1,
+            '#701 guest-arm marker present (fix-path cap)');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('🔴 red head dead0096aa — red 1/3') !== -1,
+            '#703 red-head marker present (re-validation cap) — recorded for guests too');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number + ':' + a.labels.join(','); }),
+            ['96:validation_failed', '96:agent:rework'],
+            'guest parked + fix arm fired — both features act on the same red');
+        // Machine-side marker text sanity: the red-head line matches the
+        // exact format the arm side's RED_HEAD_MARKER_RE re-reads.
+        assert.ok(/\uD83D\uDD34 red head ([0-9a-f]{7,40}) \u2014 red (\d+)\/(\d+)/
+            .test(sm.capturedPrComments[0].body), 'the marker line is machine-reparseable');
     });
 
     test('fail_validation: machineAuthor unconfigured — fail-closed, no rework arm at all', function () {
@@ -5174,5 +5219,464 @@ suite('smAgent: rerun_cancelled_checks (gh-682)', function () {
             'the remedy runs before any verdict rule can act on the dead head');
         assert.ok(own.index < byId['sweep-stale-validating'].index,
             'and before the 15-min sweep (cancelled conclusions never sweep, but order is belt-and-suspenders)');
+    });
+});
+suite('smAgent: red yields the slot (owner directive 2026-10-04)', function () {
+    // Live fa 11:0x: #1194 held ai_validating while its validations went
+    // red over and over (rework pushed WIP saves, re-arm, red, loop) and
+    // seven approved PRs (#1215..#1223) sat 'FIFO-queued' 40+ min. The
+    // directive: (1) a concluded red frees the validate slot in the SAME
+    // tick (fail-validation now runs BEFORE validate-armed and drops the
+    // open-PRs ioCache after unarming); (2) a head that already went red
+    // redHeadCap (default 3) times is never re-armed until a NEW head
+    // lands — counted via the 🔴 marker lines fail reports append (#701
+    // guest-rework-cap pattern); (3) the arm re-verifies the mutex at
+    // ACTION time on a live list (live fa 12:0x: #1194 + #1215 both held
+    // ai_validating after a manual strip — the query-time scan had read a
+    // stale list). jobParams.redHeadSkip=false is the escape hatch.
+
+    var RULES = {
+        fail: { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'red' },
+            localAction: 'fail_validation', limit: 10, id: 'fail-validation' },
+        validate: { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved'],
+                notLabels: ['ai_validating', 'validation_failed'],
+                notMergeState: ['BEHIND', 'DIRTY'], draft: false,
+                mutex: 'ai_validating', mutexAmong: ['pr_approved'] },
+            localAction: 'validate_pr', skipIfValidatedHead: true, redHeadSkip: true,
+            limit: 1, id: 'validate-armed', deferRedHead: true }
+    };
+
+    function prItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved'], issueNumber: null,
+            prNumber: n, draft: false };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    function redMarker(sha, n, cap) {
+        return '\uD83D\uDD34 red head ' + sha + ' \u2014 red ' + n + '/' + (cap || 3) +
+            ' (owner directive 2026-10-04: red yields the slot \u2014 after ' + (cap || 3) +
+            ' reds on the same head, validation waits for a NEW head)';
+    }
+
+    function runsCli(opts) {
+        return function (cmd) {
+            if (cmd.command.indexOf('actions/workflows/') !== -1 && cmd.command.indexOf('/runs?') !== -1) {
+                var m = /head_sha=([^&"]+)/.exec(cmd.command);
+                if (m && m[1] === opts.run.head_sha) {
+                    return JSON.stringify({ workflow_runs: [opts.run] });
+                }
+                return JSON.stringify({ workflow_runs: [] });
+            }
+            return '';
+        };
+    }
+
+    function dispatched(cmdList) {
+        return cmdList.some(function (c) { return c.command.indexOf('gh workflow run') === 0; });
+    }
+
+    test('fail_validation → same-tick arm of the NEXT candidate (mock sequence)', function () {
+        // One action() = one tick. The items() function models the engine's
+        // re-query per rule: rule 1 (fail-validation) sees the red armed
+        // #1194; rule 2 (validate-armed, which in sm_github.json now runs
+        // AFTER fail-validation) sees the post-unarm world where #1194 is
+        // disarmed and #1215 is the oldest eligible candidate.
+        var calls = 0;
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: function (rule) {
+                    calls++;
+                    if (rule.id === 'fail-validation') {
+                        return [prItem(1194, { labels: ['pr_approved', 'ai_validating'],
+                            author: 'ai-teammate', headSha: 'dead1194aa', branch: 'ai/gh-1194' })];
+                    }
+                    return [prItem(1215, { labels: ['pr_approved'], branch: 'feat/1215',
+                        headSha: 'dead1215aa', author: 'ai-teammate' })];
+                },
+                pr: { number: 1194, labels: ['pr_approved', 'ai_validating'],
+                      body: 'Fixes #1190 — the thing' },
+                // The action-time mutex probe reads this LIVE list: after
+                // the unarm nobody holds ai_validating → the arm proceeds.
+                prList: [
+                    { number: 1194, labels: [{ name: 'pr_approved' }], head: { sha: 'dead1194aa' } },
+                    { number: 1215, labels: [{ name: 'pr_approved' }], head: { sha: 'dead1215aa' } }
+                ],
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.fail, RULES.validate] } });
+
+        assert.equal(calls, 2, 'both rules queried in the same tick');
+        // Fail side: the red holder unarms and reports with the red marker.
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
+            return r.number === 1194 && r.label === 'ai_validating';
+        }), '#1194 releases the slot');
+        assert.ok(sm.capturedPrComments.some(function (c) {
+            return c.number === 1194 && c.body.indexOf(redMarker('dead1194aa', 1, 3)) !== -1;
+        }), 'report carries the 1/3 red-head marker');
+        // Same-tick yield: the per-tick open-PRs cache is dropped so the
+        // arm rule's mutex re-scan sees the freed slot THIS tick.
+        assert.ok(sm.capturedIoCacheDrops.some(function (d) {
+            return d.kind === 'openPrs' && d.owner === 'a' && d.repo === 'b';
+        }), 'fail_validation drops the openPrs ioCache after unarming');
+        // Arm side: the NEXT oldest candidate is armed + dispatched in the
+        // SAME action() run — no next-tick wait.
+        assert.ok(dispatched(sm.capturedCliCommands), '#1215 CI dispatched this tick');
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.number === 1215 && a.labels.join(',') === 'ai_validating';
+        }), '#1215 takes over the validate slot this tick');
+    });
+
+    test('validate-arm SKIPS a candidate whose head equals a recorded red head (cap reached)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(73, { labels: ['pr_approved'], branch: 'feat/73',
+                    headSha: 'dead0073aa', author: 'ai-teammate' })],
+                prComments: [
+                    { body: redMarker('dead0073aa', 1, 3) },
+                    { body: redMarker('dead0073aa', 2, 3) },
+                    { body: redMarker('dead0073aa', 3, 3) }
+                ]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.validate] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands),
+            'no CI burn on a head that already went red 3×');
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'no ai_validating arm — the slot advances to the next approved PR');
+    });
+
+    test('validate-arm arms the PR again after a NEW head lands', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(73, { labels: ['pr_approved'], branch: 'feat/73',
+                    headSha: 'dead0074aa', author: 'ai-teammate' })],
+                // sha73 burned out; the rework landed sha74 — a fresh head.
+                prComments: [
+                    { body: redMarker('dead0073aa', 1, 3) },
+                    { body: redMarker('dead0073aa', 2, 3) },
+                    { body: redMarker('dead0073aa', 3, 3) }
+                ]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.validate] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands),
+            'a genuinely new head re-enters validation');
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.number === 73 && a.labels.join(',') === 'ai_validating';
+        }), 'the arm lands on the fresh head');
+    });
+
+    test('jobParams.redHeadSkip=false disables the skip (escape hatch)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(73, { labels: ['pr_approved'], branch: 'feat/73',
+                    headSha: 'dead0073aa', author: 'ai-teammate' })],
+                prComments: [
+                    { body: redMarker('dead0073aa', 1, 3) },
+                    { body: redMarker('dead0073aa', 2, 3) },
+                    { body: redMarker('dead0073aa', 3, 3) }
+                ]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            redHeadSkip: false, rules: [RULES.validate] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands),
+            'the escape hatch keeps the old always-revalidate behavior');
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.number === 73 && a.labels.join(',') === 'ai_validating';
+        }), 'armed despite the recorded reds');
+    });
+
+    test('fail_validation records the per-head counter (prior 1/3 → new 2/3)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(72, { labels: ['pr_approved', 'ai_validating'],
+                    author: 'ai-teammate', headSha: 'dead0072aa', branch: 'ai/gh-71' })],
+                pr: { number: 72, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #71' },
+                prComments: [{ body: redMarker('dead0072aa', 1, 3) }]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.fail] } });
+
+        assert.equal(sm.capturedPrComments.length, 1, 'exactly one report');
+        assert.ok(sm.capturedPrComments[0].body.indexOf(redMarker('dead0072aa', 2, 3)) !== -1,
+            'the counter increments per head: 1/3 prior → 2/3 now');
+        // A DIFFERENT head's history must not leak into this one.
+        assert.ok(sm.capturedPrComments[0].body.indexOf('dead0999aa') === -1,
+            'per-head counting — other heads do not inflate the counter');
+    });
+
+    test('action-time mutex re-check: latch-skip arm REFUSED while another approved PR holds the slot (live fa 12:0x)', function () {
+        // The exact live double-arm: a manual strip left #1194 unarmed; the
+        // next tick's query-time mutex scan read a STALE cached list (no
+        // holder) and the latch-skip armed #1194 while #1215 already held
+        // ai_validating. The action-time probe re-reads the LIVE list and
+        // refuses the arm.
+        var greenRun = { status: 'completed', conclusion: 'success', head_sha: 'dead1194aa',
+            created_at: '2026-10-04T10:00:00Z', updated_at: '2026-10-04T10:05:00Z' };
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(1194, { labels: ['pr_approved', 'ai_validated'],
+                    branch: 'ai/gh-1194', headSha: 'dead1194aa', author: 'ai-teammate' })],
+                prStatus: { checkConclusion: 'green' },
+                // LIVE list: #1215 already holds the mutex (approved scope).
+                prList: [
+                    { number: 1194, labels: [{ name: 'pr_approved' }, { name: 'ai_validated' }],
+                      head: { sha: 'dead1194aa' } },
+                    { number: 1215, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }],
+                      head: { sha: 'dead1215aa' } }
+                ],
+                prComments: []
+            },
+            onCliExecute: runsCli({ run: greenRun })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.validate] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'NO second ai_validating holder — the one-validation invariant holds');
+        assert.ok(!dispatched(sm.capturedCliCommands), 'no dispatch either');
+    });
+
+    test('action-time mutex re-check: dispatch arm REFUSED behind an existing holder', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(1216, { labels: ['pr_approved'], branch: 'feat/1216',
+                    headSha: 'sha1216', author: 'ai-teammate' })],
+                prList: [
+                    { number: 1215, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }],
+                      head: { sha: 'dead1215aa' } },
+                    { number: 1216, labels: [{ name: 'pr_approved' }], head: { sha: 'sha1216' } }
+                ],
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.validate] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands), 'no CI dispatch behind a held mutex');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no arm — the holder keeps the slot');
+    });
+
+    test('action-time mutex re-check: dev-lane (unapproved) holder does NOT block the merge window', function () {
+        // mutexAmong parity: only APPROVED arms serialize validate-armed —
+        // an unapproved dev-lane ai_validating arm must not freeze the
+        // merge window (owner priority rule 2026-09-22, live fa #801).
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(1216, { labels: ['pr_approved'], branch: 'feat/1216',
+                    headSha: 'sha1216', author: 'ai-teammate' })],
+                prList: [
+                    { number: 900, labels: [{ name: 'ai_validating' }, { name: 'ai_developed' }],
+                      head: { sha: 'sha900' } },
+                    { number: 1216, labels: [{ name: 'pr_approved' }], head: { sha: 'sha1216' } }
+                ],
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.validate] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands),
+            'dev-lane arm is outside mutexAmong — the approved candidate proceeds');
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.number === 1216 && a.labels.join(',') === 'ai_validating';
+        }));
+    });
+
+    test('sm_github.json: fail-validation runs BEFORE validate-armed; #637 order invariant intact', function () {
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var idx = {};
+        rules.forEach(function (r, i) { idx[r.id] = i; });
+
+        assert.ok(idx['fail-validation'] < idx['validate-armed'],
+            'the red verdict frees the slot in the same tick the arm rule queries (owner directive 2026-10-04)');
+        // #637 rule-order invariant: rerun-cancelled-checks stays FIRST
+        // (gh-682: cancelled required checks re-run ahead of everything),
+        // and merge-validated still precedes sweep-stale-validating.
+        assert.equal(rules[0].id, 'rerun-cancelled-checks',
+            '#637/gh-682: rerun_cancelled_checks keeps the head of the list — only fail-validation moved');
+        assert.ok(idx['merge-validated'] < idx['sweep-stale-validating'],
+            '#637: merge-validated consumes a green arm before the sweeper can eat it');
+        assert.equal(rules[idx['validate-armed']].redHeadSkip, true,
+            'the arm rule carries the red-head skip flag');
+    });
+});
+
+suite('smAgent: empty rework-lap cap (owner finding 2026-10-04, live fa#1211)', function () {
+    // Lap-2 run 37196297279: the rework leg ran the FULL teammate cycle
+    // (~7m), closed the rework cycle 'success', uploaded the trace — and
+    // pushed ZERO fix commits (threads untouched, head unchanged). The
+    // machine believes it worked, so red→rework→red never ends. Backstop
+    // at the fail_validation re-arm: a red on the SAME head as the
+    // previous red = an EMPTY lap (counted via marker lines, #701
+    // pattern); after emptyLapMax (default 1, review #703 retune — was 2,
+    // dead code at redHeadCap=3 because the arm-side red-head skip kills
+    // the 4th same-head validation the old default needed; reachability:
+    // redHeadCap >= emptyLapMax + 2) the agent:rework arm is withheld,
+    // ONE owner-escalation comment is posted (review #703 ⚠️ — a capped PR
+    // must not exit the conveyor silently), and the report says a human
+    // owns the PR. Conveyor trace at the defaults (redHeadCap=3,
+    // emptyLapMax=1): red 1/3 arms → empty lap '1/1' (LAST CHANCE) arms →
+    // red 3/3 WITHHOLDS + escalates.
+
+    var RULES = {
+        fail: { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'red' },
+            localAction: 'fail_validation', limit: 10, id: 'fail-validation' }
+    };
+
+    function prItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved'], issueNumber: null,
+            prNumber: n, draft: false };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    function redMarker(sha, n, cap) {
+        return '\uD83D\uDD34 red head ' + sha + ' \u2014 red ' + n + '/' + (cap || 3) +
+            ' (owner directive 2026-10-04: red yields the slot \u2014 after ' + (cap || 3) +
+            ' reds on the same head, validation waits for a NEW head)';
+    }
+    function emptyLapMarker(sha, n, cap) {
+        return '\uD83C\uDF00 empty rework lap ' + n + '/' + (cap || 1) + ' \u2014 head ' + sha +
+            ' unchanged since the previous red (owner finding 2026-10-04)';
+    }
+
+    test('red again on the SAME head → empty lap 1/1 (LAST CHANCE) counted, arm still fires', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(1211, { labels: ['pr_approved', 'ai_validating'],
+                    author: 'ai-teammate', headSha: 'dead1211aa', branch: 'ai/gh-1210' })],
+                pr: { number: 1211, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #1210' },
+                // Previous red was ALSO on shaX — the lap in between moved nothing.
+                prComments: [{ body: redMarker('dead1211aa', 1, 3) }]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.fail] } });
+
+        assert.ok(sm.capturedPrComments[0].body.indexOf(emptyLapMarker('dead1211aa', 1, 1).substring(0, 40)) !== -1,
+            'the report counts the empty lap (1/1)');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('LAST CHANCE') !== -1,
+            'at cap 1 the lap line warns the NEXT same-head red withholds the arm');
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.number === 1210 && a.labels.join(',') === 'agent:rework';
+        }), 'below the cap the rework arm still fires — one more chance to move the head');
+    });
+
+    test('cap reached (1 prior empty lap, red 3/3) → rework arm WITHHELD + owner escalation, report says a human owns it', function () {
+        // The CONVEYOR-REACHABLE capped state (review #703 ⚠️): red 1/3
+        // armed, empty lap '1/1' (LAST CHANCE) armed, THIS fail is the 3rd
+        // red on the unchanged head — red 3/3, one prior empty-lap marker.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(1211, { labels: ['pr_approved', 'ai_validating'],
+                    author: 'ai-teammate', headSha: 'dead1211aa', branch: 'ai/gh-1210' })],
+                pr: { number: 1211, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #1210' },
+                prComments: [
+                    { body: redMarker('dead1211aa', 1, 3) },
+                    { body: redMarker('dead1211aa', 2, 3) },
+                    { body: emptyLapMarker('dead1211aa', 1, 1) }
+                ]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.fail] } });
+
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.join(',') === 'agent:rework';
+        }), 'NO rework arm — successful laps that push nothing must not loop forever');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('WITHHELD') !== -1,
+            'the report says the arm is withheld');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('human owns this PR') !== -1,
+            'ownership is handed to a human explicitly');
+        assert.ok(sm.capturedPrComments[0].body.indexOf(redMarker('dead1211aa', 3, 3)) !== -1,
+            'the red-head marker still records red 3/3 for the audit trail');
+        // Review #703 ⚠️: the capped PR must not exit the conveyor
+        // silently — ONE escalation comment naming the owner follows the
+        // report (#701 guest-cap marker style).
+        assert.equal(sm.capturedPrComments.length, 2, 'report + exactly one escalation comment');
+        assert.ok(sm.capturedPrComments[1].body.indexOf('@a') !== -1,
+            'the escalation @-mentions the owner');
+        assert.ok(sm.capturedPrComments[1].body.indexOf('needs a human') !== -1,
+            'the escalation says a human is needed');
+        assert.ok(sm.capturedPrComments[1].body.indexOf('empty-lap cap 1/1') !== -1,
+            'the escalation carries the cap state');
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
+            return r.number === 1211 && r.label === 'ai_validating';
+        }), 'the slot is still yielded — only the re-arm is withheld');
+    });
+
+    test('cap reached on a machine PR with NO linked issue → PR-anchored arm withheld too + escalation', function () {
+        // Composition gap (review #703 rebase): #701 arms UNLINKED machine
+        // PRs PR-anchored in the else branch — the empty-lap cap must gate
+        // that arm as well, not only the linked-issue arm.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(1211, { labels: ['pr_approved', 'ai_validating'],
+                    author: 'ai-teammate', headSha: 'dead1211aa', branch: 'ai/plain-branch' })],
+                pr: { number: 1211, labels: ['pr_approved', 'ai_validating'], body: 'no closing keyword' },
+                prComments: [
+                    { body: redMarker('dead1211aa', 1, 3) },
+                    { body: redMarker('dead1211aa', 2, 3) },
+                    { body: emptyLapMarker('dead1211aa', 1, 1) }
+                ]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.fail] } });
+
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.join(',') === 'agent:rework';
+        }), 'NO PR-anchored rework arm either — the cap bounds the machine loop regardless of linkage');
+        assert.ok(sm.capturedPrComments.some(function (c) {
+            return c.body.indexOf('@a') !== -1 && c.body.indexOf('needs a human') !== -1;
+        }), 'the owner escalation posts for the unlinked machine PR too');
+    });
+
+    test('head MOVED since the previous red → not an empty lap, normal re-arm', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(1211, { labels: ['pr_approved', 'ai_validating'],
+                    author: 'ai-teammate', headSha: 'beef1212aa', branch: 'ai/gh-1210' })],
+                pr: { number: 1211, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #1210' },
+                // Previous reds + empty laps were all on shaX; the head moved.
+                prComments: [
+                    { body: redMarker('dead1211aa', 3, 3) },
+                    { body: emptyLapMarker('dead1211aa', 1, 1) }
+                ]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.fail] } });
+
+        assert.ok(sm.capturedPrComments[0].body.indexOf('empty rework lap') === -1,
+            'a moved head is progress — no empty-lap line for the fresh head');
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.number === 1210 && a.labels.join(',') === 'agent:rework';
+        }), 'normal re-arm on a fresh head');
     });
 });

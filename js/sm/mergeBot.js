@@ -204,6 +204,38 @@ function action(params) {
     var acted = 0;
     var deferredApproved = false;
 
+    // Owner directive 2026-10-04 ("red yields the slot") — diagnostic only:
+    // once per run, when the first approved PR is deferred as FIFO-queued,
+    // probe whether the ai_validating holder's validation has CONCLUDED RED
+    // (an in-flight run reads 'pending' and stays silent). A red holder
+    // means the SM's fail-validation should have freed the slot — the line
+    // makes the starvation visible in the bot log (live fa 11:0x: #1194
+    // held a concluded-red arm while #1215..#1223 queued 40+ min). The bot
+    // itself NEVER acts on it (no unarm, no dispatch — SM-owned).
+    var redSlotProbed = false;
+    function noteRedSlotHolder(queuedNumber) {
+        if (redSlotProbed) return;
+        redSlotProbed = true;
+        try {
+            for (var h = 0; h < list.length; h++) {
+                var hp = list[h];
+                var hNum = (hp && (hp.number || hp.prNumber)) || 0;
+                var hLabels = labelNames(hp || {});
+                if (!hNum || hNum === queuedNumber) continue;
+                if (hLabels.indexOf('ai_validating') === -1) continue;
+                // mutexAmong parity: only APPROVED arms serialize this
+                // queue — a dev-lane arm does not hold the merge-window slot.
+                if (hLabels.indexOf('pr_approved') === -1) continue;
+                var hHead = hp.head && (hp.head.sha || hp.head);
+                if (!hHead) continue;
+                if (checksRollup(String(hHead), hp, job, owner, name) === 'red') {
+                    say('🚨 pr-' + hNum + ' holds slot with concluded-red validation — fail path should free it');
+                }
+                return; // one holder possible — probed, said or not
+            }
+        } catch (eRed) { /* diagnostic only — never fails the run */ }
+    }
+
     // Oldest first — FIFO, same fairness as the SM's merge rule (#687).
     list.sort(function (a, b) { return (a.number || 0) - (b.number || 0); });
 
@@ -229,6 +261,7 @@ function action(params) {
             if (approved && labels.indexOf('agent:review') === -1) {
                 say('⏳ pr-' + pr.number + ' approved — FIFO-queued (awaiting validate-armed turn)');
                 deferredApproved = true;
+                noteRedSlotHolder(pr.number);
             }
             continue; // mid-review: SM owns it
         }
