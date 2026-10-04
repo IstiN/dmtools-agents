@@ -96,6 +96,23 @@ jobs:
           echo "ref=${last_tag}" >> "$GITHUB_OUTPUT"
           echo "base ref: ${last_tag:-<none — first release, all agents>}"
 
+      - name: Sync to current main (queued runs release current main)
+        # The concurrency group serializes release runs, but actions/checkout
+        # gives each run its own TRIGGER SHA — a run queued behind another
+        # computed its affected set and version bumps from a ledger that
+        # pre-dated the previous run's ledger PR (live 2026-10-04, gh-690:
+        # three content PRs merged within 3 min → overlapping releases
+        # double-bumped sm_github/pr_review to 0.1.24 and cut the empty
+        # ledger PR #689). Reset to origin/main so base-tag...HEAD covers
+        # exactly the unreleased content ONCE, from the current ledger; a
+        # queued run that finds everything already released writes
+        # dist/.no-release and no-ops. Gated to push events — a manual
+        # dispatch may deliberately target a non-main ref.
+        if: github.event_name == 'push'
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
+
       - name: Build + validate affected agent packs
         id: build
         env:

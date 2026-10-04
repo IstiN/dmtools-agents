@@ -30,6 +30,12 @@ import { execSync } from 'node:child_process';
 // carry launch.json (+ loop/verdict.sh for review packs) inside the zip.
 import { launchExtras, mergeManifest } from './pack_launch_contract.cjs';
 
+// Release-guard classification (gh-690): versions.json is the version
+// LEDGER — data, not an agent. The old inline filter in allAgents() swept it
+// in as a phantom "versions" agent (a bogus ledger key plus a phantom
+// versions-<v>.zip in every release).
+import { agentNamesFromFiles, isLedgerFile } from './pack_release_guard.cjs';
+
 const ROOT = process.cwd();
 const VERSIONS_FILE = join(ROOT, 'versions.json');
 const OUT_DIR = arg('--out') || 'dist';
@@ -117,12 +123,10 @@ function readVersions() {
   return JSON.parse(readFileSync(VERSIONS_FILE, 'utf8'));
 }
 
-/** All root-level *.json entry points (agent names), excluding package*.json. */
+/** All root-level *.json entry points (agent names), excluding package*.json
+ *  and the versions.json ledger (gh-690 — see ci/pack_release_guard.cjs). */
 function allAgents() {
-  return readdirSync(ROOT)
-    .filter((f) => f.endsWith('.json') && !f.startsWith('package'))
-    .map((f) => basename(f, '.json'))
-    .sort();
+  return agentNamesFromFiles(readdirSync(ROOT));
 }
 
 /** Files changed since the base ref (last release tag), or all when none. */
@@ -151,6 +155,7 @@ function computeAffectedSet() {
 
   const affected = new Set();
   for (const file of changed) {
+    if (isLedgerFile(file)) continue; // ledger churn marks nothing affected (gh-690)
     if (file.endsWith('.json') && !file.includes('/') && !file.startsWith('package')) {
       affected.add(basename(file, '.json')); // a root entry config changed
     }

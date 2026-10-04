@@ -65,6 +65,5 @@
   "test_case_automation": "0.1.23",
   "test_cases_generator": "0.1.23",
   "unblock_resolved_dependencies": "0.1.23",
-  "workflow_failure_reporter": "0.1.23",
-  "versions": "0.1.23"
+  "workflow_failure_reporter": "0.1.23"
 }
