@@ -54,11 +54,13 @@ function makeTrackersModule(toolMocks) {
     };
 }
 
-function loadPushReworkChangesModule(fileMap) {
+function loadPushReworkChangesModule(fileMap, opts) {
+    opts = opts || {};
     var outputFiles = makeOutputFiles(fileMap);
     var replyCalls = [];
     var resolveCalls = [];
     var addCommentCalls = [];
+    var fetchDiscussionsCalls = [];
 
     var scm = {
         replyToThread: function(prId, thread, text) {
@@ -71,6 +73,12 @@ function loadPushReworkChangesModule(fileMap) {
             addCommentCalls.push({ prId: prId, text: text });
         }
     };
+    if (opts.fetchDiscussions) {
+        scm.fetchDiscussions = function(prId) {
+            fetchDiscussionsCalls.push(prId);
+            return opts.fetchDiscussions(prId);
+        };
+    }
 
     var noop = function() {};
     var mod = loadModule(
@@ -99,7 +107,10 @@ function loadPushReworkChangesModule(fileMap) {
         }
     );
 
-    return { mod: mod, scm: scm, replyCalls: replyCalls, resolveCalls: resolveCalls, addCommentCalls: addCommentCalls };
+    return {
+        mod: mod, scm: scm, replyCalls: replyCalls, resolveCalls: resolveCalls,
+        addCommentCalls: addCommentCalls, fetchDiscussionsCalls: fetchDiscussionsCalls
+    };
 }
 
 suite('pushReworkChanges — postThreadReplies field-name fallback', function() {
