@@ -17,6 +17,11 @@ function loadDevelopBugAndCreatePR(mocks) {
         cli_execute_command: function(args) {
             commands.push(args.command);
             if (args.command.indexOf('gh pr list --head ') === 0) return '';
+            if (args.command.indexOf('git check-ignore') === 0) {
+                // gh-683 probe: not-ignored repo — check-ignore exits 1,
+                // the exclusion pathspecs must stay in the staging add.
+                throw new Error('Command execution failed (exit code 1)');
+            }
             if (args.command === 'git status --porcelain') return 'A  outputs/rca.md\n';
             if (args.command === 'git branch --show-current') return 'main\n';
             return '';
@@ -266,7 +271,7 @@ suite('developBugAndCreatePR', function() {
         assert.contains(addCall, ':!.dmtools-session-output.log',
             'timer CLI-stdout snapshot never staged');
         var rmCalls = loaded.commands.filter(function(c) {
-            return c.indexOf('git rm -r --cached --ignore-unmatch') === 0;
+            return c.indexOf('git ls-files -- ') === 0;
         });
         assert.equal(rmCalls.length, 1, 'exactly one untrack-cleanup command');
         assert.contains(rmCalls[0], '.dmtools/credential-helper.log',
