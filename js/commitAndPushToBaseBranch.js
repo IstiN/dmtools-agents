@@ -28,6 +28,7 @@
 
 const { extractTicketKey } = require('./common/jiraHelpers.js');
 var configLoader = require('./configLoader.js');
+var gitStaging = require('./common/gitStaging.js');
 
 var _workingDir = null;
 function runCmd(args) {
@@ -102,8 +103,10 @@ function action(params) {
         }
 
         var message = (opts.commitMessage || 'Update {ticketKey} artifacts').split('{ticketKey}').join(ticketKey);
-        // `:!factory-kit` — nested machine-infra gitlink must not die on add -A (#648 class)
-        runCmd({ command: 'git add -A -- ":!factory-kit" ":!factory-kit/**"' });
+        // `:!factory-kit` — nested machine-infra gitlink must not die on add -A (#648 class).
+        // gh-1164: probe-filtered — naming an existing gitignored factory-kit in ANY
+        // pathspec (exclusions included) trips git add's ignored-pathspec guard.
+        runCmd({ command: 'git add -A -- ' + gitStaging.buildExclusionPathspecs(['factory-kit'], runCmd) });
         runCmd({ command: 'git commit -m "' + message.replace(/"/g, '\\"') + '" --no-verify' });
         runCmd({ command: 'git pull --rebase origin ' + baseBranch });
         runCmd({ command: 'git push origin HEAD:' + baseBranch });

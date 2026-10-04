@@ -145,13 +145,17 @@ function autoCommitAndPush(customParams, ticketKey) {
             // fails the whole add. The check-ignore probe below drops the
             // exclusion for every path git already ignores, so the timer's
             // WIP save can never die on the guard again.
+            // gh-1164 (live fa runs 37153882406 + 37220167230): `factory-kit`
+            // must go through the SAME probe — appended statically, it kept
+            // tripping the guard every 5 minutes for 40+ minutes whenever the
+            // kit was materialized AND gitignored, and the dev agent's work
+            // died uncommitted with the runner.
             command: 'git add -A -- ' + gitStaging.buildStagingPathspecs(function (args) {
                 return cli_execute_command({
                     command: args.command,
                     workingDirectory: workingDir
                 });
-            }) +
-                ' ":!factory-kit" ":!factory-kit/**"',
+            }, ['factory-kit']),
             workingDirectory: workingDir
         });
     } catch (e) {

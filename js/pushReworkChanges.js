@@ -262,10 +262,12 @@ function commitAndPush(ticketKey, config, customParams) {
     // drops exclusions for paths git already ignores — naming an existing
     // ignored-untracked path in an exclusion pathspec trips git add's
     // ignored-files guard and kills the leg.
+    // gh-1164: `factory-kit` is probe-filtered like the runtime artifacts —
+    // a static `:!factory-kit` exclusion trips git add's ignored-pathspec
+    // guard when the kit is materialized AND gitignored.
     cmd('git add . -- ' + gitStaging.buildStagingPathspecs(function (args) {
         return cmd(args.command);
-    }) +
-        ' ":!factory-kit" ":!factory-kit/**"');
+    }, ['factory-kit']));
 
     const status = prHelper.readStagedDiffStat(cmd, workingDir);
 

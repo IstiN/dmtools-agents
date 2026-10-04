@@ -404,6 +404,11 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                         staging = args.command;
                         throw new Error('staging probe reached');
                     }
+                    if (args.command.indexOf('git check-ignore') === 0 &&
+                        args.command.indexOf('factory-kit') !== -1) {
+                        // the nested machine-infra repo is NOT gitignored
+                        throw new Error('Command execution failed (exit code 1)');
+                    }
                     return base(args); // check-ignore returns '' → ignored → exclusion dropped
                 },
                 jira_post_comment: function () {},
@@ -572,6 +577,208 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
             'ticket is still reset for retry before the leg fails');
         assert.equal(comments.length, 1, 'the stage error comment is still posted');
         assert.contains(comments[0].comment, 'Git Operations');
+    });
+
+});
+
+// Loader for the landing-guard suite: real git helpers (so the flow reaches
+// the "No changes were made" path), overridable outputFiles (response.md
+// content) and feedbackLoop.resumeAgent (capture + scripted attempts).
+function loadForLandingGuard(mocks, opts) {
+    opts = opts || {};
+    var realPrHelper = loadModule('js/common/pullRequest.js', makeRequire({
+        './common/commentMarkup.js': commentMarkupModule,
+    }), {});
+    var resumeCalls = [];
+    var mod = loadModule(
+        'js/developTicketAndCreatePR.js',
+        makeRequire({
+            './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
+            './common/pullRequest.js': realPrHelper,
+            './common/submodules.js': { pushManagedSubmodules: function () { } },
+            './common/feedbackLoop.js': {
+                runQualityGates: function () { return { success: true }; },
+                runPolicyGates: function () { return { success: true }; },
+                runPostPublishGates: function () { return { success: true }; },
+                resumeAgent: function (options) {
+                    resumeCalls.push(options);
+                    return opts.resumeImpl ? opts.resumeImpl(options, resumeCalls.length)
+                        : { attempted: false, reason: 'attempts-exhausted' };
+                }
+            },
+            './common/autoStart.js': { triggerSmIfIdle: function () { } },
+            './common/outputFiles.js': {
+                readOutputFile: function () { return opts.responseMd === undefined ? null : opts.responseMd; }
+            },
+            './cacheToReleases.js': {},
+            './common/gitStaging.js': gitStagingModule,
+            './configLoader.js': configLoaderModule,
+            './config.js': configModule,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
+            './common/commentMarkup.js': commentMarkupModule
+        }),
+        Object.assign({
+            cli_execute_command: noChangesGitCommandMock('TS-20', 'ai/TS-20'),
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        }, mocks || {})
+    );
+    return { mod: mod, resumeCalls: resumeCalls };
+}
+
+var CLAIMS_CHANGES_RESPONSE = '### What changed\n' +
+    '- Part A — `js-apps` skill promoted: source of truth moved to `prompts/skills/js-apps/SKILL.md`.\n' +
+    '- Part B — render errors flow back to the authoring agent via `JsAppErrorChannel`.\n\n' +
+    '### How to verify\n```bash\ndart test test/skills\n```\n';
+
+suite('developTicketAndCreatePR > post-session landing guard (gh-1164)', function () {
+
+    test('empty tree + response claiming changes → resumeAgent called with the landing-guard promptOverride', function () {
+        // Live fa gh-1164 (run 37220167230): the previous leg's work never
+        // landed (timer autosave died on the staging guard every tick), and
+        // the resumed leg read session memory, mistook main's release tip
+        // for its own work commit, declared done and hit "No changes to
+        // commit" — review armed with no PR. response.md claimed changes;
+        // the branch carried none. The guard must resume the agent with an
+        // override explaining its changes never landed BEFORE the
+        // "No Code Changes Needed" comment path.
+        var comments = [];
+        var loaded = loadForLandingGuard({
+            jira_post_comment: function (args) { comments.push(args); }
+        }, {
+            responseMd: CLAIMS_CHANGES_RESPONSE,
+            resumeImpl: function (options, callCount) {
+                // First resume attempt "succeeds" — action() re-runs; on the
+                // second pass the attempts are exhausted → comment fallback.
+                return callCount === 1 ? { attempted: true, attempts: 1 }
+                    : { attempted: false, reason: 'attempts-exhausted' };
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-20', fields: { summary: 'lost work', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: CLAIMS_CHANGES_RESPONSE
+        });
+
+        assert.ok(loaded.resumeCalls.length >= 1, 'resumeAgent must be consulted');
+        var resume = loaded.resumeCalls[0];
+        assert.equal(resume.stage, 'development_landing_guard');
+        assert.ok(resume.promptOverride, 'a promptOverride must be passed (not the default failure prompt)');
+        assert.contains(resume.promptOverride, 'did not land in the git tree',
+            'the override names the root cause');
+        assert.contains(resume.promptOverride, 'Do not push',
+            'the override keeps the no-push contract');
+        assert.equal(result.path, 'no-changes-needed',
+            'after the resume cycle exhausts, the honest comment path still runs');
+        assert.ok(comments.some(function (c) { return c.comment.indexOf('No Code Changes Needed') !== -1; }),
+            'the no-changes comment is the documented fallback');
+    });
+
+    test('resume exhausted → falls back to the no-changes comment path', function () {
+        var comments = [];
+        var movedTo = [];
+        var loaded = loadForLandingGuard({
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); }
+        }, {
+            responseMd: CLAIMS_CHANGES_RESPONSE
+            // resumeImpl omitted → { attempted: false, reason: 'attempts-exhausted' }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-20', fields: { summary: 'lost work', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: CLAIMS_CHANGES_RESPONSE
+        });
+
+        assert.equal(loaded.resumeCalls.length, 1, 'exactly one resume consult');
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'no-changes-needed');
+        assert.ok(comments.some(function (c) { return c.comment.indexOf('No Code Changes Needed') !== -1; }),
+            'exhausted resume keeps the existing comment path');
+        assert.deepEqual(movedTo, ['In Review']);
+    });
+
+    test('empty tree + honest no-changes response → NO resume, comment path directly', function () {
+        var comments = [];
+        var loaded = loadForLandingGuard({
+            jira_post_comment: function (args) { comments.push(args); }
+        }, {
+            responseMd: 'The fix is already present in the target branch — no code changes are required.'
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-20', fields: { summary: 'already fixed', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: 'The fix is already present in the target branch.'
+        });
+
+        assert.equal(loaded.resumeCalls.length, 0,
+            'an honest "no changes needed" analysis must never trigger the landing guard');
+        assert.equal(result.path, 'no-changes-needed');
+        assert.equal(comments.length, 1);
+        assert.contains(comments[0].comment, 'No Code Changes Needed');
+    });
+
+    test('branch carrying work (dirty tree) + claims-changes response → NO resume', function () {
+        var loaded = loadForLandingGuard({
+            cli_execute_command: function (args) {
+                var command = args.command;
+                if (command.indexOf('gh pr list --head ai/TS-20') === 0) return '';
+                if (command === 'git branch --show-current') return 'ai/TS-20';
+                if (command === 'git diff --cached --stat') return '';
+                if (command.indexOf('git rev-list --count') === 0) return '0';
+                if (command === 'git status --porcelain') return ' M src/real_work.js\n';
+                return '';
+            }
+        }, {
+            responseMd: CLAIMS_CHANGES_RESPONSE
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-20', fields: { summary: 'work present', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: CLAIMS_CHANGES_RESPONSE
+        });
+
+        assert.equal(loaded.resumeCalls.length, 0,
+            'a branch that actually carries work must not trigger the guard');
+        assert.equal(result.path, 'no-changes-needed');
+    });
+
+    test('runtime-artifact / outputs status noise alone does not count as carried work', function () {
+        var loaded = loadForLandingGuard({
+            cli_execute_command: function (args) {
+                var command = args.command;
+                if (command.indexOf('gh pr list --head ai/TS-20') === 0) return '';
+                if (command === 'git branch --show-current') return 'ai/TS-20';
+                if (command === 'git diff --cached --stat') return '';
+                if (command.indexOf('git rev-list --count') === 0) return '0';
+                if (command === 'git status --porcelain') {
+                    return '?? .dmtools/fa-sessions/\n?? factory-kit/\n?? outputs/response.md\n';
+                }
+                return '';
+            }
+        }, {
+            responseMd: CLAIMS_CHANGES_RESPONSE
+        });
+
+        loaded.mod.action({
+            ticket: { key: 'TS-20', fields: { summary: 'noise only', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: {},
+            response: CLAIMS_CHANGES_RESPONSE
+        });
+
+        assert.equal(loaded.resumeCalls.length, 1,
+            'machine-local noise + the response.md claim itself must not satisfy the guard');
+        assert.equal(loaded.resumeCalls[0].stage, 'development_landing_guard');
     });
 
 });
