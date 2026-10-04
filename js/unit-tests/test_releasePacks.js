@@ -168,7 +168,9 @@ suite('release workflow wiring', function () {
 
     test('R2 guard 2: the empty-diff re-check runs after the checks finish, before merging', function () {
         var firstGuard = wf.indexOf('git diff --quiet HEAD origin/main -- versions.json');
-        var watch = wf.indexOf('gh pr checks');
+        // Anchor on the QUOTED command — the step commentary legitimately
+        // mentions the tool names and must not satisfy this invariant.
+        var watch = wf.indexOf('gh pr checks "${PR_NUM}" --watch');
         var secondGuard = nthIndexOf(wf, 'git diff --quiet HEAD origin/main -- versions.json', 2);
         var merge = wf.lastIndexOf('gh pr merge');
         assert.ok(watch !== -1 && watch > firstGuard,
