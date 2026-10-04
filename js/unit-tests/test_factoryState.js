@@ -39,18 +39,42 @@ suite('factoryState — lanes', function () {
     assert.equal(fsModule.laneOf({ labels: ['ai_validating'] }), 'validating');
   });
 
-  test('LANE_ORDER is the pipeline order (schema 2)', function () {
-    assert.deepEqual(fsModule.LANE_ORDER, ['development', 'pr_created', 'review',
-      'approved_queue', 'validating', 'merged_recent']);
+  test('active dispatched validation run on the PR head → pr_validation (gh-716 lane 2)', function () {
+    assert.equal(fsModule.laneOf({ labels: [], checks: { verdict: 'in_progress' } }), 'pr_validation');
+    assert.equal(fsModule.laneOf({ labels: [], checks: { verdict: 'queued' } }), 'pr_validation');
+    assert.equal(fsModule.laneOf({ labels: [], checks: { verdict: 'waiting' } }), 'pr_validation');
   });
 
-  test('LANE_ENTERED_AT maps every lane to its entering timestamp', function () {
+  test('machine labels win over an active validation run (review/approved/armed stay put)', function () {
+    assert.equal(fsModule.laneOf({ labels: [{ name: 'ai_pr_reviewed' }],
+      checks: { verdict: 'in_progress' } }), 'review');
+    assert.equal(fsModule.laneOf({ labels: [{ name: 'pr_approved' }],
+      checks: { verdict: 'queued' } }), 'approved_queue');
+    assert.equal(fsModule.laneOf({ labels: [{ name: 'ai_validating' }],
+      checks: { verdict: 'in_progress' } }), 'validating');
+  });
+
+  test('terminal or absent checks → pr_created', function () {
+    assert.equal(fsModule.laneOf({ labels: [], checks: { verdict: 'failure' } }), 'pr_created');
+    assert.equal(fsModule.laneOf({ labels: [], checks: { verdict: 'success' } }), 'pr_created');
+    assert.equal(fsModule.laneOf({ labels: [], checks: null }), 'pr_created');
+  });
+
+  test('LANE_ORDER is the pipeline order (schema 2; pr_validation between pr_created and review)', function () {
+    assert.deepEqual(fsModule.LANE_ORDER, ['development', 'pr_created', 'pr_validation',
+      'review', 'approved_queue', 'validating', 'merged_recent']);
+  });
+
+  test('LANE_ENTERED_AT maps every LABEL-stamped lane to its entering timestamp; pr_validation is derived (history fallback)', function () {
     assert.equal(fsModule.LANE_ENTERED_AT.development, 'devStartedAt');
     assert.equal(fsModule.LANE_ENTERED_AT.pr_created, 'prCreated');
     assert.equal(fsModule.LANE_ENTERED_AT.review, 'reviewedAt');
     assert.equal(fsModule.LANE_ENTERED_AT.approved_queue, 'approvedAt');
     assert.equal(fsModule.LANE_ENTERED_AT.validating, 'validatingAt');
     assert.equal(fsModule.LANE_ENTERED_AT.merged_recent, 'mergedAt');
+    // pr_validation mirrors an in-flight CI run, not a label — no dedicated
+    // timestamp; the board ages it from the card's newest history entry.
+    assert.equal(fsModule.LANE_ENTERED_AT.pr_validation, undefined);
   });
 });
 
@@ -124,6 +148,70 @@ suite('factoryState — buildFactoryState', function () {
     var st = build({ prs: [], runs: [] });
     assert.equal(st.counts.pr_created, 0);
     assert.deepEqual(st.lanes.validating, []);
+  });
+
+  test('PRs with an active dispatched run on the head and no machine labels → pr_validation lane (gh-716 lane 2)', function () {
+    var st = build({
+      prs: [
+        { number: 880, title: 'feat: a', labels: [],
+          head: { ref: 'ai/880', sha: 'sha880' }, user: { login: 'bot' },
+          created_at: '2026-10-01T12:00:00Z' },
+        { number: 881, title: 'feat: b', labels: [],
+          head: { ref: 'ai/881', sha: 'sha881' }, user: { login: 'bot' },
+          created_at: '2026-10-01T12:05:00Z' },
+        { number: 882, title: 'chore: idle', labels: [],
+          head: { ref: 'ai/882', sha: 'sha882' }, user: { login: 'bot' },
+          created_at: '2026-10-01T12:06:00Z' }
+      ],
+      runs: [
+        { event: 'workflow_dispatch', head_sha: 'sha880', status: 'in_progress',
+          created_at: '2026-10-01T12:01:00Z', html_url: 'http://run/880' },
+        { event: 'workflow_dispatch', head_sha: 'sha881', status: 'queued',
+          created_at: '2026-10-01T12:02:00Z', html_url: 'http://run/881' }
+      ]
+    });
+    // 2+ validating cards, FIFO-free order = PR number (multi-item case)
+    assert.deepEqual(st.lanes.pr_validation.map(function (c) { return c.pr; }), [880, 881]);
+    assert.equal(st.lanes.pr_validation[0].checks.verdict, 'in_progress');
+    assert.equal(st.lanes.pr_validation[0].checks.url, 'http://run/880');
+    assert.equal(st.lanes.pr_validation[1].checks.verdict, 'queued');
+    // no active run on the head → stays pr_created
+    assert.deepEqual(st.lanes.pr_created.map(function (c) { return c.pr; }), [882]);
+    assert.equal(st.counts.pr_validation, 2);
+    assert.equal(st.counts.pr_created, 1);
+  });
+
+  test('pr_validation history: pr_created → pr_validation transition is stamped against the previous snapshot', function () {
+    var prev = { lanes: { pr_created: [{ pr: 880, labels: [],
+      history: [{ state: 'pr_created', at: '2026-10-01T12:00:00Z' }] }] } };
+    var st = build({
+      prs: [{ number: 880, title: 't', labels: [],
+        head: { ref: 'ai/880', sha: 'sha880' }, user: { login: 'bot' },
+        created_at: '2026-10-01T12:00:00Z' }],
+      runs: [{ event: 'workflow_dispatch', head_sha: 'sha880', status: 'in_progress',
+        created_at: '2026-10-01T12:01:00Z', html_url: 'http://run/880' }],
+      prev: prev
+    });
+    var card = st.lanes.pr_validation[0];
+    assert.deepEqual(card.history.map(function (h) { return h.state; }),
+      ['pr_created', 'pr_validation']);
+    assert.equal(card.history[1].at, '2026-10-01T13:00:00Z',
+      'the transition is stamped at this tick');
+  });
+
+  test('pr_created card with a COMPLETED dispatched run stays pr_created (validation no longer in flight)', function () {
+    var st = build({
+      prs: [{ number: 883, title: 't', labels: [],
+        head: { ref: 'ai/883', sha: 'sha883' }, user: { login: 'bot' },
+        created_at: '2026-10-01T12:00:00Z' }],
+      runs: [{ event: 'workflow_dispatch', head_sha: 'sha883', status: 'completed',
+        conclusion: 'failure', created_at: '2026-10-01T12:01:00Z',
+        html_url: 'http://run/883' }]
+    });
+    assert.deepEqual(st.lanes.pr_validation, []);
+    assert.deepEqual(st.lanes.pr_created.map(function (c) { return c.pr; }), [883]);
+    assert.equal(st.lanes.pr_created[0].checks.verdict, 'failure',
+      'the failed verdict still rides the card as a red dot');
   });
 
   test('without a previous snapshot label timestamps stay null (honest unknowns)', function () {

@@ -59,6 +59,14 @@
 //
 //   development     issue-side: agent:dev on, ai_developed off (dev leg run)
 //   pr_created      open PR, no machine labels yet (was schema 1 `fresh`)
+//   pr_validation   CI validation IN FLIGHT on the PR head (a dispatched
+//                   run on the head is queued/in_progress, no machine labels
+//                   yet) — the real pipeline validates the fresh PR head
+//                   before/while review proceeds; without this lane the
+//                   board jumped pr_created → review with no visible
+//                   validation state (gh-716 lane 2). Derived, not
+//                   label-stamped: no LANE_ENTERED_AT entry — the board
+//                   ages the card from its newest history entry.
 //   review          ai_pr_reviewed, not approved
 //   approved_queue  pr_approved on, not armed (FIFO by PR number — the
 //                   same FIFO the mutex uses)
@@ -73,14 +81,22 @@ function hasLabel(pr, name) {
     });
 }
 
+// Run states that mean "validation in flight on this head" — mirrors the
+// active filter of buildFactoryState's headVerdict() (single source: a
+// state listed here but not there, or vice versa, would mislane cards).
+var ACTIVE_RUN_STATES = ['queued', 'in_progress', 'waiting', 'pending'];
+
 function laneOf(pr) {
     if (hasLabel(pr, 'ai_validating')) return 'validating';
     if (hasLabel(pr, 'pr_approved')) return 'approved_queue';
     if (hasLabel(pr, 'ai_pr_reviewed')) return 'review';
+    if (pr && pr.checks && ACTIVE_RUN_STATES.indexOf(pr.checks.verdict) !== -1) {
+        return 'pr_validation';
+    }
     return 'pr_created';
 }
 
-var LANE_ORDER = ['development', 'pr_created', 'review',
+var LANE_ORDER = ['development', 'pr_created', 'pr_validation', 'review',
                   'approved_queue', 'validating', 'merged_recent'];
 
 // Schema 1 lane order (board back-compat; old snapshots on the data branch).
@@ -94,6 +110,9 @@ var TS_BY_LABEL = {
 };
 
 // Lane → the timestamp that ENTERED the lane (the card's "age in state").
+// pr_validation is deliberately ABSENT: it mirrors an in-flight CI run,
+// not a label, so there is no accumulated stamp — the board ages those
+// cards from their newest history entry (same fallback as backlog columns).
 var LANE_ENTERED_AT = {
     development:   'devStartedAt',
     pr_created:    'prCreated',
@@ -488,7 +507,7 @@ function buildFactoryState(input) {
             queuePos: null,
             _now: now
         };
-        var lane = laneOf({ labels: card.labels });
+        var lane = laneOf({ labels: card.labels, checks: card.checks });
         mergeLabelTimestamps(card, pix.pr[pr.number], hasPrev);
         card.history = nextHistory(pix.pr[pr.number], pix.prLane[pr.number],
             lane, now, hasPrev);
@@ -766,6 +785,7 @@ module.exports = {
     tagOf: tagOf,
     laneOf: laneOf,
     hasLabel: hasLabel,
+    ACTIVE_RUN_STATES: ACTIVE_RUN_STATES,
     prevIndex: prevIndex,
     mergeLabelTimestamps: mergeLabelTimestamps,
     carryTimestamps: carryTimestamps,
