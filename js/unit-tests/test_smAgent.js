@@ -5245,7 +5245,15 @@ suite('smAgent: red yields the slot (owner directive 2026-10-04)', function () {
                 notMergeState: ['BEHIND', 'DIRTY'], draft: false,
                 mutex: 'ai_validating', mutexAmong: ['pr_approved'] },
             localAction: 'validate_pr', skipIfValidatedHead: true, redHeadSkip: true,
-            limit: 1, id: 'validate-armed', deferRedHead: true }
+            limit: 1, id: 'validate-armed', deferRedHead: true },
+        // Mirrors sm_github.json revalidate-armed: candidates SELF-HOLD
+        // ai_validating (the query requires it) and mutexExcludeSelf: true
+        // scopes the drain semantics (#577).
+        revalidate: { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                notMergeState: ['BEHIND', 'DIRTY'], checks: ['none', 'pending'], draft: false,
+                mutex: 'ai_validating', mutexAmong: ['pr_approved'], mutexExcludeSelf: true },
+            localAction: 'validate_pr', limit: 10, id: 'revalidate-armed' }
     };
 
     function prItem(n, extra) {
@@ -5498,6 +5506,85 @@ suite('smAgent: red yields the slot (owner directive 2026-10-04)', function () {
         assert.ok(sm.capturedPrLabelAdds.some(function (a) {
             return a.number === 1216 && a.labels.join(',') === 'ai_validating';
         }));
+    });
+
+    test('action-time mutex re-check honors mutexExcludeSelf: a SELF-HOLDING revalidate candidate drains a leaked stack (review #703 🚨 / fa#1068)', function () {
+        // 🚨 post-merge review finding on #703: the re-check blocked a
+        // self-holding revalidate-armed candidate on ANY other live holder —
+        // githubSource's exclude-self contract (blocked = !selfHolds &&
+        // otherHolds) inverted. Live freeze profile (fa#1068): approved
+        // #1068 + #1088 both hold ai_validating and the dispatched CI never
+        // ran; the verdict rules match nothing, validate-armed defers at
+        // query time, and revalidate-armed is the ONLY drain — it MUST fire
+        // on the self-holding candidate even while #1088 also holds.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(1068, { labels: ['pr_approved', 'ai_validating'],
+                    branch: 'ai/gh-1068', headSha: 'dead1068aa', author: 'ai-teammate' })],
+                // LIVE probe: the candidate self-holds AND a second approved
+                // PR holds — the leaked 2-holder stack.
+                prList: [
+                    { number: 1068, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }],
+                      head: { sha: 'dead1068aa' } },
+                    { number: 1088, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }],
+                      head: { sha: 'dead1088aa' } }
+                ],
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.revalidate] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands),
+            'self-holding candidate re-dispatches CI even with another live holder — the stack drains oldest-first');
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.number === 1068 && a.labels.join(',') === 'ai_validating';
+        }), 'the revalidate arm lands on the self-holder');
+    });
+
+    test('action-time mutex re-check honors mutexExcludeSelf: self as the ONLY live holder proceeds', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(1068, { labels: ['pr_approved', 'ai_validating'],
+                    branch: 'ai/gh-1068', headSha: 'dead1068aa', author: 'ai-teammate' })],
+                prList: [
+                    { number: 1068, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }],
+                      head: { sha: 'dead1068aa' } },
+                    { number: 1215, labels: [{ name: 'pr_approved' }], head: { sha: 'dead1215aa' } }
+                ],
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.revalidate] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands),
+            'the only holder is the candidate itself — nothing blocks the re-validation');
+    });
+
+    test('action-time mutex re-check honors mutexExcludeSelf: a candidate NOT holding the mutex still defers to another holder', function () {
+        // Mirror case (githubSource parity: blocked = !selfHolds &&
+        // otherHolds): the candidate's arm was stripped between the query
+        // and the action (manual unarm / racing fail_validation), so it no
+        // longer occupies its own slot — another live holder blocks it.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(1068, { labels: ['pr_approved', 'ai_validating'],
+                    branch: 'ai/gh-1068', headSha: 'dead1068aa', author: 'ai-teammate' })],
+                prList: [
+                    { number: 1068, labels: [{ name: 'pr_approved' }], head: { sha: 'dead1068aa' } },
+                    { number: 1088, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }],
+                      head: { sha: 'dead1088aa' } }
+                ],
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.revalidate] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands),
+            'no self-hold → the live holder keeps the slot');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no re-arm behind another holder');
     });
 
     test('sm_github.json: fail-validation runs BEFORE validate-armed; #637 order invariant intact', function () {
