@@ -37,6 +37,23 @@
         ]
       }
     ],
+    "pr_validation": [
+      {
+        "pr": 872,
+        "title": "feat(board): validation lane for in-flight PR heads",
+        "author": "ai-teammate",
+        "branch": "ai/gh-872",
+        "head": "aa10bb20cc30dd40ee50ff60aa70bb80cc90dd00",
+        "labels": [],
+        "checks": { "verdict": "in_progress", "at": "2026-10-03T11:52:00Z", "url": "https://example.com/run/872" },
+        "prCreated": "2026-10-03T11:45:00Z",
+        "queuePos": null,
+        "history": [
+          { "state": "pr_created", "at": "2026-10-03T11:45:00Z" },
+          { "state": "pr_validation", "at": "2026-10-03T11:52:00Z" }
+        ]
+      }
+    ],
     "review": [
       {
         "pr": 860,
@@ -134,7 +151,7 @@
       }
     ]
   },
-  "counts": { "development": 1, "pr_created": 1, "review": 1, "approved_queue": 1, "validating": 1, "merged_recent": 1 },
+  "counts": { "development": 1, "pr_created": 1, "pr_validation": 1, "review": 1, "approved_queue": 1, "validating": 1, "merged_recent": 1 },
   "backlog": {
     "in_dev": [
       {
