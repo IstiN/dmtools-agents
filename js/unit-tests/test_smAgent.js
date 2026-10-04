@@ -770,7 +770,11 @@ suite('smAgent: sm_github.json rule hygiene', function () {
         assert.equal(rule.query.threadsResolved, false,
             'the complement of review-threads-resolved — regardless of verdict staleness');
         assert.deepEqual(rule.query.labels, ['ai_pr_reviewed'], 'only reviewed PRs');
-        ['agent:rework', 'agent:review', 'ai_validating', 'pr_approved', 'validation_failed'].forEach(function (l) {
+        // gh-710: pr_approved is deliberately NOT excluded — an APPROVE
+        // verdict with unresolved threads deadlocks merge (BLOCKED
+        // conversation gate) without the rework arm. Pinned by the
+        // gh-710 test below; here only the remaining in-flight guards.
+        ['agent:rework', 'agent:review', 'ai_validating', 'validation_failed'].forEach(function (l) {
             assert.ok((rule.query.notLabels || []).indexOf(l) !== -1, 'excludes ' + l);
         });
 
