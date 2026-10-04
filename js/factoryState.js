@@ -620,7 +620,7 @@ function publishCommands(state, cfg, existingSha) {
     var put = 'gh api -X PUT repos/' + repo + '/contents/' + path +
         ' -f branch=' + branch +
         ' -f message=' + shellQuote('factory state — ' +
-            ((state.tick && state.tick.at) || '')) +
+            ((state.tick && state.tick.at) || '') + ' [skip ci]') +
         ' -f content="$(printf %s ' + shellQuote(json) + ' | base64)"';
     if (existingSha) {
         put += " -f sha=" + shellQuote(existingSha);
@@ -688,7 +688,8 @@ function snapshotPutCommand(state, cfg, stamp) {
     return 'gh api -X PUT repos/' + repo + '/contents/data/' + base + '-' +
         stamp + '.json' +
         ' -f branch=' + tagOf(cfg) +
-        ' -f message=' + shellQuote('factory state snapshot ' + stamp) +
+        ' -f message=' + shellQuote('factory state snapshot ' + stamp +
+            ' [skip ci]') +
         ' -f content="$(printf %s ' + shellQuote(json) + ' | base64)"';
 }
 
@@ -699,7 +700,7 @@ function historyPutCommand(state, cfg, index, existingSha) {
     var put = 'gh api -X PUT repos/' + repo + '/contents/' + path +
         ' -f branch=' + tagOf(cfg) +
         ' -f message=' + shellQuote('factory state history — ' +
-            ((state.tick && state.tick.at) || '')) +
+            ((state.tick && state.tick.at) || '') + ' [skip ci]') +
         ' -f content="$(printf %s ' + shellQuote(JSON.stringify(index)) +
         ' | base64)"';
     if (existingSha) {
