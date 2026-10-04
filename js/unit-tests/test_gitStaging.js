@@ -32,14 +32,18 @@ suite('gitStaging', function() {
             'shared list must contain every runtime artifact (incl. .dmtools/fa-sessions)');
     });
 
-    test('buildUntrackCommand untracks every artifact via --cached --ignore-unmatch', function() {
+    test('buildUntrackCommand names ONLY tracked artifacts — git ls-files scoped (gh-683)', function() {
         var cmd = gitStaging.buildUntrackCommand();
-        assert.ok(cmd.indexOf('git rm -r --cached --ignore-unmatch ') === 0,
-            'must be a --cached untrack (plain git rm refuses locally-appended logs)');
+        assert.ok(cmd.indexOf('git ls-files -- ') === 0,
+            'must enumerate candidates through git ls-files so untracked paths are never named to git rm');
         for (var i = 0; i < ALL_ARTIFACTS.length; i++) {
             assert.contains(cmd, ' ' + ALL_ARTIFACTS[i],
-                'untrack list must cover ' + ALL_ARTIFACTS[i]);
+                'untrack candidate list must cover ' + ALL_ARTIFACTS[i]);
         }
+        assert.contains(cmd, 'git rm -r --cached --ignore-unmatch -- "$p"',
+            'the rm stays --cached (plain git rm refuses locally-appended logs) and --ignore-unmatch');
+        assert.contains(cmd, 'while IFS= read -r p',
+            'a while-read pipeline: an empty ls-files result is a true exit-0 no-op (nothing tracked — the normal case)');
     });
 
     test('buildStagingPathspecs excludes every artifact, file and directory-content', function() {
@@ -49,6 +53,54 @@ suite('gitStaging', function() {
                 'staging pathspec must exclude ' + ALL_ARTIFACTS[i]);
             assert.contains(specs, '":!' + ALL_ARTIFACTS[i] + '/**"',
                 'staging pathspec must exclude ' + ALL_ARTIFACTS[i] + '/**');
+        }
+    });
+
+    test('buildStagingPathspecs(runner): paths git ALREADY ignores are never named — gh-683 ignored-pathspec guard', function() {
+        // Live fa run 37153405587 (fa gh-1206, 2026-10-03): `git add` runs its
+        // ignored-pathspec guard on `:!` EXCLUSION pathspecs too — naming a
+        // path that is gitignored and exists untracked kills the whole add
+        // with exit 1 ("The following paths are ignored ... Use -f if you
+        // really want to add them"). A repo whose .gitignore covers the
+        // runtime artifacts must therefore produce staging specs WITHOUT
+        // them: gitignore alone keeps `git add .` away.
+        var probeCalls = [];
+        var allIgnored = gitStaging.buildStagingPathspecs(function (args) {
+            probeCalls.push(args.command);
+            return ''; // check-ignore exit 0 = ignored — no throw
+        });
+        assert.equal(allIgnored, '',
+            'a repo that ignores every artifact needs no runtime pathspec at all');
+        assert.equal(probeCalls.length, ALL_ARTIFACTS.length,
+            'one check-ignore probe per artifact');
+
+        var someIgnored = gitStaging.buildStagingPathspecs(function (args) {
+            // credential-helper.log + fa-sessions ignored, the rest not
+            if (args.command.indexOf('.dmtools/credential-helper.log') !== -1 ||
+                args.command.indexOf('.dmtools/fa-sessions') !== -1) {
+                return '';
+            }
+            throw new Error('Command execution failed (exit code 1)');
+        });
+        assert.notContains(someIgnored, ':!.dmtools/credential-helper.log',
+            'ignored path must not be named (guard)');
+        assert.notContains(someIgnored, ':!.dmtools/fa-sessions',
+            'ignored path must not be named (guard)');
+        assert.contains(someIgnored, ':!.dmtools/fa-trace.log',
+            'not-ignored path keeps its exclusion (only defense in a repo without gitignore entries)');
+        assert.contains(someIgnored, ':!.dmtools-session-output.log',
+            'not-ignored path keeps its exclusion');
+    });
+
+    test('buildStagingPathspecs(runner): probe failure keeps the exclusion (fail conservative)', function() {
+        // A probe that itself errors (exit 128 — broken git, wrong dir)
+        // must degrade to the full static list, never to "no exclusions".
+        var specs = gitStaging.buildStagingPathspecs(function () {
+            throw new Error('Command execution failed (exit code 128)');
+        });
+        for (var i = 0; i < ALL_ARTIFACTS.length; i++) {
+            assert.contains(specs, '":!' + ALL_ARTIFACTS[i] + '"',
+                'probe failure keeps the exclusion for ' + ALL_ARTIFACTS[i]);
         }
     });
 
