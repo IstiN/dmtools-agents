@@ -794,6 +794,59 @@ suite('sm github source', function () {
         assert.equal(items[0].key, 'pr-61');
     });
 
+    test('pr rules: threadsResolved:false — unresolved threads on machine PRs match regardless of verdict staleness (gh-683)', function () {
+        // Live shape (fa #1194/#1211/#1212 + dart #340, 2026-10-04): all
+        // green+reviewed+validated with OPEN review threads — the exact
+        // complement of review-threads-resolved matched NOTHING and the
+        // 04:30 fa tick processed 0 of them. The false direction must
+        // match unresolved threads whether the verdict is stale or fresh:
+        //   91 unresolved + STALE verdict → match (staleVerdict would only
+        //      narrow back into the re-review rules' blind spot);
+        //   92 unresolved + verdict on the CURRENT head (fresh) → match
+        //      (a fresh verdict with open threads equally needs rework);
+        //   93 all threads resolved → no (review-threads-resolved owns it);
+        //   94 no threads at all → no (nothing to rework);
+        //   95 unresolved but guest-authored → no (auto-rework is
+        //      machine-only, fail-closed);
+        //   96 unresolved but ai_validating armed → no (merge window).
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 91, labels: [{ name: 'ai_pr_reviewed' }], head: { ref: 'ai/gh-91' }, draft: false,
+                      author: { login: 'ai-teammate' } },
+                    { number: 92, labels: [{ name: 'ai_pr_reviewed' }], head: { ref: 'ai/gh-92' }, draft: false,
+                      author: { login: 'ai-teammate' } },
+                    { number: 93, labels: [{ name: 'ai_pr_reviewed' }], head: { ref: 'ai/gh-93' }, draft: false,
+                      author: { login: 'ai-teammate' } },
+                    { number: 94, labels: [{ name: 'ai_pr_reviewed' }], head: { ref: 'ai/gh-94' }, draft: false,
+                      author: { login: 'ai-teammate' } },
+                    { number: 95, labels: [{ name: 'ai_pr_reviewed' }], head: { ref: 'feat/guest' }, draft: false,
+                      author: { login: 'human-contributor' } },
+                    { number: 96, labels: [{ name: 'ai_pr_reviewed' }, { name: 'ai_validating' }], head: { ref: 'ai/gh-96' }, draft: false,
+                      author: { login: 'ai-teammate' } }
+                ];
+            }
+        }, {}, {}, {}, {
+            91: { total: 2, resolved: 1, unresolved: 1 },
+            92: { total: 3, resolved: 1, unresolved: 2 },
+            93: { total: 2, resolved: 2, unresolved: 0 },
+            94: { total: 0, resolved: 0, unresolved: 0 }
+            // 95/96 never reach the thread guard (author/label filters)
+        });
+        var items = srcMod.query({
+            query: {
+                type: 'pr',
+                labels: ['ai_pr_reviewed'],
+                notLabels: ['agent:rework', 'agent:review', 'ai_validating', 'pr_approved', 'validation_failed'],
+                prMachineAuthor: true,
+                threadsResolved: false,
+                draft: false
+            }
+        }, { repoInfo: { owner: 'a', repo: 'b' }, machineAuthor: 'ai-teammate' });
+        assert.equal(items.map(function (i) { return i.key; }).join(','), 'pr-91,pr-92',
+            'unresolved threads match stale AND fresh verdicts; resolved/threadless/guest/validating do not');
+    });
+
     test('pr rules: review-stale-verdict-unchecked — validated+reviewed head with NO checks re-reviews (no green needed)', function () {
         // Live shape (flutter_agent_harness pr-1076/pr-1075, 2026-09-29): a
         // push (silent-update / rework) moved the head AFTER the review, so

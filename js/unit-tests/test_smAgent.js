@@ -597,6 +597,57 @@ suite('smAgent: localAction close_issue (github close-on-merge)', function () {
     });
 });
 
+suite('smAgent: localAction arm_rework (gh-683 unresolved review threads)', function () {
+
+    test('labels the PR agent:rework + explains in a comment; no workflow dispatched', function () {
+        // Live fa #1194/#1211/#1212 + dart #340 (2026-10-04): green +
+        // reviewed + validated machine PRs with OPEN review threads matched
+        // no rule (every re-review armer requires threadsResolved:true).
+        // arm_rework arms the PR label; rework-on-label (an existing rule)
+        // dispatches the leg and consumes the label — so this action must
+        // NOT dispatch anything itself.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1211', labels: ['ai_pr_reviewed'], issueNumber: null, prNumber: 1211,
+                      pr: { number: 1211, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true } }
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'unresolved review threads on a machine-authored reviewed PR -> arm agent:rework',
+            source: 'github',
+            query: {
+                type: 'pr',
+                labels: ['ai_pr_reviewed'],
+                notLabels: ['agent:rework', 'agent:review', 'ai_validating', 'pr_approved', 'validation_failed'],
+                prMachineAuthor: true,
+                threadsResolved: false,
+                draft: false
+            },
+            localAction: 'arm_rework',
+            limit: 5,
+            id: 'rework-unresolved-threads'
+        }]));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'exactly one label write');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 1211, 'the label lands on the PR');
+        assert.equal(sm.capturedPrLabelAdds[0].labels.join(','), 'agent:rework');
+        assert.equal(sm.capturedPrLabelAdds[0].workspace, 'epam', 'owner from rule context');
+        assert.equal(sm.capturedPrLabelAdds[0].repository, 'dmtools-dart', 'repo from rule context');
+        assert.equal(sm.capturedPrComments.length, 1, 'exactly one explanatory comment');
+        assert.contains(sm.capturedPrComments[0].body, 'Unresolved review threads',
+            'the comment states the reason (matches conflict_rework report style)');
+        assert.contains(sm.capturedPrComments[0].body, 'rework leg owns open threads',
+            'the comment states the owner-design mechanism');
+        assert.equal(sm.capturedTriggers.length, 0,
+            'no workflow dispatched — rework-on-label owns the dispatch (issue-anchored, PR-anchored fallback #544)');
+        assert.equal(sm.capturedCloses.length, 0, 'no issue churn');
+    });
+});
+
 suite('smAgent: sm_github.json rule hygiene', function () {
 
     test('every deployed github rule passes the validator (source + query + dispatch shape)', function () {
@@ -675,6 +726,52 @@ suite('smAgent: sm_github.json rule hygiene', function () {
         assert.equal(rule.limit, 1, 'one per tick — review-external-once pacing');
         assert.equal(rules.indexOf(rule), rules.indexOf(byId['review-external-once']) + 1,
             'sits right after review-external-once');
+    });
+
+    test('rework-unresolved-threads: gh-683 — unresolved threads arm agent:rework, disjoint from the re-review armers', function () {
+        // Live fa #1194/#1211/#1212 + dart #340 (2026-10-04): green +
+        // reviewed + validated machine PRs with OPEN threads, heads
+        // silently refreshed — the 04:30 fa tick processed 0 (every
+        // re-review armer requires threadsResolved:true; the complement
+        // matched nothing). This rule owns the complement.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+
+        var rule = byId['rework-unresolved-threads'];
+        assert.ok(rule, 'rework-unresolved-threads exists');
+        assert.equal(rule.localAction, 'arm_rework', 'a localAction — no direct dispatch');
+        assert.equal(rule.query.type, 'pr', 'PR carrier');
+        assert.equal(rule.query.prMachineAuthor, true,
+            'machine-author-gated (owner rule: auto-rework is machine-only, fail-closed)');
+        assert.equal(rule.query.threadsResolved, false,
+            'the complement of review-threads-resolved — regardless of verdict staleness');
+        assert.deepEqual(rule.query.labels, ['ai_pr_reviewed'], 'only reviewed PRs');
+        ['agent:rework', 'agent:review', 'ai_validating', 'pr_approved', 'validation_failed'].forEach(function (l) {
+            assert.ok((rule.query.notLabels || []).indexOf(l) !== -1, 'excludes ' + l);
+        });
+
+        // Disjointness from the re-review armers: they require
+        // threadsResolved:true, this rule false — one PR can never arm
+        // both. review-stale-verdict (the only armer without a threads
+        // guard) must exclude agent:rework so a reworked PR never stacks
+        // a re-review on top (same tick or the next).
+        var rsv = byId['review-stale-verdict'];
+        assert.ok(rsv, 'review-stale-verdict exists');
+        assert.ok((rsv.query.notLabels || []).indexOf('agent:rework') !== -1,
+            'review-stale-verdict defers while rework is armed (#683)');
+        var rtr = byId['review-threads-resolved'];
+        assert.equal(rtr.query.threadsResolved, true, 'the re-review armer stays on the true side');
+
+        // ORDER: after every re-review armer (a re-review, once armed via
+        // agent:review, defers this rule), before close-on-merge.
+        var lastArmer = Math.max.apply(null,
+            ['review-stale-verdict', 'review-threads-resolved', 'review-stale-verdict-unchecked']
+                .map(function (id) { return rules.indexOf(byId[id]); }));
+        var mine = rules.indexOf(rule);
+        assert.ok(mine > lastArmer, 'runs after the re-review armers');
+        assert.ok(mine < rules.indexOf(byId['close-on-merge']), 'before close-on-merge (end of file)');
     });
 });
 
