@@ -22,7 +22,7 @@ function query(rule, ctx) {
     // ({jiraProject}/{parentTicket} placeholders already resolved).
     var jql = (ctx && ctx.jql) || rule.jql;
     var tickets = jira_search_by_jql({ jql: jql, fields: ['key', 'labels'] }) || [];
-    return (Array.isArray(tickets) ? tickets : []).map(function (t) {
+    var items = (Array.isArray(tickets) ? tickets : []).map(function (t) {
         return {
             key: t.key,
             labels: t.labels || [],
@@ -31,6 +31,21 @@ function query(rule, ctx) {
             prNumber: null
         };
     });
+    // owner rule 2026-10-04: oldest first, always — the search API returns
+    // newest-first (REST default), which starves the oldest ticket under
+    // limit:1 rules. Jira key order == per-project creation order: sort by
+    // (project prefix, numeric suffix) so multi-project JQL keeps
+    // per-project FIFO. Same fairness fix as the GitHub source's
+    // issue/PR-number sorts and mergeBot's ascending list sort.
+    items.sort(function (a, b) {
+        var ka = String(a.key || ''), kb = String(b.key || '');
+        var pa = ka.replace(/\d+$/, ''), pb = kb.replace(/\d+$/, '');
+        if (pa !== pb) return pa < pb ? -1 : 1;
+        var na = parseInt((/(\d+)$/.exec(ka) || [0, '0'])[1], 10);
+        var nb = parseInt((/(\d+)$/.exec(kb) || [0, '0'])[1], 10);
+        return na - nb;
+    });
+    return items;
 }
 
 if (typeof module !== 'undefined' && module.exports) {

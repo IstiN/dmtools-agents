@@ -3,7 +3,7 @@
 
 function fixture(opts) {
     opts = opts || {};
-    var calls = { merges: [], adds: [], removes: [], comments: [] };
+    var calls = { merges: [], adds: [], removes: [], comments: [], cli: [] };
     var checkRuns = opts.checkRuns || [
         { status: 'COMPLETED', conclusion: 'SUCCESS' }
     ];
@@ -45,7 +45,14 @@ function fixture(opts) {
             return mergeResponses[Math.min(calls.merges.length - 1, mergeResponses.length - 1)];
         },
         github_add_labels: function (a) { calls.adds.push(a); return '{}'; },
-        github_remove_label: function (r) { calls.removes.push(r); return '{}'; }
+        github_remove_label: function (r) { calls.removes.push(r); return '{}'; },
+        // Self-tick (owner rule 2026-10-04): capture every cli dispatch;
+        // opts.cliThrows simulates a dead gh CLI for the failure path.
+        cli_execute_command: function (c) {
+            calls.cli.push(c);
+            if (opts.cliThrows) throw new Error(opts.cliThrows);
+            return '';
+        }
     };
     var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
     return { bot: bot, calls: calls, mods: mods, wfCalls: wfCalls, crCalls: crCalls };
@@ -221,6 +228,108 @@ suite('mergeBot', function () {
         assert.ok(result.log.some(function (l) {
             return l.indexOf('FIFO-queued') !== -1 && l.indexOf('pr-42') !== -1;
         }), 'the operator sees the PR is queued, not stuck: ' + JSON.stringify(result.log));
+        // Self-heal (owner rule 2026-10-04; live agents#696 + dart#342: the
+        // bot logged this defer line, exited acted:0, and the repo went
+        // event-quiet until a human fired machine-sm.yml). acted==0 + a
+        // deferred approved = nothing will produce the validate-armed turn
+        // → exactly ONE SM tick must be dispatched.
+        assert.equal(result.acted, 0);
+        assert.equal(fx.calls.cli.length, 1, 'exactly one self-tick dispatch');
+        assert.equal(fx.calls.cli[0].command,
+            'gh workflow run machine-sm.yml -F dryRun=false --repo a/b',
+            'the full machine-sm tick command line, verbatim — --repo scopes the ' +
+            'dispatch to the PR\u2019s repo (gh resolves the CWD\u2019s repo, wrong in multi-repo runners; review #701)');
+        // Review #701: the probe that guards the dispatch must be scoped to
+        // THIS repo's machine-sm.yml (not the CWD's).
+        assert.equal(fx.wfCalls[0].workflowId, 'machine-sm.yml', 'active-SM probe lists machine-sm.yml');
+        assert.equal(fx.wfCalls[0].workspace, 'a', 'active-SM probe is repo-scoped');
+        assert.equal(fx.wfCalls[0].repository, 'b', 'active-SM probe is repo-scoped');
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('🔁 deferred approved → SM tick dispatched (self-heal)') !== -1;
+        }), 'the dispatch is logged: ' + JSON.stringify(result.log));
+    });
+
+    test('self-tick: SM already active (machine-sm.yml in_progress/queued) -> NO dispatch', function () {
+        // Review #701 (tick-storm fix): during healthy waves every deferring
+        // bot run fired a fresh machine-sm.yml even while one was already
+        // draining the queue — the bot's own defer lines amplified into tick
+        // storms. An active run means the SM will consume the turn itself.
+        [['in_progress', 'in_progress'], ['queued', 'queued']].forEach(function (pair) {
+            var fx = fixture({
+                labels: ['pr_approved', 'ai_validated'],
+                workflowRuns: [{ id: 9, status: pair[0],
+                                 updated_at: new Date(Date.now() - 60 * 1000).toISOString() }]
+            });
+            var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+            assert.ok(result.log.some(function (l) {
+                return l.indexOf('FIFO-queued') !== -1;
+            }), pair[1] + ': the defer line still logs');
+            assert.equal(fx.calls.cli.length, 0, pair[1] + ' SM run active — no tick dispatched');
+            assert.ok(result.log.some(function (l) {
+                return l.indexOf('⏭️ self-tick skipped (SM already active)') !== -1;
+            }), pair[1] + ': the skip is logged: ' + JSON.stringify(result.log));
+        });
+    });
+
+    test('self-tick: zombie queued SM run (>6h stale) -> probe ignores it, dispatch fires', function () {
+        // smAgent parity (isStaleNonRunningWorkflowRun): a queued run older
+        // than 6h is a zombie superseded by its concurrency group — treating
+        // it as active would silently disable the self-heal forever.
+        var fx = fixture({
+            labels: ['pr_approved', 'ai_validated'],
+            workflowRuns: [{ id: 9, status: 'queued',
+                             updated_at: new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString() }]
+        });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(fx.calls.cli.length, 1, 'stale queued run does not block the tick');
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('SM tick dispatched') !== -1;
+        }));
+    });
+
+    test('self-tick: acted>0 (merge consumed the turn) -> NO dispatch', function () {
+        var fx = fixture({ labels: ['pr_approved', 'ai_validating', 'ai_pr_reviewed'] });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(result.acted, 1, 'the merge consumed the turn');
+        assert.equal(fx.calls.merges.length, 1);
+        assert.equal(fx.calls.cli.length, 0, 'a merge is motion — its events carry the conveyor, no tick');
+    });
+
+    test('self-tick: acted==0 but no deferred-approved -> NO dispatch', function () {
+        // Unapproved, unarmed, green-latch-less: nothing waits on a
+        // validate-armed turn, so there is nothing to self-heal.
+        var fx = fixture({ labels: ['ai_validated'] });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(result.acted, 0);
+        assert.ok(!result.log.some(function (l) { return l.indexOf('FIFO-queued') !== -1; }));
+        assert.equal(fx.calls.cli.length, 0, 'no deferred approved was seen — no tick');
+    });
+
+    test('self-tick: checks pending on an armed PR (acted==0, no defer) -> NO dispatch', function () {
+        var fx = fixture({ labels: ['ai_validating'], checkRuns: [{ status: 'IN_PROGRESS', conclusion: null }] });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(result.acted, 0);
+        assert.equal(fx.calls.cli.length, 0, 'pending CI is in-flight motion — no tick');
+    });
+
+    test('self-tick: jobParams.selfTick=false disables the dispatch', function () {
+        var fx = fixture({ labels: ['pr_approved', 'ai_validated'] });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', selfTick: false } });
+        assert.ok(result.log.some(function (l) { return l.indexOf('FIFO-queued') !== -1; }),
+            'the defer line still logs — only the dispatch is disabled');
+        assert.equal(fx.calls.cli.length, 0, 'selfTick=false → no SM tick');
+        assert.ok(!result.log.some(function (l) { return l.indexOf('SM tick dispatched') !== -1; }));
+    });
+
+    test('self-tick: dead gh CLI -> failure logged, run still succeeds', function () {
+        var fx = fixture({ labels: ['pr_approved', 'ai_validated'], cliThrows: 'gh: command not found' });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(fx.calls.cli.length, 1, 'the dispatch was attempted');
+        assert.equal(result.success, true, 'a failed self-tick never fails the bot run');
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('self-tick dispatch failed') !== -1 &&
+                   l.indexOf('gh: command not found') !== -1;
+        }), 'the failure is surfaced verbatim: ' + JSON.stringify(result.log));
     });
 
     test('unapproved without arm -> still silent (pre-review, SM owns it)', function () {
