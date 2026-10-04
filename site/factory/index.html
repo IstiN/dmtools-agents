@@ -5,16 +5,27 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Factory Board</title>
   <!--
-    Factory Board v2 (owner 2026-10-01) — deploy anywhere (GitHub Pages,
+    Factory Board v3 (owner 2026-10-03) — deploy anywhere (GitHub Pages,
     Cloudflare Pages, fa1.dev). Zero build, zero tokens: the board reads
     factory-state snapshots published by each factory's SM tick to its
     repo's `factory-data` branch (raw.githubusercontent CDN links).
-    Schema 1 and schema 2 snapshots both render.
+    Schema 1, schema 2 and the v3 additions (card history, backlog,
+    optional tokens) all render — additive schema, old snapshots never
+    break it.
+
+    v3 surfaces: readable per-lane summaries + progress bars, a click-to-
+    open details drawer (state history, per-state timings, per-leg token
+    table), and the issue backlog lanes fed by the same snapshots.
 
     DEPLOY:
       1. Copy this folder.
-      2. Edit config.js — factories[] + lanes (all knobs live there).
+      2. Edit config.js — factories[] + lanes + backlogColumns (all knobs
+         live there).
       3. Style: edit styles.css :root variables (or data-theme overrides).
+
+    DEV: append ?fixture=visual-check/fixture.json to render a bundled
+    sample snapshot (deterministic visual-check screenshots, no network);
+    ?drawer=pr-817 deep-links the details drawer.
   -->
   <script>
     (function () {
@@ -71,12 +82,18 @@
     <section class="statusline" id="statusline" hidden>
       <span class="pill" id="tick-pill">tick: —</span>
       <span class="pill" id="counts-pill"></span>
+      <span class="pill" id="backlog-pill"></span>
       <span class="pill" id="repo-pill"></span>
       <span class="pill" id="schema-pill">schema 2</span>
     </section>
     <div class="lanes" id="lanes"></div>
+    <section class="backlog" id="backlog" aria-label="issue backlog"></section>
     <p class="error" id="error" hidden></p>
   </main>
+
+  <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+  <aside class="drawer" id="drawer" hidden aria-label="details drawer"
+         role="dialog" aria-modal="false"></aside>
 
   <footer class="foot">
     <span id="foot-note">states are what the machine decided — snapshot from the SM tick · timestamps accumulate tick-over-tick</span>

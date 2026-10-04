@@ -17,6 +17,7 @@ var prHelper = require('./common/pullRequest.js');
 var feedbackLoop = require('./common/feedbackLoop.js');
 var autoStart = require('./common/autoStart.js');
 var outputFiles = require('./common/outputFiles.js');
+var gitStaging = require('./common/gitStaging.js');
 const { GIT_CONFIG, STATUSES, LABELS, resolveStatuses } = require('./config.js');
 var cacheToReleases = require('./cacheToReleases.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
@@ -226,13 +227,21 @@ function commitAndPush(ticketKey, config, customParams) {
     });
 
     try {
-        cmd('git rm -r --ignore-unmatch .dmtools/copilot-sessions');
+        // gh-628: untrack machine-local runtime logs carried by
+        // already-poisoned branches (a broad add swept the credential
+        // helper's serving trace onto ai/gh-628); the staging pathspec
+        // below keeps them out going forward. Shared canonical list:
+        // js/common/gitStaging.js.
+        cmd(gitStaging.buildUntrackCommand());
     } catch (cleanupErr) {
         console.warn('Could not remove tracked Copilot session cache before staging:', cleanupErr);
     }
 
     // `:!factory-kit` — nested machine-infra gitlink must not kill rework staging (#648 class)
-    cmd('git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**" ":!factory-kit" ":!factory-kit/**"');
+    // `:!.dmtools/...` runtime logs (gh-628) — excluded by pathspec because
+    // they live next to COMMITTED .dmtools/ files.
+    cmd('git add . -- ' + gitStaging.buildStagingPathspecs() +
+        ' ":!factory-kit" ":!factory-kit/**"');
 
     const status = prHelper.readStagedDiffStat(cmd, workingDir);
 

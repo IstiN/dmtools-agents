@@ -2090,16 +2090,25 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     }));
                     spMerged = Array.isArray(spM) ? spM : [];
                 } catch (eMerged) { /* merged lane empty this tick */ }
-                var spDevs = [];
+                // v3: ALL open issues in one search call — feeds both the
+                // development lane (agent:dev) and the backlog section
+                // (in_dev / queued / blocked / inbox, see factoryState).
+                var spIssues = [];
                 try {
                     var spD = mcpParse(github_search_issues({
-                        query: 'repo:' + spFull +
-                               ' is:issue is:open label:' +
-                               factoryStateModule.DEV_LABEL
+                        query: 'repo:' + spFull + ' is:issue is:open'
                     }));
-                    spDevs = Array.isArray(spD) ? spD :
+                    spIssues = Array.isArray(spD) ? spD :
                         ((spD && (spD.items || spD.data)) || []);
-                } catch (eDevs) { /* development lane empty this tick */ }
+                } catch (eDevs) { /* development + backlog empty this tick */ }
+                // v3: OPTIONAL per-leg token usage — factories whose legs
+                // report usage (fa's bench) drop a keyed JSON file in the
+                // tick's checkout (statePublish.tokensFile); any miss just
+                // publishes token-less cards (board renders "—").
+                var spTokens = factoryStateModule.readTokensFile(
+                    (spCfg && spCfg.tokensFile) ||
+                        factoryStateModule.DEFAULT_TOKENS_FILE,
+                    function (p) { return file_read({ path: p }); });
                 var spPrev = factoryStateModule.fetchPreviousState(
                     spFull, spCfg, function (a) {
                         return cli_execute_command(a);
@@ -2108,7 +2117,10 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     repoInfo: spRepo,
                     prs: spPrList,
                     mergedPrs: spMerged,
-                    devIssues: spDevs,
+                    issues: spIssues,
+                    machineAuthor: machineAuthorModule.resolveMachineAuthor(
+                        RUN_JOB_PARAMS, effectiveConfig),
+                    tokens: spTokens,
                     runs: spRunList,
                     checkNames: validationCheckNames() || [],
                     prev: spPrev,

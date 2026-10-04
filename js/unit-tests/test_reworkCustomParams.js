@@ -2,6 +2,7 @@
  * Unit tests for rework post-actions merging project jobParamPatches.
  */
 var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+var gitStagingModule = loadModule('js/common/gitStaging.js');
 
 
 /**
@@ -31,6 +32,7 @@ function loadPushReworkChanges() {
         'js/pushReworkChanges.js',
         makeRequire({
             './config.js': configModule,
+            './common/gitStaging.js': gitStagingModule,
             './configLoader.js': configLoaderModule,
             './common/scm.js': { createScm: function() { return {}; } },
             './common/submodules.js': {},
@@ -84,6 +86,7 @@ function loadPushReworkChangesForAction(mocks) {
         'js/pushReworkChanges.js',
         makeRequire({
             './config.js': configModule,
+            './common/gitStaging.js': gitStagingModule,
             './configLoader.js': configLoaderModule,
             './common/scm.js': {
                 createScm: function() {
@@ -141,6 +144,7 @@ function loadPostTestReworkResults() {
         'js/postTestReworkResults.js',
         makeRequire({
             './config.js': configModule,
+            './common/gitStaging.js': gitStagingModule,
             './configLoader.js': configLoaderModule,
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
             './common/feedbackLoop.js': {},

@@ -23,6 +23,7 @@ const { LABELS, resolveStatuses } = require('./config.js');
 const developTicket = require('./developTicketAndCreatePR.js');
 const commentMarkup = require('./common/commentMarkup.js');
 const outputFiles = require('./common/outputFiles.js');
+const gitStaging = require('./common/gitStaging.js');
 
 function cleanCliOutput(output) {
     return (output || '').split('\n').filter(function(l) {
@@ -213,7 +214,12 @@ function action(params) {
         let hasGitChanges = false;
         try {
             try {
-                cli_execute_command({ command: 'git rm -r --ignore-unmatch .dmtools/copilot-sessions' });
+                // gh-628: untrack machine-local runtime logs carried by
+                // already-poisoned branches (the timer's broad add swept
+                // .dmtools/credential-helper.log onto ai/gh-628); the
+                // staging pathspec below keeps them out going forward.
+                // Shared canonical list: js/common/gitStaging.js.
+                cli_execute_command({ command: gitStaging.buildUntrackCommand() });
             } catch (cleanupErr) {
                 console.warn('Could not remove tracked Copilot session cache before checking status:', cleanupErr);
             }
@@ -223,11 +229,18 @@ function action(params) {
             // leg after a green dev run (same class as gh-1000 on the story
             // flow, #648). Excluded like copilot-sessions; the status filter
             // below skips its `?? factory-kit/` line too.
-            cli_execute_command({ command: 'git add . -- ":!.dmtools/copilot-sessions" ":!.dmtools/copilot-sessions/**" ":!factory-kit" ":!factory-kit/**"' });
+            // `:!.dmtools/...` runtime logs (gh-628) — excluded by pathspec
+            // because they live next to COMMITTED .dmtools/ files.
+            cli_execute_command({ command: 'git add . -- ' + gitStaging.buildStagingPathspecs() +
+                ' ":!factory-kit" ":!factory-kit/**"' });
             const rawStatus = cli_execute_command({ command: 'git status --porcelain' }) || '';
             const statusLines = rawStatus.split('\n').filter(function(l) {
                 return l.trim() &&
                        !/^(\?\?|A )\s+factory-kit(\/|$)/.test(l) &&
+                       // gh-628: `--cached` untracking leaves the runtime logs
+                       // on disk as untracked files — never the agent's work,
+                       // so they must not flip hasGitChanges (round 1 review).
+                       !gitStaging.isRuntimeArtifactStatusLine(l) &&
                        l.indexOf('Script started') === -1 &&
                        l.indexOf('Script done') === -1;
             });
