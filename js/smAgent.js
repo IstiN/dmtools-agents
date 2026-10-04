@@ -1568,26 +1568,29 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // post-dispatch arm) sit BEHIND the rule query's mutex —
                 // but that scan ran at QUERY time on the per-tick cached
                 // open-PR list, and the latch-skip arm decides purely at
-                // action time. Belt and suspenders: re-read the LIVE list
-                // (deliberately bypassing the ioCache) and refuse the arm
-                // while ANOTHER PR within the rule's mutexAmong scope
-                // already holds ai_validating. Same semantics as
-                // githubSource's scan (blocked holders invisible,
-                // exclude-self honored, self never blocks self); fails
-                // OPEN on probe error — the query-level mutex still guards
-                // the common case.
-                var mutexHolder = validationMutexHeldByAnother(
-                    effectiveRepoInfo, rule, ticket);
-                if (mutexHolder) {
-                    console.log('  🔒 ' + key + ' arm refused — pr-' + mutexHolder +
-                                ' already holds ai_validating (action-time re-check;' +
-                                ' the query-time mutex scanned a stale list)');
-                    continue; // NOT processedKeys — the slot stays with the holder
-                }
+                // action time. Belt and suspenders: each arm site re-reads
+                // the LIVE list (deliberately bypassing the ioCache) and
+                // refuses the arm while ANOTHER PR within the rule's
+                // mutexAmong scope already holds ai_validating. Same
+                // semantics as githubSource's scan (blocked holders
+                // invisible, mutexExcludeSelf honored — a self-holding
+                // recovery candidate drains the stack, #577); fails OPEN
+                // on probe error — the query-level mutex still guards the
+                // common case. The probe sits just ABOVE each arm site
+                // (review #703 💡): candidates parked/skipped by the cheap
+                // guards below never pay the uncached read.
                 if (rule.skipIfValidatedHead && vProbe &&
                     (ticket.labels || []).indexOf('ai_validated') !== -1 &&
                     vProbe.green &&
                     validationRollupGreen(effectiveRepoInfo, ticket.prNumber)) {
+                    var latchMutexHolder = validationMutexHeldByAnother(
+                        effectiveRepoInfo, rule, ticket);
+                    if (latchMutexHolder) {
+                        console.log('  🔒 ' + key + ' arm refused — pr-' + latchMutexHolder +
+                                    ' already holds ai_validating (action-time re-check;' +
+                                    ' the query-time mutex scanned a stale list)');
+                        continue; // NOT processedKeys — the slot stays with the holder
+                    }
                     github_add_labels({
                         workspace: effectiveRepoInfo.owner,
                         repository: effectiveRepoInfo.repo,
@@ -1684,6 +1687,20 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                     ' (red yields the slot)');
                         continue; // NOT processedKeys — the limit-1 slot must move on
                     }
+                }
+                // Action-time mutex re-check, arm site 2 (see the block
+                // above the latch-skip arm): the LIVE probe runs only now —
+                // after the deferRedHead park and red-head history skip —
+                // so parked candidates never pay the uncached read
+                // (review #703 💡), while the double-arm protection still
+                // covers this arm.
+                var mutexHolder = validationMutexHeldByAnother(
+                    effectiveRepoInfo, rule, ticket);
+                if (mutexHolder) {
+                    console.log('  🔒 ' + key + ' arm refused — pr-' + mutexHolder +
+                                ' already holds ai_validating (action-time re-check;' +
+                                ' the query-time mutex scanned a stale list)');
+                    continue; // NOT processedKeys — the slot stays with the holder
                 }
                 // Superseded-head cleanup (owner 2026-09-23): any active
                 // dispatched run on an older head of THIS branch is pure
@@ -3073,7 +3090,10 @@ function dropOpenPrsCache(repoInfo) {
 // query-time scan — same semantics, LIVE data: the rule's own query.mutex
 // label, holders scoped by mutexAmong, 'blocked' holders invisible (a
 // frozen arm must not serialize the window), the candidate itself never
-// blocks itself (exclude-self parity). Reads github_list_prs DIRECTLY —
+// blocks itself, and query.mutexExcludeSelf honored: a SELF-HOLDING
+// candidate of a recovery rule (revalidate-armed/-green) is never blocked
+// by other holders — it drains the leaked stack (#577 parity).
+// Reads github_list_prs DIRECTLY —
 // deliberately bypassing the per-tick ioCache, whose staleness is exactly
 // the hole this closes. Returns the holder's PR number, or 0/false when
 // the arm may proceed (including on probe error — fail OPEN: the
@@ -3089,6 +3109,16 @@ function validationMutexHeldByAnother(repoInfo, rule, ticket) {
         var arr = Array.isArray(list) ? list :
             ((list && (list.pullRequests || list.items)) || []);
         var among = q.mutexAmong;
+        // githubSource's exclude-self contract (blocked = !selfHolds &&
+        // otherHolds): track BOTH while scanning — a candidate that
+        // SELF-HOLDS the mutex under query.mutexExcludeSelf is never
+        // blocked (#577: recovery-rule candidates occupy their own
+        // serialization slot, so a leaked multi-holder stack drains
+        // oldest-first through the revalidate rules — live fa#1068/#577).
+        // Review #703 🚨: the pre-fix re-check blocked a self-holding
+        // candidate on ANY other holder — the contract inverted.
+        var selfHolds = false;
+        var otherHolder = 0;
         for (var i = 0; i < arr.length; i++) {
             var p = arr[i];
             var num = (p && (p.number || p.prNumber)) || 0;
@@ -3098,9 +3128,11 @@ function validationMutexHeldByAnother(repoInfo, rule, ticket) {
             if (labels.indexOf(q.mutex) === -1) continue;
             if (labels.indexOf('blocked') !== -1) continue; // frozen holder — githubSource parity
             if (among && !among.some(function (l) { return labels.indexOf(l) !== -1; })) continue;
-            if (num === ticket.prNumber) continue; // self never blocks self
-            return num;
+            if (num === ticket.prNumber) { selfHolds = true; continue; } // self never blocks self
+            if (!otherHolder) otherHolder = num;
         }
+        if (q.mutexExcludeSelf && selfHolds) return 0; // self-holder drains the stack
+        return otherHolder;
     } catch (eMutex) {
         console.warn('  ⚠️  action-time mutex probe failed: ' + (eMutex.message || eMutex));
     }
