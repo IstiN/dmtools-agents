@@ -230,7 +230,7 @@
           "id": "validated-green"
         },
         {
-          "description": "GitHub PR: branch conflicts with main (silent-update's git merge cannot land; mergeState DIRTY) -> the queue would stall forever — report and, for MACHINE-authored PRs, re-arm agent:rework on the linked issue so the agent resolves the conflicts and pushes; the normal validate flow then resumes (pr_approved is STICKY — no re-review). Guest PRs get the report only (owner rule 2026-09-21: auto-rework is machine-author-only). Fires once per head: the marker comment carries the head sha and suppresses re-reports for the same head.",
+          "description": "GitHub PR: branch conflicts with main (silent-update's git merge cannot land; mergeState DIRTY) -> the queue would stall forever — report and, for MACHINE-authored PRs, re-arm agent:rework on the linked issue so the agent resolves the conflicts and pushes; the normal validate flow then resumes (pr_approved is STICKY — no re-review). Guest PRs get the report only (owner rule 2026-09-21: auto-rework is machine-author-only). Fires once per head: the marker comment carries the head sha and suppresses re-reports for the same head — never the arming (gh-683 bug C, live fa #677/#676 2026-10-03: the marker used to land before arming, a starved dispatch left a reported corpse and the issue was never labelled). Arming lands FIRST, the marker LAST; a marker whose linked issue lacks agent:rework re-arms on the next tick (suppression keys on the label, not the comment).",
           "source": "github",
           "query": {
             "type": "pr",
@@ -264,7 +264,7 @@
           "workflowRef": "{branch}"
         },
         {
-          "description": "Manual rework request: agent:rework label on the PR itself -> rework on demand, ANY author (owner override: a manual label by a write/admin actor fires even on guest PRs). Dispatches the issue-anchored rework leg on the linked issue when the scrape resolves to an EXISTING LOCAL issue (verified via github_get_issue); when the PR has no valid local issue (cross-repo/dangling ref, issue-less PR) falls back to a PR-anchored rework dispatch (inputs.pr, guard runs the rework leg on pr-<N>) instead of crashing (#544). The PR label is consumed on dispatch so the next tick does not re-fire. workflowRef={branch}: the leg runs on the PR head.",
+          "description": "Manual rework request: agent:rework label on the PR itself -> rework on demand, ANY author (owner override: a manual label by a write/admin actor fires even on guest PRs). PR-anchored (gh-683 bug E, live fa #1194 2026-10-04: the {issueNumber} body-scrape resolved a stale bare '#327' mention — a wrong-but-EXISTING issue, so the #544 existence guard passed it — while the real linked issue was gh-1044; the factory guard rejected the anchor, run=false, 75s no-op, and the failed consume (bug D) re-fanned it every tick). The label is ON the PR and the rework runs on the PR head, so anchor on inputs.pr directly (the same PR-anchored shape as review-on-label / review-external-once / review-machine-unlinked): preCliReworkSetup's #544 path runs the leg on pr-<N> with no ticket lookup, no scrape, no anchor to mis-resolve. The PR label is consumed on dispatch so the next tick does not re-fire. workflowRef={branch}: the leg runs on the PR head.",
           "source": "github",
           "query": {
             "type": "pr",
@@ -274,9 +274,10 @@
           },
           "workflowFile": "ai-teammate.yml",
           "inputs": {
-            "issue": "{issueNumber}",
+            "issue": "",
             "leg": "rework",
-            "reason": "sm: agent:rework label on the PR (manual rework request)"
+            "reason": "sm: agent:rework label on the PR (manual rework request)",
+            "pr": "{prNumber}"
           },
           "consumeLabels": [
             "agent:rework"

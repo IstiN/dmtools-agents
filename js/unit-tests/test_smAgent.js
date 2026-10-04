@@ -1004,7 +1004,7 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(inputs.leg, 'rework');
         assert.equal(sm.capturedPrLabelRemoves.length, 1, 'the request label is consumed');
         assert.equal(sm.capturedPrLabelRemoves[0].number, 90);
-        assert.deepEqual(sm.capturedPrLabelRemoves[0].labels, ['agent:rework']);
+        assert.equal(sm.capturedPrLabelRemoves[0].label, 'agent:rework'); // gh-683 bug D: singular param + owner/repo (asserted below)
     });
 
     test('rework-on-label: PR with a linked issue dispatches issue-anchored after the local-existence check (#544)', function () {
@@ -1057,7 +1057,12 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(inputs.leg, 'rework');
         assert.equal(sm.capturedPrLabelRemoves.length, 1, 'the request label is consumed');
         assert.equal(sm.capturedPrLabelRemoves[0].number, 91);
-        assert.deepEqual(sm.capturedPrLabelRemoves[0].labels, ['agent:rework']);
+        // gh-683 bug D: the consume call carries owner/repo + the singular
+        // `label` param the bridge reads (the plural `labels` shape starved
+        // the consume on live fa #1194 — every tick re-dispatched).
+        assert.equal(sm.capturedPrLabelRemoves[0].label, 'agent:rework');
+        assert.equal(sm.capturedPrLabelRemoves[0].workspace, 'a');
+        assert.equal(sm.capturedPrLabelRemoves[0].repository, 'b');
     });
 
     test('rework-on-label: dangling scraped #N (not a local issue) degrades to PR-anchored (#544)', function () {
@@ -1295,6 +1300,10 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
                 items: [prItem(95, { labels: [], branch: 'ai/gh-91', author: 'ai-teammate',
                                       pr: { headSha: 'deadbee' } })],
                 pr: { number: 95, labels: [], body: 'Fixes #91 — thing' },
+                // gh-683 bug C: the linked issue carries agent:rework — the
+                // re-arm LANDED. (Marker present + label absent now re-arms:
+                // see the conflict_rework re-arm reliability suite.)
+                issue: { number: 91, state: 'open', labels: [{ name: 'agent:rework' }] },
                 prComments: [
                     { body: '⚠️ Merge conflict with main — the silent branch update could not merge main (conflict). (head `deadbee`)' }
                 ]
@@ -4136,4 +4145,187 @@ suite('probeDispatchedState bundle (runAsync read fan-out)', function () {
             ['ai_validated'], 'success side re-latches (complete_validation parity)');
     });
 
+});
+
+// ─── gh-683 rule-action reliability: conflict re-arm (C), label consume (D),
+// PR-anchored manual rework (E). Live evidence 2026-10-03/04: fa #677 DIRTY
+// since 21:09Z with issue #676 never labelled (owner armed it by hand 05:10Z,
+// leg fired 05:12Z); fa #1194 re-dispatch loop (consume call without
+// owner/repo → tool error; {issueNumber} scrape anchored stale #327 while the
+// real issue was gh-1044 → guard run=false, 75s no-op). ─────────────────────
+
+suite('smAgent: conflict_rework re-arm reliability (gh-683 bug C)', function () {
+
+    var CONFLICT_RULE = {
+        description: 'branch conflicts with main -> report + machine re-arm',
+        source: 'github',
+        query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+        localAction: 'conflict_rework',
+        limit: 1,
+        id: 'conflict-rework'
+    };
+
+    function conflictParams(overrides) {
+        var p = baseParams('epam', 'dmtools-dart', [CONFLICT_RULE]);
+        p.jobParams.machineAuthor = 'ai-teammate';
+        return Object.assign(p, overrides || {});
+    }
+
+    test('starved PR-anchored dispatch posts NO marker comment — retried next tick, not suppressed forever', function () {
+        // fa #677 shape: marker used to land BEFORE arming; a dispatch that
+        // starved (global cap / active run / trigger failure) left a
+        // "reported" corpse that suppressed every later tick.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [{ key: 'pr-677', labels: [], issueNumber: null, prNumber: 677,
+                          branch: 'ai/cleanup-reports', author: 'ai-teammate', pr: { headSha: 'deadbeef77' } }],
+                // no closes/fixes ref and no gh-<n> branch grammar -> the
+                // PR-anchored dispatch path
+                pr: { number: 677, body: 'some rework', head: { sha: 'deadbeef77' } },
+                prComments: []
+            },
+            onTrigger: function () { throw new Error('workflow cap'); }
+        });
+
+        sm.action(conflictParams());
+
+        assert.equal(sm.capturedTriggers.length, 1, 'the rework dispatch was attempted');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'the marker comment must NOT post when arming failed — the next tick retries');
+    });
+
+    test('marker present + linked issue OPEN but UNLABELLED -> self-heal re-arms agent:rework', function () {
+        // fa #677/#676 corpse: marker present, issue #676 had no
+        // agent:rework. Suppression keys on the LABEL, not the comment.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [{ key: 'pr-677', labels: [], issueNumber: null, prNumber: 677,
+                          branch: 'ai/gh-676', author: 'ai-teammate', pr: { headSha: 'deadbeef77' } }],
+                pr: { number: 677, body: 'Closes #676', head: { sha: 'deadbeef77' } },
+                prComments: [{ body: '⚠️ Merge conflict with main — cannot merge (head `deadbeef77`)' }],
+                issue: { number: 676, state: 'open', labels: [] }
+            }
+        });
+
+        sm.action(conflictParams());
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'the linked issue is re-armed');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 676);
+        assert.equal(sm.capturedPrLabelAdds[0].labels.join(','), 'agent:rework');
+        assert.equal(sm.capturedPrLabelAdds[0].workspace, 'epam', 'owner/repo ride the call (bug D family)');
+        assert.equal(sm.capturedPrLabelAdds[0].repository, 'dmtools-dart');
+        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch — the issue-rework rule owns it');
+        assert.equal(sm.capturedPrComments.length, 0, 'no duplicate marker report');
+    });
+
+    test('marker present + linked issue ALREADY labelled -> quiet (once-per-head pacing holds)', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [{ key: 'pr-677', labels: [], issueNumber: null, prNumber: 677,
+                          branch: 'ai/gh-676', author: 'ai-teammate', pr: { headSha: 'deadbeef77' } }],
+                pr: { number: 677, body: 'Closes #676', head: { sha: 'deadbeef77' } },
+                prComments: [{ body: '⚠️ Merge conflict with main — cannot merge (head `deadbeef77`)' }],
+                issue: { number: 676, state: 'open', labels: [{ name: 'agent:rework' }] }
+            }
+        });
+
+        sm.action(conflictParams());
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'already armed — no duplicate');
+        assert.equal(sm.capturedPrComments.length, 0, 'no duplicate marker report');
+        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch');
+    });
+});
+
+suite('smAgent: trigger-label consume carries owner/repo (gh-683 bug D)', function () {
+
+    test('consumeLabels removes the PR label with workspace/repository + singular label param', function () {
+        // fa #1194 loop: the consume call was {"number":1194,"labels":
+        // ["agent:rework"]} — no owner/repo, plural param — the bridge
+        // errored "Issue reference requires owner/repo/number", the label
+        // never left, every tick re-dispatched the same no-op leg.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [{ key: 'pr-1194', labels: ['agent:rework'], issueNumber: null,
+                          prNumber: 1194, branch: 'ai/gh-1194', author: 'ai-teammate' }]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'manual rework label on the PR',
+            source: 'github',
+            query: { type: 'pr', labels: ['agent:rework'] },
+            workflowFile: 'ai-teammate.yml',
+            inputs: { issue: '', leg: 'rework', reason: 'sm: manual', pr: '{prNumber}' },
+            consumeLabels: ['agent:rework'],
+            limit: 1,
+            id: 'rework-on-label',
+            workflowRef: '{branch}'
+        }]));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'dispatch happened');
+        assert.equal(sm.capturedPrLabelRemoves.length, 1, 'the trigger label is consumed');
+        var rm = sm.capturedPrLabelRemoves[0];
+        assert.equal(rm.number, 1194, 'consumed from the PR');
+        assert.equal(rm.label, 'agent:rework', 'singular label param the bridge reads');
+        assert.equal(rm.workspace, 'epam', 'owner present (the live error named its absence)');
+        assert.equal(rm.repository, 'dmtools-dart', 'repo present');
+    });
+});
+
+suite('smAgent: manual rework is PR-anchored, no body scrape (gh-683 bug E)', function () {
+
+    test('rework-on-label dispatches inputs.pr — never {issueNumber}', function () {
+        // fa #1194: the {issueNumber} scrape picked a stale bare '#327'
+        // mention — wrong but EXISTING, so the #544 existence guard passed
+        // it (real issue gh-1044) — the factory guard rejected the anchor,
+        // run=false, 75s no-op. The label is on the PR; anchor on the PR.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [{ key: 'pr-1194', labels: ['agent:rework'], issueNumber: 327,
+                          prNumber: 1194, branch: 'ai/gh-1194', author: 'ai-teammate' }]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'manual rework label on the PR',
+            source: 'github',
+            query: { type: 'pr', labels: ['agent:rework'] },
+            workflowFile: 'ai-teammate.yml',
+            inputs: { issue: '', leg: 'rework', reason: 'sm: manual', pr: '{prNumber}' },
+            consumeLabels: ['agent:rework'],
+            limit: 1,
+            id: 'rework-on-label',
+            workflowRef: '{branch}'
+        }]));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'dispatch happened');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.pr, '1194', 'anchored on the PR number');
+        assert.equal(inputs.issue, '', 'no issue anchor to mis-resolve');
+        assert.equal(sm.capturedPrLabelRemoves.length, 1, 'label consumed — no re-fire loop');
+    });
+
+    test('sm_github.json pins it: rework-on-label inputs are PR-anchored like its review siblings', function () {
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+
+        var rule = byId['rework-on-label'];
+        assert.ok(rule, 'rework-on-label exists');
+        assert.equal(rule.inputs.pr, '{prNumber}', 'PR-anchored');
+        assert.equal(rule.inputs.issue, '', 'no issue anchor');
+        assert.equal(JSON.stringify(rule.inputs).indexOf('{issueNumber}'), -1,
+            'no body-scrape anchor anywhere in its inputs');
+        // The PR-anchored shape is the established family pattern:
+        ['review-on-label', 'review-external-once', 'review-machine-unlinked'].forEach(function (id) {
+            assert.equal(byId[id].inputs.pr, '{prNumber}', id + ' is PR-anchored (family parity)');
+        });
+    });
 });

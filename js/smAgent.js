@@ -580,12 +580,24 @@ function firstMatchingLabel(ticket, labels) {
     return null;
 }
 
-function addRuleLabels(ticketKey, rule) {
+function addRuleLabels(ticketKey, rule, repoInfo) {
     normalizeLabels(rule.addLabel, rule.addLabels).forEach(function(label) {
         try {
             if (rule.source === 'github') {
                 var n = /(\d+)$/.exec(String(ticketKey));
-                if (n) github_add_labels({ number: parseInt(n[1], 10), labels: [label] });
+                // gh-683 bug D (live fa #1194, 2026-10-04): without
+                // workspace/repository the github bridge answers "Issue
+                // reference requires owner/repo/number" and the label
+                // never lands — include them whenever the rule context
+                // knows the repo.
+                if (n) {
+                    var params = { number: parseInt(n[1], 10), labels: [label] };
+                    if (repoInfo && repoInfo.owner && repoInfo.repo) {
+                        params.workspace = repoInfo.owner;
+                        params.repository = repoInfo.repo;
+                    }
+                    github_add_labels(params);
+                }
             } else {
                 if (DRY) { console.log('  [dry] 🏷️ ' + ticketKey + ' +' + label); }
                 else { jira_add_label({ key: ticketKey, label: label }); }
@@ -613,12 +625,26 @@ function ruleTargetSelfManagesLabel(rule) {
     }
 }
 
-function removeRuleLabel(ticketKey, label, rule) {
+function removeRuleLabel(ticketKey, label, rule, repoInfo) {
     if (!ticketKey || !label) return;
     try {
         if (rule && rule.source === 'github') {
             var n = /(\d+)$/.exec(String(ticketKey));
-            if (n) github_remove_label({ number: parseInt(n[1], 10), labels: [label] });
+            // gh-683 bug D (live fa #1194, 2026-10-04): the call carried NO
+            // workspace/repository (and `labels:[…]` where the bridge reads
+            // singular `label`) — the tool errored "Issue reference requires
+            // owner/repo/number", the trigger label was never consumed, and
+            // every later tick re-dispatched the same no-op leg. Pass the
+            // rule context's repo and the singular param the bridge reads.
+            if (n) {
+                if (DRY) { console.log('  [dry] 🏷️ ' + ticketKey + ' -' + label); return; }
+                var params = { number: parseInt(n[1], 10), label: label };
+                if (repoInfo && repoInfo.owner && repoInfo.repo) {
+                    params.workspace = repoInfo.owner;
+                    params.repository = repoInfo.repo;
+                }
+                github_remove_label(params);
+            }
         } else {
             if (DRY) { console.log('  [dry] 🏷️ ' + ticketKey + ' -' + label); }
             else { jira_remove_label({ key: ticketKey, label: label }); }
@@ -792,7 +818,7 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
             // previous local action crashed: recover and retry.
             if (shouldRecoverStaleTriggerLabel(rule, skipLabel)) {
                 console.log('  ♻️  ' + key + ' has stale lock ' + skipLabel + ' (local run finished) — recovering');
-                removeRuleLabel(key, skipLabel, rule);
+                removeRuleLabel(key, skipLabel, rule, effectiveRepoInfo);
             } else {
                 console.log('  ⏭️  ' + key + ' skipped (label: ' + skipLabel + ')');
                 skippedKeys.push(key);
@@ -824,7 +850,7 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
             console.log('  ✅ ' + key + ' done — action: ' + (result && result.action || JSON.stringify(result).substring(0, 80)));
             processedKeys.push(key);
 
-            addRuleLabels(key, rule);
+            addRuleLabels(key, rule, effectiveRepoInfo);
         } catch (e) {
             console.error('  ❌ Local execution failed for ' + key + ': ' + (e.message || e));
         }
@@ -984,7 +1010,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     continue;
                 }
                 console.log('  ♻️  ' + key + ' has ' + skipLabel + ' but no active workflow — recovering stale trigger label');
-                removeRuleLabel(key, skipLabel, rule);
+                removeRuleLabel(key, skipLabel, rule, effectiveRepoInfo);
             } else {
                 console.log('  ⏭️  ' + key + ' skipped (label: ' + skipLabel + ')');
                 skippedKeys.push(key);
@@ -1588,6 +1614,20 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // machine-author-only). Once per head: a conflict-marker comment
             // carrying the current head sha means this head was already
             // reported+armed.
+            //
+            // gh-683 bug C (live fa #677/PR #676, 2026-10-03 21:09Z): the
+            // marker comment used to be posted BEFORE arming, so a starved
+            // PR-anchored dispatch (triggerWorkflow false under the global
+            // workflow cap / active-run guard) or a failed label add left a
+            // "reported" corpse — every later tick suppressed on the comment
+            // and the linked issue NEVER got agent:rework (owner armed it by
+            // hand 2026-10-04 ~05:10Z; the leg fired 05:12Z instantly).
+            // Invariants now: (1) arm FIRST, marker comment LAST — the
+            // marker only ever lands once the rework is actually armed;
+            // (2) suppression self-heals — a marker whose re-arm never
+            // landed (label absent on the linked issue) re-arms instead of
+            // suppressing: suppression keys on the LABEL, the comment is
+            // only the once-per-head pacing for the REPORT.
             try {
                 var headSha = (ticket.pr && ticket.pr.headSha) || null;
                 if (!headSha) {
@@ -1619,17 +1659,10 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                             (!headSha || b.indexOf(String(headSha)) !== -1);
                     });
                 } catch (e6) { /* read failed — treat as not reported */ }
-                if (alreadyReported) {
-                    console.log('  ⏭️  ' + key + ' conflict already reported for head — waiting on rework');
-                    processedKeys.push(key);
-                    continue;
-                }
-                try {
-                    github_remove_label({
-                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                        number: ticket.prNumber, label: 'ai_validating'
-                    });
-                } catch (e7) { /* absent label is fine */ }
+
+                // Resolve machine-author + linked issue BEFORE the marker
+                // check — the self-heal below needs to know whether the
+                // re-arm actually landed (gh-683 bug C).
                 var cMachineAuthor = machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, effectiveConfig);
                 var cIsMachinePr = machineAuthorModule.isMachineAuthored(
                     ticket, cMachineAuthor, effectiveRepoInfo.owner);
@@ -1661,6 +1694,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // ever fired). Not OPEN → PR-anchored rework dispatch below
                 // (the #544 fallback shape).
                 var cLinkedOpen = false;
+                var cIssueHasRework = false;
                 if (cIsMachinePr && cLinked) {
                     try {
                         if (typeof github_get_issue === 'function') {
@@ -1674,11 +1708,38 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                 typeof liObj.number === 'number' && !liObj.message;
                             cLinkedOpen = !!liOk &&
                                 String(liObj.state || 'open').toLowerCase() === 'open';
+                            cIssueHasRework = cLinkedOpen && Array.isArray(liObj.labels) &&
+                                liObj.labels.some(function (l) { return l && l.name === 'agent:rework'; });
                         } else {
                             cLinkedOpen = true; // legacy bridges: trust the scrape
                         }
                     } catch (e9) { cLinkedOpen = false; }
                 }
+
+                if (alreadyReported) {
+                    // gh-683 bug C self-heal: the marker is once-per-head
+                    // pacing for the REPORT, not proof the re-arm landed. A
+                    // machine PR whose linked OPEN issue does NOT carry
+                    // agent:rework re-arms right here — the label is the
+                    // functional bit (idempotent add if the read was stale).
+                    if (!DRY && cIsMachinePr && cLinked && cLinkedOpen && !cIssueHasRework) {
+                        github_add_labels({
+                            workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                            number: cLinked, labels: ['agent:rework']
+                        });
+                        console.log('  🔁 ' + key + ' conflict marker present but issue #' + cLinked +
+                            ' has no agent:rework — re-armed (gh-683 self-heal)');
+                    }
+                    console.log('  ⏭️  ' + key + ' conflict already reported for head — waiting on rework');
+                    processedKeys.push(key);
+                    continue;
+                }
+                try {
+                    github_remove_label({
+                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                        number: ticket.prNumber, label: 'ai_validating'
+                    });
+                } catch (e7) { /* absent label is fine */ }
                 var cReworkNote = (cLinked && cLinkedOpen)
                     ? ' Rework re-queued (linked issue #' + cLinked + ' re-armed): resolve the conflicts and push — validation re-runs automatically.'
                     : (cLinked
@@ -1692,33 +1753,49 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     : (marker + ' — the silent branch update could not merge main (conflict).' +
                        (headSha ? ' (head `' + headSha + '`)' : '') +
                        ' Guest PR: rebase onto main and push — validation re-runs automatically; auto-rework is reserved for the machine account.');
-                github_create_comment({
+
+                // Arm FIRST (gh-683 bug C): whatever arming means for this PR,
+                // it must land BEFORE the marker comment — a starved dispatch
+                // or failed label add must leave NO marker, so the next tick
+                // retries instead of suppressing forever.
+                var armed = true;
+                if (cIsMachinePr) {
+                    if (cLinked && cLinkedOpen) {
+                        if (!DRY) {
+                            github_add_labels({
+                                workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                                number: cLinked, labels: ['agent:rework']
+                            });
+                        }
+                    } else {
+                        // #579: no OPEN linked issue (missing, dangling, or
+                        // already CLOSED) — anchor the rework on the PR itself,
+                        // the same leg the rework-on-label rule dispatches (#544
+                        // fallback shape). triggerWorkflow returns false on the
+                        // global workflow cap, an active same-key run, or a
+                        // dispatch failure — treat all as NOT armed (retry next
+                        // tick); in DRY it logs and returns undefined — armed.
+                        armed = DRY || triggerWorkflow(effectiveRepoInfo, key, {
+                            id: 'conflict-rework',
+                            workflowFile: 'ai-teammate.yml',
+                            workflowRef: '{branch}',
+                            inputs: {
+                                issue: '',
+                                leg: 'rework',
+                                reason: 'sm: merge conflict with main, no OPEN linked issue - PR-anchored conflict rework',
+                                pr: '{prNumber}'
+                            }
+                        }, effectiveConfig, workflowBudget, { prNumber: ticket.prNumber, branch: ticket.branch }) === true;
+                    }
+                }
+                if (!armed) {
+                    console.log('  ⏳ ' + key + ' conflict rework arming deferred (workflow cap / active run) — marker NOT posted, retrying next tick (gh-683)');
+                    continue;
+                }
+                if (!DRY) github_create_comment({
                     workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
                     number: ticket.prNumber, body: cReport
                 });
-                if (cIsMachinePr && cLinked && cLinkedOpen) {
-                    github_add_labels({
-                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                        number: cLinked, labels: ['agent:rework']
-                    });
-                } else if (cIsMachinePr) {
-                    // #579: no OPEN linked issue (missing, dangling, or
-                    // already CLOSED) — anchor the rework on the PR itself,
-                    // the same leg the rework-on-label rule dispatches (#544
-                    // fallback shape). Runs once per head: the marker comment
-                    // above suppresses re-entry until the head moves.
-                    triggerWorkflow(effectiveRepoInfo, key, {
-                        id: 'conflict-rework',
-                        workflowFile: 'ai-teammate.yml',
-                        workflowRef: '{branch}',
-                        inputs: {
-                            issue: '',
-                            leg: 'rework',
-                            reason: 'sm: merge conflict with main, no OPEN linked issue - PR-anchored conflict rework',
-                            pr: '{prNumber}'
-                        }
-                    }, effectiveConfig, workflowBudget, { prNumber: ticket.prNumber, branch: ticket.branch });
-                }
                 console.log('  🔁 ' + key + ' merge conflict with main — ' +
                     (cIsMachinePr
                         ? ((cLinked && cLinkedOpen)
@@ -2024,7 +2101,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             ? runTeammateLocally(key, rule, effectiveConfig)
             : triggerWorkflow(effectiveRepoInfo, key, rule, effectiveConfig, workflowBudget, ticket);
 
-        if (triggered && !ruleSelfManagesLabel) addRuleLabels(key, rule);
+        if (triggered && !ruleSelfManagesLabel) addRuleLabels(key, rule, effectiveRepoInfo);
 
         // consumeLabels: the matched label IS the request (e.g. agent:rework
         // on a PR — a human's manual rework ask on any author). Consume it on
@@ -2033,7 +2110,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // the PR's. Reuses the stale-label removal primitive (no-op in DRY).
         if (triggered && rule.consumeLabels) {
             normalizeLabels(null, rule.consumeLabels).forEach(function (label) {
-                removeRuleLabel(key, label, rule);
+                removeRuleLabel(key, label, rule, effectiveRepoInfo);
             });
         }
 
