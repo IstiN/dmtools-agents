@@ -302,6 +302,131 @@ function commitAndPush(ticketKey, config, customParams) {
 }
 
 /**
+ * Extracts review-thread ids (GitHub GraphQL node ids, PRRT_...) cited anywhere
+ * in a text — typically the rework response/fix summary. A rework that cites a
+ * thread id is claiming that thread's findings as addressed, so those threads
+ * MUST be resolved (gh-692); this is the citeable fallback when the AI-written
+ * review_replies.json is missing or lacks threadIds.
+ */
+function extractCitedThreadIds(text) {
+    var ids = [];
+    var seen = {};
+    String(text || '').replace(/PRRT_[A-Za-z0-9_]+/g, function(m) {
+        if (!seen[m]) { seen[m] = true; ids.push(m); }
+        return m;
+    });
+    return ids;
+}
+
+/**
+ * Reads the setup-time thread snapshot input/<ticketKey>/pr_discussions_raw.json
+ * (written by preCliReworkSetup via gitOps.writePRContext). Each thread carries
+ * BOTH ids needed post-rework: rootCommentId (inline reply target) and threadId
+ * (resolve target). Returns [] when missing or unparsable.
+ */
+function readInputRawThreads(ticketKey, outputOptions) {
+    if (!ticketKey) return [];
+    var candidates = ['input/' + ticketKey + '/pr_discussions_raw.json'];
+    if (outputOptions && outputOptions.workingDir) {
+        candidates.push(outputOptions.workingDir + '/input/' + ticketKey + '/pr_discussions_raw.json');
+    }
+    for (var i = 0; i < candidates.length; i++) {
+        try {
+            var raw = file_read({ path: candidates[i] });
+            if (!raw || !String(raw).trim()) continue;
+            var parsed = JSON.parse(raw);
+            var threads = (parsed && parsed.threads) ? parsed.threads : (Array.isArray(parsed) ? parsed : []);
+            if (threads && threads.length > 0) return threads;
+        } catch (e) { /* try next candidate */ }
+    }
+    return [];
+}
+
+/**
+ * Indexes a thread list by both id kinds (stringified keys — the AI output and
+ * the snapshot may disagree on number vs string).
+ */
+function buildThreadLookup(threads) {
+    var byRoot = {};
+    var byThread = {};
+    (threads || []).forEach(function(t) {
+        if (!t) return;
+        if (t.rootCommentId !== null && t.rootCommentId !== undefined) {
+            byRoot[String(t.rootCommentId)] = t;
+        }
+        if (t.threadId) byThread[String(t.threadId)] = t;
+    });
+    return { byRoot: byRoot, byThread: byThread };
+}
+
+/**
+ * gh-692 closure step: after posting replies, make ONE fresh API pass over the
+ * PR's review threads and resolve every still-open thread this rework addressed —
+ * matched by threadId/rootCommentId from review_replies.json, by the setup-time
+ * snapshot, or by the thread ids cited in the rework response (MUST-resolve).
+ *
+ * Why this exists (live fa #1194, 2026-10-04): the rework leg fixed the findings
+ * and pushed, but the review threads stayed open because the raw discussion
+ * export lacked threadIds — postThreadReplies could not resolve what it could not
+ * name. With the threads open, the threadsResolved:true re-review rule never
+ * matches while the unresolved-threads rule (gh-683) keeps re-arming rework:
+ * an infinite loop whose only exit is a human. A fresh sweep at resolution time
+ * re-fetches the current thread ids, closing the loop even when every earlier
+ * id source was incomplete.
+ *
+ * Fail-open by design: probe/resolution errors are logged, never thrown — a
+ * broken sweep must not fail the rework leg.
+ */
+function resolveRemainingAddressedThreads(scm, pullRequestId, addressed) {
+    var cited = (addressed && addressed.citedThreadIds) || [];
+    var byThreadId = (addressed && addressed.addressedThreadIds) || {};
+    var byRootId = (addressed && addressed.addressedRootIds) || {};
+    var hasWork = cited.length > 0 ||
+        Object.keys(byThreadId).length > 0 ||
+        Object.keys(byRootId).length > 0;
+    if (!hasWork) return;
+
+    var resolvedViaSweep = {};
+    var freshThreads = [];
+    if (scm && typeof scm.fetchDiscussions === 'function') {
+        try {
+            var data = scm.fetchDiscussions(String(pullRequestId));
+            freshThreads = (data && data.rawThreads && data.rawThreads.threads) || [];
+        } catch (e) {
+            console.warn('Fresh review-thread sweep failed (falling back to direct resolution of cited ids):', e.message || e);
+        }
+    }
+
+    freshThreads.forEach(function(t) {
+        if (!t || t.resolved === true) return;
+        var isAddressed =
+            (t.threadId && (byThreadId[String(t.threadId)] || cited.indexOf(String(t.threadId)) !== -1)) ||
+            (t.rootCommentId !== null && t.rootCommentId !== undefined && byRootId[String(t.rootCommentId)]);
+        if (!isAddressed) return;
+        try {
+            scm.resolveThread(pullRequestId, { threadId: t.threadId });
+            console.log('✅ Resolved still-open addressed thread (fresh sweep):', t.threadId);
+            if (t.threadId) resolvedViaSweep[String(t.threadId)] = true;
+        } catch (e) {
+            console.warn('Failed to resolve thread', t.threadId + ':', e.message || e);
+        }
+    });
+
+    // Threads cited in the rework response MUST be resolved even when the sweep
+    // could not confirm them open (probe failed, pagination, stale flags) —
+    // resolve them directly; resolving an already-resolved thread is harmless.
+    cited.forEach(function(threadId) {
+        if (resolvedViaSweep[String(threadId)]) return;
+        try {
+            scm.resolveThread(pullRequestId, { threadId: threadId });
+            console.log('✅ Resolved thread cited in rework response:', threadId);
+        } catch (e) {
+            console.warn('Failed to resolve cited thread', threadId + ':', e.message || e);
+        }
+    });
+}
+
+/**
  * Post replies to each review thread and resolve them.
  * Reads outputs/review_replies.json produced by the cursor agent.
  *
@@ -313,32 +438,45 @@ function commitAndPush(ticketKey, config, customParams) {
  * field names from input/<TICKET>/pr_discussions_raw.json (rootCommentId/body)
  * rather than renaming them to the documented output schema.
  *
- * Anti-spam: replies without any usable comment id (no inReplyToId/rootCommentId)
- * cannot be posted as an inline threaded reply. Instead of posting one generic
- * top-level PR comment per such item (which spams the conversation with
- * repeated "✅ Addressed." messages), all of them are batched into a single
- * combined top-level comment.
+ * Id enrichment (gh-692): a missing threadId/inReplyToId is filled in from the
+ * setup-time snapshot input/<ticketKey>/pr_discussions_raw.json (matched by the
+ * id that IS present), so a reply becomes threaded and its thread resolvable
+ * even when the agent dropped one of the two ids.
+ *
+ * Closure sweep (gh-692): after the per-item pass, resolveRemainingAddressedThreads()
+ * resolves every still-open thread the rework addressed — including threads whose
+ * ids only appear in the rework response text (outputOptions.responseText). Without
+ * this step the threadsResolved:true re-review rule can never match.
+ *
+ * Anti-spam: replies without any usable comment id (no inReplyToId/rootCommentId,
+ * even after enrichment) cannot be posted as an inline threaded reply. Instead of
+ * posting one generic top-level PR comment per such item (which spams the
+ * conversation with repeated "✅ Addressed." messages), all of them are batched
+ * into a single combined top-level comment — the specified fallback for
+ * unciteable items.
  */
 function postThreadReplies(scm, pullRequestId, outputOptions) {
     outputOptions = outputOptions || {};
+    var lookup = buildThreadLookup(readInputRawThreads(outputOptions.ticketKey, outputOptions));
+    console.log('DBG lookup keys:', JSON.stringify(Object.keys(lookup.byRoot)), JSON.stringify(Object.keys(lookup.byThread)));
+
     let repliesJson = outputFiles.readOutputFile('review_replies.json', outputOptions);
     if (!repliesJson) {
         console.warn('outputs/review_replies.json not found — skipping thread replies');
-        return 0;
     }
 
-    let data;
-    try {
-        data = JSON.parse(repliesJson);
-    } catch (e) {
-        console.warn('Failed to parse review_replies.json:', e.message || e);
-        return 0;
+    let data = null;
+    if (repliesJson) {
+        try {
+            data = JSON.parse(repliesJson);
+        } catch (e) {
+            console.warn('Failed to parse review_replies.json:', e.message || e);
+        }
     }
 
     const replies = (data && data.replies) ? data.replies : [];
     if (replies.length === 0) {
         console.log('No thread replies to post');
-        return 0;
     }
 
     function resolveReplyText(replyRef) {
@@ -357,14 +495,34 @@ function postThreadReplies(scm, pullRequestId, outputOptions) {
 
     let posted = 0;
     const untargeted = [];
+    const addressed = { threadIds: {}, rootIds: {} };
     replies.forEach(function(item) {
         // Accept both the documented field names (inReplyToId/reply) and the
         // input-schema field names (rootCommentId/body) — the AI agent commonly
         // mirrors field names from input/<TICKET>/pr_discussions_raw.json
         // (which uses rootCommentId/body) instead of renaming them for output.
-        const inReplyToId = item.inReplyToId || item.rootCommentId || null;
+        let inReplyToId = item.inReplyToId || item.rootCommentId || null;
+
+        // gh-692: fill a missing id from the setup-time snapshot so the reply can
+        // be posted inline and the thread can be resolved.
+        if (!inReplyToId && item.threadId && lookup.byThread[String(item.threadId)] &&
+            lookup.byThread[String(item.threadId)].rootCommentId !== null &&
+            lookup.byThread[String(item.threadId)].rootCommentId !== undefined) {
+            inReplyToId = lookup.byThread[String(item.threadId)].rootCommentId;
+        }
+        if (!item.threadId && inReplyToId && lookup.byRoot[String(inReplyToId)] &&
+            lookup.byRoot[String(inReplyToId)].threadId) {
+            item.threadId = lookup.byRoot[String(inReplyToId)].threadId;
+        }
+
         const replyText = resolveReplyText(item.reply || item.body);
         const thread = { rootCommentId: inReplyToId, threadId: item.threadId || null };
+
+        // Track every id this rework claims as addressed — the closure sweep
+        // below retries resolution for anything the per-item pass could not
+        // name or complete.
+        if (item.threadId) addressed.threadIds[String(item.threadId)] = true;
+        if (inReplyToId) addressed.rootIds[String(inReplyToId)] = true;
 
         if (inReplyToId) {
             // Normal case: post an inline threaded reply — this appears nested
@@ -410,6 +568,16 @@ function postThreadReplies(scm, pullRequestId, outputOptions) {
             console.warn('Failed to post combined untargeted reply comment:', e.message || e);
         }
     }
+
+    // Closure step (gh-692): sweep the PR's fresh open threads and resolve every
+    // still-open thread this rework addressed — plus the ids cited in the rework
+    // response, which MUST be resolved. Runs even when review_replies.json was
+    // missing entirely.
+    resolveRemainingAddressedThreads(scm, pullRequestId, {
+        citedThreadIds: extractCitedThreadIds(outputOptions.responseText),
+        addressedThreadIds: addressed.threadIds,
+        addressedRootIds: addressed.rootIds
+    });
 
     console.log('Posted ' + posted + '/' + replies.length + ' thread replies');
     return posted;
@@ -799,10 +967,13 @@ function action(params) {
         let prCommentPosted = false;
 
         if (pr && repoInfo) {
-            // Reply to each review thread and resolve it
+            // Reply to each review thread and resolve it. responseText feeds the
+            // gh-692 closure sweep: threads cited in the rework response MUST be
+            // resolved even when review_replies.json lacks their ids.
             const repliesPosted = postThreadReplies(scm, pr.number, {
                 ticketKey: ticketKey,
-                workingDir: config.workingDir || null
+                workingDir: config.workingDir || null,
+                responseText: fixSummary
             });
             console.log('Thread replies posted:', repliesPosted);
 
@@ -1019,5 +1190,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview };
+    module.exports = { action, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads };
 }
