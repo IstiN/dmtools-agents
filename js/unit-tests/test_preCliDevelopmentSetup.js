@@ -377,3 +377,79 @@ suite('preCliDevelopmentSetup.checkoutBranch — base branch fetch before checko
     });
 
 });
+
+suite('preCliDevelopmentSetup.reportExistingDevBranch — existing remote work surfaced (gh-1164)', function () {
+
+    // Live fa gh-1164 (run 37220167230): a resumed dev leg on a fresh branch
+    // read session memory and mistook main's release tip for its own work
+    // commit — nothing in the input folder said what origin/ai/<ticket>
+    // already carried. Mirrors preCliReworkSetup.js surfacing existing state.
+
+    function loadForReport(calls, responses, writes) {
+        var configLoaderStub = makeConfigLoaderStub({ development: 'ai/PROJ-7' }, 'main', null, []);
+        var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: makeCliMock(calls, responses),
+            file_write: function (args) { writes.push(args); }
+        });
+        return mod;
+    }
+
+    var CONFIG = makeConfig({ git: { featureBranch: { enabled: false } } });
+
+    test('no remote branch → cheap no-op: one ls-remote, no file written', function () {
+        var calls = [];
+        var writes = [];
+        var mod = loadForReport(calls, {}, writes);
+
+        var result = mod.reportExistingDevBranch('PROJ-7', CONFIG, TICKET, 'input/PROJ-7');
+
+        assert.equal(result, false);
+        assert.deepEqual(calls, ['git ls-remote --heads origin ai/PROJ-7'],
+            'exactly one ls-remote when the branch does not exist');
+        assert.equal(writes.length, 0);
+    });
+
+    test('existing remote branch → input/<ticket>/existing_work.md carries commit count, file stat and oneline log', function () {
+        var calls = [];
+        var writes = [];
+        var responses = {};
+        responses['git ls-remote --heads origin ai/PROJ-7'] = 'abc123\trefs/heads/ai/PROJ-7';
+        responses['git rev-list --count origin/main..origin/ai/PROJ-7'] = '3';
+        responses['git log --oneline -20 origin/main..origin/ai/PROJ-7'] = 'abc123 PROJ-7 WIP auto-save\ndef456 PROJ-7 part A\n789abc PROJ-7 scaffold';
+        responses['git diff --shortstat origin/main...origin/ai/PROJ-7'] = ' 5 files changed, 120 insertions(+), 4 deletions(-)';
+        var mod = loadForReport(calls, responses, writes);
+
+        var result = mod.reportExistingDevBranch('PROJ-7', CONFIG, TICKET, 'input/PROJ-7');
+
+        assert.equal(result, true);
+        assert.equal(writes.length, 1, 'exactly one report file');
+        assert.equal(writes[0].path, 'input/PROJ-7/existing_work.md');
+        var content = writes[0].content;
+        assert.contains(content, 'RESUMED development leg',
+            'the resumed-leg warning is the headline');
+        assert.contains(content, 'Commits ahead of base: 3');
+        assert.contains(content, '5 files changed, 120 insertions(+), 4 deletions(-)',
+            'brief file stat');
+        assert.contains(content, 'def456 PROJ-7 part A', 'oneline commit list');
+        assert.contains(content, 'origin/ai/PROJ-7');
+        assert.contains(content, 'origin/main',
+            'names the base so the agent cannot mistake main\'s tip for its own work');
+        // cheap: ls-remote + rev-list + log + diff, nothing else
+        assert.equal(calls.length, 4, 'one ls-remote + one log batch when the branch exists');
+    });
+
+    test('ls-remote failure is non-fatal and writes nothing', function () {
+        var writes = [];
+        var configLoaderStub = makeConfigLoaderStub({ development: 'ai/PROJ-7' }, 'main', null, []);
+        var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: function () { throw new Error('network down'); },
+            file_write: function (args) { writes.push(args); }
+        });
+
+        var result = mod.reportExistingDevBranch('PROJ-7', CONFIG, TICKET, 'input/PROJ-7');
+
+        assert.equal(result, false);
+        assert.equal(writes.length, 0);
+    });
+
+});

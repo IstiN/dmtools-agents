@@ -346,6 +346,70 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
     }
 }
 
+// ── Existing remote work report (gh-1164) ───────────────────────────────────
+// Live fa gh-1164 (run 37220167230): a resumed dev leg started on a fresh
+// branch, read session memory, and mistook main's release tip for its own
+// work commit — because nothing in the input folder told it what
+// origin/<devBranch> ALREADY carried. Mirrors how preCliReworkSetup.js
+// surfaces existing state (PR diff/discussions into the input folder): one
+// ls-remote always, one log/diff only when the branch exists, and the result
+// lands in input/<ticketKey>/existing_work.md so the agent sees previous
+// rounds' work before it starts.
+function reportExistingDevBranch(ticketKey, config, ticket, inputFolder) {
+    var branchName = configLoader.resolveBranchName(config, ticket, 'development');
+    var baseBranch = configLoader.resolvePRTargetBranch(config, ticket);
+
+    var lsRemote = '';
+    try {
+        lsRemote = cleanCommandOutput(runCmd({ command: 'git ls-remote --heads origin ' + branchName }) || '');
+    } catch (e) {
+        console.warn('Could not check remote branch state (non-fatal):', e);
+        return false;
+    }
+    if (!lsRemote.trim()) {
+        console.log('No existing remote branch origin/' + branchName + ' — fresh development leg');
+        return false;
+    }
+
+    var originRef = 'origin/' + baseBranch;
+    var branchRef = 'origin/' + branchName;
+    var commitsAhead = '?';
+    var logLines = '';
+    var diffStat = '';
+    try {
+        commitsAhead = cleanCommandOutput(runCmd({ command: 'git rev-list --count ' + originRef + '..' + branchRef }) || '') || '0';
+    } catch (e) {
+        console.warn('Could not count branch commits (non-fatal):', e);
+    }
+    try {
+        logLines = cleanCommandOutput(runCmd({ command: 'git log --oneline -20 ' + originRef + '..' + branchRef }) || '');
+    } catch (e) { }
+    try {
+        diffStat = cleanCommandOutput(runCmd({ command: 'git diff --shortstat ' + originRef + '...' + branchRef }) || '');
+    } catch (e) { }
+
+    var content = '# Existing Work on Remote Branch\n\n' +
+        '⚠️ `' + branchRef + '` already exists — this is a RESUMED development leg. ' +
+        'Previous rounds\' work lives on this branch. Do NOT mistake the base branch tip (' + originRef + ') ' +
+        'or session-memory claims for your own landed work — the commits below are what actually exists.\n\n' +
+        '- Branch: `' + branchName + '` (remote)\n' +
+        '- Base: `' + originRef + '`\n' +
+        '- Commits ahead of base: ' + commitsAhead + '\n' +
+        '- Diff vs base: ' + (diffStat || '(no diff)') + '\n';
+    if (logLines) {
+        content += '\n## Commits ahead of base\n\n```\n' + logLines + '\n```\n';
+    }
+
+    try {
+        file_write({ path: inputFolder + '/existing_work.md', content: content });
+        console.log('📋 Reported existing remote work: ' + branchRef + ' is ' + commitsAhead +
+            ' commit(s) ahead of ' + originRef + ' → ' + inputFolder + '/existing_work.md');
+    } catch (e) {
+        console.warn('Could not write existing_work.md (non-fatal):', e);
+    }
+    return true;
+}
+
 // Defensive cap on Jira/tracker comment length — see setupCommands.truncateSetupError
 // for rationale (Jira rejects comments over ~350000 chars; unbounded error messages
 // here could silently fail to post, leaving the ticket with no failure visibility).
@@ -415,6 +479,17 @@ function action(params) {
         // would be overwritten".
         baseBranchMarker.writeBaseBranchMarker(config.git.baseBranch);
 
+        // 2.5. Surface existing remote dev-branch work into the input folder (gh-1164):
+        // a resumed leg must see previous rounds' commits instead of mistaking the
+        // base branch tip for its own work. Cheap: one ls-remote (+ one log/diff when
+        // the branch exists); never fatal.
+        try {
+            var ticketForReport = params.ticket || actualParams.ticket || { key: ticketKey, fields: {} };
+            reportExistingDevBranch(ticketKey, config, ticketForReport, folder);
+        } catch (e) {
+            console.warn('reportExistingDevBranch failed (non-fatal):', e);
+        }
+
         // 3. Fetch questions with answers into input folder
         fetchQuestionsToInput.action(actualParams);
 
@@ -460,5 +535,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, checkoutBranch };
+    module.exports = { action, checkoutBranch, reportExistingDevBranch };
 }

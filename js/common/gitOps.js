@@ -21,6 +21,7 @@
 
 const { GIT_CONFIG } = require('../config.js');
 const prHelper = require('./pullRequest.js');
+var gitStaging = require('./gitStaging.js');
 
 var MAX_PR_DIFF_CONTEXT_CHARS = 12000;
 
@@ -133,7 +134,13 @@ function checkoutPRBranch(branchName, workingDir, baseBranch) {
     var stashed = false;
     if (dirty) {
         console.log('Working tree has local changes — stashing before branch switch');
-        cmd('git add -A -- ":!factory-kit" ":!factory-kit/**"');
+        // gh-1164: probe-filtered — a static `:!factory-kit` exclusion trips
+        // git add's ignored-pathspec guard when the kit exists AND is
+        // gitignored; when it is NOT ignored (the nested-gitlink case) the
+        // exclusion is kept and the guard cannot fire.
+        cmd('git add -A -- ' + gitStaging.buildExclusionPathspecs(['factory-kit'], function (args) {
+            return cmd(args.command);
+        }));
         try {
             cmd('git stash push -u -m "preflight-checkout-' + branchName + '"');
             stashed = true;

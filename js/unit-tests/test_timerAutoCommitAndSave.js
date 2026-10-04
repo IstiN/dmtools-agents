@@ -211,7 +211,14 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
             cli_execute_command: function(args) {
                 cliCalls.push(args.command);
                 if (args.command.indexOf('git status') !== -1) return 'M file.txt\n';
-                return ''; // check-ignore succeeds → treated as ignored
+                if (args.command.indexOf('git check-ignore') === 0) {
+                    if (args.command.indexOf('factory-kit') !== -1) {
+                        // the nested machine-infra repo is NOT gitignored
+                        throw new Error('Command execution failed (exit code 1)');
+                    }
+                    return ''; // runtime artifacts ignored → exclusions dropped
+                }
+                return '';
             }
         });
         m.action({
@@ -232,6 +239,68 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
             assert.notContains(addCall, ':!.' + (p.indexOf('.dmtools-session') === 0 ? p : 'dmtools/' + p),
                 'ignored path ' + p + ' must not be named in the pathspec (guard)');
         });
+    });
+
+    test('gh-1164: factory-kit ignored+materialized — the add names NOTHING ignored, the WIP commit lands (red→green repro)', function() {
+        // Live fa gh-1164 (runs 37153882406 + 37220167230, 2026-10-03/04): a
+        // dev agent did real work live while this timer's `git add -A`
+        // FAILED every 5 minutes for 40+ minutes — exit 1, "The following
+        // paths are ignored by one of your .gitignore files" — the work was
+        // never committed and died with the runner. Scratch-repo repro (git
+        // 2.50.1) pinned the trip wire: the STATIC
+        // `":!factory-kit" ":!factory-kit/**"` appended after the
+        // probe-filtered specs — the guard fires on any literal pathspec
+        // (exclusions included) naming an existing gitignored-untracked
+        // path, and the runner workspace has exactly that when factory-kit
+        // is materialized AND gitignored. This mock re-enacts the guard
+        // faithfully: the add throws whenever its command line names a path
+        // check-ignore reported as ignored.
+        var cliCalls = [];
+        var ignoredPaths = ['.dmtools/copilot-sessions', '.dmtools/credential-helper.log',
+            '.dmtools/fa-trace.log', '.dmtools/run-output.txt', '.dmtools/stall-capture.log',
+            '.dmtools/fa-sessions', '.dmtools-session-output.log', 'factory-kit'];
+        var m = loadTimer({
+            cli_execute_command: function(args) {
+                cliCalls.push(args.command);
+                if (args.command.indexOf('git status') !== -1) return 'M feature.js\n';
+                if (args.command.indexOf('git check-ignore') === 0) {
+                    return ''; // every candidate (incl. factory-kit) is gitignored here
+                }
+                if (args.command.indexOf('git add -A') === 0) {
+                    // git add's ignored-pathspec guard, faithfully:
+                    for (var i = 0; i < ignoredPaths.length; i++) {
+                        if (args.command.indexOf(':!' + ignoredPaths[i]) !== -1) {
+                            throw new Error('Command execution failed (exit code 1): ' +
+                                'The following paths are ignored by one of your .gitignore files:\n' +
+                                ignoredPaths[i] + '\nhint: Use -f if you really want to add them.');
+                        }
+                    }
+                    return '';
+                }
+                return '';
+            }
+        });
+        m.action({
+            ticket: { key: 'GH-1164' },
+            jobParams: {
+                customParams: {
+                    targetRepository: { workingDir: '/some/dir' }
+                },
+                metadata: { contextId: 'sf_story_development' }
+            },
+            currentCliOutput: ''
+        });
+        var addCall = cliCalls.filter(function(c) { return c.indexOf('git add -A') === 0; })[0];
+        assert.ok(addCall, 'staging command present');
+        ignoredPaths.forEach(function (p) {
+            assert.notContains(addCall, ':!' + p,
+                'ignored path ' + p + ' must never be named — the guard trips on it (gh-1164)');
+        });
+        var commitCall = cliCalls.filter(function(c) { return c.indexOf('git commit') === 0; })[0];
+        assert.ok(commitCall, 'the WIP auto-save commit MUST land — the guard can no longer starve it');
+        assert.contains(commitCall, 'GH-1164');
+        assert.ok(cliCalls.some(function(c) { return c.indexOf('git push') === 0; }),
+            'and the push runs — work survives a runner death');
     });
 
     test('refuses to commit/push when HEAD is on baseBranch', function() {

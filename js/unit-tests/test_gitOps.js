@@ -8,12 +8,15 @@
  * Uses: configModule, loadModule(), makeRequire(), assert, test(), suite()
  */
 
+var gitStagingModuleForGitOps = loadModule('js/common/gitStaging.js');
+
 function loadGitOps(mocks) {
     return loadModule(
         'js/common/gitOps.js',
         makeRequire({
             '../config.js': configModule,
             'config': configModule,
+            './gitStaging.js': gitStagingModuleForGitOps,
             './pullRequest.js': {
                 buildTargetedOriginFetchCommand: function(branches) {
                     var list = (branches || []).filter(function(b) { return b; });
@@ -95,6 +98,11 @@ suite('gitOps.checkoutPRBranch', function() {
                 commands.push(args.command);
                 if (args.command === 'git status --porcelain') return ' M .codegraph/codegraph.db\nCOMMAND_EXIT_CODE=0';
                 if (args.command === 'git branch --list "feature/x"') return '  feature/x\nCOMMAND_EXIT_CODE=0';
+                if (args.command.indexOf('git check-ignore') === 0) {
+                    // gh-1164 probe: factory-kit NOT gitignored (nested repo) →
+                    // the exclusion is kept and the add command keeps its classic shape.
+                    throw new Error('Command execution failed (exit code 1)');
+                }
                 return 'COMMAND_EXIT_CODE=0';
             }
         });
