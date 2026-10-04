@@ -1714,7 +1714,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     var rcCommentsRaw = github_get_pr_comments({
                         workspace: effectiveRepoInfo.owner,
                         repository: effectiveRepoInfo.repo,
-                        number: ticket.prNumber
+                        pullRequestId: ticket.prNumber
                     });
                     var rcCommentsObj = typeof rcCommentsRaw === 'string'
                         ? JSON.parse(rcCommentsRaw) : (rcCommentsRaw || []);
@@ -1733,26 +1733,38 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 }
                 // No in-flight run on the head: a queued/running run
                 // re-stamps the contexts on its own (hasActiveDispatchedRun
-                // probe pattern, widened to every event).
-                if (hasActiveHeadRun(effectiveRepoInfo, rcHead)) {
+                // probe pattern, widened to every event). One head-runs
+                // fetch feeds both the probe and the target mapping below
+                // (#695 review: the double identical gh api call was
+                // redundant).
+                var rcHeadRuns = headWorkflowRunsSafe(effectiveRepoInfo, rcHead);
+                if (hasActiveHeadRun(rcHeadRuns)) {
                     console.log('  ⏭️  ' + key + ' head carries an in-flight run — it re-stamps the contexts, no rerun');
                     continue;
                 }
-                var rcTargets = rerunTargetsForCancelledContexts(effectiveRepoInfo, rcHead, rcCancelled);
+                var rcTargets = rerunTargetsForCancelledContexts(effectiveRepoInfo, rcHead, rcCancelled, rcHeadRuns);
                 if (!rcTargets.length) {
                     console.warn('  ⚠️  ' + key + ' cancelled contexts ' + rcCancelled.join(', ') +
                                  ' have no rerunnable (attempt-1) cancelled run — skip, retry next tick');
                     continue;
                 }
+                // Partial coverage must NOT post the once-per-head marker
+                // (#695 review): the marker is keyed on the head sha alone,
+                // so posting it over a partial rerun set latches the gate
+                // shut and the uncovered cancelled contexts are never
+                // retried. Rerun what mapped, defer the marker — the
+                // attempt-1 guard keeps the covered runs from looping
+                // while the uncovered ones stay actionable next tick.
+                var rcCovered = {};
+                rcTargets.forEach(function (t) { rcCovered[t.context] = true; });
+                var rcUncovered = rcCancelled.filter(function (c) { return !rcCovered[c]; });
                 // One rerun per RUN (a run re-stamps every context it
                 // carries — two cancelled contexts from the same cancelled
                 // run need a single gh run rerun, not two).
-                var rcRunIds = [];
                 var rcSeen = {};
                 rcTargets.forEach(function (t) {
                     if (rcSeen[t.runId]) return;
                     rcSeen[t.runId] = true;
-                    rcRunIds.push(t.runId);
                     if (DRY) {
                         console.log('  [dry] ▶️ gh run rerun ' + t.runId +
                                     ' (' + t.context + ')');
@@ -1763,7 +1775,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                  ' --repo ' + effectiveRepoInfo.owner + '/' + effectiveRepoInfo.repo
                     });
                 });
-                if (!DRY) {
+                if (!DRY && !rcUncovered.length) {
                     github_create_comment({
                         workspace: effectiveRepoInfo.owner,
                         repository: effectiveRepoInfo.repo,
@@ -1775,6 +1787,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                               'CANCELLED is never a verdict: nothing failed, the re-run re-stamps the contexts and merging resumes automatically.' +
                               ' (head `' + rcHead + '`)'
                     });
+                } else if (rcUncovered.length && !DRY) {
+                    console.warn('  ⚠️  ' + key + ' rerun set covers ' +
+                                 (rcCancelled.length - rcUncovered.length) + '/' + rcCancelled.length +
+                                 ' cancelled contexts — marker deferred, uncovered: ' +
+                                 rcUncovered.join(', ') + ' (retried next tick)');
                 }
                 console.log('  🔁 ' + key + ' cancelled required checks re-run dispatched: ' +
                             rcTargets.map(function (t) { return t.context + ' (run ' + t.runId + ')'; }).join(', '));
@@ -2699,6 +2716,9 @@ function headWorkflowRuns(repoInfo, headSha) {
     // ALL runs on this exact head (any workflow, any event — the kicker
     // dies on push-event runs, validation on workflow_dispatch ones).
     // Same gh-api shape as hasActiveDispatchedRun, minus the event filter.
+    // per_page=50 caps the probe at the newest 50 runs on the head —
+    // comfortably above the observed waves (8 branches / 36 s in fa);
+    // revisit only if heads ever carry >50 runs.
     var res = cli_execute_command({
         command: 'gh api "repos/' + repoInfo.owner + '/' + repoInfo.repo +
                  '/actions/runs?head_sha=' + headSha + '&per_page=50"'
@@ -2707,32 +2727,49 @@ function headWorkflowRuns(repoInfo, headSha) {
     return (runs && runs.workflow_runs) || [];
 }
 
-function hasActiveHeadRun(repoInfo, headSha) {
+function headWorkflowRunsSafe(repoInfo, headSha) {
+    // headWorkflowRuns + fail-OPEN wrapper: a probe error must not kill
+    // the action (worst case: one rerun too many — the same worst case
+    // the dispatch guard accepts). null = the probe failed; callers that
+    // still need the rollup refetch it themselves.
+    try {
+        return headWorkflowRuns(repoInfo, headSha);
+    } catch (e) {
+        console.warn('  ⚠️  head-run probe failed: ' + (e.message || e));
+        return null;
+    }
+}
+
+
+function hasActiveHeadRun(runs) {
     // hasActiveDispatchedRun semantics, widened to every run on the head:
     // any queued/in-progress/waiting/pending run means the state is about
     // to move on its own (a fresh kicker stamps the contexts, a validation
     // dispatch re-runs them) — rerunning cancelled runs under it would
-    // only stack. Fail OPEN on probe errors (worst case: one rerun too
-    // many — the same worst case the dispatch guard accepts).
-    try {
-        return headWorkflowRuns(repoInfo, headSha).some(function (r) {
-            return r.status === 'queued' || r.status === 'in_progress' ||
-                r.status === 'waiting' || r.status === 'pending';
-        });
-    } catch (e) {
-        console.warn('  ⚠️  head-run probe failed: ' + (e.message || e));
-        return false;
-    }
+    // only stack. Takes the pre-fetched head rollup (the action fetches
+    // once and shares it with the target mapping — #695 review); a null
+    // (failed probe) reads as no active run — fail OPEN.
+    return (runs || []).some(function (r) {
+        return r.status === 'queued' || r.status === 'in_progress' ||
+            r.status === 'waiting' || r.status === 'pending';
+    });
 }
 
 function cancelledRequiredContexts(repoInfo, headSha, contexts) {
     // Which of the deployment's REQUIRED check contexts currently read
     // CANCELLED on this head — the check-runs rollup is the source of
-    // truth (a newer green run would have re-stamped the context, so a
-    // CANCELLED conclusion means the last word on that context was a
-    // cancel). FAILURE/TIMED_OUT are deliberately ignored here: red
-    // verdicts belong to fail_validation and friends. Conclusions arrive
-    // lowercase from REST — normalize. [] on any error = no action.
+    // truth, read with BRANCH-PROTECTION semantics: a context's verdict
+    // is the LATEST check run carrying its name, not any historical one
+    // (#695 review: a re-run appends a fresh check run while the
+    // superseded one stays in the head's history, so any-CANCELLED
+    // matching re-fired forever on a stale cancel next to a fresh green
+    // re-stamp and parked mergeable PRs red). Newest per context wins by
+    // completed_at, then started_at, then id, then page position (REST
+    // sorts check runs by id ascending — later position IS newer when
+    // the rollup carries no timestamps). FAILURE/TIMED_OUT on the latest
+    // run are deliberately ignored here: red verdicts belong to
+    // fail_validation and friends. Conclusions arrive lowercase from
+    // REST — normalize. [] on any error = no action.
     try {
         var raw = github_get_commit_check_runs({
             workspace: repoInfo.owner, repository: repoInfo.repo,
@@ -2740,24 +2777,31 @@ function cancelledRequiredContexts(repoInfo, headSha, contexts) {
         });
         var cr = mcpParse(raw) || {};
         var rollup = cr.check_runs || cr.checkRuns || [];
-        var cancelled = {};
-        rollup.forEach(function (r) {
+        var latest = {}; // context -> { t, id, pos, concl }
+        rollup.forEach(function (r, pos) {
             var name = r && (r.name || r.context);
+            if (!name || contexts.indexOf(name) === -1) return;
             var concl = r && r.conclusion
                 ? String(r.conclusion).toUpperCase() : null;
-            if (name && concl === 'CANCELLED' &&
-                contexts.indexOf(name) !== -1) {
-                cancelled[name] = true;
+            var t = Date.parse(r.completed_at || r.started_at || '') || 0;
+            var id = Number(r.id) || 0;
+            var prev = latest[name];
+            if (!prev || t > prev.t ||
+                (t === prev.t && (id > prev.id ||
+                    (id === prev.id && pos > prev.pos)))) {
+                latest[name] = { t: t, id: id, pos: pos, concl: concl };
             }
         });
-        return contexts.filter(function (c) { return !!cancelled[c]; });
+        return contexts.filter(function (c) {
+            return !!(latest[c] && latest[c].concl === 'CANCELLED');
+        });
     } catch (e) {
         console.warn('  ⚠️  check-run scan failed: ' + (e.message || e));
         return [];
     }
 }
 
-function rerunTargetsForCancelledContexts(repoInfo, headSha, contexts) {
+function rerunTargetsForCancelledContexts(repoInfo, headSha, contexts, runsPrefetched) {
     // Latest cancelled RUN per cancelled required context: walk the head's
     // completed+cancelled runs newest-first and read each run's job names
     // (a workflow_call job stamps its context as '<caller> / <called>',
@@ -2765,9 +2809,14 @@ function rerunTargetsForCancelledContexts(repoInfo, headSha, contexts) {
     // requires). First (newest) hit per context wins; a run already
     // re-run (run_attempt > 1) and still cancelled is skipped — the
     // remedy already fired on it, another automatic rerun would loop.
+    // runsPrefetched: the head rollup the action already fetched (shared
+    // probe — #695 review); null/undefined = refetch (probe had failed).
     // Returns [{ context, runId }] (empty = nothing mappable).
     try {
-        var runs = headWorkflowRuns(repoInfo, headSha).filter(function (r) {
+        var allRuns = (runsPrefetched === null || runsPrefetched === undefined)
+            ? headWorkflowRuns(repoInfo, headSha)
+            : runsPrefetched;
+        var runs = allRuns.filter(function (r) {
             return r.status === 'completed' && r.conclusion === 'cancelled';
         });
         runs.sort(function (a, b) {
@@ -2782,7 +2831,7 @@ function rerunTargetsForCancelledContexts(repoInfo, headSha, contexts) {
             var jobsRaw = cli_execute_command({
                 command: 'gh api "repos/' + repoInfo.owner + '/' +
                          repoInfo.repo +
-                         '/actions/runs/' + run.id + '/jobs?per_page=50"'
+                         '/actions/runs/' + run.id + '/jobs?per_page=50"' // 50 jobs/run: kicker carries 2
             });
             var jobs = mcpParse((jobsRaw || {}).output ||
                                 (jobsRaw || {}).stdout || jobsRaw) || {};

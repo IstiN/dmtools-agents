@@ -4618,7 +4618,7 @@ suite('smAgent: rerun_cancelled_checks (gh-682)', function () {
         var it = { key: 'pr-' + n, labels: ['ai_validating'], issueNumber: null,
                    prNumber: n, draft: false, branch: 'ai/gh-1202',
                    pr: { headSha: '898efd4' } };
-        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra; } }
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
         return it;
     }
 
@@ -4743,6 +4743,105 @@ suite('smAgent: rerun_cancelled_checks (gh-682)', function () {
         assert.equal(sm.capturedPrComments.length, 0, 'no comment');
     });
 
+    test('#695 regression: stale CANCELLED + fresh green re-stamp on the same context does NOT act (branch-protection semantics)', function () {
+        // The rollup keeps the superseded check run in the head's history:
+        // sm-liveness was cancelled at 23:05, then re-ran green at 23:12.
+        // Any-historical-CANCELLED matching (the reviewed bug) re-fired
+        // forever here and parked mergeable PRs red — the LATEST run per
+        // context is the verdict branch protection reads.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [prItem682(1202)],
+                commitCheckRuns: { check_runs: [
+                    { name: 'kicker / sm-liveness', conclusion: 'cancelled', status: 'completed',
+                      id: 111, started_at: '2026-10-03T23:05:00Z', completed_at: '2026-10-03T23:05:02Z' },
+                    { name: 'kicker / sm-liveness', conclusion: 'success', status: 'completed',
+                      id: 222, started_at: '2026-10-03T23:12:00Z', completed_at: '2026-10-03T23:12:40Z' },
+                    { name: 'kicker / head-completeness', conclusion: 'success', status: 'completed',
+                      id: 333, started_at: '2026-10-03T23:12:00Z', completed_at: '2026-10-03T23:12:41Z' }
+                ] },
+                prComments: []
+            },
+            onCliExecute: cli682({ headRuns: cancelledKickerRuns(), jobsByRun: kickerJobs() })
+        });
+
+        sm.action(params682());
+
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh run rerun') === 0;
+        }).length, 0, 'stale cancel under a fresh green re-stamp is NOT cancelled');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment');
+    });
+
+    test('#695 regression: latest check run CANCELLED (stale green underneath) DOES act', function () {
+        // The mirror pair: green at 23:05, cancelled at 23:12 — the newest
+        // word on the context IS a cancel, so the remedy fires exactly as
+        // before the fix.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [prItem682(1202)],
+                commitCheckRuns: { check_runs: [
+                    { name: 'kicker / sm-liveness', conclusion: 'success', status: 'completed',
+                      id: 111, started_at: '2026-10-03T23:05:00Z', completed_at: '2026-10-03T23:05:02Z' },
+                    { name: 'kicker / sm-liveness', conclusion: 'cancelled', status: 'completed',
+                      id: 222, started_at: '2026-10-03T23:12:00Z', completed_at: '2026-10-03T23:12:40Z' },
+                    { name: 'kicker / head-completeness', conclusion: 'success', status: 'completed',
+                      id: 333, started_at: '2026-10-03T23:12:00Z', completed_at: '2026-10-03T23:12:41Z' }
+                ] },
+                prComments: []
+            },
+            onCliExecute: cli682({ headRuns: cancelledKickerRuns(), jobsByRun: kickerJobs() })
+        });
+
+        sm.action(params682());
+
+        var reruns = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh run rerun') === 0;
+        });
+        assert.equal(reruns.length, 1, 'latest-cancelled context rerun (green head-completeness untouched)');
+        assert.equal(reruns[0].command, 'gh run rerun 555001 --repo IstiN/flutter_agent_harness');
+        assert.equal(sm.capturedPrComments.length, 1, 'full coverage (the one cancelled context) -> marker posts');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('kicker / sm-liveness') !== -1, 'names the rerun context');
+    });
+
+    test('#695 regression: per-context independence — no timestamps, page order breaks the tie', function () {
+        // Mocks (and degraded rollups) can carry no timestamps/ids: REST
+        // sorts check runs by id ascending, so later page position IS
+        // newer. sm-liveness ends green, head-completeness ends cancelled.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [prItem682(1202)],
+                commitCheckRuns: { check_runs: [
+                    { name: 'kicker / sm-liveness', conclusion: 'cancelled', status: 'completed' },
+                    { name: 'kicker / sm-liveness', conclusion: 'success', status: 'completed' },
+                    { name: 'kicker / head-completeness', conclusion: 'success', status: 'completed' },
+                    { name: 'kicker / head-completeness', conclusion: 'cancelled', status: 'completed' }
+                ] },
+                prComments: []
+            },
+            onCliExecute: cli682({
+                headRuns: cancelledKickerRuns(),
+                jobsByRun: { 555001: [{ name: 'kicker / head-completeness' }] }
+            })
+        });
+
+        sm.action(params682());
+
+        var reruns = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh run rerun') === 0;
+        });
+        assert.equal(reruns.length, 1, 'only the context whose LATEST run is cancelled acts');
+        assert.equal(reruns[0].command, 'gh run rerun 555001 --repo IstiN/flutter_agent_harness');
+        assert.equal(sm.capturedPrComments.length, 1, 'full coverage -> marker posts');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('kicker / head-completeness') !== -1,
+            'marker names the acted-on context only');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('kicker / sm-liveness') === -1,
+            'the green-latest context is not claimed as cancelled');
+    });
+
     test('in-flight run on the head -> skip (the run re-stamps the contexts itself)', function () {
         var sm = makeSmAgent({
             fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
@@ -4846,6 +4945,68 @@ suite('smAgent: rerun_cancelled_checks (gh-682)', function () {
         });
         assert.equal(reruns.length, 1, 'both contexts resolved to the NEWEST cancelled run');
         assert.equal(reruns[0].command, 'gh run rerun 555002 --repo IstiN/flutter_agent_harness');
+    });
+
+    test('#695 regression: partial rerun coverage reruns the covered context but defers the marker', function () {
+        // Both contexts read CANCELLED, but only sm-liveness maps to an
+        // attempt-1 cancelled run (555001 carries just that job) — the
+        // once-per-head marker must NOT post over the partial set: it is
+        // keyed on the head sha alone, so it would latch the gate shut and
+        // head-completeness would never be retried. The covered run still
+        // reruns; the uncovered context stays actionable next tick.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [prItem682(1202)],
+                commitCheckRuns: cancelledCheckRuns(),
+                prComments: []
+            },
+            onCliExecute: cli682({
+                headRuns: cancelledKickerRuns(),
+                jobsByRun: { 555001: [{ name: 'kicker / sm-liveness' }] }
+            })
+        });
+
+        sm.action(params682());
+
+        var reruns = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh run rerun') === 0;
+        });
+        assert.equal(reruns.length, 1, 'the covered context still reruns');
+        assert.equal(reruns[0].command, 'gh run rerun 555001 --repo IstiN/flutter_agent_harness');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'partial coverage must not post the head marker — uncovered context retried next tick');
+    });
+
+    test('#695 regression: uncovered context is still actionable on the NEXT tick (marker never latched)', function () {
+        // Continuation of the partial-coverage scenario: the rerun of
+        // 555001 restamps sm-liveness green (attempt 2), head-completeness
+        // stays cancelled and only NOW maps to a rerunnable run — the
+        // remedy must fire for it exactly as on a first visit, with full
+        // coverage posting the marker.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [prItem682(1202)],
+                commitCheckRuns: { check_runs: [
+                    { name: 'kicker / sm-liveness', conclusion: 'success', status: 'completed' },
+                    { name: 'kicker / head-completeness', conclusion: 'cancelled', status: 'completed' }
+                ] },
+                prComments: [] // no marker was ever posted (it was deferred)
+            },
+            onCliExecute: cli682({
+                headRuns: cancelledKickerRuns(),
+                jobsByRun: kickerJobs()
+            })
+        });
+
+        sm.action(params682());
+
+        var reruns = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh run rerun') === 0;
+        });
+        assert.equal(reruns.length, 1, 'the previously-uncovered context reruns once it maps');
+        assert.equal(sm.capturedPrComments.length, 1, 'full coverage now -> the marker posts');
     });
 
     test('dryRun: reruns log only, no comment, no command', function () {
