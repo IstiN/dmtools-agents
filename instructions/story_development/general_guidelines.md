@@ -16,7 +16,10 @@ flowchart TD
     PASS -->|Yes| GITSTATUS["Run git status and review every new/modified file"]
     GITSTATUS --> SECRETS{Sensitive or untracked non-code files present?}
     SECRETS -->|Yes| IGNORE["Add appropriate patterns to .gitignore"]
-    SECRETS -->|No| SUMMARY["Write concise PR description to outputs/response.md — see output_rules.md"]
-    IGNORE --> SUMMARY
+    SECRETS -->|No| GUARD["⚠️ COMPLETION GUARD — prove work landed BEFORE writing the summary:<br/>git fetch origin main &amp;&amp; git log origin/main..HEAD --oneline<br/>EMPTY result = work did NOT land — re-do or resume the work,<br/>NEVER report done from session memory or main's tip"]
+    IGNORE --> GUARD
+    GUARD -->|Diff shows your commits| SUMMARY["Write concise PR description to outputs/response.md — see output_rules.md"]
+    GUARD -->|Empty diff| REDO["Re-do or resume the work — verify the working dir,<br/>git log, git stash list.<br/>If the fix is genuinely already on the base branch,<br/>prove it (git log origin/main -- grep) before any<br/>'no changes needed' conclusion"]
+    REDO --> IMPLEMENT
     SUMMARY --> END([End — post-processing handles branch, commit and PR])
 ```
