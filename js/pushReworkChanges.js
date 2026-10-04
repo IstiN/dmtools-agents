@@ -273,7 +273,7 @@ function commitAndPush(ticketKey, config, customParams) {
 
     var hasChanges = false;
     if (status.trim()) {
-        const commitMsg = configLoader.formatTemplate(config.formats.commitMessage.rework, {ticketKey: ticketKey});
+        const commitMsg = stripCiSkipTokens(configLoader.formatTemplate(config.formats.commitMessage.rework, {ticketKey: ticketKey}));
         cmd('git commit -m "' + commitMsg + '"');
         console.log('✅ Committed rework changes');
         hasChanges = true;
