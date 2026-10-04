@@ -4739,6 +4739,160 @@ suite('smAgent: manual rework is PR-anchored, no body scrape (gh-683 bug E)', fu
     });
 });
 
+// ─── gh-715: duplicate rework dispatch — 2s apart, same SHA (fa gh-1226,
+// 2026-10-04 18:47:11/13, runs 37225765526/37225768365). agent:rework was
+// armed on BOTH carriers — the linked issue (review post-action) and the
+// PR (rework-unresolved-threads) — so one SM tick matched both rework
+// dispatch rules; each passed its own in-flight guard because the guards
+// key on the run-title anchor token ('· gh-1226' vs '· pr-1227') and the
+// two carriers anchor the SAME work differently. One leg must win. ────────
+
+suite('smAgent: duplicate rework dispatch — one leg wins (gh-715)', function () {
+
+    function deployedRules(ids) {
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+        return ids.map(function (id) {
+            assert.ok(byId[id], 'deployed rule ' + id + ' exists');
+            return byId[id];
+        });
+    }
+
+    function ghParams(rules, extra) {
+        var p = { jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            machineAuthor: 'ai-teammate', rules: rules } };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) p.jobParams[k] = extra[k]; } }
+        return p;
+    }
+
+    // Source stub with minimal guard fidelity: applies the deployed
+    // query's labels/notPrLabels (item side) and prLabels/notPrLabels
+    // (linked-PR side, against the state fixture) — the same contract the
+    // real matchesGuards implements, covered directly (with the real
+    // deployed query) in test_smGithubSource.js.
+    function armedBothSource(state) {
+        return function (rule, ctx) {
+            var q = (rule && rule.query) || {};
+            var out = [];
+            var has = function (arr, l) { return (arr || []).indexOf(l) !== -1; };
+            var issue = { key: 'gh-1226', labels: ['agent:rework'], issueNumber: 1226,
+                          prNumber: 1227, branch: 'ai/gh-1226', author: 'ai-teammate',
+                          pr: { labels: state.prLabels } };
+            var pr = { key: 'pr-1227', labels: state.prLabels, issueNumber: 1226,
+                       prNumber: 1227, branch: 'ai/gh-1226', author: 'ai-teammate' };
+            var candidates = q.type === 'issue' ? [issue] : [pr];
+            candidates.forEach(function (c) {
+                if (q.labels && !q.labels.every(function (l) { return has(c.labels, l); })) return;
+                if (q.notLabels && q.notLabels.some(function (l) { return has(c.labels, l); })) return;
+                var prLs = (c.pr && c.pr.labels) || [];
+                if (q.prLabels && !q.prLabels.some(function (l) { return has(prLs, l); })) return;
+                if (q.notPrLabels && q.notPrLabels.some(function (l) { return has(prLs, l); })) return;
+                out.push(c);
+            });
+            return out;
+        };
+    }
+
+    test('sm_github.json pins it: rework-on-red-ci defers to the armed PR (notPrLabels agent:rework)', function () {
+        var rules = deployedRules(['rework-on-red-ci', 'rework-on-label']);
+        var auto = rules[0];
+        assert.equal(auto.query.type, 'issue', 'issue carrier');
+        assert.ok((auto.query.notPrLabels || []).indexOf('agent:rework') !== -1,
+            'issue-carrier rule defers while the PR carries agent:rework (gh-715)');
+        assert.ok(!auto.consumeLabels,
+            'the issue arm survives dispatch — the dead-letter re-fire design stays intact');
+        var manual = rules[1];
+        assert.ok((manual.consumeLabels || []).indexOf('agent:rework') !== -1,
+            'PR-carrier rule keeps consuming its label on dispatch');
+    });
+
+    test('both carriers armed in one tick → exactly ONE rework dispatch (the PR-anchored leg)', function () {
+        // The exact fa gh-1226 evidence: one tick, agent:rework on the
+        // issue AND the PR — the SM fired both rules 2 seconds apart on
+        // the same head SHA.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: armedBothSource({ prLabels: ['agent:rework'] }),
+                issue: { number: 1226, state: 'open', labels: [{ name: 'agent:rework' }] }
+            }
+        });
+
+        sm.action(ghParams(deployedRules(['rework-on-red-ci', 'rework-on-label'])));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'one leg wins — no duplicate rework dispatch');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.pr, '1227', 'the PR-anchored leg is the winner (self-consuming)');
+        assert.equal(sm.capturedPrLabelRemoves.length, 1, 'the winning rule consumed the PR label');
+    });
+
+    test('cross-anchor guard: an issue-anchored leg in flight suppresses the PR-carrier dispatch', function () {
+        // The cross-tick race: tick N dispatches the issue-anchored leg and
+        // rework-unresolved-threads arms the PR later in the SAME tick; on
+        // tick N+1 the PR-carrier rule must recognize the running
+        // '· gh-1226' leg as the SAME work — and consume the PR label so a
+        // finished run never re-fires a duplicate leg on the next quiet tick.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [{ key: 'pr-1227', labels: ['agent:rework'], issueNumber: 1226,
+                          prNumber: 1227, branch: 'ai/gh-1226', author: 'ai-teammate' }]
+            },
+            workflowRuns: { in_progress: [
+                { id: 37225765526, name: 'AI Teammate', status: 'in_progress',
+                  display_title: '▶ rework (SM) · gh-1226' }
+            ] }
+        });
+
+        sm.action(ghParams(deployedRules(['rework-on-label'])));
+
+        assert.equal(sm.capturedTriggers.length, 0, 'the in-flight issue-anchored leg is the same work — no second dispatch');
+        assert.equal(sm.capturedPrLabelRemoves.length, 1, 'request consumed — the active leg fulfills it');
+        assert.equal(sm.capturedPrLabelRemoves[0].label, 'agent:rework');
+        assert.equal(sm.capturedPrLabelRemoves[0].number, 1227, 'consumed from the PR');
+    });
+
+    test('cross-anchor guard: a PR-anchored leg in flight suppresses the issue-carrier dispatch', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [{ key: 'gh-1226', labels: ['agent:rework'], issueNumber: 1226,
+                          prNumber: 1227, branch: 'ai/gh-1226', author: 'ai-teammate' }],
+                issue: { number: 1226, state: 'open', labels: [{ name: 'agent:rework' }] }
+            },
+            workflowRuns: { in_progress: [
+                { id: 37225768365, name: 'AI Teammate', status: 'in_progress',
+                  display_title: '▶ rework (SM) · pr-1227' }
+            ] }
+        });
+
+        sm.action(ghParams(deployedRules(['rework-on-red-ci'])));
+
+        assert.equal(sm.capturedTriggers.length, 0, 'the in-flight PR-anchored leg is the same work — no second dispatch');
+    });
+
+    test('cross-anchor guard: an active run for a DIFFERENT issue does not suppress', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [{ key: 'pr-1227', labels: ['agent:rework'], issueNumber: 1226,
+                          prNumber: 1227, branch: 'ai/gh-1226', author: 'ai-teammate' }]
+            },
+            workflowRuns: { in_progress: [
+                { id: 37225810446, name: 'AI Teammate', status: 'in_progress',
+                  display_title: '▶ rework (SM) · gh-999' }
+            ] }
+        });
+
+        sm.action(ghParams(deployedRules(['rework-on-label'])));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'unrelated active run — the dispatch proceeds');
+        assert.equal(sm.capturedPrLabelRemoves.length, 1, 'label consumed on the real dispatch');
+    });
+});
+
 // ─── gh-682: standing cancelled-checks remedy. Live evidence: fa#1202
 // (head 898efd4) — all 4 kicker push-runs on ai/gh-1171 CANCELLED
 // 21:43–23:05 as refresh pushes landed, required checks ended CANCELLED →

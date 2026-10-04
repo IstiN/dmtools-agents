@@ -147,6 +147,34 @@ function shouldRecoverStaleTriggerLabel(rule, label) {
     return isRuleTriggerLabel(rule, label);
 }
 
+// gh-715: the OTHER anchor of the same issue/PR pair. A rework/review
+// request can be armed on BOTH carriers at once (agent:rework on the
+// issue by the review verdict / red CI AND on the PR by
+// rework-unresolved-threads / the guest validation-red arm), and the two
+// carrier families dispatch under DIFFERENT anchor tokens — issue-carrier
+// items key 'gh-<N>', PR-carrier items key 'pr-<N>'. The in-flight guard
+// (hasActiveTargetWorkflowRun) matches the run-title anchor token, so a
+// leg dispatched under one anchor never suppresses the other carrier's
+// rule and the same work double-dispatched (live fa gh-1226 2026-10-04
+// 18:47:11/13 — two rework runs 2s apart, same head SHA). Both item
+// shapes carry the cross reference free of charge: PR items from the
+// body-scrape linkedIssueNumber, issue items from the linked-PR
+// enrichment. Returns [] when the item has no opposite anchor (classic
+// Jira-carrier rules, unlinked PRs).
+function crossAnchorKeys(item) {
+    var it = item || {};
+    var key = String(it.key || '');
+    var keys = [];
+    if (key.indexOf('pr-') === 0 &&
+        it.issueNumber !== undefined && it.issueNumber !== null) {
+        keys.push('gh-' + it.issueNumber);
+    } else if (key.indexOf('gh-') === 0 &&
+        it.prNumber !== undefined && it.prNumber !== null) {
+        keys.push('pr-' + it.prNumber);
+    }
+    return keys;
+}
+
 function hasActiveTargetWorkflowRun(scm, workflowFile, configFile, ticketKey) {
     if (!scm || typeof scm.listWorkflowRuns !== 'function') return false;
 
@@ -364,7 +392,7 @@ function localIssueExists(repoInfo, issueNumber) {
     return false; // empty/unparseable body — unverifiable, do not anchor
 }
 
-function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBudget, item) {
+function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBudget, item, skipInfo) {
     var workflowFile = rule.workflowFile || 'ai-teammate.yml';
     // workflowRef may reference the matched item: '{branch}' dispatches the
     // leg ON the PR head so GitHub links the run to the PR (checks + PR
@@ -398,6 +426,23 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
         }
         if (hasActiveTargetWorkflowRun(scm, workflowFile, resolvedCf, concurrencyKey)) {
             return false;
+        }
+        // gh-715 cross-anchor guard: the same issue/PR pair can arrive
+        // through the OTHER carrier's rule while a leg dispatched under
+        // this item's opposite anchor is still in flight (e.g. an
+        // issue-anchored rework run active while the PR-carrier
+        // rework-on-label matched). Same work, different run-title token —
+        // without this check the dispatch duplicates (live fa gh-1226,
+        // two rework runs 2s apart on the same head SHA). The caller
+        // consumes the matched request label on this suppression: the
+        // in-flight run fulfills the request, and an unconsumed label
+        // would re-fire a duplicate leg on the next quiet tick.
+        var altKeys = crossAnchorKeys(item);
+        for (var altIx = 0; altIx < altKeys.length; altIx++) {
+            if (hasActiveTargetWorkflowRun(scm, workflowFile, resolvedCf, altKeys[altIx])) {
+                if (skipInfo) skipInfo.crossAnchorActive = altKeys[altIx];
+                return false;
+            }
         }
         var inputs;
         if (rule.inputs) {
@@ -2570,9 +2615,10 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // review<->rework cycle can re-trigger. Re-adding it here afterward would immediately
         // stomp on that cleanup and permanently stick the ticket, since local rules have no
         // stale-label recovery. Only add it when the target job does *not* already self-manage it.
+        var skipInfo = {};
         var triggered = rule.localTeammate
             ? runTeammateLocally(key, rule, effectiveConfig)
-            : triggerWorkflow(effectiveRepoInfo, key, rule, effectiveConfig, workflowBudget, ticket);
+            : triggerWorkflow(effectiveRepoInfo, key, rule, effectiveConfig, workflowBudget, ticket, skipInfo);
 
         if (triggered && !ruleSelfManagesLabel) addRuleLabels(key, rule, effectiveRepoInfo);
 
@@ -2582,6 +2628,16 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         // customParams.removeLabels only reaches the ISSUE's labels, never
         // the PR's. Reuses the stale-label removal primitive (no-op in DRY).
         if (triggered && rule.consumeLabels) {
+            normalizeLabels(null, rule.consumeLabels).forEach(function (label) {
+                removeRuleLabel(key, label, rule, effectiveRepoInfo);
+            });
+        } else if (!triggered && skipInfo.crossAnchorActive && rule.consumeLabels) {
+            // gh-715: the cross-anchor guard suppressed this dispatch
+            // because a leg for the SAME issue/PR is already in flight
+            // under the other anchor — that run fulfills the request, so
+            // the label is consumed exactly as if the dispatch had
+            // happened; otherwise it outlives the run and re-fires a
+            // duplicate leg on the next quiet tick.
             normalizeLabels(null, rule.consumeLabels).forEach(function (label) {
                 removeRuleLabel(key, label, rule, effectiveRepoInfo);
             });
