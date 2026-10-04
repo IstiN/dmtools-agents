@@ -412,6 +412,16 @@ All runners share the `timerAutoCommitAndSave` WIP timer (5 min commits,
 
 ## 9. CI cost policy (choose deliberately)
 
+> **Dependency (gh-711, live fa 2026-10-04):** commit messages pushed to
+> **validation-bound PR branches must never carry a CI-skip directive**
+> (`[skip ci]` / `[ci skip]` / `[no ci]` / `[skip actions]`). A skipped CI
+> run means the ruleset-required check never registers on the new head —
+> the PR sits BLOCKED with green latches until a manual `ci.yml` dispatch.
+> The rework push path (`js/pushReworkChanges.js`) strips these directives
+> from the rework commit message regardless of the configured template.
+> Keep `[skip ci]` only for branches no ruleset requires checks on (e.g.
+> the factory-data publish branch).
+
 After every merge to main, three things can re-run CI:
 
 1. quality on main (unavoidable, ×1);

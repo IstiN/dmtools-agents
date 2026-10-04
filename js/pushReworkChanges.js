@@ -188,6 +188,28 @@ function configureGitAuthor(config) {
     }
 }
 
+/**
+ * gh-711 (live fa queue 2026-10-04, fa #1212/#1217/#1221/#1222/#1223/#1225):
+ * a rework commit message may carry a CI-skip directive (project-configured
+ * `formats.commitMessage.rework` template — "correct" for CI-noise on
+ * data-only branches). On a validation-bound PR branch that directive
+ * suppresses CI entirely: the required check never registers on the new
+ * head and the PR sits BLOCKED with green latches until a human dispatches
+ * ci.yml manually. A rework push exists precisely to re-validate the PR,
+ * so the directive is stripped here — GitHub honors skip directives
+ * case-insensitively ([skip ci], [ci skip], [no ci], [skip actions],
+ * [actions skip]), the whole bracket token is removed, and the cleaned-up
+ * whitespace collapse keeps the message readable. Branches that genuinely
+ * must not run CI (e.g. factory-data publishes) never pass through here.
+ */
+function stripCiSkipTokens(message) {
+    if (!message) return message;
+    return String(message)
+        .replace(/\[(skip[\s-]?ci|ci[\s-]?skip|no[\s-]?ci|skip[\s-]?actions|actions[\s-]?skip)\]/gi, '')
+        .replace(/[ \t]{2,}/g, ' ')
+        .trim();
+}
+
 function commitAndPush(ticketKey, config, customParams) {
     var workingDir = config.workingDir || null;
     var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
