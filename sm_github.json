@@ -66,6 +66,20 @@
           "id": "merge-validated"
         },
         {
+          "description": "RULE ORDER (owner directive 2026-10-04 'red yields the slot', live fa 11:0x: #1194 held ai_validating through repeated reds while #1215..#1223 sat FIFO-queued 40+ min): this rule MUST run BEFORE validate-armed — the unarm below frees the limit-1 mutex and (with the openPrs ioCache drop in the action) the arm rule's later query in the SAME tick sees the freed slot and arms the NEXT oldest approved PR immediately. Previously fail-validation ran after validate-armed: the arm rule scanned the still-occupied mutex every tick and the slot stayed hostage until the failed PR's rework cycle re-armed it. #637 rule-order invariant preserved: rerun-cancelled-checks stays first (#682/gh-682), and merge-validated still runs before sweep-stale-validating. GitHub PR: validation CI red on the head -> unarm ai_validating, report (with the 🔴 red-head counter marker — the validate_pr arm side skips heads with >= redHeadCap recorded reds), requeue agent:rework on the linked issue. pr_approved is STICKY (owner rule 2026-09): the reworked head re-validates and merges without a re-review — no token burn on review legs. Limit 10 (owner 2026-09-22): latch/unlatch verdicts in waves — pure label writes, nothing serial.",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validating"
+            ],
+            "checks": "red"
+          },
+          "localAction": "fail_validation",
+          "limit": 10,
+          "id": "fail-validation"
+        },
+        {
           "description": "Stale-arm sweeper (live: fa #999 — ai_validating held 7h with a CONCLUDED green CI and no verdict consumed; the ai_validating mutex stayed held forever. unarm-stale-validation covers BEHIND only). ai_validating + the head's dispatched validation run CONCLUDED (success or failure — CANCELLED is never a verdict) more than staleMinutes (15) ago, arm never consumed → unarm. Success side: unarm + re-latch ai_validated (complete_validation parity — the merge window re-flows; validate-armed latch-skips on the unchanged head). Failure side: the standard fail path (report + machine-only rework re-arm). Fresh conclusions (<15 min) never sweep: the check-visibility/verdict race window — the same-tick verdict rules (merge-validated / fail-validation / validated-green) own those. BEHIND excluded: unarm-stale-validation owns the moved-base recovery.",
           "source": "github",
           "query": {
@@ -119,7 +133,7 @@
           "id": "park-reset"
         },
         {
-          "description": "Post-approval merge window — OWNER FIFO RULE (2026-09-22): lead the OLDEST approved PR all the way to merge; never validate other approved PRs meanwhile (the merge moves the base — they would re-validate anyway). Advance to the next approved ONLY when the oldest is DIRTY (conflict-rework owns it) or its validation went RED (rework leg fixes it) — both free this slot while the oldest repairs. BEHIND/DIRTY excluded here: silent-update refreshes BEHIND heads first; conflicted heads can never reach CLEAN. Mutex ai_validating = one validation at a time. validation_failed excluded (owner 2026-09-27, live: fa#923 — a GUEST PR whose head went red cycles arm→CI red→silent-update→re-arm forever, holding this limit-1 slot hostage; the silent-update action labels such guests validation_failed and they stay parked until a NON-MACHINE push moves the head).",
+          "description": "Post-approval merge window — OWNER FIFO RULE (2026-09-22): lead the OLDEST approved PR all the way to merge; never validate other approved PRs meanwhile (the merge moves the base — they would re-validate anyway). Advance to the next approved ONLY when the oldest is DIRTY (conflict-rework owns it) or its validation went RED (rework leg fixes it) — both free this slot while the oldest repairs. BEHIND/DIRTY excluded here: silent-update refreshes BEHIND heads first; conflicted heads can never reach CLEAN. Mutex ai_validating = one validation at a time; the action re-verifies that mutex at ARM time on a LIVE list (owner directive 2026-10-04, live fa 12:0x: #1194 + #1215 both armed after a manual strip — the query-time scan read the stale cached list). RED YIELDS THE SLOT (owner directive 2026-10-04): a candidate whose CURRENT head SHA already went red redHeadCap (default 3) times — counted from the 🔴 markers on its fail reports — is SKIPPED until a NEW head lands; jobParams.redHeadSkip=false disables. validation_failed excluded (owner 2026-09-27, live: fa#923 — a GUEST PR whose head went red cycles arm→CI red→silent-update→re-arm forever, holding this limit-1 slot hostage; the silent-update action labels such guests validation_failed and they stay parked until a NON-MACHINE push moves the head).",
           "source": "github",
           "query": {
             "type": "pr",
@@ -142,6 +156,7 @@
           },
           "localAction": "validate_pr",
           "skipIfValidatedHead": true,
+          "redHeadSkip": true,
           "limit": 1,
           "id": "validate-armed",
           "deferRedHead": true
@@ -224,20 +239,6 @@
           "localAction": "validate_pr",
           "limit": 1,
           "id": "validate-fresh"
-        },
-        {
-          "description": "GitHub PR: validation CI red on the head -> unarm ai_validating, report, requeue agent:rework on the linked issue. pr_approved is STICKY (owner rule 2026-09): the reworked head re-validates and merges without a re-review — no token burn on review legs. Limit 10 (owner 2026-09-22): latch/unlatch verdicts in waves — pure label writes, nothing serial.",
-          "source": "github",
-          "query": {
-            "type": "pr",
-            "labels": [
-              "ai_validating"
-            ],
-            "checks": "red"
-          },
-          "localAction": "fail_validation",
-          "limit": 10,
-          "id": "fail-validation"
         },
         {
           "description": "GitHub PR: validation green but not yet approved -> latch ai_validated, unarm ai_validating. review-after-dev requires the latch + green checks, so review fires exactly once per validated head. Approved PRs are excluded (merge-validated / unarm-stale own them). Limit 10 (owner 2026-09-22): latch/unlatch verdicts in waves — pure label writes, nothing serial.",

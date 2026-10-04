@@ -77,6 +77,18 @@ function ioCachePut(owner, repo, kind, id, data) {
     _cache.entries[ioCacheKey(owner, repo, kind, id)] = { at: Date.now(), data: data };
 }
 
+// Drop ONE cached entry (owner directive 2026-10-04 "red yields the slot"):
+// the SM tick mutates PR labels mid-tick (fail_validation unarms
+// ai_validating) and a LATER rule in the SAME tick must observe the freed
+// mutex — validate-armed re-queries the open-PR list, which rides this
+// cache. Without the drop the arm rule sees the stale arm and defers the
+// whole approved FIFO to the next tick (live fa 2026-10-04 11:0x: #1194
+// red, seven approved PRs queued 40+ min). Invalidate-after-mutation, not
+// shorter TTLs: the 60s budget stays for read-only rules.
+function ioCacheDrop(owner, repo, kind, id) {
+    delete _cache.entries[ioCacheKey(owner, repo, kind, id)];
+}
+
 // Collect every non-expired entry of one kind for a repo into a plain
 // {id: data} map — the prStatus leg of snapshot(). Keys are the id tail
 // of the cache key (PR numbers as strings).
@@ -779,5 +791,9 @@ function createSmProvider(config) {
 if (typeof module !== 'undefined' && module.exports) {
     // _cache is exported for the unit tests (clearing/aging the holder);
     // production callers never touch it directly.
-    module.exports = { createSmProvider: createSmProvider, _cache: _cache };
+    module.exports = {
+        createSmProvider: createSmProvider,
+        ioCacheDrop: ioCacheDrop,
+        _cache: _cache
+    };
 }

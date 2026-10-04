@@ -725,3 +725,46 @@ suite('smProvider', function () {
     });
 
 });
+
+suite('smProvider: ioCacheDrop (owner directive 2026-10-04 — red yields the slot)', function () {
+
+    var MOD = 'js/common/smProvider.js';
+
+    test('dropping openPrs forces a fresh github_list_prs on the next read', function () {
+        // Same-tick slot yield: fail_validation unarms ai_validating
+        // mid-tick; the arm rule re-reading the open-PR list in the SAME
+        // tick must see the freed mutex — the cached entry is dropped, the
+        // next listOpenPrs() re-fetches instead of serving the stale arm.
+        var listCalls = 0;
+        var mod = loadModule(MOD, makeRequire({}, {}), {
+            github_list_prs: function () {
+                listCalls++;
+                return JSON.stringify([{ number: listCalls }]); // payload changes per fetch
+            }
+        });
+        mod._cache.entries = {}; // fresh holder
+
+        var provider = mod.createSmProvider({
+            scm: { provider: 'github' },
+            repository: { owner: 'mygroup', repo: 'my-repo' }
+        });
+
+        var first = provider.listOpenPrs();
+        assert.equal(listCalls, 1, 'first read fetches');
+        var cached = provider.listOpenPrs();
+        assert.equal(listCalls, 1, 'second read rides the per-tick cache');
+        assert.equal(cached[0].number, first[0].number, 'cache serves the same payload');
+
+        mod.ioCacheDrop('mygroup', 'my-repo', 'openPrs', null);
+        var fresh = provider.listOpenPrs();
+        assert.equal(listCalls, 2, 'after the drop the list re-fetches');
+        assert.notEqual(fresh[0].number, first[0].number,
+            'the fresh payload (post-unarm labels) is what the arm rule sees');
+    });
+
+    test('ioCacheDrop is a no-op for absent entries (never throws)', function () {
+        var mod = loadModule(MOD, makeRequire({}, {}), {});
+        mod._cache.entries = {};
+        mod.ioCacheDrop('nobody', 'nowhere', 'openPrs', null); // must not throw
+    });
+});
