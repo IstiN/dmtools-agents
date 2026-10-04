@@ -161,6 +161,43 @@ suite('sm github source', function () {
         assert.equal(items.length, 0);
     });
 
+    test('deployed rework-on-red-ci: issue armed + PR also armed → no match (gh-715 one-wins)', function () {
+        // fa gh-1226 2026-10-04 18:47: the review post-action armed
+        // agent:rework on the ISSUE and rework-unresolved-threads armed
+        // the same label on the PR — one SM tick fired BOTH rework
+        // dispatch rules 2s apart on the same head SHA (runs
+        // 37225765526/37225768365). The deployed issue-carrier query must
+        // defer to the PR-carrier rule (rework-on-label — self-consuming,
+        // PR-anchored) whenever the PR is armed, so exactly one leg wins.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var query = null;
+        rules.forEach(function (r) { if (r.id === 'rework-on-red-ci') query = r.query; });
+        assert.ok(query, 'deployed rework-on-red-ci query found');
+
+        var mk = function (prLabels) {
+            return load({
+                github_search_issues: function () {
+                    return { items: [{ number: 1226, labels: [{ name: 'agent:rework' }] }] };
+                }
+            }, {
+                1226: { number: 1227, state: 'OPEN' }
+            }, {
+                1227: { number: 1227, state: 'OPEN', checks: 'none', mergeState: 'BLOCKED',
+                       mergeable: null, author: 'ai-teammate', branch: 'ai/gh-1226',
+                       labels: prLabels }
+            });
+        };
+        var ctx = { repoInfo: { owner: 'epam', repo: 'dmtools-dart' }, machineAuthor: 'ai-teammate' };
+
+        var both = mk(['agent:rework']).query({ source: 'github', query: query }, ctx);
+        assert.equal(both.length, 0, 'PR also armed — the PR-carrier rule owns the dispatch');
+
+        var onlyIssue = mk([]).query({ source: 'github', query: query }, ctx);
+        assert.equal(onlyIssue.length, 1, 'issue-only arm still dispatches');
+        assert.equal(onlyIssue[0].key, 'gh-1226');
+    });
+
     test('blocked label: the SM ignores the item on every rule (fa #939)', function () {
         // 'blocked' is owner-controlled parking: label matches the rule,
         // yet the item must not surface from ANY query.
@@ -808,7 +845,11 @@ suite('sm github source', function () {
         //   94 no threads at all → no (nothing to rework);
         //   95 unresolved but guest-authored → no (auto-rework is
         //      machine-only, fail-closed);
-        //   96 unresolved but ai_validating armed → no (merge window).
+        //   96 unresolved but ai_validating armed → no (merge window);
+        //   97 unresolved + pr_approved (APPROVE verdict posted new
+        //      threads — live fa #1211, gh-710) → MATCH: the sticky
+        //      approval label must NOT exclude the rework arm; merge is
+        //      BLOCKED by the conversation gate until the threads resolve.
         var srcMod = load({
             github_list_prs: function () {
                 return [
@@ -823,6 +864,8 @@ suite('sm github source', function () {
                     { number: 95, labels: [{ name: 'ai_pr_reviewed' }], head: { ref: 'feat/guest' }, draft: false,
                       author: { login: 'human-contributor' } },
                     { number: 96, labels: [{ name: 'ai_pr_reviewed' }, { name: 'ai_validating' }], head: { ref: 'ai/gh-96' }, draft: false,
+                      author: { login: 'ai-teammate' } },
+                    { number: 97, labels: [{ name: 'ai_pr_reviewed' }, { name: 'pr_approved' }], head: { ref: 'ai/gh-97' }, draft: false,
                       author: { login: 'ai-teammate' } }
                 ];
             }
@@ -830,21 +873,25 @@ suite('sm github source', function () {
             91: { total: 2, resolved: 1, unresolved: 1 },
             92: { total: 3, resolved: 1, unresolved: 2 },
             93: { total: 2, resolved: 2, unresolved: 0 },
-            94: { total: 0, resolved: 0, unresolved: 0 }
+            94: { total: 0, resolved: 0, unresolved: 0 },
+            97: { total: 5, resolved: 0, unresolved: 5 }
             // 95/96 never reach the thread guard (author/label filters)
         });
         var items = srcMod.query({
             query: {
                 type: 'pr',
                 labels: ['ai_pr_reviewed'],
-                notLabels: ['agent:rework', 'agent:review', 'ai_validating', 'pr_approved', 'validation_failed'],
+                // gh-710: pr_approved deliberately NOT excluded — an
+                // APPROVE verdict with unresolved threads deadlocks merge
+                // (BLOCKED conversation gate) without the rework arm.
+                notLabels: ['agent:rework', 'agent:review', 'ai_validating', 'validation_failed'],
                 prMachineAuthor: true,
                 threadsResolved: false,
                 draft: false
             }
         }, { repoInfo: { owner: 'a', repo: 'b' }, machineAuthor: 'ai-teammate' });
-        assert.equal(items.map(function (i) { return i.key; }).join(','), 'pr-91,pr-92',
-            'unresolved threads match stale AND fresh verdicts; resolved/threadless/guest/validating do not');
+        assert.equal(items.map(function (i) { return i.key; }).join(','), 'pr-91,pr-92,pr-97',
+            'unresolved threads match stale AND fresh verdicts AND sticky-approved PRs; resolved/threadless/guest/validating do not');
     });
 
     test('pr rules: review-stale-verdict-unchecked — validated+reviewed head with NO checks re-reviews (no green needed)', function () {

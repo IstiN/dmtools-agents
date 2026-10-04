@@ -65,31 +65,29 @@ function buildUntrackCommand() {
 }
 
 /**
- * `:!` pathspec exclusions (each path and its contents) for `git add` staging
- * commands, e.g. `git add . -- <specs> ":!factory-kit" ":!factory-kit/**"`.
- * Quoted, so a shell (or cli_execute_command) never splits paths.
+ * Probe-filtered `:!` exclusion pathspecs for an arbitrary path list.
+ * Each path that git does NOT already ignore yields `":!<path>"` plus
+ * `":!<path>/**"` (quoted, so a shell or cli_execute_command never splits
+ * paths); a path git already ignores yields nothing — gitignore alone keeps
+ * it out of `git add`, and naming it in ANY pathspec (exclusions included)
+ * is exactly what trips git add's ignored-pathspec guard.
  *
- * gh-683: pass `runCommand` (a function taking { command } — e.g. the site's
- * cli_execute_command wrapper, executing in the SAME working directory as
- * the add) to probe each artifact with `git check-ignore -q -- <path>`:
+ * gh-683 + gh-1164 probe contract: `runCommand` takes { command } (e.g. the
+ * site's cli_execute_command wrapper, executing in the SAME working
+ * directory as the add) and runs `git check-ignore -q -- <path>`:
  *   - probe succeeds (exit 0 = git already ignores the path): the exclusion
- *     is DROPPED — gitignore alone keeps the artifact out of `git add .`,
- *     and naming it in a pathspec is exactly what trips git add's
- *     ignored-pathspec guard (live fa run 37153405587);
+ *     is DROPPED (live guard casualties: fa runs 37153405587, 37153882406);
  *   - probe throws (exit 1 = not ignored; cli_execute_command throws on any
  *     non-zero exit): the exclusion is KEPT — the pathspec is the only thing
- *     keeping the artifact out of the commit, and a not-ignored path can
- *     never trip the ignored-files guard.
- * Every staging site runs the untrack command BEFORE the add, so the probe
- * observes the post-untrack state: a poisoned branch's tracked runtime files
- * are already index-less by then, and the tracked+ignored case never trips
- * the guard anyway. Without `runCommand` the full static list is returned
+ *     keeping the path out of the commit, and a not-ignored path can never
+ *     trip the ignored-files guard.
+ * Without `runCommand` the full static exclusion list is returned
  * (pre-gh-683 behavior) — kept for signature compatibility.
  */
-function buildStagingPathspecs(runCommand) {
-    var paths = RUNTIME_ARTIFACT_PATHS;
+function buildExclusionPathspecs(paths, runCommand) {
+    var kept = paths || [];
     if (typeof runCommand === 'function') {
-        paths = RUNTIME_ARTIFACT_PATHS.filter(function (path) {
+        kept = kept.filter(function (path) {
             try {
                 runCommand({ command: 'git check-ignore -q -- ' + path });
                 return false; // ignored — git's own exclude machinery owns it
@@ -99,11 +97,42 @@ function buildStagingPathspecs(runCommand) {
         });
     }
     var specs = [];
-    for (var i = 0; i < paths.length; i++) {
-        specs.push('":!' + paths[i] + '"');
-        specs.push('":!' + paths[i] + '/**"');
+    for (var i = 0; i < kept.length; i++) {
+        specs.push('":!' + kept[i] + '"');
+        specs.push('":!' + kept[i] + '/**"');
     }
     return specs.join(' ');
+}
+
+/**
+ * `:!` pathspec exclusions (each path and its contents) for `git add` staging
+ * commands, e.g. `git add . -- <specs>`. Quoted, so a shell (or
+ * cli_execute_command) never splits paths.
+ *
+ * `extraPaths` (gh-1164): site-specific excludes appended beside the runtime
+ * artifacts — above all `factory-kit`, the factory workflow's nested
+ * machine-infra repo. Live fa gh-1164 (runs 37153882406 + 37220167230,
+ * 2026-10-03/04): the timer autosave's `git add -A` FAILED every 5 minutes
+ * for 40+ minutes with exit 1 "The following paths are ignored by one of
+ * your .gitignore files", the dev agent's real work was never committed and
+ * died with the runner — because every site appended
+ * `":!factory-kit" ":!factory-kit/**"` STATICALLY, after the probe-filtered
+ * runtime specs. Scratch-repo repro (git 2.50.1): the guard fires on ANY
+ * literal pathspec — exclusions included — naming an existing,
+ * gitignored-untracked path, and a runner workspace has exactly that when
+ * `factory-kit` is materialized AND gitignored. Extra paths therefore go
+ * through the SAME check-ignore probe: ignored+present → exclusion dropped
+ * (gitignore keeps it out); not ignored (the nested-gitlink case the
+ * exclusion exists for) → exclusion kept, guard-safe either way.
+ *
+ * Every staging site runs the untrack command BEFORE the add, so the probe
+ * observes the post-untrack state: a poisoned branch's tracked runtime files
+ * are already index-less by then, and the tracked+ignored case never trips
+ * the guard anyway.
+ */
+function buildStagingPathspecs(runCommand, extraPaths) {
+    var paths = RUNTIME_ARTIFACT_PATHS.concat(extraPaths || []);
+    return buildExclusionPathspecs(paths, runCommand);
 }
 
 /**
@@ -125,6 +154,7 @@ function isRuntimeArtifactStatusLine(line) {
 module.exports = {
     RUNTIME_ARTIFACT_PATHS: RUNTIME_ARTIFACT_PATHS,
     buildUntrackCommand: buildUntrackCommand,
+    buildExclusionPathspecs: buildExclusionPathspecs,
     buildStagingPathspecs: buildStagingPathspecs,
     isRuntimeArtifactStatusLine: isRuntimeArtifactStatusLine
 };

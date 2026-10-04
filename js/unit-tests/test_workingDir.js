@@ -14,6 +14,14 @@
 // each shard runs in its own engine).
 var commentMarkupModule = loadModule('js/common/commentMarkup.js');
 
+// Real tracker factory (provider probing is pure config/env reads) —
+// preCliDevelopmentSetup requires it for the dev-leg label assertion.
+var trackersModuleReal = loadModule(
+    'js/common/trackers.js',
+    makeRequire({ '../config.js': configModule }),
+    {}
+);
+
 /**
  * Load preCliDevelopmentSetup with controlled mocks.
  * Returns { module, calls } where calls accumulates every cli_execute_command invocation.
@@ -73,7 +81,8 @@ function loadPreCli(workingDir) {
             './fetchLinkedTestsToInput.js': { action: function() {} },
             './restoreFromReleases.js': { action: function() {} },
             './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; }, buildSetupWarningsMarkdown: function() { return null; } },
-            './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} }
+            './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
+            './common/trackers.js': trackersModuleReal
         }),
         {
             cli_execute_command: mockCli,
@@ -195,7 +204,8 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 './fetchLinkedTestsToInput.js': { action: function() {} },
                 './restoreFromReleases.js': { action: function() {} },
                 './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; }, buildSetupWarningsMarkdown: function() { return null; } },
-                './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} }
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
+            './common/trackers.js': trackersModuleReal
             ,
             './common/commentMarkup.js': commentMarkupModule,
         }),
@@ -273,7 +283,8 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 './fetchLinkedTestsToInput.js': { action: function() {} },
                 './restoreFromReleases.js': { action: function() {} },
                 './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; }, buildSetupWarningsMarkdown: function() { return null; } },
-                './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} }
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
+            './common/trackers.js': trackersModuleReal
             ,
             './common/commentMarkup.js': commentMarkupModule,
         }),
@@ -355,7 +366,8 @@ suite('preCliDevelopmentSetup > runCmd workingDir', function() {
                 './fetchLinkedTestsToInput.js': { action: function() {} },
                 './restoreFromReleases.js': { action: function() {} },
                 './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; }, buildSetupWarningsMarkdown: function() { return null; } },
-                './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} }
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
+            './common/trackers.js': trackersModuleReal
             ,
             './common/commentMarkup.js': commentMarkupModule,
         }),

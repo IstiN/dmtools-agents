@@ -235,8 +235,11 @@ function action(params) {
             // (via cli_execute_command) drops exclusions for paths git
             // already ignores — naming an existing ignored-untracked path
             // in an exclusion pathspec trips git add's ignored-files guard.
-            cli_execute_command({ command: 'git add . -- ' + gitStaging.buildStagingPathspecs(cli_execute_command) +
-                ' ":!factory-kit" ":!factory-kit/**"' });
+            // gh-1164: `factory-kit` goes through the same check-ignore
+            // probe (inside buildStagingPathspecs' extraPaths) — a static
+            // exclusion trips the same ignored-pathspec guard when the kit
+            // is materialized AND gitignored.
+            cli_execute_command({ command: 'git add . -- ' + gitStaging.buildStagingPathspecs(cli_execute_command, ['factory-kit']) });
             const rawStatus = cli_execute_command({ command: 'git status --porcelain' }) || '';
             const statusLines = rawStatus.split('\n').filter(function(l) {
                 return l.trim() &&

@@ -15,6 +15,14 @@
 var NOOP_MODULE = {};
 var NOOP_CONFIG_JS = { GIT_CONFIG: {}, STATUSES: {}, resolveStatuses: function() { return {}; } };
 
+// The real tracker factory (provider probing is pure config/env reads) so
+// action() tests exercise the actual github/jira provider gating.
+var trackersModuleReal = loadModule(
+    'js/common/trackers.js',
+    makeRequire({ '../config.js': configModule }),
+    {}
+);
+
 var DEFAULT_PR_HELPER_STUB = {
     buildTargetedOriginFetchCommand: function(branches) {
         var list = (branches || []).filter(function(b) { return b; });
@@ -52,7 +60,8 @@ function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
             './fetchParentContextToInput.js': NOOP_MODULE,
             './restoreFromReleases.js': NOOP_MODULE,
             './common/setupCommands.js': NOOP_MODULE,
-            './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} }
+            './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
+            './common/trackers.js': trackersModuleReal
         }),
         mocks || {}
     );
@@ -374,6 +383,221 @@ suite('preCliDevelopmentSetup.checkoutBranch — base branch fetch before checko
         assert.ok(fetchIdx !== -1, 'git fetch origin release/rc_mobile_proj-1 must run before checkout');
         assert.ok(checkoutIdx !== -1, 'git checkout -B release/rc_mobile_proj-1 origin/release/rc_mobile_proj-1 must run');
         assert.ok(fetchIdx < checkoutIdx, 'fetch must come before checkout');
+    });
+
+});
+
+suite('preCliDevelopmentSetup.reportExistingDevBranch — existing remote work surfaced (gh-1164)', function () {
+
+    // Live fa gh-1164 (run 37220167230): a resumed dev leg on a fresh branch
+    // read session memory and mistook main's release tip for its own work
+    // commit — nothing in the input folder said what origin/ai/<ticket>
+    // already carried. Mirrors preCliReworkSetup.js surfacing existing state.
+
+    function loadForReport(calls, responses, writes) {
+        var configLoaderStub = makeConfigLoaderStub({ development: 'ai/PROJ-7' }, 'main', null, []);
+        var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: makeCliMock(calls, responses),
+            file_write: function (args) { writes.push(args); }
+        });
+        return mod;
+    }
+
+    var CONFIG = makeConfig({ git: { featureBranch: { enabled: false } } });
+
+    test('no remote branch → cheap no-op: one ls-remote, no file written', function () {
+        var calls = [];
+        var writes = [];
+        var mod = loadForReport(calls, {}, writes);
+
+        var result = mod.reportExistingDevBranch('PROJ-7', CONFIG, TICKET, 'input/PROJ-7');
+
+        assert.equal(result, false);
+        assert.deepEqual(calls, ['git ls-remote --heads origin ai/PROJ-7'],
+            'exactly one ls-remote when the branch does not exist');
+        assert.equal(writes.length, 0);
+    });
+
+    test('existing remote branch → input/<ticket>/existing_work.md carries commit count, file stat and oneline log', function () {
+        var calls = [];
+        var writes = [];
+        var responses = {};
+        responses['git ls-remote --heads origin ai/PROJ-7'] = 'abc123\trefs/heads/ai/PROJ-7';
+        responses['git rev-list --count origin/main..origin/ai/PROJ-7'] = '3';
+        responses['git log --oneline -20 origin/main..origin/ai/PROJ-7'] = 'abc123 PROJ-7 WIP auto-save\ndef456 PROJ-7 part A\n789abc PROJ-7 scaffold';
+        responses['git diff --shortstat origin/main...origin/ai/PROJ-7'] = ' 5 files changed, 120 insertions(+), 4 deletions(-)';
+        var mod = loadForReport(calls, responses, writes);
+
+        var result = mod.reportExistingDevBranch('PROJ-7', CONFIG, TICKET, 'input/PROJ-7');
+
+        assert.equal(result, true);
+        assert.equal(writes.length, 1, 'exactly one report file');
+        assert.equal(writes[0].path, 'input/PROJ-7/existing_work.md');
+        var content = writes[0].content;
+        assert.contains(content, 'RESUMED development leg',
+            'the resumed-leg warning is the headline');
+        assert.contains(content, 'Commits ahead of base: 3');
+        assert.contains(content, '5 files changed, 120 insertions(+), 4 deletions(-)',
+            'brief file stat');
+        assert.contains(content, 'def456 PROJ-7 part A', 'oneline commit list');
+        assert.contains(content, 'origin/ai/PROJ-7');
+        assert.contains(content, 'origin/main',
+            'names the base so the agent cannot mistake main\'s tip for its own work');
+        // cheap: ls-remote + rev-list + log + diff, nothing else
+        assert.equal(calls.length, 4, 'one ls-remote + one log batch when the branch exists');
+    });
+
+    test('ls-remote failure is non-fatal and writes nothing', function () {
+        var writes = [];
+        var configLoaderStub = makeConfigLoaderStub({ development: 'ai/PROJ-7' }, 'main', null, []);
+        var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
+            cli_execute_command: function () { throw new Error('network down'); },
+            file_write: function (args) { writes.push(args); }
+        });
+
+        var result = mod.reportExistingDevBranch('PROJ-7', CONFIG, TICKET, 'input/PROJ-7');
+
+        assert.equal(result, false);
+        assert.equal(writes.length, 0);
+    });
+
+});
+
+suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-716)', function () {
+
+    // Live fa gh-1164: a MANUALLY dispatched dev leg (gh workflow run
+    // ai-teammate.yml -f issue=N -f leg=dev) bypassed the SM's agent:dev
+    // labeling, so the card vanished from the factory board's Development
+    // lane while the leg ran 40+ minutes. The setup now asserts the
+    // transition itself: agent:dev ON, stale agent:review / ai_developed
+    // cleared — on ANY dispatch path. GitHub-tracker deployments only;
+    // never fatal (a labeling failure costs board visibility, not the run).
+
+    function makeActionConfig(extra) {
+        return makeConfig(Object.assign({
+            git: { baseBranch: 'main', featureBranch: { enabled: false } },
+            tracker: { provider: 'github' },
+            repository: { owner: 'acme', repo: 'widgets' }
+        }, extra || {}));
+    }
+
+    function makeActionConfigLoaderStub(config) {
+        return {
+            loadProjectConfig: function () { return config; },
+            paramsForConfigLoad: function (params) { return params; },
+            resolveBranchName: function (cfg, ticket, role) {
+                return (role === 'development' ? 'ai/' : 'feature/') + ticket.key;
+            },
+            resolvePRTargetBranch: function () { return 'main'; },
+            loadHookFn: function () { return null; }
+        };
+    }
+
+    // Full-stub loader: action() touches restore/fetch/setup helpers that
+    // checkoutBranch-only tests never exercised.
+    function loadForAction(bag, config, githubBehavior) {
+        return loadPreCliDevelopmentSetupWithExtras(bag, config, githubBehavior);
+    }
+
+    function loadPreCliDevelopmentSetupWithExtras(bag, config, githubBehavior) {
+        return loadModule(
+            'js/preCliDevelopmentSetup.js',
+            makeRequire({
+                './configLoader.js': makeActionConfigLoaderStub(config),
+                './common/pullRequest.js': DEFAULT_PR_HELPER_STUB,
+                './config.js': NOOP_CONFIG_JS,
+                './fetchQuestionsToInput.js': { action: function () {} },
+                './fetchLinkedTestsToInput.js': { action: function () {} },
+                './fetchParentContextToInput.js': { action: function () {} },
+                './restoreFromReleases.js': { action: function () {} },
+                './common/setupCommands.js': {
+                    runSetupCommands: function () { return null; },
+                    buildSetupWarningsMarkdown: function () { return null; },
+                    truncateSetupError: function (s) { return String(s); }
+                },
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
+                './common/trackers.js': trackersModuleReal
+            }),
+            {
+                cli_execute_command: makeCliMock(bag.cliCalls, {}),
+                jira_move_to_status: function (args) { bag.moves.push(args); },
+                file_write: function (args) { bag.writes.push(args); },
+                github_add_labels: function (args) {
+                    bag.events.push({ op: 'add', args: args });
+                    if (githubBehavior && githubBehavior.addThrows) {
+                        throw new Error('label add failed');
+                    }
+                },
+                github_remove_label: function (args) {
+                    bag.events.push({ op: 'remove', args: args });
+                    if (githubBehavior && githubBehavior.removeThrowsFor === args.label) {
+                        throw new Error('label absent');
+                    }
+                }
+            }
+        );
+    }
+
+    function makeBag() {
+        return { cliCalls: [], moves: [], writes: [], events: [] };
+    }
+
+    var GH_TICKET = { key: 'gh-716', fields: {} };
+
+    test('github tracker: clears stale agent:review + ai_developed, THEN asserts agent:dev with repo-scoped calls', function () {
+        var bag = makeBag();
+        var mod = loadForAction(bag, makeActionConfig(), { removeThrowsFor: 'agent:review' });
+
+        mod.action({ inputFolderPath: 'input/gh-716', ticket: GH_TICKET, customParams: {} });
+
+        var ghEvents = bag.events;
+        assert.equal(ghEvents.length, 3, 'two removals + one add');
+        // stale labels cleared FIRST (absent label = thrown, swallowed)
+        assert.equal(ghEvents[0].op, 'remove');
+        assert.equal(ghEvents[0].args.label, 'agent:review');
+        assert.equal(ghEvents[1].op, 'remove');
+        assert.equal(ghEvents[1].args.label, 'ai_developed');
+        assert.equal(ghEvents[2].op, 'add');
+        assert.deepEqual(ghEvents[2].args.labels, ['agent:dev']);
+        ghEvents.forEach(function (e) {
+            assert.equal(e.args.number, 716, 'issue number parsed from the gh-716 key');
+            assert.equal(e.args.workspace, 'acme');
+            assert.equal(e.args.repository, 'widgets');
+        });
+        // setup kept going: branch checkout happened after the assertion
+        assert.ok(bag.cliCalls.indexOf('git checkout -b ai/gh-716') !== -1,
+            'branch setup still ran');
+    });
+
+    test('non-github tracker (jira default): never touches GitHub labels', function () {
+        var bag = makeBag();
+        var mod = loadForAction(bag, makeActionConfig({ tracker: { provider: 'jira' } }), {});
+
+        mod.action({ inputFolderPath: 'input/PROJ-1', ticket: { key: 'PROJ-1', fields: {} }, customParams: {} });
+
+        assert.equal(bag.events.length, 0, 'no github_add_labels / github_remove_label calls');
+        assert.ok(bag.cliCalls.indexOf('git checkout -b ai/PROJ-1') !== -1,
+            'branch setup still ran');
+    });
+
+    test('label assertion failure is non-fatal: github_add_labels throws, the setup still completes', function () {
+        var bag = makeBag();
+        var mod = loadForAction(bag, makeActionConfig(), { addThrows: true });
+
+        mod.action({ inputFolderPath: 'input/gh-716', ticket: GH_TICKET, customParams: {} });
+
+        assert.equal(bag.events.length, 3, 'removals were attempted, add was attempted');
+        assert.ok(bag.cliCalls.indexOf('git checkout -b ai/gh-716') !== -1,
+            'development was NOT stopped by the labeling failure');
+    });
+
+    test('assertDevLegTransition: key without a trailing issue number is skipped without calls', function () {
+        var bag = makeBag();
+        var mod = loadForAction(bag, makeActionConfig(), {});
+
+        mod.assertDevLegTransition('no-digits-here', makeActionConfig(), {});
+
+        assert.equal(bag.events.length, 0);
     });
 
 });

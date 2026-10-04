@@ -104,6 +104,59 @@ suite('gitStaging', function() {
         }
     });
 
+    test('buildStagingPathspecs(runner, extraPaths): extra paths go through the SAME check-ignore probe — gh-1164 factory-kit repro', function() {
+        // gh-1164 scratch-repo repro (git 2.50.1): the runner workspace has
+        // factory-kit materialized AND gitignored, and git add's
+        // ignored-pathspec guard fires on ANY literal pathspec naming an
+        // existing ignored-untracked path — `:!` exclusions included. Every
+        // staging site used to append `":!factory-kit" ":!factory-kit/**"`
+        // STATICALLY after the probe-filtered runtime specs, so the timer
+        // autosave died every 5 minutes (live fa runs 37153882406 +
+        // 37220167230) and the dev agent's work was never committed.
+        // extraPaths must be probe-filtered exactly like the runtime list:
+        // ignored → dropped (gitignore keeps it out), not ignored → kept.
+        var probeCalls = [];
+        var allIgnored = gitStaging.buildStagingPathspecs(function (args) {
+            probeCalls.push(args.command);
+            return ''; // check-ignore exit 0 = ignored
+        }, ['factory-kit']);
+        assert.equal(allIgnored, '',
+            'a repo that ignores factory-kit too needs NO pathspec at all — nothing left to trip the guard');
+        assert.ok(probeCalls.some(function (c) { return c === 'git check-ignore -q -- factory-kit'; }),
+            'factory-kit is probed like every runtime artifact');
+
+        var kitNotIgnored = gitStaging.buildStagingPathspecs(function (args) {
+            if (args.command.indexOf('factory-kit') !== -1) {
+                throw new Error('Command execution failed (exit code 1)'); // nested repo, not ignored
+            }
+            return ''; // runtime artifacts ignored
+        }, ['factory-kit']);
+        assert.equal(kitNotIgnored, '":!factory-kit" ":!factory-kit/**"',
+            'the nested-gitlink case keeps BOTH factory-kit exclusions (and only those)');
+        assert.notContains(kitNotIgnored, ':!.dmtools/',
+            'ignored runtime artifacts stay unnamed');
+
+        // No runner: static legacy behavior now covers extra paths too.
+        var staticSpecs = gitStaging.buildStagingPathspecs(undefined, ['factory-kit']);
+        assert.contains(staticSpecs, '":!factory-kit"');
+        assert.contains(staticSpecs, '":!factory-kit/**"');
+        assert.contains(staticSpecs, '":!.dmtools/fa-sessions"');
+    });
+
+    test('buildExclusionPathspecs probes an arbitrary path list (gitOps/commitAndPushToBaseBranch sites)', function() {
+        var kept = gitStaging.buildExclusionPathspecs(['factory-kit'], function () {
+            throw new Error('Command execution failed (exit code 1)');
+        });
+        assert.equal(kept, '":!factory-kit" ":!factory-kit/**"',
+            'not-ignored path keeps file + content exclusions');
+        var dropped = gitStaging.buildExclusionPathspecs(['factory-kit'], function () { return ''; });
+        assert.equal(dropped, '',
+            'ignored path yields no pathspec — the guard can never fire on it');
+        var legacy = gitStaging.buildExclusionPathspecs(['factory-kit']);
+        assert.equal(legacy, '":!factory-kit" ":!factory-kit/**"',
+            'without a runner the full static list is returned');
+    });
+
     test('isRuntimeArtifactStatusLine flags runtime-artifact status lines only', function() {
         assert.ok(gitStaging.isRuntimeArtifactStatusLine('?? .dmtools/copilot-sessions/'),
             'untracked copilot-sessions leftover');

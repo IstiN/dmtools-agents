@@ -17,6 +17,7 @@ const fetchParentContextToInput = require('./fetchParentContextToInput.js');
 var restoreFromReleases = require('./restoreFromReleases.js');
 var setupCommands = require('./common/setupCommands.js');
 var baseBranchMarker = require('./common/baseBranchMarker.js');
+var trackersModule = require('./common/trackers.js');
 
 // Universal working-directory-aware wrapper for cli_execute_command.
 // When config.workingDir is set (via customParams.targetRepository.workingDir),
@@ -346,6 +347,120 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
     }
 }
 
+// ── Existing remote work report (gh-1164) ───────────────────────────────────
+// Live fa gh-1164 (run 37220167230): a resumed dev leg started on a fresh
+// branch, read session memory, and mistook main's release tip for its own
+// work commit — because nothing in the input folder told it what
+// origin/<devBranch> ALREADY carried. Mirrors how preCliReworkSetup.js
+// surfaces existing state (PR diff/discussions into the input folder): one
+// ls-remote always, one log/diff only when the branch exists, and the result
+// lands in input/<ticketKey>/existing_work.md so the agent sees previous
+// rounds' work before it starts.
+function reportExistingDevBranch(ticketKey, config, ticket, inputFolder) {
+    var branchName = configLoader.resolveBranchName(config, ticket, 'development');
+    var baseBranch = configLoader.resolvePRTargetBranch(config, ticket);
+
+    var lsRemote = '';
+    try {
+        lsRemote = cleanCommandOutput(runCmd({ command: 'git ls-remote --heads origin ' + branchName }) || '');
+    } catch (e) {
+        console.warn('Could not check remote branch state (non-fatal):', e);
+        return false;
+    }
+    if (!lsRemote.trim()) {
+        console.log('No existing remote branch origin/' + branchName + ' — fresh development leg');
+        return false;
+    }
+
+    var originRef = 'origin/' + baseBranch;
+    var branchRef = 'origin/' + branchName;
+    var commitsAhead = '?';
+    var logLines = '';
+    var diffStat = '';
+    try {
+        commitsAhead = cleanCommandOutput(runCmd({ command: 'git rev-list --count ' + originRef + '..' + branchRef }) || '') || '0';
+    } catch (e) {
+        console.warn('Could not count branch commits (non-fatal):', e);
+    }
+    try {
+        logLines = cleanCommandOutput(runCmd({ command: 'git log --oneline -20 ' + originRef + '..' + branchRef }) || '');
+    } catch (e) { }
+    try {
+        diffStat = cleanCommandOutput(runCmd({ command: 'git diff --shortstat ' + originRef + '...' + branchRef }) || '');
+    } catch (e) { }
+
+    var content = '# Existing Work on Remote Branch\n\n' +
+        '⚠️ `' + branchRef + '` already exists — this is a RESUMED development leg. ' +
+        'Previous rounds\' work lives on this branch. Do NOT mistake the base branch tip (' + originRef + ') ' +
+        'or session-memory claims for your own landed work — the commits below are what actually exists.\n\n' +
+        '- Branch: `' + branchName + '` (remote)\n' +
+        '- Base: `' + originRef + '`\n' +
+        '- Commits ahead of base: ' + commitsAhead + '\n' +
+        '- Diff vs base: ' + (diffStat || '(no diff)') + '\n';
+    if (logLines) {
+        content += '\n## Commits ahead of base\n\n```\n' + logLines + '\n```\n';
+    }
+
+    try {
+        file_write({ path: inputFolder + '/existing_work.md', content: content });
+        console.log('📋 Reported existing remote work: ' + branchRef + ' is ' + commitsAhead +
+            ' commit(s) ahead of ' + originRef + ' → ' + inputFolder + '/existing_work.md');
+    } catch (e) {
+        console.warn('Could not write existing_work.md (non-fatal):', e);
+    }
+    return true;
+}
+
+// ── Dev-leg transition assertion (gh-716) ────────────────────────────────────
+// The factory board's Development lane reads GitHub labels: agent:dev ON and
+// ai_developed OFF means "dev leg running". The SM sets agent:dev when IT
+// arms the leg — a MANUAL dispatch (gh workflow run ai-teammate.yml
+// -f issue=N -f leg=dev) bypasses that labeling and the card vanishes from
+// the board (live fa gh-1164: leg running 40+ min, Development column
+// empty). So the setup asserts the transition itself, on ANY dispatch path:
+// clear stale agent:review / ai_developed left over from a previous cycle,
+// then add agent:dev.
+// GitHub-tracker deployments ONLY — these labels are the GitHub
+// machine-loop state; Jira/ADO tickets must not be touched. Never fatal: a
+// labeling failure costs board visibility, never the development run
+// (same trade-off as the status move below).
+function assertDevLegTransition(ticketKey, config, customParams) {
+    try {
+        var tracker = trackersModule.createTracker(config, customParams || {});
+        if (tracker.provider() !== 'github') return;
+        // Factory issue keys are 'gh-N' shaped — take the trailing number,
+        // exactly like smAgent's github addLabel/removeRuleLabel do (the
+        // trackers.js key expansion only handles bare numeric keys).
+        var m = /(\d+)$/.exec(String(ticketKey));
+        if (!m) {
+            console.warn('assertDevLegTransition: no issue number in key "' + ticketKey +
+                '" — skipping label assertion');
+            return;
+        }
+        var params = { number: parseInt(m[1], 10) };
+        // gh-683 bug D: without workspace/repository the github bridge
+        // rejects the call ("Issue reference requires owner/repo/number")
+        // and the label never lands — scope it whenever the config knows
+        // the target repo (mirrors smAgent.addRuleLabels).
+        if (config.repository && config.repository.owner && config.repository.repo) {
+            params.workspace = config.repository.owner;
+            params.repository = config.repository.repo;
+        }
+        ['agent:review', 'ai_developed'].forEach(function (label) {
+            try {
+                github_remove_label(Object.assign({ label: label }, params));
+                console.log('Cleared stale ' + label + ' from ' + ticketKey);
+            } catch (e) {
+                // label absent — the normal case, nothing to clear
+            }
+        });
+        github_add_labels(Object.assign({ labels: ['agent:dev'] }, params));
+        console.log('Asserted agent:dev on ' + ticketKey + ' — dev leg visible on the board');
+    } catch (e) {
+        console.warn('assertDevLegTransition failed (non-fatal):', e);
+    }
+}
+
 // Defensive cap on Jira/tracker comment length — see setupCommands.truncateSetupError
 // for rationale (Jira rejects comments over ~350000 chars; unbounded error messages
 // here could silently fail to post, leaving the ticket with no failure visibility).
@@ -392,6 +507,16 @@ function action(params) {
             console.warn('Failed to move ticket to ' + statuses.IN_DEVELOPMENT + ':', e);
         }
 
+        // 1.5. Assert the dev-leg transition labels (gh-716): agent:dev ON,
+        // stale agent:review / ai_developed cleared — so ANY dispatch path
+        // (SM-armed or manual) shows the card on the factory board's
+        // Development lane. GitHub deployments only; non-fatal.
+        try {
+            assertDevLegTransition(ticketKey, config, customParams);
+        } catch (e) {
+            console.warn('Failed to assert dev transition labels (non-fatal):', e);
+        }
+
         // 2. Checkout or create feature branch
         try {
             var ticket = params.ticket || actualParams.ticket || { key: ticketKey, fields: {} };
@@ -414,6 +539,17 @@ function action(params) {
         // `git add -A` auto-save), aborting checkout with "untracked working tree files
         // would be overwritten".
         baseBranchMarker.writeBaseBranchMarker(config.git.baseBranch);
+
+        // 2.5. Surface existing remote dev-branch work into the input folder (gh-1164):
+        // a resumed leg must see previous rounds' commits instead of mistaking the
+        // base branch tip for its own work. Cheap: one ls-remote (+ one log/diff when
+        // the branch exists); never fatal.
+        try {
+            var ticketForReport = params.ticket || actualParams.ticket || { key: ticketKey, fields: {} };
+            reportExistingDevBranch(ticketKey, config, ticketForReport, folder);
+        } catch (e) {
+            console.warn('reportExistingDevBranch failed (non-fatal):', e);
+        }
 
         // 3. Fetch questions with answers into input folder
         fetchQuestionsToInput.action(actualParams);
@@ -460,5 +596,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, checkoutBranch };
+    module.exports = { action, checkoutBranch, reportExistingDevBranch, assertDevLegTransition };
 }

@@ -226,9 +226,12 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
         // probes each artifact with `git check-ignore` (via runCmd) and
         // omits the exclusion for paths git already ignores, so this add
         // can never hit the "paths are ignored" guard.
+        // gh-1164 (live fa runs 37153882406 + 37220167230): `factory-kit`
+        // goes through the same probe — a static `:!factory-kit` exclusion
+        // trips the very same guard when the kit is materialized AND
+        // gitignored, silently starving the leg's commits.
         runCmd({
-            command: 'git add . -- ' + gitStaging.buildStagingPathspecs(runCmd) +
-                ' ":!factory-kit" ":!factory-kit/**"'
+            command: 'git add . -- ' + gitStaging.buildStagingPathspecs(runCmd, ['factory-kit'])
         });
 
         // Check if there are changes to commit
@@ -590,7 +593,7 @@ function resetDevelopmentForRetry(ticketKey, statuses, customParams, metadata, s
     });
 }
 
-function resumeDevelopmentAgent(params, ticketKey, customParams, stage, errorMessage) {
+function resumeDevelopmentAgent(params, ticketKey, customParams, stage, errorMessage, promptOverride) {
     // feedbackLoop.resumeAgent() itself shells out (mkdir/bash/run-agent.sh --continue).
     // If that self-invocation is ever blocked (e.g. a misconfigured CLI_ALLOWED_COMMANDS
     // whitelist) or fails for any other unexpected reason, it can throw instead of returning
@@ -605,13 +608,90 @@ function resumeDevelopmentAgent(params, ticketKey, customParams, stage, errorMes
             customParams: customParams,
             section: 'postAction',
             stage: stage,
-            error: errorMessage
+            error: errorMessage,
+            promptOverride: promptOverride
         }).attempted;
     } catch (resumeError) {
         console.error('resumeDevelopmentAgent: feedbackLoop.resumeAgent failed unexpectedly — treating as "not resumed" so the ticket can still be reset for retry:', resumeError);
         return false;
     }
 }
+
+// ── Post-session landing guard (gh-1164) ────────────────────────────────────
+// Live fa gh-1164 (runs 37153882406 + 37220167230, 2026-10-03/04): a dev agent
+// did real work live, the timer autosave's staging add FAILED on every tick
+// (git's ignored-pathspec guard), the work died uncommitted with the runner,
+// and the NEXT leg — on a fresh branch off main, reading session memory —
+// mistook main's release tip for its own work commit, declared done, and hit
+// "No changes to commit": response.md claimed changes, the branch carried
+// none, and the ticket moved to In Review with no PR. The guard below runs
+// BEFORE the 'No Code Changes Needed' comment path: when the branch carries
+// no work but the agent's response CLAIMS changes, resume the agent with a
+// promptOverride telling it its changes never landed.
+
+/**
+ * True when the current branch carries dev work: commits ahead of the base
+ * branch, or a non-trivial working tree (runtime artifacts and the
+ * factory-kit nested repo never count — they are machine-local noise).
+ */
+function branchCarriesWork(baseBranch) {
+    var originRef = 'origin/' + (baseBranch || 'main');
+    try {
+        var log = cleanCommandOutput(runCmd({ command: 'git log ' + originRef + '..HEAD --oneline' }) || '');
+        if (log.trim()) return true;
+    } catch (e) {
+        console.warn('Landing guard: could not inspect ' + originRef + '..HEAD:', e);
+    }
+    try {
+        var status = runCmd({ command: 'git status --porcelain' }) || '';
+        var lines = status.split('\n');
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            if (!line.trim()) continue;
+            if (gitStaging.isRuntimeArtifactStatusLine(line)) continue;
+            if (/^(\?\?|A )\s+factory-kit(\/|$)/.test(line)) continue;
+            // The job's own scratch output (response.md etc.) is the CLAIM,
+            // never the work — an untracked outputs/ leftover must not
+            // satisfy the guard on its own.
+            if (/^\?\?\s+outputs\//.test(line)) continue;
+            return true;
+        }
+    } catch (e) {
+        console.warn('Landing guard: could not inspect git status:', e);
+    }
+    return false;
+}
+
+/**
+ * True when the agent's response CLAIMS file changes were made (vs. an
+ * honest "no changes needed" analysis, e.g. "the fix is already present").
+ * Heuristic: a "What changed" section, or change-verbs naming concrete
+ * files/paths. False negatives are safe (the ticket just follows the
+ * existing no-changes comment path); the gh-1164 response shape
+ * ("### What changed" + bullet list of edited files) must never slip through.
+ */
+function responseClaimsChanges(text) {
+    if (!text) return false;
+    if (/what changed/i.test(text)) return true;
+    return /(created|added|modified|updated|implemented|moved|edited|deleted|rewrote|refactored)\b[^\n]*(\.`?[A-Za-z0-9_\/-]+\.(js|ts|dart|md|yaml|yml|json|java|kt|kts|swift|py|rb|go|rs|sh|gradle|xml|html|css|scss)`?|`[A-Za-z0-9_\/.-]+`)/i.test(text);
+}
+
+var LANDING_GUARD_STAGE = 'development_landing_guard';
+var LANDING_GUARD_ERROR = 'Agent response claims code changes, but the branch carries none ' +
+    '(no commits ahead of the base branch, clean working tree).';
+var LANDING_GUARD_PROMPT = [
+    'Your reported changes did not land in the git tree — the branch has no commits ahead of the base branch and the working tree is clean, but your response.md claims code changes were made.',
+    '',
+    'A previous session likely did the work in a different working directory or its commits were never created (e.g. staging failed silently). Session memory and main\'s tip are NOT your work — verify against the git tree itself.',
+    '',
+    'What to do:',
+    '- Verify the working directory you are in (git rev-parse --show-toplevel, git branch --show-current).',
+    '- Check whether your changes exist anywhere (git log, git status, git stash list).',
+    '- Re-apply the changes from your plan/response if they are genuinely absent.',
+    '- Ensure the changes are present in the working tree so they can be staged and committed by the post-action.',
+    '- Update outputs/response.md to reflect what you ACTUALLY re-applied.',
+    '- Do not push; the post-action will commit and push after you finish.'
+].join('\n');
 
 /**
  * Retry push after asking the agent to fix the commit
@@ -847,6 +927,20 @@ function action(params) {
                     ? actualParams.metadata.contextId + '_wip' : null;
 
                 if (agentResponse && agentResponse.trim()) {
+                    // gh-1164 landing guard: response.md claims work but the
+                    // branch carries none → the changes never landed (dead
+                    // autosave, wrong working dir, fresh-branch amnesia).
+                    // Resume the agent to re-apply BEFORE declaring "no code
+                    // changes needed"; only when the resume is not attempted
+                    // (disabled/exhausted/non-recoverable) fall through to
+                    // the honest no-changes comment path.
+                    if (!branchCarriesWork(prTarget) && responseClaimsChanges(agentResponse)) {
+                        console.warn('⚠️ Landing guard: response.md claims changes but the branch carries no work — resuming the agent to re-apply them.');
+                        if (resumeDevelopmentAgent(params, ticketKey, _customParams, LANDING_GUARD_STAGE, LANDING_GUARD_ERROR, LANDING_GUARD_PROMPT)) {
+                            return action(params);
+                        }
+                        console.warn('Landing guard: resume not attempted (disabled/exhausted/non-recoverable) — falling back to the no-changes path.');
+                    }
                     // Case A: agent finished successfully, no code changes needed.
                     console.log('No git changes detected — agent completed successfully (response.md present). Treating as "no change needed".');
                     try {
