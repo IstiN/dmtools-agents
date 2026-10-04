@@ -1059,6 +1059,55 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             continue;
         }
 
+        if (rule.localAction === 'arm_rework') {
+            // dmtools-agents #683 (live fa #1194/#1211/#1212 + dart #340,
+            // 2026-10-04): machine-authored reviewed PRs with UNRESOLVED
+            // review threads matched NO rule — every re-review armer
+            // requires threadsResolved:true, its complement matched
+            // nothing, and the 04:30 fa tick processed 0 of them. Owner
+            // rule 2026-10-04: unresolved threads on a machine-authored
+            // PR arm agent:rework — the rework leg owns open threads by
+            // design (the note in review-stale-verdict-unchecked: its
+            // threadsResolved guard "excludes the mid-rework window (the
+            // rework leg owns open threads)"). Arm the PR label; the
+            // rework-on-label rule dispatches the leg (issue-anchored with
+            // the PR-anchored #544 fallback) and consumes the label — this
+            // action never dispatches itself. Label FIRST, comment second:
+            // the label is the functional bit (a lost comment costs
+            // nothing — the leg still fires). Convergent: the rework
+            // resolves the threads (review-threads-resolved then arms a
+            // fresh review) or the label persists and this rule stays
+            // quiet (notLabels agent:rework) — never both legs at once.
+            try {
+                if (DRY) {
+                    console.log('  🧪 [dry] ' + key + ' would arm agent:rework (unresolved review threads on PR #' + ticket.prNumber + ')');
+                    processedKeys.push(key);
+                    continue;
+                }
+                github_add_labels({
+                    workspace: effectiveRepoInfo.owner,
+                    repository: effectiveRepoInfo.repo,
+                    number: ticket.prNumber,
+                    labels: ['agent:rework']
+                });
+                github_create_comment({
+                    workspace: effectiveRepoInfo.owner,
+                    repository: effectiveRepoInfo.repo,
+                    number: ticket.prNumber,
+                    body: '🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed ' +
+                        '(ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: ' +
+                        'agent:rework is armed on this PR and the rework runner will work through the threads and push. ' +
+                        'Validation re-runs automatically afterwards, and once the threads are resolved a fresh ' +
+                        're-review is armed (review-threads-resolved).'
+                });
+                console.log('  ✅ ' + key + ' agent:rework armed (unresolved review threads on PR #' + ticket.prNumber + ')');
+                processedKeys.push(key);
+            } catch (e) {
+                console.error('  ❌ arm_rework failed for ' + key + ': ' + (e.message || e));
+            }
+            continue;
+        }
+
         // Silent branch refresh = a git merge push, NOT the GitHub
         // update-branch APIs. Live-verified dead ends for
         // github-actions[bot]: the GraphQL mutation (gh pr update-branch)

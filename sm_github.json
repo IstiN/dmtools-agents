@@ -387,12 +387,13 @@
           "workflowRef": "{branch}"
         },
         {
-          "description": "GitHub PR: CHANGES_REQUESTED verdict pinned to an older commit (fixes pushed after the review) + green -> re-arm agent:review. review-on-label dispatches the runner, the runner consumes the label and re-reviews the current head; the fresh verdict's commit_id equals the head, so this never loops. Never on approved PRs (pr_approved is sticky — approved rework re-validates, never re-reviews). workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
+          "description": "GitHub PR: CHANGES_REQUESTED verdict pinned to an older commit (fixes pushed after the review) + green -> re-arm agent:review. review-on-label dispatches the runner, the runner consumes the label and re-reviews the current head; the fresh verdict's commit_id equals the head, so this never loops. Never on approved PRs (pr_approved is sticky — approved rework re-validates, never re-reviews). agent:rework excluded (#683, 2026-10-04): the ONLY re-review armer that can overlap rework-unresolved-threads (a stale CHANGES_REQUESTED with open threads) — a PR sent to rework must not simultaneously arm a re-review; review-threads-resolved re-arms the review once the threads are resolved. workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",
           "source": "github",
           "query": {
             "type": "pr",
             "notLabels": [
               "agent:review",
+              "agent:rework",
               "ai_validating",
               "pr_approved"
             ],
@@ -451,6 +452,29 @@
           "limit": 5,
           "id": "review-stale-verdict-unchecked",
           "workflowRef": "{branch}"
+        },
+        {
+          "description": "GitHub PR: UNRESOLVED review threads on a machine-authored reviewed PR -> arm agent:rework (dmtools-agents #683, live fa #1194/#1211/#1212 + dart #340, 2026-10-04: all green+reviewed+validated with open threads, heads silently refreshed so the verdicts went stale, and the 04:30 fa tick processed 0 — every re-review armer requires threadsResolved:true, its complement matched NOTHING). Owner rule 2026-10-04: unresolved threads on a machine-authored PR arm agent:rework — the rework leg owns open threads by design (the note in review-stale-verdict-unchecked: threadsResolved 'excludes the mid-rework window (the rework leg owns open threads)'). threadsResolved:false regardless of verdict staleness: a FRESH verdict with unresolved threads equally needs rework (staleVerdict would only narrow the match back into the re-review rules' blind spot). ORDER/disjointness vs the re-review armers: review-threads-resolved and review-stale-verdict-unchecked require threadsResolved:true — this rule false; one PR can never arm both. agent:review in notLabels keeps a queued/running re-review unstacked, and review-stale-verdict (the one armer without a threads guard) now excludes agent:rework for the same reason. ai_validating (merge window), pr_approved (sticky approval — rework re-validates, never re-reviews), validation_failed (parked) and agent:rework (already armed — convergent until the rework leg consumes the label) all excluded. prMachineAuthor fails closed (owner rule: auto-rework is machine-only, same as fail_validation/conflict-rework). localAction arm_rework labels the PR agent:rework + explains in a comment; rework-on-label dispatches the leg (issue-anchored, PR-anchored fallback #544) and consumes the label.",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_pr_reviewed"
+            ],
+            "notLabels": [
+              "agent:rework",
+              "agent:review",
+              "ai_validating",
+              "pr_approved",
+              "validation_failed"
+            ],
+            "prMachineAuthor": true,
+            "threadsResolved": false,
+            "draft": false
+          },
+          "localAction": "arm_rework",
+          "limit": 5,
+          "id": "rework-unresolved-threads"
         },
         {
           "description": "GitHub PR: agent:review label on a PR -> review on demand (any author; consumed by the review runner) workflowRef={branch}: the leg runs on the PR head — GitHub links the run to the PR (visible in PR checks/timeline as the review/rework run).",

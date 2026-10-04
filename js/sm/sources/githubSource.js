@@ -175,10 +175,19 @@ function matchesGuards(item, rule, provider, machineAuthor, owner) {
     }
     // All review threads resolved (at least one exists): the rework leg
     // resolved the review's findings — a fresh verdict is owed.
-    if (q.threadsResolved) {
+    // gh-683: the explicit FALSE direction — unresolved threads exist —
+    // arms rework on machine-authored PRs (the rework leg owns open
+    // threads; a fresh verdict with unresolved threads equally needs
+    // rework). total 0 matches neither direction: nothing to rework,
+    // nothing to re-review.
+    if (q.threadsResolved === true) {
         var th = (provider && provider.reviewThreads)
             ? provider.reviewThreads(item.prNumber) : null;
         if (!(th && th.total > 0 && th.unresolved === 0)) return false;
+    } else if (q.threadsResolved === false) {
+        var tho = (provider && provider.reviewThreads)
+            ? provider.reviewThreads(item.prNumber) : null;
+        if (!(tho && tho.unresolved > 0)) return false;
     }
     // Machine-author gate (owner rule): auto legs (rework, review, …) only
     // fire on machine-authored PRs — the deployment's machine login, or a
