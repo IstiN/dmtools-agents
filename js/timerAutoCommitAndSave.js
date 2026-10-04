@@ -139,7 +139,18 @@ function autoCommitAndPush(customParams, ticketKey) {
             // behind, and the next broad add would commit the full session
             // log into the ticket branch. Shared canonical list:
             // js/common/gitStaging.js.
-            command: 'git add -A -- ' + gitStaging.buildStagingPathspecs() +
+            // gh-683 (live fa run 37153405587 — this timer's add was the
+            // FIRST casualty of git's ignored-pathspec guard): naming an
+            // existing ignored-untracked path in a `:!` exclusion pathspec
+            // fails the whole add. The check-ignore probe below drops the
+            // exclusion for every path git already ignores, so the timer's
+            // WIP save can never die on the guard again.
+            command: 'git add -A -- ' + gitStaging.buildStagingPathspecs(function (args) {
+                return cli_execute_command({
+                    command: args.command,
+                    workingDirectory: workingDir
+                });
+            }) +
                 ' ":!factory-kit" ":!factory-kit/**"',
             workingDirectory: workingDir
         });

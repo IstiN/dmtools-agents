@@ -323,6 +323,10 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
             {
                 cli_execute_command: function (args) {
                     commands.push(args.command);
+                    if (args.command.indexOf('git check-ignore') === 0) {
+                        // gh-683 probe: not-ignored repo → keep exclusions
+                        throw new Error('Command execution failed (exit code 1)');
+                    }
                     if (args.command.indexOf('git add . --') === 0) {
                         staging = args.command;
                         throw new Error('staging probe reached');
@@ -335,17 +339,94 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
             }
         );
 
-        mod.action({
-            ticket: { key: 'TS-9', fields: { summary: 'staging hygiene', description: '', labels: [] } },
-            metadata: { contextId: 'sm_story_development' },
-            customParams: {}
-        });
+        // gh-683: the staging failure now fails the whole leg (thrown
+        // gitOperationsFailure) instead of returning success-with-comment.
+        assert.throws(function () {
+            mod.action({
+                ticket: { key: 'TS-9', fields: { summary: 'staging hygiene', description: '', labels: [] } },
+                metadata: { contextId: 'sm_story_development' },
+                customParams: {}
+            });
+        }, 'a Git-Operations failure must fail the leg, not return success');
 
         assert.ok(staging, 'staging command executed — commands seen: ' + JSON.stringify(commands));
         assert.ok(staging.indexOf(':!factory-kit') !== -1,
             'staging excludes factory-kit gitlink — found: ' + staging);
         assert.ok(staging.indexOf(':!.dmtools/copilot-sessions') !== -1,
             'copilot-sessions exclusion preserved');
+    });
+
+    test('gh-683: a repo that IGNORES the runtime paths stages without naming them — git add guard cannot fire', function () {
+        // Live fa run 37153405587 (fa gh-1206, 2026-10-03): the dev leg's
+        // `git add . -- ":!.dmtools/credential-helper.log" ...` died with
+        // exit 1 — "The following paths are ignored by one of your
+        // .gitignore files ... hint: Use -f if you really want to add
+        // them" — AFTER a fully green development run: no PR, ticket
+        // rolled back, leg marked SUCCESS. git add runs its
+        // ignored-pathspec guard on `:!` EXCLUSION pathspecs too. In a
+        // repo whose .gitignore covers the artifacts, the check-ignore
+        // probe drops every runtime exclusion (gitignore alone keeps
+        // `git add .` away); only factory-kit (never ignored) remains.
+        var staging = null;
+        var base = noChangesGitCommandMock('TS-11', 'ai/TS-11');
+        var realLoadProjectConfig = configLoaderModule.loadProjectConfig;
+        var loaderWithGitDefaults = Object.assign({}, configLoaderModule, {
+            loadProjectConfig: function (p) {
+                var c = realLoadProjectConfig(p) || {};
+                if (!c.git) c.git = { baseBranch: 'main' };
+                return c;
+            }
+        });
+        var mod = loadModule(
+            'js/developTicketAndCreatePR.js',
+            makeRequire({
+                './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
+                './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
+                './common/submodules.js': { pushManagedSubmodules: function () {} },
+                './common/feedbackLoop.js': {
+                    runQualityGates: function () { return { success: true }; },
+                    runPolicyGates: function () { return { success: true }; },
+                    runPostPublishGates: function () { return { success: true }; },
+                    resumeAgent: function () { return { attempted: false }; }
+                },
+                './common/autoStart.js': { triggerSmIfIdle: function () { } },
+                './common/outputFiles.js': { readOutputFile: function () { return null; } },
+                './cacheToReleases.js': {},
+                './common/gitStaging.js': gitStagingModule,
+                './configLoader.js': loaderWithGitDefaults,
+                './config.js': configModule,
+                './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
+                './common/commentMarkup.js': commentMarkupModule
+            }),
+            {
+                cli_execute_command: function (args) {
+                    if (args.command.indexOf('git add . --') === 0) {
+                        staging = args.command;
+                        throw new Error('staging probe reached');
+                    }
+                    return base(args); // check-ignore returns '' → ignored → exclusion dropped
+                },
+                jira_post_comment: function () {},
+                jira_move_to_status: function () {},
+                jira_remove_label: function () {}
+            }
+        );
+
+        assert.throws(function () {
+            mod.action({
+                ticket: { key: 'TS-11', fields: { summary: 'staging hygiene', description: '', labels: [] } },
+                metadata: { contextId: 'sm_story_development' },
+                customParams: {}
+            });
+        }, 'staging probe short-circuits into the Git-Operations failure leg-throw');
+
+        assert.ok(staging, 'staging command executed');
+        assert.ok(staging.indexOf(':!factory-kit') !== -1,
+            'factory-kit exclusion stays (a nested repo is never gitignored)');
+        assert.ok(staging.indexOf(':!.dmtools/') === -1,
+            'no runtime path named in the pathspec — found: ' + staging);
+        assert.ok(staging.indexOf(':!.dmtools-session-output.log') === -1,
+            'no runtime path named in the pathspec — found: ' + staging);
     });
 
     test('git add never stages machine-local .dmtools runtime logs (gh-628)', function () {
@@ -392,9 +473,13 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
             }),
             {
                 cli_execute_command: function (args) {
-                    if (args.command.indexOf('git rm -r --cached --ignore-unmatch') === 0) {
+                    if (args.command.indexOf('git ls-files -- ') === 0) {
                         cleanup = args.command;
                         return '';
+                    }
+                    if (args.command.indexOf('git check-ignore') === 0) {
+                        // gh-683 probe: not-ignored repo → keep exclusions
+                        throw new Error('Command execution failed (exit code 1)');
                     }
                     if (args.command.indexOf('git add . --') === 0) {
                         staging = args.command;
@@ -408,11 +493,15 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
             }
         );
 
-        mod.action({
-            ticket: { key: 'TS-9', fields: { summary: 'staging hygiene', description: '', labels: [] } },
-            metadata: { contextId: 'sm_story_development' },
-            customParams: {}
-        });
+        // gh-683: the staging failure now fails the whole leg (thrown
+        // gitOperationsFailure) instead of returning success-with-comment.
+        assert.throws(function () {
+            mod.action({
+                ticket: { key: 'TS-9', fields: { summary: 'staging hygiene', description: '', labels: [] } },
+                metadata: { contextId: 'sm_story_development' },
+                customParams: {}
+            });
+        }, 'a Git-Operations failure must fail the leg, not return success');
 
         assert.ok(staging, 'staging command executed');
         assert.contains(staging, ':!.dmtools/credential-helper.log',
@@ -425,6 +514,64 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
             'already-tracked credential-helper.log is untracked');
         assert.contains(cleanup, '.dmtools/fa-sessions',
             'session store untracked too — untrack list must not drift from staging exclusions (gh-628)');
+    });
+
+    test('Git-Operations failure fails the leg (thrown, marked) after resetting the ticket — gh-683 dead dev letter', function () {
+        // Live fa run 37153405587 (fa gh-1206..1210, 2026-10-03): the dev
+        // leg did all the work, the staging add died on git's
+        // ignored-pathspec guard, and the leg posted the error comment,
+        // moved the ticket back to Ready For Development and returned
+        // { success: true } — the SM cannot distinguish a dead dev letter
+        // from a green one, so the ticket silently looped with no PR. The
+        // leg must now THROW a marked error after the reset (same
+        // propagation mechanism as the fatal CLI environment failure), so
+        // the workflow run is RED and retryable.
+        var movedTo = [];
+        var comments = [];
+        var caught = null;
+        var mod = loadDevelopTicketAndCreatePR({
+            cli_execute_command: function (args) {
+                if (args.command.indexOf('gh pr list --head ai/TS-12') === 0) return '';
+                if (args.command === 'git branch --show-current') return 'ai/TS-12';
+                if (args.command.indexOf('git check-ignore') === 0) {
+                    throw new Error('Command execution failed (exit code 1)');
+                }
+                if (args.command.indexOf('git add . --') === 0) {
+                    // The exact live failure shape: git add's ignored-pathspec guard
+                    throw new Error('Tool execution failed: Command execution failed (exit code 1): ' +
+                        'The following paths are ignored by one of your .gitignore files:\n' +
+                        '.dmtools/credential-helper.log\n.dmtools/fa-sessions\n' +
+                        'hint: Use -f if you really want to add them.');
+                }
+                return '';
+            },
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); },
+            jira_remove_label: function () { }
+        });
+
+        try {
+            mod.action({
+                ticket: {
+                    key: 'TS-12',
+                    fields: { summary: 'dead dev letter visibility', description: '', labels: [] }
+                },
+                metadata: { contextId: 'sm_story_development' },
+                customParams: {}
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught, 'the Git-Operations failure must throw (fail the run), not return success');
+        assert.ok(caught.gitOperationsFailure === true,
+            'thrown error carries the gitOperationsFailure marker (outer catch rethrows it)');
+        assert.contains(String(caught.message), 'Git Operations',
+            'the stage name rides the thrown error');
+        assert.deepEqual(movedTo, ['Ready For Development'],
+            'ticket is still reset for retry before the leg fails');
+        assert.equal(comments.length, 1, 'the stage error comment is still posted');
+        assert.contains(comments[0].comment, 'Git Operations');
     });
 
 });

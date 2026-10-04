@@ -231,7 +231,11 @@ function action(params) {
             // below skips its `?? factory-kit/` line too.
             // `:!.dmtools/...` runtime logs (gh-628) — excluded by pathspec
             // because they live next to COMMITTED .dmtools/ files.
-            cli_execute_command({ command: 'git add . -- ' + gitStaging.buildStagingPathspecs() +
+            // gh-683 (live fa run 37153405587): the check-ignore probe
+            // (via cli_execute_command) drops exclusions for paths git
+            // already ignores — naming an existing ignored-untracked path
+            // in an exclusion pathspec trips git add's ignored-files guard.
+            cli_execute_command({ command: 'git add . -- ' + gitStaging.buildStagingPathspecs(cli_execute_command) +
                 ' ":!factory-kit" ":!factory-kit/**"' });
             const rawStatus = cli_execute_command({ command: 'git status --porcelain' }) || '';
             const statusLines = rawStatus.split('\n').filter(function(l) {
