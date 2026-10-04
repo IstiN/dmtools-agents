@@ -14,6 +14,7 @@ const commentMarkup = require('./common/commentMarkup.js');
 var trackersModule = require('./common/trackers.js');
 var submoduleHelper = require('./common/submodules.js');
 var prHelper = require('./common/pullRequest.js');
+var ghHelpers = require('./common/githubHelpers.js');
 var feedbackLoop = require('./common/feedbackLoop.js');
 var autoStart = require('./common/autoStart.js');
 var outputFiles = require('./common/outputFiles.js');
@@ -138,7 +139,24 @@ function getGitHubRepoInfo() {
     }
 }
 
+/**
+ * Greppable failure marker for PR-lookup failures in the post-action. Appears
+ * in the leg log, in the action result (job summary), and in the tracker error
+ * comment — so an operator can find every empty-rework-lap incident by grep.
+ */
+var PR_LOOKUP_FAILED_PREFIX = 'PR-LOOKUP-FAILED:';
+
 function findPRForTicket(scm, ticketKey) {
+    // PR-anchored (githubSource #544): a pseudo-ticket key 'pr-N' IS the PR —
+    // resolve it directly by number via the shared helper's deterministic
+    // get-by-number path. Never list-scan a pseudo key: the PR's title/branch
+    // reference the ORIGINAL work item (live fa #1212, 2026-10-04: key
+    // 'pr-1212', branch 'ai/gh-1204' — the scan matched nothing and the
+    // replies/resolutions were silently skipped). Jira-shaped keys keep the
+    // unchanged substring scan below (byte-identical jiraSource behavior).
+    if (/^pr-(\d+)$/.test(String(ticketKey || ''))) {
+        return ghHelpers.findPRForTicket(scm, ticketKey);
+    }
     try {
         const openPRs = scm.listPrs('open');
 
@@ -962,43 +980,59 @@ function action(params) {
         } else {
             repoInfo = scm.getRemoteRepoInfo();
         }
-        const pr = repoInfo ? findPRForTicket(scm, ticketKey) : null;
+        if (!repoInfo) {
+            throw new Error(PR_LOOKUP_FAILED_PREFIX +
+                ' could not determine the GitHub repository (no config.repository, git remote unparsable) for ticket ' +
+                ticketKey + ' — the rework PR replies/comments cannot be posted and the rework cycle is NOT closed.');
+        }
+        const pr = findPRForTicket(scm, ticketKey);
+        if (!pr) {
+            // Loud failure instead of silent skip (live fa #1212, run 37200002499,
+            // 2026-10-04): the old silent skip left review threads unresolved, still
+            // moved the ticket to In Review, removed the rework labels and declared
+            // the cycle closed — SM re-armed rework on the same unresolved threads →
+            // infinite empty-lap loop. Replies/resolutions were skipped for
+            // infrastructure reasons: the cycle-close steps below must NOT run.
+            console.error(PR_LOOKUP_FAILED_PREFIX + ' no Pull Request found for ticket ' + ticketKey +
+                " after the rework push (branch '" + branchName + "') — PR replies/resolutions skipped;" +
+                ' failing the leg instead of closing the cycle.');
+            throw new Error(PR_LOOKUP_FAILED_PREFIX + ' no Pull Request found for ticket ' + ticketKey +
+                " after the rework push (branch '" + branchName + "'). Review-thread replies/resolutions and the" +
+                ' fix-summary comment were NOT posted; the rework cycle was NOT closed — failing loudly instead of' +
+                ' silently skipping (silent skip re-arms empty rework laps forever, live fa #1212 2026-10-04).');
+        }
         let prCommentPosted = false;
 
-        if (pr && repoInfo) {
-            // Reply to each review thread and resolve it. responseText feeds the
-            // gh-692 closure sweep: threads cited in the rework response MUST be
-            // resolved even when review_replies.json lacks their ids.
-            const repliesPosted = postThreadReplies(scm, pr.number, {
-                ticketKey: ticketKey,
-                workingDir: config.workingDir || null,
-                responseText: fixSummary
-            });
-            console.log('Thread replies posted:', repliesPosted);
+        // Reply to each review thread and resolve it. responseText feeds the
+        // gh-692 closure sweep: threads cited in the rework response MUST be
+        // resolved even when review_replies.json lacks their ids.
+        const repliesPosted = postThreadReplies(scm, pr.number, {
+            ticketKey: ticketKey,
+            workingDir: config.workingDir || null,
+            responseText: fixSummary
+        });
+        console.log('Thread replies posted:', repliesPosted);
 
-            // Post general fix summary as a top-level PR comment only when there are no
-            // review thread replies. When replies exist, the thread replies themselves are
-            // sufficient; an extra top-level comment is noise — except non-blocking gate
-            // warnings, which are worth a short standalone comment even then, since they
-            // wouldn't otherwise be visible anywhere on the PR.
-            var hasMeaningfulSummary = fixSummary && fixSummary.length > 50
-                && fixSummary !== '_(No fix summary generated)_';
-            if (repliesPosted > 0) {
-                console.log('ℹ️ Review thread replies posted — skipping general PR comment');
-                if (nonBlockingGateWarningBlock) {
-                    try {
-                        scm.addComment(pr.number, '## ⚠️ Non-blocking gate warnings' + nonBlockingGateWarningBlock);
-                    } catch (e) {
-                        console.warn('Failed to post non-blocking gate warning comment:', e);
-                    }
+        // Post general fix summary as a top-level PR comment only when there are no
+        // review thread replies. When replies exist, the thread replies themselves are
+        // sufficient; an extra top-level comment is noise — except non-blocking gate
+        // warnings, which are worth a short standalone comment even then, since they
+        // wouldn't otherwise be visible anywhere on the PR.
+        var hasMeaningfulSummary = fixSummary && fixSummary.length > 50
+            && fixSummary !== '_(No fix summary generated)_';
+        if (repliesPosted > 0) {
+            console.log('ℹ️ Review thread replies posted — skipping general PR comment');
+            if (nonBlockingGateWarningBlock) {
+                try {
+                    scm.addComment(pr.number, '## ⚠️ Non-blocking gate warnings' + nonBlockingGateWarningBlock);
+                } catch (e) {
+                    console.warn('Failed to post non-blocking gate warning comment:', e);
                 }
-            } else if (codeChangesCommitted || hasMeaningfulSummary) {
-                prCommentPosted = postPRComment(scm, pr.number, fixSummaryWithWarnings, ticketKey, repliesPosted);
-            } else {
-                console.log('ℹ️ No thread replies, no code changes, and no meaningful summary — skipping general PR comment');
             }
+        } else if (codeChangesCommitted || hasMeaningfulSummary) {
+            prCommentPosted = postPRComment(scm, pr.number, fixSummaryWithWarnings, ticketKey, repliesPosted);
         } else {
-            console.warn('Could not find PR to post comment — skipping GitHub PR comment');
+            console.log('ℹ️ No thread replies, no code changes, and no meaningful summary — skipping general PR comment');
         }
 
         // Move ticket to In Review
