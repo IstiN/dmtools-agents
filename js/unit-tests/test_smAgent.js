@@ -770,7 +770,11 @@ suite('smAgent: sm_github.json rule hygiene', function () {
         assert.equal(rule.query.threadsResolved, false,
             'the complement of review-threads-resolved — regardless of verdict staleness');
         assert.deepEqual(rule.query.labels, ['ai_pr_reviewed'], 'only reviewed PRs');
-        ['agent:rework', 'agent:review', 'ai_validating', 'pr_approved', 'validation_failed'].forEach(function (l) {
+        // gh-710: pr_approved is deliberately NOT excluded — an APPROVE
+        // verdict with unresolved threads deadlocks merge (BLOCKED
+        // conversation gate) without the rework arm. Pinned by the
+        // gh-710 test below; here only the remaining in-flight guards.
+        ['agent:rework', 'agent:review', 'ai_validating', 'validation_failed'].forEach(function (l) {
             assert.ok((rule.query.notLabels || []).indexOf(l) !== -1, 'excludes ' + l);
         });
 
@@ -794,6 +798,41 @@ suite('smAgent: sm_github.json rule hygiene', function () {
         var mine = rules.indexOf(rule);
         assert.ok(mine > lastArmer, 'runs after the re-review armers');
         assert.ok(mine < rules.indexOf(byId['close-on-merge']), 'before close-on-merge (end of file)');
+    });
+
+    test('rework-unresolved-threads: gh-710 — APPROVE-with-unresolved-threads (pr_approved) must arm rework, not deadlock', function () {
+        // Live fa #1211 (2026-10-04): the 14:13 re-review verdict was
+        // APPROVE but posted 5 new threads. Result: pr_approved +
+        // ai_validated + unresolved threads = mergeStateStatus BLOCKED
+        // (conversation gate), while every rework armer missed — the
+        // rework-unresolved-threads rule excluded pr_approved, red-CI
+        // rework needs red checks (green), the review-verdict arm fires
+        // only on CHANGES_REQUESTED. Merge blocked + no armed leg = the
+        // PR deadlocked ~1h until a manual rework dispatch. The rule must
+        // gate on unresolved threads > 0 AND no active rework/review/
+        // validation in flight — the verdict being APPROVE is irrelevant.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+
+        var rule = byId['rework-unresolved-threads'];
+        assert.ok(rule, 'rework-unresolved-threads exists');
+        assert.equal(rule.query.threadsResolved, false, 'still the unresolved-threads complement');
+        assert.equal((rule.query.notLabels || []).indexOf('pr_approved'), -1,
+            'pr_approved must NOT exclude the rework arm (gh-710 deadlock)');
+        // The in-flight guards stay — the ticket-suggested gate:
+        ['agent:rework', 'agent:review', 'ai_validating', 'validation_failed'].forEach(function (l) {
+            assert.ok((rule.query.notLabels || []).indexOf(l) !== -1, 'still excludes ' + l);
+        });
+
+        // Sticky approval is why REWORK is the right leg (not re-review):
+        // after the rework push, validate-armed re-validates the new head
+        // and merge proceeds without a re-review. The re-review armers
+        // must keep excluding pr_approved so no review stacks on top.
+        var rtr = byId['review-threads-resolved'];
+        assert.ok((rtr.query.notLabels || []).indexOf('pr_approved') !== -1,
+            'review-threads-resolved keeps excluding pr_approved (sticky approval)');
     });
 });
 

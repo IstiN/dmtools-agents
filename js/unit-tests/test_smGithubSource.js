@@ -808,7 +808,11 @@ suite('sm github source', function () {
         //   94 no threads at all → no (nothing to rework);
         //   95 unresolved but guest-authored → no (auto-rework is
         //      machine-only, fail-closed);
-        //   96 unresolved but ai_validating armed → no (merge window).
+        //   96 unresolved but ai_validating armed → no (merge window);
+        //   97 unresolved + pr_approved (APPROVE verdict posted new
+        //      threads — live fa #1211, gh-710) → MATCH: the sticky
+        //      approval label must NOT exclude the rework arm; merge is
+        //      BLOCKED by the conversation gate until the threads resolve.
         var srcMod = load({
             github_list_prs: function () {
                 return [
@@ -823,6 +827,8 @@ suite('sm github source', function () {
                     { number: 95, labels: [{ name: 'ai_pr_reviewed' }], head: { ref: 'feat/guest' }, draft: false,
                       author: { login: 'human-contributor' } },
                     { number: 96, labels: [{ name: 'ai_pr_reviewed' }, { name: 'ai_validating' }], head: { ref: 'ai/gh-96' }, draft: false,
+                      author: { login: 'ai-teammate' } },
+                    { number: 97, labels: [{ name: 'ai_pr_reviewed' }, { name: 'pr_approved' }], head: { ref: 'ai/gh-97' }, draft: false,
                       author: { login: 'ai-teammate' } }
                 ];
             }
@@ -830,21 +836,25 @@ suite('sm github source', function () {
             91: { total: 2, resolved: 1, unresolved: 1 },
             92: { total: 3, resolved: 1, unresolved: 2 },
             93: { total: 2, resolved: 2, unresolved: 0 },
-            94: { total: 0, resolved: 0, unresolved: 0 }
+            94: { total: 0, resolved: 0, unresolved: 0 },
+            97: { total: 5, resolved: 0, unresolved: 5 }
             // 95/96 never reach the thread guard (author/label filters)
         });
         var items = srcMod.query({
             query: {
                 type: 'pr',
                 labels: ['ai_pr_reviewed'],
-                notLabels: ['agent:rework', 'agent:review', 'ai_validating', 'pr_approved', 'validation_failed'],
+                // gh-710: pr_approved deliberately NOT excluded — an
+                // APPROVE verdict with unresolved threads deadlocks merge
+                // (BLOCKED conversation gate) without the rework arm.
+                notLabels: ['agent:rework', 'agent:review', 'ai_validating', 'validation_failed'],
                 prMachineAuthor: true,
                 threadsResolved: false,
                 draft: false
             }
         }, { repoInfo: { owner: 'a', repo: 'b' }, machineAuthor: 'ai-teammate' });
-        assert.equal(items.map(function (i) { return i.key; }).join(','), 'pr-91,pr-92',
-            'unresolved threads match stale AND fresh verdicts; resolved/threadless/guest/validating do not');
+        assert.equal(items.map(function (i) { return i.key; }).join(','), 'pr-91,pr-92,pr-97',
+            'unresolved threads match stale AND fresh verdicts AND sticky-approved PRs; resolved/threadless/guest/validating do not');
     });
 
     test('pr rules: review-stale-verdict-unchecked — validated+reviewed head with NO checks re-reviews (no green needed)', function () {
