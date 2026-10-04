@@ -21,7 +21,23 @@ permissions:
   checks: read
 
 concurrency:
-  group: sm-kicker
+  # dmtools-agents#682 (live fa#1202/#1203 2026-10-03, still reproducing
+  # 2026-10-04 06:21–06:22 in THIS repo — runs 06:36/06:41/06:43): the
+  # global group below already ran with cancel-in-progress:false, yet
+  # kicker runs kept dying cancelled in chains. cancel-in-progress only
+  # shields the RUNNING run — a queued run in the same group ALWAYS
+  # supersedes (cancels) the pending one (GitHub docs: "Any existing
+  # pending job or workflow in the same concurrency group, if it exists,
+  # will be canceled and the new queued job or workflow will take its
+  # place"). One global group meant every push anywhere (silent refresh,
+  # factory-data snapshots, dev waves) cancelled every other branch's
+  # pending kicker. Per-head-SHA group: no push can displace another
+  # push's kicker — a queued kicker that is about to dispatch a tick
+  # always gets to run (canonical fix + consumer notes: IstiN/
+  # dmtools-agentic-workflows factory-sm-kicker.yml). Effective once the
+  # canonical pin is bumped (separate PR): until then the called
+  # workflow's own global group still supersedes.
+  group: sm-kicker-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
