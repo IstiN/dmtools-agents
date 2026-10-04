@@ -115,17 +115,58 @@ function _scorePR(pr, normalizedKey, numericPart) {
 function findPRForTicket(scmOrWorkspace, repositoryOrTicketKey, ticketKeyOpt, optionsOpt) {
     var openPRs, ticketKey, options;
     try {
-        if (_isScm(scmOrWorkspace)) {
+        var isScmForm = _isScm(scmOrWorkspace);
+        if (isScmForm) {
             ticketKey = repositoryOrTicketKey;
             options = ticketKeyOpt || {};
-            console.log('Searching for PR related to', ticketKey);
-            openPRs = scmOrWorkspace.listPrs('open');
         } else {
             ticketKey = ticketKeyOpt;
             options = optionsOpt || {};
-            console.log('Searching for PR related to', ticketKey);
-            openPRs = github_list_prs({ workspace: scmOrWorkspace, repository: repositoryOrTicketKey, state: 'open' });
         }
+        console.log('Searching for PR related to', ticketKey);
+
+        // PR-anchored lookup (githubSource #544): a pseudo-ticket key 'pr-N' IS
+        // the PR number — fetch it directly (REST pulls/{n}) instead of
+        // list-scanning. The scan can never reliably match a pseudo key: the
+        // PR's title/head reference the ORIGINAL work item, and a single
+        // listPrs page may not even contain the PR (live fa #1212, 2026-10-04:
+        // key 'pr-1212', PR titled/branched 'ai/gh-1204' among 10+ open PRs —
+        // the scan produced "No open Pull Request found" false negatives at
+        // the start gate and in the post-action). Case-sensitive lowercase,
+        // same convention as preCliReworkSetup's anchor — a real uppercase
+        // Jira key like 'PR-1212' keeps the list-scan path below.
+        var anchorMatch = /^pr-(\d+)$/.exec(String(ticketKey || ''));
+        if (anchorMatch) {
+            var prNumber = anchorMatch[1];
+            try {
+                var anchoredPr = isScmForm
+                    ? scmOrWorkspace.getPr(prNumber)
+                    : github_get_pr({
+                        workspace: scmOrWorkspace,
+                        repository: repositoryOrTicketKey,
+                        pullRequestId: prNumber
+                    });
+                if (anchoredPr) {
+                    if (anchoredPr.state && String(anchoredPr.state) !== 'open') {
+                        console.warn('PR #' + prNumber + ' (anchor of ' + ticketKey + ') is ' + anchoredPr.state + ' — treating as not found');
+                        return null;
+                    }
+                    console.log('PR-anchored lookup:', ticketKey, '→ PR #' + prNumber + ':', anchoredPr.title);
+                    return anchoredPr;
+                }
+            } catch (anchorError) {
+                console.error('Failed to fetch PR #' + prNumber + ' for ticket ' + ticketKey + ':', anchorError.message || anchorError);
+            }
+            // No list-scan fallback for anchored keys: a failed direct fetch IS
+            // the answer (missing/hidden/closed PR). Scanning would reintroduce
+            // the false-negative race this path exists to eliminate.
+            console.warn('No open PR found for ticket', ticketKey, '(direct PR #' + prNumber + ' lookup failed)');
+            return null;
+        }
+
+        openPRs = isScmForm
+            ? scmOrWorkspace.listPrs('open')
+            : github_list_prs({ workspace: scmOrWorkspace, repository: repositoryOrTicketKey, state: 'open' });
         console.log('Found', openPRs.length, 'open PRs');
 
         var normalizedKey = _normalizeForMatch(ticketKey);
