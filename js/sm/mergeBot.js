@@ -20,8 +20,10 @@
  * it only CONCLUDES stages whose evidence is already on the PR.
  *
  * One exception (owner rule 2026-10-04): a deferred approved PR with
- * acted==0 at end-of-run fires a single machine-sm.yml tick (self-heal) —
- * see the END-OF-RUN SELF-TICK block in action().
+ * acted==0 at end-of-run fires a single machine-sm.yml tick (self-heal,
+ * 'gh workflow run machine-sm.yml -F dryRun=false --repo owner/name'),
+ * skipped when a machine-sm.yml run is already active — see the
+ * END-OF-RUN SELF-TICK block in action() and hasActiveSmRun().
  *
  * jsrunner contract: repo comes from params.jobParams.repo
  * ("owner/name") or GH_REPO; tools are the global snake_case bridge.
@@ -114,6 +116,52 @@ function mergeStateOf(pr) {
     var ms = pr.mergeStateStatus ||
         (pr.mergeable_state ? String(pr.mergeable_state).toUpperCase() : '');
     return ms || (pr.mergeable === true ? 'CLEAN' : 'UNKNOWN');
+}
+
+/**
+ * SM-active probe (review #701, tick-storm fix): TRUE when a machine-sm.yml
+ * run is queued/in_progress/waiting/pending — the SM is already about to
+ * drain the queue itself, so the end-of-run self-tick must NOT stack another
+ * one. Mirrors smAgent's hasActiveTargetWorkflowRun semantics: a queued run
+ * older than 6h is a zombie (the concurrency group superseded it) and does
+ * not count. The workflow-id form of the listing 404s for some PATs (live fa
+ * 2026-09-23, same fallback as smAgent's validation-sync) — fall back to the
+ * all-runs endpoint and filter by workflow path client-side. An unlistable
+ * repo fails OPEN (dispatch anyway): a missed tick stalls the conveyor, a
+ * duplicate one is idempotent.
+ */
+function hasActiveSmRun(owner, name) {
+    var runs = [];
+    try {
+        var wf = parseMcp(github_list_workflow_runs({
+            workspace: owner, repository: name,
+            workflowId: 'machine-sm.yml', perPage: 30
+        }));
+        runs = (wf && (wf.workflow_runs || wf.runs)) || [];
+        if (!runs.length && wf && wf.message) {
+            var all = parseMcp(github_list_workflow_runs({
+                workspace: owner, repository: name, perPage: 30
+            }));
+            var allRuns = (all && (all.workflow_runs || all.runs)) || [];
+            runs = allRuns.filter(function (r) {
+                return String(r.path || '') === '.github/workflows/machine-sm.yml';
+            });
+        }
+    } catch (eActive) {
+        return false; // unlistable → fail open, the self-heal still fires
+    }
+    var now = Date.now();
+    for (var i = 0; i < runs.length; i++) {
+        var r = runs[i] || {};
+        var s = r.status ? String(r.status).toLowerCase() : '';
+        if (s !== 'queued' && s !== 'in_progress' && s !== 'waiting' && s !== 'pending') continue;
+        if (s !== 'in_progress') {
+            var ts = Date.parse(r.updated_at || r.updatedAt || r.created_at || r.createdAt || '');
+            if (!isNaN(ts) && (now - ts) > 6 * 60 * 60 * 1000) continue; // zombie queued > 6h
+        }
+        return true;
+    }
+    return false;
 }
 
 function squashMerge(owner, repo, number) {
@@ -239,15 +287,24 @@ function action(params) {
     // so the oldest approved PR gets its validate-armed turn. Not fired
     // when acted>0 (a merge/latch/unarm is motion — its events carry the
     // conveyor) nor when no deferred-approved was seen (nothing waits on a
-    // turn). jobParams.selfTick=false disables the dispatch.
+    // turn). Review #701 hardening: the dispatch targets the PR's own repo
+    // explicitly (--repo owner/name — gh resolves the CWD's repo, wrong in
+    // multi-repo runners) and is SKIPPED when a machine-sm.yml run is
+    // already queued/running (hasActiveSmRun — the active SM drains the
+    // queue itself; a second tick per bot run was tick-storm amplification
+    // during healthy waves). jobParams.selfTick=false disables it.
     if (deferredApproved && acted === 0 && job.selfTick !== false) {
-        try {
-            cli_execute_command({
-                command: 'gh workflow run machine-sm.yml -F dryRun=false'
-            });
-            say('🔁 deferred approved → SM tick dispatched (self-heal)');
-        } catch (eTick) {
-            say('⚠️ self-tick dispatch failed: ' + ((eTick && eTick.message) || eTick));
+        if (hasActiveSmRun(owner, name)) {
+            say('⏭️ self-tick skipped (SM already active)');
+        } else {
+            try {
+                cli_execute_command({
+                    command: 'gh workflow run machine-sm.yml -F dryRun=false --repo ' + owner + '/' + name
+                });
+                say('🔁 deferred approved → SM tick dispatched (self-heal)');
+            } catch (eTick) {
+                say('⚠️ self-tick dispatch failed: ' + ((eTick && eTick.message) || eTick));
+            }
         }
     }
 

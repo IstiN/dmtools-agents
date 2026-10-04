@@ -1655,6 +1655,91 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
             'the report says the rework agent is armed on the PR (2026-10-04)');
         assert.ok(sm.capturedPrComments[0].body.indexOf('Failed run: https://github.com/a/b/actions/runs/701') !== -1,
             'the GUEST report links its red run too (timed_out counts) — the guest sees WHERE it went red');
+        // Review #701 cap: no prior marker → arm 1/2 posts the counter
+        // marker the next red verdict counts.
+        assert.ok(sm.capturedPrComments[0].body.indexOf('🔁 guest rework arm 1/2 (owner directive 2026-10-04)') !== -1,
+            'the first guest arm appends its marker line (counted on the next red)');
+    });
+
+    test('fail_validation: guest rework cap — prior arm below MAX arms again and posts arm N+1 (review #701)', function () {
+        // The 2026-10-04 guest rework arm must not loop forever on a
+        // persistently-red guest PR. Counting key: the 'guest rework arm N'
+        // marker lines appended to this PR's reports — per-PR, NOT per-head
+        // (every rework pushes a new head; a per-head count would reset to
+        // zero each lap and never cap anything).
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(98, { labels: ['pr_approved', 'ai_validating'], branch: 'feat/x', author: 'someguest', headSha: 'sha98' })],
+                pr: { number: 98, labels: ['pr_approved', 'ai_validating'], body: 'guest fix' },
+                prComments: [
+                    { body: '⚠️ Validation CI went red on the head. Guest PR: the rework agent is armed…\n🔁 guest rework arm 1/2 (owner directive 2026-10-04)' }
+                ]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
+
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number + ':' + a.labels.join(','); }),
+            ['98:validation_failed', '98:agent:rework'],
+            'N=1 < MAX=2 → still parks AND arms the PR-anchored rework leg');
+        assert.equal(sm.capturedPrComments.length, 1, 'one report per red verdict');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('🔁 guest rework arm 2/2 (owner directive 2026-10-04)') !== -1,
+            'the second arm posts its marker — the next red sees N=2');
+    });
+
+    test('fail_validation: guest rework cap reached — NO arm, cap log, coordinator line (review #701)', function () {
+        var logs = [];
+        var origLog = console.log;
+        console.log = function (l) { logs.push(String(l)); };
+        var sm;
+        try {
+            sm = makeSmAgent(Object.assign(config('a', 'b'), {
+                github: {
+                    items: [prItem(98, { labels: ['pr_approved', 'ai_validating'], branch: 'feat/x', author: 'someguest', headSha: 'sha98' })],
+                    pr: { number: 98, labels: ['pr_approved', 'ai_validating'], body: 'guest fix' },
+                    prComments: [
+                        { body: '…\n🔁 guest rework arm 1/2 (owner directive 2026-10-04)' },
+                        { body: '…\n🔁 guest rework arm 2/2 (owner directive 2026-10-04)' }
+                    ]
+                }
+            }));
+            sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
+        } finally {
+            console.log = origLog;
+        }
+
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number + ':' + a.labels.join(','); }),
+            ['98:validation_failed'],
+            'N=2 >= MAX=2 → the park label still lands but agent:rework is NEVER added');
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) { return a.labels.indexOf('agent:rework') !== -1; }),
+            'no rework arm at the cap');
+        assert.equal(sm.capturedPrComments.length, 1, 'the report still posts');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('rework attempts exhausted (2/2)') !== -1,
+            'the report tells the guest the coordinator owns it now');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('guest rework arm 3') === -1,
+            'no marker beyond the cap');
+        assert.ok(logs.some(function (l) {
+            return l.indexOf('🛑 guest pr-98 rework cap reached (2/2) — coordinator owns it from here') !== -1;
+        }), 'the cap is logged: ' + logs.filter(function (l) { return l.indexOf('🛑') !== -1; }).join(' | '));
+    });
+
+    test('fail_validation: guestReworkMaxAttempts jobParams override — MAX=1 caps on the first marker', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(97, { labels: ['pr_approved', 'ai_validating'], branch: 'feat/y', author: 'someguest', headSha: 'sha97' })],
+                pr: { number: 97, labels: ['pr_approved', 'ai_validating'], body: 'guest fix' },
+                prComments: [
+                    { body: '…\n🔁 guest rework arm 1/2 (owner directive 2026-10-04)' }
+                ]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            guestReworkMaxAttempts: 1, rules: [RULES.fail] } });
+
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number + ':' + a.labels.join(','); }),
+            ['97:validation_failed'],
+            'override MAX=1 with one prior arm (N=1 >= 1) → no agent:rework');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('rework attempts exhausted (1/1)') !== -1,
+            'the report counts against the OVERRIDE max');
     });
 
     test('fail_validation: machineAuthor unconfigured — fail-closed, no rework arm at all', function () {

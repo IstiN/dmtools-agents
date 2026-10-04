@@ -92,6 +92,7 @@
         "js/unit-tests/test_smGithubSource.js",
         "js/unit-tests/test_reviewVerdict.js",
         "js/unit-tests/test_mergeBot.js",
+        "js/unit-tests/test_smJiraSource.js",
         "js/unit-tests/test_ciCheckMirror.js",
         "js/unit-tests/test_gitPushGuard.js",
         "js/unit-tests/test_aiTeammateTemplate.js",

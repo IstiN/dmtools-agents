@@ -29,6 +29,10 @@
  *   to switch EVERY default-dispatch rule to the local teammate pipeline for that run,
  *   without editing sm.json/.dmtools/config.js. Rules with localExecution:true are
  *   unaffected; a rule can still opt out with an explicit `localTeammate: false`.
+ *   jobParams.guestReworkMaxAttempts — cap on guest validation-red rework arms per
+ *   PR (review #701; default 2). Counted via the 'guest rework arm N/MAX' marker
+ *   lines appended to the guest fail reports; at N >= MAX the arm is withheld and
+ *   the coordinator owns the PR.
  *
  * Rule fields:
  *   jql            (required) — JQL to find tickets (supports {jiraProject}, {parentTicket})
@@ -2232,14 +2236,28 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 var failedRunsLine = failedRunLinksLine(effectiveRepoInfo,
                     rule.ciWorkflow || ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
                     (ticket.pr && ticket.pr.headSha) || ticket.headSha);
+                // Guest rework cap (review #701): count prior guest-rework
+                // arms via the marker lines on this PR's reports BEFORE the
+                // arm decision — the report and the arm must agree.
+                var reworkMax = isMachinePr ? 0 : guestReworkMaxAttempts(RUN_JOB_PARAMS);
+                var reworkArms = isMachinePr ? 0 : guestReworkArmsSoFar(effectiveRepoInfo, ticket.prNumber);
+                var reworkCapped = !isMachinePr && reworkArms >= reworkMax;
                 var report = (isMachinePr
                     ? ('⚠️ Validation CI went red on the head — merge aborted, rework re-queued.' +
                        (linked ? ' (linked issue #' + linked + ' re-armed)' : '') +
                        ' (approval latch kept — no re-review after fixes)')
-                    : '⚠️ Validation CI went red on the head. Guest PR: the rework agent is armed ' +
-                      'on this PR (owner directive 2026-10-04) — it fixes the findings and pushes; ' +
-                      'your own push re-runs validation just the same.')
-                    + (failedRunsLine ? '\n' + failedRunsLine : '');
+                    : ('⚠️ Validation CI went red on the head. Guest PR: ' +
+                       (reworkCapped
+                           ? 'rework attempts exhausted (' + reworkArms + '/' + reworkMax +
+                             ') — the coordinator owns this PR from here.'
+                           : 'the rework agent is armed ' +
+                             'on this PR (owner directive 2026-10-04) — it fixes the findings and pushes; ' +
+                             'your own push re-runs validation just the same.')))
+                    + (failedRunsLine ? '\n' + failedRunsLine : '')
+                    + (!isMachinePr && !reworkCapped
+                        ? '\n🔁 guest rework arm ' + (reworkArms + 1) + '/' + reworkMax +
+                          ' (owner directive 2026-10-04)'
+                        : '');
                 github_create_comment({
                     workspace: effectiveRepoInfo.owner,
                     repository: effectiveRepoInfo.repo,
@@ -2297,24 +2315,41 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // linked issue: that path stays machine-author-only.
                     // Review findings on guests remain owner/coordinator-
                     // owned — this arm is validation-red only.
-                    try {
-                        github_add_labels({
-                            workspace: effectiveRepoInfo.owner,
-                            repository: effectiveRepoInfo.repo,
-                            number: ticket.prNumber,
-                            labels: ['agent:rework']
-                        });
-                        console.log('  🔁 guest pr-' + ticket.prNumber +
-                            ' validation red — agent:rework armed on the PR (owner directive 2026-10-04)');
-                    } catch (eGuestRework) {
-                        console.warn('  ⚠️  guest rework arm failed: ' +
-                            (eGuestRework.message || eGuestRework));
+                    //
+                    // Review #701 CAP: the guest arm is bounded by
+                    // guestReworkMaxAttempts (default 2) counted via the
+                    // 'guest rework arm N/MAX' markers on the PR — a
+                    // persistently-red guest must loop to a HUMAN
+                    // (coordinator), not through the rework agent forever.
+                    // Machine-author PRs (unlinked) stay uncapped: the
+                    // machine fixes its own code, that loop is ours.
+                    if (reworkCapped) {
+                        console.log('  🛑 guest pr-' + ticket.prNumber +
+                            ' rework cap reached (' + reworkArms + '/' + reworkMax +
+                            ') — coordinator owns it from here');
+                    } else {
+                        try {
+                            github_add_labels({
+                                workspace: effectiveRepoInfo.owner,
+                                repository: effectiveRepoInfo.repo,
+                                number: ticket.prNumber,
+                                labels: ['agent:rework']
+                            });
+                            console.log('  🔁 guest pr-' + ticket.prNumber +
+                                ' validation red — agent:rework armed on the PR (owner directive 2026-10-04)');
+                        } catch (eGuestRework) {
+                            console.warn('  ⚠️  guest rework arm failed: ' +
+                                (eGuestRework.message || eGuestRework));
+                        }
                     }
                 }
                 console.log('  🔁 ' + key + ' validation failed — ' +
                     (isMachinePr && linked ? 'rework re-queued (issue #' + linked + ')'
                      : isMachinePr ? 'no linked issue — rework armed PR-anchored'
-                     : 'guest PR, parked (validation_failed) + agent:rework armed on the PR'));
+                     : reworkCapped
+                       ? 'guest PR, parked (validation_failed) — rework cap reached (' +
+                         reworkArms + '/' + reworkMax + '), coordinator owns it from here'
+                       : 'guest PR, parked (validation_failed) + agent:rework armed on the PR'));
                 processedKeys.push(key);
             } catch (e) {
                 console.error('  ❌ fail_validation failed for ' + key + ': ' + (e.message || e));
@@ -2678,6 +2713,58 @@ function failedRunLinksLine(repoInfo, ciWorkflow, headSha) {
     } catch (e) {
         console.warn('  ⚠️  failed-run link lookup failed: ' + (e.message || e));
         return '';
+    }
+}
+
+// ── Guest rework cap (review #701: unbounded guest rework cycle) ──────────
+//
+// The 2026-10-04 guest validation-red rework arm is PR-anchored and fires
+// on EVERY red verdict — a persistently-red guest PR (the rework agent
+// pushes a head that goes red again) would loop arm→rework→red→arm
+// forever. The cap counts prior arms via the marker line appended to each
+// guest fail report: 'guest rework arm N/MAX (owner directive 2026-10-04)'.
+// Counting is per-PR (NOT per-head): every rework cycle pushes a NEW head,
+// so a per-head count would reset to zero each lap and never cap anything.
+// MAX: jobParams.guestReworkMaxAttempts (default 2). At N >= MAX the arm
+// is withheld — the coordinator owns the PR from there.
+
+var GUEST_REWORK_DEFAULT_MAX = 2;
+var GUEST_REWORK_ARM_MARK_RE = /guest rework arm (\d+)/g;
+
+function guestReworkMaxAttempts(jobParams) {
+    var raw = jobParams && jobParams.guestReworkMaxAttempts;
+    var n = parseInt(raw, 10);
+    return (!isNaN(n) && n > 0) ? n : GUEST_REWORK_DEFAULT_MAX;
+}
+
+/**
+ * Highest 'guest rework arm N' marker already posted on this PR (0 when
+ * none). Probe failure fails OPEN (0 → arm): a broken comment read must
+ * not strand a red guest head that the cap exists to un-stall — the next
+ * red re-reads and re-evaluates.
+ */
+function guestReworkArmsSoFar(repoInfo, prNumber) {
+    try {
+        var res = github_get_pr_comments({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            pullRequestId: prNumber
+        });
+        var obj = typeof res === 'string' ? JSON.parse(res) : (res || []);
+        var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+        var max = 0;
+        list.forEach(function (c) {
+            var body = String((c && c.body) || '');
+            GUEST_REWORK_ARM_MARK_RE.lastIndex = 0;
+            var m;
+            while ((m = GUEST_REWORK_ARM_MARK_RE.exec(body)) !== null) {
+                var n = parseInt(m[1], 10);
+                if (!isNaN(n) && n > max) max = n;
+            }
+        });
+        return max;
+    } catch (e) {
+        console.warn('  ⚠️  guest rework arm count probe failed: ' + (e.message || e));
+        return 0;
     }
 }
 

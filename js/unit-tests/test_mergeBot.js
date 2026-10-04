@@ -235,11 +235,56 @@ suite('mergeBot', function () {
         // → exactly ONE SM tick must be dispatched.
         assert.equal(result.acted, 0);
         assert.equal(fx.calls.cli.length, 1, 'exactly one self-tick dispatch');
-        assert.equal(fx.calls.cli[0].command, 'gh workflow run machine-sm.yml -F dryRun=false',
-            'the full machine-sm tick command line, verbatim');
+        assert.equal(fx.calls.cli[0].command,
+            'gh workflow run machine-sm.yml -F dryRun=false --repo a/b',
+            'the full machine-sm tick command line, verbatim — --repo scopes the ' +
+            'dispatch to the PR\u2019s repo (gh resolves the CWD\u2019s repo, wrong in multi-repo runners; review #701)');
+        // Review #701: the probe that guards the dispatch must be scoped to
+        // THIS repo's machine-sm.yml (not the CWD's).
+        assert.equal(fx.wfCalls[0].workflowId, 'machine-sm.yml', 'active-SM probe lists machine-sm.yml');
+        assert.equal(fx.wfCalls[0].workspace, 'a', 'active-SM probe is repo-scoped');
+        assert.equal(fx.wfCalls[0].repository, 'b', 'active-SM probe is repo-scoped');
         assert.ok(result.log.some(function (l) {
             return l.indexOf('🔁 deferred approved → SM tick dispatched (self-heal)') !== -1;
         }), 'the dispatch is logged: ' + JSON.stringify(result.log));
+    });
+
+    test('self-tick: SM already active (machine-sm.yml in_progress/queued) -> NO dispatch', function () {
+        // Review #701 (tick-storm fix): during healthy waves every deferring
+        // bot run fired a fresh machine-sm.yml even while one was already
+        // draining the queue — the bot's own defer lines amplified into tick
+        // storms. An active run means the SM will consume the turn itself.
+        [['in_progress', 'in_progress'], ['queued', 'queued']].forEach(function (pair) {
+            var fx = fixture({
+                labels: ['pr_approved', 'ai_validated'],
+                workflowRuns: [{ id: 9, status: pair[0],
+                                 updated_at: new Date(Date.now() - 60 * 1000).toISOString() }]
+            });
+            var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+            assert.ok(result.log.some(function (l) {
+                return l.indexOf('FIFO-queued') !== -1;
+            }), pair[1] + ': the defer line still logs');
+            assert.equal(fx.calls.cli.length, 0, pair[1] + ' SM run active — no tick dispatched');
+            assert.ok(result.log.some(function (l) {
+                return l.indexOf('⏭️ self-tick skipped (SM already active)') !== -1;
+            }), pair[1] + ': the skip is logged: ' + JSON.stringify(result.log));
+        });
+    });
+
+    test('self-tick: zombie queued SM run (>6h stale) -> probe ignores it, dispatch fires', function () {
+        // smAgent parity (isStaleNonRunningWorkflowRun): a queued run older
+        // than 6h is a zombie superseded by its concurrency group — treating
+        // it as active would silently disable the self-heal forever.
+        var fx = fixture({
+            labels: ['pr_approved', 'ai_validated'],
+            workflowRuns: [{ id: 9, status: 'queued',
+                             updated_at: new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString() }]
+        });
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(fx.calls.cli.length, 1, 'stale queued run does not block the tick');
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('SM tick dispatched') !== -1;
+        }));
     });
 
     test('self-tick: acted>0 (merge consumed the turn) -> NO dispatch', function () {
