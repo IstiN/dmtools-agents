@@ -77,7 +77,10 @@
   ];
 
   // lane → the timestamp that ENTERED it (schema 2; mirrors
-  // js/factoryState.js LANE_ENTERED_AT — kept in sync deliberately)
+  // js/factoryState.js LANE_ENTERED_AT — kept in sync deliberately).
+  // pr_validation is intentionally ABSENT there (derived from an in-flight
+  // CI run, not a label) — cardHtml ages those cards from their newest
+  // history entry, exactly like the backlog columns.
   var LANE_ENTERED_AT = {
     development: 'devStartedAt',
     pr_created: 'prCreated',
@@ -160,14 +163,16 @@
 
   // ── lane summary (v3): readable "how much is left" per lane ────────────────
   // done = merged (terminal); in-flight = actively worked right now
-  // (dev leg running, mutex validating); queued = waiting on the next
-  // machine step; blocked = owner hold — wins over everything.
+  // (dev leg running, head validation running, mutex validating); queued =
+  // waiting on the next machine step; blocked = owner hold — wins over
+  // everything.
   function laneSummary(laneId, list) {
     var s = { total: list.length, done: 0, inflight: 0, queued: 0, blocked: 0 };
     list.forEach(function (c) {
       if (hasBlocked(c)) s.blocked++;
       else if (c.mergedAt) s.done++;
-      else if (laneId === 'validating' || laneId === 'development') s.inflight++;
+      else if (laneId === 'validating' || laneId === 'development' ||
+               laneId === 'pr_validation') s.inflight++;
       else s.queued++;
     });
     return s;

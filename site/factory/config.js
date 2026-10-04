@@ -47,9 +47,12 @@ window.FACTORY_BOARD_CONFIG = {
   // Lane rendering order + titles — the PIPELINE order (schema 2). A card
   // moves left→right exactly once per stage. Schema 1 snapshots map onto it:
   // `fresh` renders as `pr_created`; development/merged_recent stay empty.
+  // pr_validation (gh-716) holds PRs whose head validation run is still
+  // in flight — the window between "PR created" and "reviewed".
   lanes: [
     { id: 'development',    title: 'Development',          icon: 'dev' },
     { id: 'pr_created',     title: 'PR created',           icon: 'pr' },
+    { id: 'pr_validation',  title: 'PR validation',        icon: 'validate' },
     { id: 'review',         title: 'Review',               icon: 'review' },
     { id: 'approved_queue', title: 'Approved queue · FIFO', icon: 'queue' },
     { id: 'validating',     title: 'Validating · mutex',   icon: 'validate' },
