@@ -19,6 +19,23 @@
 var commentMarkupModule = loadModule('js/common/commentMarkup.js');
 var gitStagingModule = loadModule('js/common/gitStaging.js');
 
+// Real githubHelpers (only its own deps stubbed) — pushReworkChanges requires
+// it for the PR-anchored (pr-N) lookup path; jira keys never touch it.
+var githubHelpersModule = loadModule(
+    'js/common/githubHelpers.js',
+    makeRequire({
+        './pullRequest.js': { buildOriginFetchCommand: function() { return 'git fetch origin'; } },
+        './gitOps.js': {
+            checkoutPRBranch: function() {},
+            getPRDiff: function() {},
+            detectMergeConflicts: function() {},
+            trimLargeTextForInput: function() {},
+            writePRContext: function() {}
+        }
+    }),
+    {}
+);
+
 function makeOutputFiles(fileMap) {
     return loadModule('js/common/outputFiles.js', makeRequire({
             './common/commentMarkup.js': commentMarkupModule,
@@ -89,6 +106,7 @@ function loadPushReworkChangesModule(fileMap, opts) {
             './common/scm.js': { createScm: function() { return scm; } },
             './common/submodules.js': {},
             './common/pullRequest.js': {},
+            './common/githubHelpers.js': githubHelpersModule,
             './common/feedbackLoop.js': {},
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: noop },
             './common/outputFiles.js': outputFiles,
@@ -493,6 +511,7 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
                     return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
                 }
             },
+            './common/githubHelpers.js': githubHelpersModule,
             './common/feedbackLoop.js': {
                 runQualityGates: function() { return { success: true }; },
                 runPolicyGates: function() { return { success: true }; },
@@ -661,8 +680,20 @@ function loadPushReworkChangesForAction(mocks, opts) {
     var resumeAgentCalls = [];
     var cliCommands = [];
 
+    // Default fixture: the jira-shaped ticket's own PR is in the listPrs page
+    // (title/branch contain the key) — the normal happy-path shape. Before the
+    // PR-LOOKUP-FAILED hardening this defaulted to [] and the happy-path
+    // regression below passed only BECAUSE of the old silent skip; the lookup
+    // failure path now fails loudly by design and needs its own test.
     var scm = Object.assign({
-        listPrs: function() { return []; },
+        listPrs: function() {
+            return [{
+                number: 123,
+                title: 'PROJ-123: rework fix',
+                head: { ref: 'bug/PROJ-123' },
+                html_url: 'https://github.com/IstiN/dmtools-agents/pull/123'
+            }];
+        },
         getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; }
     }, (opts && opts.scm) || {});
 
@@ -712,6 +743,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
                 readStagedDiffStat: function() { return 'M file.txt\n'; },
                 syncBranchWithBase: function() { return { success: true, updated: false }; }
             },
+            './common/githubHelpers.js': githubHelpersModule,
             './common/feedbackLoop.js': (function() {
                 var fl = (opts && opts.feedbackLoop) || {
                     runQualityGates: function() { return { success: true }; },
@@ -900,6 +932,7 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
             './common/scm.js': { createScm: function() { return {}; } },
             './common/submodules.js': { pushManagedSubmodules: function() {} },
             './common/pullRequest.js': {},
+            './common/githubHelpers.js': githubHelpersModule,
             './common/feedbackLoop.js': Object.assign({
                 runQualityGates: function() { return { success: true }; },
                 runPolicyGates: function() { return { success: true }; },
@@ -1244,5 +1277,196 @@ suite('pushReworkChanges — fatal rework CLI failure (non-zero exit ≠ 124)', 
 
         assert.equal(result.path, 'rework-interrupted', '124 must still take the interrupted path');
         assert.equal(result.success, true);
+    });
+});
+
+// ── PR-anchored lookup + loud lookup failure (githubSource pr-N, fa #1212) ───
+// Live fa #1212 (2026-10-04, run 37200002499, job 111429622376): the post-action
+// looked up the PR for pseudo-ticket 'pr-1212' by scanning a single listPrs
+// page for a title/head containing the literal key — the PR is titled/branched
+// after the ORIGINAL work item ('ai/gh-1204') and was not even on the fetched
+// page → "Could not find PR to post comment — skipping GitHub PR comment" →
+// thread replies/resolutions SKIPPED, ticket still moved to In Review, WIP and
+// agent:rework labels removed, cycle declared closed with success:true. The
+// threads stayed unresolved, SM re-armed rework → infinite empty-lap loop.
+//
+// Two hard requirements proven here:
+//   1. pr-N keys resolve the PR directly by number (REST pulls/{n}) — never
+//      by list-scanning.
+//   2. A PR-lookup failure after the rework push FAILS LOUDLY: no PR comment,
+//      no status move, no label removal, no "cycle closed" — the leg returns
+//      success:false with a greppable PR-LOOKUP-FAILED marker.
+suite('pushReworkChanges — PR-anchored lookup & loud lookup failure (fa #1212)', function() {
+
+    var PR_1212 = {
+        number: 1212,
+        title: 'ai/gh-1204: fix telemetry',
+        head: { ref: 'ai/gh-1204' },
+        state: 'open',
+        html_url: 'https://github.com/IstiN/fa/pull/1212'
+    };
+
+    function loadAnchoredAction(scmOverrides, extraMocks) {
+        var getPrCalls = [];
+        var listCalls = [];
+        var addCommentCalls = [];
+        var moveCalls = [];
+        var removedLabels = [];
+        var ticketComments = [];
+
+        var scm = Object.assign({
+            getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'fa' }; },
+            // Single page of unrelated open PRs — #1212 is NOT in it (fa #1212
+            // lived past page 1 among 10+ open PRs).
+            listPrs: function(state) {
+                listCalls.push(state);
+                return [{ number: 1200, title: 'ai/gh-800: unrelated', head: { ref: 'ai/gh-800' }, changed_files: 2 }];
+            },
+            getPr: function(id) { getPrCalls.push(id); return PR_1212; },
+            addComment: function(prId, text) { addCommentCalls.push({ prId: prId, text: text }); },
+            listReviews: function() { return []; }
+        }, scmOverrides || {});
+
+        var mocks = Object.assign({
+            cli_execute_command: function(args) {
+                if (args.command === 'git branch --show-current') return 'ai/gh-1204\n';
+                if (args.command.indexOf('git ls-remote --heads origin') === 0) {
+                    return 'abc123\trefs/heads/ai/gh-1204\n';
+                }
+                return '';
+            },
+            file_read: function(args) {
+                var p = args && (args.path || args);
+                if (p && p.indexOf('rework_setup_failed.md') !== -1) {
+                    throw new Error('File does not exist');
+                }
+                if (p && p.indexOf('pr_info.md') !== -1) {
+                    return '**Branch**: `ai/gh-1204` → `main`';
+                }
+                return null;
+            },
+            jira_post_comment: function(args) { ticketComments.push(args.comment || args.body || ''); },
+            jira_move_to_status: function(args) { moveCalls.push(args.statusName); },
+            jira_remove_label: function(args) { removedLabels.push(args.label); },
+            jira_assign_ticket_to: function() {}
+        }, extraMocks || {});
+
+        var loaded = loadPushReworkChangesForAction(mocks, { scm: scm });
+
+        return {
+            loaded: loaded,
+            getPrCalls: getPrCalls,
+            listCalls: listCalls,
+            addCommentCalls: addCommentCalls,
+            moveCalls: moveCalls,
+            removedLabels: removedLabels,
+            ticketComments: ticketComments,
+            run: function() {
+                return loaded.mod.action({
+                    ticket: { key: 'pr-1212', fields: { labels: [] } },
+                    metadata: { contextId: 'pr_rework' },
+                    response: 'Fix summary long enough to be a meaningful rework completion summary.',
+                    customParams: { removeLabels: ['agent:rework'] }
+                });
+            }
+        };
+    }
+
+    test('repro (fa #1212): pr-1212 post-action finds PR #1212 directly by number and posts to it', function() {
+        var fx = loadAnchoredAction();
+        var result = fx.run();
+
+        assert.equal(result.success, true, 'the rework leg completes');
+        assert.equal(result.prUrl, 'https://github.com/IstiN/fa/pull/1212');
+        assert.equal(fx.getPrCalls.length, 1, 'exactly one direct get-by-number fetch');
+        assert.equal(String(fx.getPrCalls[0]), '1212', 'pulls/1212 is the lookup path');
+        assert.equal(fx.listCalls.length, 0, 'anchored keys must not list-scan at all');
+        assert.ok(
+            fx.addCommentCalls.some(function(c) { return c.prId === 1212; }),
+            'the fix summary must be posted to PR #1212 (was silently skipped pre-fix)'
+        );
+    });
+
+    test('loud failure: PR lookup fails → leg fails, cycle-close steps never run', function() {
+        var fx = loadAnchoredAction({
+            getPr: function() { throw new Error('pulls/1212 not found'); },
+            listPrs: function() { return []; }
+        });
+        var result = fx.run();
+
+        assert.equal(result.success, false, 'a skipped-lookup leg must NOT report success');
+        assert.contains(String(result.error), 'PR-LOOKUP-FAILED', 'greppable marker in the job result');
+        assert.contains(String(result.error), 'pr-1212');
+        assert.equal(fx.addCommentCalls.length, 0, 'nothing was posted to any PR');
+        assert.equal(
+            fx.moveCalls.filter(function(s) { return s === 'In Review'; }).length, 0,
+            'the ticket must NOT be moved to In Review — replies/resolutions were skipped for infrastructure reasons'
+        );
+        assert.equal(fx.removedLabels.length, 0,
+            'no label removal (agent:rework / WIP) — the rework cycle was NOT closed');
+        assert.ok(
+            fx.ticketComments.some(function(c) { return String(c).indexOf('PR-LOOKUP-FAILED') !== -1; }),
+            'a job-summary line reaches the tracker error comment'
+        );
+        assert.equal(fx.loaded.resumeAgentCalls.length, 1, 'one resume attempt, then the honest failure');
+    });
+
+    test('loud failure: closed/merged anchored PR also fails loudly instead of silently skipping', function() {
+        var fx = loadAnchoredAction({
+            getPr: function(id) { fx.getPrCalls.push(id); return Object.assign({}, PR_1212, { state: 'closed' }); }
+        });
+        fx.getPrCalls = [];
+        var result = fx.run();
+
+        assert.equal(result.success, false);
+        assert.contains(String(result.error), 'PR-LOOKUP-FAILED');
+        assert.equal(fx.removedLabels.length, 0, 'cycle not closed');
+    });
+
+    test('jira regression: jira-shaped ticket keeps the exact pre-change lookup and completion path', function() {
+        var listCalls = [];
+        var getPrCalls = [];
+        var addCommentCalls = [];
+        var moveCalls = [];
+        var ticketComments = [];
+
+        var loaded = loadPushReworkChangesForAction({
+            jira_post_comment: function(args) { ticketComments.push(args.comment || args.body || ''); },
+            jira_move_to_status: function(args) { moveCalls.push(args.statusName); }
+        }, {
+            scm: {
+                getRemoteRepoInfo: function() { return { owner: 'IstiN', repo: 'dmtools-agents' }; },
+                listPrs: function(state) {
+                    listCalls.push(state);
+                    return [{
+                        number: 123,
+                        title: 'PROJ-123: rework fix',
+                        head: { ref: 'bug/PROJ-123' },
+                        html_url: 'https://github.com/IstiN/dmtools-agents/pull/123'
+                    }];
+                },
+                getPr: function(id) { getPrCalls.push(id); return { number: 123 }; },
+                addComment: function(prId, text) { addCommentCalls.push({ prId: prId, text: text }); },
+                listReviews: function() { return []; }
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'Some fix summary that should be pushed normally.'
+        });
+
+        // Byte-identical jiraSource path: list-scan lookup, PR comment posted,
+        // ticket moved to In Review, completion comment, success.
+        assert.equal(result.success, true);
+        assert.deepEqual(listCalls, ['open'], 'unchanged single open-state list call');
+        assert.equal(getPrCalls.length, 0, 'jira keys never switch to get-by-number');
+        assert.ok(addCommentCalls.some(function(c) { return c.prId === 123; }), 'fix summary posted to the scanned PR');
+        assert.ok(moveCalls.some(function(s) { return s === 'In Review'; }), 'In Review move preserved');
+        assert.ok(
+            ticketComments.some(function(c) { return String(c).indexOf('Rework Completed') !== -1; }),
+            'completion comment to the Jira ticket preserved'
+        );
+        assert.equal(result.branchName, 'bug/PROJ-123');
     });
 });

@@ -147,3 +147,131 @@ suite('checkWipLabel: ticket not found guard', function() {
     });
 
 });
+
+// ── PR-anchored start gate (githubSource pseudo-ticket pr-N) ─────────────────
+// Live fa #1212 (2026-10-04, run 37200002499): checkOpenPR gate ran
+// findPRForTicket('pr-1212') against a single listPrs page whose PRs reference
+// their own work items — no match → "No open Pull Request found for this
+// ticket" → job stopped → empty rework lap. The gate must resolve a pr-N key
+// directly by PR number. These tests wire the REAL githubHelpers (only
+// configLoader stays stubbed) so the full gate path is exercised.
+suite('checkWipLabel — PR-anchored start gate (githubSource pr-N, fa #1212)', function() {
+
+    var gitOpsStub = {
+        checkoutPRBranch: function() {},
+        getPRDiff: function() {},
+        detectMergeConflicts: function() {},
+        trimLargeTextForInput: function() {},
+        writePRContext: function() {}
+    };
+
+    function loadWithRealHelpers(scm, mocks) {
+        var gh = loadModule(
+            'js/common/githubHelpers.js',
+            makeRequire({
+                './pullRequest.js': {
+                    buildOriginFetchCommand: function() { return 'git fetch origin'; }
+                },
+                './gitOps.js': gitOpsStub
+            }),
+            {}
+        );
+        return loadModule(
+            'js/checkWipLabel.js',
+            makeRequire({
+                './configLoader.js': {
+                    loadProjectConfig: function() { return {}; },
+                    createScm: function() { return scm; }
+                },
+                './common/githubHelpers.js': gh
+            }),
+            mocks || {}
+        );
+    }
+
+    var anchoredPr = {
+        number: 1212,
+        title: 'ai/gh-1204: fix telemetry',
+        head: { ref: 'ai/gh-1204' },
+        state: 'open'
+    };
+
+    function anchoredScm() {
+        return {
+            listPrs: function() {
+                // Single page of unrelated open PRs — #1212 is NOT in it.
+                return [{ number: 1200, title: 'ai/gh-800: unrelated', head: { ref: 'ai/gh-800' } }];
+            },
+            getPr: function() { return anchoredPr; }
+        };
+    }
+
+    test('repro (fa #1212): pr-N pseudo-ticket passes the checkOpenPR gate via direct PR fetch, not the list scan', function() {
+        var comments = [];
+        var module = loadWithRealHelpers(anchoredScm(), {
+            jira_post_comment: function(args) { comments.push(args); }
+        });
+
+        var result = module.action({
+            ticket: makeTicket('pr-1212'),
+            metadata: { contextId: 'pr_rework' },
+            jobParams: { customParams: { checkOpenPR: true } }
+        });
+
+        assert.equal(result, true, 'PR #1212 is open — the gate must let the rework leg run');
+        assert.equal(
+            comments.filter(function(c) { return String(c.comment).indexOf('No open Pull Request') !== -1; }).length,
+            0,
+            'must NOT post the false "No open Pull Request found" skip comment'
+        );
+    });
+
+    test('pr-N gate still stops when the anchored PR cannot be fetched (honest stop, no false pass)', function() {
+        var comments = [];
+        var scm = anchoredScm();
+        scm.getPr = function() { throw new Error('pulls/1212 not found'); };
+        var module = loadWithRealHelpers(scm, {
+            jira_post_comment: function(args) { comments.push(args); }
+        });
+
+        var result = module.action({
+            ticket: makeTicket('pr-1213'),
+            metadata: { contextId: 'pr_rework' },
+            jobParams: { customParams: { checkOpenPR: true } }
+        });
+
+        assert.equal(result, false, 'a PR that cannot be fetched is treated as no open PR — the gate stops');
+        assert.ok(
+            comments.some(function(c) { return String(c.comment).indexOf('No open Pull Request') !== -1; }),
+            'the skip comment is still posted (best-effort for pseudo-tickets)'
+        );
+    });
+
+    test('jira regression: jira-shaped ticket keeps the exact pre-change gate behavior (list scan)', function() {
+        var comments = [];
+        var listCalls = [];
+        var getPrCalls = [];
+        var scm = {
+            listPrs: function(state) {
+                listCalls.push(state);
+                return [{ number: 42, title: 'TS-1: fix', head: { ref: 'feature/ts-1' } }];
+            },
+            getPr: function(id) { getPrCalls.push(id); return anchoredPr; }
+        };
+        var module = loadWithRealHelpers(scm, {
+            jira_post_comment: function(args) { comments.push(args); }
+        });
+
+        var result = module.action({
+            ticket: makeTicket('TS-1'),
+            metadata: { contextId: 'pr_rework' },
+            jobParams: { customParams: { checkOpenPR: true } }
+        });
+
+        assert.equal(result, true, 'jira ticket with a scannable PR continues as before');
+        assert.equal(comments.length, 0, 'no comments on the passing gate — identical to before');
+        assert.deepEqual(listCalls, ['open']);
+        assert.equal(getPrCalls.length, 0, 'jira keys never take the anchor fetch');
+    });
+
+});

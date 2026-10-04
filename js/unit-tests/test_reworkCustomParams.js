@@ -3,6 +3,20 @@
  */
 var commentMarkupModule = loadModule('js/common/commentMarkup.js');
 var gitStagingModule = loadModule('js/common/gitStaging.js');
+var githubHelpersModule = loadModule(
+    'js/common/githubHelpers.js',
+    makeRequire({
+        './pullRequest.js': { buildOriginFetchCommand: function() { return 'git fetch origin'; } },
+        './gitOps.js': {
+            checkoutPRBranch: function() {},
+            getPRDiff: function() {},
+            detectMergeConflicts: function() {},
+            trimLargeTextForInput: function() {},
+            writePRContext: function() {}
+        }
+    }),
+    {}
+);
 
 
 /**
@@ -37,6 +51,7 @@ function loadPushReworkChanges() {
             './common/scm.js': { createScm: function() { return {}; } },
             './common/submodules.js': {},
             './common/pullRequest.js': {},
+            './common/githubHelpers.js': githubHelpersModule,
             './common/feedbackLoop.js': {},
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
             './common/trackers.js': makeTrackersModule({}),
@@ -107,6 +122,7 @@ function loadPushReworkChangesForAction(mocks) {
                 readStagedDiffStat: function() { return 'lib/app.dart | 1 +'; },
                 syncBranchWithBase: function() { return { success: true }; }
             },
+            './common/githubHelpers.js': githubHelpersModule,
             './common/feedbackLoop.js': {
                 runQualityGates: function() { return { success: true }; },
                 runPolicyGates: function() { return { success: true }; },
