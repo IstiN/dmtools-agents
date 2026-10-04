@@ -146,20 +146,17 @@ body {
 }
 .pill b { color: var(--run); font-weight: 700; }
 
-/* ── lanes grid ─────────────────────────────────────────────────── */
+/* ── lanes strip (gh-726) ───────────────────────────────────────── */
+/* ONE horizontal strip, always: fixed compact lane width + horizontal
+   scroll as the overflow strategy — never a wrapped lone lane, whatever
+   the lane count or viewport (--lane-w is the deploy knob). */
 .lanes {
-  display: grid; gap: 12px; padding: 12px 20px 20px;
-  grid-template-columns: repeat(6, minmax(250px, 1fr));
-  grid-auto-flow: column;
-  overflow-x: auto;                 /* horizontal scroll on narrow screens */
-  align-items: start;
-}
-@media (min-width: 1600px) {
-  .lanes { grid-template-columns: repeat(6, 1fr); grid-auto-flow: row; }
+  display: flex; gap: 12px; padding: 12px 20px 20px;
+  overflow-x: auto; align-items: flex-start;
 }
 .lane {
   background: var(--panel); border: 1px solid var(--line);
-  border-radius: 12px; min-width: 0;
+  border-radius: 12px; flex: 0 0 var(--lane-w, 290px);
   border-top: 2px solid var(--accent, var(--line-2));
 }
 .lane-head {
@@ -221,18 +218,43 @@ body {
 .dot.bad { background: var(--bad); }
 .dot.run { background: var(--run); animation: pulse 1.6s infinite; }
 
-/* ── mini timeline (SVG) ────────────────────────────────────────── */
-.tl { display: block; width: 100%; height: 14px; margin-top: 8px; }
-.tl-axis { stroke: var(--line-2); stroke-width: 1.5; }
-.tl circle { fill: var(--st-pr); }
-.tl circle:hover { stroke: var(--text); stroke-width: 1; }
-.tl .st-dev  { fill: var(--st-dev); }
-.tl .st-rev  { fill: var(--st-rev); }
-.tl .st-app  { fill: var(--st-app); }
-.tl .st-val  { fill: var(--st-val); }
-.tl .st-mrg  { fill: var(--st-mrg); }
-.tl .first   { stroke: var(--line-2); stroke-width: 1.5; }
-.tl .last    { stroke: var(--text); stroke-width: 1; }
+/* ── labeled stepper (gh-726): named stages, colored by state ───── */
+.stepper { display: flex; margin-top: 8px; }
+.step {
+  flex: 1; min-width: 0; position: relative;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+}
+/* connector: from the previous node's center to this one */
+.step::before {
+  content: ''; position: absolute; top: 4px; left: -50%; width: 50%;
+  height: 2px; background: var(--line-2);
+}
+.step:first-child::before { display: none; }
+.step-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--line-2);
+}
+.step-name {
+  font-size: 8.5px; line-height: 1; letter-spacing: .02em;
+  color: var(--dim); max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* done — solid; the connector behind a done node reads as progress */
+.step.st-done::before { background: var(--ok); }
+.step.st-done .step-dot { background: var(--ok); }
+.step.st-done .step-name { color: var(--muted); }
+/* current — highlighted, pulsing */
+.step.st-current .step-dot {
+  background: var(--accent); animation: pulse 1.6s infinite;
+}
+.step.st-current .step-name { color: var(--text); font-weight: 700; }
+/* pending — dim outline, no fill */
+.step.st-pending .step-dot {
+  background: transparent; border: 1.5px solid var(--dim);
+}
+/* failed — red, unmissable */
+.step.st-failed .step-dot { background: var(--bad); }
+.step.st-failed .step-name { color: var(--bad); font-weight: 700; }
 
 /* ── v3 lane summary + progress bar ─────────────────────────────── */
 .lane-sum {

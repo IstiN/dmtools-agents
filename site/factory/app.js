@@ -23,6 +23,15 @@
  *  - ?fixture=<url> renders a bundled sample snapshot (deterministic
  *    visual-check screenshots, no network); ?drawer=pr-817 deep-links the
  *    drawer.
+ *
+ * gh-726 (owner 2026-10-04):
+ *  - the lanes never wrap: fixed compact lane width + horizontal scroll —
+ *    any lane count renders as ONE left→right strip (the 7th lane used to
+ *    drop to a lone wrapped row);
+ *  - dots → labeled stepper: the per-card status strip shows six NAMED
+ *    steps (dev → pr → valid → review → approve → merge), each colored by
+ *    state (done / current / pending / failed); the exact pipeline position
+ *    reads off the strip alone. Logic lives in steps.js (unit-tested).
  */
 (function () {
   'use strict';
@@ -66,15 +75,27 @@
   // lane id whose data lives under the v1 key (fresh → pr_created)
   var LANE_ALIASES = { pr_created: 'fresh' };
 
-  // pipeline stages for the mini timeline, in order; `k` = card field
-  var STAGES = [
-    { k: 'devStartedAt', cls: 'st-dev',  name: 'dev started' },
-    { k: 'prCreated',    cls: 'st-pr',   name: 'PR created' },
-    { k: 'reviewedAt',   cls: 'st-rev',  name: 'reviewed' },
-    { k: 'approvedAt',   cls: 'st-app',  name: 'approved' },
-    { k: 'validatingAt', cls: 'st-val',  name: 'validating' },
-    { k: 'mergedAt',     cls: 'st-mrg',  name: 'merged' }
-  ];
+  // ── labeled stepper (gh-726): named stages, colored by state ──────────────
+  // Logic (state computation, lane→step mapping, failed-verdict detection)
+  // lives in steps.js — pure and unit-tested; this file only renders.
+  function stepperHtml(c, laneId) {
+    var steps = (window.FACTORY_STEPS || { stepStates: function () { return []; } })
+      .stepStates(c, laneId);
+    if (!steps.length) return '';
+    var nodes = steps.map(function (s) {
+      var tip = s.at
+        ? s.name + ' · ' + clockTime(s.at) + ' (' + ago(s.at) + ')'
+        : s.name + ' · not reached';
+      return '<span class="step st-' + s.state + '" title="' + esc(tip) + '">' +
+        '<span class="step-dot"></span>' +
+        '<span class="step-name">' + esc(s.name) + '</span></span>';
+    }).join('');
+    var cur = steps.filter(function (s) { return s.state === 'current'; });
+    var pos = cur.length ? ' — now at ' + cur[0].name
+      : (c.mergedAt ? ' — merged' : ' — not on the PR pipeline yet');
+    return '<div class="stepper" role="img" aria-label="pipeline position' +
+      esc(pos) + '">' + nodes + '</div>';
+  }
 
   // lane → the timestamp that ENTERED it (schema 2; mirrors
   // js/factoryState.js LANE_ENTERED_AT — kept in sync deliberately).
@@ -245,39 +266,6 @@
     return key || '—';
   }
 
-  // ── mini timeline (SVG): transition dots on a proportional axis ────────────
-  function timelineSvg(c) {
-    var pts = STAGES.filter(function (s) { return c[s.k]; })
-      .map(function (s) {
-        return { t: new Date(c[s.k]).getTime(), cls: s.cls,
-                 name: s.name, raw: c[s.k] };
-      })
-      .filter(function (p) { return !isNaN(p.t); })
-      .sort(function (a, b) { return a.t - b.t; });
-    if (pts.length < 1) return '';
-    var min = pts[0].t, max = pts[pts.length - 1].t;
-    var span = Math.max(max - min, 1);
-    var dots = pts.map(function (p, i) {
-      var x = pts.length === 1 ? 50 : 3 + (94 * (p.t - min) / span);
-      var first = i === 0, last = i === pts.length - 1;
-      return '<circle class="' + p.cls + (first ? ' first' : '') +
-             (last ? ' last' : '') + '" cx="' + x.toFixed(1) +
-             '" cy="5" r="' + (first || last ? 3 : 2.5) + '">' +
-             '<title>' + esc(p.name) + ' · ' + esc(clockTime(p.raw)) +
-             ' (' + esc(ago(p.raw)) + ')</title></circle>';
-    }).join('');
-    return '<svg class="tl" viewBox="0 0 100 10" preserveAspectRatio="none" ' +
-      'role="img" aria-label="pipeline timeline">' +
-      '<line class="tl-axis" x1="3" y1="5" x2="97" y2="5"></line>' +
-      (pts.length === 1 ? '' : dots) +
-      (pts.length === 1
-        ? '<circle class="' + pts[0].cls + ' first last" cx="50" cy="5" r="3">' +
-          '<title>' + esc(pts[0].name) + ' · ' + esc(clockTime(pts[0].raw)) +
-          ' (' + esc(ago(pts[0].raw)) + ')</title></circle>'
-        : '') +
-      '</svg>';
-  }
-
   // ── cards ──────────────────────────────────────────────────────────────────
   function keyOf(c, laneId) {
     return (c.pr != null ? 'pr-' + c.pr : 'issue-' + c.issue) + '@' + laneId;
@@ -334,7 +322,7 @@
           (c.author && !isIssue ? '<span class="author">' +
           esc(c.author) + '</span>' : '') + checks + '</div>'
         : '') +
-      timelineSvg(c) +
+      stepperHtml(c, laneId) +
       '</a>';
   }
 
