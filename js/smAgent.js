@@ -1268,7 +1268,13 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 //     movement NEVER clears it: the SM's own silent-update
                 //     merges ('sm-silent-update' committer) and the agent
                 //     legs' pushes (machineAuthor login, e.g. the rework
-                //     WIP auto-saves on fa pr-1094) are not new work.
+                //     WIP auto-saves on fa pr-1094) are not new work. A
+                //     machine merge ON TOP of a human push is not machine
+                //     work either (#681, live fa#1213: retrigger 7ecf11d7
+                //     22:56 buried by bot merge b3f9c6b5 before the next
+                //     tick) — the probe walks back past machine-authored
+                //     merges to the LAST SUBSTANTIVE commit and tests
+                //     THAT actor + date.
                 var parkLabelVf = 'validation_failed';
                 var labelsVf = ticket.labels || [];
                 var uHead = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
@@ -1277,11 +1283,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     ticket, prMachineAuthorU, effectiveRepoInfo.owner);
                 var unparkedThisPass = false;
                 if (labelsVf.indexOf(parkLabelVf) !== -1) {
-                    var lastCommitter = uHead ? headCommitIdentity(effectiveRepoInfo, uHead) : null;
-                    var actorVf = uHead ? headCommitActor(effectiveRepoInfo, uHead) : null;
+                    var actorVf = uHead ? parkResetCommit(effectiveRepoInfo, uHead, prMachineAuthorU) : null;
                     var parkedAtVf = parkedSince(effectiveRepoInfo, ticket.prNumber);
                     var actorLoginVf = ((actorVf && actorVf.login) || '').toLowerCase();
                     var machineLoginVf = String(prMachineAuthorU || '').toLowerCase();
+                    var lastCommitter = actorVf ? String(actorVf.committer || '') : null;
                     var machinePushVf = lastCommitter === 'sm-silent-update' ||
                         (!!machineLoginVf && !!actorLoginVf && actorLoginVf === machineLoginVf);
                     var freshPushVf = !!(actorVf && actorVf.date && parkedAtVf &&
@@ -1307,9 +1313,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         latestDispatchedVerdict(effectiveRepoInfo,
                             rule.ciWorkflow || ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
                             uHead) !== 'failure';
-                    if (lastCommitter === null || actorVf === null || parkedAtVf === null) {
+                    if (actorVf === null || parkedAtVf === null) {
                         console.warn('  ⚠️  ' + key + ' ' + parkLabelVf +
-                            ': park probe failed (commit actor / park time) — keeping the park (fail closed)');
+                            ': park probe failed (substantive commit / park time) — keeping the park (fail closed)');
                     } else if (headChangedNoVerdictVf) {
                         if (!DRY) {
                             try {
@@ -1344,9 +1350,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         unparkedThisPass = true;
                     } else if (machinePushVf) {
                         console.log('  🅿️  ' + key + ' ' + parkLabelVf +
-                            ' holds — head moved by the machine (' +
+                            ' holds — the last substantive commit is machine work (' +
                             (lastCommitter === 'sm-silent-update' ? 'sm-silent-update' : actorLoginVf) +
-                            '); silent-updates and agent auto-saves are not new work');
+                            '); silent-updates, bot merges of main and agent auto-saves are not new work');
                     } else if (!freshPushVf) {
                         console.log('  🅿️  ' + key + ' ' + parkLabelVf +
                             ' holds — the head predates the park event (no new push since)');
@@ -1367,9 +1373,10 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                     workspace: effectiveRepoInfo.owner,
                                     repository: effectiveRepoInfo.repo,
                                     number: ticket.prNumber,
-                                    body: '🅿️→▶ validation_failed cleared — the head `' + uHead +
-                                        '` was pushed by `' + (actorLoginVf || lastCommitter) +
-                                        '` (human, newer than the park event) — re-entering validation.'
+                                    body: '🅿️→▶ validation_failed cleared — the last substantive commit `' +
+                                        (actorVf.sha || uHead) + '` (head `' + uHead +
+                                        '`) was pushed by `' + (actorLoginVf || lastCommitter || 'unknown') +
+                                        '` (human, newer than the park event; machine merges of main walked past) — re-entering validation.'
                                 });
                             } catch (eUnparkVfC) {
                                 console.warn('  ⚠️  un-park comment failed: ' + (eUnparkVfC.message || eUnparkVfC));
@@ -1444,14 +1451,16 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // 16:01 to five parked PRs; two hours later not one label
                 // cleared — update_branch never fired for any of them).
                 // Same identity rules as update_branch's RESET, fail closed:
-                // only a NON-machine push NEWER than the newest park event
-                // clears the label and lets this dispatch proceed.
-                var vprActor = headCommitActor(effectiveRepoInfo, ticket.headSha);
-                var vprParkedAt = parkedSince(effectiveRepoInfo, ticket.prNumber);
+                // only a NON-machine SUBSTANTIVE push NEWER than the newest
+                // park event clears the label and lets this dispatch proceed
+                // — parkResetCommit (#681) walks back past machine merges of
+                // main, which bury the retrigger, never replace it.
                 var vprMachineLogin = String(machineAuthorModule.resolveMachineAuthor(
                     RUN_JOB_PARAMS, effectiveConfig) || '').toLowerCase();
+                var vprActor = parkResetCommit(effectiveRepoInfo, ticket.headSha, vprMachineLogin);
+                var vprParkedAt = parkedSince(effectiveRepoInfo, ticket.prNumber);
                 var vprActorLogin = ((vprActor && vprActor.login) || '').toLowerCase();
-                var vprMachinePush = vprActorLogin === 'sm-silent-update' ||
+                var vprMachinePush = String((vprActor && vprActor.committer) || '') === 'sm-silent-update' ||
                     (!!vprMachineLogin && vprActorLogin === vprMachineLogin);
                 var vprFreshPush = !!(vprActor && vprActor.date && vprParkedAt &&
                     Date.parse(vprActor.date) > Date.parse(vprParkedAt));
@@ -1469,6 +1478,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                 repository: effectiveRepoInfo.repo, number: ticket.prNumber,
                                 body: '🅿️→▶ validation_failed cleared — human push by `' +
                                     (vprActorLogin || 'unknown') + '` at ' + vprActor.date +
+                                    ' (last substantive commit `' + (vprActor.sha || ticket.headSha) +
+                                    '` of head `' + ticket.headSha + '`, machine merges of main walked past — #681)' +
                                     ' is newer than the park (' + vprParkedAt +
                                     '). Re-entering validation (update_branch RESET never ' +
                                     'ran: the head is not BEHIND — live fa 2026-10-03).' });
@@ -2895,52 +2906,77 @@ function headChecksRed(repoInfo, prNumber) {
     }
 }
 
-function headCommitIdentity(repoInfo, headSha) {
-    // Sticky-park RESET probe (owner 2026-09-27): the LAST commit's
-    // committer name. 'sm-silent-update' is the identity
-    // silentUpdateBranch sets explicitly on its merge commits — anything
-    // else means an author push / a non-machine actor moved the head and
-    // the validation_failed park must clear. Returns the committer name
-    // ('' when unknown — treated as non-machine by the caller:
-    // revalidate rather than starve), or null when the probe fails (the
-    // caller keeps the park — fail CLOSED: an SM head must never slip
-    // through on a dead probe).
-    try {
-        var res = cli_execute_command({
-            command: 'gh api "repos/' + repoInfo.owner + '/' + repoInfo.repo +
-                     '/commits/' + headSha + '" --jq ".commit.committer.name"'
-        });
-        var out = (res || {}).output || (res || {}).stdout || res;
-        return String(out == null ? '' : out).trim().replace(/^"|"$/g, '');
-    } catch (e) {
-        console.warn('  ⚠️  head-commit probe failed: ' + (e.message || e));
-        return null;
-    }
-}
-
 function headCommitActor(repoInfo, headSha) {
     // Sticky-park RESET probe v2 (owner 2026-09-30, live fa pr-1094): the
-    // GitHub-linked account that carries the head commit plus its commit
-    // date. login = author.login || committer.login — the deployment's
-    // machineAuthor login carries every agent-leg push (the rework WIP
-    // auto-saves land as ai-teammate), so a machine push is recognizable
-    // by LOGIN, not by git name: the agent's git identity ("AI Teammate"
-    // <agent.ai.native@gmail.com>) differs from the workflow identities.
-    // Returns {login, date} or null (fail closed: the caller keeps the
-    // park — a dead probe must never un-park).
+    // GitHub-linked account that carries a commit plus its commit date,
+    // committer name, sha and parents. login = author.login ||
+    // committer.login — the deployment's machineAuthor login carries every
+    // agent-leg push (the rework WIP auto-saves land as ai-teammate), so a
+    // machine push is recognizable by LOGIN, not by git name: the agent's
+    // git identity ("AI Teammate" <agent.ai.native@gmail.com>) differs
+    // from the workflow identities. committer name keeps the owner
+    // 2026-09-27 identity: 'sm-silent-update' is what silentUpdateBranch
+    // sets on its merge commits. date reads .commit.committer.date — the
+    // top-level .committer is a GitHub USER object with no date (the v2
+    // jq's bare .committer.date was null on the live API, silently
+    // killing the freshness half of the RESET). parents power the #681
+    // walk-back. Returns {login, date, committer, sha, parents} or null
+    // (fail closed: the caller keeps the park — a dead probe must never
+    // un-park).
     try {
         var res = cli_execute_command({
             command: 'gh api "repos/' + repoInfo.owner + '/' + repoInfo.repo +
                      '/commits/' + headSha +
-                     '" --jq \'{login: (.author.login // .committer.login // ""), date: .committer.date}\''
+                     '" --jq \'{login: (.author.login // .committer.login // ""), date: (.commit.committer.date // .committer.date // ""), committer: .commit.committer.name, sha: .sha, parents: [.parents[].sha]}\''
         });
         var parsed = mcpParse((res || {}).output || (res || {}).stdout || res);
         if (!parsed || typeof parsed !== 'object') return null;
-        return { login: String(parsed.login || ''), date: String(parsed.date || '') };
+        return {
+            login: String(parsed.login || ''),
+            date: String(parsed.date || ''),
+            committer: String(parsed.committer || ''),
+            sha: String(parsed.sha || headSha),
+            parents: Array.isArray(parsed.parents) ? parsed.parents : []
+        };
     } catch (e) {
         console.warn('  ⚠️  head-commit actor probe failed: ' + (e.message || e));
         return null;
     }
+}
+
+function parkResetCommit(repoInfo, headSha, machineAuthor) {
+    // Sticky-park RESET probe v3 (dmtools-agents#681, live fa#1213
+    // 2026-10-03 22:56–23:10): the LAST SUBSTANTIVE commit of the head,
+    // not the head itself. Live race: the human pushed retrigger 7ecf11d7
+    // at 22:56; the silent-update bot merged main on top (bot merge
+    // b3f9c6b5) BEFORE the next tick; the HEAD-keyed probe read the
+    // machine actor, declined, and the park survived four real ticks
+    // (22:59/23:04/23:06…) until a human removed the label by hand. A bot
+    // merge of main is never the retrigger — it BURIES one. Walk back
+    // past MERGE commits authored by the machine (committer
+    // 'sm-silent-update' or login == machineAuthor — the same identities
+    // the v1/v2 probes keyed on) to the first commit that is not a
+    // machine-authored merge and report THAT commit's actor + committer +
+    // date. Non-merge machine pushes (the agent legs' WIP auto-saves, fa
+    // pr-1094) stop the walk — machine work keeps the park; a HUMAN merge
+    // of main is not skipped — a human merge is a human push. Returns
+    // headCommitActor's shape or null (fail closed: an unwalkable chain
+    // keeps the park).
+    var machineLogin = String(machineAuthor || '').toLowerCase();
+    var sha = headSha;
+    for (var step = 0; sha && step < 10; step++) {
+        var commit = headCommitActor(repoInfo, sha);
+        if (!commit) return null;
+        var login = String(commit.login || '').toLowerCase();
+        var machineMerge = Array.isArray(commit.parents) && commit.parents.length >= 2 &&
+            (String(commit.committer || '') === 'sm-silent-update' ||
+             (!!machineLogin && !!login && login === machineLogin));
+        if (!machineMerge) return commit;
+        sha = commit.parents[0];
+    }
+    console.warn('  ⚠️  park-reset walk: 10 machine merges deep without a ' +
+        'substantive commit — keeping the park (fail closed)');
+    return null;
 }
 
 function parkedSince(repoInfo, prNumber) {

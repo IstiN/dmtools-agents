@@ -2200,6 +2200,130 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
         assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
     });
 
+    // dmtools-agents#681 (live fa#1213, 2026-10-03 22:56–23:10): the human
+    // retrigger 7ecf11d7 landed 22:56; the silent-update bot merged main on
+    // top (bot merge b3f9c6b5) BEFORE the next tick — the HEAD-keyed probe
+    // saw the machine actor and declined across FOUR real ticks
+    // (22:59/23:04/23:06/…) until a human removed the label by hand. The
+    // RESET probe must walk back past machine-authored MERGES to the last
+    // substantive commit and test THAT actor + date.
+    var BOT_MERGE_681 = 'b3f9c6b5b3f9c6b5b3f9c6b5b3f9c6b5b3f9c6b5';
+    var HUMAN_FIX_681 = '7ecf11d77ecf11d77ecf11d77ecf11d77ecf11d7';
+    var STALE_HUMAN_681 = '4545454545454545454545454545454545454545';
+    var MAIN_TIP_681 = '0123456789abcdef0123456789abcdef01234567';
+
+    function vfMergeActors(opts) {
+        // sha-keyed actor stubs for the #681 walk tests (bracket-built — a
+        // literal key would name the CONSTANT, not the sha it holds)
+        var map = {};
+        map[opts.mergeSha] = {
+            login: 'ai-teammate', date: opts.mergeDate || '2026-10-03T22:57:30Z',
+            committer: 'sm-silent-update',
+            parents: [opts.tipSha, MAIN_TIP_681]
+        };
+        if (!opts.selfLoop) {
+            map[opts.tipSha] = { login: opts.tipLogin, date: opts.tipDate };
+        }
+        return map;
+    }
+
+    test('silent-update: a bot merge of main BURYING a fresh human push clears the label (#681)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(209, { labels: ['validation_failed'], headSha: BOT_MERGE_681 })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({
+                // the bot merge (machine login + sm-silent-update committer,
+                // TWO parents: branch tip + main) buries the retrigger — its
+                // 22:57 date must NOT speak for the branch; the walk lands
+                // on the human 22:56 fix, newer than the 22:31 park
+                actors: vfMergeActors({ mergeSha: BOT_MERGE_681, tipSha: HUMAN_FIX_681,
+                                        tipLogin: 'istinn', tipDate: '2026-10-03T22:56:00Z' }),
+                parkedAt: '2026-10-03T22:31:00Z'
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
+            ['validation_failed'], 'the buried retrigger clears the park');
+        assert.equal(sm.capturedPrComments.length, 1, 'un-park comment');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('istinn') !== -1,
+            'names the HUMAN actor of the substantive commit');
+        assert.ok(sm.capturedPrComments[0].body.indexOf(HUMAN_FIX_681) !== -1,
+            'points at the substantive commit, not the bot-merge head');
+    });
+
+    test('silent-update: a bot merge of main with NO human push since the park keeps the label (#681)', function () {
+        // The branch sat parked; the bot only refreshed it with main — the
+        // walk lands on the very head the park was set on (22:2x, older
+        // than the 22:31 park event). The bot merge's fresh date must not
+        // be mistaken for a retrigger.
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(210, { labels: ['validation_failed'], headSha: BOT_MERGE_681 })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({
+                // the parked red head itself (22:20) — predates the park
+                actors: vfMergeActors({ mergeSha: BOT_MERGE_681, tipSha: STALE_HUMAN_681,
+                                        tipLogin: 'vendor-guest', tipDate: '2026-10-03T22:20:00Z',
+                                        mergeDate: '2026-10-03T23:04:00Z' }),
+                parkedAt: '2026-10-03T22:31:00Z'
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'no retrigger — the park holds');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
+    });
+
+    test('silent-update: a bot merge walking back to a HUMAN push OLDER than the park keeps the label (#681)', function () {
+        // Humanness alone must not clear: only a human push NEWER than the
+        // park event is a retrigger. A pre-park human fix buried under a
+        // post-park bot merge is exactly the head the park punished.
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(211, { labels: ['validation_failed'], headSha: BOT_MERGE_681 })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({
+                actors: vfMergeActors({ mergeSha: BOT_MERGE_681, tipSha: STALE_HUMAN_681,
+                                        tipLogin: 'another-human', tipDate: '2026-10-03T22:05:00Z' }),
+                parkedAt: '2026-10-03T22:31:00Z'
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'a stale human push is not a retrigger');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
+    });
+
+    test('silent-update: a walk that never finds a substantive commit keeps the label (fail closed, #681)', function () {
+        // A pathological all-machine chain must not walk forever: the cap
+        // fails closed — the park survives a dead/garbage probe.
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(212, { labels: ['validation_failed'], headSha: BOT_MERGE_681 })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({
+                // self-parenting machine merge — the walk hits its cap
+                actors: vfMergeActors({ mergeSha: BOT_MERGE_681, tipSha: BOT_MERGE_681,
+                                        selfLoop: true }),
+                parkedAt: '2026-10-03T22:31:00Z'
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'unwalkable chain — park holds');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
+    });
+
     test('silent-update: a failed park probe keeps the label (fail closed)', function () {
         var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
             github: {
@@ -2439,6 +2563,36 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
 
         assert.equal(sm.capturedPrLabelRemoves.length, 0, 'the parked head predates the park — no clear');
         assert.ok(!vfDispatched(sm.capturedCliCommands), 'no CI while parked');
+    });
+
+    test('validate_pr backstop: a bot merge of main BURYING a fresh human push clears the park (#681)', function () {
+        // Same live race as update_branch's RESET (fa#1213: retrigger
+        // 22:56, bot merge 22:57, park 22:31) reaching the action-level
+        // backstop — the probe must walk past the bot merge and dispatch.
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(213, { labels: ['pr_approved', 'validation_failed'],
+                                     headSha: BOT_MERGE_681 })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({
+                actors: vfMergeActors({ mergeSha: BOT_MERGE_681, tipSha: HUMAN_FIX_681,
+                                        tipLogin: 'istinn', tipDate: '2026-10-03T22:56:00Z' }),
+                parkedAt: '2026-10-03T22:31:00Z'
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [{
+            source: 'github', query: { type: 'pr', labels: ['pr_approved'],
+                notLabels: ['ai_validating'], notMergeState: ['BEHIND', 'DIRTY'], draft: false },
+            localAction: 'validate_pr', deferRedHead: true, limit: 1, id: 'validate-armed-no-vf' }] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
+            ['validation_failed'], 'the buried retrigger clears the park at the backstop too');
+        assert.ok(vfDispatched(sm.capturedCliCommands), 'validation CI dispatched for the substantive head');
+        assert.ok(sm.capturedPrComments.some(function (c) {
+            return c.body.indexOf('machine merges of main walked past') !== -1; }),
+            'the un-park comment explains the walk');
     });
 });
 
