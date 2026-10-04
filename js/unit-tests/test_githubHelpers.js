@@ -229,6 +229,162 @@ suite('githubHelpers.findPRForTicket', function() {
     });
 });
 
+// ── Suite: PR-anchored lookup for githubSource pseudo-tickets (pr-N) ─────────
+// Live fa #1212 (2026-10-04, run 37200002499, job 111429622376): the rework
+// ticket key was the pseudo-ticket 'pr-1212' but the PR's title/branch reference
+// the ORIGINAL work item ('ai/gh-1204'), and with ~10+ open PRs the target was
+// not even in the single listPrs page the pack fetched. The list-scan scored
+// nothing → "No open Pull Request found for this ticket" at the start gate and
+// "Could not find PR to post comment" in the post-action → empty rework laps
+// and unresolved threads forever. A 'pr-N' key must resolve DIRECTLY by number.
+suite('githubHelpers.findPRForTicket — PR-anchored (githubSource pr-N) lookup', function() {
+
+    function pageOneOpenPrs() {
+        // A single github_list_prs page of unrelated open PRs — none of them is
+        // #1212 and none matches 'pr-1212' / bounded '1212' in title or branch.
+        var prs = [];
+        for (var n = 1200; n <= 1209; n++) {
+            var other = n - 400; // 800..809 — original work items of OTHER PRs
+            prs.push({
+                number: n,
+                title: 'ai/gh-' + other + ': unrelated fix',
+                head: { ref: 'ai/gh-' + other },
+                changed_files: 2
+            });
+        }
+        return prs;
+    }
+
+    var anchoredPr = {
+        number: 1212,
+        title: 'ai/gh-1204: fix telemetry',
+        head: { ref: 'ai/gh-1204' },
+        state: 'open',
+        changed_files: 3
+    };
+
+    test('repro (fa #1212): pr-N key resolves directly by number even when the PR is absent from the single listPrs page', function() {
+        var gh = loadGithubHelpers({});
+        var listCalls = [];
+        var getPrCalls = [];
+        var scm = {
+            listPrs: function(state) { listCalls.push(state); return pageOneOpenPrs(); },
+            getPr: function(id) { getPrCalls.push(id); return anchoredPr; }
+        };
+
+        var result = gh.findPRForTicket(scm, 'pr-1212');
+
+        assert.ok(result, 'the PR-anchored key must resolve to its PR — list-scan false negatives end here');
+        assert.equal(result.number, 1212);
+        assert.equal(getPrCalls.length, 1, 'exactly one direct get-by-number call');
+        assert.equal(String(getPrCalls[0]), '1212', 'direct get-by-number (REST pulls/{n}) is the lookup path');
+        assert.equal(listCalls.length, 0, 'anchored keys must not depend on the (page-1-only) PR list at all');
+    });
+
+    test('anchored lookup failure does NOT fall back to the list-scan (deterministic)', function() {
+        var gh = loadGithubHelpers({});
+        var listCalls = [];
+        var scm = {
+            listPrs: function(state) { listCalls.push(state); return pageOneOpenPrs(); },
+            getPr: function() { throw new Error('pulls/1212 not found'); }
+        };
+
+        var result = gh.findPRForTicket(scm, 'pr-1212');
+
+        assert.ok(!result, 'failed direct fetch means no PR — null, honestly');
+        assert.equal(listCalls.length, 0, 'no list-scan fallback: scanning reintroduces the false-negative race');
+    });
+
+    test('anchored lookup returns null for a closed/merged PR (open-gate semantics)', function() {
+        var gh = loadGithubHelpers({});
+        var scm = {
+            listPrs: function() { return pageOneOpenPrs(); },
+            getPr: function() { return Object.assign({}, anchoredPr, { state: 'closed' }); }
+        };
+
+        var result = gh.findPRForTicket(scm, 'pr-1212');
+
+        assert.ok(!result, 'a closed anchored PR is not an open PR — the gate must stop');
+    });
+
+    test('anchored lookup tolerates providers that omit the state field', function() {
+        var gh = loadGithubHelpers({});
+        var scm = {
+            listPrs: function() { return pageOneOpenPrs(); },
+            getPr: function() { var p = Object.assign({}, anchoredPr); delete p.state; return p; }
+        };
+
+        var result = gh.findPRForTicket(scm, 'pr-1212');
+
+        assert.ok(result, 'missing state must not reject a directly-fetched PR');
+        assert.equal(result.number, 1212);
+    });
+
+    test('anchor is case-sensitive lowercase (a real Jira project key "PR-1212" keeps the list-scan path)', function() {
+        var gh = loadGithubHelpers({});
+        var listCalls = [];
+        var getPrCalls = [];
+        var scm = {
+            listPrs: function(state) {
+                listCalls.push(state);
+                return [{ number: 42, title: 'PR-1212: jira ticket fix', head: { ref: 'feature/PR-1212' }, changed_files: 1 }];
+            },
+            getPr: function(id) { getPrCalls.push(id); return anchoredPr; }
+        };
+
+        var result = gh.findPRForTicket(scm, 'PR-1212');
+
+        assert.ok(result, 'uppercase Jira key still matches via the unchanged scan');
+        assert.equal(result.number, 42, 'must be the scanned PR, not the anchor fetch');
+        assert.equal(getPrCalls.length, 0, 'no anchor fetch for uppercase keys');
+        assert.deepEqual(listCalls, ['open']);
+    });
+
+    test('legacy (workspace, repository, ticketKey) form: anchored key uses github_get_pr, never github_list_prs', function() {
+        var gh = loadGithubHelpers({
+            github_get_pr: function(args) {
+                getPrArgs.push(args);
+                return anchoredPr;
+            },
+            github_list_prs: function(args) {
+                listPrsArgs.push(args);
+                return pageOneOpenPrs();
+            }
+        });
+        var getPrArgs = [];
+        var listPrsArgs = [];
+
+        var result = gh.findPRForTicket('IstiN', 'fa', 'pr-1212');
+
+        assert.ok(result, 'legacy calling convention must resolve the anchor too');
+        assert.equal(result.number, 1212);
+        assert.equal(getPrArgs.length, 1);
+        assert.equal(getPrArgs[0].pullRequestId, '1212');
+        assert.equal(getPrArgs[0].repository, 'fa');
+        assert.equal(listPrsArgs.length, 0, 'no list call for anchored keys');
+    });
+
+    test('jira regression: real ticket keys keep the exact pre-change list-scan path', function() {
+        var gh = loadGithubHelpers({});
+        var listCalls = [];
+        var getPrCalls = [];
+        var scm = {
+            listPrs: function(state) {
+                listCalls.push(state);
+                return [{ number: 7, title: 'PROJ-42: fix login', head: { ref: 'feature/proj-42' }, changed_files: 1 }];
+            },
+            getPr: function(id) { getPrCalls.push(id); return anchoredPr; }
+        };
+
+        var result = gh.findPRForTicket(scm, 'PROJ-42');
+
+        assert.ok(result, 'jira-shaped key still found by the scan');
+        assert.equal(result.number, 7);
+        assert.deepEqual(listCalls, ['open'], 'same single open-state list call as before');
+        assert.equal(getPrCalls.length, 0, 'jira keys never switch to get-by-number');
+    });
+});
+
 // ── Suite: resolved status from GraphQL ──────────────────────────────────────
 
 suite('github repo remote parsing', function() {
