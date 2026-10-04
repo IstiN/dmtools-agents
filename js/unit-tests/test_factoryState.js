@@ -670,6 +670,8 @@ suite('factoryState — publishFactoryState', function () {
     assert.ok(cmds[1].indexOf('-f branch=factory-data') > 0);
     assert.ok(cmds[1].indexOf('-f sha=') === -1,
               'no probed sha — first publish creates the file');
+    assert.ok(cmds[1].indexOf(' [skip ci]') > 0,
+              'publish message carries [skip ci] — no phantom runs on factory-data (gh-676)');
   });
 
   test('publish runs exec per command and returns the raw.githubusercontent URL', function () {
@@ -726,6 +728,8 @@ suite('factoryState — history (board time travel)', function () {
     assert.ok(c.indexOf('data/fa-state-20260923-2235.json') > 0);
     assert.ok(c.indexOf('-f sha=') === -1, 'snapshot is a create — no sha');
     assert.ok(c.indexOf('| base64)') > 0, 'payload rides base64');
+    assert.ok(c.indexOf(' [skip ci]') > 0,
+              'snapshot message carries [skip ci] — no phantom runs (gh-676)');
   });
 
   test('history PUT: sha rides only when the index already exists', function () {
@@ -737,6 +741,8 @@ suite('factoryState — history (board time travel)', function () {
     var update = fsModule.historyPutCommand(ST,
       { repo: 'IstiN/flutter_agent_harness', asset: 'fa-state.json' }, idx, 'abc123');
     assert.ok(update.indexOf("-f sha='abc123'") > 0, 'update must carry the sha');
+    assert.ok(create.indexOf(' [skip ci]') > 0 && update.indexOf(' [skip ci]') > 0,
+              'history messages carry [skip ci] — no phantom runs (gh-676)');
   });
 
   test('updateHistory: first run creates the index with one snapshot', function () {
