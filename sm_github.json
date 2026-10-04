@@ -7,6 +7,33 @@
       "maxTriggeredWorkflows": 3,
       "rules": [
         {
+          "description": "RULE ORDER (dmtools-agents#682, live fa#1202/#1203 2026-10-03 23:05–23:57, still reproducing 2026-10-04 06:21–06:22): runs FIRST, ahead of merge-validated AND sweep-stale-validating (whose relative order is a documented #637 invariant — this rule preserves it by prefixing, never interleaving). A cancelled required check is never a verdict: the sweep skips cancelled conclusions by design and fail-validation owns red, so this rule cannot fight them — it never touches labels and never dispatches workflows, it only re-runs GitHub Actions runs. GitHub PR: armed (ai_validating) or latched (ai_validated) head whose REQUIRED check contexts (rule.requiredContexts, branch protection here: static/gate/agents-gate; in fa the kicker's sm-liveness/head-completeness) concluded CANCELLED — the kicker cancel-loop death: every silent-refresh push queued a new kicker run and the pending one was superseded (cancelled) in the shared concurrency group, required contexts died CANCELLED on fresh heads, PRs BLOCKED until manual reruns (2 dead zones + 2 manual reruns on 2026-10-03 alone). CANCELLED is read with branch-protection semantics: the LATEST check run per context is the verdict — a stale cancel under a fresh green re-stamp does NOT act (#695 review fix). NOT failure — failure paths exist; NOT pending-with-active-runs — the localAction probes every run on the head (hasActiveDispatchedRun pattern widened to all events) and skips while anything is in flight. localAction rerun_cancelled_checks re-runs (gh run rerun) the latest attempt-1 cancelled run per required context and posts a once-per-head marker comment citing the evidence — ONLY when the rerun set covers every cancelled context (a partial set defers the marker so the uncovered contexts stay actionable; #695). BEHIND (silent-update refreshes the head) and DIRTY (conflict-rework owns it) are excluded, and agent:rework defers to the rework leg. limit 2: the observed death takes two PRs per wave (fa#1202+#1203 in one 36-second push wave).",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "ai_validating",
+              "ai_validated"
+            ],
+            "notLabels": [
+              "agent:rework"
+            ],
+            "notMergeState": [
+              "BEHIND",
+              "DIRTY"
+            ],
+            "draft": false
+          },
+          "localAction": "rerun_cancelled_checks",
+          "requiredContexts": [
+            "static",
+            "gate",
+            "agents-gate"
+          ],
+          "limit": 2,
+          "id": "rerun-cancelled-checks"
+        },
+        {
           "description": "Validated-but-stale: armed (ai_validating) + validation concluded but BASE MOVED (BEHIND only). BLOCKED must NOT unarm: since #483 BLOCKED is a real verdict, and on a freshly armed head BLOCKED simply means 'required checks pending' — unarming there races validate-armed in the SAME tick and deadlocks the PR forever (live: fa pr-762 armed at 08:25:37, unarmed 08:25:58 by the BLOCKED match, re-armed next tick, loop). silent-update-behind excludes ai_validating and merge-validated needs CLEAN, so without this unarm a genuinely moved base still deadlocks (live: fa pr-744) — BEHIND-only keeps that recovery and stops the self-inflicted one.",
           "source": "github",
           "query": {
