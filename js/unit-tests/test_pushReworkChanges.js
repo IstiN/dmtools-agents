@@ -245,8 +245,6 @@ suite('pushReworkChanges — postThreadReplies field-name fallback', function() 
 // rework response MUST be resolved; unciteable items fall back to a comment.
 suite('pushReworkChanges — thread resolution closure (gh-692)', function() {
 
-    var INPUT_SNAPSHOT = 'input/PROJ-123/pr_discussions_raw.json';
-
     test('extractCitedThreadIds: finds unique PRRT_ ids in the rework response', function() {
         var loaded = loadPushReworkChangesModule({});
         assert.deepEqual(
@@ -263,7 +261,7 @@ suite('pushReworkChanges — thread resolution closure (gh-692)', function() {
             'outputs/review_replies.json': JSON.stringify({
                 replies: [{ rootCommentId: 5550001, reply: 'Fixed the doc header.' }]
             }),
-            INPUT_SNAPSHOT: JSON.stringify({
+            'input/PROJ-123/pr_discussions_raw.json': JSON.stringify({
                 threads: [
                     { index: 1, rootCommentId: 5550001, threadId: 'PRRT_snapshot_1', resolved: false, body: 'typo' }
                 ]
@@ -285,7 +283,7 @@ suite('pushReworkChanges — thread resolution closure (gh-692)', function() {
             'outputs/review_replies.json': JSON.stringify({
                 replies: [{ threadId: 'PRRT_snapshot_2', reply: 'Fixed.' }]
             }),
-            INPUT_SNAPSHOT: JSON.stringify({
+            'input/PROJ-123/pr_discussions_raw.json': JSON.stringify({
                 threads: [
                     { index: 1, rootCommentId: 7770002, threadId: 'PRRT_snapshot_2', resolved: false, body: 'fix' }
                 ]
@@ -306,7 +304,7 @@ suite('pushReworkChanges — thread resolution closure (gh-692)', function() {
                 'outputs/review_replies.json': JSON.stringify({
                     replies: [{ rootCommentId: 5550001, reply: 'Doc-only fix applied.' }]
                 }),
-                INPUT_SNAPSHOT: JSON.stringify({
+                'input/PROJ-123/pr_discussions_raw.json': JSON.stringify({
                     threads: [{ index: 1, rootCommentId: 5550001, threadId: null, resolved: false, body: 'typo' }]
                 })
             },
@@ -389,7 +387,7 @@ suite('pushReworkChanges — thread resolution closure (gh-692)', function() {
 
         assert.equal(posted, 0, 'no replies posted');
         var resolvedIds = loaded.resolveCalls.map(function(c) { return c.thread.threadId; }).sort();
-        assert.deepEqual(resolvedIds, ['PRRT_kwDOTXdlLc6opmBc', 'PRRT_kwDOTXdlLc6opl_v'],
+        assert.deepEqual(resolvedIds, ['PRRT_kwDOTXdlLc6opl_v', 'PRRT_kwDOTXdlLc6opmBc'],
             'every cited thread resolved');
     });
 

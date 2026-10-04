@@ -458,7 +458,6 @@ function resolveRemainingAddressedThreads(scm, pullRequestId, addressed) {
 function postThreadReplies(scm, pullRequestId, outputOptions) {
     outputOptions = outputOptions || {};
     var lookup = buildThreadLookup(readInputRawThreads(outputOptions.ticketKey, outputOptions));
-    console.log('DBG lookup keys:', JSON.stringify(Object.keys(lookup.byRoot)), JSON.stringify(Object.keys(lookup.byThread)));
 
     let repliesJson = outputFiles.readOutputFile('review_replies.json', outputOptions);
     if (!repliesJson) {
