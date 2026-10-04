@@ -181,14 +181,16 @@ jobs:
           echo "versions PR: #${PR_NUM} (${PR_URL})"
           # Wait for the required checks, then re-run the nothing-changed
           # guard BEFORE merging (guard 2 — the #689 window). --watch exits
-          # non-zero on red checks or when none are reported yet; retry the
-          # not-reported-yet case, then fall through to the merge attempt
-          # (a strict ruleset rejects it and the PR is left for the machine
-          # loop — never fail the release AFTER publishing).
+          # non-zero on red checks or when none are reported yet. RED CHECKS
+          # INTENTIONALLY FALL THROUGH to the merge attempt: the strict
+          # ruleset rejects the merge and the PR is left for the machine
+          # loop — never fail the release AFTER publishing. Only the
+          # not-reported-yet case is retried, and the last attempt does not
+          # sleep (there is nothing left to wait for).
           checks_ok=false
           for attempt in 1 2 3; do
             if gh pr checks "${PR_NUM}" --watch --interval 15; then checks_ok=true; break; fi
-            sleep 30
+            [ "${attempt}" = "3" ] || sleep 30
           done
           git fetch origin main
           if git diff --quiet HEAD origin/main -- versions.json; then

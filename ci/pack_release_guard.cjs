@@ -30,7 +30,12 @@ function isLedgerFile(file) {
  */
 function isAgentConfigFile(file) {
   if (file.indexOf('/') !== -1) return false; // entry configs live at the root only
-  if (file.lastIndexOf('.json') !== file.length - '.json'.length) return false;
+  // Suffix check must not use lastIndexOf: for any name shorter than 5 chars
+  // lastIndexOf('.json') is -1 AND file.length - 5 is -1, so -1 !== -1 was
+  // false and short root entries (.git, .fah, docs, site) passed as agents —
+  // phantom .fa/.gi/doc/sit packs and a crashed release build. slice(-n)
+  // returns '' for short names and compares cleanly.
+  if (file.slice(-'.json'.length) !== '.json') return false;
   if (file.indexOf('package') === 0) return false; // npm metadata
   if (isLedgerFile(file)) return false; // gh-690: the ledger is data, not an agent
   return true;

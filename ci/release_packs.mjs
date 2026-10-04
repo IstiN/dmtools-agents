@@ -33,8 +33,11 @@ import { launchExtras, mergeManifest } from './pack_launch_contract.cjs';
 // Release-guard classification (gh-690): versions.json is the version
 // LEDGER — data, not an agent. The old inline filter in allAgents() swept it
 // in as a phantom "versions" agent (a bogus ledger key plus a phantom
-// versions-<v>.zip in every release).
-import { agentNamesFromFiles, isLedgerFile } from './pack_release_guard.cjs';
+// versions-<v>.zip in every release). pack_release_guard.cjs is the single
+// definition of "what is an agent" — the affected-set path uses it too.
+import {
+  agentNamesFromFiles, isAgentConfigFile, toAgentName,
+} from './pack_release_guard.cjs';
 
 const ROOT = process.cwd();
 const VERSIONS_FILE = join(ROOT, 'versions.json');
@@ -155,9 +158,11 @@ function computeAffectedSet() {
 
   const affected = new Set();
   for (const file of changed) {
-    if (isLedgerFile(file)) continue; // ledger churn marks nothing affected (gh-690)
-    if (file.endsWith('.json') && !file.includes('/') && !file.startsWith('package')) {
-      affected.add(basename(file, '.json')); // a root entry config changed
+    // Single classification path (gh-690 review): the guard module owns
+    // "what is an agent" — it already excludes the ledger, npm metadata and
+    // nested files, so a root entry config change is the only per-agent case.
+    if (isAgentConfigFile(file)) {
+      affected.add(toAgentName(file)); // a root entry config changed
     }
     if (SHARED_PREFIXES.some((p) => file.startsWith(p))) {
       console.log(`Shared file changed: ${file} — bumping all agents`);

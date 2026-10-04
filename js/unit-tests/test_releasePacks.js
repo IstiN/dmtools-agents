@@ -79,6 +79,30 @@ suite('pack release guard: file classification', function () {
         assert.equal(guard().isAgentConfigFile('instructions/x.json'), false);
     });
 
+    test('short non-json root entries (dirs like .git/.fah/docs/site) are not agent configs', function () {
+        // Review-blocked regression: for names shorter than 5 chars the old
+        // `lastIndexOf('.json') !== file.length - 5` suffix check compared
+        // -1 !== -1 and PASSED the name through as an agent — the runner's
+        // checkout (actions/checkout creates .git; .fah/docs/site are
+        // tracked) would have produced phantom agents .fa/.gi/doc/sit and
+        // crashed the release building .fa.json.
+        assert.equal(guard().isAgentConfigFile('.git'), false);
+        assert.equal(guard().isAgentConfigFile('.fah'), false);
+        assert.equal(guard().isAgentConfigFile('docs'), false);
+        assert.equal(guard().isAgentConfigFile('site'), false);
+    });
+
+    test('agentNamesFromFiles survives a root-shaped runner listing with no phantom names', function () {
+        var names = guard().agentNamesFromFiles([
+            '.git', '.github', '.fah', 'docs', 'site', 'js', 'setup',
+            'AGENTS.md', 'LICENSE', 'README.md', 'package.json',
+            'versions.json', 'sm.json', 'pr_review.json',
+        ]);
+        assert.deepEqual(names, ['pr_review', 'sm'],
+            'short root entries must never leak in as phantom agents — ' +
+            'allAgents() feeds this straight into buildPack()');
+    });
+
     test('toAgentName strips only the .json suffix', function () {
         assert.equal(guard().toAgentName('sm.json'), 'sm');
         assert.equal(guard().toAgentName('createRepoTasks.json'), 'createRepoTasks');
@@ -115,13 +139,21 @@ suite('release builder wiring', function () {
             'filter swept versions.json in as a phantom "versions" agent');
     });
 
-    test('a changed ledger file never marks anything affected', function () {
+    test('a changed ledger file never marks anything affected (via the guard classifier)', function () {
         var affected = builder.indexOf('function computeAffectedSet()');
-        var skip = builder.indexOf('isLedgerFile', affected);
-        assert.ok(skip !== -1,
-            'computeAffectedSet must skip the ledger: every merged ledger PR ' +
-            'puts versions.json into the base...HEAD diff, and the old sweep ' +
-            'turned that into a phantom affected agent');
+        var classified = builder.indexOf('isAgentConfigFile(file)', affected);
+        assert.ok(classified !== -1,
+            'computeAffectedSet must route root-entry classification through ' +
+            'isAgentConfigFile: every merged ledger PR puts versions.json into ' +
+            'the base...HEAD diff, and the old sweep turned that into a ' +
+            'phantom affected agent');
+        assert.ok(builder.indexOf('toAgentName(file)', affected) !== -1,
+            'the affected-set path must derive agent names via toAgentName — ' +
+            'one classification path, one test surface');
+        assert.equal(builder.indexOf("!file.includes('/') && !file.startsWith('package')", affected), -1,
+            'the hand-rolled inline copy of isAgentConfigFile+toAgentName must ' +
+            'go — a second classifier drifts from the unit-tested one and the ' +
+            'phantom-agent class returns through the affected-set door');
     });
 
     test('the builder still wires the launch contract', function () {
@@ -188,9 +220,12 @@ suite('release workflow wiring', function () {
         assert.ok(close !== -1 && close > secondGuard,
             'the empty-diff outcome must be a close');
         var tail = wf.slice(close);
+        assert.ok(tail.indexOf('could not close version PR') !== -1,
+            'a failing close must degrade to a warning anchored on the close ' +
+            'itself — a bare ::warning:: probe also matches the unrelated ' +
+            'merge-fallback warning further down and passes for the wrong reason');
         assert.ok(tail.indexOf('::warning::') !== -1,
-            'a failing close (PR already merged by the machine loop, say) must ' +
-            'degrade to a warning — the release is already published by then');
+            'the degraded close must still surface as a warning, not fail the release');
     });
 
     test('R2: --auto merge is gone — it merges server-side, bypassing the guard', function () {
