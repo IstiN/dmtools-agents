@@ -240,7 +240,13 @@ function commitAndPush(ticketKey, config, customParams) {
     // `:!factory-kit` — nested machine-infra gitlink must not kill rework staging (#648 class)
     // `:!.dmtools/...` runtime logs (gh-628) — excluded by pathspec because
     // they live next to COMMITTED .dmtools/ files.
-    cmd('git add . -- ' + gitStaging.buildStagingPathspecs() +
+    // gh-683 (live fa run 37153405587): the check-ignore probe (via cmd)
+    // drops exclusions for paths git already ignores — naming an existing
+    // ignored-untracked path in an exclusion pathspec trips git add's
+    // ignored-files guard and kills the leg.
+    cmd('git add . -- ' + gitStaging.buildStagingPathspecs(function (args) {
+        return cmd(args.command);
+    }) +
         ' ":!factory-kit" ":!factory-kit/**"');
 
     const status = prHelper.readStagedDiffStat(cmd, workingDir);

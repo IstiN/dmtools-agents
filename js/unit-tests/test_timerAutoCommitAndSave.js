@@ -112,6 +112,11 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
         var m = loadTimer({
             cli_execute_command: function(args) {
                 cliCalls.push(args.command);
+                // gh-683 probe: simulate a repo that does NOT ignore the
+                // runtime paths — check-ignore exits 1 → exclusion kept.
+                if (args.command.indexOf('git check-ignore') === 0) {
+                    throw new Error('Command execution failed (exit code 1)');
+                }
                 if (args.command.indexOf('git status') !== -1) return 'M file.txt\n';
                 return '';
             }
@@ -127,11 +132,15 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
             currentCliOutput: ''
         });
         assert.ok(cliCalls.length >= 4, 'should call status, add, commit, push');
-        assert.contains(cliCalls[1], 'git rm -r --cached --ignore-unmatch .dmtools/copilot-sessions');
-        assert.contains(cliCalls[2], 'git add -A');
-        assert.contains(cliCalls[3], 'git commit');
-        assert.contains(cliCalls[3], 'PROJ-123');
-        assert.contains(cliCalls[4], 'git push');
+        var untrack = cliCalls.filter(function(c) { return c.indexOf('git ls-files -- ') === 0; })[0];
+        assert.ok(untrack, 'untrack-cleanup command present');
+        assert.contains(untrack, '.dmtools/copilot-sessions');
+        var addCall = cliCalls.filter(function(c) { return c.indexOf('git add -A') === 0; })[0];
+        assert.ok(addCall, 'staging command present');
+        var commitCall = cliCalls.filter(function(c) { return c.indexOf('git commit') === 0; })[0];
+        assert.ok(commitCall, 'commit command present');
+        assert.contains(commitCall, 'PROJ-123');
+        assert.ok(cliCalls.some(function(c) { return c.indexOf('git push') === 0; }), 'push command present');
     });
 
     test('never stages machine-local .dmtools runtime logs — credential-helper.log leaked onto ai/gh-628 (gh-628)', function() {
@@ -147,6 +156,11 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
         var m = loadTimer({
             cli_execute_command: function(args) {
                 cliCalls.push(args.command);
+                // gh-683 probe: not-ignored repo — check-ignore exits 1 →
+                // the exclusion pathspecs below must all be present.
+                if (args.command.indexOf('git check-ignore') === 0) {
+                    throw new Error('Command execution failed (exit code 1)');
+                }
                 if (args.command.indexOf('git status') !== -1) return 'M file.txt\n';
                 return '';
             }
@@ -161,7 +175,7 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
             },
             currentCliOutput: ''
         });
-        var rmCalls = cliCalls.filter(function(c) { return c.indexOf('git rm -r --cached --ignore-unmatch') === 0; });
+        var rmCalls = cliCalls.filter(function(c) { return c.indexOf('git ls-files -- ') === 0; });
         assert.equal(rmCalls.length, 1, 'exactly one untrack-cleanup command');
         assert.contains(rmCalls[0], '.dmtools/credential-helper.log',
             'already-tracked credential-helper.log is untracked (poisoned-branch self-heal)');
@@ -178,6 +192,46 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
         assert.contains(addCall, ':!.dmtools/fa-sessions', 'session store never staged');
         assert.contains(addCall, ':!.dmtools-session-output.log',
             'the timer\'s own CLI-stdout snapshot (crash-leftover) never staged');
+    });
+
+    test('gh-683: a repo that IGNORES the runtime paths gets no runtime pathspec — git add guard cannot fire', function() {
+        // Live fa run 37153405587 (fa gh-1206, 2026-10-03): the timer's
+        // `git add -A` died with exit 1 — "The following paths are ignored
+        // by one of your .gitignore files: .dmtools/credential-helper.log
+        // .dmtools/fa-sessions .dmtools/fa-trace.log .dmtools/run-output.txt
+        // .dmtools/stall-capture.log — hint: Use -f if you really want to
+        // add them". git add runs its ignored-pathspec guard on `:!`
+        // EXCLUSION pathspecs too: naming an existing ignored-untracked
+        // path fails the whole add. In such a repo the probe
+        // (check-ignore exit 0, no throw) drops every runtime exclusion —
+        // gitignore alone keeps the artifacts out — and only the
+        // factory-kit specs (never ignored) remain.
+        var cliCalls = [];
+        var m = loadTimer({
+            cli_execute_command: function(args) {
+                cliCalls.push(args.command);
+                if (args.command.indexOf('git status') !== -1) return 'M file.txt\n';
+                return ''; // check-ignore succeeds → treated as ignored
+            }
+        });
+        m.action({
+            ticket: { key: 'PROJ-123' },
+            jobParams: {
+                customParams: {
+                    targetRepository: { workingDir: '/some/dir' }
+                },
+                metadata: { contextId: 'sf_story_development' }
+            },
+            currentCliOutput: ''
+        });
+        var addCall = cliCalls.filter(function(c) { return c.indexOf('git add -A') === 0; })[0];
+        assert.ok(addCall, 'staging command present');
+        assert.contains(addCall, ':!factory-kit', 'factory-kit exclusion stays (never ignored)');
+        ['credential-helper.log', 'fa-trace.log', 'run-output.txt', 'stall-capture.log',
+         'fa-sessions', 'copilot-sessions', '.dmtools-session-output.log'].forEach(function (p) {
+            assert.notContains(addCall, ':!.' + (p.indexOf('.dmtools-session') === 0 ? p : 'dmtools/' + p),
+                'ignored path ' + p + ' must not be named in the pathspec (guard)');
+        });
     });
 
     test('refuses to commit/push when HEAD is on baseBranch', function() {

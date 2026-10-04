@@ -220,8 +220,14 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
         // operations failed" — no PR). Excluded like copilot-sessions.
         // `:!.dmtools/...` runtime logs (gh-628) — excluded by pathspec
         // because they live next to COMMITTED .dmtools/ files.
+        // gh-683 (live fa run 37153405587): `git add` trips its
+        // ignored-pathspec guard when an exclusion pathspec NAMES a path
+        // that is gitignored and exists untracked — buildStagingPathspecs
+        // probes each artifact with `git check-ignore` (via runCmd) and
+        // omits the exclusion for paths git already ignores, so this add
+        // can never hit the "paths are ignored" guard.
         runCmd({
-            command: 'git add . -- ' + gitStaging.buildStagingPathspecs() +
+            command: 'git add . -- ' + gitStaging.buildStagingPathspecs(runCmd) +
                 ' ":!factory-kit" ":!factory-kit/**"'
         });
 
@@ -524,6 +530,27 @@ function throwFatalCliEnvironmentError(ticketKey, errorMessage) {
     postFatalCliEnvironmentErrorToJira(ticketKey, errorMessage);
     var err = new Error('Fatal CLI/environment failure: ' + errorMessage);
     err.fatalCliEnvironment = true;
+    throw err;
+}
+
+/**
+ * Throws a marked Error so a Git-Operations failure propagates out of
+ * action() and the workflow run is RED — the SM (and any human watching
+ * the run list) can tell a dead dev letter from a green one.
+ *
+ * gh-683 (live fa run 37153405587, fa gh-1206..1210, 2026-10-03): the dev
+ * leg did all the work, the staging add died on git's ignored-pathspec
+ * guard, and the leg then posted the error comment, moved the ticket back
+ * to Ready For Development and returned { success: true } — a silent
+ * no-PR loop the conveyor could not see. resetDevelopmentForRetry() has
+ * ALREADY posted the stage comment and reset the ticket before this
+ * throws, so the failure stays retryable; only the run's conclusion
+ * changes (green → red). Same propagation mechanism as
+ * throwFatalCliEnvironmentError above.
+ */
+function throwGitOperationsFailure(stage, errorMessage) {
+    var err = new Error('Git operations failure (' + stage + '): ' + errorMessage);
+    err.gitOperationsFailure = true;
     throw err;
 }
 
@@ -871,7 +898,9 @@ function action(params) {
                     return action(params);
                 }
                 resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Git Operations', initialGitResult.error);
-                return { success: true, path: 'development-reset-for-retry', error: 'Git operations failed: ' + initialGitResult.error };
+                // gh-683: ticket is reset for retry — fail the RUN so the SM
+                // sees a dead dev letter instead of a green no-PR leg.
+                throwGitOperationsFailure('Git Operations', initialGitResult.error);
             }
         }
 
@@ -917,7 +946,9 @@ function action(params) {
                     return action(params);
                 }
                 resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Gate Fix Git Operations', gateFixGitResult.error);
-                return { success: true, path: 'development-reset-for-retry', error: 'Gate fix git operations failed: ' + gateFixGitResult.error };
+                // gh-683: same dead-letter visibility as the initial Git
+                // Operations failure above.
+                throwGitOperationsFailure('Gate Fix Git Operations', gateFixGitResult.error);
             }
         }
 
@@ -1107,6 +1138,13 @@ function action(params) {
             // Retrying can never fix a broken CLI/tooling setup (missing binary, bad
             // provider config, ...) — let the exception propagate so the job fails
             // loudly and visibly instead of silently looping via resume/reset-for-retry.
+            throw error;
+        }
+
+        if (error && error.gitOperationsFailure) {
+            // gh-683: the ticket was already reset for retry (comment +
+            // Ready For Development) — rethrow so the run itself is a
+            // visible failure instead of a green silent no-PR leg.
             throw error;
         }
 
