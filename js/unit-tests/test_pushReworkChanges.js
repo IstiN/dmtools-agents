@@ -54,11 +54,13 @@ function makeTrackersModule(toolMocks) {
     };
 }
 
-function loadPushReworkChangesModule(fileMap) {
+function loadPushReworkChangesModule(fileMap, opts) {
+    opts = opts || {};
     var outputFiles = makeOutputFiles(fileMap);
     var replyCalls = [];
     var resolveCalls = [];
     var addCommentCalls = [];
+    var fetchDiscussionsCalls = [];
 
     var scm = {
         replyToThread: function(prId, thread, text) {
@@ -71,6 +73,12 @@ function loadPushReworkChangesModule(fileMap) {
             addCommentCalls.push({ prId: prId, text: text });
         }
     };
+    if (opts.fetchDiscussions) {
+        scm.fetchDiscussions = function(prId) {
+            fetchDiscussionsCalls.push(prId);
+            return opts.fetchDiscussions(prId);
+        };
+    }
 
     var noop = function() {};
     var mod = loadModule(
@@ -99,7 +107,10 @@ function loadPushReworkChangesModule(fileMap) {
         }
     );
 
-    return { mod: mod, scm: scm, replyCalls: replyCalls, resolveCalls: resolveCalls, addCommentCalls: addCommentCalls };
+    return {
+        mod: mod, scm: scm, replyCalls: replyCalls, resolveCalls: resolveCalls,
+        addCommentCalls: addCommentCalls, fetchDiscussionsCalls: fetchDiscussionsCalls
+    };
 }
 
 suite('pushReworkChanges — postThreadReplies field-name fallback', function() {
@@ -218,6 +229,244 @@ suite('pushReworkChanges — postThreadReplies field-name fallback', function() 
 
         assert.equal(loaded.addCommentCalls.length, 1);
         assert.equal(loaded.addCommentCalls[0].text, 'Only fix.');
+    });
+});
+
+// ── thread-resolution closure (gh-692) ───────────────────────────────────────
+// Live case (fa #1194, 2026-10-04): a rework leg addressed both open review
+// threads and pushed, but the GitHub threads stayed UNRESOLVED — the raw
+// discussion export (pr_discussions_raw.json) lacked threadIds for some items,
+// so postThreadReplies (which only resolves item.threadId from the AI-written
+// review_replies.json) silently skipped them. Consequence: the threadsResolved:true
+// re-review rule can never match while the unresolved-threads rule (gh-683) keeps
+// re-arming rework → infinite loop. The post-action must close the loop itself:
+// enrich ids from the setup-time thread snapshot, sweep the PR's fresh open
+// threads, and resolve every thread the rework addressed — threads cited in the
+// rework response MUST be resolved; unciteable items fall back to a comment.
+suite('pushReworkChanges — thread resolution closure (gh-692)', function() {
+
+    test('extractCitedThreadIds: finds unique PRRT_ ids in the rework response', function() {
+        var loaded = loadPushReworkChangesModule({});
+        assert.deepEqual(
+            loaded.mod.extractCitedThreadIds(
+                'addressed PRRT_kwDOTXdlLc6opl_v and PRRT_kwDOTXdlLc6opmBc; PRRT_kwDOTXdlLc6opl_v again'),
+            ['PRRT_kwDOTXdlLc6opl_v', 'PRRT_kwDOTXdlLc6opmBc']);
+        assert.deepEqual(loaded.mod.extractCitedThreadIds('no ids here'), []);
+        assert.deepEqual(loaded.mod.extractCitedThreadIds(null), []);
+        assert.deepEqual(loaded.mod.extractCitedThreadIds(undefined), []);
+    });
+
+    test('enriches a missing threadId from the setup-time thread snapshot (matched by rootCommentId)', function() {
+        var loaded = loadPushReworkChangesModule({
+            'outputs/review_replies.json': JSON.stringify({
+                replies: [{ rootCommentId: 5550001, reply: 'Fixed the doc header.' }]
+            }),
+            'input/PROJ-123/pr_discussions_raw.json': JSON.stringify({
+                threads: [
+                    { index: 1, rootCommentId: 5550001, threadId: 'PRRT_snapshot_1', resolved: false, body: 'typo' }
+                ]
+            })
+        });
+
+        var posted = loaded.mod.postThreadReplies(loaded.scm, '123', { ticketKey: 'PROJ-123' });
+
+        assert.equal(posted, 1, 'reply posted inline (rootCommentId present)');
+        assert.equal(loaded.replyCalls.length, 1, 'inline threaded reply, not a combined fallback comment');
+        assert.equal(loaded.addCommentCalls.length, 0);
+        assert.equal(loaded.resolveCalls.length, 1, 'thread must be resolved');
+        assert.equal(loaded.resolveCalls[0].thread.threadId, 'PRRT_snapshot_1',
+            'threadId enriched from input/<KEY>/pr_discussions_raw.json');
+    });
+
+    test('enriches a missing inReplyToId from the snapshot (matched by threadId) so the reply becomes threaded', function() {
+        var loaded = loadPushReworkChangesModule({
+            'outputs/review_replies.json': JSON.stringify({
+                replies: [{ threadId: 'PRRT_snapshot_2', reply: 'Fixed.' }]
+            }),
+            'input/PROJ-123/pr_discussions_raw.json': JSON.stringify({
+                threads: [
+                    { index: 1, rootCommentId: 7770002, threadId: 'PRRT_snapshot_2', resolved: false, body: 'fix' }
+                ]
+            })
+        });
+
+        loaded.mod.postThreadReplies(loaded.scm, '123', { ticketKey: 'PROJ-123' });
+
+        assert.equal(loaded.replyCalls.length, 1, 'reply became a threaded reply');
+        assert.equal(loaded.replyCalls[0].thread.rootCommentId, 7770002, 'inReplyToId enriched from snapshot');
+        assert.equal(loaded.addCommentCalls.length, 0, 'no top-level fallback comment needed');
+        assert.equal(loaded.resolveCalls.length, 1);
+    });
+
+    test('fresh-sweep resolves an open thread by rootCommentId when BOTH the agent output and the snapshot lack threadIds (the live gh-692 case)', function() {
+        var loaded = loadPushReworkChangesModule(
+            {
+                'outputs/review_replies.json': JSON.stringify({
+                    replies: [{ rootCommentId: 5550001, reply: 'Doc-only fix applied.' }]
+                }),
+                'input/PROJ-123/pr_discussions_raw.json': JSON.stringify({
+                    threads: [{ index: 1, rootCommentId: 5550001, threadId: null, resolved: false, body: 'typo' }]
+                })
+            },
+            {
+                fetchDiscussions: function() {
+                    return {
+                        markdown: 'irrelevant',
+                        rawThreads: {
+                            threads: [
+                                { index: 1, rootCommentId: 5550001, threadId: 'PRRT_fresh_1', resolved: false, body: 'typo' }
+                            ]
+                        }
+                    };
+                }
+            }
+        );
+
+        loaded.mod.postThreadReplies(loaded.scm, '123', { ticketKey: 'PROJ-123' });
+
+        assert.equal(loaded.fetchDiscussionsCalls.length, 1, 'exactly one fresh thread probe');
+        assert.equal(loaded.resolveCalls.length, 1, 'the open thread must be resolved via the fresh sweep');
+        assert.equal(loaded.resolveCalls[0].thread.threadId, 'PRRT_fresh_1');
+    });
+
+    test('sweep resolves multiple addressed open threads but never an unaddressed one (2+ item case)', function() {
+        var loaded = loadPushReworkChangesModule(
+            {
+                'outputs/review_replies.json': JSON.stringify({
+                    replies: [
+                        { rootCommentId: 1, reply: 'Fix one.' },
+                        { rootCommentId: 2, reply: 'Fix two.' }
+                    ]
+                })
+            },
+            {
+                fetchDiscussions: function() {
+                    return {
+                        rawThreads: {
+                            threads: [
+                                { index: 1, rootCommentId: 1, threadId: 'PRRT_a', resolved: false },
+                                { index: 2, rootCommentId: 2, threadId: 'PRRT_b', resolved: false },
+                                { index: 3, rootCommentId: 3, threadId: 'PRRT_unaddressed', resolved: false }
+                            ]
+                        }
+                    };
+                }
+            }
+        );
+
+        loaded.mod.postThreadReplies(loaded.scm, '123', { ticketKey: 'PROJ-123' });
+
+        var resolvedIds = loaded.resolveCalls.map(function(c) { return c.thread.threadId; });
+        assert.ok(resolvedIds.indexOf('PRRT_a') !== -1, 'PRRT_a resolved, got: ' + JSON.stringify(resolvedIds));
+        assert.ok(resolvedIds.indexOf('PRRT_b') !== -1, 'PRRT_b resolved, got: ' + JSON.stringify(resolvedIds));
+        assert.ok(resolvedIds.indexOf('PRRT_unaddressed') === -1,
+            'a thread with NO reply item and NO citation must stay open');
+    });
+
+    test('threads cited in the rework response MUST be resolved — even with no review_replies.json at all', function() {
+        var loaded = loadPushReworkChangesModule(
+            {},
+            {
+                fetchDiscussions: function() {
+                    return {
+                        rawThreads: {
+                            threads: [
+                                { index: 1, rootCommentId: 11, threadId: 'PRRT_kwDOTXdlLc6opl_v', resolved: false },
+                                { index: 2, rootCommentId: 12, threadId: 'PRRT_kwDOTXdlLc6opmBc', resolved: false }
+                            ]
+                        }
+                    };
+                }
+            }
+        );
+
+        var posted = loaded.mod.postThreadReplies(loaded.scm, '123', {
+            ticketKey: 'PROJ-123',
+            responseText: 'Addressed PRRT_kwDOTXdlLc6opl_v and PRRT_kwDOTXdlLc6opmBc (doc-only).'
+        });
+
+        assert.equal(posted, 0, 'no replies posted');
+        var resolvedIds = loaded.resolveCalls.map(function(c) { return c.thread.threadId; }).sort();
+        assert.deepEqual(resolvedIds, ['PRRT_kwDOTXdlLc6opl_v', 'PRRT_kwDOTXdlLc6opmBc'],
+            'every cited thread resolved');
+    });
+
+    test('cited ids are resolved DIRECTLY when the fresh sweep is unavailable or finds nothing (MUST semantics)', function() {
+        var loaded = loadPushReworkChangesModule({});
+
+        loaded.mod.postThreadReplies(loaded.scm, '123', {
+            ticketKey: 'PROJ-123',
+            responseText: 'Fixed per PRRT_direct_1.'
+        });
+
+        assert.equal(loaded.fetchDiscussionsCalls.length, 0, 'scm has no fetchDiscussions — no probe attempted');
+        assert.equal(loaded.resolveCalls.length, 1, 'cited id resolved directly');
+        assert.equal(loaded.resolveCalls[0].thread.threadId, 'PRRT_direct_1');
+    });
+
+    test('sweep skips already-resolved threads', function() {
+        var loaded = loadPushReworkChangesModule(
+            {
+                'outputs/review_replies.json': JSON.stringify({
+                    replies: [{ rootCommentId: 5550001, reply: 'Fixed.' }]
+                })
+            },
+            {
+                fetchDiscussions: function() {
+                    return {
+                        rawThreads: {
+                            threads: [
+                                { index: 1, rootCommentId: 5550001, threadId: 'PRRT_already', resolved: true }
+                            ]
+                        }
+                    };
+                }
+            }
+        );
+
+        loaded.mod.postThreadReplies(loaded.scm, '123', { ticketKey: 'PROJ-123' });
+
+        assert.equal(loaded.resolveCalls.length, 0, 'resolved threads must not be re-resolved');
+    });
+
+    test('no replies, no citations → no probe, no resolutions (missing review_replies.json unchanged)', function() {
+        var loaded = loadPushReworkChangesModule(
+            {},
+            {
+                fetchDiscussions: function() {
+                    return { rawThreads: { threads: [{ rootCommentId: 1, threadId: 'PRRT_open', resolved: false }] } };
+                }
+            }
+        );
+
+        var posted = loaded.mod.postThreadReplies(loaded.scm, '123', { ticketKey: 'PROJ-123' });
+
+        assert.equal(posted, 0);
+        assert.equal(loaded.fetchDiscussionsCalls.length, 0, 'the rework claimed nothing — resolve nothing');
+        assert.equal(loaded.resolveCalls.length, 0);
+    });
+
+    test('sweep failure is non-fatal: cited ids still get direct resolve attempts', function() {
+        var loaded = loadPushReworkChangesModule(
+            {
+                'outputs/review_replies.json': JSON.stringify({
+                    replies: [{ rootCommentId: 5550001, reply: 'Fixed.' }]
+                })
+            },
+            {
+                fetchDiscussions: function() { throw new Error('GraphQL down'); }
+            }
+        );
+
+        var posted = loaded.mod.postThreadReplies(loaded.scm, '123', {
+            ticketKey: 'PROJ-123',
+            responseText: 'Fixed PRRT_cited_1 too.'
+        });
+
+        assert.equal(posted, 1, 'the leg itself still succeeds');
+        var resolvedIds = loaded.resolveCalls.map(function(c) { return c.thread.threadId; });
+        assert.ok(resolvedIds.indexOf('PRRT_cited_1') !== -1,
+            'cited id resolved directly after the probe failed, got: ' + JSON.stringify(resolvedIds));
     });
 });
 
