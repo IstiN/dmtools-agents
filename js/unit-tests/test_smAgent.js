@@ -1333,6 +1333,80 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(inputs.leg, 'review');
     });
 
+    function issueItem(n, extra) {
+        var it = { key: 'gh-' + n, labels: ['ai_developed'], issueNumber: n,
+                   prNumber: null, branch: 'ai/gh-' + n, draft: false };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    var REVIEW_AFTER_DEV_RULE = { source: 'github',
+        query: { type: 'issue', labels: ['ai_developed'], notLabels: ['agent:rework'],
+                 notPrLabels: ['ai_pr_reviewed', 'pr_approved'], prLabels: ['ai_validated'] },
+        workflowFile: 'ai-teammate.yml',
+        inputs: { issue: '{issueNumber}', leg: 'review',
+                  reason: 'sm: green PR awaits review' },
+        workflowRef: '{branch}', limit: 10, id: 'review-after-dev' };
+
+    test('review-after-dev (gh-744): neighbor-key legs in flight must not suppress the post-rework review dispatch', function () {
+        // Live fa gh-1274: dev leg → rework leg (success 11:07) → issue
+        // ai_developed + green PR — and NO review leg for 3+ h (a manual
+        // 'leg=review' dispatch unblocked it instantly). Trace: the
+        // in-flight guard's stub-title match was a PLAIN SUBSTRING — the
+        // guard for 'gh-1274' also matched '▶ rework (SM) · gh-12749'
+        // (a DIFFERENT issue's leg; gh-1274 is a key PREFIX of gh-12749),
+        // and the gh-715 cross-anchor pass matched '· pr-1279' inside
+        // '▶ dev (SM) · pr-12790'. While any neighbor leg cycled, every
+        // review-after-dev dispatch was suppressed. The anchor is a whole
+        // token: a key-extending character after it must not match.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [issueItem(1274, { prNumber: 1279 })],
+                issue: { number: 1274, state: 'open' }
+            },
+            workflowRuns: { in_progress: [
+                // a NEIGHBOR issue's leg — 'gh-1274' is a prefix of its key:
+                { name: '\u25b6 rework (SM) \u00b7 gh-12749', id: 11,
+                  updated_at: new Date().toISOString() },
+                // a NEIGHBOR PR's leg — 'pr-1279' is a prefix of its key
+                // (hits the gh-715 cross-anchor pass for issue gh-1274):
+                { name: '\u25b6 dev (SM) \u00b7 pr-12790', id: 12,
+                  updated_at: new Date().toISOString() }
+            ] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [REVIEW_AFTER_DEV_RULE] } });
+
+        assert.equal(sm.capturedTriggers.length, 1,
+            'review leg dispatches on the first tick after rework success');
+        var inputs = JSON.parse(sm.capturedTriggers[0].inputs);
+        assert.equal(inputs.leg, 'review');
+        assert.equal(inputs.issue, '1274', 'the post-rework review stays issue-anchored');
+    });
+
+    test('review-after-dev (gh-744): the issue\'s OWN in-flight leg still suppresses the dispatch', function () {
+        // Guard hardening must not weaken the dedup the stub title exists
+        // for: gh-1274's own running leg blocks the re-dispatch regardless
+        // of the stub's trailing lines (second anchor line, ': title').
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [issueItem(1274, { prNumber: 1279 })],
+                issue: { number: 1274, state: 'open' }
+            },
+            workflowRuns: { in_progress: [
+                // full stub shape: anchor + second anchor line + issue title:
+                { name: '\u25b6 rework (SM) \u00b7 gh-1274\n\u00b7 gh-1274: some title', id: 21,
+                  updated_at: new Date().toISOString() },
+                // cross-anchor: a PR-anchored leg for the SAME PR (#544 shape):
+                { name: '\u25b6 rework (SM) \u00b7 pr-1279', id: 22,
+                  updated_at: new Date().toISOString() }
+            ] }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [REVIEW_AFTER_DEV_RULE] } });
+
+        assert.equal(sm.capturedTriggers.length, 0,
+            'own in-flight leg still blocks the dispatch (no duplicate leg)');
+    });
+
     test('unarm_validation: stale validated PR drops ai_validating (refresh + re-validate follows)', function () {
         // Live deadlock (fa pr-744): armed + validated green, then base
         // moved → BEHIND. silent-update-behind excludes ai_validating,

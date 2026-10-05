@@ -175,6 +175,32 @@ function crossAnchorKeys(item) {
     return keys;
 }
 
+// gh-744: the stub-title anchor is a WHOLE token. A plain substring match
+// collided on key prefixes — the guard for 'gh-1274' matched
+// '▶ rework (SM) · gh-12749' (a DIFFERENT issue's in-flight leg) and
+// review-after-dev never dispatched after the rework leg finished (live
+// fa gh-1274: no review leg for 3+ h until a manual dispatch). What may
+// follow the anchor token: nothing (EOL), the stub's second anchor line
+// ('\n· gh-<key>'), or the ': <issue title>' suffix. What must NOT follow
+// it: a key-extending character (digits/letters extend the number;
+// '-' continues a compound key) — that token belongs to a different item.
+function isAnchorKeyChar(ch) {
+    return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') ||
+           (ch >= 'A' && ch <= 'Z') || ch === '-';
+}
+
+function stubAnchorMatches(runName, ticketKey) {
+    var token = '· ' + ticketKey;
+    var from = 0;
+    while (from <= runName.length - token.length) {
+        var idx = runName.indexOf(token, from);
+        if (idx === -1) return false;
+        if (!isAnchorKeyChar(runName.charAt(idx + token.length))) return true;
+        from = idx + 1;
+    }
+    return false;
+}
+
 function hasActiveTargetWorkflowRun(scm, workflowFile, configFile, ticketKey) {
     if (!scm || typeof scm.listWorkflowRuns !== 'function') return false;
 
@@ -206,8 +232,10 @@ function hasActiveTargetWorkflowRun(scm, workflowFile, configFile, ticketKey) {
             // Stub-title match (#687): the caller-side stub names its runs
             // '▶ <leg> (SM) · gh-<key>' / '· pr-<key>' — recognize the
             // ticket key token so PR-anchored dispatches are not re-fired
-            // on every tick while the review is still running.
-            var matchesStubName = runName.indexOf('· ' + ticketKey) !== -1;
+            // on every tick while the review is still running. gh-744:
+            // whole-token match — a key PREFIX inside a longer neighbor
+            // key ('gh-1274' vs 'gh-12749') must not suppress.
+            var matchesStubName = stubAnchorMatches(runName, ticketKey);
             if (matchesOldName || matchesDisplayName || matchesStubName) {
                 console.log('  ⏭️  ' + ticketKey + ' skipped (active workflow already exists: ' + expectedRunName + ')');
                 return true;
