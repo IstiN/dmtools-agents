@@ -423,7 +423,8 @@ suite('preCliDevelopmentSetup.reportExistingDevBranch — existing remote work s
         var writes = [];
         var responses = {};
         responses['git ls-remote --heads origin ai/PROJ-7'] = 'abc123\trefs/heads/ai/PROJ-7';
-        responses['git rev-list --count origin/main..origin/ai/PROJ-7'] = '3';
+        responses['git -c fetch.recurseSubmodules=no fetch origin +refs/heads/main:refs/remotes/origin/main +refs/heads/ai/PROJ-7:refs/remotes/origin/ai/PROJ-7'] = '';
+        responses['git rev-list --count --right-only origin/main...origin/ai/PROJ-7'] = '3';
         responses['git log --oneline -20 origin/main..origin/ai/PROJ-7'] = 'abc123 PROJ-7 WIP auto-save\ndef456 PROJ-7 part A\n789abc PROJ-7 scaffold';
         responses['git diff --shortstat origin/main...origin/ai/PROJ-7'] = ' 5 files changed, 120 insertions(+), 4 deletions(-)';
         var mod = loadForReport(calls, responses, writes);
@@ -443,8 +444,44 @@ suite('preCliDevelopmentSetup.reportExistingDevBranch — existing remote work s
         assert.contains(content, 'origin/ai/PROJ-7');
         assert.contains(content, 'origin/main',
             'names the base so the agent cannot mistake main\'s tip for its own work');
-        // cheap: ls-remote + rev-list + log + diff, nothing else
-        assert.equal(calls.length, 4, 'one ls-remote + one log batch when the branch exists');
+        // cheap: ls-remote + targeted fetch + rev-list + log + diff, nothing else
+        assert.equal(calls.length, 5, 'one ls-remote + one fetch + one log batch when the branch exists');
+        var fetchIdx = calls.indexOf('git -c fetch.recurseSubmodules=no fetch origin +refs/heads/main:refs/remotes/origin/main +refs/heads/ai/PROJ-7:refs/remotes/origin/ai/PROJ-7');
+        var countIdx = calls.indexOf('git rev-list --count --right-only origin/main...origin/ai/PROJ-7');
+        assert.ok(fetchIdx !== -1, 'targeted fetch of base+branch refs must run');
+        assert.ok(countIdx !== -1, 'three-dot right-only ahead-count must run');
+        assert.ok(fetchIdx < countIdx, 'gh-729: fresh refs BEFORE the count — a stale origin/main must not inflate it');
+    });
+
+    test('gh-729: ahead-count uses the three-dot right-only range (matches the diff, immune to stale base refs)', function () {
+        // Live fa gh-1197 (run 37234028759): the report claimed 'Commits ahead
+        // of base: 2343' while the very next line said 'Diff vs base: (no
+        // diff)' — the two-dot count read a stale local origin/main ref while
+        // the diff used the merge base. The count must use the same
+        // three-dot semantics as the diff, against freshly fetched refs.
+        var calls = [];
+        var writes = [];
+        var responses = {};
+        responses['git ls-remote --heads origin ai/PROJ-7'] = 'abc123\trefs/heads/ai/PROJ-7';
+        responses['git -c fetch.recurseSubmodules=no fetch origin +refs/heads/main:refs/remotes/origin/main +refs/heads/ai/PROJ-7:refs/remotes/origin/ai/PROJ-7'] = '';
+        responses['git rev-list --count --right-only origin/main...origin/ai/PROJ-7'] = '0';
+        responses['git log --oneline -20 origin/main..origin/ai/PROJ-7'] = '';
+        responses['git diff --shortstat origin/main...origin/ai/PROJ-7'] = '';
+        var mod = loadForReport(calls, responses, writes);
+
+        var result = mod.reportExistingDevBranch('PROJ-7', CONFIG, TICKET, 'input/PROJ-7');
+
+        assert.equal(result, true);
+        assert.equal(writes.length, 1);
+        assert.contains(writes[0].content, 'Commits ahead of base: 0',
+            'a fully-merged branch counts 0 ahead — consistent with the (no diff) line');
+        var twoDotIdx = -1;
+        for (var i = 0; i < calls.length; i++) {
+            if (calls[i].indexOf('git rev-list --count') === 0 && calls[i].indexOf('--right-only') === -1) {
+                twoDotIdx = i;
+            }
+        }
+        assert.equal(twoDotIdx, -1, 'no two-dot ahead-count may run anymore — it is the stale-ref bug');
     });
 
     test('ls-remote failure is non-fatal and writes nothing', function () {

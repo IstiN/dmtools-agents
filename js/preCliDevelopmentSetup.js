@@ -374,11 +374,26 @@ function reportExistingDevBranch(ticketKey, config, ticket, inputFolder) {
 
     var originRef = 'origin/' + baseBranch;
     var branchRef = 'origin/' + branchName;
+    // gh-729 (live fa gh-1197, run 37234028759): the ahead-count used to run
+    // against the local origin/<base> tracking ref, which a cached/shallow
+    // checkout never refreshes — the report claimed 'Commits ahead of base:
+    // 2343' on a 15-commit branch while the three-dot diff two lines below
+    // said '(no diff)'. Refresh EXACTLY the two refs the report compares
+    // (targeted refspecs, no blanket fetch — owner rule 2026-10-03) before
+    // counting, and count with a three-dot --right-only range so the number
+    // carries the same merge-base semantics as the diff it is printed next
+    // to (a fully-merged branch counts 0 ahead instead of main's history).
+    try {
+        var fetchCmd = prHelper.buildTargetedOriginFetchCommand([baseBranch, branchName]);
+        if (fetchCmd) runCmd({ command: fetchCmd });
+    } catch (e) {
+        console.warn('Could not refresh refs for existing-work report (non-fatal):', e);
+    }
     var commitsAhead = '?';
     var logLines = '';
     var diffStat = '';
     try {
-        commitsAhead = cleanCommandOutput(runCmd({ command: 'git rev-list --count ' + originRef + '..' + branchRef }) || '') || '0';
+        commitsAhead = cleanCommandOutput(runCmd({ command: 'git rev-list --count --right-only ' + originRef + '...' + branchRef }) || '') || '0';
     } catch (e) {
         console.warn('Could not count branch commits (non-fatal):', e);
     }
