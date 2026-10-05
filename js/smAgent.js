@@ -1947,17 +1947,56 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // pr-744). Drop the marker; next ticks: silent refresh → merge
             // window re-validates the fresh head (422-arm covers the
             // already-fresh case) → merge.
+            // gh-751 verdict-aware strip (live: fa #1295, 2026-10-05 — the
+            // arm was stripped FIVE times in one day, zero latches:
+            // [ai_validating] → [] → [ai_validating] → … under a saturated
+            // CI queue): every main merge made the armed head BEHIND and
+            // this strip DISCARDED the head's already-concluded green
+            // verdict — it lost the race to the strip (merge-validated
+            // needs CLEAN; validated-green sits later and excludes
+            // pr_approved), silent-update refreshed, validate-fresh
+            // re-armed and re-dispatched CI: a full re-validation per main
+            // merge. Before unarming, probe the head's dispatched
+            // validation runs: a concluded GREEN on the head → latch
+            // ai_validated instead of the bare unarm (complete_validation
+            // parity — the sweep's success-branch shape; the latch excludes
+            // the PR from validate-fresh, killing the re-dispatch yo-yo;
+            // validate-armed latch-skips on the unchanged head). The green
+            // facet (hasSuccessfulDispatchedRun — ANY completed-green run
+            // on the head) matches the latch consumer skipIfValidatedHead
+            // exactly: gh-748 showed two workflow_dispatch runs landing on
+            // ONE head seconds apart, and a cancelled/red NEWEST over an
+            // older green must not slip past the strip. No green at all
+            // (red / absent / in-flight / cancelled-only) → no verdict to
+            // consume, the bare unarm stands.
             try {
+                var uHead = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
+                var uCiWf = rule.ciWorkflow ||
+                    ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml';
+                var uProbe = uHead
+                    ? probeDispatchedState(effectiveRepoInfo, uCiWf, uHead) : null;
+                var uGreen = !!(uHead && uProbe && uProbe.green);
                 github_remove_label({
                     workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
                     number: ticket.prNumber, label: 'ai_validating'
                 });
+                if (uGreen) {
+                    github_add_labels({
+                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                        number: ticket.prNumber, labels: ['ai_validated']
+                    });
+                }
                 // Same-tick slot yield (owner 2026-10-04): this rule runs
                 // BEFORE validate-armed — drop the cached open-PR list so
                 // the arm rule's mutex re-scan sees the freed slot now,
                 // not next tick.
                 dropOpenPrsCache(effectiveRepoInfo);
-                console.log('  🔓 ' + key + ' unarmed (validated head went stale) — refresh + re-validate follows');
+                if (uGreen) {
+                    console.log('  🔓 ' + key + ' BEHIND strip — head validation green,' +
+                                ' ai_validated latched (verdict consumed, no re-dispatch — gh-751)');
+                } else {
+                    console.log('  🔓 ' + key + ' unarmed (validated head went stale) — refresh + re-validate follows');
+                }
                 processedKeys.push(key);
             } catch (e) {
                 console.error('  ❌ unarm_validation failed for ' + key + ': ' + (e.message || e));
