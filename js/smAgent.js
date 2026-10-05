@@ -46,6 +46,14 @@
  *   head, so it is only live while redHeadCap >= emptyLapMax + 2 (3 >= 1 + 2 at the
  *   defaults — with the old emptyLapMax=2 the arm-side red-head skip killed the 4th
  *   same-head validation first and the cap was dead code).
+ *   jobParams.dispatchRaceGraceMs (default 60000, gh-748) — how long a COMPLETED
+ *   run on the head still counts as "may have just ordered CI" for the validate_pr
+ *   dispatch-race guard: before dispatching, the arm also counts ANY run on the
+ *   head_sha (any workflow/event/actor — the kicker's own push run included) that
+ *   is active now or completed within this grace, and skips — its workflow_dispatch
+ *   CI child may still be invisible to the event-filtered duplicate guard (Actions
+ *   API registration lag; live fa ai/gh-1292: two CI runs 4s apart). 0 disables the
+ *   widened probe (legacy single-probe guard).
  *
  * Rule fields:
  *   jql            (required) — JQL to find tickets (supports {jiraProject}, {parentTicket})
@@ -1803,10 +1811,6 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         continue; // NOT processedKeys — nothing was dispatched, nothing to un-arm
                     }
                 }
-                    console.log('  ⏭️  ' + key + ' a run just landed on this head' +
-                                ' (kicker/CI dispatch race, gh-748) — it owns the CI order, no second dispatch');
-                    continue; // NOT processedKeys — nothing was dispatched, nothing to un-arm
-                }
                 // Superseded-head cleanup (owner 2026-09-23): any active
                 // dispatched run on an older head of THIS branch is pure
                 // waste — cancel before arming the fresh one.
@@ -3388,23 +3392,6 @@ function hasActiveHeadRun(runs) {
     });
 }
 
-function cancelledRequiredContexts(repoInfo, headSha, contexts) {
-    // Which of the deployment's REQUIRED check contexts currently read
-    // CANCELLED on this head — the check-runs rollup is the source of
-    // truth, read with BRANCH-PROTECTION semantics: a context's verdict
-    // is the LATEST check run carrying its name, not any historical one
-    // (#695 review: a re-run appends a fresh check run while the
-    // superseded one stays in the head's history, so any-CANCELLED
-    // matching re-fired forever on a stale cancel next to a fresh green
-    // re-stamp and parked mergeable PRs red). Newest per context wins by
-    // completed_at, then started_at, then id, then page position (REST
-    // sorts check runs by id ascending — later position IS newer when
-    // the rollup carries no timestamps). FAILURE/TIMED_OUT on the latest
-    // run are deliberately ignored here: red verdicts belong to
-    // fail_validation and friends. Conclusions arrive lowercase from
-    // REST — normalize. [] on any error = no action.
-    try {
-
 // gh-748 dispatch-race probe over the FULL head rollup (all workflows, all
 // events, all triggering actors): a run that is ACTIVE now, or completed
 // within graceMs, means somebody may have just ordered/produced CI on this
@@ -3434,6 +3421,21 @@ function hasRecentHeadRun(runs, graceMs) {
 }
 
 function cancelledRequiredContexts(repoInfo, headSha, contexts) {
+    // Which of the deployment's REQUIRED check contexts currently read
+    // CANCELLED on this head — the check-runs rollup is the source of
+    // truth, read with BRANCH-PROTECTION semantics: a context's verdict
+    // is the LATEST check run carrying its name, not any historical one
+    // (#695 review: a re-run appends a fresh check run while the
+    // superseded one stays in the head's history, so any-CANCELLED
+    // matching re-fired forever on a stale cancel next to a fresh green
+    // re-stamp and parked mergeable PRs red). Newest per context wins by
+    // completed_at, then started_at, then id, then page position (REST
+    // sorts check runs by id ascending — later position IS newer when
+    // the rollup carries no timestamps). FAILURE/TIMED_OUT on the latest
+    // run are deliberately ignored here: red verdicts belong to
+    // fail_validation and friends. Conclusions arrive lowercase from
+    // REST — normalize. [] on any error = no action.
+    try {
         var raw = github_get_commit_check_runs({
             workspace: repoInfo.owner, repository: repoInfo.repo,
             commitSha: headSha

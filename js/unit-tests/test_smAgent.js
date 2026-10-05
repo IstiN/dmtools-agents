@@ -6266,6 +6266,7 @@ suite('smAgent: validate_pr dispatch-race guard (gh-748)', function () {
     });
 
     test('hasRecentHeadRun semantics (direct pin)', function () {
+        var sm = makeSmAgent(config('a', 'b'));
         var grace = 60 * 1000;
         var run = function (over) {
             var r = { id: 1, status: 'queued', head_sha: 's',
@@ -6296,6 +6297,7 @@ suite('smAgent: validate_pr dispatch-race guard (gh-748)', function () {
     });
 
     test('dispatchRaceGraceMs knob parsing (direct pin)', function () {
+        var sm = makeSmAgent(config('a', 'b'));
         assert.equal(sm.dispatchRaceGraceMs({}), 60 * 1000, 'default 60s');
         assert.equal(sm.dispatchRaceGraceMs(undefined), 60 * 1000, 'no jobParams — default');
         assert.equal(sm.dispatchRaceGraceMs({ dispatchRaceGraceMs: 0 }), 0, 'explicit 0 disables');
