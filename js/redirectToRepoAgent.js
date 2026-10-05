@@ -56,8 +56,15 @@ function action(params) {
 
     console.log('redirectToRepoAgent: ' + ticketKey + ' \u2192 ' + agent);
 
+    // Forward the CI run URL so the target agent traces its run to the ticket
+    var ciRunUrl = actualParams.ciRunUrl || params.ciRunUrl || (params.jobParams && params.jobParams.ciRunUrl) || '';
+    var command = 'dmtools --debug run "' + agent + '" --inputJql "key=' + ticketKey + '"';
+    if (ciRunUrl) {
+        command += ' --ciRunUrl "' + ciRunUrl + '"';
+    }
+
     try {
-        cli_execute_command({ command: 'dmtools --debug run "' + agent + '" --inputJql "key=' + ticketKey + '"' });
+        cli_execute_command({ command: command });
     } catch (e) {
         console.error('redirectToRepoAgent: failed to run ' + agent + ': ' + e);
         return false;
