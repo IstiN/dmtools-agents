@@ -13,6 +13,7 @@
  *   (neither file, but response.md missing) → CLI agent was interrupted (rate limit / crash)
  *                               → Push partial work (e.g. outputs/rca.md) if any
  *                               → Post informational comment, move to Ready For Development for retry
+ *                               → Fail the run (gh-742) so the no-PR leg is a visible dead letter
  *
  *   (neither file, response.md present) → Normal fix — code changes made
  *                               → Delegate to developTicketAndCreatePR: commit, push, create PR, move to In Review
@@ -331,7 +332,13 @@ function action(params) {
             }
 
             removeLabels(ticketKeyForCheck, params);
-            return { success: true, path: 'interrupted', ticketKey: ticketKeyForCheck };
+            // gh-742: ticket is reset for retry — fail the RUN so this
+            // interrupted half-exit is a visible dead letter, not a green
+            // no-PR leg that arms review downstream. The marked
+            // throwInterruptedReset helper is shared from
+            // developTicketAndCreatePR (required above) so the
+            // marker/message contract lives in exactly one place.
+            developTicket.throwInterruptedReset(ticketKeyForCheck);
         }
 
         const result = developTicket.action(params);
@@ -345,10 +352,11 @@ function action(params) {
     } catch (error) {
         console.error('❌ Error in developBugAndCreatePR:', error);
         // Marked failures from the delegated developTicketAndCreatePR (fatal
-        // CLI environment, git-operations gh-683, PR-creation gh-729) must
-        // keep propagating so the RUN is RED — swallowing them here would
-        // turn a deliberate loud failure back into a returned result.
-        if (error && (error.fatalCliEnvironment || error.gitOperationsFailure || error.prCreationFailure)) {
+        // CLI environment, git-operations gh-683, PR-creation gh-729,
+        // interrupted-reset gh-742) must keep propagating so the RUN is RED —
+        // swallowing them here would turn a deliberate loud failure back into
+        // a returned result.
+        if (error && (error.fatalCliEnvironment || error.gitOperationsFailure || error.prCreationFailure || error.interruptedReset)) {
             throw error;
         }
         try {

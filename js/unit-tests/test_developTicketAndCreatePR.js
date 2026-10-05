@@ -216,7 +216,12 @@ suite('developTicketAndCreatePR > failure recovery', function () {
         assert.contains(comments[0].comment, 'AI CLI Environment Failure');
     });
 
-    test('still resets ticket for retry (does not throw) on an ordinary interrupted response with no fatal environment signature', function () {
+    test('gh-742: ordinary interrupted response (no fatal environment signature) still resets the ticket but now FAILS the leg (thrown, marked)', function () {
+        // Live dmtools-dart gh-350 (run 37316571468, 2026-10-05): the
+        // interrupted-reset path returned { success: true } — a green no-PR
+        // leg the wrapper read as "dev done", so agent:review was armed on
+        // an issue with no PR and no retry ever fired. The reset must stay
+        // (comment + Ready For Development), but the run must go RED.
         var movedTo = [];
         var comments = [];
         var mod = loadDevelopTicketAndCreatePRWithRealGitHelpers({
@@ -225,16 +230,23 @@ suite('developTicketAndCreatePR > failure recovery', function () {
             jira_move_to_status: function (args) { movedTo.push(args.statusName); }
         });
 
-        var result = mod.action({
-            ticket: { key: 'TS-4', fields: { summary: 'Rate limited', description: '', labels: [] } },
-            metadata: { contextId: 'story_development' },
-            customParams: {},
-            response: 'Agent hit a rate limit and stopped mid-analysis.'
-        });
+        var caught = null;
+        try {
+            mod.action({
+                ticket: { key: 'TS-4', fields: { summary: 'Rate limited', description: '', labels: [] } },
+                metadata: { contextId: 'story_development' },
+                customParams: {},
+                response: 'Agent hit a rate limit and stopped mid-analysis.'
+            });
+        } catch (e) {
+            caught = e;
+        }
 
-        assert.equal(result.success, true);
-        assert.equal(result.path, 'interrupted');
-        assert.deepEqual(movedTo, ['Ready For Development']);
+        assert.ok(caught, 'an interrupted leg must fail the run (throw), not return plain success');
+        assert.ok(caught && caught.interruptedReset === true,
+            'thrown error carries the interruptedReset marker (outer catch rethrows it)');
+        assert.deepEqual(movedTo, ['Ready For Development'],
+            'ticket is still reset for retry before the leg fails');
         assert.equal(comments.length, 1);
         assert.contains(comments[0].comment, 'Development Interrupted');
     });
@@ -939,6 +951,50 @@ suite('developTicketAndCreatePR > PR-creation tail (gh-729)', function () {
             'the underlying gh error reaches the Jira comment');
         assert.ok(loaded.errors.some(function (e) { return e.indexOf('Pull Request creation failed') !== -1; }),
             'the failure reason is error-logged, not swallowed — the live gh-1197 log had no error line at all');
+    });
+
+    test('gh-742: work committed and pushed but response.md missing → interrupted-reset comment, ticket reset AND the leg fails loudly (thrown, marked)', function () {
+        // Live dmtools-dart gh-350 (run 37316571468, 2026-10-05) — the exact
+        // log tail: "agent verdict: parity already implemented" → commit →
+        // "outputs/response.md missing after commit — CLI agent was
+        // interrupted mid-way. Resetting for retry." → {"success":true}.
+        // The leg went green with no PR and the wrapper armed agent:review
+        // on the issue; no retry ever fired. The interrupted comment +
+        // Ready For Development reset must stay, but the run must go RED so
+        // a no-PR leg can never read as "dev done".
+        var movedTo = [];
+        var removedLabels = [];
+        var comments = [];
+        var loaded = loadForPrTail({
+            cli_execute_command: committedWorkGitMock('ai/TS-32', ''),
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); },
+            jira_remove_label: function (args) { removedLabels.push(args.label); }
+        }, { responseMd: null });
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-32', fields: { summary: 'interrupted mid-way', description: '', labels: [] } },
+                metadata: { contextId: 'sm_story_development' },
+                customParams: {},
+                response: 'Agent hit a rate limit while writing the summary.'
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught, 'an interrupted no-PR leg must NOT return plain success — it must throw');
+        assert.ok(caught && caught.interruptedReset === true,
+            'thrown error carries the interruptedReset marker (outer catch rethrows it)');
+        assert.deepEqual(movedTo, ['Ready For Development'],
+            'ticket is still reset for retry before the leg fails');
+        assert.equal(comments.length, 1, 'the interrupted comment is still posted');
+        assert.contains(comments[0].comment, 'Development Interrupted');
+        assert.contains(comments[0].comment, 'ai/TS-32',
+            'the comment names the branch carrying the partial work');
+        assert.deepEqual(removedLabels, ['sm_story_development_wip'],
+            'the WIP label is still cleared so the retry is not label-locked');
     });
 
     test('gh-737: dev leg PR body contains the canonical Closes #N line by construction', function () {
