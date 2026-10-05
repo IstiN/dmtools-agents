@@ -1927,6 +1927,150 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
     });
 });
 
+
+suite('smAgent: verdict-aware unarm_validation (gh-751 — green-verdict yo-yo)', function () {
+    // Live: fa #1295 (gh-1292, 2026-10-05) — the ai_validating arm was
+    // stripped FIVE times in one day with zero latches:
+    // [ai_validating] → [] → [ai_validating] → [] → … Every main merge
+    // made the armed head BEHIND and unarm-stale-validation stripped it
+    // with a BARE unarm even though the head's dispatched validation had
+    // ALREADY concluded green — the verdict lost the race to the strip
+    // (merge-validated needs CLEAN; validated-green sits later in the
+    // stack and excludes pr_approved), silent-update refreshed,
+    // validate-fresh re-armed and re-dispatched CI: a full re-validation
+    // burned per main merge under a saturated queue. The strip is now
+    // verdict-aware: a GREEN conclusion on the head latches ai_validated
+    // instead of the bare unarm (complete_validation parity — the sweep
+    // success-branch shape); red / absent / in-flight / cancelled keep
+    // the bare unarm.
+
+    var UNARM_RULE = {
+        source: 'github',
+        query: { type: 'pr', labels: ['ai_validating'], mergeState: ['BEHIND'], draft: false },
+        localAction: 'unarm_validation', limit: 2, id: 'unarm-stale-validation'
+    };
+
+    function prItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved'], issueNumber: null, prNumber: n, draft: false };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    function runsCli(runsByHead) {
+        // Mock the dispatched-runs endpoint exactly like the real API:
+        // filter by the head_sha in the query string.
+        return function (cmd) {
+            if (cmd.command.indexOf('actions/workflows/') !== -1 && cmd.command.indexOf('/runs?') !== -1) {
+                var m = /head_sha=([^&"]+)/.exec(cmd.command);
+                return JSON.stringify({ workflow_runs: (m && runsByHead[m[1]]) || [] });
+            }
+            return '';
+        };
+    }
+    function concluded(conclusion, headSha) {
+        var t = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+        return { status: 'completed', conclusion: conclusion, head_sha: headSha,
+                 created_at: t, updated_at: t };
+    }
+    function dispatched(cmdList) {
+        return cmdList.some(function (c) { return c.command.indexOf('gh workflow run') === 0; });
+    }
+
+    test('BEHIND strip with a concluded GREEN validation on the head → ai_validated latched, no re-dispatch (regression: fa #1295)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(1295, { labels: ['pr_approved', 'ai_validating'],
+                                        headSha: 'shaG', branch: 'ai/gh-1292' })]
+            },
+            onCliExecute: runsCli({ shaG: [concluded('success', 'shaG')] })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [UNARM_RULE] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.number + ':' + r.label; }),
+            ['1295:ai_validating'], 'the BEHIND strip still releases the mutex');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number + ':' + a.labels.join(','); }),
+            ['1295:ai_validated'],
+            'the green verdict is CONSUMED, not discarded — validate-fresh excluded, no yo-yo');
+        assert.ok(!dispatched(sm.capturedCliCommands),
+            'latching never re-dispatches CI — the existing green covers the head');
+        assert.ok(sm.capturedIoCacheDrops.some(function (d) { return d.kind === 'openPrs'; }),
+            'slot yield: the freed mutex is visible to the arm rule same-tick (owner 2026-10-04)');
+    });
+
+    test('two armed BEHIND PRs, green + red heads → only the green head latches (multi-item)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [
+                    prItem(301, { labels: ['pr_approved', 'ai_validating'], headSha: 'shaOK' }),
+                    prItem(302, { labels: ['pr_approved', 'ai_validating'], headSha: 'shaBAD' })
+                ]
+            },
+            onCliExecute: runsCli({
+                shaOK: [concluded('success', 'shaOK')],
+                shaBAD: [concluded('failure', 'shaBAD')]
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [UNARM_RULE] } });
+
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number + ':' + a.labels.join(','); }),
+            ['301:ai_validated'],
+            'only the green head latches — the red head keeps the bare unarm');
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.number; }).sort(),
+            [301, 302], 'both arms released');
+    });
+
+    test('red conclusion → bare unarm, never a latch', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(303, { labels: ['pr_approved', 'ai_validating'], headSha: 'shaR' })]
+            },
+            onCliExecute: runsCli({ shaR: [concluded('failure', 'shaR')] })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [UNARM_RULE] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }), ['ai_validating']);
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'red → the bare unarm stands (gh-751)');
+        assert.ok(!dispatched(sm.capturedCliCommands), 'the unarm action never dispatches CI');
+    });
+
+    test('absent / in-flight / cancelled run → bare unarm (no verdict to consume)', function () {
+        // Absent: the dispatched run was lost — revalidate-armed owns that
+        // recovery; the unarm must not fabricate a latch.
+        var smNone = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(304, { labels: ['ai_validating'], headSha: 'shaN' })] },
+            onCliExecute: runsCli({ shaN: [] })
+        }));
+        smNone.action({ jobParams: { owner: 'a', repo: 'b', rules: [UNARM_RULE] } });
+        assert.equal(smNone.capturedPrLabelAdds.length, 0, 'no run → no latch');
+
+        // In-flight: the verdict does not exist yet.
+        var now = new Date().toISOString();
+        var smActive = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(305, { labels: ['ai_validating'], headSha: 'shaA' })] },
+            onCliExecute: runsCli({ shaA: [{ status: 'in_progress', head_sha: 'shaA', created_at: now }] })
+        }));
+        smActive.action({ jobParams: { owner: 'a', repo: 'b', rules: [UNARM_RULE] } });
+        assert.equal(smActive.capturedPrLabelAdds.length, 0, 'in-flight → no latch');
+
+        // CANCELLED is never a verdict (#682 semantics).
+        var smCancelled = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [prItem(306, { labels: ['ai_validating'], headSha: 'shaC' })] },
+            onCliExecute: runsCli({ shaC: [concluded('cancelled', 'shaC')] })
+        }));
+        smCancelled.action({ jobParams: { owner: 'a', repo: 'b', rules: [UNARM_RULE] } });
+        assert.equal(smCancelled.capturedPrLabelAdds.length, 0, 'cancelled → no latch');
+
+        assert.deepEqual(smNone.capturedPrLabelRemoves.map(function (r) { return r.number; })
+            .concat(smActive.capturedPrLabelRemoves.map(function (r) { return r.number; }))
+            .concat(smCancelled.capturedPrLabelRemoves.map(function (r) { return r.number; })).sort(),
+            [304, 305, 306], 'all three still bare-unarm — refresh + re-validate recovery stands');
+    });
+});
 suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', function () {
     // Latch-skip: an approved PR whose head did NOT move since its green
     // validation (ai_validated latch + a completed-green dispatched run on
