@@ -282,8 +282,7 @@ suite('pullRequest helper', function() {
         }), 'expected merge after merge-base is found');
     });
 
-    test('truncates oversized PR body to fit GitHub limit', function() {
-        var writes = [];
+    test('truncates oversized PR body to fit GitHub limit', function() {        var writes = [];
         var pr = loadPullRequestHelper({
             cli_execute_command: function(args) {
                 if (args.command.indexOf('gh pr list --head feature/DMC-9') === 0) return '';
@@ -309,6 +308,136 @@ suite('pullRequest helper', function() {
         assert.equal(writes.length, 1);
         assert.ok(writes[0].content.length <= 60000, 'body should be truncated to <= 60000 chars');
         assert.contains(writes[0].content, 'PR body truncated by automation');
+    });
+
+});
+
+// gh-737: the merge bot (awf factory-merge-trigger) links approved issues to
+// PRs ONLY via 'Closes #N' in the PR body (or branch 'N-*'). Factory-created
+// PRs built from the response.md template don't carry it, so the bot merged
+// nothing (merged=0 skipped=4). The Closes line must be guaranteed by
+// construction in every PR the pack creates.
+suite('pullRequest helper > Closes line (gh-737)', function() {
+
+    test('extractIssueNumber pulls the trailing number from gh-N and PROJ-N keys', function() {
+        var pr = loadPullRequestHelper();
+        assert.equal(pr.extractIssueNumber('gh-737'), '737', 'gh-737 → 737');
+        assert.equal(pr.extractIssueNumber('PROJ-123'), '123', 'PROJ-123 → 123');
+        assert.equal(pr.extractIssueNumber('gh-737 '), '737', 'tolerates surrounding whitespace');
+        assert.equal(pr.extractIssueNumber('no-digits'), null, 'no digits → null');
+        assert.equal(pr.extractIssueNumber(''), null, 'empty key → null');
+        assert.equal(pr.extractIssueNumber(null), null, 'null key → null');
+    });
+
+    test('ensureClosesLine prepends the canonical Closes line when absent', function() {
+        var pr = loadPullRequestHelper();
+        var result = pr.ensureClosesLine('### What changed\n- Fixed parser.\n', 'gh-737');
+
+        assert.contains(result, 'Closes #737', 'Closes line present');
+        assert.equal(result.indexOf('Closes #737'), 0, 'canonical line goes first so the merge bot sees it');
+        assert.contains(result, '### What changed', 'original body preserved');
+    });
+
+    test('ensureClosesLine is idempotent when Closes #N is already present', function() {
+        var pr = loadPullRequestHelper();
+        var body = 'Closes #737\n\n### What changed\n- Fixed parser.\n';
+        var result = pr.ensureClosesLine(body, 'gh-737');
+
+        assert.equal(result, body, 'body with an existing Closes line is left untouched');
+        assert.equal(result.split('Closes #737').length - 1, 1, 'exactly one Closes line');
+    });
+
+    test('ensureClosesLine still emits canonical Closes when the body only carries a non-canonical keyword (Fixes)', function() {
+        var pr = loadPullRequestHelper();
+        var result = pr.ensureClosesLine('Fixes #737\n\nSome description.\n', 'gh-737');
+
+        assert.contains(result, 'Closes #737',
+            'Fixes/Part-of (bot-side awf#19 patterns) never substitute for the canonical Closes');
+    });
+
+    test('ensureClosesLine leaves the body unchanged when the key has no digits', function() {
+        var pr = loadPullRequestHelper();
+        var body = '### What changed\n- Fixed parser.\n';
+        assert.equal(pr.ensureClosesLine(body, 'epic-no-digits'), body);
+        assert.equal(pr.ensureClosesLine(body, null), body);
+    });
+
+    test('createPullRequest injects the Closes line into the written PR body (gh-cli path)', function() {
+        var writes = [];
+        var pr = loadPullRequestHelper({
+            cli_execute_command: function(args) {
+                if (args.command.indexOf('gh pr list --head ai/gh-737') === 0) return '';
+                if (args.command.indexOf('gh pr create') === 0) return 'https://github.com/org/repo/pull/737';
+                return '';
+            },
+            file_write: function(path, content) {
+                writes.push({ path: path, content: content });
+            }
+        });
+
+        var result = pr.createPullRequest({
+            title: 'gh-737 Example',
+            branchName: 'ai/gh-737',
+            baseBranch: 'main',
+            workingDir: 'repo',
+            ticketKey: 'gh-737',
+            bodyContent: '### What changed\n- Parser fix.\n'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(writes.length, 1);
+        assert.contains(writes[0].content, 'Closes #737',
+            'the merge bot requires Closes #N in the body — it must be there even when the agent forgot it');
+        assert.contains(writes[0].content, '### What changed', 'agent body preserved');
+    });
+
+    test('createPullRequest injects the Closes line for the SCM-provider path too', function() {
+        var captured = null;
+        var pr = loadPullRequestHelper();
+        var fakeScm = {
+            createPr: function(options) {
+                captured = options;
+                return { success: true, prUrl: 'https://gitlab.example.com/org/repo/merge_requests/5' };
+            }
+        };
+
+        var result = pr.createPullRequest({
+            title: 'gh-737 Example',
+            branchName: 'ai/gh-737',
+            baseBranch: 'main',
+            ticketKey: 'gh-737',
+            scm: fakeScm,
+            bodyContent: 'body without closes line'
+        });
+
+        assert.equal(result.success, true);
+        assert.ok(captured, 'scm.createPr must be called');
+        assert.contains(captured.body, 'Closes #737', 'SCM path body also carries the canonical line');
+    });
+
+    test('createPullRequest without ticketKey keeps the body unchanged (back-compat)', function() {
+        var writes = [];
+        var pr = loadPullRequestHelper({
+            cli_execute_command: function(args) {
+                if (args.command.indexOf('gh pr list --head feature/DMC-1') === 0) return '';
+                if (args.command.indexOf('gh pr create') === 0) return 'https://github.com/org/repo/pull/1';
+                return '';
+            },
+            file_write: function(path, content) {
+                writes.push({ path: path, content: content });
+            }
+        });
+
+        var result = pr.createPullRequest({
+            title: 'DMC-1 Example',
+            branchName: 'feature/DMC-1',
+            baseBranch: 'main',
+            bodyContent: 'plain body'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(writes[0].content, 'plain body',
+            'callers that do not pass a ticketKey are unaffected');
     });
 
 });

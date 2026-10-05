@@ -388,7 +388,7 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
  * @param {string} branchName - Branch name to use as head
  * @returns {Object} Result with success status and PR URL
  */
-function createPullRequest(title, branchName, baseBranch) {
+function createPullRequest(title, branchName, baseBranch, ticketKey) {
     console.log('Creating Pull Request...');
 
     function remoteBranchExists(branch) {
@@ -428,6 +428,10 @@ function createPullRequest(title, branchName, baseBranch) {
         baseBranch: baseBranch,
         workingDir: _workingDir,
         scm: _scm,
+        // gh-737: the merge bot links approved issues to PRs ONLY via
+        // 'Closes #N' in the body — guarantee the canonical line by
+        // construction for every dev-leg PR.
+        ticketKey: ticketKey,
         bodyFileCandidates: ['outputs/response.md'],
         defaultBody: 'Development changes.',
         runCommand: function (command, workingDir) {
@@ -1136,7 +1140,7 @@ function action(params) {
 
         // Create Pull Request
         const prTitle = configLoader.formatTemplate(config.formats.prTitle.development, { ticketKey: ticketKey, ticketSummary: ticketSummary });
-        const prResult = createPullRequest(prTitle, branchName, prTarget);
+        const prResult = createPullRequest(prTitle, branchName, prTarget, ticketKey);
 
         if (!prResult.success) {
             // gh-729: the reason must be visible in the JOB LOG itself — the
