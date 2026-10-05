@@ -80,7 +80,11 @@ function runSetupCommands(customParams, defaultWorkingDir) {
             results.push({ name: name, success: true, output: output });
         } catch (e) {
             var errorText = e && e.message ? e.message : String(e);
-            console.warn('Setup command "' + name + '" failed:', errorText);
+            // Log the BOUNDED text only. The full errorText stays in `results` (callers and
+            // buildSetupWarningsMarkdown apply their own bound). A multi-megabyte tool output
+            // printed as a single console line makes the GitHub Actions log processor take
+            // minutes (dm.ai#635: two 500 KB lines = ~800 s of a 13 s test run).
+            console.warn('Setup command "' + name + '" failed:', truncateSetupError(errorText));
             results.push({ name: name, success: false, error: errorText });
             if (allowFailure === false) {
                 throw new Error('Required setup command failed: ' + name + ' — ' + truncateSetupError(errorText));
