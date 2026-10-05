@@ -26,6 +26,39 @@ if (typeof java === 'undefined') {
     }
 }
 
+// ── Network guard ────────────────────────────────────────────────────────────
+// Unit tests must never reach a real service. Several tests fall through to the
+// REAL host tool (github_*, confluence_* ...) when they do not mock it, which issued
+// ~100 real api.github.com / atlassian.net requests per run (each a 401 after a
+// round-trip, ~40 s locally, flaky offline, and a rate-limit risk with a real token).
+// Replace every network-backed integration tool with one that throws — the same
+// failure mode the tests already tolerate from a 401 — while file_*, cli_*, kb_* and
+// mermaid_* stay real. Tests that mock a tool through loadModule() shadow it locally
+// and are unaffected.
+var NETWORK_TOOL_PREFIXES_ = [
+    'github', 'gitlab', 'bitbucket', 'jira', 'xray', 'confluence', 'ado', 'rally',
+    'figma', 'teams', 'sharepoint', 'bitrise', 'jenkins', 'testrail', 'tracker',
+    'source', 'gemini', 'openai', 'anthropic', 'bedrock', 'dial', 'ollama', 'vertex'
+];
+
+function installNetworkGuard_() {
+    var g = (typeof globalThis !== 'undefined') ? globalThis : this;
+    var guarded = 0;
+    Object.getOwnPropertyNames(g).forEach(function(name) {
+        var m = /^([a-z0-9]+)_/.exec(name);
+        if (!m || NETWORK_TOOL_PREFIXES_.indexOf(m[1]) === -1) return;
+        if (typeof g[name] !== 'function') return;
+        try {
+            g[name] = function() {
+                throw new Error('unit-test network guard: ' + name + '() is not mocked — ' +
+                    'unit tests must not call real services');
+            };
+            guarded++;
+        } catch (e) { /* non-writable binding — leave as is */ }
+    });
+    return guarded;
+}
+
 // Pre-loaded base modules available to all test files as globals
 var configModule = null;
 var configLoaderModule = null;
@@ -260,6 +293,8 @@ function action(params) {
     console.log('═══════════════════════════════════════════');
     console.log('  DMTools Agent Unit Tests');
     console.log('═══════════════════════════════════════════');
+
+    console.log('  Network guard: ' + installNetworkGuard_() + ' integration tools stubbed');
 
     // Pre-load base modules once — test files use these as globals
     try {

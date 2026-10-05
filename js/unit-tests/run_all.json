@@ -104,7 +104,8 @@
         "js/unit-tests/test_instructionRefs.js",
         "js/unit-tests/test_packLaunchContract.js",
         "js/unit-tests/test_releasePacks.js",
-        "js/unit-tests/test_completionGuard.js"
+        "js/unit-tests/test_completionGuard.js",
+        "js/unit-tests/test_networkGuard.js"
       ]
     }
   }
