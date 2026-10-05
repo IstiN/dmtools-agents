@@ -1,0 +1,14 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "agents/js/mergeTrigger.js",
+    "jobParams": {
+      "repo": "{owner}/{repo}",
+      "label": "pr_approved",
+      "mapPrLabels": true,
+      "ghBranchPattern": true,
+      "removePrLabel": true,
+      "ciRunUrl": ""
+    }
+  }
+}
