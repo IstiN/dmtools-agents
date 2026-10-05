@@ -355,6 +355,12 @@ suite('pullRequest helper > Closes line (gh-737)', function() {
             'Fixes/Part-of (bot-side awf#19 patterns) never substitute for the canonical Closes');
     });
 
+    test('ensureClosesLine leaves the body unchanged for non-GitHub tracker keys', function() {
+        var pr = loadPullRequestHelper();
+        var body = '### What changed\n- Fixed parser.\n';
+        assert.equal(pr.ensureClosesLine(body, 'PROJ-123'), body, 'tracker keys must not produce Closes #N');
+    });
+
     test('ensureClosesLine leaves the body unchanged when the key has no digits', function() {
         var pr = loadPullRequestHelper();
         var body = '### What changed\n- Fixed parser.\n';
