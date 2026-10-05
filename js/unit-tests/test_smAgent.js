@@ -256,7 +256,8 @@ function makeSmAgent(opts) {
                     capturedIoCacheDrops.push({ owner: o, repo: r, kind: kind, id: id });
                 }
             },
-            './factoryState.js': loadModule('js/factoryState.js', makeRequire({}), {}),
+            './factoryState.js': loadModule('js/factoryState.js',
+                makeRequire({ './common/machineAuthor.js': machineAuthorModule }), {}),
         }),
         smMocks
     );
@@ -2147,6 +2148,48 @@ suite('smAgent: red-head park + dry-run dispatch + conclusion grace (fa wave sta
             ['ai_validating'], 'armed for the fresh validation');
     });
 
+    test('deferRedHead (gh-728, live fa PR #1249): a github-actions[bot]-authored PR with a red head rides the MACHINE path — never parked', function () {
+        // Owner directive 2026-10-05: bot-authored PRs ride the machine
+        // path. The machineAuthor knob is a LIST — with github-actions[bot]
+        // as the second entry a red bot head must behave EXACTLY like a red
+        // ai-teammate head: no validation_failed park, no park comment, no
+        // CI re-dispatch on the unchanged head.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(98, { headSha: 'ee55ff66aa', author: 'github-actions[bot]' })],
+                prStatus: { checkConclusion: 'red' }
+            },
+            onCliExecute: runsCli({ run: run('failure', 'ee55ff66aa', 40 * 60000, 20 * 60000) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+                                 machineAuthor: 'ai-teammate,github-actions[bot]',
+                                 rules: [RULES.armed] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands), 'machine PR on an unchanged red head — no wasted CI');
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'NOT parked — github-actions[bot] is a machine login under the list config');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'no park comment — the fail path/rework owns the report for machine PRs');
+    });
+
+    test('deferRedHead (gh-728): a github-actions[bot] PR re-enters on a NEW head under a list config', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(99, { headSha: 'shaNEW', author: 'github-actions[bot]' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            // The old red run sits on the OLD sha — the new head has no verdict.
+            onCliExecute: runsCli({ run: run('failure', 'shaOLD', 40 * 60000, 20 * 60000) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+                                 machineAuthor: 'ai-teammate,github-actions[bot]',
+                                 rules: [RULES.armed] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands), 'new head — real validation dispatched for the bot PR');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
+            ['ai_validating'], 'armed for the fresh validation');
+    });
+
     test('dispatchCiWorkflow honors DRY — a dry tick dispatches NO CI', function () {
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: {
@@ -2370,6 +2413,29 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
         assert.equal(sm.capturedPrLabelRemoves.length, 0, 'machine push must NOT un-park');
         assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
         assert.ok(vfRefreshed(sm.capturedCliCommands), 'refresh still runs');
+    });
+
+    test('silent-update (gh-728): a github-actions[bot] push does NOT clear the label under a multi-entry machineAuthor', function () {
+        // Live fa PR #1249 class: the machineAuthor knob is a LIST
+        // ('ai-teammate,github-actions[bot]') — the park RESET must treat a
+        // push by ANY list entry as machine movement (the fa pr-1094 rule
+        // for the second login), not as the human push that clears the park.
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(211, { labels: ['validation_failed'], headSha: 'cc99dd88ee' })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: vfCli({ committers: { cc99dd88ee: 'github-actions[bot]' },
+                                  actors: { cc99dd88ee: { login: 'github-actions[bot]', date: '2026-10-05T09:00:00Z' } },
+                                  parkedAt: '2026-10-05T08:55:00Z' })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+                                 machineAuthor: 'ai-teammate,github-actions[bot]',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'a second machine login pushing is still machine movement — the park holds');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
     });
 
     test('silent-update: a HUMAN push OLDER than the park event does NOT clear the label', function () {
