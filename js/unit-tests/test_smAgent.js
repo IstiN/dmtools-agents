@@ -2777,6 +2777,199 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
         assert.equal(sm.capturedPrLabelRemoves.length, 0,
             'no sha change — the human-push RESET path remains the only exit');
     });
+    // ── gh-750 (live fa#1227, owner directive 2026-10-05): a MACHINE-
+    // authored parked PR has NO self-clear path at all. The RESET above
+    // demands a NON-machine substantive push newer than the park — fa
+    // pushes their own heads, so it never lands; the #633 comment-sha
+    // path needs a park comment legacy parks predate; and the rework
+    // armers list validation_failed as an in-flight blocker, so no
+    // rework leg fires either (fa#1227: pr_approved + ai_pr_reviewed +
+    // MERGEABLE, parked since the CI-storm era — permanent). Owner rule:
+    // the SM clears the label ITSELF when the park's verdict is void for
+    // the CURRENT head — the check rollup is GREEN, or the head moved
+    // past the park carrying no red verdict of its own. Guests keep the
+    // 2026-09-27 sticky behavior.
+    var MACHINE_HEAD_750 = 'ab1177aa22bb33cc44dd55ee66ff770011223344';
+
+    test('gh-750: a MACHINE-authored parked PR with a GREEN head self-clears the label (fa#1227)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(221, { author: 'ai-teammate', labels: ['validation_failed'],
+                                      headSha: MACHINE_HEAD_750 })],
+                prStatus: { checkConclusion: 'green' }
+            },
+            onCliExecute: vfCli({
+                actors: { ab1177aa22bb33cc44dd55ee66ff770011223344: {
+                    login: 'ai-teammate', date: '2026-09-15T10:00:00Z', parents: [] } },
+                parkedAt: '2026-09-20T00:00:00Z'
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
+            ['validation_failed'],
+            'machine PR parked with a green head — the label is cleared within a tick');
+        assert.ok(sm.capturedPrComments.some(function (c) {
+            return c.body.indexOf('cleared') !== -1 &&
+                c.body.toUpperCase().indexOf('MACHINE') !== -1; }),
+            'the clear comment names the machine self-clear');
+    });
+
+    test('gh-750: a MACHINE-authored parked PR whose head moved past the park self-clears (no own red verdict)', function () {
+        // The park's red belongs to the sha it was set on; fa pushed a new
+        // head AFTER the park and the legacy park comment is lost — the #633
+        // sha-keyed path has nothing to key on. The head-date probe clears
+        // where the sha probe cannot.
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(222, { author: 'ai-teammate', labels: ['validation_failed'],
+                                      headSha: MACHINE_HEAD_750 })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: function (cmd) {
+                if (cmd.command.indexOf('/runs?head_sha=' + MACHINE_HEAD_750) !== -1) {
+                    return JSON.stringify({ workflow_runs: [] });
+                }
+                return vfCli({
+                    actors: { ab1177aa22bb33cc44dd55ee66ff770011223344: {
+                        login: 'ai-teammate', date: '2026-10-05T09:00:00Z', parents: [] } },
+                    parkedAt: '2026-09-20T00:00:00Z'
+                })(cmd);
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
+            ['validation_failed'],
+            'the head moved after the park with no red of its own — cleared');
+    });
+
+    test('gh-750: a MACHINE-authored parked PR whose head PREDATES the park and is not green keeps the label', function () {
+        // Fail-closed boundary: neither green-now nor moved-past-the-park —
+        // the parked red verdict still belongs to this exact head.
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(223, { author: 'ai-teammate', labels: ['validation_failed'],
+                                      headSha: MACHINE_HEAD_750 })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: function (cmd) {
+                if (cmd.command.indexOf('/runs?head_sha=' + MACHINE_HEAD_750) !== -1) {
+                    return JSON.stringify({ workflow_runs: [] });
+                }
+                return vfCli({
+                    actors: { ab1177aa22bb33cc44dd55ee66ff770011223344: {
+                        login: 'ai-teammate', date: '2026-09-15T10:00:00Z', parents: [] } },
+                    parkedAt: '2026-09-20T00:00:00Z'
+                })(cmd);
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'the parked head still carries the park\'s verdict — the park holds');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
+    });
+
+    test('gh-750: a MACHINE-authored parked PR whose moved head carries its OWN red verdict keeps the label', function () {
+        // Red does not transfer across shas in either direction: a fresh red
+        // dispatched verdict on the moved head re-justifies a park (the
+        // machine loop owns it via rework — never this label again).
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(224, { author: 'ai-teammate', labels: ['validation_failed'],
+                                      headSha: MACHINE_HEAD_750 })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: function (cmd) {
+                if (cmd.command.indexOf('/runs?head_sha=' + MACHINE_HEAD_750) !== -1) {
+                    return JSON.stringify({ workflow_runs: [
+                        { head_sha: MACHINE_HEAD_750, status: 'completed',
+                          conclusion: 'failure', updated_at: '2026-10-05T09:05:00Z' }
+                    ] });
+                }
+                return vfCli({
+                    actors: { ab1177aa22bb33cc44dd55ee66ff770011223344: {
+                        login: 'ai-teammate', date: '2026-10-05T09:00:00Z', parents: [] } },
+                    parkedAt: '2026-09-20T00:00:00Z'
+                })(cmd);
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'a fresh red verdict on the moved head re-justifies the park');
+    });
+
+    test('gh-750: a probe failure keeps a MACHINE-authored parked PR parked even with a green head (fail closed)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(225, { author: 'ai-teammate', labels: ['validation_failed'],
+                                      headSha: MACHINE_HEAD_750 })],
+                prStatus: { checkConclusion: 'green' }
+            },
+            onCliExecute: vfCli({})
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'dead probes must NOT un-park a machine PR either');
+    });
+
+    test('gh-750: a GUEST parked PR keeps the sticky park — green head and machine pushes never clear it', function () {
+        // The owner directive is machine-PR-only. A guest parked red keeps
+        // the 2026-09-27 contract: only a fresh HUMAN push clears it (the
+        // machine login below is exactly the fa push that must not speak
+        // for the guest, and green-now is a machine-PR-only exit).
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(226, { labels: ['validation_failed'],
+                                      headSha: MACHINE_HEAD_750 })],
+                prStatus: { checkConclusion: 'green' }
+            },
+            onCliExecute: vfCli({
+                actors: { ab1177aa22bb33cc44dd55ee66ff770011223344: {
+                    login: 'ai-teammate', date: '2026-10-05T09:00:00Z', parents: [] } },
+                parkedAt: '2026-09-20T00:00:00Z'
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'guests keep the sticky park — the human-push RESET is their only exit');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment while parked');
+    });
+
+    test('gh-750: the self-clear rides the park-reset rule route too (non-BEHIND, live fa#1227)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(227, { author: 'ai-teammate',
+                                      labels: ['validation_failed', 'pr_approved', 'ai_pr_reviewed'],
+                                      headSha: MACHINE_HEAD_750 })],
+                prStatus: { checkConclusion: 'green' }
+            },
+            onCliExecute: vfCli({
+                actors: { ab1177aa22bb33cc44dd55ee66ff770011223344: {
+                    login: 'ai-teammate', date: '2026-09-15T10:00:00Z', parents: [] } },
+                parkedAt: '2026-09-20T00:00:00Z'
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [{ source: 'github',
+            query: { type: 'pr', labels: ['validation_failed'],
+                     notLabels: ['ai_validating', 'blocked'], draft: false },
+            localAction: 'update_branch', limit: 10, id: 'park-reset' }] } });
+
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.label; }),
+            ['validation_failed'],
+            'the park-reset route (mergeable, not behind) clears a green machine park');
+    });
 
     test('validate_pr: a labeled PR gets NO CI dispatch at all (validate-fresh backstop)', function () {
         var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {

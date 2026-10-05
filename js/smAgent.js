@@ -1412,6 +1412,48 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         latestDispatchedVerdict(effectiveRepoInfo,
                             rule.ciWorkflow || ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
                             uHead) !== 'failure';
+                    // gh-750 (live fa#1227, owner directive 2026-10-05): a
+                    // MACHINE-authored parked PR has NO self-clear path at
+                    // all — the human-push RESET below never fires (fa pushes
+                    // their own heads, so the last substantive commit is
+                    // always machine work), the #633 comment-sha path needs
+                    // a park comment legacy parks predate, and the rework
+                    // armers list validation_failed as an in-flight blocker
+                    // so no rework leg fires either — the park is permanent
+                    // (fa#1227: pr_approved + ai_pr_reviewed + MERGEABLE,
+                    // parked since the CI-storm era). The SM clears the label
+                    // ITSELF when the park's verdict is void for the CURRENT
+                    // head: the check rollup is GREEN right now, or the head
+                    // moved after the park was set AND carries no red
+                    // dispatched verdict of its own (#633's rationale minus
+                    // the park-comment dependency — the red belongs to the
+                    // parked sha, not this one; a fresh red re-justifies the
+                    // park and the machine loop owns it via rework, never
+                    // this label again). Guests keep the 2026-09-27 sticky
+                    // behavior in full: none of this evaluates for them.
+                    // Probe failures keep the park (fail closed) — the branch
+                    // is gated on the same non-null probes the ladder below
+                    // demands, and both probes fail closed themselves.
+                    var machineUnparkVf = false;
+                    var machineUnparkWhyVf = '';
+                    if (isMachinePrU && uHead && actorVf !== null && parkedAtVf !== null) {
+                        var greenRollupVf = validationRollupGreen(effectiveRepoInfo, ticket.prNumber);
+                        var headMovedCleanVf = false;
+                        if (!greenRollupVf) {
+                            var headActorVf = headCommitActor(effectiveRepoInfo, uHead);
+                            var headTsVf = headActorVf ? Date.parse(headActorVf.date) : NaN;
+                            var parkedTsVf = Date.parse(parkedAtVf);
+                            headMovedCleanVf = !isNaN(headTsVf) && !isNaN(parkedTsVf) &&
+                                headTsVf > parkedTsVf &&
+                                latestDispatchedVerdict(effectiveRepoInfo,
+                                    rule.ciWorkflow || ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
+                                    uHead) !== 'failure';
+                        }
+                        machineUnparkVf = greenRollupVf || headMovedCleanVf;
+                        machineUnparkWhyVf = greenRollupVf
+                            ? 'the current head checks are GREEN'
+                            : 'the head moved past the park carrying no red verdict of its own';
+                    }
                     if (actorVf === null || parkedAtVf === null) {
                         console.warn('  ⚠️  ' + key + ' ' + parkLabelVf +
                             ': park probe failed (substantive commit / park time) — keeping the park (fail closed)');
@@ -1446,6 +1488,37 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                             ' cleared: head changed to ' + uHead.slice(0, 8) +
                             ' since the park (' + parkedHeadVf.slice(0, 8) +
                             ') and carries no red verdict — re-validating');
+                        unparkedThisPass = true;
+                    } else if (machineUnparkVf) {
+                        if (!DRY) {
+                            try {
+                                github_remove_label({
+                                    workspace: effectiveRepoInfo.owner,
+                                    repository: effectiveRepoInfo.repo,
+                                    number: ticket.prNumber,
+                                    label: parkLabelVf
+                                });
+                            } catch (eUnparkMv) {
+                                console.warn('  ⚠️  un-park label failed: ' + (eUnparkMv.message || eUnparkMv));
+                            }
+                            try {
+                                github_create_comment({
+                                    workspace: effectiveRepoInfo.owner,
+                                    repository: effectiveRepoInfo.repo,
+                                    number: ticket.prNumber,
+                                    body: '🅿️→▶ validation_failed cleared — this MACHINE-authored PR was ' +
+                                        'parked with no self-clear path (the machine pushes its own heads, so ' +
+                                        'the human-push reset can never fire): ' + machineUnparkWhyVf + '. ' +
+                                        'The parked red verdict is void for the current head — re-entering ' +
+                                        'validation (owner directive 2026-10-05).'
+                                });
+                            } catch (eUnparkMvC) {
+                                console.warn('  ⚠️  un-park comment failed: ' + (eUnparkMvC.message || eUnparkMvC));
+                            }
+                        }
+                        console.log('  ▶ ' + key + ' ' + parkLabelVf +
+                            ' cleared: machine-authored PR, ' + machineUnparkWhyVf +
+                            ' — re-validating (the park had no self-clear path, gh-750)');
                         unparkedThisPass = true;
                     } else if (machinePushVf) {
                         console.log('  🅿️  ' + key + ' ' + parkLabelVf +
