@@ -782,3 +782,164 @@ suite('developTicketAndCreatePR > post-session landing guard (gh-1164)', functio
     });
 
 });
+
+// ── gh-729: PR-creation tail visibility ─────────────────────────────────────
+// Live fa gh-1197 (run 37234028759, 2026-10-04): the dev leg's log showed the
+// staging check-ignore probes and then NOTHING for 23s — no git add, no
+// commit, no push, no gh pr create, no error — and the leg still reported
+// success and armed review with no PR. The tail must log every step and a
+// missing PR must never read as plain success.
+function loadForPrTail(mocks, opts) {
+    opts = opts || {};
+    var realPrHelper = loadModule('js/common/pullRequest.js', makeRequire({
+        './common/commentMarkup.js': commentMarkupModule,
+    }), {});
+    var logs = [];
+    var errors = [];
+    var mod = loadModule(
+        'js/developTicketAndCreatePR.js',
+        makeRequire({
+            './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
+            './common/pullRequest.js': realPrHelper,
+            './common/submodules.js': { pushManagedSubmodules: function () { } },
+            './common/feedbackLoop.js': {
+                runQualityGates: function () { return { success: true }; },
+                runPolicyGates: function () { return { success: true }; },
+                runPostPublishGates: function () { return { success: true }; },
+                resumeAgent: function () { return { attempted: false, reason: 'attempts-exhausted' }; }
+            },
+            './common/autoStart.js': { triggerSmIfIdle: function () { } },
+            './common/outputFiles.js': {
+                readOutputFile: function () { return opts.responseMd === undefined ? null : opts.responseMd; }
+            },
+            './cacheToReleases.js': {},
+            './common/gitStaging.js': gitStagingModule,
+            './configLoader.js': configLoaderModule,
+            './config.js': configModule,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
+            './common/commentMarkup.js': commentMarkupModule
+        }),
+        Object.assign({
+            cli_execute_command: opts.gitMock || function () { return ''; },
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { },
+            file_write: function () { },
+            file_delete: function () { },
+            console: {
+                log: function (msg) { logs.push(String(msg)); },
+                warn: function (msg) { logs.push('WARN: ' + String(msg)); },
+                error: function (msg) { errors.push(String(msg)); }
+            }
+        }, mocks || {})
+    );
+    return { mod: mod, logs: logs, errors: errors };
+}
+
+// Simulates the live gh-1197 branch state at post-action: the CLI agent
+// already committed its work (branch 2 commits ahead of origin/main) and the
+// working tree is clean — post-action must push and create the PR.
+function committedWorkGitMock(branchName, prUrl, opts) {
+    opts = opts || {};
+    return function (args) {
+        var command = args.command;
+        if (command.indexOf('gh pr list --head ' + branchName) === 0) return '';
+        if (command === 'git branch --show-current') return branchName;
+        if (command.indexOf('git ls-files -- ') === 0) return '';
+        if (command.indexOf('git check-ignore') === 0) {
+            throw new Error('Command execution failed (exit code 1)'); // not ignored → keep exclusions
+        }
+        if (command.indexOf('git add . --') === 0) return '';
+        if (command === 'git diff --cached --stat') return '';
+        if (command.indexOf('git rev-list --count') === 0) return '2';
+        if (command.indexOf('git fetch') === 0) return '';
+        if (command.indexOf('git rev-parse origin/') === 0) return 'basesha123';
+        if (command.indexOf('git merge-base') === 0) return 'basesha123';
+        if (command.indexOf('git push') === 0) return '';
+        if (command === 'git ls-remote --heads origin main') return 'sha9\trefs/heads/main';
+        if (command === 'git ls-remote --heads origin ' + branchName) return 'abc123\trefs/heads/' + branchName;
+        if (command.indexOf('gh pr create') === 0) {
+            if (opts.prCreateFails) throw new Error('HTTP 502: GraphQL: Bad Gateway');
+            return prUrl;
+        }
+        return '';
+    };
+}
+
+suite('developTicketAndCreatePR > PR-creation tail (gh-729)', function () {
+
+    test('branch with committed work + clean tree at post-action → push + PR created', function () {
+        var prUrl = 'https://github.com/acme/widgets/pull/1263';
+        var commands = [];
+        var gitMock = committedWorkGitMock('ai/TS-30', prUrl);
+        var loaded = loadForPrTail({
+            cli_execute_command: function (args) { commands.push(args.command); return gitMock(args); },
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        }, { responseMd: '### What changed\n- Fixed the parser (`js/parser.js`).\n' });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-30', fields: { summary: 'committed work, clean tree', description: '', labels: [] } },
+            metadata: { contextId: 'sm_bug_development' },
+            customParams: {},
+            response: '### What changed\n- Fixed the parser (`js/parser.js`).\n'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.prUrl, prUrl,
+            'a branch carrying work must end with a PR, not a bare success');
+        assert.ok(commands.some(function (c) { return c.indexOf('git push') === 0; }),
+            'the agent-committed work must be pushed — commands seen: ' + JSON.stringify(commands));
+        assert.ok(commands.some(function (c) { return c.indexOf('gh pr create') === 0; }),
+            'a PR must actually be created');
+        // gh-729 tail visibility: every step between staging and PR-create logs.
+        var allOutput = loaded.logs.join('\n');
+        assert.contains(allOutput, 'Staging working tree',
+            'tail step log: staging');
+        assert.contains(allOutput, 'agent already committed',
+            'tail step log: clean tree + commits ahead → push-only path named');
+        assert.contains(allOutput, 'completed successfully',
+            'tail step log: final outcome logged');
+    });
+
+    test('gh pr create failure → reset for retry AND the leg fails loudly (thrown, marked) — no silent green no-PR leg', function () {
+        var movedTo = [];
+        var comments = [];
+        var gitMock = committedWorkGitMock('ai/TS-31', '', { prCreateFails: true });
+        var loaded = loadForPrTail({
+            cli_execute_command: gitMock,
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { movedTo.push(args.statusName); },
+            jira_remove_label: function () { }
+        }, { responseMd: '### What changed\n- Fixed the parser (`js/parser.js`).\n' });
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-31', fields: { summary: 'PR API outage', description: '', labels: [] } },
+                metadata: { contextId: 'sm_bug_development' },
+                customParams: {},
+                response: '### What changed\n- Fixed the parser (`js/parser.js`).\n'
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught, 'a missing-PR outcome must NOT return plain success — it must throw');
+        assert.ok(caught && caught.prCreationFailure === true,
+            'thrown error carries the prCreationFailure marker (outer catch rethrows it)');
+        assert.contains(String(caught && caught.message), 'Pull Request Creation',
+            'the stage name rides the thrown error');
+        assert.deepEqual(movedTo, ['Ready For Development'],
+            'ticket is still reset for retry before the leg fails');
+        assert.equal(comments.length, 1, 'the stage error comment is still posted');
+        assert.contains(comments[0].comment, 'Pull Request Creation');
+        assert.contains(comments[0].comment, '502',
+            'the underlying gh error reaches the Jira comment');
+        assert.ok(loaded.errors.some(function (e) { return e.indexOf('Pull Request creation failed') !== -1; }),
+            'the failure reason is error-logged, not swallowed — the live gh-1197 log had no error line at all');
+    });
+
+});
+

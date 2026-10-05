@@ -230,6 +230,10 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
         // goes through the same probe — a static `:!factory-kit` exclusion
         // trips the very same guard when the kit is materialized AND
         // gitignored, silently starving the leg's commits.
+        // gh-729: this line is the LAST visible step before the silent 23s
+        // in live fa gh-1197 (run 37234028759) — the tail must log every
+        // step so a stall/kill here is diagnosable from the job log.
+        console.log('Staging working tree (check-ignore probe-filtered exclusions)...');
         runCmd({
             command: 'git add . -- ' + gitStaging.buildStagingPathspecs(runCmd, ['factory-kit'])
         });
@@ -240,6 +244,11 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
         }, _workingDir);
 
         if (!statusOutput || !statusOutput.trim()) {
+            // gh-729: name this branch in the log — the live gh-1197 leg went
+            // quiet between the staging probes and the PR-create call, and
+            // without step logs that window is indistinguishable from a
+            // clean "nothing to do".
+            console.log('Nothing staged — checking whether the agent already committed or pushed its work...');
             // No uncommitted changes — but check if the agent already committed its work
             // (the CLI agent sometimes commits itself before postJSAction runs)
             var originRef = baseBranch ? 'origin/' + baseBranch : 'origin/main';
@@ -386,6 +395,10 @@ function createPullRequest(title, branchName, baseBranch) {
         var output = runCmd({ command: 'git ls-remote --heads origin ' + branch }) || '';
         return output.indexOf('refs/heads/' + branch) !== -1;
     }
+
+    // gh-729: verify loudly — a silent missing base/head ref used to be the
+    // only signal between the staging probes and the gh pr create call.
+    console.log('Verifying PR branches exist on origin (base: ' + baseBranch + ', head: ' + branchName + ')...');
 
     try {
         if (!remoteBranchExists(baseBranch)) {
@@ -554,6 +567,24 @@ function throwFatalCliEnvironmentError(ticketKey, errorMessage) {
 function throwGitOperationsFailure(stage, errorMessage) {
     var err = new Error('Git operations failure (' + stage + '): ' + errorMessage);
     err.gitOperationsFailure = true;
+    throw err;
+}
+
+/**
+ * Throws a marked Error so a Pull-Request-creation failure propagates out of
+ * action() and the workflow run is RED — same mechanism and rationale as
+ * throwGitOperationsFailure (gh-683).
+ *
+ * gh-729 (live fa gh-1197, run 37234028759, 2026-10-04): the dev leg's
+ * PR-creation tail produced NO PR and the leg still reported success and
+ * armed review — a missing-PR outcome must never read as plain success.
+ * resetDevelopmentForRetry() has ALREADY posted the stage comment and reset
+ * the ticket before this throws, so the failure stays retryable; only the
+ * run's conclusion changes (green → red).
+ */
+function throwPrCreationFailure(stage, errorMessage) {
+    var err = new Error('Pull Request creation failure (' + stage + '): ' + errorMessage);
+    err.prCreationFailure = true;
     throw err;
 }
 
@@ -1108,15 +1139,19 @@ function action(params) {
         const prResult = createPullRequest(prTitle, branchName, prTarget);
 
         if (!prResult.success) {
+            // gh-729: the reason must be visible in the JOB LOG itself — the
+            // live gh-1197 leg had no error line at all between the staging
+            // probes and cleanup, so the failure class (nothing-to-push vs
+            // gh-error vs guard) was unknowable without re-running by hand.
+            console.error('❌ Pull Request creation failed — no PR exists for ' + ticketKey + ':', prResult.error);
             if (resumeDevelopmentAgent(params, ticketKey, _customParams, 'development_pr_creation', prResult.error)) {
                 return action(params);
             }
             resetDevelopmentForRetry(ticketKey, statuses, _customParams, actualParams.metadata, 'Pull Request Creation', prResult.error);
-            return {
-                success: true,
-                path: 'development-reset-for-retry',
-                error: 'PR creation failed: ' + prResult.error
-            };
+            // gh-729: ticket is reset for retry — fail the RUN so a no-PR leg
+            // is a visible dead letter instead of a green silent success
+            // (same propagation mechanism as throwGitOperationsFailure).
+            throwPrCreationFailure('Pull Request Creation', prResult.error);
         }
 
         // Assign ticket to initiator
@@ -1173,7 +1208,7 @@ function action(params) {
             }
         }
 
-        console.log('✅ Development workflow completed successfully');
+        console.log('✅ Development workflow completed successfully — PR: ' + (prResult.prUrl || '(URL not captured — PR was created)'));
 
         // Auto-start pr_review after PR is created and ticket moved to In Review (opt-in)
         const customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
@@ -1239,6 +1274,13 @@ function action(params) {
             // gh-683: the ticket was already reset for retry (comment +
             // Ready For Development) — rethrow so the run itself is a
             // visible failure instead of a green silent no-PR leg.
+            throw error;
+        }
+
+        if (error && error.prCreationFailure) {
+            // gh-729: same dead-letter visibility as the Git-Operations
+            // failure above — a missing PR must fail the run, not read as
+            // plain success.
             throw error;
         }
 
