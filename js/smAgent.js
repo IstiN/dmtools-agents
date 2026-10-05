@@ -1407,11 +1407,82 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // report 'failure' for the current head (fail closed:
                     // probe error keeps the park, same as parkedSince).
                     var parkedHeadVf = parkedHeadSha(effectiveRepoInfo, ticket.prNumber);
+                    // One shared dispatched-verdict probe for the current
+                    // head (pr-752 rework): the #633 head-change path and
+                    // the gh-750 machine moved-head path ask the SAME
+                    // question with the SAME args — a memoized local fires
+                    // `gh api .../runs?head_sha=` at most ONCE per tick
+                    // instead of once per consumer. The probe FAILS OPEN
+                    // for the clear decision (probe error → null → 'no
+                    // red'), inherited #633 semantics — re-validation
+                    // re-discovers a genuinely red head one CI cycle later.
+                    var headVerdictVf = null;
+                    var headVerdictProbedVf = false;
+                    var probeHeadVerdictVf = function () {
+                        if (!headVerdictProbedVf) {
+                            headVerdictProbedVf = true;
+                            headVerdictVf = latestDispatchedVerdict(effectiveRepoInfo,
+                                rule.ciWorkflow || ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
+                                uHead);
+                        }
+                        return headVerdictVf;
+                    };
                     var headChangedNoVerdictVf = !!uHead && parkedHeadVf !== null &&
                         parkedHeadVf !== '' && uHead !== parkedHeadVf &&
-                        latestDispatchedVerdict(effectiveRepoInfo,
-                            rule.ciWorkflow || ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
-                            uHead) !== 'failure';
+                        probeHeadVerdictVf() !== 'failure';
+                    // gh-750 (live fa#1227, owner directive 2026-10-05): a
+                    // MACHINE-authored parked PR has NO self-clear path at
+                    // all — the human-push RESET below never fires (fa pushes
+                    // their own heads, so the last substantive commit is
+                    // always machine work), the #633 comment-sha path needs
+                    // a park comment legacy parks predate, and the rework
+                    // armers list validation_failed as an in-flight blocker
+                    // so no rework leg fires either — the park is permanent
+                    // (fa#1227: pr_approved + ai_pr_reviewed + MERGEABLE,
+                    // parked since the CI-storm era). The SM clears the label
+                    // ITSELF when the park's verdict is void for the CURRENT
+                    // head: the check rollup is GREEN right now, or the head
+                    // moved after the park was set AND carries no red
+                    // dispatched verdict of its own (#633's rationale minus
+                    // the park-comment dependency — the red belongs to the
+                    // parked sha, not this one; a fresh red re-justifies the
+                    // park and the machine loop owns it via rework, never
+                    // this label again). Guests keep the 2026-09-27 sticky
+                    // behavior in full: none of this evaluates for them.
+                    // Probe failures keep the park (fail closed) — the branch
+                    // is gated on the same non-null probes the ladder below
+                    // demands; parkResetCommit/parkedSince are null-guarded
+                    // and validationRollupGreen/headCommitActor fail closed
+                    // (error → false/NaN). The dispatched-verdict probe is
+                    // the one FAIL-OPEN input (error → null → 'no red',
+                    // shared with #633 — re-validation re-discovers red).
+                    var machineUnparkVf = false;
+                    var machineUnparkWhyVf = '';
+                    if (isMachinePrU && uHead && actorVf !== null && parkedAtVf !== null) {
+                        var greenRollupVf = validationRollupGreen(effectiveRepoInfo, ticket.prNumber);
+                        var headMovedCleanVf = false;
+                        if (!greenRollupVf) {
+                            var headActorVf = headCommitActor(effectiveRepoInfo, uHead);
+                            var headTsVf = headActorVf ? Date.parse(headActorVf.date) : NaN;
+                            var parkedTsVf = Date.parse(parkedAtVf);
+                            headMovedCleanVf = !isNaN(headTsVf) && !isNaN(parkedTsVf) &&
+                                headTsVf > parkedTsVf &&
+                                probeHeadVerdictVf() !== 'failure';
+                        }
+                        machineUnparkVf = greenRollupVf || headMovedCleanVf;
+                        // Audit evidence rides the reason (pr-752 rework):
+                        // the sibling clear comments cite their inputs
+                        // (#633: both shas; human-push: actor + date) — the
+                        // moved-head branch cites head sha @ commit date >
+                        // park time so the clear is auditable from the PR
+                        // thread alone.
+                        machineUnparkWhyVf = greenRollupVf
+                            ? 'the current head checks are GREEN'
+                            : 'the head moved past the park carrying no red verdict of its ' +
+                              'own (head `' + uHead.slice(0, 8) + '` @ ' +
+                              (headActorVf && headActorVf.date ? headActorVf.date : 'unknown') +
+                              ' > park ' + parkedAtVf + ')';
+                    }
                     if (actorVf === null || parkedAtVf === null) {
                         console.warn('  ⚠️  ' + key + ' ' + parkLabelVf +
                             ': park probe failed (substantive commit / park time) — keeping the park (fail closed)');
@@ -1446,6 +1517,37 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                             ' cleared: head changed to ' + uHead.slice(0, 8) +
                             ' since the park (' + parkedHeadVf.slice(0, 8) +
                             ') and carries no red verdict — re-validating');
+                        unparkedThisPass = true;
+                    } else if (machineUnparkVf) {
+                        if (!DRY) {
+                            try {
+                                github_remove_label({
+                                    workspace: effectiveRepoInfo.owner,
+                                    repository: effectiveRepoInfo.repo,
+                                    number: ticket.prNumber,
+                                    label: parkLabelVf
+                                });
+                            } catch (eUnparkMv) {
+                                console.warn('  ⚠️  un-park label failed: ' + (eUnparkMv.message || eUnparkMv));
+                            }
+                            try {
+                                github_create_comment({
+                                    workspace: effectiveRepoInfo.owner,
+                                    repository: effectiveRepoInfo.repo,
+                                    number: ticket.prNumber,
+                                    body: '🅿️→▶ validation_failed cleared — this MACHINE-authored PR was ' +
+                                        'parked with no self-clear path (the machine pushes its own heads, so ' +
+                                        'the human-push reset can never fire): ' + machineUnparkWhyVf + '. ' +
+                                        'The parked red verdict is void for the current head — re-entering ' +
+                                        'validation (owner directive 2026-10-05).'
+                                });
+                            } catch (eUnparkMvC) {
+                                console.warn('  ⚠️  un-park comment failed: ' + (eUnparkMvC.message || eUnparkMvC));
+                            }
+                        }
+                        console.log('  ▶ ' + key + ' ' + parkLabelVf +
+                            ' cleared: machine-authored PR, ' + machineUnparkWhyVf +
+                            ' — re-validating (the park had no self-clear path, gh-750)');
                         unparkedThisPass = true;
                     } else if (machinePushVf) {
                         console.log('  🅿️  ' + key + ' ' + parkLabelVf +
