@@ -282,7 +282,8 @@ suite('pullRequest helper', function() {
         }), 'expected merge after merge-base is found');
     });
 
-    test('truncates oversized PR body to fit GitHub limit', function() {        var writes = [];
+    test('truncates oversized PR body to fit GitHub limit', function() {
+        var writes = [];
         var pr = loadPullRequestHelper({
             cli_execute_command: function(args) {
                 if (args.command.indexOf('gh pr list --head feature/DMC-9') === 0) return '';

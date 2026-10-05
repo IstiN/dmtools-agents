@@ -108,16 +108,19 @@ function action(params) {
                 const summary = ticket && ticket.fields ? (ticket.fields.summary || ticketKey) : ticketKey;
                 const prTitle = configLoader.formatTemplate(config.formats.prTitle.rework, {ticketKey: ticketKey, ticketSummary: summary});
 
-                if (!scm.createPr) {
-                    throw new Error('Configured SCM provider does not support createPr');
-                }
-                const prResult = scm.createPr({
+                // gh-737/gh-738: route through prHelper.createPullRequest — the
+                // single choke point that guarantees the canonical 'Closes #N'
+                // line for both the SCM-provider and gh-cli paths. Do NOT call
+                // scm.createPr directly here (a second place remembering the
+                // guarantee is exactly the drift gh-737 set out to eliminate).
+                const prResult = prHelper.createPullRequest({
                     title: prTitle,
-                    // gh-737: merge bot links approved issues via 'Closes #N' —
-                    // emit it by construction on this auto-created rework PR.
-                    body: prHelper.ensureClosesLine('Auto-created PR for rework of test automation.\n\nTicket: ' + ticketKey, ticketKey),
                     branchName: testBranchName,
-                    baseBranch: config.git.baseBranch
+                    baseBranch: config.git.baseBranch,
+                    ticketKey: ticketKey,
+                    bodyContent: 'Auto-created PR for rework of test automation.\n\nTicket: ' + ticketKey,
+                    workingDir: config.workingDir || null,
+                    scm: scm
                 });
                 if (!prResult || !prResult.success) {
                     throw new Error((prResult && prResult.error) || 'SCM provider failed to create PR/MR');
