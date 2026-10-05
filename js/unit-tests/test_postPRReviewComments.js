@@ -591,7 +591,12 @@ suite('postPRReviewComments', function() {
                 jira_move_to_status: function() {},
                 jira_post_comment: function() {},
                 jira_remove_label: function() {},
-                jira_assign_ticket_to: function() {}
+                jira_assign_ticket_to: function() {},
+                github_get_pr: function() {
+                    // The machine-PR rework re-arm reads the PR body for a
+                    // 'closes #N' linked issue (gh-728 test rides this).
+                    return JSON.stringify({ body: opts.githubPrBody || '' });
+                }
             };
 
             var mod = loadModule(
@@ -803,6 +808,34 @@ suite('postPRReviewComments', function() {
             assert.ok(
                 loaded.addLabelCalls.some(function(c) { return c.prId === 42 && c.label === 'pr_approved'; }),
                 'external PR approved → pr_approved armed: ' + JSON.stringify(loaded.addLabelCalls)
+            );
+        });
+
+        test('PR-anchored MACHINE bot PR (second list entry) + REQUEST_CHANGES: agent:rework re-armed on the linked issue (gh-728, live fa PR #1249)', function() {
+            // Owner directive 2026-10-05: github-actions-authored PRs ride
+            // the machine path — the machineAuthor knob is a comma-separated
+            // LIST and the re-arm predicate must match ANY entry.
+            var loaded = loadPostPRReviewCommentsForFormalReview({
+                config: { machineAuthor: 'ai-teammate,github-actions[bot]' },
+                githubPrBody: 'ci(quarantine)\n\ncloses #191',
+                prInfoContent: '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: ci/quarantine\n- **Author**: github-actions[bot]\n',
+                reviewData: {
+                    recommendation: 'REQUEST_CHANGES',
+                    issueCounts: { blocking: 1, important: 0, suggestions: 0 },
+                    inlineComments: []
+                }
+            });
+
+            loaded.mod.action({
+                ticket: { key: 'pr-42', fields: { labels: [] } },
+                response: 'review content',
+                inputFolderPath: 'input/pr-42'
+            });
+
+            assert.ok(
+                loaded.addLabelCalls.some(function(c) { return c.prId === 191 && c.label === 'agent:rework'; }),
+                'bot PR counts as machine under the list config → rework re-armed on the linked issue: ' +
+                    JSON.stringify(loaded.addLabelCalls)
             );
         });
 

@@ -134,7 +134,7 @@ a deterministic read of the machine's own signals, first match wins:
 | bucket | signal |
 | --- | --- |
 | `blocked` | the `blocked` label — owner hold, its own visually distinct column |
-| `in_dev` | assigned to the machine author (the `machineAuthor` deployment knob; unconfigured → no assignment bucketing at all) |
+| `in_dev` | assigned to the machine author (the `machineAuthor` deployment knob — a comma-separated login list, gh-728; unconfigured → no assignment bucketing at all) |
 | `queued` | `agent:dev` label, not assigned |
 | `inbox` | everything else (no label/assignee) |
 

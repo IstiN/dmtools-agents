@@ -99,6 +99,11 @@ function laneOf(pr) {
 var LANE_ORDER = ['development', 'pr_created', 'pr_validation', 'review',
                   'approved_queue', 'validating', 'merged_recent'];
 
+// Machine-login list parsing (gh-728): the machineAuthor knob is a
+// comma-separated list — assignment bucketing treats ANY entry as the
+// machine (same semantics as the author guards in common/machineAuthor.js).
+var machineAuthorModule = require('./common/machineAuthor.js');
+
 // Schema 1 lane order (board back-compat; old snapshots on the data branch).
 var LANE_ORDER_V1 = ['validating', 'approved_queue', 'review', 'fresh'];
 
@@ -161,11 +166,14 @@ function backlogBucket(issue, machineAuthor) {
     if (hasLabel(issue, BLOCKED_LABEL)) return 'blocked';
     // a null/absent machineAuthor (the deployment never configured the
     // knob) opts OUT of assignment bucketing entirely — no hardcoded
-    // login is ever consulted
-    var assigned = !!machineAuthor && (
+    // login is ever consulted. gh-728: the knob is a comma-separated
+    // LIST — assignment to ANY entry means the machine owns the issue.
+    var logins = machineAuthorModule.machineAuthorLogins(machineAuthor);
+    var assigned = logins.length > 0 && (
         ((issue && issue.assignees) || []).some(function (a) {
-            return a && a.login === machineAuthor;
-        }) || !!(issue && issue.assignee && issue.assignee.login === machineAuthor));
+            return a && logins.indexOf(a.login) !== -1;
+        }) || !!(issue && issue.assignee && issue.assignee.login !== undefined &&
+                 logins.indexOf(issue.assignee.login) !== -1));
     if (assigned) return 'in_dev';
     if (hasLabel(issue, DEV_LABEL)) return 'queued';
     return 'inbox';
