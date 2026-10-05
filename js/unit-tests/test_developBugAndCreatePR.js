@@ -40,6 +40,35 @@ function loadDevelopBugAndCreatePR(mocks) {
 var commentMarkupModule = loadModule('js/common/commentMarkup.js');
 var gitStagingModule = loadModule('js/common/gitStaging.js');
 
+// gh-742 rework: the bug flow's interrupted path calls
+// developTicket.throwInterruptedReset, so the mock below exposes the REAL
+// exported helper (single source of truth for the marker/message contract)
+// instead of a byte-copy. The bug tests never invoke the delegated
+// developTicketAndCreatePR action(), so its stubbed deps are never touched.
+var developTicketRealModule = loadModule(
+    'js/developTicketAndCreatePR.js',
+    makeRequire({
+        './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
+        './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
+        './common/submodules.js': {},
+        './common/feedbackLoop.js': {
+            runQualityGates: function () { return { success: true }; },
+            runPolicyGates: function () { return { success: true }; },
+            runPostPublishGates: function () { return { success: true }; },
+            resumeAgent: function () { return { attempted: false }; }
+        },
+        './common/autoStart.js': { triggerSmIfIdle: function () { } },
+        './common/outputFiles.js': { readOutputFile: function () { return null; } },
+        './cacheToReleases.js': {},
+        './common/gitStaging.js': gitStagingModule,
+        './configLoader.js': configLoaderModule,
+        './config.js': configModule,
+        './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
+        './common/commentMarkup.js': commentMarkupModule
+    }),
+    {}
+);
+
     var mod = loadModule(
         'js/developBugAndCreatePR.js',
         makeRequire({
@@ -47,7 +76,10 @@ var gitStagingModule = loadModule('js/common/gitStaging.js');
             './common/gitStaging.js': gitStagingModule,
             './configLoader.js': configLoaderModule,
             './common/outputFiles.js': outputFiles,
-            './developTicketAndCreatePR.js': { action: function() { return { success: true, path: 'delegated' }; } }
+            './developTicketAndCreatePR.js': {
+                action: function() { return { success: true, path: 'delegated' }; },
+                throwInterruptedReset: developTicketRealModule.throwInterruptedReset
+            }
         ,
             './common/commentMarkup.js': commentMarkupModule,
         }),
@@ -59,7 +91,8 @@ var gitStagingModule = loadModule('js/common/gitStaging.js');
         commands: commands,
         comments: comments,
         moves: moves,
-        removed: removed
+        removed: removed,
+        developTicketRealModule: developTicketRealModule
     };
 }
 
@@ -90,6 +123,14 @@ suite('developBugAndCreatePR', function() {
         assert.ok(caught, 'an interrupted leg must fail the run (throw), not return plain success');
         assert.ok(caught && caught.interruptedReset === true,
             'thrown error carries the interruptedReset marker');
+        // gh-742 rework: the bug flow must throw through the REAL shared
+        // helper exported by developTicketAndCreatePR — not a local copy —
+        // so the marker/message contract can never drift between the two
+        // interrupted paths.
+        assert.equal(typeof loaded.developTicketRealModule.throwInterruptedReset, 'function',
+            'developTicketAndCreatePR must export throwInterruptedReset for the bug flow to reuse');
+        assert.contains(caught.message, 'TS-1296 was reset for retry',
+            'the thrown message is the shared contract message from developTicketAndCreatePR');
         assert.ok(
             loaded.commands.indexOf('git checkout -B ai/TS-1296') !== -1,
             'expected partial work to switch away from main'

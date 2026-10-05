@@ -71,22 +71,6 @@ function removeLabels(ticketKey, params) {
     }
 }
 
-/**
- * Throws a marked Error so the interrupted-agent "reset for retry" fails the
- * run loudly — the gh-742 dead-letter contract shared with
- * developTicketAndCreatePR.throwInterruptedReset (the bug flow's interrupted
- * path lives before the delegation point, so it throws its own marker). The
- * interrupted comment + Ready For Development reset + partial-work push have
- * ALREADY happened before this throws, so the failure stays retryable; only
- * the run's conclusion changes (green → red) — a no-PR leg must never read
- * as plain success for the wrapper to arm review on.
- */
-function throwInterruptedReset(ticketKey) {
-    var err = new Error('CLI agent interrupted mid-run — ' + ticketKey + ' was reset for retry; failing the run so a no-PR leg is not read as success (gh-742)');
-    err.interruptedReset = true;
-    throw err;
-}
-
 function action(params) {
     try {
         const actualParams = params.ticket ? params : (params.jobParams || params);
@@ -350,8 +334,11 @@ function action(params) {
             removeLabels(ticketKeyForCheck, params);
             // gh-742: ticket is reset for retry — fail the RUN so this
             // interrupted half-exit is a visible dead letter, not a green
-            // no-PR leg that arms review downstream.
-            throwInterruptedReset(ticketKeyForCheck);
+            // no-PR leg that arms review downstream. The marked
+            // throwInterruptedReset helper is shared from
+            // developTicketAndCreatePR (required above) so the
+            // marker/message contract lives in exactly one place.
+            developTicket.throwInterruptedReset(ticketKeyForCheck);
         }
 
         const result = developTicket.action(params);

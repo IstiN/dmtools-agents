@@ -1361,5 +1361,5 @@ function action(params) {
 }
 // Export for dmtools standalone execution
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = { action, throwInterruptedReset };
 }
