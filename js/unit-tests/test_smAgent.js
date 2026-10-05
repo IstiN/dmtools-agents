@@ -1972,8 +1972,9 @@ suite('smAgent: verdict-aware unarm_validation (gh-751 — green-verdict yo-yo)'
             return '';
         };
     }
-    function concluded(conclusion, headSha) {
-        var t = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    function concluded(conclusion, headSha, ageMs) {
+        var t = new Date(Date.now() -
+            (typeof ageMs === 'number' ? ageMs : 60 * 60 * 1000)).toISOString();
         return { status: 'completed', conclusion: conclusion, head_sha: headSha,
                  created_at: t, updated_at: t };
     }
@@ -2069,6 +2070,44 @@ suite('smAgent: verdict-aware unarm_validation (gh-751 — green-verdict yo-yo)'
             .concat(smActive.capturedPrLabelRemoves.map(function (r) { return r.number; }))
             .concat(smCancelled.capturedPrLabelRemoves.map(function (r) { return r.number; })).sort(),
             [304, 305, 306], 'all three still bare-unarm — refresh + re-validate recovery stands');
+    });
+
+    test('gh-748 double-dispatch on ONE head — cancelled/red NEWEST run over an older GREEN run still latches (consumer parity)', function () {
+        // The latch consumer (validate-armed's skipIfValidatedHead) accepts
+        // ANY completed-green dispatched run on the head (probeDispatchedState
+        // .green — hasSuccessfulDispatchedRun), never just the newest one.
+        // Two workflow_dispatch runs land on the same head seconds apart in
+        // the wild (gh-748 kicker race); when the newest of the pair is
+        // cancelled or red while an older run on the SAME head concluded
+        // success, a newest-only latch check misses the green, bare-unarms,
+        // and the yo-yo survives exactly its saturated-queue target sub-case.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [
+                    prItem(307, { labels: ['pr_approved', 'ai_validating'], headSha: 'shaDC' }),
+                    prItem(308, { labels: ['pr_approved', 'ai_validating'], headSha: 'shaDR' })
+                ]
+            },
+            onCliExecute: runsCli({
+                shaDC: [
+                    concluded('success', 'shaDC', 60 * 60 * 1000),
+                    concluded('cancelled', 'shaDC', 0) // NEWEST — concurrency-cancel shadow
+                ],
+                shaDR: [
+                    concluded('success', 'shaDR', 60 * 60 * 1000),
+                    concluded('failure', 'shaDR', 0) // NEWEST — later red re-run
+                ]
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [UNARM_RULE] } });
+
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number + ':' + a.labels.join(','); }).sort(),
+            ['307:ai_validated', '308:ai_validated'],
+            'any green run on the head latches — producer parity with skipIfValidatedHead (hasSuccessfulDispatchedRun)');
+        assert.ok(!dispatched(sm.capturedCliCommands),
+            'latching never re-dispatches CI — the existing green covers the head');
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.number; }).sort(),
+            [307, 308], 'the stale arm is still released on both heads');
     });
 });
 suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', function () {
