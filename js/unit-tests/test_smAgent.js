@@ -266,6 +266,8 @@ function makeSmAgent(opts) {
         action: sm.action,
         applyRuleOverridesForTest: sm.applyRuleOverridesForTest,
         probeDispatchedState: sm.probeDispatchedState,
+        hasRecentHeadRun: sm.hasRecentHeadRun,
+        dispatchRaceGraceMs: sm.dispatchRaceGraceMs,
         capturedTriggers: capturedTriggers,
         capturedLabels: capturedLabels,
         capturedStatusMoves: capturedStatusMoves,
@@ -6099,4 +6101,209 @@ suite('smAgent: empty rework-lap cap (owner finding 2026-10-04, live fa#1211)', 
             return a.number === 1210 && a.labels.join(',') === 'agent:rework';
         }), 'normal re-arm on a fresh head');
     });
+});
+
+// ─── gh-748: validate_pr dispatch-race guard ─────────────────────────────────
+// Live fa ai/gh-1292 (PR #1295, 2026-10-05 17:45): the kicker push-handler
+// and the SM tick both covered the same codeless head with no shared
+// 'already ordered' marker. The kicker's workflow_dispatch CI run registers
+// in the Actions API SECONDS after `gh workflow run` returns, so the
+// dispatch-only duplicate guard probed the lag window, failed OPEN, and a
+// second CI run landed 4s after the first (2x queue latency on a single
+// runner). The fix: before dispatching, validate_pr counts ANY run on the
+// head — any workflow (the kicker's own push run IS visible even when its
+// CI child is not), any event, any triggering actor — active now, or
+// completed within a short grace (jobParams.dispatchRaceGraceMs, default
+// 60s: a run that just finished may have ordered CI that is not registered
+// yet).
+suite('smAgent: validate_pr dispatch-race guard (gh-748)', function () {
+
+    var RULE = { source: 'github',
+        query: { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'], draft: false },
+        localAction: 'validate_pr', limit: 1, id: 'validate-armed' };
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    function pr(n, headSha) {
+        return { key: 'pr-' + n, labels: ['pr_approved'], issueNumber: null,
+                 prNumber: n, draft: false, branch: 'ai/gh-748', headSha: headSha };
+    }
+
+    // Route the THREE head-probe shapes apart: the widened rollup probe
+    // (actions/runs?head_sha=), the dispatch-only guard probes
+    // (actions/workflows/<wf>/runs?head_sha=), and the stale-head cancel
+    // probe (runs?event=workflow_dispatch).
+    function cliRouter(headRollup, dispatchedRuns) {
+        return function (cmdOpts) {
+            var c = cmdOpts.command;
+            if (c.indexOf('actions/runs?head_sha=') !== -1) {
+                return { output: JSON.stringify({ workflow_runs: headRollup }) };
+            }
+            if (c.indexOf('/workflows/') !== -1 && c.indexOf('runs?head_sha=') !== -1) {
+                return { output: JSON.stringify({ workflow_runs: dispatchedRuns }) };
+            }
+            if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                return { output: JSON.stringify({ workflow_runs: [] }) };
+            }
+            return undefined;
+        };
+    }
+
+    function dispatchCommands(sm) {
+        return sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run ') === 0; });
+    }
+
+    function kickerRun(status, doneAgoMs) {
+        var r = { name: 'SM kicker', event: 'push', status: status,
+                  head_sha: 'beef7480aa', created_at: new Date(Date.now() - 60 * 1000).toISOString() };
+        if (status === 'completed') {
+            r.conclusion = 'success';
+            r.updated_at = new Date(Date.now() - doneAgoMs).toISOString();
+        }
+        return r;
+    }
+
+    test('REGRESSION: an in-flight kicker run on the head blocks the second dispatch', function () {
+        // The exact gh-748 shape: the kicker (push event) is mid-grace on the
+        // codeless head; its workflow_dispatch CI child has NOT registered in
+        // the API yet (the dispatch-only probe reads empty). The SM tick must
+        // not order a second CI run — the kicker owns this head's CI order.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [pr(1295, 'beef7480aa')] },
+            onCliExecute: cliRouter([kickerRun('in_progress')], [])
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULE] } });
+
+        assert.equal(dispatchCommands(sm).length, 0,
+            'exactly one CI run on the head — the kicker dispatched it, the SM stays out');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no ai_validating arm without an SM dispatch');
+    });
+
+    test('a run completed within the grace window also blocks (registration lag after a finished kicker)', function () {
+        // The kicker completed 4s ago having just ordered CI; that CI run is
+        // still invisible to the event-filtered probe. The finished kicker
+        // itself is the evidence — skip.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [pr(1296, 'cafe7481bb')] },
+            onCliExecute: cliRouter([kickerRun('completed', 4 * 1000)], [])
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULE] } });
+
+        assert.equal(dispatchCommands(sm).length, 0, 'no dispatch inside the grace window');
+    });
+
+    test('a run completed OUTSIDE the grace window does not block (the head still gets its validation)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [pr(1297, 'd00d7482cc')] },
+            onCliExecute: cliRouter([kickerRun('completed', 9 * 60 * 1000)], [])
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULE] } });
+
+        assert.equal(dispatchCommands(sm).length, 1, 'stale kicker evidence — the SM dispatches');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
+            ['ai_validating'], 'armed after the clean dispatch');
+    });
+
+    test('the guard scans the WHOLE rollup: an old CI run next to a fresh kicker still blocks', function () {
+        // Multi-item pin: the race evidence is not required to be entry 0.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [pr(1298, 'f00f7483dd')] },
+            onCliExecute: cliRouter([
+                { name: 'Quality', event: 'workflow_dispatch', status: 'completed',
+                  conclusion: 'success', head_sha: 'f00f7483dd',
+                  created_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+                  updated_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() },
+                kickerRun('queued')], [])
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULE] } });
+
+        assert.equal(dispatchCommands(sm).length, 0, 'the queued kicker anywhere in the rollup blocks');
+    });
+
+    test('probe failure fails OPEN: the dispatch proceeds (worst case is the duplicate, never a wedge)', function () {
+        var router = cliRouter([], []);
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [pr(1299, 'aa7474844e')] },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('actions/runs?head_sha=') !== -1) {
+                    throw new Error('API rolled over');
+                }
+                return router(cmdOpts);
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULE] } });
+
+        assert.equal(dispatchCommands(sm).length, 1, 'fail OPEN — the arm is never wedged by the guard');
+    });
+
+    test('jobParams.dispatchRaceGraceMs = 0 disables the widened guard (legacy single-probe behavior)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [pr(1300, 'bb7474855f')] },
+            onCliExecute: cliRouter([kickerRun('in_progress')], [])
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', dispatchRaceGraceMs: 0, rules: [RULE] } });
+
+        assert.equal(dispatchCommands(sm).length, 1, 'escape hatch: the guard is off');
+        assert.ok(!sm.capturedCliCommands.some(function (c) {
+            return c.command.indexOf('actions/runs?head_sha=') !== -1; }),
+            'guard off — the widened rollup probe never runs');
+    });
+
+    test('jobParams.dispatchRaceGraceMs tunes the completed-run window', function () {
+        // A 120s window catches a kicker completed 90s ago that the default
+        // 60s window would release.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: { items: [pr(1301, 'cc7474866a')] },
+            onCliExecute: cliRouter([kickerRun('completed', 90 * 1000)], [])
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', dispatchRaceGraceMs: 120 * 1000, rules: [RULE] } });
+
+        assert.equal(dispatchCommands(sm).length, 0, 'the deployment-tuned window still blocks');
+    });
+
+    test('hasRecentHeadRun semantics (direct pin)', function () {
+        var sm = makeSmAgent(config('a', 'b'));
+        var grace = 60 * 1000;
+        var run = function (over) {
+            var r = { id: 1, status: 'queued', head_sha: 's',
+                      created_at: new Date().toISOString() };
+            if (over) { for (var k in over) { r[k] = over[k]; } }
+            return r;
+        };
+        ['queued', 'in_progress', 'waiting', 'pending', 'requested'].forEach(function (s) {
+            assert.equal(sm.hasRecentHeadRun([run({ status: s })], grace), true,
+                'active status ' + s + ' blocks');
+        });
+        assert.equal(sm.hasRecentHeadRun([run({
+            status: 'completed', conclusion: 'failure',
+            created_at: new Date(Date.now() - 90 * 1000).toISOString(),
+            updated_at: new Date(Date.now() - (grace - 1000)).toISOString() })], grace),
+            true, 'completed just inside the grace blocks (any conclusion)');
+        assert.equal(sm.hasRecentHeadRun([run({
+            status: 'completed', conclusion: 'success',
+            created_at: new Date(Date.now() - 90 * 1000).toISOString(),
+            updated_at: new Date(Date.now() - grace).toISOString() })], grace),
+            false, 'exactly at the grace boundary the run no longer blocks');
+        assert.equal(sm.hasRecentHeadRun([run({
+            status: 'completed', created_at: new Date().toISOString(),
+            updated_at: 'not-a-date' })], grace),
+            false, 'a completed run with an unparseable timestamp never blocks');
+        assert.equal(sm.hasRecentHeadRun([], grace), false, 'empty rollup — no race');
+        assert.equal(sm.hasRecentHeadRun(null, grace), false, 'null rollup (failed probe) — fail OPEN');
+    });
+
+    test('dispatchRaceGraceMs knob parsing (direct pin)', function () {
+        var sm = makeSmAgent(config('a', 'b'));
+        assert.equal(sm.dispatchRaceGraceMs({}), 60 * 1000, 'default 60s');
+        assert.equal(sm.dispatchRaceGraceMs(undefined), 60 * 1000, 'no jobParams — default');
+        assert.equal(sm.dispatchRaceGraceMs({ dispatchRaceGraceMs: 0 }), 0, 'explicit 0 disables');
+        assert.equal(sm.dispatchRaceGraceMs({ dispatchRaceGraceMs: '45000' }), 45000, 'string form parses');
+        assert.equal(sm.dispatchRaceGraceMs({ dispatchRaceGraceMs: -5 }), 60 * 1000, 'negative falls back');
+        assert.equal(sm.dispatchRaceGraceMs({ dispatchRaceGraceMs: 'junk' }), 60 * 1000, 'junk falls back');
+    });
+
 });

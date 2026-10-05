@@ -46,6 +46,14 @@
  *   head, so it is only live while redHeadCap >= emptyLapMax + 2 (3 >= 1 + 2 at the
  *   defaults — with the old emptyLapMax=2 the arm-side red-head skip killed the 4th
  *   same-head validation first and the cap was dead code).
+ *   jobParams.dispatchRaceGraceMs (default 60000, gh-748) — how long a COMPLETED
+ *   run on the head still counts as "may have just ordered CI" for the validate_pr
+ *   dispatch-race guard: before dispatching, the arm also counts ANY run on the
+ *   head_sha (any workflow/event/actor — the kicker's own push run included) that
+ *   is active now or completed within this grace, and skips — its workflow_dispatch
+ *   CI child may still be invisible to the event-filtered duplicate guard (Actions
+ *   API registration lag; live fa ai/gh-1292: two CI runs 4s apart). 0 disables the
+ *   widened probe (legacy single-probe guard).
  *
  * Rule fields:
  *   jql            (required) — JQL to find tickets (supports {jiraProject}, {parentTicket})
@@ -1778,6 +1786,31 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                 ' the query-time mutex scanned a stale list)');
                     continue; // NOT processedKeys — the slot stays with the holder
                 }
+                // gh-748 dispatch-race guard (live fa ai/gh-1292 / PR #1295,
+                // 2026-10-05 17:45): the kicker push-handler races this
+                // dispatch on codeless heads — its workflow_dispatch CI run
+                // registers in the Actions API SECONDS after `gh workflow
+                // run` returns, so the event-filtered duplicate guard above
+                // probed the lag window and failed OPEN → two CI runs 4s
+                // apart, 2x queue latency on a single runner. Count ANY run
+                // on THIS head — any workflow (the kicker's own push run is
+                // visible even when its CI child is not), any event, any
+                // triggering actor: active now, or completed within a short
+                // grace (jobParams.dispatchRaceGraceMs, default 60s — a run
+                // that just finished may have ordered CI that is not
+                // registered yet). Fail OPEN on probe errors
+                // (headWorkflowRunsSafe → null): the worst case is exactly
+                // the duplicate this guard prevents, never a wedge.
+                if (vHead0) {
+                    var vRaceGrace = dispatchRaceGraceMs(RUN_JOB_PARAMS);
+                    if (vRaceGrace > 0 &&
+                        hasRecentHeadRun(headWorkflowRunsSafe(effectiveRepoInfo, vHead0),
+                                         vRaceGrace)) {
+                        console.log('  ⏭️  ' + key + ' a run just landed on this head' +
+                                    ' (kicker/CI dispatch race, gh-748) — it owns the CI order, no second dispatch');
+                        continue; // NOT processedKeys — nothing was dispatched, nothing to un-arm
+                    }
+                }
                 // Superseded-head cleanup (owner 2026-09-23): any active
                 // dispatched run on an older head of THIS branch is pure
                 // waste — cancel before arming the fresh one.
@@ -3105,6 +3138,19 @@ function redHeadSkipEnabled(rule, jobParams) {
         String((jobParams || {}).redHeadSkip) !== 'false';
 }
 
+// gh-748: how long a COMPLETED run on the head still counts as "may have
+// just ordered CI" for the validate_pr dispatch-race guard — the
+// Actions-API registration lag after a `gh workflow run` returns (a
+// finished kicker's CI child can stay invisible to the event-filtered
+// probe for seconds). Default 60s; jobParams.dispatchRaceGraceMs tunes it
+// per deployment; 0 disables the widened probe (legacy single-probe guard).
+function dispatchRaceGraceMs(jobParams) {
+    var n = (jobParams || {}).dispatchRaceGraceMs;
+    n = typeof n === 'string' ? parseInt(n, 10) : n;
+    if (typeof n !== 'number' || isNaN(n) || n < 0) return 60 * 1000;
+    return Math.floor(n);
+}
+
 // Per-head red counts parsed from this PR's fail-report marker lines:
 // { <headSha>: <highest recorded N> }. Single fetch via failMarkerState —
 // the arm-side caller (redHeadBlocked) pays ONE comment read, never three.
@@ -3343,6 +3389,34 @@ function hasActiveHeadRun(runs) {
     return (runs || []).some(function (r) {
         return r.status === 'queued' || r.status === 'in_progress' ||
             r.status === 'waiting' || r.status === 'pending';
+    });
+}
+
+// gh-748 dispatch-race probe over the FULL head rollup (all workflows, all
+// events, all triggering actors): a run that is ACTIVE now, or completed
+// within graceMs, means somebody may have just ordered/produced CI on this
+// head — the SM must not stack a second dispatch on it. A run completed
+// seconds ago is exactly the registration-lag shape: its own CI child (a
+// kicker's workflow_dispatch) can still be invisible to the event-filtered
+// hasActiveDispatchedRun probe. Takes the pre-fetched head rollup
+// (headWorkflowRunsSafe — a null failed probe reads as no race — fail
+// OPEN, matching hasActiveDispatchedRun's error contract). A completed run
+// with no parseable timestamp never blocks (cannot be aged — the 15-min
+// completed grace of the dispatched probe covers it if it is CI).
+function hasRecentHeadRun(runs, graceMs) {
+    var now = Date.now();
+    return (runs || []).some(function (r) {
+        if (!r) return false;
+        if (r.status === 'queued' || r.status === 'in_progress' ||
+            r.status === 'waiting' || r.status === 'pending' ||
+            r.status === 'requested') return true;
+        if (r.status === 'completed') {
+            var endTs = Date.parse(r.updated_at || r.created_at || '');
+            if (isNaN(endTs)) return false;
+            var age = now - endTs;
+            return age >= 0 && age < graceMs;
+        }
+        return false;
     });
 }
 
@@ -4111,5 +4185,7 @@ function action(params) {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { action: action, applyRuleOverridesForTest: applyRuleOverrides,
         probeDispatchedState: probeDispatchedState,
-        failedRunLinksLine: failedRunLinksLine };
+        failedRunLinksLine: failedRunLinksLine,
+        hasRecentHeadRun: hasRecentHeadRun,
+        dispatchRaceGraceMs: dispatchRaceGraceMs };
 }
