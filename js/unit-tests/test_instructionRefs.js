@@ -73,19 +73,22 @@ var KNOWN_DANGLING = [
 
 var REF_PAT = /(agents\/)?((?:instructions|js)\/[A-Za-z0-9_\-./]+\.(?:md|js))/g;
 
-// Repo root, resolved once from file_list('..') absolute entries (relative
-// '../x' resolves against the job's working directory, not the test cwd —
-// not portable; absolute paths are).
+// Repo root = the job's working directory (tests run with cwd = the repo
+// root). Resolved once as the parent of any file_list('.') entry — absolute
+// entries are portable, relative paths are not. Deliberately NOT derived from
+// an '/agents/' path segment: when this repo is checked out as the `agents`
+// submodule of dmtools that segment is the checkout itself and the derived
+// root pointed one level too high (every reference read then failed, and the
+// closure was silently empty).
 var ROOT = (function () {
     var out = file_list('.');
     if (typeof out === 'string') out = JSON.parse(out);
-    var entries = ((out && out.entries) || []).map(String);
-    var probe = '';
+    var entries = ((out && out.entries) || []).map(function (e) { return String(e).replace(/\\/g, '/'); });
     for (var i = 0; i < entries.length; i++) {
-        if (entries[i].indexOf('/agents/') !== -1) { probe = entries[i]; break; }
+        var cut = entries[i].lastIndexOf('/');
+        if (cut > 0) return entries[i].slice(0, cut);
     }
-    var cut = probe.indexOf('/agents/');
-    return cut === -1 ? '.' : probe.slice(0, cut);
+    return '.';
 })();
 
 // repo-relative path -> absolute filesystem path

@@ -188,44 +188,40 @@ suite('release workflow wiring', function () {
             'the reset is gated to push events — manual dispatch may target a branch');
     });
 
-    test('R2 guard 1: main-already-carries-it skips PR creation', function () {
+    test('R2 guard 1: main-already-carries-it skips the push entirely', function () {
         var guardDiff = wf.indexOf('git diff --quiet HEAD origin/main -- versions.json');
         assert.ok(guardDiff !== -1, 'the nothing-changed guard must exist');
-        var create = wf.indexOf('gh pr create');
-        assert.ok(create !== -1 && guardDiff < create,
-            'the guard must run BEFORE the PR is created (skip, not close)');
+        var push = wf.indexOf('git push origin HEAD:main');
+        assert.ok(push !== -1 && guardDiff < push,
+            'the guard must run BEFORE the push (skip, not push an empty/duplicate ledger)');
         assert.ok(wf.indexOf('::notice::main already carries the target agent versions') !== -1,
             'the skip must be visible in the run log');
     });
 
-    test('R2 guard 2: the empty-diff re-check runs after the checks finish, before merging', function () {
+    test('R2 guard 2: the ledger is rebased onto fresh main right before the direct push', function () {
         var firstGuard = wf.indexOf('git diff --quiet HEAD origin/main -- versions.json');
-        // Anchor on the QUOTED command — the step commentary legitimately
-        // mentions the tool names and must not satisfy this invariant.
-        var watch = wf.indexOf('gh pr checks "${PR_NUM}" --watch');
-        var secondGuard = nthIndexOf(wf, 'git diff --quiet HEAD origin/main -- versions.json', 2);
-        var merge = wf.lastIndexOf('gh pr merge');
-        assert.ok(watch !== -1 && watch > firstGuard,
-            'the run must wait for the required checks before re-checking');
-        assert.ok(secondGuard !== -1 && secondGuard > watch,
-            'the guard must be RE-RUN after the checks finish — main may have ' +
-            'moved while the PR waited (#689 was cut before #688 landed)');
-        assert.ok(merge > secondGuard,
-            'only a still-different ledger may proceed to merge');
+        var rebase = wf.indexOf('git rebase origin/main');
+        var push = wf.indexOf('git push origin HEAD:main');
+        assert.ok(rebase !== -1 && rebase > firstGuard,
+            'main may move while the run builds — rebase after the guard');
+        assert.ok(push > rebase,
+            'rebase must precede the push so a concurrent merge is never a non-fast-forward');
     });
 
-    test('R2: an empty-diff PR is closed, not merged, and the close never fails the release', function () {
-        var close = wf.indexOf('gh pr close');
-        var secondGuard = nthIndexOf(wf, 'git diff --quiet HEAD origin/main -- versions.json', 2);
-        assert.ok(close !== -1 && close > secondGuard,
-            'the empty-diff outcome must be a close');
-        var tail = wf.slice(close);
-        assert.ok(tail.indexOf('could not close version PR') !== -1,
-            'a failing close must degrade to a warning anchored on the close ' +
-            'itself — a bare ::warning:: probe also matches the unrelated ' +
-            'merge-fallback warning further down and passes for the wrong reason');
-        assert.ok(tail.indexOf('::warning::') !== -1,
-            'the degraded close must still surface as a warning, not fail the release');
+    test('R2: a rejected direct push degrades to a warning and never fails the release', function () {
+        var push = wf.indexOf('git push origin HEAD:main');
+        var tail = wf.slice(push);
+        assert.ok(/if ! git push origin HEAD:main/.test(wf),
+            'the push must be guarded so a rejection cannot fail the run after publishing');
+        assert.ok(tail.indexOf('::warning::direct ledger push rejected') !== -1,
+            'the rejected push must still surface as a warning — the next release recomputes from main');
+    });
+
+    test('R2: the ledger lands by direct push — no PR round-trip (#724)', function () {
+        assert.ok(wf.indexOf('gh pr create') === -1,
+            'the version ledger must not open a chore PR (queue through conveyor gates)');
+        assert.ok(wf.indexOf('gh pr merge') === -1,
+            'no PR means no merge step to bypass the empty-diff guard');
     });
 
     test('R2: --auto merge is gone — it merges server-side, bypassing the guard', function () {
