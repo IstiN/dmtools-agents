@@ -793,7 +793,7 @@ function loadForPrTail(mocks, opts) {
     opts = opts || {};
     var realPrHelper = loadModule('js/common/pullRequest.js', makeRequire({
         './common/commentMarkup.js': commentMarkupModule,
-    }), {});
+    }), opts.prHelperGlobals || {});
     var logs = [];
     var errors = [];
     var mod = loadModule(
@@ -939,6 +939,43 @@ suite('developTicketAndCreatePR > PR-creation tail (gh-729)', function () {
             'the underlying gh error reaches the Jira comment');
         assert.ok(loaded.errors.some(function (e) { return e.indexOf('Pull Request creation failed') !== -1; }),
             'the failure reason is error-logged, not swallowed — the live gh-1197 log had no error line at all');
+    });
+
+    test('gh-737: dev leg PR body contains the canonical Closes #N line by construction', function () {
+        // Live fa 2026-10-05: the merge bot (awf factory-merge-trigger) links
+        // approved issues to PRs ONLY via 'Closes #N' in the PR body (or branch
+        // 'N-*'). Factory PRs built from the response.md template carried no
+        // Closes line → the bot merged nothing (merged=0 skipped=4). The dev
+        // leg must emit 'Closes #737' for a gh-737 ticket even when the agent
+        // response forgot it.
+        var writes = [];
+        var prUrl = 'https://github.com/acme/widgets/pull/737';
+        var loaded = loadForPrTail({
+            cli_execute_command: committedWorkGitMock('ai/gh-737', prUrl),
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        }, {
+            responseMd: '### What changed\n- Parser fix.\n',
+            prHelperGlobals: {
+                file_write: function (path, content) { writes.push({ path: path, content: content }); },
+                file_delete: function () { }
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'gh-737', fields: { summary: 'emit Closes line', description: '', labels: [] } },
+            metadata: { contextId: 'sm_story_development' },
+            customParams: {},
+            response: '### What changed\n- Parser fix.\n'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.prUrl, prUrl);
+        var bodyWrite = writes.filter(function (w) { return w.path.indexOf('pr_body_tmp') !== -1; })[0];
+        assert.ok(bodyWrite, 'PR body must be written to the temp body file — writes seen: ' + JSON.stringify(writes.map(function (w) { return w.path; })));
+        assert.contains(bodyWrite.content, 'Closes #737',
+            'the merge bot requires Closes #N in the PR body — the dev leg must emit it by construction');
     });
 
 });

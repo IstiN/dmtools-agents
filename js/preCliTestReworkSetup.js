@@ -7,6 +7,7 @@
 var configLoader = require('./configLoader.js');
 const gh = require('./common/githubHelpers.js');
 const gitOps = require('./common/gitOps.js');
+const prHelper = require('./common/pullRequest.js');
 const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchLinkedBugsToInput = require('./fetchLinkedBugsToInput.js');
 
@@ -112,7 +113,9 @@ function action(params) {
                 }
                 const prResult = scm.createPr({
                     title: prTitle,
-                    body: 'Auto-created PR for rework of test automation.\n\nTicket: ' + ticketKey,
+                    // gh-737: merge bot links approved issues via 'Closes #N' —
+                    // emit it by construction on this auto-created rework PR.
+                    body: prHelper.ensureClosesLine('Auto-created PR for rework of test automation.\n\nTicket: ' + ticketKey, ticketKey),
                     branchName: testBranchName,
                     baseBranch: config.git.baseBranch
                 });

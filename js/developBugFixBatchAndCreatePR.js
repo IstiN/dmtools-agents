@@ -92,6 +92,9 @@ function ensurePRExists(branchName, epic, config, bugs) {
         branchName: branchName,
         baseBranch: configLoader.resolvePRTargetBranch(config, epic),
         title: title,
+        // gh-737: merge bot links approved issues via 'Closes #N' — the batch
+        // PR closes the epic, so its key drives the canonical line.
+        ticketKey: epic.key,
         bodyContent: body,
         workingDir: config.workingDir || null,
         tempBodyFile: 'pr_body_tmp_batch.md'

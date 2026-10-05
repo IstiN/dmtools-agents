@@ -284,6 +284,9 @@ function createPRIfMissing(scm, branchName, ticketKey, config) {
             title: prTitle,
             branchName: branchName,
             baseBranch: config.git.baseBranch,
+            // gh-737: merge bot links approved issues via 'Closes #N' — emit it
+            // by construction on this auto-created rework PR.
+            ticketKey: ticketKey,
             bodyContent: 'Auto-created PR after test rework.\n\nTicket: ' + ticketKey
         });
         if (prResult && prResult.success) {

@@ -255,7 +255,7 @@ function performGitOperations(branchName, commitMessage, workingDir, testFilesPa
     }
 }
 
-function createPullRequest(title, branchName, baseBranch, workingDir, scm) {
+function createPullRequest(title, branchName, baseBranch, workingDir, scm, ticketKey) {
     console.log('Creating Pull Request...');
     return prHelper.createPullRequest({
         title: title,
@@ -263,6 +263,9 @@ function createPullRequest(title, branchName, baseBranch, workingDir, scm) {
         baseBranch: baseBranch,
         workingDir: workingDir,
         scm: scm,
+        // gh-737: merge bot links approved issues via 'Closes #N' — emit it
+        // by construction on every test-automation PR.
+        ticketKey: ticketKey,
         bodyFileCandidates: ['outputs/pr_body.md', 'outputs/response.md'],
         defaultBody: 'Automated test automation changes.',
         runCommand: runInRepo,
@@ -437,7 +440,7 @@ function action(params) {
 
             if (gitResult.success && !gitResult.noNewCommit) {
                 const prTitle = configLoader.formatTemplate(config.formats.prTitle.testAutomation, {ticketKey: ticketKey, ticketSummary: ticketSummary});
-                const prResult = createPullRequest(prTitle, branchName, config.git.baseBranch, workingDir, scm);
+                const prResult = createPullRequest(prTitle, branchName, config.git.baseBranch, workingDir, scm, ticketKey);
                 prUrl = prResult.prUrl;
                 if (!prResult.success || !prUrl) {
                     // PR creation failed — branch has code but no PR; post comment and reset to Backlog for retry
