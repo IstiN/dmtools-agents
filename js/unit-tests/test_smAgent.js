@@ -2971,6 +2971,79 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
             'the park-reset route (mergeable, not behind) clears a green machine park');
     });
 
+    test('gh-750: the moved-head self-clear fires ONE dispatched-verdict probe per tick (shared #633/gh-750 probe)', function () {
+        // Review (pr-752 rework, thread 1): with a park comment present, the
+        // #633 head-change path and the gh-750 machine moved-head path each
+        // probed the SAME dispatched verdict for the SAME head with the SAME
+        // args — two identical `gh api .../runs?head_sha=` calls in one
+        // tick. One shared memoized probe serves both consumers.
+        var verdictProbeCalls = 0;
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(228, { author: 'ai-teammate', labels: ['validation_failed'],
+                                      headSha: MACHINE_HEAD_750 })],
+                prComments: [{ body: '🛑 parked-head: ' + OLD_HEAD }],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: function (cmd) {
+                if (cmd.command.indexOf('/runs?head_sha=') !== -1) {
+                    verdictProbeCalls += 1;
+                    return JSON.stringify({ workflow_runs: [] });
+                }
+                return vfCli({
+                    actors: { ab1177aa22bb33cc44dd55ee66ff770011223344: {
+                        login: 'ai-teammate', date: '2026-10-05T09:00:00Z', parents: [] } },
+                    parkedAt: '2026-09-20T00:00:00Z'
+                })(cmd);
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(verdictProbeCalls, 1,
+            'the shared verdict probe runs ONCE per tick, not once per consumer');
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
+            return r.label === 'validation_failed'; }),
+            'the park still clears — probe sharing must not change the ladder');
+    });
+
+    test('gh-750: the moved-head clear comment cites its evidence (head sha @ date > park time)', function () {
+        // Review (pr-752 rework, thread 2): the sibling clear comments cite
+        // their evidence (#633 names both shas; the human-push RESET names
+        // actor + date) — the machine clear named only the reason class.
+        // The moved-head branch carries the same audit trail: which head,
+        // when it moved, when the park was set.
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(229, { author: 'ai-teammate', labels: ['validation_failed'],
+                                      headSha: MACHINE_HEAD_750 })],
+                prStatus: { checkConclusion: 'none' }
+            },
+            onCliExecute: function (cmd) {
+                if (cmd.command.indexOf('/runs?head_sha=' + MACHINE_HEAD_750) !== -1) {
+                    return JSON.stringify({ workflow_runs: [] });
+                }
+                return vfCli({
+                    actors: { ab1177aa22bb33cc44dd55ee66ff770011223344: {
+                        login: 'ai-teammate', date: '2026-10-05T09:00:00Z', parents: [] } },
+                    parkedAt: '2026-09-20T00:00:00Z'
+                })(cmd);
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        var clear = sm.capturedPrComments.filter(function (c) {
+            return c.body.indexOf('MACHINE') !== -1; });
+        assert.equal(clear.length, 1, 'the machine clear comment is posted');
+        assert.ok(clear[0].body.indexOf('ab1177aa') !== -1,
+            'the moved head sha is cited');
+        assert.ok(clear[0].body.indexOf('2026-10-05T09:00:00Z') !== -1,
+            'the head commit date is cited');
+        assert.ok(clear[0].body.indexOf('2026-09-20T00:00:00Z') !== -1,
+            'the park time is cited');
+    });
+
     test('validate_pr: a labeled PR gets NO CI dispatch at all (validate-fresh backstop)', function () {
         var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
             github: {
@@ -3016,6 +3089,31 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
         assert.equal(q.mergeState, undefined, 'NO merge-state filter — non-BEHIND parked heads reach the RESET probe');
         assert.equal(reset[0].localAction, 'update_branch', 'rides the existing RESET probe inside update_branch');
         assert.ok((q.notLabels || []).indexOf('ai_validating') !== -1, 'never touches a validating PR mid-run');
+    });
+
+    test('sm_github.json: the machine self-clear wording states BOTH routes (shared RESET probe)', function () {
+        // Review (pr-752 rework, thread 4): park-reset's description claimed
+        // to be "the ONLY exit" — false for BEHIND heads, which
+        // silent-update-behind serves through the same shared RESET probe.
+        // The silent-update-behind note that machine PRs "never get the
+        // label" now states the guest-gating explicitly (legacy parks
+        // predate it).
+        var raw = file_read({ path: 'sm_github.json' });
+        var cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || cfg.rules || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+
+        assert.ok(byId['park-reset'], 'park-reset exists');
+        assert.ok(byId['park-reset'].description.indexOf(
+                'only exit when the head is NOT BEHIND') !== -1,
+            'park-reset scopes its exclusivity claim to NOT-BEHIND heads');
+        assert.equal(byId['park-reset'].description.indexOf(
+                'the ONLY exit a MACHINE-authored parked PR will ever get'), -1,
+            'the imprecise exclusivity claim is gone');
+        assert.ok(byId['silent-update-behind'], 'silent-update-behind exists');
+        assert.ok(byId['silent-update-behind'].description.indexOf('guest-gated') !== -1,
+            'silent-update-behind states that current SET rules are guest-gated');
     });
 
     test('validate_pr backstop: a FRESH HUMAN push on a parked PR clears the label and dispatches (live fa 2026-10-03)', function () {

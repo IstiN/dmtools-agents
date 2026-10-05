@@ -1407,11 +1407,29 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // report 'failure' for the current head (fail closed:
                     // probe error keeps the park, same as parkedSince).
                     var parkedHeadVf = parkedHeadSha(effectiveRepoInfo, ticket.prNumber);
+                    // One shared dispatched-verdict probe for the current
+                    // head (pr-752 rework): the #633 head-change path and
+                    // the gh-750 machine moved-head path ask the SAME
+                    // question with the SAME args — a memoized local fires
+                    // `gh api .../runs?head_sha=` at most ONCE per tick
+                    // instead of once per consumer. The probe FAILS OPEN
+                    // for the clear decision (probe error → null → 'no
+                    // red'), inherited #633 semantics — re-validation
+                    // re-discovers a genuinely red head one CI cycle later.
+                    var headVerdictVf = null;
+                    var headVerdictProbedVf = false;
+                    var probeHeadVerdictVf = function () {
+                        if (!headVerdictProbedVf) {
+                            headVerdictProbedVf = true;
+                            headVerdictVf = latestDispatchedVerdict(effectiveRepoInfo,
+                                rule.ciWorkflow || ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
+                                uHead);
+                        }
+                        return headVerdictVf;
+                    };
                     var headChangedNoVerdictVf = !!uHead && parkedHeadVf !== null &&
                         parkedHeadVf !== '' && uHead !== parkedHeadVf &&
-                        latestDispatchedVerdict(effectiveRepoInfo,
-                            rule.ciWorkflow || ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
-                            uHead) !== 'failure';
+                        probeHeadVerdictVf() !== 'failure';
                     // gh-750 (live fa#1227, owner directive 2026-10-05): a
                     // MACHINE-authored parked PR has NO self-clear path at
                     // all — the human-push RESET below never fires (fa pushes
@@ -1433,7 +1451,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // behavior in full: none of this evaluates for them.
                     // Probe failures keep the park (fail closed) — the branch
                     // is gated on the same non-null probes the ladder below
-                    // demands, and both probes fail closed themselves.
+                    // demands; parkResetCommit/parkedSince are null-guarded
+                    // and validationRollupGreen/headCommitActor fail closed
+                    // (error → false/NaN). The dispatched-verdict probe is
+                    // the one FAIL-OPEN input (error → null → 'no red',
+                    // shared with #633 — re-validation re-discovers red).
                     var machineUnparkVf = false;
                     var machineUnparkWhyVf = '';
                     if (isMachinePrU && uHead && actorVf !== null && parkedAtVf !== null) {
@@ -1445,14 +1467,21 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                             var parkedTsVf = Date.parse(parkedAtVf);
                             headMovedCleanVf = !isNaN(headTsVf) && !isNaN(parkedTsVf) &&
                                 headTsVf > parkedTsVf &&
-                                latestDispatchedVerdict(effectiveRepoInfo,
-                                    rule.ciWorkflow || ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
-                                    uHead) !== 'failure';
+                                probeHeadVerdictVf() !== 'failure';
                         }
                         machineUnparkVf = greenRollupVf || headMovedCleanVf;
+                        // Audit evidence rides the reason (pr-752 rework):
+                        // the sibling clear comments cite their inputs
+                        // (#633: both shas; human-push: actor + date) — the
+                        // moved-head branch cites head sha @ commit date >
+                        // park time so the clear is auditable from the PR
+                        // thread alone.
                         machineUnparkWhyVf = greenRollupVf
                             ? 'the current head checks are GREEN'
-                            : 'the head moved past the park carrying no red verdict of its own';
+                            : 'the head moved past the park carrying no red verdict of its ' +
+                              'own (head `' + uHead.slice(0, 8) + '` @ ' +
+                              (headActorVf && headActorVf.date ? headActorVf.date : 'unknown') +
+                              ' > park ' + parkedAtVf + ')';
                     }
                     if (actorVf === null || parkedAtVf === null) {
                         console.warn('  ⚠️  ' + key + ' ' + parkLabelVf +
