@@ -8,7 +8,9 @@
 
 var assert = globalThis.assert;
 
-var fsModule = loadModule('js/factoryState.js', makeRequire({}), {});
+var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+var fsModule = loadModule('js/factoryState.js',
+    makeRequire({ './common/machineAuthor.js': machineAuthorModule }), {});
 
 // ── laneOf ───────────────────────────────────────────────────────────────────
 
@@ -543,6 +545,21 @@ suite('factoryState — v3 backlog (issue lanes)', function () {
                     issue(23, ['agent:dev'])]);
     assert.deepEqual(st.backlog.in_dev.map(function (c) { return c.issue; }), [22]);
     assert.deepEqual(st.backlog.queued.map(function (c) { return c.issue; }), [23]);
+  });
+
+  test('machineAuthor LIST: assignment to ANY list entry buckets in_dev (gh-728)', function () {
+    var st = build([issue(30, [], { assignees: [{ login: 'github-actions[bot]' }] })],
+      { machineAuthor: 'ai-teammate,github-actions[bot]' });
+    assert.deepEqual(st.backlog.in_dev.map(function (c) { return c.issue; }), [30],
+      'a login listed in the knob marks the issue as machine-owned');
+    var st2 = build([issue(31, [], { assignees: [{ login: 'ai-teammate' }] })],
+      { machineAuthor: 'ai-teammate,github-actions[bot]' });
+    assert.deepEqual(st2.backlog.in_dev.map(function (c) { return c.issue; }), [31],
+      'the first entry still buckets');
+    var st3 = build([issue(32, [], { assignees: [{ login: 'some-human' }] })],
+      { machineAuthor: 'ai-teammate,github-actions[bot]' });
+    assert.deepEqual(st3.backlog.inbox.map(function (c) { return c.issue; }), [32],
+      'foreign assignees stay inbox');
   });
 
   test('unconfigured machineAuthor (null) → no assignment bucketing (no silent default)', function () {

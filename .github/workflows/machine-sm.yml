@@ -42,9 +42,12 @@ jobs:
     # matching loop change).
     uses: IstiN/dmtools-agentic-workflows/.github/workflows/factory-sm.yml@main
     with:
-      # No .dmtools/config.js in this repo — the machine login rides the
-      # deployment-level input (#687), exactly like the factory's contract.
-      machine-author: ai-teammate
+      # No .dmtools/config.js in this repo — the machine logins ride the
+      # deployment-level input (#687, gh-728), exactly like the factory's
+      # contract. Comma-separated LIST: the agent harness bot AND the CI
+      # bot — github-actions[bot] authors its own PRs (live fa PR #1249)
+      # and must ride the machine path (owner directive 2026-10-05).
+      machine-author: 'ai-teammate,github-actions[bot]'
       # This repo dispatches no CI on PR heads (docs checks only) — the SM
       # leaves validation to the event-driven merge bot and labels.
       ci-workflow: ''

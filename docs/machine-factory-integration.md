@@ -346,8 +346,16 @@ scripts (`preparePRForReview` / `postPRReviewComments`).
 **Machine author is a deployment knob, never a rule field:** the agents
 repo carries no bot login. Every machine-keyed guard (the `notMachine`
 filter in `review-external-once`, the `pr_approved` arming gate, the
-rework re-arm in PR-anchored reviews) resolves through one helper —
-`js/common/machineAuthor.js` → `resolveMachineAuthor(jobParams, config)`:
+rework re-arm in PR-anchored reviews, the sticky-park RESET) resolves
+through one helper — `js/common/machineAuthor.js` →
+`resolveMachineAuthor(jobParams, config)`. The knob is a **comma-separated
+LIST of logins** since gh-728 (owner directive 2026-10-05:
+`'ai-teammate,github-actions[bot]'` — the CI bot authors its own PRs,
+live fa PR #1249): `resolveMachineAuthor` returns the raw string,
+`machineAuthorLogins()` splits it (trim + drop empties), and the
+predicates (`isMachineAuthored` for PR authors — case-sensitive exact
+match per entry; `isMachineLogin` for commit actors — case-insensitive)
+match ANY entry. Resolution order:
 
 1. `jobParams.machineAuthor` — **the JSON parameter at factory setup**.
    The factory-sm reusable workflow takes a `machine-author` input; it

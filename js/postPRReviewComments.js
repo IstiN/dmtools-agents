@@ -1012,7 +1012,12 @@ function action(params) {
             if (!isApproved) {
                 // Machine-authored: re-arm the rework loop on the linked
                 // issue; external: the verdict comment is the whole report.
-                if (prAuthor === machineAuthor) {
+                // gh-728: the knob is a comma-separated LIST of machine
+                // logins — a direct single-login compare here stranded
+                // github-actions[bot] PRs as guests forever (live fa PR
+                // #1249).
+                if (machineAuthorModule.isMachineAuthored({ author: prAuthor }, machineAuthor,
+                        repoInfo && repoInfo.owner)) {
                     try {
                         var prRaw = github_get_pr({
                             workspace: repoInfo.owner, repository: repoInfo.repo, pullRequestId: prNumber

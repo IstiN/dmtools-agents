@@ -1348,10 +1348,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     var actorVf = uHead ? parkResetCommit(effectiveRepoInfo, uHead, prMachineAuthorU) : null;
                     var parkedAtVf = parkedSince(effectiveRepoInfo, ticket.prNumber);
                     var actorLoginVf = ((actorVf && actorVf.login) || '').toLowerCase();
-                    var machineLoginVf = String(prMachineAuthorU || '').toLowerCase();
                     var lastCommitter = actorVf ? String(actorVf.committer || '') : null;
+                    // gh-728: machine movement = a push by ANY machineAuthor
+                    // list entry (the knob is comma-separated now).
                     var machinePushVf = lastCommitter === 'sm-silent-update' ||
-                        (!!machineLoginVf && !!actorLoginVf && actorLoginVf === machineLoginVf);
+                        machineAuthorModule.isMachineLogin(actorLoginVf, prMachineAuthorU);
                     var freshPushVf = !!(actorVf && actorVf.date && parkedAtVf &&
                         Date.parse(actorVf.date) > Date.parse(parkedAtVf));
                     // Head-change without its own red verdict (dmtools-
@@ -1517,13 +1518,15 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // park event clears the label and lets this dispatch proceed
                 // — parkResetCommit (#681) walks back past machine merges of
                 // main, which bury the retrigger, never replace it.
-                var vprMachineLogin = String(machineAuthorModule.resolveMachineAuthor(
-                    RUN_JOB_PARAMS, effectiveConfig) || '').toLowerCase();
+                var vprMachineLogin = machineAuthorModule.resolveMachineAuthor(
+                    RUN_JOB_PARAMS, effectiveConfig);
                 var vprActor = parkResetCommit(effectiveRepoInfo, ticket.headSha, vprMachineLogin);
                 var vprParkedAt = parkedSince(effectiveRepoInfo, ticket.prNumber);
                 var vprActorLogin = ((vprActor && vprActor.login) || '').toLowerCase();
+                // gh-728: the knob is a login LIST — any entry's push is
+                // machine movement and never clears the park.
                 var vprMachinePush = String((vprActor && vprActor.committer) || '') === 'sm-silent-update' ||
-                    (!!vprMachineLogin && vprActorLogin === vprMachineLogin);
+                    machineAuthorModule.isMachineLogin(vprActorLogin, vprMachineLogin);
                 var vprFreshPush = !!(vprActor && vprActor.date && vprParkedAt &&
                     Date.parse(vprActor.date) > Date.parse(vprParkedAt));
                 if (vprActor !== null && vprParkedAt !== null && vprFreshPush && !vprMachinePush) {
@@ -2329,8 +2332,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     });
                 } catch (e3) { /* absent label is fine */ }
                 var machineAuthor = machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, effectiveConfig);
-                var isMachinePr = !!machineAuthor && !!ticket.author &&
-                    String(ticket.author).toLowerCase() === String(machineAuthor).toLowerCase();
+                // gh-728: the knob is a LIST — a direct single-login string
+                // compare here parked bot PRs (github-actions[bot] ≠
+                // 'ai-teammate') as guests forever (live fa PR #1249).
+                var isMachinePr = machineAuthorModule.isMachineAuthored(
+                    ticket, machineAuthor, effectiveRepoInfo.owner);
                 var linked = null;
                 if (isMachinePr) {
                     try {
@@ -3560,15 +3566,14 @@ function parkResetCommit(repoInfo, headSha, machineAuthor) {
     // (22:59/23:04/23:06…) until a human removed the label by hand. A bot
     // merge of main is never the retrigger — it BURIES one. Walk back
     // past MERGE commits authored by the machine (committer
-    // 'sm-silent-update' or login == machineAuthor — the same identities
-    // the v1/v2 probes keyed on) to the first commit that is not a
-    // machine-authored merge and report THAT commit's actor + committer +
-    // date. Non-merge machine pushes (the agent legs' WIP auto-saves, fa
-    // pr-1094) stop the walk — machine work keeps the park; a HUMAN merge
-    // of main is not skipped — a human merge is a human push. Returns
-    // headCommitActor's shape or null (fail closed: an unwalkable chain
-    // keeps the park).
-    var machineLogin = String(machineAuthor || '').toLowerCase();
+    // 'sm-silent-update' or login matching ANY machineAuthor list entry
+    // (gh-728 — the same identities the v1/v2 probes keyed on) to the
+    // first commit that is not a machine-authored merge and report THAT
+    // commit's actor + committer + date. Non-merge machine pushes (the
+    // agent legs' WIP auto-saves, fa pr-1094) stop the walk — machine
+    // work keeps the park; a HUMAN merge of main is not skipped — a human
+    // merge is a human push. Returns headCommitActor's shape or null
+    // (fail closed: an unwalkable chain keeps the park).
     var sha = headSha;
     for (var step = 0; sha && step < 10; step++) {
         var commit = headCommitActor(repoInfo, sha);
@@ -3576,7 +3581,7 @@ function parkResetCommit(repoInfo, headSha, machineAuthor) {
         var login = String(commit.login || '').toLowerCase();
         var machineMerge = Array.isArray(commit.parents) && commit.parents.length >= 2 &&
             (String(commit.committer || '') === 'sm-silent-update' ||
-             (!!machineLogin && !!login && login === machineLogin));
+             (!!login && machineAuthorModule.isMachineLogin(commit.login, machineAuthor)));
         if (!machineMerge) return commit;
         sha = commit.parents[0];
     }
