@@ -301,13 +301,16 @@ function performGitOperations(branchName, commitMessage, workingDir, testFilesPa
 }
 
 /** Create PR in the automation repo (or find existing). */
-function createAutomationPR(title, branchName, baseBranch, workingDir, scm) {
+function createAutomationPR(title, branchName, baseBranch, workingDir, scm, ticketKey) {
     var result = prHelper.createPullRequest({
         title: title,
         branchName: branchName,
         baseBranch: baseBranch,
         workingDir: workingDir,
         scm: scm,
+        // gh-737: merge bot links approved issues via 'Closes #N' — emit it
+        // by construction on every automation PR.
+        ticketKey: ticketKey,
         runCommand: runInRepo,
         readFile: function(path) { return readOutputFile(path, workingDir, null); },
         writeFile: file_write,
@@ -571,7 +574,7 @@ function action(params) {
 
             if (gitResult.success) {
                 var prTitle = sanitizeForShell(ticketKey + ' ' + ticketSummary);
-                var prResult = createAutomationPR(prTitle, branchName, config.git.baseBranch, workingDir, automationScm);
+                var prResult = createAutomationPR(prTitle, branchName, config.git.baseBranch, workingDir, automationScm, ticketKey);
                 automationPrUrl = prResult.prUrl;
             } else {
                 console.warn('Git operations failed:', gitResult.error);

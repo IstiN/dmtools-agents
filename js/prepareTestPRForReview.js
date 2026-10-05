@@ -218,6 +218,9 @@ function action(params) {
                     title: prTitle,
                     branchName: branchName,
                     baseBranch: config.git.baseBranch,
+                    // gh-737: merge bot links approved issues via 'Closes #N' —
+                    // emit it by construction on this auto-created review PR.
+                    ticketKey: ticketKey,
                     bodyContent: 'Auto-created PR for test automation review.\n\nTicket: ' + ticketKey
                 });
                 if (!prResult || !prResult.success) {
