@@ -609,4 +609,91 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
         assert.contains(attemptsCsv.split('\n')[0], 'source');
         assert.contains(attemptsCsv, 'reported');
     });
+
+    test('fa-tokens line with trailing content still parses via brace-balanced payload', function() {
+        var reporter = loadReporter();
+        var parsed = reporter.parseTokensLine('fa-tokens: {"sessionId":"s1","segment":1,"input":100,"output":10,"cacheRead":5,"requests":3,"source":"reported"} (replayed by runner)');
+
+        assert.notEqual(parsed, null);
+        assert.equal(parsed.readTokens, 100);
+        assert.equal(parsed.faSessionId, 's1');
+        assert.equal(parsed.faSegment, 1);
+    });
+
+    test('falls through to CommandLineUtils parsing when fa-tokens payload is malformed', function() {
+        var reporter = loadReporter();
+        var parsed = reporter.parseTokensLine('fa-tokens: {broken json [INFO] CommandLineUtils - Tokens    ↑ 1.2k • ↓ 300');
+
+        assert.notEqual(parsed, null);
+        assert.equal(parsed.readTokens, 1200);
+        assert.equal(parsed.writeTokens, 300);
+    });
+
+    test('fa payloads without segment are not deduped together', function() {
+        var reporter = loadReporter();
+        var parsed = reporter.parseTokensLine('fa-tokens: {"sessionId":"s1","input":100,"output":10,"cacheRead":5,"requests":3,"source":"reported"}');
+        assert.equal(parsed.faSegment, null);
+
+        var usage = reporter.extractTokenUsage([
+            'fa-tokens: {"sessionId":"s1","input":100,"output":10,"cacheRead":5,"requests":3,"source":"reported"}',
+            'fa-tokens: {"sessionId":"s1","input":200,"output":20,"cacheRead":6,"requests":4,"source":"reported"}'
+        ].join('\n'));
+
+        assert.equal(usage.samples, 2);
+        assert.equal(usage.readTokens, 300);
+        assert.equal(usage.requests, 7);
+        assert.equal(usage.source, 'reported');
+    });
+
+    test('renders unknown source values with a neutral badge instead of the reported styling', function() {
+        var reporter = loadReporter();
+        var rows = [
+            { createdAt: '2026-10-05T01:00:00Z', agent: 'story_development', ticketKey: 'TS-1', conclusion: 'success', samples: 1, resumeDetected: false, feedbackLoopCount: 0, rateLimitRetryCount: 0, timeoutCount: 0, durationSeconds: 60, duration: '1m 0s', readTokens: 100, writeTokens: 10, cachedTokens: 50, reasoningTokens: 0, source: 'typo-value', runNumber: 10, url: 'https://example.test/run/10' }
+        ];
+        var summary = reporter.buildSummary(rows.map(function(r) {
+            return {
+                createdAt: r.createdAt,
+                startedAt: r.createdAt,
+                updatedAt: r.createdAt,
+                day: r.createdAt.substring(0, 10),
+                agent: r.agent,
+                readTokens: r.readTokens,
+                writeTokens: r.writeTokens,
+                cachedTokens: r.cachedTokens,
+                reasoningTokens: r.reasoningTokens,
+                samples: r.samples,
+                resumeDetected: r.resumeDetected,
+                feedbackLoopCount: 0,
+                rateLimitRetryCount: 0,
+                rateLimitDetected: false,
+                timeoutCount: 0,
+                durationSeconds: r.durationSeconds
+            };
+        }), 1);
+        var html = reporter.buildHtml(rows, summary);
+
+        assert.contains(html, 'src-badge src-unknown');
+        assert.contains(html, '.src-unknown');
+        assert.notContains(html, 'src-badge src-rep');
+        assert.notContains(html, 'class="row-est"');
+    });
+
+    test('does not merge stale lastRequests metadata into fa-tokens lines', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            'Requests 99 (pro)',
+            'fa-tokens: {"sessionId":"s1","segment":1,"input":100,"output":10,"cacheRead":5,"requests":3,"source":"reported"}'
+        ].join('\n'));
+
+        assert.equal(usage.requests, 3);
+        assert.equal(usage.attempts[0].requestTier, '');
+
+        var usageNoRequests = reporter.extractTokenUsage([
+            'Requests 99 (pro)',
+            'fa-tokens: {"sessionId":"s2","segment":1,"input":100,"output":10,"cacheRead":5,"source":"reported"}'
+        ].join('\n'));
+
+        assert.equal(usageNoRequests.requests, 0);
+        assert.equal(usageNoRequests.attempts[0].requestTier, '');
+    });
 });
