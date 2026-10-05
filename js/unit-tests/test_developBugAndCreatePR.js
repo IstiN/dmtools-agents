@@ -331,4 +331,60 @@ suite('developBugAndCreatePR', function() {
             (loaded.comments[0] ? loaded.comments[0].comment : '(none)'));
     });
 
+    test('marked failures from the delegated developTicketAndCreatePR propagate (gh-729/ gh-683 dead-letter contract)', function () {
+        // developTicketAndCreatePR fails the RUN loudly on PR-creation and
+        // git-operations failures by THROWING marked errors (after resetting
+        // the ticket). If developBugAndCreatePR swallowed those into a
+        // returned { success: false }, the run would not go RED and the
+        // missing-PR leg would read as ordinary failure output.
+        var marked = new Error('Pull Request creation failure (Pull Request Creation): HTTP 502');
+        marked.prCreationFailure = true;
+        var commentMarkupMod = loadModule('js/common/commentMarkup.js');
+        var gitStagingMod = loadModule('js/common/gitStaging.js');
+        var mod = loadModule(
+            'js/developBugAndCreatePR.js',
+            makeRequire({
+                './config.js': configModule,
+                './common/gitStaging.js': gitStagingMod,
+                './configLoader.js': configLoaderModule,
+                './common/outputFiles.js': loadModule('js/common/outputFiles.js', makeRequire({}), {
+                    file_read: function (args) {
+                        if (args.path === 'outputs/response.md') return '### What changed\n- fix\n';
+                        throw new Error('missing ' + args.path);
+                    }
+                }),
+                './developTicketAndCreatePR.js': { action: function () { throw marked; } },
+                './common/commentMarkup.js': commentMarkupMod
+            }),
+            {
+                cli_execute_command: function (args) {
+                    if (args.command.indexOf('gh pr list --head ') === 0) return '';
+                    if (args.command.indexOf('git check-ignore') === 0) {
+                        throw new Error('Command execution failed (exit code 1)');
+                    }
+                    if (args.command === 'git status --porcelain') return '';
+                    if (args.command === 'git branch --show-current') return 'ai/TS-1306';
+                    return '';
+                },
+                jira_post_comment: function () { },
+                jira_move_to_status: function () { },
+                jira_remove_label: function () { }
+            }
+        );
+
+        var caught = null;
+        try {
+            mod.action({
+                ticket: { key: 'TS-1306', fields: { summary: 'PR API outage', description: '', labels: [] } },
+                metadata: { contextId: 'bug_development' },
+                jobParams: { customParams: {} }
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught, 'the marked prCreationFailure must propagate out of developBugAndCreatePR');
+        assert.equal(caught && caught.prCreationFailure, true, 'marker survives the passthrough');
+    });
+
 });

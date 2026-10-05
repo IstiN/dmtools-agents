@@ -205,6 +205,13 @@ function action(params) {
         // ── Path 3: Normal Fix — code changes present ────────────────────────
         console.log('No special outputs found — proceeding with normal PR creation');
 
+        // gh-729 (live fa gh-1197, run 37234028759): the job log went silent
+        // between the staging check-ignore probes and the delegated
+        // developTicketAndCreatePR call — 23s with no git add, no error, and
+        // the leg still reported success with no PR. Every step below logs,
+        // so a future stall in this window is diagnosable from the job log.
+        console.log('Staging + status check: inspecting the working tree for agent changes...');
+
         // Before delegating, check if the CLI agent was interrupted (no response.md, no code changes).
         // If there ARE git changes (e.g. outputs/rca.md written) but no response.md, the agent
         // was interrupted mid-way. Push partial work and reset ticket for retry.
@@ -261,6 +268,10 @@ function action(params) {
             const r = outputFiles.readOutputFile('response.md', { ticketKey: ticketKeyForCheck });
             hasResponseMd = !!(r && r.trim());
         } catch (e) {}
+
+        console.log('Working tree check: git changes present = ' + hasGitChanges +
+            '; outputs/response.md = ' + (hasResponseMd ? 'present' : 'MISSING') +
+            (hasGitChanges || hasResponseMd ? '' : ' — neither work nor a response; the agent produced nothing'));
 
         if (!hasResponseMd) {
             // CLI agent did not finish (rate limit / crash). Push whatever partial work exists
@@ -333,6 +344,13 @@ function action(params) {
 
     } catch (error) {
         console.error('❌ Error in developBugAndCreatePR:', error);
+        // Marked failures from the delegated developTicketAndCreatePR (fatal
+        // CLI environment, git-operations gh-683, PR-creation gh-729) must
+        // keep propagating so the RUN is RED — swallowing them here would
+        // turn a deliberate loud failure back into a returned result.
+        if (error && (error.fatalCliEnvironment || error.gitOperationsFailure || error.prCreationFailure)) {
+            throw error;
+        }
         try {
             const key = (params.ticket || (params.jobParams && params.jobParams.ticket) || {}).key;
             if (key) {
