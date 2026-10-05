@@ -22,6 +22,17 @@ NODE_VERSION="${1:-${NODE_VERSION:-20}}"
 OS="$(detect_os)"
 NVM_DIR="${NVM_DIR:-${HOME}/.nvm}"
 
+# nvm exits with code 11 while an npm "prefix" is configured. Drop it around nvm
+# calls and restore it afterwards so later global installs keep their target.
+SAVED_NPM_PREFIX=""
+if is_installed npm; then
+  SAVED_NPM_PREFIX="$(npm config get prefix --location=user 2>/dev/null || true)"
+  [ "${SAVED_NPM_PREFIX}" = "undefined" ] && SAVED_NPM_PREFIX=""
+fi
+_drop_npm_prefix() { if [ -n "${SAVED_NPM_PREFIX}" ]; then npm config delete prefix 2>/dev/null || true; fi; }
+_restore_npm_prefix() { if [ -n "${SAVED_NPM_PREFIX}" ]; then npm config set prefix "${SAVED_NPM_PREFIX}" 2>/dev/null || true; fi; }
+unset NPM_CONFIG_PREFIX npm_config_prefix
+
 echo "🟩 Node.js ${NODE_VERSION} [OS=${OS} CI=$(detect_ci)]"
 
 # ── Helper: check if current node matches requested major version ─────────────
@@ -48,6 +59,7 @@ fi
 # ── Priority 2: nvm already has the version ───────────────────────────────────
 if [ -s "${NVM_DIR}/nvm.sh" ]; then
   export NVM_DIR
+  _drop_npm_prefix
   # shellcheck source=/dev/null
   source "${NVM_DIR}/nvm.sh" --no-use 2>/dev/null || source "${NVM_DIR}/nvm.sh"
   if nvm ls "${NODE_VERSION}" &>/dev/null 2>&1; then
@@ -56,6 +68,7 @@ if [ -s "${NVM_DIR}/nvm.sh" ]; then
     nvm alias default "${NODE_VERSION}"
     register_path "$(dirname "$(nvm which "${NODE_VERSION}")")"
     export_var "NODE_VERSION" "${NODE_VERSION}"
+    _restore_npm_prefix
     echo "✅ $(node --version) · npm $(npm --version)"
     exit 0
   fi
@@ -70,6 +83,7 @@ if [ ! -s "${NVM_DIR}/nvm.sh" ]; then
 fi
 
 export NVM_DIR
+_drop_npm_prefix
 # shellcheck source=/dev/null
 source "${NVM_DIR}/nvm.sh"
 
@@ -79,6 +93,7 @@ nvm alias default "${NODE_VERSION}"
 
 register_path "$(dirname "$(nvm which "${NODE_VERSION}")")"
 export_var "NODE_VERSION" "${NODE_VERSION}"
+_restore_npm_prefix
 
 echo "✅ $(node --version) · npm $(npm --version)"
 
