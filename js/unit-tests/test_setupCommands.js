@@ -108,6 +108,30 @@ suite('setupCommands helper', function() {
         assert.deepEqual(calls, ['check-required-creds'], 'must stop after the required command fails');
     });
 
+    test('console output of a failing setup command is bounded (dm.ai#635 log-processor stall)', function() {
+        // A multi-megabyte failure printed as ONE console line stalls the GitHub Actions
+        // log processor (~400 s per 500 KB line), turning a 13 s suite into a 13 min step.
+        var warned = [];
+        var realWarn = console.warn;
+        console.warn = function() { warned.push(Array.prototype.slice.call(arguments).join(' ')); };
+        try {
+            var loaded = loadSetupCommands({
+                cli_execute_command: function() { throw new Error('Z'.repeat(500000)); }
+            });
+            var result = loaded.mod.runSetupCommands({
+                setupCommands: [{ name: 'huge', command: 'mvn clean verify' }]
+            }, './dependencies/repo');
+            assert.equal(result.results[0].success, false);
+            assert.equal(result.results[0].error.length, 500000, 'the full text stays in the result for callers');
+        } finally {
+            console.warn = realWarn;
+        }
+        assert.ok(warned.length >= 1, 'the failure must still be logged');
+        warned.forEach(function(line) {
+            assert.ok(line.length < 10000, 'logged line must be bounded, got ' + line.length + ' chars');
+        });
+    });
+
     test('skips entries without a command', function() {
         var loaded = loadSetupCommands();
         var result = loaded.mod.runSetupCommands({
