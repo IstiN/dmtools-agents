@@ -45,8 +45,66 @@ function parseRequestsLine(line) {
     };
 }
 
+// Extracts the JSON payload of an fa-tokens ledger line by balanced-brace
+// scanning, so a payload wrapped in a larger log line (or followed by trailing
+// text) is found reliably. Returns null when no complete {...} object follows
+// the 'fa-tokens:' marker.
+function extractFaPayload(text) {
+    var marker = String(text || '').indexOf('fa-tokens:');
+    if (marker === -1) return null;
+    var start = text.indexOf('{', marker);
+    if (start === -1) return null;
+    var depth = 0;
+    var inString = false;
+    var escaped = false;
+    for (var i = start; i < text.length; i++) {
+        var ch = text.charAt(i);
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (ch === '\\') escaped = true;
+            else if (ch === '"') inString = false;
+            continue;
+        }
+        if (ch === '"') inString = true;
+        else if (ch === '{') depth++;
+        else if (ch === '}') {
+            depth--;
+            if (depth === 0) return text.substring(start, i + 1);
+        }
+    }
+    return null;
+}
+
 function parseTokensLine(line) {
     var text = String(line || '');
+
+    // fa ledger log line (resume-aware): fa-tokens: {"sessionId":...,"segment":N,
+    // "input":...,"output":...,"cacheRead":...,"requests":...,"source":"reported"|"estimated"}
+    var faPayload = extractFaPayload(text);
+    if (faPayload != null) {
+        var payload = parseJson(faPayload, null);
+        // Only consume the line as an fa ledger entry when the payload is a
+        // valid object carrying token counts; otherwise fall through to the
+        // CommandLineUtils parsing below so the line is not silently dropped.
+        if (payload && typeof payload === 'object' &&
+            (payload.input != null || payload.output != null || payload.cacheRead != null)) {
+            var faSegment = parseInt(payload.segment, 10);
+            return {
+                readTokens: parseInt(payload.input, 10) || 0,
+                writeTokens: parseInt(payload.output, 10) || 0,
+                cachedTokens: parseInt(payload.cacheRead, 10) || 0,
+                reasoningTokens: 0,
+                requests: parseInt(payload.requests, 10) || 0,
+                requestTier: '',
+                requestDuration: '',
+                source: String(payload.source || ''),
+                faSessionId: String(payload.sessionId || ''),
+                faSegment: isNaN(faSegment) ? null : faSegment,
+                rawTokensLine: text.trim()
+            };
+        }
+    }
+
     if (text.indexOf('Tokens') === -1) return null;
 
     var readMatch = text.match(/(?:↑|\^|read(?:\s+tokens?)?)\s*([0-9][0-9.,]*\s*[kmb]?)/i);
@@ -68,6 +126,7 @@ function extractTokenUsage(logs) {
     var lines = String(logs || '').split(/\r?\n/);
     var lastRequests = null;
     var samples = [];
+    var seenFaSegments = {};
     var resumeDetected = false;
     var resumeStages = [];
     var feedbackLoopCount = 0;
@@ -111,13 +170,30 @@ function extractTokenUsage(logs) {
 
         var tokens = parseTokensLine(lines[i]);
         if (tokens) {
-            samples.push(Object.assign({ attemptIndex: samples.length + 1 }, lastRequests || {}, tokens));
+            // The fa ledger is resume-aware: the same sessionId emits one line per
+            // segment, so dedupe by (sessionId, segment) to avoid double-counting
+            // resumed segments if a line is replayed in the logs. Lines without a
+            // segment field keep faSegment null and are never deduped.
+            if (tokens.faSessionId && tokens.faSegment != null) {
+                var segmentKey = tokens.faSessionId + ':' + tokens.faSegment;
+                if (seenFaSegments[segmentKey]) continue;
+                seenFaSegments[segmentKey] = true;
+            }
+            var base = { attemptIndex: samples.length + 1 };
+            if (tokens.requests == null && lastRequests) base = Object.assign(base, lastRequests);
+            samples.push(Object.assign(base, tokens));
         }
     }
 
     if (!samples.length) return null;
     var finalSample = samples[samples.length - 1];
+    var faSources = {};
+    samples.forEach(function(sample) {
+        if (sample.source) faSources[sample.source] = true;
+    });
+    var faSourceKeys = Object.keys(faSources).sort();
     var aggregate = {
+        source: faSourceKeys.length === 0 ? '' : (faSourceKeys.length === 1 ? faSourceKeys[0] : 'mixed'),
         requests: 0,
         requestTier: finalSample.requestTier || '',
         requestDuration: finalSample.requestDuration || '',
@@ -222,7 +298,7 @@ function buildCsv(rows) {
         'readTokens', 'writeTokens', 'cachedTokens', 'reasoningTokens',
         'samples', 'resumeDetected', 'resumeStages',
         'feedbackLoopCount', 'rateLimitRetryCount', 'rateLimitDetected', 'timeoutCount',
-        'url'
+        'source', 'url'
     ];
     var out = [headers.join(',')];
     rows.forEach(function(row) {
@@ -238,7 +314,7 @@ function buildAttemptsCsv(attemptRows) {
         'feedbackLoopCount', 'rateLimitRetryCount', 'rateLimitDetected', 'timeoutCount',
         'requests', 'requestTier', 'requestDuration',
         'readTokens', 'writeTokens', 'cachedTokens', 'reasoningTokens',
-        'rawTokensLine', 'url'
+        'rawTokensLine', 'source', 'url'
     ];
     var out = [headers.join(',')];
     attemptRows.forEach(function(row) {
@@ -421,6 +497,7 @@ function buildHtml(rows, summary) {
         '.grid{display:grid;grid-template-columns:1.4fr 1fr;gap:16px}.panel{padding:16px}.panel h2{font-size:16px;margin:0 0 12px}.chart{width:100%;height:340px;display:block}.pie{height:300px}' +
         'table{width:100%;border-collapse:collapse}th,td{padding:8px 10px;border-bottom:1px solid var(--grid);text-align:left;white-space:nowrap}th{font-size:12px;color:var(--muted);font-weight:600}th.sortable{cursor:pointer;user-select:none}th.sortable:after{content:"";display:inline-block;margin-left:5px;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid #9aa4b2;vertical-align:middle}th.sortable.desc:after{border-top:0;border-bottom:5px solid #9aa4b2}td.num{text-align:right;font-variant-numeric:tabular-nums}.scroll{overflow:auto;max-height:520px}' +
         '.legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;color:var(--muted);font-size:12px}.dot{width:10px;height:10px;border-radius:2px;display:inline-block;margin-right:5px}.tooltip{position:fixed;z-index:10;display:none;max-width:260px;padding:8px 10px;border:1px solid #cfd6df;border-radius:6px;background:#111827;color:#fff;font-size:12px;line-height:1.4;box-shadow:0 8px 20px rgba(0,0,0,.18);pointer-events:none;white-space:pre-line}' +
+        '.src-badge{display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;line-height:1.5;border:1px solid transparent}.src-rep{background:#ecfdf5;color:#047857;border-color:#a7f3d0}.src-est{background:#fffbeb;color:#b45309;border-style:dashed;border-color:#f59e0b}.src-unknown{background:#f1f5f9;color:#475569;border-style:dotted;border-color:#cbd5e1}.row-est td{background:#fffbeb}' +
         '@media(max-width:900px){.kpis,.grid{grid-template-columns:1fr}.wrap,header{padding-left:16px;padding-right:16px}}\n' +
         '</style>\n</head>\n<body>\n<header><h1>AI Teammate Token Usage</h1><p>Generated ' + htmlEscape(summary.generatedAt) + ' from completed workflow logs.</p></header>\n' +
         '<main class="wrap">\n<section class="kpis">' +
@@ -452,9 +529,15 @@ function buildHtml(rows, summary) {
             return '<tr><td' + sortAttr(a.key) + '>' + htmlEscape(a.key) + '</td><td class="num"' + sortAttr(a.runs) + '>' + a.runs + '</td><td class="num"' + sortAttr(a.samples) + '>' + a.samples + '</td><td class="num"' + sortAttr(a.resumedRuns) + '>' + a.resumedRuns + '</td><td class="num"' + sortAttr(a.feedbackLoopCount) + '>' + a.feedbackLoopCount + '</td><td class="num"' + sortAttr(a.rateLimitRetryCount) + '>' + a.rateLimitRetryCount + '</td><td class="num"' + sortAttr(a.timeoutCount) + '>' + a.timeoutCount + '</td><td class="num"' + sortAttr(a.durationSeconds) + '>' + htmlEscape(a.totalDuration || '0s') + '</td><td class="num"' + sortAttr(a.avgDurationSeconds) + '>' + htmlEscape(a.avgDuration || '0s') + '</td><td class="num"' + sortAttr(a.readTokens) + '>' + formatShort(a.readTokens) + '</td><td class="num"' + sortAttr(a.avgReadTokens) + '>' + formatShort(a.avgReadTokens) + '</td><td class="num"' + sortAttr(a.writeTokens) + '>' + formatShort(a.writeTokens) + '</td><td class="num"' + sortAttr(a.avgWriteTokens) + '>' + formatShort(a.avgWriteTokens) + '</td><td class="num"' + sortAttr(a.cachedTokens) + '>' + formatShort(a.cachedTokens) + '</td><td class="num"' + sortAttr(a.reasoningTokens) + '>' + formatShort(a.reasoningTokens) + '</td></tr>';
         }).join('') +
         '</tbody></table></div></section>\n' +
-        '<section class="panel"><h2>Recent Runs</h2><div class="scroll"><table id="runsTable"><thead><tr><th class="sortable" data-type="text">Created</th><th class="sortable" data-type="text">Agent</th><th class="sortable" data-type="text">Key</th><th class="sortable" data-type="text">Conclusion</th><th class="sortable" data-type="number">Duration</th><th class="sortable" data-type="number">Attempts</th><th class="sortable" data-type="text">Resume</th><th class="sortable" data-type="number">Loops</th><th class="sortable" data-type="number">Limit Retries</th><th class="sortable" data-type="number">Timeouts</th><th class="sortable" data-type="number">Read</th><th class="sortable" data-type="number">Write</th><th class="sortable" data-type="number">Cached</th><th class="sortable" data-type="number">Reasoning</th><th class="sortable" data-type="number">Run</th></tr></thead><tbody>' +
+        '<section class="panel"><h2>Recent Runs</h2><div class="scroll"><table id="runsTable"><thead><tr><th class="sortable" data-type="text">Created</th><th class="sortable" data-type="text">Agent</th><th class="sortable" data-type="text">Key</th><th class="sortable" data-type="text">Conclusion</th><th class="sortable" data-type="number">Duration</th><th class="sortable" data-type="number">Attempts</th><th class="sortable" data-type="text">Resume</th><th class="sortable" data-type="number">Loops</th><th class="sortable" data-type="number">Limit Retries</th><th class="sortable" data-type="number">Timeouts</th><th class="sortable" data-type="number">Read</th><th class="sortable" data-type="number">Write</th><th class="sortable" data-type="number">Cached</th><th class="sortable" data-type="number">Reasoning</th><th class="sortable" data-type="text">Source</th><th class="sortable" data-type="number">Run</th></tr></thead><tbody>' +
         recentRows.map(function(r) {
-            return '<tr><td' + sortAttr(r.createdAt) + '>' + htmlEscape(r.createdAt) + '</td><td' + sortAttr(r.agent) + '>' + htmlEscape(r.agent) + '</td><td' + sortAttr(r.ticketKey) + '>' + htmlEscape(r.ticketKey) + '</td><td' + sortAttr(r.conclusion) + '>' + htmlEscape(r.conclusion) + '</td><td class="num"' + sortAttr(r.durationSeconds) + '>' + htmlEscape(r.duration || '0s') + '</td><td class="num"' + sortAttr(r.samples) + '>' + htmlEscape(r.samples || 1) + '</td><td' + sortAttr(r.resumeDetected ? 'yes' : 'no') + '>' + (r.resumeDetected ? 'yes' : 'no') + '</td><td class="num"' + sortAttr(r.feedbackLoopCount) + '>' + (r.feedbackLoopCount || 0) + '</td><td class="num"' + sortAttr(r.rateLimitRetryCount) + '>' + (r.rateLimitRetryCount || 0) + '</td><td class="num"' + sortAttr(r.timeoutCount) + '>' + (r.timeoutCount || 0) + '</td><td class="num"' + sortAttr(r.readTokens) + '>' + formatShort(r.readTokens) + '</td><td class="num"' + sortAttr(r.writeTokens) + '>' + formatShort(r.writeTokens) + '</td><td class="num"' + sortAttr(r.cachedTokens) + '>' + formatShort(r.cachedTokens) + '</td><td class="num"' + sortAttr(r.reasoningTokens) + '>' + formatShort(r.reasoningTokens) + '</td><td' + sortAttr(r.runNumber) + '><a href="' + htmlEscape(r.url) + '">#' + htmlEscape(r.runNumber) + '</a></td></tr>';
+            var rowClass = r.source === 'estimated' ? '<tr class="row-est">' : '<tr>';
+            var sourceBadge = '';
+            if (r.source) {
+                var srcClass = r.source === 'estimated' ? 'src-est' : (r.source === 'reported' ? 'src-rep' : 'src-unknown');
+                sourceBadge = '<span class="src-badge ' + srcClass + '">' + htmlEscape(r.source) + '</span>';
+            }
+            return rowClass + '<td' + sortAttr(r.createdAt) + '>' + htmlEscape(r.createdAt) + '</td><td' + sortAttr(r.agent) + '>' + htmlEscape(r.agent) + '</td><td' + sortAttr(r.ticketKey) + '>' + htmlEscape(r.ticketKey) + '</td><td' + sortAttr(r.conclusion) + '>' + htmlEscape(r.conclusion) + '</td><td class="num"' + sortAttr(r.durationSeconds) + '>' + htmlEscape(r.duration || '0s') + '</td><td class="num"' + sortAttr(r.samples) + '>' + htmlEscape(r.samples || 1) + '</td><td' + sortAttr(r.resumeDetected ? 'yes' : 'no') + '>' + (r.resumeDetected ? 'yes' : 'no') + '</td><td class="num"' + sortAttr(r.feedbackLoopCount) + '>' + (r.feedbackLoopCount || 0) + '</td><td class="num"' + sortAttr(r.rateLimitRetryCount) + '>' + (r.rateLimitRetryCount || 0) + '</td><td class="num"' + sortAttr(r.timeoutCount) + '>' + (r.timeoutCount || 0) + '</td><td class="num"' + sortAttr(r.readTokens) + '>' + formatShort(r.readTokens) + '</td><td class="num"' + sortAttr(r.writeTokens) + '>' + formatShort(r.writeTokens) + '</td><td class="num"' + sortAttr(r.cachedTokens) + '>' + formatShort(r.cachedTokens) + '</td><td class="num"' + sortAttr(r.reasoningTokens) + '>' + formatShort(r.reasoningTokens) + '</td><td' + sortAttr(r.source || '') + '>' + sourceBadge + '</td><td' + sortAttr(r.runNumber) + '><a href="' + htmlEscape(r.url) + '">#' + htmlEscape(r.runNumber) + '</a></td></tr>';
         }).join('') +
         '</tbody></table></div></section>\n</main><div id="chartTooltip" class="tooltip"></div>\n<script>const DATA=JSON.parse("' + payload + '");\n' +
         'function short(v){v=v||0;if(v>=1e9)return(v/1e9).toFixed(1).replace(/\\.0$/,"")+"b";if(v>=1e6)return(v/1e6).toFixed(1).replace(/\\.0$/,"")+"m";if(v>=1e3)return(v/1e3).toFixed(1).replace(/\\.0$/,"")+"k";return String(v)}' +
@@ -831,6 +914,7 @@ function action(params) {
                 rateLimitRetryCount: usage.rateLimitRetryCount || 0,
                 rateLimitDetected: usage.rateLimitDetected === true,
                 timeoutCount: usage.timeoutCount || 0,
+                source: usage.source || '',
                 url: run.html_url || run.htmlUrl || ''
             };
             var runAttemptRows = [];
@@ -860,6 +944,7 @@ function action(params) {
                     cachedTokens: attempt.cachedTokens || 0,
                     reasoningTokens: attempt.reasoningTokens || 0,
                     rawTokensLine: attempt.rawTokensLine || '',
+                    source: attempt.source || '',
                     url: run.html_url || run.htmlUrl || ''
                 };
                 attemptRows.push(attemptRow);

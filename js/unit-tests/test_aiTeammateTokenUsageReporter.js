@@ -476,4 +476,224 @@ suite('aiTeammateTokenUsageReporter parsing', function() {
         assert.equal(result.summary.runsWithTokens, 1);
         assert.contains(writes['outputs/token_usage/ai_teammate_token_usage.html'], 'Daily Token Trend');
     });
+
+    test('parses fa-tokens JSON usage line (IT-7 fixture)', function() {
+        var reporter = loadReporter();
+        var parsed = reporter.parseTokensLine('fa-tokens: {"sessionId":"gh-1164","segment":2,"input":722300,"output":17600,"cacheRead":421100,"requests":58,"source":"reported"}');
+
+        assert.notEqual(parsed, null);
+        assert.equal(parsed.readTokens, 722300);
+        assert.equal(parsed.writeTokens, 17600);
+        assert.equal(parsed.cachedTokens, 421100);
+        assert.equal(parsed.requests, 58);
+        assert.equal(parsed.source, 'reported');
+        assert.equal(parsed.faSessionId, 'gh-1164');
+        assert.equal(parsed.faSegment, 2);
+    });
+
+    test('aggregates fa segments per sessionId without double-counting resumed segments', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            'fa-tokens: {"sessionId":"gh-1164","segment":1,"input":100,"output":10,"cacheRead":50,"requests":5,"source":"reported"}',
+            'fa-tokens: {"sessionId":"gh-1164","segment":2,"input":200,"output":20,"cacheRead":60,"requests":6,"source":"reported"}',
+            'fa-tokens: {"sessionId":"gh-1164","segment":2,"input":200,"output":20,"cacheRead":60,"requests":6,"source":"reported"}',
+            'fa-tokens: {"sessionId":"gh-1165","segment":1,"input":300,"output":30,"cacheRead":70,"requests":7,"source":"estimated"}'
+        ].join('\n'));
+
+        assert.equal(usage.readTokens, 600);
+        assert.equal(usage.writeTokens, 60);
+        assert.equal(usage.cachedTokens, 180);
+        assert.equal(usage.requests, 18);
+        assert.equal(usage.samples, 3);
+        assert.equal(usage.source, 'mixed');
+        assert.equal(usage.attempts[0].source, 'reported');
+        assert.equal(usage.attempts[2].source, 'estimated');
+    });
+
+    test('marks estimated token rows visually distinct from reported in dashboard HTML', function() {
+        var reporter = loadReporter();
+        var rows = [
+            { createdAt: '2026-10-05T01:00:00Z', agent: 'story_development', ticketKey: 'TS-1', conclusion: 'success', samples: 1, resumeDetected: false, feedbackLoopCount: 0, rateLimitRetryCount: 0, timeoutCount: 0, durationSeconds: 60, duration: '1m 0s', readTokens: 100, writeTokens: 10, cachedTokens: 50, reasoningTokens: 0, source: 'reported', runNumber: 10, url: 'https://example.test/run/10' },
+            { createdAt: '2026-10-05T02:00:00Z', agent: 'story_development', ticketKey: 'TS-2', conclusion: 'success', samples: 2, resumeDetected: true, feedbackLoopCount: 0, rateLimitRetryCount: 0, timeoutCount: 0, durationSeconds: 120, duration: '2m 0s', readTokens: 200, writeTokens: 20, cachedTokens: 80, reasoningTokens: 0, source: 'estimated', runNumber: 11, url: 'https://example.test/run/11' }
+        ];
+        var summary = reporter.buildSummary(rows.map(function(r) {
+            return {
+                createdAt: r.createdAt,
+                startedAt: r.createdAt,
+                updatedAt: r.createdAt,
+                day: r.createdAt.substring(0, 10),
+                agent: r.agent,
+                readTokens: r.readTokens,
+                writeTokens: r.writeTokens,
+                cachedTokens: r.cachedTokens,
+                reasoningTokens: r.reasoningTokens,
+                samples: r.samples,
+                resumeDetected: r.resumeDetected,
+                feedbackLoopCount: 0,
+                rateLimitRetryCount: 0,
+                rateLimitDetected: false,
+                timeoutCount: 0,
+                durationSeconds: r.durationSeconds
+            };
+        }), 2);
+        var html = reporter.buildHtml(rows, summary);
+
+        assert.contains(html, '>Source</th>');
+        assert.contains(html, 'src-badge src-rep');
+        assert.contains(html, 'src-badge src-est');
+        assert.contains(html, 'class="row-est"');
+        assert.contains(html, '.row-est');
+    });
+
+    test('includes source column in aggregate and attempt CSVs', function() {
+        var reporter = loadReporter();
+        var aggregateCsv = reporter.buildCsv([{
+            runId: '1',
+            runNumber: 10,
+            createdAt: '2026-10-05T01:00:00Z',
+            day: '2026-10-05',
+            conclusion: 'success',
+            agent: 'story_development',
+            ticketKey: 'TS-1',
+            configFile: 'agents/story_development.json',
+            title: 'agents/story_development.json : TS-1 : TS-1',
+            durationSeconds: 60,
+            duration: '1m 0s',
+            requests: 58,
+            requestTier: '',
+            requestDuration: '',
+            readTokens: 722300,
+            writeTokens: 17600,
+            cachedTokens: 421100,
+            reasoningTokens: 0,
+            samples: 2,
+            resumeDetected: true,
+            resumeStages: '',
+            feedbackLoopCount: 0,
+            rateLimitRetryCount: 0,
+            rateLimitDetected: false,
+            timeoutCount: 0,
+            source: 'reported',
+            url: 'https://example.test/run/10'
+        }]);
+        var attemptsCsv = reporter.buildAttemptsCsv([{
+            runId: '1',
+            runNumber: 10,
+            createdAt: '2026-10-05T01:00:00Z',
+            day: '2026-10-05',
+            conclusion: 'success',
+            durationSeconds: 60,
+            duration: '1m 0s',
+            agent: 'story_development',
+            ticketKey: 'TS-1',
+            attemptIndex: 2,
+            resumeDetected: true,
+            feedbackLoopCount: 0,
+            rateLimitRetryCount: 0,
+            rateLimitDetected: false,
+            timeoutCount: 0,
+            requests: 58,
+            requestTier: '',
+            requestDuration: '',
+            readTokens: 722300,
+            writeTokens: 17600,
+            cachedTokens: 421100,
+            reasoningTokens: 0,
+            rawTokensLine: 'fa-tokens: {...}',
+            source: 'reported',
+            url: 'https://example.test/run/10'
+        }]);
+
+        assert.contains(aggregateCsv.split('\n')[0], 'source');
+        assert.contains(aggregateCsv, 'reported');
+        assert.contains(attemptsCsv.split('\n')[0], 'source');
+        assert.contains(attemptsCsv, 'reported');
+    });
+
+    test('fa-tokens line with trailing content still parses via brace-balanced payload', function() {
+        var reporter = loadReporter();
+        var parsed = reporter.parseTokensLine('fa-tokens: {"sessionId":"s1","segment":1,"input":100,"output":10,"cacheRead":5,"requests":3,"source":"reported"} (replayed by runner)');
+
+        assert.notEqual(parsed, null);
+        assert.equal(parsed.readTokens, 100);
+        assert.equal(parsed.faSessionId, 's1');
+        assert.equal(parsed.faSegment, 1);
+    });
+
+    test('falls through to CommandLineUtils parsing when fa-tokens payload is malformed', function() {
+        var reporter = loadReporter();
+        var parsed = reporter.parseTokensLine('fa-tokens: {broken json [INFO] CommandLineUtils - Tokens    ↑ 1.2k • ↓ 300');
+
+        assert.notEqual(parsed, null);
+        assert.equal(parsed.readTokens, 1200);
+        assert.equal(parsed.writeTokens, 300);
+    });
+
+    test('fa payloads without segment are not deduped together', function() {
+        var reporter = loadReporter();
+        var parsed = reporter.parseTokensLine('fa-tokens: {"sessionId":"s1","input":100,"output":10,"cacheRead":5,"requests":3,"source":"reported"}');
+        assert.equal(parsed.faSegment, null);
+
+        var usage = reporter.extractTokenUsage([
+            'fa-tokens: {"sessionId":"s1","input":100,"output":10,"cacheRead":5,"requests":3,"source":"reported"}',
+            'fa-tokens: {"sessionId":"s1","input":200,"output":20,"cacheRead":6,"requests":4,"source":"reported"}'
+        ].join('\n'));
+
+        assert.equal(usage.samples, 2);
+        assert.equal(usage.readTokens, 300);
+        assert.equal(usage.requests, 7);
+        assert.equal(usage.source, 'reported');
+    });
+
+    test('renders unknown source values with a neutral badge instead of the reported styling', function() {
+        var reporter = loadReporter();
+        var rows = [
+            { createdAt: '2026-10-05T01:00:00Z', agent: 'story_development', ticketKey: 'TS-1', conclusion: 'success', samples: 1, resumeDetected: false, feedbackLoopCount: 0, rateLimitRetryCount: 0, timeoutCount: 0, durationSeconds: 60, duration: '1m 0s', readTokens: 100, writeTokens: 10, cachedTokens: 50, reasoningTokens: 0, source: 'typo-value', runNumber: 10, url: 'https://example.test/run/10' }
+        ];
+        var summary = reporter.buildSummary(rows.map(function(r) {
+            return {
+                createdAt: r.createdAt,
+                startedAt: r.createdAt,
+                updatedAt: r.createdAt,
+                day: r.createdAt.substring(0, 10),
+                agent: r.agent,
+                readTokens: r.readTokens,
+                writeTokens: r.writeTokens,
+                cachedTokens: r.cachedTokens,
+                reasoningTokens: r.reasoningTokens,
+                samples: r.samples,
+                resumeDetected: r.resumeDetected,
+                feedbackLoopCount: 0,
+                rateLimitRetryCount: 0,
+                rateLimitDetected: false,
+                timeoutCount: 0,
+                durationSeconds: r.durationSeconds
+            };
+        }), 1);
+        var html = reporter.buildHtml(rows, summary);
+
+        assert.contains(html, 'src-badge src-unknown');
+        assert.contains(html, '.src-unknown');
+        assert.notContains(html, 'src-badge src-rep');
+        assert.notContains(html, 'class="row-est"');
+    });
+
+    test('does not merge stale lastRequests metadata into fa-tokens lines', function() {
+        var reporter = loadReporter();
+        var usage = reporter.extractTokenUsage([
+            'Requests 99 (pro)',
+            'fa-tokens: {"sessionId":"s1","segment":1,"input":100,"output":10,"cacheRead":5,"requests":3,"source":"reported"}'
+        ].join('\n'));
+
+        assert.equal(usage.requests, 3);
+        assert.equal(usage.attempts[0].requestTier, '');
+
+        var usageNoRequests = reporter.extractTokenUsage([
+            'Requests 99 (pro)',
+            'fa-tokens: {"sessionId":"s2","segment":1,"input":100,"output":10,"cacheRead":5,"source":"reported"}'
+        ].join('\n'));
+
+        assert.equal(usageNoRequests.requests, 0);
+        assert.equal(usageNoRequests.attempts[0].requestTier, '');
+    });
 });
