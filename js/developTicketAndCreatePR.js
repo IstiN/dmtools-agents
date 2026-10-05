@@ -592,6 +592,27 @@ function throwPrCreationFailure(stage, errorMessage) {
     throw err;
 }
 
+/**
+ * Throws a marked Error so an interrupted-agent "reset for retry" propagates
+ * out of action() and the workflow run is RED — same mechanism and rationale
+ * as throwGitOperationsFailure (gh-683) and throwPrCreationFailure (gh-729).
+ *
+ * gh-742 (live dmtools-dart gh-350, run 37316571468, 2026-10-05): the CLI
+ * agent was interrupted mid-way — "outputs/response.md missing after commit —
+ * CLI agent was interrupted mid-way. Resetting for retry." — and the leg then
+ * returned { success: true }. The green no-PR leg read as "dev done": the
+ * wrapper armed agent:review on an issue with no PR and no closing
+ * explanation, and no retry ever fired. The interrupted comment + Ready For
+ * Development reset have ALREADY happened before this throws, so the failure
+ * stays retryable; only the run's conclusion changes (green → red), which
+ * keeps the wrapper from reaching its review-arming step.
+ */
+function throwInterruptedReset(ticketKey) {
+    var err = new Error('CLI agent interrupted mid-run — ' + ticketKey + ' was reset for retry; failing the run so a no-PR leg is not read as success (gh-742)');
+    err.interruptedReset = true;
+    throw err;
+}
+
 function labelsToRemove(customParams, metadata) {
     var labels = [];
     if (customParams && customParams.removeLabel) labels.push(customParams.removeLabel);
@@ -1021,7 +1042,10 @@ function action(params) {
                 if (wipLabelIfNoChanges) {
                     try { jira_remove_label({ key: ticketKey, label: wipLabelIfNoChanges }); } catch (e) { }
                 }
-                return { success: true, path: 'interrupted', ticketKey: ticketKey };
+                // gh-742: ticket is reset for retry — fail the RUN so the leg
+                // is a visible dead letter (not a green no-PR leg the wrapper
+                // reads as "dev done" and arms review on).
+                throwInterruptedReset(ticketKey);
             } else {
                 if (resumeDevelopmentAgent(params, ticketKey, _customParams, 'development_git_operations', initialGitResult.error)) {
                     return action(params);
@@ -1134,7 +1158,10 @@ function action(params) {
             if (wipLabel2) {
                 try { jira_remove_label({ key: ticketKey, label: wipLabel2 }); } catch (e) { }
             }
-            return { success: true, path: 'interrupted', ticketKey: ticketKey };
+            // gh-742: ticket is reset for retry — fail the RUN so this
+            // interrupted half-exit is a visible dead letter, not a green
+            // no-PR leg that arms review downstream.
+            throwInterruptedReset(ticketKey);
         }
         console.log('Using outputs/response.md as PR body (' + responseContent.length + ' characters)');
 
@@ -1285,6 +1312,14 @@ function action(params) {
             // gh-729: same dead-letter visibility as the Git-Operations
             // failure above — a missing PR must fail the run, not read as
             // plain success.
+            throw error;
+        }
+
+        if (error && error.interruptedReset) {
+            // gh-742: the interrupted comment + Ready For Development reset
+            // already happened inline before the throw — rethrow so the run
+            // is RED instead of a green no-PR leg the wrapper reads as
+            // "dev done" (and arms review on).
             throw error;
         }
 

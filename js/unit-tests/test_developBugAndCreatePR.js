@@ -68,19 +68,28 @@ suite('developBugAndCreatePR', function() {
     test('pushes interrupted partial work to development branch instead of main', function() {
         var loaded = loadDevelopBugAndCreatePR();
 
-        var result = loaded.mod.action({
-            ticket: {
-                key: 'TS-1296',
-                fields: { summary: 'Bug loop', description: '', labels: [] }
-            },
-            metadata: { contextId: 'bug_development' },
-            jobParams: {
-                customParams: { removeLabel: 'sm_bug_development_triggered' }
-            }
-        });
+        // gh-742: the interrupted-reset path must fail the run (throw) so a
+        // no-PR leg never reads as plain success — while still pushing the
+        // partial work and resetting the ticket for retry.
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: {
+                    key: 'TS-1296',
+                    fields: { summary: 'Bug loop', description: '', labels: [] }
+                },
+                metadata: { contextId: 'bug_development' },
+                jobParams: {
+                    customParams: { removeLabel: 'sm_bug_development_triggered' }
+                }
+            });
+        } catch (e) {
+            caught = e;
+        }
 
-        assert.equal(result.success, true);
-        assert.equal(result.path, 'interrupted');
+        assert.ok(caught, 'an interrupted leg must fail the run (throw), not return plain success');
+        assert.ok(caught && caught.interruptedReset === true,
+            'thrown error carries the interruptedReset marker');
         assert.ok(
             loaded.commands.indexOf('git checkout -B ai/TS-1296') !== -1,
             'expected partial work to switch away from main'
@@ -106,19 +115,25 @@ suite('developBugAndCreatePR', function() {
     test('does not clean CodeGraph runtime artifacts from JS post-action', function() {
         var loaded = loadDevelopBugAndCreatePR();
 
-        var result = loaded.mod.action({
-            ticket: {
-                key: 'TS-1298',
-                fields: { summary: 'Interrupted by rate limit', description: '', labels: [] }
-            },
-            metadata: { contextId: 'bug_development' },
-            jobParams: {
-                customParams: { removeLabel: 'sm_bug_development_triggered' }
-            }
-        });
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: {
+                    key: 'TS-1298',
+                    fields: { summary: 'Interrupted by rate limit', description: '', labels: [] }
+                },
+                metadata: { contextId: 'bug_development' },
+                jobParams: {
+                    customParams: { removeLabel: 'sm_bug_development_triggered' }
+                }
+            });
+        } catch (e) {
+            caught = e;
+        }
 
-        assert.equal(result.success, true);
-        assert.equal(result.path, 'interrupted');
+        assert.ok(caught, 'an interrupted leg must fail the run (throw), not return plain success');
+        assert.ok(caught && caught.interruptedReset === true,
+            'thrown error carries the interruptedReset marker');
         assert.notOk(
             loaded.commands.some(function(c) {
                 return c.indexOf('.agent-bin') !== -1 || c.indexOf('.codegraph') !== -1;
@@ -248,16 +263,25 @@ suite('developBugAndCreatePR', function() {
         // status-check staging pathspec must exclude them like
         // copilot-sessions.
         var loaded = loadDevelopBugAndCreatePR();
-        loaded.mod.action({
-            ticket: {
-                key: 'TS-1299',
-                fields: { summary: 'staging hygiene', description: '', labels: [] }
-            },
-            metadata: { contextId: 'bug_development' },
-            jobParams: {
-                customParams: { removeLabel: 'sm_bug_development_triggered' }
-            }
-        });
+        // gh-742: the interrupted path now throws after the staging check —
+        // capture the throw so the staging assertions below still run.
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: {
+                    key: 'TS-1299',
+                    fields: { summary: 'staging hygiene', description: '', labels: [] }
+                },
+                metadata: { contextId: 'bug_development' },
+                jobParams: {
+                    customParams: { removeLabel: 'sm_bug_development_triggered' }
+                }
+            });
+        } catch (e) {
+            caught = e;
+        }
+        assert.ok(caught && caught.interruptedReset === true,
+            'the interrupted path must fail the run (throw) after the staging check');
         var addCall = loaded.commands.filter(function(c) {
             return c.indexOf('git add . --') === 0;
         })[0];
@@ -308,18 +332,25 @@ suite('developBugAndCreatePR', function() {
             }
         });
 
-        var result = loaded.mod.action({
-            ticket: {
-                key: 'TS-1305',
-                fields: { summary: 'runtime-only status noise', description: '', labels: [] }
-            },
-            metadata: { contextId: 'bug_development' },
-            jobParams: {
-                customParams: { removeLabel: 'sm_bug_development_triggered' }
-            }
-        });
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: {
+                    key: 'TS-1305',
+                    fields: { summary: 'runtime-only status noise', description: '', labels: [] }
+                },
+                metadata: { contextId: 'bug_development' },
+                jobParams: {
+                    customParams: { removeLabel: 'sm_bug_development_triggered' }
+                }
+            });
+        } catch (e) {
+            caught = e;
+        }
 
-        assert.equal(result.path, 'interrupted');
+        assert.ok(caught, 'an interrupted leg must fail the run (throw), not return plain success');
+        assert.ok(caught && caught.interruptedReset === true,
+            'thrown error carries the interruptedReset marker');
         assert.notOk(cmds.some(function(c) { return c.indexOf('git checkout -B') === 0; }),
             'recovery push must not run — untracked runtime logs are not work');
         assert.notOk(cmds.some(function(c) { return c.indexOf('git commit') === 0; }),
