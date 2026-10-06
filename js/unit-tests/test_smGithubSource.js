@@ -1436,3 +1436,131 @@ suite('sm github source — runAsync batching', function () {
     });
 
 });
+
+suite('sm github source: validate-fresh-masked-green (gh-759 dead zone)', function () {
+
+    // Same harness as the main suite above — local copy (load is scoped
+    // to that suite's closure).
+    var providerStub = {
+        findPr: function (n) { return providerStub._prs[n] || null; },
+        prStatus: function (n) { return providerStub._status[n] || null; },
+        lastReview: function () { return null; },
+        reviewThreads: function () { return { total: 0, unresolved: 0 }; },
+        _prs: {}, _status: {}, _reviews: {}, _threads: {}
+    };
+
+    function load(tools, prs, statuses) {
+        providerStub._prs = prs || {};
+        providerStub._status = statuses || {};
+        var smAsyncMod = loadModule('js/common/smAsync.js', makeRequire({
+            './common/smProvider.js': { createSmProvider: function () { return providerStub; } }
+        }), tools || {});
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': { createSmProvider: function () { return providerStub; } },
+            '../../common/smAsync.js': smAsyncMod
+        }), tools || {});
+    }
+
+
+    // gh-759 live fa wave (PRs #1305/#1306/#1309/#1311/#1312): dev leg
+    // done, PR zero-label, rollup GREEN from the repo's kicker/CodeQL
+    // checks while the dispatch-only validation CI has no run on the
+    // head, mergeState BLOCKED. validate-fresh (checks [none, pending])
+    // cannot see these; the masked-green rule is the only matcher.
+
+    var RULE = {
+        source: 'github',
+        query: {
+            type: 'pr',
+            checks: 'green',
+            notLabels: ['ai_validating', 'pr_approved', 'ai_validated', 'chore:pin', 'validation_failed'],
+            notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'],
+            draft: false
+        },
+        localAction: 'validate_pr',
+        limit: 1,
+        id: 'validate-fresh-masked-green'
+    };
+
+    function pr(n, labels, mergeState, author) {
+        return {
+            number: n, labels: (labels || []).map(function (l) { return { name: l }; }),
+            draft: false, user: { login: author || 'ai-teammate' },
+            head: { ref: 'ai/gh-' + (n - 1) }, body: 'Closes #' + (n - 1)
+        };
+    }
+
+    test('matches exactly the un-armed, un-approved, BLOCKED masked-green PRs (multi-item wave)', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    pr(1305),                                        // the dead zone
+                    pr(1306, ['ai_validating']),                     // armed — sweep/fail own it
+                    pr(1307, ['ai_validated']),                      // latched — review-after-dev owns it
+                    pr(1308, ['pr_approved']),                       // merge window
+                    pr(1309, ['validation_failed']),                 // parked
+                    pr(1310, ['chore:pin']),                         // factory pin
+                    pr(1311, [], 'CLEAN'),                           // green+CLEAN — merge-validated shape
+                    pr(1312, [], 'BEHIND'),                          // silent-update refreshes first
+                    pr(1313, [], 'DIRTY'),                           // conflict-rework owns it
+                    pr(1314, [], 'BLOCKED', 'vendor-guest'),         // guest — validation is author-agnostic
+                    { number: 1315, labels: [], draft: true,         // draft
+                      user: { login: 'ai-teammate' }, head: { ref: 'wip' }, body: '' },
+                    { number: 1316, labels: [], draft: false,        // checks 'none' — validate-fresh's shape
+                      user: { login: 'ai-teammate' }, head: { ref: 'ai/gh-1315' }, body: 'Closes #1315' }
+                ];
+            }
+        }, {}, {
+            1305: { number: 1305, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', mergeable: false },
+            1306: { number: 1306, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', mergeable: false },
+            1307: { number: 1307, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', mergeable: false },
+            1308: { number: 1308, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', mergeable: false },
+            1309: { number: 1309, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', mergeable: false },
+            1310: { number: 1310, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', mergeable: false },
+            1311: { number: 1311, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true },
+            1312: { number: 1312, state: 'OPEN', checks: 'green', mergeState: 'BEHIND', mergeable: null },
+            1313: { number: 1313, state: 'OPEN', checks: 'green', mergeState: 'DIRTY', mergeable: null },
+            1314: { number: 1314, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', mergeable: false },
+            1316: { number: 1316, state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: false }
+        });
+
+        var items = srcMod.query(RULE, { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
+
+        assert.deepEqual(items.map(function (i) { return i.key; }), ['pr-1305'],
+            'limit 1 paces the wave — the OLDEST masked-green head first (validate-fresh pacing)');
+
+        var wave = srcMod.query(Object.assign({}, RULE, { limit: 10 }),
+            { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
+        assert.deepEqual(wave.map(function (i) { return i.key; }), ['pr-1305', 'pr-1314'],
+            'only the zero-label BLOCKED masked-green heads match — machine AND guest (validation is author-agnostic)');
+    });
+
+    test('validate-fresh finds nothing on the same wave — the gap this rule closes', function () {
+        // Same live state, the deployed validate-fresh query: checks
+        // [none, pending] never sees a kicker-masked green rollup.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [pr(1305), pr(1314, [], 'BLOCKED', 'vendor-guest')];
+            }
+        }, {}, {
+            1305: { number: 1305, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', mergeable: false },
+            1314: { number: 1314, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', mergeable: false }
+        });
+        var fresh = srcMod.query({
+            source: 'github',
+            query: {
+                type: 'pr',
+                checks: ['none', 'pending'],
+                notLabels: ['ai_validating', 'pr_approved', 'chore:pin', 'ai_validated'],
+                notMergeState: 'BEHIND',
+                draft: false
+            },
+            limit: 1,
+            id: 'validate-fresh'
+        }, { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
+        assert.equal(fresh.length, 0,
+            'validate-fresh is blind to the masked-green head — this IS the gh-759 dead zone');
+    });
+
+});

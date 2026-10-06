@@ -6726,3 +6726,188 @@ suite('smAgent: validate_pr dispatch-race guard (gh-748)', function () {
     });
 
 });
+
+suite('smAgent: validate-fresh-masked-green (gh-759 post-dev dead zone)', function () {
+
+    // Live fa 2026-10-06, PRs #1305/#1306/#1309/#1311/#1312: the dev leg
+    // completes (issue ai_developed + status:In Review) and the fresh PR
+    // head immediately carries GREEN check runs from the repo's kicker /
+    // CodeQL / analyze workflows — while the DISPATCH-ONLY validation CI
+    // (ci.yml, no push trigger) has never been ordered. The check rollup
+    // reads 'green', so validate-fresh (checks [none, pending]) never
+    // matches; every verdict/re-dispatch rule needs ai_validating or
+    // pr_approved — the PR has zero labels. Nothing arms the validation
+    // and the PR dead-locks BLOCKED until a human hand-arms it.
+    //
+    // Fix: the un-armed twin of revalidate-armed-green (the gh-922
+    // dead-zone rule). Green rollup + BLOCKED + no ai_validating /
+    // pr_approved / ai_validated → validate_pr, which probes the head for
+    // a dispatched CI run: none → dispatch + arm; a completed green run →
+    // skipIfGreenCi stops the loop (the blocker is another workflow's
+    // required check).
+
+    var MASKED_GREEN_RULE = {
+        source: 'github',
+        query: {
+            type: 'pr',
+            checks: 'green',
+            notLabels: ['ai_validating', 'pr_approved', 'ai_validated', 'chore:pin', 'validation_failed'],
+            notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'],
+            draft: false
+        },
+        localAction: 'validate_pr',
+        skipIfGreenCi: true,
+        limit: 1,
+        id: 'validate-fresh-masked-green'
+    };
+
+    test('config: rule deployed right after validate-fresh with the masked-green shape', function () {
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+        var rule = byId['validate-fresh-masked-green'];
+        assert.ok(rule, 'validate-fresh-masked-green exists in sm_github.json');
+        assert.equal(rules.indexOf(rule), rules.indexOf(byId['validate-fresh']) + 1,
+            'sits immediately after validate-fresh (its fallback for the shape validate-fresh cannot see)');
+        assert.equal(rule.source, 'github');
+        assert.equal(rule.localAction, 'validate_pr', 'arms + dispatches via validate_pr');
+        assert.equal(rule.skipIfGreenCi, true,
+            'a completed green CI run on the head must stop the re-dispatch loop');
+        assert.equal(rule.limit, 1, 'validate-fresh pacing — one masked head per tick');
+        assert.equal(rule.query.checks, 'green', 'the masked-green rollup is the trigger');
+        assert.deepEqual(rule.query.notMergeState, ['BEHIND', 'DIRTY', 'CLEAN'],
+            'BLOCKED-only: BEHIND refreshes first, DIRTY is conflict-rework, CLEAN+green is merge-validated');
+        ['ai_validating', 'pr_approved', 'ai_validated', 'chore:pin', 'validation_failed'].forEach(function (l) {
+            assert.ok((rule.query.notLabels || []).indexOf(l) !== -1, 'excludes ' + l);
+        });
+        assert.equal(rule.query.draft, false);
+    });
+
+    test('engine: arms ai_validating + dispatches CI for the un-armed masked-green head', function () {
+        var CUR = '0e33b153c02e861469ea4107cb7ad237cc14bfd6';
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [{
+                    key: 'pr-1305', labels: [], issueNumber: 1303, prNumber: 1305,
+                    draft: false, branch: 'ai/gh-1303', headSha: CUR
+                }]
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=') !== -1) return { workflow_runs: [] };
+                return undefined;
+            }
+        });
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [MASKED_GREEN_RULE] } });
+
+        var dispatch = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; });
+        assert.equal(dispatch.length, 1,
+            'the never-ordered validation CI is dispatched on the head');
+        assert.equal(dispatch[0].command,
+            'gh workflow run ci.yml --repo IstiN/flutter_agent_harness --ref ai/gh-1303');
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'the arm lands');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 1305);
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['ai_validating']);
+    });
+
+    test('engine: skipIfGreenCi — a completed green CI run on the head stops the arm', function () {
+        // The masked-green head whose validation CI ALREADY concluded green
+        // (BLOCKED persists because another required context is red): the
+        // blocker is not this CI — re-running it every tick would loop.
+        var CUR = 'aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111';
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [{
+                    key: 'pr-1305', labels: [], issueNumber: 1303, prNumber: 1305,
+                    draft: false, branch: 'ai/gh-1303', headSha: CUR
+                }]
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    return { workflow_runs: [
+                        { id: 555, event: 'workflow_dispatch', head_branch: 'ai/gh-1303',
+                          head_sha: CUR, status: 'completed', conclusion: 'success',
+                          created_at: '2026-09-20T00:00:00Z' }
+                    ] };
+                }
+                return undefined;
+            }
+        });
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [MASKED_GREEN_RULE] } });
+
+        var dispatch = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; });
+        assert.equal(dispatch.length, 0, 'green cover already on the head — no re-dispatch');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no arm churn');
+    });
+
+    test('engine: cancelled CI on the masked head is no cover — CI is dispatched', function () {
+        // The concurrency-cancelled dispatch is a non-verdict (gh-922
+        // parity): the validation has still never concluded — order it.
+        var CUR = 'bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222';
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js':
+                'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [{
+                    key: 'pr-1311', labels: [], issueNumber: 1308, prNumber: 1311,
+                    draft: false, branch: 'ai/gh-1308', headSha: CUR
+                }]
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    return { workflow_runs: [
+                        { id: 556, event: 'workflow_dispatch', head_branch: 'ai/gh-1308',
+                          head_sha: CUR, status: 'completed', conclusion: 'cancelled',
+                          created_at: '2026-09-20T00:00:00Z' }
+                    ] };
+                }
+                return undefined;
+            }
+        });
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [MASKED_GREEN_RULE] } });
+
+        var dispatch = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; });
+        assert.equal(dispatch.length, 1, 'cancelled is not a verdict — CI dispatched');
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'arm applied');
+    });
+
+    test('config disjointness: validate-fresh and validate-fresh-masked-green never share a candidate', function () {
+        // none/pending heads belong to validate-fresh; masked-green heads
+        // to this rule. A same-tick double arm on one PR must be impossible.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+        var fresh = byId['validate-fresh'].query;
+        var masked = byId['validate-fresh-masked-green'].query;
+
+        function matches(q, labels, checks) {
+            if ((q.labels || []).some(function (l) { return labels.indexOf(l) === -1; })) return false;
+            if ((q.notLabels || []).some(function (l) { return labels.indexOf(l) !== -1; })) return false;
+            if (q.checks) {
+                var want = Array.isArray(q.checks) ? q.checks : [q.checks];
+                if (want.indexOf(checks) === -1) return false;
+            }
+            return true;
+        }
+        ['none', 'pending', 'green', 'red'].forEach(function (rollup) {
+            var a = matches(fresh, [], rollup);
+            var b = matches(masked, [], rollup);
+            assert.ok(!(a && b), 'rollup ' + rollup + ': both rules match — double arm');
+        });
+    });
+
+});

@@ -241,6 +241,31 @@
           "id": "validate-fresh"
         },
         {
+          "description": "Post-dev dead-zone fix (gh-759, live fa 2026-10-06: PRs #1305/#1306/#1309/#1311/#1312 — five fresh machine PRs BLOCKED with ZERO labels for hours, each unblocked by hand-arming ai_validating + dispatching CI; agents #756 / fa #1295 / fa #1304 are the same class patched by hand the same day). The dev leg completes (issue ai_developed + status:In Review) and the fresh head IMMEDIATELY carries GREEN check runs from the deployment's ambient workflows (fa: kicker sm-liveness/head-completeness, CodeQL, the analyze suite) — while the DISPATCH-ONLY validation CI (jobParams.ciWorkflow, no push trigger) has never been ordered. The rollup reads 'green', so validate-fresh (checks [none, pending]) never matches; every verdict/re-dispatch rule needs ai_validating or pr_approved, and the PR carries zero labels — nothing ever arms validation and the PR dead-locks BLOCKED. This rule is the UN-ARMED twin of revalidate-armed-green (gh-922): rollup green + BLOCKED + none of ai_validating/pr_approved/ai_validated/chore:pin/validation_failed → validate_pr probes the head for a dispatched CI run — none (or cancelled-only) → dispatch + arm ai_validating; a completed GREEN run → skipIfGreenCi skips (the blocker is another workflow's required check — re-running loops forever). Disjoint from validate-fresh by construction (none/pending vs green) and from every verdict rule by labels; notMergeState excludes BEHIND (silent-update refreshes first), DIRTY (conflict-rework) and CLEAN (merge-validated). Deliberately author-agnostic (gh-757 review): a guest PR's kicker-masked head is equally stranded, and validating external PRs is the sanctioned prerequisite for the external review flow — only the auto-REWORK arm is machine-gated, never the validation dispatch. Runs immediately AFTER validate-fresh, same dev-lane pacing (limit 1, no mutex — the merge window's mutexAmong [pr_approved] is untouched). Green verdicts flow through validated-green exactly as validate-fresh's do; red verdicts converge through sweep-stale-validating (which probes the dispatched run, not the masked rollup) into the standard fail path.",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "checks": "green",
+            "notLabels": [
+              "ai_validating",
+              "pr_approved",
+              "ai_validated",
+              "chore:pin",
+              "validation_failed"
+            ],
+            "notMergeState": [
+              "BEHIND",
+              "DIRTY",
+              "CLEAN"
+            ],
+            "draft": false
+          },
+          "localAction": "validate_pr",
+          "skipIfGreenCi": true,
+          "limit": 1,
+          "id": "validate-fresh-masked-green"
+        },
+        {
           "description": "GitHub PR: validation green but not yet approved -> latch ai_validated, unarm ai_validating. review-after-dev requires the latch + green checks, so review fires exactly once per validated head. Approved PRs are excluded (merge-validated / unarm-stale own them). Limit 10 (owner 2026-09-22): latch/unlatch verdicts in waves — pure label writes, nothing serial.",
           "source": "github",
           "query": {
