@@ -246,7 +246,6 @@ suite('preCliReworkSetup.buildReworkStartedComment — per-tracker markup (gh-77
         assert.equal(out.indexOf('{panel'), -1, 'no wiki panel');
         assert.equal(out.indexOf('{code'), -1, 'no wiki code tag');
         assert.equal(out.indexOf('[PR #1308|'), -1, 'no wiki link');
-        assert.equal(out.indexOf('*Pull Request*'), -1, 'no wiki bold');
     });
 
     test('clean run: no conflict/CI panels are emitted', function() {

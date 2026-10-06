@@ -624,11 +624,11 @@ suite('trackers.js github provider — gh-N router keys (gh-770)', function () {
     test('getTicket / addLabel / moveToStatus parse gh-N keys too', function () {
         var ghGet = recorder('github_get_issue', { number: 9, title: 'T', state: 'open' });
         var ghAdd = recorder('github_add_labels', '{}');
-        var ghClose = recorder('github_close_issue', '{}');
+        var ghMove = recorder('github_move_issue_to_status', '{}');
         var trackers = loadTrackers({
             github_get_issue: ghGet,
             github_add_labels: ghAdd,
-            github_close_issue: ghClose
+            github_move_issue_to_status: ghMove
         });
         var t = trackers.createTracker(GH_CONFIG);
         t.getTicket('gh-9');
@@ -636,7 +636,8 @@ suite('trackers.js github provider — gh-N router keys (gh-770)', function () {
         t.moveToStatus('gh-9', 'done');
         assert.equal(ghGet.calls[0].issueNumber, 9);
         assert.equal(ghAdd.calls[0].number, 9);
-        assert.deepEqual(ghClose.calls[0], { owner: 'acme', repo: 'widgets', number: 9 });
+        assert.equal(ghMove.calls[0].number, 9);
+        assert.equal(ghMove.calls[0].key, 'gh-9');
     });
 
     test('composite owner/repo#N and bare-number keys keep working alongside gh-N', function () {

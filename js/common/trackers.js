@@ -169,7 +169,13 @@ function createTracker(config, customParams) {
 
     function githubIssueNumber(key) {
         var k = expandKey(key);
-        var m = /^[\w.-]+\/[\w.-]+#(\d+)$/.exec(k) || /^(\d+)$/.exec(k);
+        // gh-N (gh-1308) is the GitHub router key convention — same shape
+        // list as commentMarkup's GITHUB_KEY_SHAPES. Without it every
+        // comment/label/status op on a gh-N ticket would throw and the
+        // machine-loop scripts would silently lose their tracker updates.
+        var m = /^[\w.-]+\/[\w.-]+#(\d+)$/.exec(k) ||
+            /^gh-(\d+)$/i.exec(k) ||
+            /^(\d+)$/.exec(k);
         if (!m) {
             throw new Error('trackers: cannot parse GitHub issue key: ' + key);
         }

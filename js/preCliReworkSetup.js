@@ -7,11 +7,13 @@
  * 4. Runs project-specific setup commands (build/verify) against the now-updated branch
  * 5. Writes input folder: pr_info.md, pr_diff.txt, pr_discussions.md, pr_discussions_raw.json
  * 6. Fetches question subtasks with answers (extra context)
- * 7. Posts "Rework Started" comment to the ticket (Jira/ADO/GitHub via common/trackers.js)
+ * 7. Posts "Rework Started" comment to the ticket (Jira/ADO/GitHub via common/trackers.js),
+ *    rendered in the ticket's markup flavor (Markdown on GitHub, wiki on Jira — gh-770)
  */
 
 var configLoader = require('./configLoader.js');
 var trackersModule = require('./common/trackers.js');
+var commentMarkup = require('./common/commentMarkup.js');
 const gh = require('./common/githubHelpers.js');
 const gitOps = require('./common/gitOps.js');
 const { resolveStatuses } = require('./config.js');
@@ -68,7 +70,47 @@ function syncBaseBranchIfConfigured(baseBranch, customParams, config) {
 // swallowed, leaving the ticket with no visible failure reason at all.
 var truncateForComment = setupCommands.truncateSetupError;
 
-function failSetup(tracker, ticketKey, inputFolder, message) {
+/**
+ * Build the "Automated Rework Started" comment in the flavor of the ticket's
+ * tracker (gh-770). The template historically hard-coded Jira wiki markup
+ * (h3., {panel:bgColor=...}, {code}), which renders as raw text garbage on
+ * GitHub issues; the flavor comes from common/commentMarkup.js so the same
+ * script renders Markdown on GitHub and wiki on Jira.
+ *
+ * @param {Object} flavor - a commentMarkup flavor bag (forTicket/forFlavor)
+ * @param {Object} ctx    - { prNumber, prUrl, branchName, conflictFiles, failedChecks }
+ * @returns {string} the rendered comment
+ */
+function buildReworkStartedComment(flavor, ctx) {
+    var m = flavor;
+    var comment = m.h(3, '🔧 Automated Rework Started') + '\n\n' +
+        m.bold('Pull Request') + ': ' + m.link('PR #' + ctx.prNumber, ctx.prUrl) + '\n' +
+        m.bold('Branch') + ': ' + m.code(ctx.branchName) + '\n\n';
+
+    var conflicts = ctx.conflictFiles || [];
+    if (conflicts.length > 0) {
+        comment += m.panel(null,
+            '⚠️ ' + m.bold('Merge conflicts detected') + ' — ' + conflicts.length +
+                ' file(s) must be resolved before rework can be applied:\n' +
+            conflicts.map(function (f) { return '* ' + m.code(f); }).join('\n'),
+            'bgColor=#FFEBE6|borderColor=#DE350B') + '\n\n';
+    }
+
+    var checks = ctx.failedChecks || [];
+    if (checks.length > 0) {
+        comment += m.panel(null,
+            '⚠️ ' + m.bold('CI checks failing') + ' — ' + checks.length + ' check(s) must pass before merge:\n' +
+            checks.map(function (c) { return '* ' + m.code(c.name); }).join('\n') +
+            '\nError logs: ' + m.code('ci_failures.md') + ' (summary) and ' + m.code('ci_failures_full.log') + ' (full logs).',
+            'bgColor=#FFEBE6|borderColor=#DE350B') + '\n\n';
+    }
+
+    comment += 'AI Teammate is fixing issues raised in the code review.\n\n' +
+        m.italic('Fix results will be posted shortly...');
+    return comment;
+}
+
+function failSetup(tracker, ticketKey, inputFolder, message, customParams) {
     try {
         file_write({
             path: inputFolder + '/rework_setup_failed.md',
@@ -78,9 +120,10 @@ function failSetup(tracker, ticketKey, inputFolder, message) {
         console.warn('Failed to write rework setup failure marker:', e);
     }
     try {
+        var m = commentMarkup.forTicket(ticketKey, customParams);
         tracker.postComment(
             ticketKey,
-            'h3. ❌ Rework Setup Failed\n\n' + truncateForComment(message)
+            m.h(3, '❌ Rework Setup Failed') + '\n' + truncateForComment(message)
         );
     } catch (e) {
         // PR-anchored reworks (#544): a 'pr-N' key parses to no tracker
@@ -147,7 +190,10 @@ function action(params) {
         }
         if (!repoInfo) {
             const err = 'Could not determine GitHub repository from git remote';
-            try { tracker.postComment(ticketKey, 'h3. ❌ Rework Setup Failed\n\n' + err); } catch (e) {}
+            try {
+                var mRepoFail = commentMarkup.forTicket(ticketKey, customParams);
+                tracker.postComment(ticketKey, mRepoFail.h(3, '❌ Rework Setup Failed') + '\n' + err);
+            } catch (e) {}
             return { success: false, error: err };
         }
 
@@ -165,25 +211,26 @@ function action(params) {
                 tracker,
                 ticketKey,
                 inputFolder,
-                'No Pull Request found for ticket ' + ticketKey + '. Cannot start rework without an existing PR.'
+                'No Pull Request found for ticket ' + ticketKey + '. Cannot start rework without an existing PR.',
+                customParams
             );
         }
 
         // Step 3: PR details
         const prDetails = gh.getPRDetails(scm, pr.number);
         if (!prDetails) {
-            failSetup(tracker, ticketKey, inputFolder, 'Failed to fetch PR details for PR #' + pr.number);
+            failSetup(tracker, ticketKey, inputFolder, 'Failed to fetch PR details for PR #' + pr.number, customParams);
         }
 
         // Step 4: Checkout PR branch
         const branchName = prDetails.head ? prDetails.head.ref : null;
         if (!branchName) {
-            failSetup(tracker, ticketKey, inputFolder, 'Could not determine branch from PR details');
+            failSetup(tracker, ticketKey, inputFolder, 'Could not determine branch from PR details', customParams);
         }
         try {
             gitOps.checkoutPRBranch(branchName, config.workingDir, config.git.baseBranch);
         } catch (e) {
-            failSetup(tracker, ticketKey, inputFolder, 'Failed to checkout branch: ' + e.toString());
+            failSetup(tracker, ticketKey, inputFolder, 'Failed to checkout branch: ' + e.toString(), customParams);
         }
 
         const baseBranch = prDetails.base ? prDetails.base.ref : config.git.baseBranch;
@@ -229,7 +276,7 @@ function action(params) {
                 }
             }
         } catch (e) {
-            failSetup(tracker, ticketKey, inputFolder, 'Environment setup failed: ' + (e && e.toString ? e.toString() : String(e)));
+            failSetup(tracker, ticketKey, inputFolder, 'Environment setup failed: ' + (e && e.toString ? e.toString() : String(e)), customParams);
         }
 
         // Step 4.7: Detect failed CI checks — writes ci_failures.md if any failed
@@ -258,29 +305,18 @@ function action(params) {
         if (prAnchor) {
             console.log('PR-anchored rework: skipping tracker comment (no ticket, #544)');
         } else try {
-            var jiraComment = 'h3. 🔧 Automated Rework Started\n\n' +
-                '*Pull Request*: [PR #' + prDetails.number + '|' + prDetails.html_url + ']\n' +
-                '*Branch*: {code}' + branchName + '{code}\n\n';
-
-            if (conflictFiles.length > 0) {
-                jiraComment += '{panel:bgColor=#FFEBE6|borderColor=#DE350B}' +
-                    '⚠️ *Merge conflicts detected* — ' + conflictFiles.length + ' file(s) must be resolved before rework can be applied:\n' +
-                    conflictFiles.map(function(f) { return '* {code}' + f + '{code}'; }).join('\n') +
-                    '{panel}\n\n';
-            }
-
-            if (failedChecks.length > 0) {
-                jiraComment += '{panel:bgColor=#FFEBE6|borderColor=#DE350B}' +
-                    '⚠️ *CI checks failing* — ' + failedChecks.length + ' check(s) must pass before merge:\n' +
-                    failedChecks.map(function(c) { return '* {code}' + c.name + '{code}'; }).join('\n') +
-                    '\nError logs: {code}ci_failures.md{code} (summary) and {code}ci_failures_full.log{code} (full logs).' +
-                    '{panel}\n\n';
-            }
-
-            jiraComment += 'AI Teammate is fixing issues raised in the code review.\n\n' +
-                '_Fix results will be posted shortly..._';
-
-            tracker.postComment(ticketKey, jiraComment);
+            // Rendered in the flavor of the ticket's tracker (gh-770):
+            // Markdown on GitHub issues, wiki markup on Jira.
+            tracker.postComment(ticketKey, buildReworkStartedComment(
+                commentMarkup.forTicket(ticketKey, customParams),
+                {
+                    prNumber: prDetails.number,
+                    prUrl: prDetails.html_url,
+                    branchName: branchName,
+                    conflictFiles: conflictFiles,
+                    failedChecks: failedChecks
+                }
+            ));
         } catch (e) {
             console.warn('Failed to post tracker comment:', e);
         }
@@ -321,9 +357,13 @@ function action(params) {
                     }
                 }
                 if (errorTracker) {
+                    // Flavor follows the ticket's tracker (gh-770): Markdown
+                    // on GitHub issues, wiki markup on Jira.
+                    var errorCustomParams = (params.jobParams && params.jobParams.customParams) || params.customParams;
+                    var em = commentMarkup.forTicket(ticketKey, errorCustomParams);
                     errorTracker.postComment(
                         ticketKey,
-                        'h3. ❌ Rework Setup Error\n\n{code}' + truncateForComment(error.toString()) + '{code}'
+                        em.h(3, '❌ Rework Setup Error') + '\n\n' + em.code(truncateForComment(error.toString()))
                     );
                 }
             }
@@ -335,5 +375,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, syncBaseBranchIfConfigured, truncateForComment };
+    module.exports = { action, syncBaseBranchIfConfigured, truncateForComment, buildReworkStartedComment };
 }

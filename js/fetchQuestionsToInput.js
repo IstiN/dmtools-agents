@@ -4,12 +4,18 @@
  * them to the input folder before the CLI agent runs.
  * Receives params.inputFolderPath from DMTools after input folder creation.
  *
+ * Tracker-aware (gh-770): the provider is probed via common/trackers.js and
+ * the JQL is only fired on Jira — question subtasks (issuetype + answer
+ * custom field) are a Jira concept, and the JQL is meaningless on GitHub/ADO
+ * trackers, where it silently returned empty on every dev/rework leg.
+ *
  * Configurable via .dmtools/config.js:
  *   jira.questions.fetchJql   — JQL to find question subtasks ({ticketKey} placeholder)
  *   jira.questions.answerField — Jira custom field name for the answer (default: 'Answer')
  */
 
 var configLoader = require('./configLoader.js');
+var trackersModule = require('./common/trackers.js');
 
 function hasAnswerValue(fields, key) {
     return Object.prototype.hasOwnProperty.call(fields, key)
@@ -57,6 +63,39 @@ function getAnswerValue(fields, answerField) {
 }
 
 /**
+ * Build the question-subtask fetch plan for the ticket's tracker (gh-770).
+ *
+ * The configured query (`jira.questions.fetchJql`) is Jira-speak —
+ * "parent = {ticketKey} AND issuetype = Subtask" — which routes fine on a
+ * GitHub-backed deployment but is meaningless there: it silently returns
+ * empty and the leg logs "Failed to fetch questions, continuing without
+ * file". Question subtasks (issuetype + answer custom field) are a Jira
+ * concept, so the JQL is only fired on the jira provider; github/ado skip
+ * with an explicit reason instead of firing a query that can never match.
+ *
+ * @param {string} provider        - tracker provider (createTracker().provider())
+ * @param {Object} questionsConfig - config.jira.questions (fetchJql, answerField)
+ * @param {string} ticketKey       - the ticket whose questions are fetched
+ * @returns {Object} { skip: false, jql } | { skip: true, reason }
+ */
+function questionsFetchPlan(provider, questionsConfig, ticketKey) {
+    var p = String(provider || 'jira').toLowerCase();
+    if (p !== 'jira') {
+        return {
+            skip: true,
+            reason: 'question subtasks are a Jira issue-type concept (' +
+                String((questionsConfig && questionsConfig.fetchJql) || '') +
+                ') — the query is Jira-speak and would silently return nothing on the ' +
+                p + ' tracker'
+        };
+    }
+    return {
+        skip: false,
+        jql: questionsConfig.fetchJql.replace('{ticketKey}', ticketKey)
+    };
+}
+
+/**
  * Pre-CLI action: fetch question subtasks into input folder
  *
  * @param {Object} params - Parameters from DMTools
@@ -71,12 +110,19 @@ function action(params) {
 
         var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
         var questionsConfig = projectConfig.jira.questions;
-        var jql = questionsConfig.fetchJql.replace('{ticketKey}', ticketKey);
         var answerField = questionsConfig.answerField;
 
-        try {
+        // Probe the tracker provider once (gh-770): the same script then runs
+        // unchanged on Jira / ADO / GitHub deployments.
+        var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+        var provider = trackersModule.createTracker(projectConfig, customParams).provider();
+        var plan = questionsFetchPlan(provider, questionsConfig, ticketKey);
+
+        if (plan.skip) {
+            console.warn('Skipping question subtask fetch — ' + plan.reason);
+        } else try {
             var rawQuestions = jira_search_by_jql({
-                jql: jql,
+                jql: plan.jql,
                 fields: ['key', 'summary', 'description', 'status', 'priority', answerField]
             });
             var questions = [];
@@ -113,5 +159,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, getAnswerValue, hasAnswerValue };
+    module.exports = { action, getAnswerValue, hasAnswerValue, questionsFetchPlan };
 }

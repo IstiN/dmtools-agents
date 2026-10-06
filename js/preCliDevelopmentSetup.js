@@ -18,6 +18,7 @@ var restoreFromReleases = require('./restoreFromReleases.js');
 var setupCommands = require('./common/setupCommands.js');
 var baseBranchMarker = require('./common/baseBranchMarker.js');
 var trackersModule = require('./common/trackers.js');
+var commentMarkup = require('./common/commentMarkup.js');
 
 // Universal working-directory-aware wrapper for cli_execute_command.
 // When config.workingDir is set (via customParams.targetRepository.workingDir),
