@@ -16,7 +16,8 @@
 // File-scope base module (was previously misplaced INSIDE the file_read mock
 // closure below — a latent defect masked in run_all.json by another test file
 // leaking the same sloppy-mode global, but breaking isolated per-file runs).
-var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+var commentMarkupModule = loadModule('js/common/commentMarkup.js',
+    makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 var gitStagingModule = loadModule('js/common/gitStaging.js');
 
 // Real githubHelpers (only its own deps stubbed) — pushReworkChanges requires
@@ -57,7 +58,10 @@ function makeOutputFiles(fileMap) {
 function makeTrackersModule(toolMocks) {
     var realTrackers = loadModule(
         'js/common/trackers.js',
-        makeRequire({ '../config.js': configModule }),
+        makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }),
         toolMocks || {}
     );
     return {

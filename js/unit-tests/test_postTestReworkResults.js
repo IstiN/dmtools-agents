@@ -21,8 +21,12 @@ function loadPostTestReworkResults(cliMock) {
             },
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
             './common/feedbackLoop.js': {},
-            './common/commentMarkup.js': loadModule('js/common/commentMarkup.js'),
-            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule }), {}),
+            './common/commentMarkup.js': loadModule('js/common/commentMarkup.js',
+                makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') })),
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+            }), {}),
             './common/pullRequest.js': {
                 // Mirrors the real readStagedDiffStat(runCommand, workingDir).
                 readStagedDiffStat: function(runCommand) {
@@ -129,7 +133,8 @@ suite('postTestReworkResults — canonical MERGE_HEAD probe (gh-761)', function(
 // (commentMarkup.forTicket) is testable per tracker, and posting goes through
 // the probed tracker (trackers.js).
 
-var testReworkCommentMarkup = loadModule('js/common/commentMarkup.js');
+var testReworkCommentMarkup = loadModule('js/common/commentMarkup.js',
+    makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 
 suite('postTestReworkResults.buildTestReworkResultComment — per-tracker markup (gh-770)', function() {
 

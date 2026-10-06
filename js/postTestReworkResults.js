@@ -516,9 +516,10 @@ function action(params) {
             if (resume.attempted) {
                 return action(params);
             }
+            var mFail = commentMarkup.forTicket(ticketKey, customParams);
             trackersModule.createTracker(config, customParams).postComment(
                 ticketKey,
-                commentMarkup.forTicket(ticketKey, customParams).h(3, '❌ Rework Push Failed') + '\n\n' + commentMarkup.forTicket(ticketKey, customParams).code(e.toString())
+                mFail.h(3, '❌ Rework Push Failed') + '\n\n' + mFail.code(e.toString())
             );
             releaseLock();
             return { success: false, error: e.toString() };
@@ -637,13 +638,11 @@ function action(params) {
                 if (resume.attempted) {
                     return action(params);
                 }
-                // Flavor follows the ticket's tracker (gh-770); the
-                // customParams const may be uninitialized (TDZ) if the
-                // failure predates its declaration, so resolve defensively.
-                var catchCustomParams =
-                    (params.jobParams && params.jobParams.customParams) || params.customParams || {};
-                var em = commentMarkup.forTicket(key, catchCustomParams);
-                trackersModule.createTracker(config, catchCustomParams).postComment(
+                // Flavor follows the ticket's tracker (gh-770); customParams
+                // is declared before the guarded try, so it is always
+                // initialized by the time this catch runs.
+                var em = commentMarkup.forTicket(key, customParams);
+                trackersModule.createTracker(config, customParams).postComment(
                     key,
                     em.h(3, '❌ Test Rework Error') + '\n\n' + em.code(error.toString())
                 );

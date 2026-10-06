@@ -37,7 +37,8 @@ function loadDevelopBugAndCreatePR(mocks) {
         }),
         allMocks
     );
-var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+var commentMarkupModule = loadModule('js/common/commentMarkup.js',
+    makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 var gitStagingModule = loadModule('js/common/gitStaging.js');
 
 // gh-742 rework: the bug flow's interrupted path calls
@@ -411,7 +412,8 @@ suite('developBugAndCreatePR', function() {
         // missing-PR leg would read as ordinary failure output.
         var marked = new Error('Pull Request creation failure (Pull Request Creation): HTTP 502');
         marked.prCreationFailure = true;
-        var commentMarkupMod = loadModule('js/common/commentMarkup.js');
+        var commentMarkupMod = loadModule('js/common/commentMarkup.js',
+            makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
         var gitStagingMod = loadModule('js/common/gitStaging.js');
         var mod = loadModule(
             'js/developBugAndCreatePR.js',

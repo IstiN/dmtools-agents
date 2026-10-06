@@ -12,7 +12,8 @@
 
 var NOOP_MODULE = {};
 
-var reworkCommentMarkupModule = loadModule('js/common/commentMarkup.js');
+var reworkCommentMarkupModule = loadModule('js/common/commentMarkup.js',
+    makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 
 function makeGhStub(fetchCalls) {
     return {
@@ -203,7 +204,8 @@ suite('preCliReworkSetup.truncateForComment', function() {
 // tracker that renders as raw text garbage. The builder is extracted so the
 // flavor choice (commentMarkup.forTicket) is testable per tracker.
 
-var reworkCommentMarkup = loadModule('js/common/commentMarkup.js');
+var reworkCommentMarkup = loadModule('js/common/commentMarkup.js',
+    makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 
 suite('preCliReworkSetup.buildReworkStartedComment — per-tracker markup (gh-770)', function() {
 

@@ -22,7 +22,10 @@ function loadFetchQuestionsToInput() {
             },
             './common/trackers.js': loadModule(
                 'js/common/trackers.js',
-                makeRequire({ '../config.js': configModule }),
+                makeRequire({
+                    '../config.js': configModule,
+                    './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+                }),
                 {}
             )
         }),
@@ -98,7 +101,10 @@ function loadFetchQuestionsWithMocks(options) {
     }
     var trackersModule = loadModule(
         'js/common/trackers.js',
-        makeRequire({ '../config.js': configModule }),
+        makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }),
         {}
     );
     var mod = loadModule(

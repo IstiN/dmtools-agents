@@ -90,7 +90,7 @@ suite('ticketKeyShapes: shapeSources', function () {
         assert.equal(re.exec('key = acme/w#12')[1], 'acme/w#12');
         assert.equal(re.exec('key = #12')[1], '#12');
         assert.equal(re.exec('key = 12')[1], '12');
-        assert.equal(re.exec('key = PROJ-12'), null);
+        assert.equal(re.exec('key = gh-abc'), null);
     });
 
 });

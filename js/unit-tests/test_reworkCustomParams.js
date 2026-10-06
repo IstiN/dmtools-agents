@@ -1,7 +1,8 @@
 /**
  * Unit tests for rework post-actions merging project jobParamPatches.
  */
-var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+var commentMarkupModule = loadModule('js/common/commentMarkup.js',
+    makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 var gitStagingModule = loadModule('js/common/gitStaging.js');
 var githubHelpersModule = loadModule(
     'js/common/githubHelpers.js',
@@ -27,7 +28,10 @@ var githubHelpersModule = loadModule(
 function makeTrackersModule(toolMocks) {
     var realTrackers = loadModule(
         'js/common/trackers.js',
-        makeRequire({ '../config.js': configModule }),
+        makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }),
         toolMocks || {}
     );
     return {
