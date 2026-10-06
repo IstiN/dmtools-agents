@@ -17,6 +17,31 @@ var prHelper = require('./common/pullRequest.js');
 var mergeState = require('./common/mergeState.js');
 const { GIT_CONFIG, LABELS } = require('./config.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
+var trackersModule = require('./common/trackers.js');
+var commentMarkup = require('./common/commentMarkup.js');
+
+/**
+ * Build the "Test Rework Completed" comment in the flavor of the ticket's
+ * tracker (gh-770). The template historically hard-coded Jira wiki markup
+ * (h3., *bold*, {code}) and was posted via raw jira_post_comment; on a
+ * GitHub-backed tracker that renders as raw text garbage.
+ *
+ * @param {Object} flavor - a commentMarkup flavor bag (forTicket/forFlavor)
+ * @param {Object} ctx    - { passed, testStatus, branchName, prUrl, fixSummary }
+ * @returns {string} the rendered comment
+ */
+function buildTestReworkResultComment(flavor, ctx) {
+    var m = flavor;
+    var statusEmoji = ctx.passed ? '✅' : '❌';
+    var comment = m.h(3, '🔧 Test Rework Completed') + '\n' +
+        m.bold('Re-run result') + ': ' + statusEmoji + ' ' + m.bold(String(ctx.testStatus).toUpperCase()) + '\n' +
+        m.bold('Branch') + ': ' + m.code(ctx.branchName) + '\n';
+    if (ctx.prUrl) {
+        comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
+    }
+    comment += '\n' + ctx.fixSummary;
+    return comment;
+}
 
 function cleanCommandOutput(output) {
     if (!output) return '';
@@ -424,11 +449,13 @@ function action(params) {
                 ? 'Could not read outputs/test_automation_result.json — file missing or empty.'
                 : 'outputs/test_automation_result.json is missing required "status" field (got: ' + JSON.stringify(result) + '). The agent must write { "status": "passed" | "failed", ... }.';
             console.error(errMsg);
+            var tracker = trackersModule.createTracker(config, customParams);
+            var mErr = commentMarkup.forTicket(ticketKey, customParams);
             try {
-                jira_post_comment({
-                    key: ticketKey,
-                    comment: 'h3. ⚠️ Rework Error\n\n' + errMsg + '\n\nCheck CI logs for the agent output.'
-                });
+                tracker.postComment(
+                    ticketKey,
+                    mErr.h(3, '⚠️ Rework Error')\n\n + errMsg + '\n\nCheck CI logs for the agent output.'
+                );
             } catch (e) {}
             releaseLock();
             return { success: false, error: errMsg };
@@ -489,10 +516,10 @@ function action(params) {
             if (resume.attempted) {
                 return action(params);
             }
-            jira_post_comment({
-                key: ticketKey,
-                comment: 'h3. ❌ Rework Push Failed\n\n{code}' + e.toString() + '{code}'
-            });
+            trackersModule.createTracker(config, customParams).postComment(
+                ticketKey,
+                commentMarkup.forTicket(ticketKey, customParams).h(3, '❌ Rework Push Failed')\n\n + commentMarkup.forTicket(ticketKey, customParams).code(e.toString())
+            );
             releaseLock();
             return { success: false, error: e.toString() };
         }
@@ -532,17 +559,24 @@ function action(params) {
             console.warn('Failed to move ticket status:', e);
         }
 
-        // Step 6: Post Jira comment
+        // Step 6: Post tracker comment — flavor follows the ticket's
+        // tracker (gh-770): Markdown on GitHub issues, wiki markup on Jira.
         try {
-            const statusEmoji = passed ? '✅' : '❌';
-            let comment = 'h3. 🔧 Test Rework Completed\n\n';
-            comment += '*Re-run result*: ' + statusEmoji + ' *' + testStatus.toUpperCase() + '*\n';
-            comment += '*Branch*: {code}' + branchName + '{code}\n';
-            if (pr) comment += '*Pull Request*: ' + pr.html_url + '\n';
-            comment += '\n' + fixSummary;
-            jira_post_comment({ key: ticketKey, comment: comment });
+            trackersModule.createTracker(config, customParams).postComment(
+                ticketKey,
+                buildTestReworkResultComment(
+                    commentMarkup.forTicket(ticketKey, customParams),
+                    {
+                        passed: passed,
+                        testStatus: testStatus,
+                        branchName: branchName,
+                        prUrl: pr ? pr.html_url : null,
+                        fixSummary: fixSummary
+                    }
+                )
+            );
         } catch (e) {
-            console.warn('Failed to post Jira comment:', e);
+            console.warn('Failed to post tracker comment:', e);
         }
 
         // Step 7 & 8: Remove WIP label + SM idempotency label
@@ -603,10 +637,16 @@ function action(params) {
                 if (resume.attempted) {
                     return action(params);
                 }
-                jira_post_comment({
-                    key: key,
-                    comment: 'h3. ❌ Test Rework Error\n\n{code}' + error.toString() + '{code}'
-                });
+                // Flavor follows the ticket's tracker (gh-770); the
+                // customParams const may be uninitialized (TDZ) if the
+                // failure predates its declaration, so resolve defensively.
+                var catchCustomParams =
+                    (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+                var em = commentMarkup.forTicket(key, catchCustomParams);
+                trackersModule.createTracker(config, catchCustomParams).postComment(
+                    key,
+                    em.h(3, '❌ Test Rework Error')\n\n + em.code(error.toString())
+                );
             }
         } catch (e) {}
         releaseLock();
