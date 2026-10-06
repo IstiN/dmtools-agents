@@ -33,7 +33,10 @@ function loadPostStoryTestAutomationResults(mocks) {
     var allMocks = Object.assign({}, defaults, mocks);
 
     var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({}), allMocks);
-    var prHelper = loadModule('js/common/pullRequest.js', null, allMocks);
+    var prHelper = loadModule('js/common/pullRequest.js', makeRequire({
+        './mergeState.js': loadModule('js/common/mergeState.js'),
+        './common/mergeState.js': loadModule('js/common/mergeState.js')
+    }), allMocks);
 
     return loadModule(
         'js/postStoryTestAutomationResults.js',

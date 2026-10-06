@@ -31,7 +31,11 @@ function loadPrepareTestPRForReview(mocks) {
 
     var prHelper = loadModule(
         'js/common/pullRequest.js',
-        makeRequire({ './config.js': configModule }),
+        makeRequire({
+            './config.js': configModule,
+            './mergeState.js': loadModule('js/common/mergeState.js'),
+            './common/mergeState.js': loadModule('js/common/mergeState.js')
+        }),
         { cli_execute_command: function() { return ''; }, jira_search_by_jql: function() { return []; }, file_write: function() {} }
     );
 

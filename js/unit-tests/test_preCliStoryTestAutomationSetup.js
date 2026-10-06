@@ -20,7 +20,11 @@ function loadPreCliStoryTestAutomationSetup(mocks) {
 
     var prHelper = loadModule(
         'js/common/pullRequest.js',
-        makeRequire({ './config.js': configModule }),
+        makeRequire({
+            './config.js': configModule,
+            './mergeState.js': loadModule('js/common/mergeState.js'),
+            './common/mergeState.js': loadModule('js/common/mergeState.js')
+        }),
         defaults
     );
 
@@ -172,7 +176,11 @@ suite('preCliStoryTestAutomationSetup', function() {
                 ),
                 './common/pullRequest.js': loadModule(
                     'js/common/pullRequest.js',
-                    makeRequire({ './config.js': configModule }),
+                    makeRequire({
+                        './config.js': configModule,
+                        './mergeState.js': loadModule('js/common/mergeState.js'),
+                        './common/mergeState.js': loadModule('js/common/mergeState.js')
+                    }),
                     { jira_search_by_jql: function() { return []; }, cli_execute_command: function() { return ''; }, file_write: function() {} }
                 ),
                 './common/githubHelpers.js': githubHelpers,
@@ -227,7 +235,11 @@ suite('preCliStoryTestAutomationSetup', function() {
                 ),
                 './common/pullRequest.js': loadModule(
                     'js/common/pullRequest.js',
-                    makeRequire({ './config.js': configModule }),
+                    makeRequire({
+                        './config.js': configModule,
+                        './mergeState.js': loadModule('js/common/mergeState.js'),
+                        './common/mergeState.js': loadModule('js/common/mergeState.js')
+                    }),
                     { jira_search_by_jql: function() { return []; }, cli_execute_command: function() { return ''; }, file_write: function() {} }
                 ),
                 './common/githubHelpers.js': githubHelpers,

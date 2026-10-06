@@ -47,6 +47,7 @@ function loadTimer(mocks, opts) {
     var requireFn = makeRequire({
         './common/releaseArtefacts.js': releaseArtefactsMock,
         './common/gitStaging.js': gitStagingModule,
+        './common/mergeState.js': loadModule('js/common/mergeState.js'),
         './configLoader.js': configLoaderMock
     });
 
@@ -193,6 +194,7 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
     });
 
     test('gh-761: a skipped auto-commit still uploads the session artefact — crash-safety is git-independent', function() {
+        var fileWriteCalls = [];
         var m = loadTimer({
             cli_execute_command: function(args) {
                 if (args.command.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1) {
@@ -200,7 +202,9 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
                 }
                 if (args.command.indexOf('git status') !== -1) return 'UU lib/app.dart\n';
                 return '';
-            }
+            },
+            file_write: function(args) { fileWriteCalls.push(args); },
+            file_delete: function() {}
         });
         m.action({
             ticket: { key: 'PROJ-123' },

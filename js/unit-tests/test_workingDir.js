@@ -702,7 +702,10 @@ function loadPostTestAutomation(workingDir, testFilesGlob) {
 
     var prHelper = loadModule(
         'js/common/pullRequest.js',
-        null,
+        makeRequire({
+            './mergeState.js': loadModule('js/common/mergeState.js'),
+            './common/mergeState.js': loadModule('js/common/mergeState.js')
+        }),
         allMocks
     );
     var outputFiles = loadModule(

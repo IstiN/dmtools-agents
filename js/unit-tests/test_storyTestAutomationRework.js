@@ -24,6 +24,7 @@ function loadRework(mocks) {
             triggerSmIfIdle: function () {}
         },
         './common/pullRequest.js': {},
+        './common/mergeState.js': loadModule('js/common/mergeState.js'),
         './config.js': { LABELS: {} },
         './common/tokenUsageComment.js': {
             postTokenUsageComments: function () {}
@@ -84,9 +85,6 @@ suite('storyTestAutomationRework — mergeMain mid-merge guard (gh-761)', functi
                 commands.push(args.command);
                 if (args.command === 'git rev-parse --quiet --verify MERGE_HEAD') {
                     throw new Error('Command execution failed (exit code 1)'); // no MERGE_HEAD
-                }
-                if (args.command === 'git fetch origin main') {
-                    throw new Error('Command execution failed (exit code 1)'); // simulate fetch issues being non-fatal? no — keep simple: succeed below
                 }
                 return '';
             }

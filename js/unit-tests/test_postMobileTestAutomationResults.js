@@ -23,7 +23,10 @@ function loadPostCli(mocks) {
     );
     var prHelper = loadModule(
         'js/common/pullRequest.js',
-        makeRequire({}),
+        makeRequire({
+            './mergeState.js': loadModule('js/common/mergeState.js'),
+            './common/mergeState.js': loadModule('js/common/mergeState.js')
+        }),
         {}
     );
 
