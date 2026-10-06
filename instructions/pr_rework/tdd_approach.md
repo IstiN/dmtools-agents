@@ -17,6 +17,9 @@ flowchart TD
         R2["✅ If the existing tests only cover a single-item/simple case, add a test for the multi-item/edge case the finding points at — a fix without a test for that exact case is not verified"]
         R3["✅ Returned findings: your fix must differ from the previous attempt and the new/updated test must prove it"]
         R4["✅ Run the FULL test suite before finishing — no regressions allowed"]
+        R5["✅ Verification order: finalize ALL fixes BEFORE launching the full test-suite/coverage run — a run over a tree you are still editing is wasted"]
+        R6["✅ Long runs (full suite, coverage) start with bash background: true and are collected via bash_job status/output between other steps — NEVER foreground sleep-polling (see prompts/bash_tools.md)"]
+        R7["❌ NEVER kill a running verification because files changed after it started — let it finish, treat the result as stale, re-run deliberately"]
     end
 
     TDD --> RULES
