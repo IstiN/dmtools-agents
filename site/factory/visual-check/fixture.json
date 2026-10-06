@@ -101,7 +101,7 @@
     "review": [
       {
         "pr": 860,
-        "title": "fix(tests): nightly matrix drops flaky shard",
+        "title": "[WIP] [GOAL] Egress proxy hardening: children reach only loopback + pinned upstream ranges, per-child token budgets, and egress audit sink that streams denied-connection telemetry into the factory board drawer history for the whole owner review pass, with unit + contract coverage across darwin/linux",
         "author": "ai-teammate",
         "branch": "ai/gh-809",
         "head": "1b88e0c9aa112233445566778899aabbccddeeff",
