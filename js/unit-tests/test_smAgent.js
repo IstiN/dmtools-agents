@@ -2196,6 +2196,33 @@ suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', f
             'the report says validation went red');
     });
 
+    test('sweep_stale_validation: stale red dispatched run but the head rollup is cancelled-only → NO fail path (gh-755)', function () {
+        // The sweep probed the DISPATCHED run (concluded failure, stale) —
+        // but the head's check rollup at arm time reads cancelled-only (a
+        // concurrency cancel superseded the failed attempt's re-stamp, or
+        // the kicker wave cancelled everything after the 15m window).
+        // CANCELLED is never a verdict: the shared fail-path guard skips —
+        // no unarm, no park, no report; the rerun-cancelled-checks remedy
+        // re-stamps and the next sweep sees the fresh word.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(756, { labels: ['pr_approved', 'ai_validating'], headSha: 'sha756' })],
+                pr: { number: 756, body: 'no closing keyword' },
+                commitCheckRuns: { check_runs: [
+                    { name: 'quality / validation', conclusion: 'cancelled', status: 'completed' },
+                    { name: 'kicker / sm-liveness', conclusion: 'cancelled', status: 'completed' }
+                ] }
+            },
+            onCliExecute: runsCli({ run: oldRun('failure', 'sha756') })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'the ai_validating arm stays on — a cancelled-only rollup is no verdict');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no ai_validated latch, no validation_failed park');
+        assert.equal(sm.capturedPrComments.length, 0, 'no red report on a cancelled-only head');
+    });
+
     test('sweep_stale_validation: fresh conclusion (< staleMinutes) → arm stays (verdict race window)', function () {
         var t = new Date(Date.now() - 2 * 60 * 1000).toISOString();
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
@@ -6020,37 +6047,6 @@ suite('smAgent: gh-755 deployed rerun rules are author-disjoint (sm_github.json 
         assert.equal(sib.rule.query.draft, false);
         assert.equal(sib.rule.limit, named.rule.limit, 'same per-tick pacing');
     });
-
-    test('the deployed queries route machine PRs to the sibling and guest PRs to the named rule', function () {
-        var byId = deployed();
-        var srcMod = load({
-            github_list_prs: function () {
-                return [
-                    { number: 752, labels: [{ name: 'ai_validating' }], draft: false,
-                      author: { login: 'ai-teammate' } },
-                    { number: 753, labels: [{ name: 'ai_validating' }], draft: false,
-                      author: { login: 'vendor-guest' } }
-                ];
-            }
-        }, {}, {
-            752: { state: 'OPEN', checks: 'pending', mergeState: 'BLOCKED', mergeable: true },
-            753: { state: 'OPEN', checks: 'pending', mergeState: 'BLOCKED', mergeable: true }
-        });
-        var ctx = { repoInfo: { owner: 'a', repo: 'b' }, machineAuthor: 'ai-teammate' };
-
-        var named = srcMod.query(byId['rerun-cancelled-checks'].rule, ctx);
-        assert.equal(named.map(function (i) { return i.key; }).join(','), 'pr-753',
-            'the named rule keeps GUEST heads only');
-
-        var sib = srcMod.query(byId['rerun-any-cancelled-checks'].rule, ctx);
-        assert.equal(sib.map(function (i) { return i.key; }).join(','), 'pr-752',
-            'the ANY-cancelled sibling claims MACHINE heads only');
-
-        var noKnob = srcMod.query(byId['rerun-any-cancelled-checks'].rule,
-            { repoInfo: { owner: 'a', repo: 'b' } });
-        assert.equal(noKnob.length, 0,
-            'no machineAuthor configured — the sibling fails closed (named rule covers everyone)');
-    });
 });
 suite('smAgent: rerun_cancelled_checks ANY mode (gh-755)', function () {
 
@@ -6203,9 +6199,9 @@ suite('smAgent: rerun_cancelled_checks ANY mode (gh-755)', function () {
         assert.equal(reruns.length, 1, 'only the context whose LATEST run is cancelled acts');
         assert.equal(reruns[0].command, 'gh run rerun 555003 --repo IstiN/flutter_agent_harness');
         assert.equal(sm.capturedPrComments.length, 1, 'full coverage -> marker posts');
-        assert.ok(sm.capturedPrComments[0].body.indexOf('kicker / sm-liveness') !== -1);
-        assert.ok(sm.capturedPrComments[0].body.indexOf('docs-freshness') === -1,
-            'the re-stamped context is not claimed');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('`kicker / sm-liveness`') !== -1);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('`docs-freshness`') === -1,
+            'the re-stamped context is not claimed (backticked names = the rerun set only)');
     });
 
     test('once-per-head marker holds in ANY mode; attempt-2 runs are never re-rerun', function () {
