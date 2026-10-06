@@ -128,6 +128,15 @@ function asList(parsed) {
     if (Array.isArray(parsed.issues)) return parsed.issues;
     return [];
 }
+// Bookkeeping check prefixes (dmtools-agents#628/#635): check runs the
+// machine stamps on its own heads that are NOT validation verdicts —
+// sm-kicker fires on every non-main push, the runner wake-up probe and
+// the Machine Merge Bot stamp their own bookkeeping. computePrStatus
+// folds them out of the rollup; smAgent.js's gh-755 arm-time red-verdict
+// probe (headHasRealFailure) skips the same set via this export so the
+// two verdict readers can never drift apart.
+var BOOKKEEPING_CHECK_PREFIXES = ['kicker /', 'Wake-up probe', 'merge /'];
+
 
 function githubProvider(cfg) {
     var owner = cfg.repository.owner;
@@ -276,8 +285,6 @@ function githubProvider(cfg) {
             // bookkeeping FAILURE is no more a verdict than a cancelled
             // one, and a drifted copy here would let the fail path arm
             // rework on rollups computePrStatus itself never calls red.)
-            // (all-cancelled/bookkeeping still counts as 'no verdict yet')
-            // (all-cancelled/bookkeeping still counts as 'no verdict yet')
             rollup.forEach(function (c) {
                 var concl = c.conclusion;
                 var status = c.status;
@@ -809,6 +816,7 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         createSmProvider: createSmProvider,
         ioCacheDrop: ioCacheDrop,
+        BOOKKEEPING_CHECK_PREFIXES: BOOKKEEPING_CHECK_PREFIXES,
         _cache: _cache
     };
 }

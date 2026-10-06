@@ -2013,7 +2013,10 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // re-executes on the SAME head SHA and re-stamps the contexts.
             // Guards, in order: (1) the check-runs rollup is the source of
             // truth — only contexts that currently read CANCELLED among
-            // rule.requiredContexts act; (2) once-per-head marker comment
+            // truth — only contexts that currently read CANCELLED act:
+            // among rule.requiredContexts, or (gh-755) EVERY context on
+            // the head when rule.anyCancelled is set; (2) once-per-head
+            // marker comment
             // (conflict_rework pacing — posted AFTER the reruns land, the
             // gh-683 bug C invariant: no marker without the action);
             // (3) hasActiveDispatchedRun widened to every run on the head
@@ -2032,13 +2035,29 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         return s.trim();
                     }).filter(Boolean);
                 }
-                if (!rcContexts.length) {
-                    console.warn('  ⚠️  ' + key + ' rerun_cancelled_checks: rule carries no requiredContexts — skip');
+                // gh-755 (owner directive 2026-10-05 'если что-то
+                // канселится — надо повторно запускать'): rule.anyCancelled
+                // switches the rule to the ANY-cancelled mode — no name
+                // list, every context on the head whose LATEST check run
+                // reads CANCELLED is a rerun target (a cancelled context
+                // is never a fail signal, wherever it comes from). The
+                // named requiredContexts mode is unchanged.
+                var rcAny = rule.anyCancelled === true;
+                var rcContexts = [];
+                if (Array.isArray(rule.requiredContexts)) {
+                    rcContexts = rule.requiredContexts;
+                } else if (typeof rule.requiredContexts === 'string' && rule.requiredContexts) {
+                    rcContexts = rule.requiredContexts.split(',').map(function (s) {
+                        return s.trim();
+                    }).filter(Boolean);
+                }
+                if (!rcContexts.length && !rcAny) {
+                    console.warn('  ⚠️  ' + key + ' rerun_cancelled_checks: rule carries no requiredContexts and no anyCancelled — skip');
                     continue;
                 }
-                var rcCancelled = cancelledRequiredContexts(effectiveRepoInfo, rcHead, rcContexts);
+                var rcCancelled = cancelledRequiredContexts(effectiveRepoInfo, rcHead, rcAny ? null : rcContexts);
                 if (!rcCancelled.length) {
-                    console.log('  ⏭️  ' + key + ' no required context reads CANCELLED on ' +
+                    console.log('  ⏭️  ' + key + ' no context reads CANCELLED on ' +
                                 rcHead.substring(0, 7) + ' — nothing to rerun');
                     continue;
                 }
@@ -2111,6 +2130,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                  ' --repo ' + effectiveRepoInfo.owner + '/' + effectiveRepoInfo.repo
                     });
                 });
+                var rcEvidence = rcAny
+                    ? 'the push runs died after the 15m verdict window (gh-755 — live dmtools-agents PRs ' +
+                      '#752/#753: kicker sm-liveness + docs-freshness cancelled with no rerun and no verdict; ' +
+                      'owner directive 2026-10-05: a CANCELLED run is not a verdict, re-run it)'
+                    : 'a pending run superseded by the silent-refresh push wave ' +
+                      '(live fa#1202/#1203 2026-10-03, still reproducing 2026-10-04 06:21 — dmtools-agents#682)';
                 if (!DRY && !rcUncovered.length) {
                     github_create_comment({
                         workspace: effectiveRepoInfo.owner,
@@ -2118,8 +2143,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         number: ticket.prNumber,
                         body: rcMarker + ': ' +
                               rcTargets.map(function (t) { return '`' + t.context + '`'; }).join(', ') +
-                              ' ended CANCELLED on this head — a pending run superseded by the silent-refresh push wave ' +
-                              '(live fa#1202/#1203 2026-10-03, still reproducing 2026-10-04 06:21 — dmtools-agents#682). ' +
+                              ' ended CANCELLED on this head — ' + rcEvidence + '. ' +
                               'CANCELLED is never a verdict: nothing failed, the re-run re-stamps the contexts and merging resumes automatically.' +
                               ' (head `' + rcHead + '`)'
                     });
@@ -2521,6 +2545,27 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // rework-on-label still honours a MANUAL agent:rework label from
             // a human on any PR.
             try {
+                // gh-755 (owner directive 2026-10-05): CANCELLED is never
+                // a verdict. The query matched `checks: red` on a rollup
+                // snapshot — before any verdict action (unarm, report,
+                // guest park, rework arm), re-read the head's check
+                // rollup: if the red dissolves into cancelled-only (no
+                // FAILURE/TIMED_OUT on the LATEST run of any
+                // non-bookkeeping context), this is NO verdict — skip and
+                // wait for the rerun-cancelled-checks remedy to re-stamp
+                // the contexts. The ai_validating arm STAYS on: the rerun
+                // re-stamps under it and the verdict rules consume the
+                // fresh word next tick. Re-work legs burned on
+                // cancelled-only heads (live dmtools-agents #752/#753,
+                // kicker sm-liveness + docs-freshness after the 15m
+                // window) are exactly the token burn this directive
+                // forbids.
+                var fvHead = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
+                if (fvHead && !headHasRealFailure(effectiveRepoInfo, fvHead)) {
+                    console.log('  ⏭️  ' + key + ' red is cancelled-only — no verdict (gh-755):' +
+                                ' skipping the fail path, waiting on the rerun-cancelled-checks remedy');
+                    continue;
+                }
                 try {
                     github_remove_label({
                         workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
@@ -3474,48 +3519,126 @@ function hasRecentHeadRun(runs, graceMs) {
 }
 
 function cancelledRequiredContexts(repoInfo, headSha, contexts) {
-    // Which of the deployment's REQUIRED check contexts currently read
-    // CANCELLED on this head — the check-runs rollup is the source of
-    // truth, read with BRANCH-PROTECTION semantics: a context's verdict
-    // is the LATEST check run carrying its name, not any historical one
-    // (#695 review: a re-run appends a fresh check run while the
-    // superseded one stays in the head's history, so any-CANCELLED
-    // matching re-fired forever on a stale cancel next to a fresh green
-    // re-stamp and parked mergeable PRs red). Newest per context wins by
-    // completed_at, then started_at, then id, then page position (REST
-    // sorts check runs by id ascending — later position IS newer when
-    // the rollup carries no timestamps). FAILURE/TIMED_OUT on the latest
-    // run are deliberately ignored here: red verdicts belong to
-    // fail_validation and friends. Conclusions arrive lowercase from
-    // REST — normalize. [] on any error = no action.
+    // Which check contexts currently read CANCELLED on this head — the
+    // check-runs rollup is the source of truth, read with
+    // BRANCH-PROTECTION semantics: a context's verdict is the LATEST
+    // check run carrying its name, not any historical one (#695 review:
+    // a re-run appends a fresh check run while the superseded one stays
+    // in the head's history, so any-CANCELLED matching re-fired forever
+    // on a stale cancel next to a fresh green re-stamp and parked
+    // mergeable PRs red). Newest per context wins by completed_at, then
+    // started_at, then id, then page position (REST sorts check runs by
+    // id ascending — later position IS newer when the rollup carries no
+    // timestamps). FAILURE/TIMED_OUT on the latest run are deliberately
+    // ignored here: red verdicts belong to fail_validation and friends.
+    // Conclusions arrive lowercase from REST — normalize.
+    // contexts: the name list to scan (deployment's branch-protection
+    // required contexts) — or NULL for the gh-755 ANY-cancelled mode:
+    // no name filter, EVERY context on the head whose latest run reads
+    // CANCELLED is returned (rule.anyCancelled — a cancelled context is
+    // a rerun target wherever it comes from). [] on any error = no
+    // action.
+    try {
+        var rollup = headCheckRunsSafe(repoInfo, headSha);
+        if (rollup === null) return [];
+        var latest = latestCheckRunConclusions(rollup);
+        var names = contexts || Object.keys(latest);
+        return names.filter(function (c) {
+            return !!(latest[c] && latest[c].concl === 'CANCELLED');
+        });
+    } catch (e) {
+        console.warn('  ⚠️  check-run scan failed: ' + (e.message || e));
+        return [];
+    }
+}
+
+function headCheckRunsSafe(repoInfo, headSha) {
+    // The head's commit check-run rollup (REST, conclusions lowercase),
+    // fail-OPEN wrapper shared by the cancelled-context scan and the
+    // gh-755 arm-time red-verdict probe. null = the probe failed —
+    // callers decide their own fail direction (the cancelled scan takes
+    // no action; the red probe fails open to a real red).
     try {
         var raw = github_get_commit_check_runs({
             workspace: repoInfo.owner, repository: repoInfo.repo,
             commitSha: headSha
         });
         var cr = mcpParse(raw) || {};
-        var rollup = cr.check_runs || cr.checkRuns || [];
-        var latest = {}; // context -> { t, id, pos, concl }
-        rollup.forEach(function (r, pos) {
-            var name = r && (r.name || r.context);
-            if (!name || contexts.indexOf(name) === -1) return;
-            var concl = r && r.conclusion
-                ? String(r.conclusion).toUpperCase() : null;
-            var t = Date.parse(r.completed_at || r.started_at || '') || 0;
-            var id = Number(r.id) || 0;
-            var prev = latest[name];
-            if (!prev || t > prev.t ||
-                (t === prev.t && (id > prev.id ||
-                    (id === prev.id && pos > prev.pos)))) {
-                latest[name] = { t: t, id: id, pos: pos, concl: concl };
-            }
-        });
-        return contexts.filter(function (c) {
-            return !!(latest[c] && latest[c].concl === 'CANCELLED');
-        });
+        return cr.check_runs || cr.checkRuns || [];
     } catch (e) {
         console.warn('  ⚠️  check-run scan failed: ' + (e.message || e));
-        return [];
+        return null;
+    }
+}
+
+function latestCheckRunConclusions(rollup) {
+    // context -> { t, id, pos, concl } of the LATEST check run per
+    // context (the #695 branch-protection walk, shared by every verdict
+    // reader). Newest per context wins by completed_at, then started_at,
+    // then id, then page position.
+    var latest = {};
+    (rollup || []).forEach(function (r, pos) {
+        var name = r && (r.name || r.context);
+        if (!name) return;
+        var concl = r && r.conclusion
+            ? String(r.conclusion).toUpperCase() : null;
+        var t = Date.parse(r.completed_at || r.started_at || '') || 0;
+        var id = Number(r.id) || 0;
+        var prev = latest[name];
+        if (!prev || t > prev.t ||
+            (t === prev.t && (id > prev.id ||
+                (id === prev.id && pos > prev.pos)))) {
+            latest[name] = { t: t, id: id, pos: pos, concl: concl };
+        }
+    });
+    return latest;
+}
+
+function isBookkeepingCheckName(name) {
+    // dmtools-agents#628/#635: the machine's own check runs (kicker,
+    // wake-up probe, merge bot) are bookkeeping, not verdicts — the same
+    // prefix list computePrStatus folds out of the rollup, imported from
+    // smProvider so the two verdict readers cannot drift (the literal
+    // fallback keeps minimal test stubs working).
+    var prefixes = (smProviderModule && smProviderModule.BOOKKEEPING_CHECK_PREFIXES) ||
+        ['kicker /', 'Wake-up probe', 'merge /'];
+    var n = String(name || '');
+    for (var i = 0; i < prefixes.length; i++) {
+        if (n.indexOf(prefixes[i]) === 0) return true;
+    }
+    return false;
+}
+
+function headHasRealFailure(repoInfo, headSha) {
+    // gh-755 (owner directive 2026-10-05): the arm-time verdict check
+    // for fail_validation and the sweep failure side. The rule query
+    // matched `checks: red` on a rollup snapshot; before any verdict
+    // action (unarm, report, park, rework arm) re-read the head's check
+    // rollup: the red is REAL only when some non-bookkeeping context's
+    // LATEST check run concluded FAILURE or TIMED_OUT (#628 bookkeeping
+    // parity, #695 latest-per-context semantics). A rollup whose only
+    // red-reading conclusions are CANCELLED is NO verdict — the caller
+    // must skip and wait for the rerun-cancelled-checks remedy to
+    // re-stamp the contexts. Fail OPEN (true) whenever the rollup cannot
+    // be read (probe error) or reads EMPTY (an empty rollup is an
+    // unreadable one, not a cancelled-only one — the query matched red,
+    // so check runs existed at query time; a degraded read must not
+    // launder a real red). This guard exists to swallow cancelled-only
+    // reds, never to hide a red it could not see.
+    try {
+        var rollup = headCheckRunsSafe(repoInfo, headSha);
+        if (!rollup || !rollup.length) return true;
+        var latest = latestCheckRunConclusions(rollup);
+        var names = Object.keys(latest);
+        for (var i = 0; i < names.length; i++) {
+            if (isBookkeepingCheckName(names[i])) continue;
+            var concl = latest[names[i]].concl;
+            if (concl === 'FAILURE' || concl === 'TIMED_OUT') return true;
+        }
+        return false;
+    } catch (e) {
+        console.warn('  ⚠️  red-verdict probe failed: ' + (e.message || e));
+        return true;
     }
 }
 
