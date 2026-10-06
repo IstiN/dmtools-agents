@@ -29,10 +29,6 @@
  *   to switch EVERY default-dispatch rule to the local teammate pipeline for that run,
  *   without editing sm.json/.dmtools/config.js. Rules with localExecution:true are
  *   unaffected; a rule can still opt out with an explicit `localTeammate: false`.
- *   jobParams.guestReworkMaxAttempts — cap on guest validation-red rework arms per
- *   PR (review #701; default 2). Counted via the 'guest rework arm N/MAX' marker
- *   lines appended to the guest fail reports; at N >= MAX the arm is withheld and
- *   the coordinator owns the PR.
  *   jobParams.redHeadSkip = false — OWNER ESCAPE HATCH (directive 2026-10-04 "red yields
  *   the slot"): disables the validate-arm red-head skip. Recording of red heads on the
  *   fail reports continues (audit trail); only the arm-side skip goes dark. A rule can
@@ -2509,23 +2505,21 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         }
 
         if (rule.localAction === 'fail_validation' || sweepFailure) {
-            // Validation CI went red: unarm, tell the PR, and requeue the
-            // machine loop by re-arming agent:rework on the linked issue
-            // (the existing rework-on-red-ci rule picks it up). External
-            // PRs without a linked issue get the report only.
-            // Owner rule 2026-09-21: auto-REWORK is machine-author-ONLY.
-            // Accounts other than the machine login are guests: they get
-            // review + validation and no rework arm on their own findings
-            // (they fix their own review findings; the SM re-validates on
-            // their push). A guest "fixes #<n>" body must not arm rework
-            // on a machine ticket.
-            // SUPERSEDED 2026-10-04 (owner directive, live: the
-            // report-only branch left red guest heads parked motionless
-            // until a human fired machine-sm.yml manually): VALIDATION-RED
-            // now arms rework for guests too — PR-anchored on the PR
-            // itself, never on a (possibly machine) linked issue. REVIEW
-            // findings on guests remain owner/coordinator-owned: the
-            // 2026-09-21 machine-only rule still holds everywhere else.
+            // Validation CI went red: unarm, tell the PR, and — MACHINE PRs
+            // only — requeue the machine loop by re-arming agent:rework (the
+            // linked issue carries it; an unlinked machine PR gets the
+            // PR-anchored arm). Owner rule 2026-09-21: auto-REWORK is
+            // machine-author-ONLY. Accounts other than the machine login are
+            // guests: they get review + validation and no rework arm — a
+            // guest "fixes #<n>" body must not arm rework on a machine ticket.
+            // gh-757 (live fa#1286, 2026-10-06, vendor vabhzw17eg2qu4m9-bit):
+            // REVERTS the 2026-10-04 guest validation-red arm — that
+            // directive spent an AI rework leg on a vendor PR (the very burn
+            // the 2026-09-21 rule exists to prevent). Guest recovery = the
+            // #1179 validation_failed park + the #633 RESET probe (the guest
+            // pushes a fix, the park clears, validation re-runs);
+            // rework-on-label still honours a MANUAL agent:rework label from
+            // a human on any PR.
             try {
                 try {
                     github_remove_label({
@@ -2554,9 +2548,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // Fallback (live: fa pr-750 — body said "Fixes the Play Store
                     // rejection (gh-746)", no closing keyword): machine PRs carry
                     // the issue in the branch name (ai/gh-<n>). Guest branches
-                    // get nothing — issue RESOLUTION stays machine-only; a
-                    // guest's rework arm lands on the PR itself (below,
-                    // 2026-10-04), never on a machine issue.
+                    // get nothing — issue RESOLUTION stays machine-only, and
+                    // gh-757: a guest red never arms rework anywhere (park only).
                     if (!linked && ticket.branch) {
                         var bm = /(?:^|\/)gh-(\d+)$/i.exec(String(ticket.branch));
                         if (bm) linked = parseInt(bm[1], 10);
@@ -2579,31 +2572,20 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 var failedRunsLine = failedRunLinksLine(effectiveRepoInfo,
                     rule.ciWorkflow || ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
                     (ticket.pr && ticket.pr.headSha) || ticket.headSha);
-                // ── COMPOSITION #701 × #703 (review #703 blocker): both
-                // features live on THIS red, in one report, with three
-                // independent caps — #701's guest-rework cap bounds the FIX
-                // loop (guest PRs: agent:rework arms at most
-                // guestReworkMaxAttempts times, then the coordinator owns
-                // it), #703's red-head marker bounds the RE-VALIDATION loop
-                // (any PR: a head with redHeadCap recorded reds is never
-                // re-armed — only a genuinely NEW head re-enters
-                // validation), #703's empty-lap cap bounds the MACHINE
-                // rework loop (same-head red = a lap that pushed nothing —
-                // at emptyLapMax the machine arm is withheld and the owner
-                // is escalated to). They compose: the guest cap arms the
-                // FIX path, the red-head skip gates RE-VALIDATION of the
-                // same failed head — different loops, one report.
+                // ── COMPOSITION #703 (review #703 blocker): the caps live on
+                // THIS red, in one report — the red-head marker bounds the
+                // RE-VALIDATION loop (any PR: a head with redHeadCap recorded
+                // reds is never re-armed — only a genuinely NEW head re-enters
+                // validation) and the empty-lap cap bounds the MACHINE rework
+                // loop (same-head red = a lap that pushed nothing — at
+                // emptyLapMax the machine arm is withheld and the owner is
+                // escalated to). #701's guest-rework cap is gone with the
+                // guest arm itself (gh-757: auto-rework is machine-only).
                 //
                 // One comment read per fail (review #703 💡): all marker
-                // kinds — guest-rework arms, red-head counts, empty laps —
-                // parse from a SINGLE github_get_pr_comments payload.
+                // kinds — red-head counts, empty laps — parse from a SINGLE
+                // github_get_pr_comments payload.
                 var failMarks = failMarkerState(effectiveRepoInfo, ticket.prNumber);
-                // Guest rework cap (review #701): count prior guest-rework
-                // arms via the marker lines on this PR's reports BEFORE the
-                // arm decision — the report and the arm must agree.
-                var reworkMax = isMachinePr ? 0 : guestReworkMaxAttempts(RUN_JOB_PARAMS);
-                var reworkArms = isMachinePr ? 0 : failMarks.guestArms;
-                var reworkCapped = !isMachinePr && reworkArms >= reworkMax;
                 // Red-head history (owner directive 2026-10-04: red yields
                 // the slot): append the per-head counter marker to the
                 // report — the validate_pr arm side re-reads these markers
@@ -2648,19 +2630,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         : '⚠️ Validation CI went red on the head — merge aborted, rework re-queued.' +
                           (linked ? ' (linked issue #' + linked + ' re-armed)' : '') +
                           ' (approval latch kept — no re-review after fixes)'))
-                    : ('⚠️ Validation CI went red on the head. Guest PR: ' +
-                       (reworkCapped
-                           ? 'rework attempts exhausted (' + reworkArms + '/' + reworkMax +
-                             ') — the coordinator owns this PR from here.'
-                           : 'the rework agent is armed ' +
-                             'on this PR (owner directive 2026-10-04) — it fixes the findings and pushes; ' +
-                             'your own push re-runs validation just the same.')))
+                    : ('⚠️ Validation CI went red on the head. Guest PR: rebase onto main and push — ' +
+                       'validation re-runs automatically; auto-rework is reserved for the machine ' +
+                       'account (gh-757). Your push clears the validation_failed park via the ' +
+                       'head-change reset.'))
                     + (failedRunsLine ? '\n' + failedRunsLine : '')
                     + (redLine ? '\n' + redLine : '')
-                    + (!isMachinePr && !reworkCapped
-                        ? '\n🔁 guest rework arm ' + (reworkArms + 1) + '/' + reworkMax +
-                          ' (owner directive 2026-10-04)'
-                        : '')
                     + (emptyLapLine ? '\n' + emptyLapLine : '');
                 github_create_comment({
                     workspace: effectiveRepoInfo.owner,
@@ -2671,9 +2646,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 if (isMachinePr && reworkEmptyCapped) {
                     // Withheld for MACHINE PRs regardless of linkage (the
                     // cap bounds the machine rework loop — linked-issue arm
-                    // AND the PR-anchored unlinked arm). Guest PRs never
-                    // reach here: their loop is bounded by #701's
-                    // guestReworkMaxAttempts cap below.
+                    // AND the PR-anchored unlinked arm).
                     console.log('  🛑 ' + key + ' empty rework-lap cap reached (' + emptyLaps +
                                 '/' + lapMax + ' on head ' + failHead + ') — NO agent:rework arm,' +
                                 ' a human owns the PR (live fa#1211: successful laps that push nothing)');
@@ -2705,76 +2678,44 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         number: linked,
                         labels: ['agent:rework']
                     });
-                } else {
-                    if (!isMachinePr) {
-                        // GUEST PRs get the validation_failed PARK LABEL
-                        // (dmtools-agents#1179 mirror, live fa 2026-10-02: 11
-                        // manual mitigations in one night — the report-only
-                        // branch left the PR eligible for validate-armed, which
-                        // re-selected it as the OLDEST approved candidate every
-                        // tick and froze the whole FIFO behind a red guest
-                        // head). The label is exactly what the sticky-park rule
-                        // would set; the un-park path (human push newer than
-                        // the park) clears it, so a guest fix still re-enters
-                        // validation. Machine PRs never get the label: their
-                        // rework cycle pushes a new head and validate-armed's
-                        // notLabels:[validation_failed] would lock them out of
-                        // the re-validation the rework exists for.
-                        try {
-                            github_add_labels({
-                                workspace: effectiveRepoInfo.owner,
-                                repository: effectiveRepoInfo.repo,
-                                number: ticket.prNumber,
-                                labels: ['validation_failed']
-                            });
-                        } catch (eGuestPark) {
-                            console.warn('  ⚠️  guest park label failed: ' +
-                                (eGuestPark.message || eGuestPark));
-                        }
+                } else if (isMachinePr) {
+                    // Machine PR with NO OPEN linked issue: PR-anchored arm
+                    // (#544 fallback shape) — the machine fixes its own code,
+                    // that loop is ours. Never lands on a linked issue from
+                    // here: the issue path above is the only linked carrier.
+                    try {
+                        github_add_labels({
+                            workspace: effectiveRepoInfo.owner,
+                            repository: effectiveRepoInfo.repo,
+                            number: ticket.prNumber,
+                            labels: ['agent:rework']
+                        });
+                    } catch (eUnlinkedArm) {
+                        console.warn('  ⚠️  unlinked machine rework arm failed: ' +
+                            (eUnlinkedArm.message || eUnlinkedArm));
                     }
-                    // Owner directive 2026-10-04 (supersedes the 2026-09-21
-                    // machine-only rework rule for VALIDATION-RED ONLY): a
-                    // red guest head must not sit parked and motionless
-                    // until a human ticks the SM (live: agents#696,
-                    // dart#342). Arm the rework leg PR-ANCHORED — the
-                    // rework-on-label rule dispatches the pr-<N> anchored
-                    // leg (see the #544 PR-only-anchor dispatch above), the
-                    // rework agent fixes the findings and pushes a NEW
-                    // head, and the park's head-change reset (dmtools-
-                    // agents#633: a head with no red verdict of its own is
-                    // never parked) clears validation_failed so
-                    // validate-armed re-runs CI on the fixed head. Also
-                    // covers machine PRs with NO linked issue (previously
-                    // report-only, equally stall-prone). Never lands on a
-                    // linked issue: that path stays machine-author-only.
-                    // Review findings on guests remain owner/coordinator-
-                    // owned — this arm is validation-red only.
-                    //
-                    // Review #701 CAP: the guest arm is bounded by
-                    // guestReworkMaxAttempts (default 2) counted via the
-                    // 'guest rework arm N/MAX' markers on the PR — a
-                    // persistently-red guest must loop to a HUMAN
-                    // (coordinator), not through the rework agent forever.
-                    // Machine-author PRs (unlinked) stay uncapped: the
-                    // machine fixes its own code, that loop is ours.
-                    if (reworkCapped) {
-                        console.log('  🛑 guest pr-' + ticket.prNumber +
-                            ' rework cap reached (' + reworkArms + '/' + reworkMax +
-                            ') — coordinator owns it from here');
-                    } else {
-                        try {
-                            github_add_labels({
-                                workspace: effectiveRepoInfo.owner,
-                                repository: effectiveRepoInfo.repo,
-                                number: ticket.prNumber,
-                                labels: ['agent:rework']
-                            });
-                            console.log('  🔁 guest pr-' + ticket.prNumber +
-                                ' validation red — agent:rework armed on the PR (owner directive 2026-10-04)');
-                        } catch (eGuestRework) {
-                            console.warn('  ⚠️  guest rework arm failed: ' +
-                                (eGuestRework.message || eGuestRework));
-                        }
+                } else {
+                    // GUEST PRs get the validation_failed PARK LABEL — and
+                    // NOTHING else (gh-757, live fa#1286: the 2026-10-04
+                    // guest rework arm spent an AI leg on a vendor PR;
+                    // auto-rework is machine-author-ONLY again, owner rule
+                    // 2026-09-21). The park (dmtools-agents#1179 mirror,
+                    // live fa 2026-10-02: 11 manual mitigations in one
+                    // night) takes the red guest out of validate-armed's
+                    // FIFO; the #633 RESET probe clears it on the guest's
+                    // own substantive push and validation re-runs. A MANUAL
+                    // agent:rework label by a human still fires via
+                    // rework-on-label (any author, owner override).
+                    try {
+                        github_add_labels({
+                            workspace: effectiveRepoInfo.owner,
+                            repository: effectiveRepoInfo.repo,
+                            number: ticket.prNumber,
+                            labels: ['validation_failed']
+                        });
+                    } catch (eGuestPark) {
+                        console.warn('  ⚠️  guest park label failed: ' +
+                            (eGuestPark.message || eGuestPark));
                     }
                 }
                 console.log('  🔁 ' + key + ' validation failed — ' +
@@ -2785,10 +2726,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                             : 'rework re-queued' + (linked
                                 ? ' (issue #' + linked + ')'
                                 : ' \u2014 no linked issue, armed PR-anchored'))
-                        : (reworkCapped
-                            ? 'guest PR, parked (validation_failed) — rework cap reached (' +
-                              reworkArms + '/' + reworkMax + '), coordinator owns it from here'
-                            : 'guest PR, parked (validation_failed) + agent:rework armed on the PR')));
+                        : 'guest PR, parked (validation_failed) — no rework arm' +
+                          ' (auto-rework is machine-only, gh-757)'));
                 // Same-tick slot yield (owner directive 2026-10-04): the
                 // unarm (and the guest park add) just changed PR labels —
                 // drop the per-tick open-PRs cache so the LATER rules in
@@ -3177,42 +3116,20 @@ function failedRunLinksLine(repoInfo, ciWorkflow, headSha) {
     }
 }
 
-// ── Guest rework cap (review #701: unbounded guest rework cycle) ──────────
-//
-// The 2026-10-04 guest validation-red rework arm is PR-anchored and fires
-// on EVERY red verdict — a persistently-red guest PR (the rework agent
-// pushes a head that goes red again) would loop arm→rework→red→arm
-// forever. The cap counts prior arms via the marker line appended to each
-// guest fail report: 'guest rework arm N/MAX (owner directive 2026-10-04)'.
-// Counting is per-PR (NOT per-head): every rework cycle pushes a NEW head,
-// so a per-head count would reset to zero each lap and never cap anything.
-// MAX: jobParams.guestReworkMaxAttempts (default 2). At N >= MAX the arm
-// is withheld — the coordinator owns the PR from there.
-
-var GUEST_REWORK_DEFAULT_MAX = 2;
-var GUEST_REWORK_ARM_MARK_RE = /guest rework arm (\d+)/g;
-
-function guestReworkMaxAttempts(jobParams) {
-    var raw = jobParams && jobParams.guestReworkMaxAttempts;
-    var n = parseInt(raw, 10);
-    return (!isNaN(n) && n > 0) ? n : GUEST_REWORK_DEFAULT_MAX;
-}
-
-// ── One comment read per fail (review #703 💡, composition of #701 × #703)
+// ── One comment read per fail (review #703 💡) ────────────────────────────
 // ──
-// fail_validation needs THREE marker kinds before its arm decision —
-// #701's guest-rework arm count, this PR's red-head counts, and the
-// empty-lap counts — and each had its own github_get_pr_comments reader
-// (four fetches per fail after the rebase). THIS reader fetches the PR
-// comment list ONCE and parses every marker kind from the same payload:
+// fail_validation needs TWO marker kinds before its arm decision —
+// this PR's red-head counts and the empty-lap counts — and each had
+// its own github_get_pr_comments reader (four fetches per fail after
+// the rebase). THIS reader fetches the PR comment list ONCE and parses
+// every marker kind from the same payload:
 // { redHeads: { <headSha>: <highest recorded N> },
-//   emptyLaps: { <headSha>: <highest recorded N> },
-//   guestArms: <highest recorded N> }.
+//   emptyLaps: { <headSha>: <highest recorded N> }.
 // Probe failure fails OPEN (empty state → arm): a broken comment read
 // must not strand a red head that these caps exist to un-stall — the
 // next red re-reads and re-evaluates.
 function failMarkerState(repoInfo, prNumber) {
-    var out = { redHeads: {}, emptyLaps: {}, guestArms: 0 };
+    var out = { redHeads: {}, emptyLaps: {} };
     try {
         var raw = github_get_pr_comments({
             workspace: repoInfo.owner, repository: repoInfo.repo,
@@ -3232,11 +3149,6 @@ function failMarkerState(repoInfo, prNumber) {
             while ((m = EMPTY_LAP_MARKER_RE.exec(body)) !== null) {
                 var ln = parseInt(m[1], 10) || 0;
                 if (!out.emptyLaps[m[3]] || ln > out.emptyLaps[m[3]]) out.emptyLaps[m[3]] = ln;
-            }
-            GUEST_REWORK_ARM_MARK_RE.lastIndex = 0;
-            while ((m = GUEST_REWORK_ARM_MARK_RE.exec(body)) !== null) {
-                var gn = parseInt(m[1], 10);
-                if (!isNaN(gn) && gn > out.guestArms) out.guestArms = gn;
             }
         });
     } catch (eMarks) {
