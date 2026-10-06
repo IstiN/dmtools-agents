@@ -28,3 +28,6 @@ dmtools.env
 .dmtools/stall-capture.log
 .dmtools/fa-sessions/
 .dmtools-session-output.log
+-e 
+# playwright-cli scratch (live-board debugging)
+site/factory/.playwright-cli/
