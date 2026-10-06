@@ -63,6 +63,73 @@ suite('validateInputJql: extractTicketKeyFromJql', function() {
 
 });
 
+// ── GitHub key shapes (gh-770) ────────────────────────────────────────────────
+// The machine loop keys issues 'gh-N'; the gate must not abort GitHub-backed
+// legs with "Invalid or missing Jira ticket key".
+
+suite('validateInputJql: extractTicketKeyFromJql — GitHub key shapes (gh-770)', function() {
+
+    test('extracts the gh-N router key as written (case preserved)', function() {
+        var v = makeValidator();
+        assert.equal(v.extractTicketKeyFromJql('key = gh-1308'), 'gh-1308');
+        assert.equal(v.extractTicketKeyFromJql('key in (gh-7)'), 'gh-7');
+    });
+
+    test('extracts composite owner/repo#N, #N and bare-number keys', function() {
+        var v = makeValidator();
+        assert.equal(v.extractTicketKeyFromJql('key = acme/widgets#12'), 'acme/widgets#12');
+        assert.equal(v.extractTicketKeyFromJql('key = #12'), '#12');
+        assert.equal(v.extractTicketKeyFromJql('key = 12'), '12');
+    });
+
+    test('still normalises Jira keys to uppercase', function() {
+        var v = makeValidator();
+        assert.equal(v.extractTicketKeyFromJql('key = proj-42'), 'PROJ-42');
+    });
+
+});
+
+suite('validateInputJql: validateTicketKeyFormat — GitHub key shapes (gh-770)', function() {
+
+    test('accepts the gh-N router key', function() {
+        var v = makeValidator();
+        assert.doesNotThrow(function() { v.validateTicketKeyFormat('gh-1308'); });
+    });
+
+    test('accepts composite owner/repo#N, #N and bare-number keys', function() {
+        var v = makeValidator();
+        assert.doesNotThrow(function() { v.validateTicketKeyFormat('acme/widgets#123'); });
+        assert.doesNotThrow(function() { v.validateTicketKeyFormat('#123'); });
+        assert.doesNotThrow(function() { v.validateTicketKeyFormat('123'); });
+    });
+
+    test('still rejects lowercase Jira keys and junk', function() {
+        var v = makeValidator();
+        assert.throws(function() { v.validateTicketKeyFormat('proj-123'); }, /Invalid or missing/);
+        assert.throws(function() { v.validateTicketKeyFormat('PROJ'); }, /Invalid or missing/);
+        assert.throws(function() { v.validateTicketKeyFormat('gh-abc'); }, /Invalid or missing/);
+        assert.throws(function() { v.validateTicketKeyFormat(null); }, /Invalid or missing/);
+    });
+
+});
+
+suite('validateInputJql: validateAndRequireTicket — GitHub key shapes (gh-770)', function() {
+
+    test('succeeds for inputJql "key = gh-12" when the issue exists', function() {
+        var v = makeValidator(existingTicketMock('gh-12'));
+        var ticket = v.validateAndRequireTicket({ jobParams: { inputJql: 'key = gh-12' } });
+        assert.equal(ticket.key, 'gh-12');
+    });
+
+    test('reports the gh-N key as not found when the issue is missing', function() {
+        var v = makeValidator(function() { return null; });
+        assert.throws(function() {
+            v.validateAndRequireTicket({ jobParams: { inputJql: 'key = gh-99' } });
+        }, /not found/i);
+    });
+
+});
+
 // ── validateTicketKeyFormat ───────────────────────────────────────────────────
 
 suite('validateInputJql: validateTicketKeyFormat', function() {

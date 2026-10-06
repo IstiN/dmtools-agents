@@ -10,25 +10,53 @@
 // Accepts PROJECT-123 or PROJECT_CODE-123 (uppercase project key, numeric id)
 var TICKET_KEY_RE = /^[A-Z][A-Z0-9_]*-\d+$/;
 
+// GitHub issue key shapes (gh-770) — same convention list as
+// commentMarkup's GITHUB_KEY_SHAPES: 'gh-N' is the machine-loop router key,
+// 'owner/repo#N' the composite form, '#N' and bare 'N' appear in dispatch
+// payloads. A tracker-agnostic gate must not abort GitHub-backed legs with
+// "Invalid or missing Jira ticket key".
+var GITHUB_KEY_SHAPES = [
+    /^gh-\d+$/i,
+    /^[\w.-]+\/[\w.-]+#\d+$/,
+    /^#\d+$/,
+    /^\d+$/
+];
+
+function isGitHubKeyShape(key) {
+    var k = String(key == null ? '' : key).trim();
+    for (var i = 0; i < GITHUB_KEY_SHAPES.length; i++) {
+        if (GITHUB_KEY_SHAPES[i].test(k)) return true;
+    }
+    return false;
+}
+
 /**
  * Extract the ticket key from an inputJql string.
- * Handles both "key = PROJ-1" and "key in (PROJ-1)" forms.
+ * Handles "key = KEY", "key in (KEY)" and the GitHub key shapes.
  * @param {string} jql
  * @returns {string|null}
  */
 function extractTicketKeyFromJql(jql) {
     if (!jql || typeof jql !== 'string') return null;
+    // GitHub shapes are matched FIRST so gh-N keys keep their original case —
+    // uppercasing would mint 'GH-12', a different key from the 'gh-12' the
+    // machine loop created. (A Jira project literally keyed 'GH' is unaffected:
+    // its keys already match the Jira shape unchanged.)
+    var gh = jql.match(/key\s*(?:=|in\s*\()\s*(gh-\d+|[\w.-]+\/[\w.-]+#\d+|#\d+|\d+)/i);
+    if (gh && gh[1]) return gh[1];
     var m = jql.match(/key\s*(?:=|in\s*\()\s*([A-Z][A-Z0-9_]*-\d+)/i);
     return m ? m[1].toUpperCase() : null;
 }
 
 /**
- * Throw if key is null or does not match the expected Jira key format.
+ * Throw if key is null or does not match an expected ticket key format
+ * (Jira PROJECT-123 or a GitHub issue key shape).
  * @param {string|null} key
  */
 function validateTicketKeyFormat(key) {
-    if (!key || !TICKET_KEY_RE.test(key)) {
-        throw new Error('Invalid or missing Jira ticket key: "' + key + '". Expected format: PROJECT-123');
+    if (!key || (!TICKET_KEY_RE.test(key) && !isGitHubKeyShape(key))) {
+        throw new Error('Invalid or missing ticket key: "' + key +
+            '". Expected a Jira key (PROJECT-123) or a GitHub issue key (gh-123, owner/repo#123, #123, 123)');
     }
 }
 
