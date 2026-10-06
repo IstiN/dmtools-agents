@@ -116,6 +116,56 @@ suite('agentDocGenerator', function() {
         assert.contains(written.content, 'agents/snapshots/pr_review.md');
     });
 
+    test('gh-761: the timer must never publish a "git merge" side effect — real timerAutoCommitAndSave.js source stays clean', function() {
+        // collectSideEffects() matches /git merge/g against RAW source — comments
+        // included. A comment mentioning `git merge` in timerAutoCommitAndSave.js
+        // (the timerJSAction of story_development / bug_development / pr_rework)
+        // made the docs-freshness gate red with a FALSE side effect: the gh-761
+        // timer only REFUSES to run while a merge is in progress, it never merges.
+        // This test pins the real source file, not a synthetic fixture.
+        var timerSource = file_read({ path: 'js/timerAutoCommitAndSave.js' });
+        assert.ok(timerSource && timerSource.indexOf('isMergeInProgress') !== -1,
+            'precondition: the real timer source was loaded');
+
+        var sampleAgent = JSON.stringify({
+            name: 'Teammate',
+            params: {
+                metadata: { contextId: 'story_development' },
+                outputType: 'none',
+                timerJSAction: 'agents/js/timerAutoCommitAndSave.js'
+            }
+        }, null, 2);
+
+        var mock = makeMockFs({
+            'agents/js/agentDocGenerator.js': '// probe',
+            'agents/story_development.json': sampleAgent,
+            'agents/js/timerAutoCommitAndSave.js': timerSource
+        });
+
+        var generator = loadModule(
+            'js/agentDocGenerator.js',
+            makeRequire({
+                'fs': mock.fs,
+                'path': makeMockPath()
+            }),
+            {}
+        );
+
+        var result = generator.generate();
+        assert.equal(result.success, true);
+        assert.equal(result.generated, 1);
+
+        var doc = mock.calls.write[0].content;
+        var timerSection = doc.substring(doc.indexOf('timerJSAction'));
+        assert.contains(timerSection, 'timerAutoCommitAndSave.js');
+        assert.contains(timerSection, 'git push');
+        assert.equal(timerSection.indexOf('git merge') !== -1, false,
+            'timer section must NOT list "git merge" — the timer refuses merges (gh-761). ' +
+            'If this fires, the source text (comment included) mentions "git merge" and ' +
+            'the doc generator would publish it as a false side effect (docs-freshness red). ' +
+            'Reword the comment instead of fixing the doc.');
+    });
+
     test('ignores sm.json, sm_merge.json and run_ files', function() {
         var mock = makeMockFs({
             'agents/js/agentDocGenerator.js': '// probe',
