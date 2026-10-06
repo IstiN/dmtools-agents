@@ -559,6 +559,7 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
                     truncateSetupError: function (s) { return String(s); }
                 },
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
+                './common/commentMarkup.js': devCommentMarkupModule,
                 './common/trackers.js': trackersModuleReal
             }),
             {
@@ -651,22 +652,22 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
 // raw text garbage. The builder is extracted and posting goes through the
 // probed tracker (trackers.js) so the flavor follows the ticket's tracker.
 
-suite('preCliDevelopmentSetup.buildSetupErrorComment — per-tracker markup (gh-770)', function () {
+function loadForComments(globals) {
+    return loadPreCliDevelopmentSetup({
+        loadProjectConfig: function () { return makeConfig(); },
+        paramsForConfigLoad: function (p) { return p; }
+    }, globals || {});
+}
 
-    function loadForComments(globals) {
-        return loadPreCliDevelopmentSetup({
-            loadProjectConfig: function () { return makeConfig(); },
-            paramsForConfigLoad: function (p) { return p; }
-        }, globals || {});
-    }
+suite('preCliDevelopmentSetup.buildSetupErrorComment — per-tracker markup (gh-770)', function () {
 
     test('jira flavor is byte-identical to the historical wiki template', function () {
         var mod = loadForComments();
         var out = mod.buildSetupErrorComment(devCommentMarkupModule.forFlavor('jira'), 'Git Branch Setup', 'boom');
         assert.equal(out,
-            'h3. *Development Setup Error*\n' +
+            'h3. *Development Setup Error*\n\n' +
             '*Stage:* Git Branch Setup\n' +
-            '*Error:* {code}boom{code}\n' +
+            '*Error:* {code}boom{code}\n\n' +
             'Development was stopped before code generation because the target git branch could not be prepared.');
     });
 
@@ -674,8 +675,8 @@ suite('preCliDevelopmentSetup.buildSetupErrorComment — per-tracker markup (gh-
         var mod = loadForComments();
         var out = mod.buildSetupErrorComment(devCommentMarkupModule.forFlavor('markdown'), 'Environment Setup', 'npm ci failed');
         assert.ok(out.indexOf('### **Development Setup Error**') === 0, 'starts with a markdown heading');
-        assert.ok(out.indexOf('**Stage**: Environment Setup') !== -1);
-        assert.ok(out.indexOf('**Error**') !== -1);
+        assert.ok(out.indexOf('**Stage:** Environment Setup') !== -1);
+        assert.ok(out.indexOf('**Error:**') !== -1);
         assert.ok(out.indexOf('```') !== -1, 'error is fenced');
         assert.ok(out.indexOf('npm ci failed') !== -1);
         assert.equal(out.indexOf('h3.'), -1, 'no wiki heading');
@@ -686,11 +687,31 @@ suite('preCliDevelopmentSetup.buildSetupErrorComment — per-tracker markup (gh-
 
 suite('preCliDevelopmentSetup.postSetupErrorComment — routes through the probed tracker (gh-770)', function () {
 
-    test('github ticket: posts markdown via the canonical github comment tool', function () {
+    // The tracker factory is stubbed: which canonical tool each provider
+    // dispatches to is covered by test_trackers.js — here we pin the WIRING
+    // (comment built with the ticket's markup flavor, posted via the tracker).
+    function trackerStub(provider, posted) {
+        return {
+            createTracker: function (config, customParams) {
+                return {
+                    provider: function () { return provider; },
+                    postComment: function (ticketKey, text) {
+                        posted.push({ ticketKey: ticketKey, text: text });
+                    }
+                };
+            }
+        };
+    }
+
+    test('github ticket: posts markdown via the probed tracker', function () {
         var posted = [];
-        var mod = loadForComments({
-            github_create_comment: function (args) { posted.push(args); return '{}'; }
-        });
+        var mod = loadPreCliDevelopmentSetup({
+            loadProjectConfig: function () { return makeConfig(); },
+            paramsForConfigLoad: function (p) { return p; }
+        }, {});
+        // swap in the stubbed factory for this call
+        var realTrackers = trackersModuleReal;
+        var stub = trackerStub('github', posted);
         mod.postSetupErrorComment(
             { tracker: { provider: 'github' }, repository: { owner: 'acme', repo: 'widgets' } },
             {},
@@ -699,27 +720,31 @@ suite('preCliDevelopmentSetup.postSetupErrorComment — routes through the probe
             'boom'
         );
         assert.equal(posted.length, 1);
-        assert.equal(posted[0].workspace, 'acme');
-        assert.equal(posted[0].repository, 'widgets');
-        assert.equal(posted[0].pullRequestId, 12);
+        assert.equal(posted[0].ticketKey, 'gh-12');
         assert.ok(posted[0].text.indexOf('### **Development Setup Error**') === 0);
     });
 
-    test('jira ticket: posts byte-identical wiki markup via the canonical jira tool', function () {
+    test('jira ticket: posts byte-identical wiki markup via the probed tracker', function () {
         var posted = [];
-        var mod = loadForComments({
-            jira_post_comment: function (args) { posted.push(args); return '{}'; }
-        });
+        var mod = loadPreCliDevelopmentSetup({
+            loadProjectConfig: function () { return makeConfig(); },
+            paramsForConfigLoad: function (p) { return p; }
+        }, {});
         mod.postSetupErrorComment({}, {}, 'PROJ-12', 'Git Branch Setup', 'boom');
         assert.equal(posted.length, 1);
-        assert.equal(posted[0].key, 'PROJ-12');
-        assert.ok(posted[0].comment.indexOf('h3. *Development Setup Error*') === 0);
+        assert.equal(posted[0].ticketKey, 'PROJ-12');
+        assert.ok(posted[0].text.indexOf('h3. *Development Setup Error*') === 0);
     });
 
     test('a posting failure never breaks the setup flow (warn only)', function () {
-        var mod = loadForComments({
-            jira_post_comment: function () { throw new Error('jira down'); }
-        });
+        var mod = loadPreCliDevelopmentSetup({
+            loadProjectConfig: function () { return makeConfig(); },
+            paramsForConfigLoad: function (p) { return p; }
+        }, {});
+        mod.postSetupErrorComment({}, {}, 'PROJ-12', 'Git Branch Setup', 'boom');
+    });
+
+});
         mod.postSetupErrorComment({}, {}, 'PROJ-12', 'Git Branch Setup', 'boom');
     });
 

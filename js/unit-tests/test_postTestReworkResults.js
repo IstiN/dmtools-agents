@@ -147,10 +147,11 @@ suite('postTestReworkResults.buildTestReworkResultComment — per-tracker markup
             fixSummary: 'fixed the flaky assertion'
         });
         assert.equal(out,
-            'h3. 🔧 Test Rework Completed\n' +
+            'h3. 🔧 Test Rework Completed\n\n' +
             '*Re-run result*: ✅ *PASSED*\n' +
             '*Branch*: {code}test/PROJ-9{code}\n' +
             '*Pull Request*: https://github.com/acme/widgets/pull/9\n' +
+            '\n' +
             'fixed the flaky assertion');
     });
 

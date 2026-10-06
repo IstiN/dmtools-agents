@@ -496,8 +496,8 @@ var truncateForComment = setupCommands.truncateSetupError;
 function buildSetupErrorComment(flavor, stage, errorMessage) {
     var m = flavor;
     return m.h(3, m.bold('Development Setup Error')) + '\n\n' +
-        m.bold('Stage') + ': ' + stage + '\n' +
-        m.bold('Error') + ': ' + m.code(truncateForComment(errorMessage)) + '\n\n' +
+        m.bold('Stage:') + ' ' + stage + '\n' +
+        m.bold('Error:') + ' ' + m.code(truncateForComment(errorMessage)) + '\n\n' +
         'Development was stopped before code generation because the target git branch could not be prepared.';
 }
 

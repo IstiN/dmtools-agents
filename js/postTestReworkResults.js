@@ -33,7 +33,7 @@ var commentMarkup = require('./common/commentMarkup.js');
 function buildTestReworkResultComment(flavor, ctx) {
     var m = flavor;
     var statusEmoji = ctx.passed ? '✅' : '❌';
-    var comment = m.h(3, '🔧 Test Rework Completed') + '\n' +
+    var comment = m.h(3, '🔧 Test Rework Completed') + '\n\n' +
         m.bold('Re-run result') + ': ' + statusEmoji + ' ' + m.bold(String(ctx.testStatus).toUpperCase()) + '\n' +
         m.bold('Branch') + ': ' + m.code(ctx.branchName) + '\n';
     if (ctx.prUrl) {
@@ -454,7 +454,7 @@ function action(params) {
             try {
                 tracker.postComment(
                     ticketKey,
-                    mErr.h(3, '⚠️ Rework Error')\n\n + errMsg + '\n\nCheck CI logs for the agent output.'
+                    mErr.h(3, '⚠️ Rework Error') + '\n\n' + errMsg + '\n\nCheck CI logs for the agent output.'
                 );
             } catch (e) {}
             releaseLock();
@@ -518,7 +518,7 @@ function action(params) {
             }
             trackersModule.createTracker(config, customParams).postComment(
                 ticketKey,
-                commentMarkup.forTicket(ticketKey, customParams).h(3, '❌ Rework Push Failed')\n\n + commentMarkup.forTicket(ticketKey, customParams).code(e.toString())
+                commentMarkup.forTicket(ticketKey, customParams).h(3, '❌ Rework Push Failed') + '\n\n' + commentMarkup.forTicket(ticketKey, customParams).code(e.toString())
             );
             releaseLock();
             return { success: false, error: e.toString() };
@@ -645,7 +645,7 @@ function action(params) {
                 var em = commentMarkup.forTicket(key, catchCustomParams);
                 trackersModule.createTracker(config, catchCustomParams).postComment(
                     key,
-                    em.h(3, '❌ Test Rework Error')\n\n + em.code(error.toString())
+                    em.h(3, '❌ Test Rework Error') + '\n\n' + em.code(error.toString())
                 );
             }
         } catch (e) {}
@@ -655,5 +655,11 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, resolveCustomParams, commitIfNeeded, commitAndPush };
+    module.exports = {
+        action,
+        resolveCustomParams,
+        commitIfNeeded,
+        commitAndPush,
+        buildTestReworkResultComment
+    };
 }

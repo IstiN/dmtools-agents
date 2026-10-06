@@ -123,7 +123,7 @@ function failSetup(tracker, ticketKey, inputFolder, message, customParams) {
         var m = commentMarkup.forTicket(ticketKey, customParams);
         tracker.postComment(
             ticketKey,
-            m.h(3, '❌ Rework Setup Failed') + '\n' + truncateForComment(message)
+            m.h(3, '❌ Rework Setup Failed') + '\n\n' + truncateForComment(message)
         );
     } catch (e) {
         // PR-anchored reworks (#544): a 'pr-N' key parses to no tracker
@@ -192,7 +192,7 @@ function action(params) {
             const err = 'Could not determine GitHub repository from git remote';
             try {
                 var mRepoFail = commentMarkup.forTicket(ticketKey, customParams);
-                tracker.postComment(ticketKey, mRepoFail.h(3, '❌ Rework Setup Failed') + '\n' + err);
+                tracker.postComment(ticketKey, mRepoFail.h(3, '❌ Rework Setup Failed') + '\n\n' + err);
             } catch (e) {}
             return { success: false, error: err };
         }
