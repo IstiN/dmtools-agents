@@ -14,6 +14,7 @@ var configLoader = require('./configLoader.js');
 var autoStart = require('./common/autoStart.js');
 var feedbackLoop = require('./common/feedbackLoop.js');
 var prHelper = require('./common/pullRequest.js');
+var mergeState = require('./common/mergeState.js');
 const { GIT_CONFIG, LABELS } = require('./config.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
@@ -84,13 +85,17 @@ function updatePullRequestBody(scm, prNumber, ticketKey, testStatus, bodyContent
     }
 }
 
+/**
+ * gh-761: canonical MERGE_HEAD probe (js/common/mergeState.js). The previous
+ * local duplicate drifted — it returned true on ANY non-throwing call, so a
+ * non-throwing command with empty output read as "merge in progress" and
+ * silently skipped rework commits and base-branch merges. The canonical
+ * probe requires non-empty output (the merge-head SHA).
+ */
 function isMergeInProgress() {
-    try {
-        cli_execute_command({ command: 'git rev-parse --quiet --verify MERGE_HEAD' });
-        return true;
-    } catch (e) {
-        return false;
-    }
+    return mergeState.isMergeInProgress(function (command) {
+        return cli_execute_command({ command: command });
+    });
 }
 
 function isSubmodulePath(path) {
@@ -610,5 +615,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, resolveCustomParams };
+    module.exports = { action, resolveCustomParams, commitIfNeeded, commitAndPush };
 }

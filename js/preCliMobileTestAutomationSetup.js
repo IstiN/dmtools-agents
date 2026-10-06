@@ -23,6 +23,7 @@
 
 var configLoader = require('./configLoader.js');
 var prHelper = require('./common/pullRequest.js');
+var mergeState = require('./common/mergeState.js');
 const { STATUSES } = require('./config.js');
 
 function cleanCommandOutput(output) {
@@ -71,6 +72,19 @@ function checkoutAutomationBranch(ticketKey, config) {
     );
 
     function syncWithBase() {
+        // gh-761: never start a rebase or merge on top of an unconcluded
+        // merge (MERGE_HEAD present — e.g. the agent left a conflicted
+        // base-branch merge unresolved). The rebase would fail, and the
+        // merge fallback below would then fail with "You have not concluded
+        // your merge" and SILENTLY `git merge --abort` the agent's in-flight
+        // resolution — destroying work this setup step did not start. Leave
+        // the tree exactly as the agent left it; the agent concludes (or
+        // aborts) the merge itself.
+        if (mergeState.isMergeInProgress(runInRepo, workingDir)) {
+            console.warn('⚠️ MERGE_HEAD exists in ' + workingDir +
+                ' — a merge is already in progress; skipping base-branch sync (rebase/merge on top of it would finalize or abort the in-flight merge)');
+            return;
+        }
         try {
             runInRepo('git rebase origin/' + baseBranch, workingDir);
             console.log('✅ Rebase succeeded');
