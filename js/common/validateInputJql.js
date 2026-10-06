@@ -37,8 +37,9 @@ function extractTicketKeyFromJql(jql) {
     if (!jql || typeof jql !== 'string') return null;
     var m = jql.match(KEY_EXTRACTION_RE);
     if (!m || !m[1]) return null;
-    // Jira keys are normalized to uppercase; GitHub shapes pass through as
-    // written (they cannot match the uppercase Jira branch's shape).
+    // The Jira branch is case-insensitive, so it can also match a gh-N key —
+    // the shape check therefore decides: GitHub keys return as written (no
+    // 'GH-12' minting), everything else is a Jira key and uppercases.
     return ticketKeyShapes.isGitHubKeyShape(m[1]) ? m[1] : m[1].toUpperCase();
 }
 
