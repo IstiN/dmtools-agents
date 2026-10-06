@@ -219,6 +219,7 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
         });
         assert.equal(m._uploadRawFileCalls.length, 1,
             'session log snapshot must still upload while the merge is unconcluded');
+        assert.ok(fileWriteCalls.length >= 1, 'snapshot file written before upload');
     });
 
     test('commits and pushes when there are changes', function() {
