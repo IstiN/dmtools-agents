@@ -224,6 +224,7 @@ function makeSmAgent(opts) {
         // rollup — conclusions exactly as the REST commit check-runs tool
         // returns them (lowercase).
         smMocks.github_get_commit_check_runs = function () {
+            if (opts.github.commitCheckRunsError) throw new Error(opts.github.commitCheckRunsError);
             return JSON.stringify(opts.github.commitCheckRuns || { check_runs: [] });
         };
         smMocks.set_env_variable = function (name, value) {
@@ -2193,6 +2194,33 @@ suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', f
             'the standard fail report posts (guest PR → report + park + PR-anchored rework arm, 2026-10-04)');
         assert.ok(sm.capturedPrComments[0].body.indexOf('went red') !== -1,
             'the report says validation went red');
+    });
+
+    test('sweep_stale_validation: stale red dispatched run but the head rollup is cancelled-only → NO fail path (gh-755)', function () {
+        // The sweep probed the DISPATCHED run (concluded failure, stale) —
+        // but the head's check rollup at arm time reads cancelled-only (a
+        // concurrency cancel superseded the failed attempt's re-stamp, or
+        // the kicker wave cancelled everything after the 15m window).
+        // CANCELLED is never a verdict: the shared fail-path guard skips —
+        // no unarm, no park, no report; the rerun-cancelled-checks remedy
+        // re-stamps and the next sweep sees the fresh word.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(756, { labels: ['pr_approved', 'ai_validating'], headSha: 'sha756' })],
+                pr: { number: 756, body: 'no closing keyword' },
+                commitCheckRuns: { check_runs: [
+                    { name: 'quality / validation', conclusion: 'cancelled', status: 'completed' },
+                    { name: 'kicker / sm-liveness', conclusion: 'cancelled', status: 'completed' }
+                ] }
+            },
+            onCliExecute: runsCli({ run: oldRun('failure', 'sha756') })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'the ai_validating arm stays on — a cancelled-only rollup is no verdict');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no ai_validated latch, no validation_failed park');
+        assert.equal(sm.capturedPrComments.length, 0, 'no red report on a cancelled-only head');
     });
 
     test('sweep_stale_validation: fresh conclusion (< staleMinutes) → arm stays (verdict race window)', function () {
@@ -5973,6 +6001,349 @@ suite('smAgent: rerun_cancelled_checks (gh-682)', function () {
             'the remedy runs before any verdict rule can act on the dead head');
         assert.ok(own.index < byId['sweep-stale-validating'].index,
             'and before the 15-min sweep (cancelled conclusions never sweep, but order is belt-and-suspenders)');
+    });
+});
+suite('smAgent: gh-755 deployed rerun rules are author-disjoint (sm_github.json shape)', function () {
+    // gh-755 (owner directive 2026-10-05): cancelled checks must auto-rerun
+    // and never arm rework. The rerun remedy splits by authorship:
+    // rerun-cancelled-checks keeps the named branch-protection contexts for
+    // GUEST heads (query.notMachine); the new rerun-any-cancelled-checks
+    // sibling reruns ANY cancelled context on MACHINE-authored heads
+    // (query.prMachineAuthor + rule.anyCancelled). Disjointness is what
+    // keeps the rerun single-shot: exactly one rerun rule matches any PR,
+    // so no run is rerun twice and the once-per-head markers never
+    // interfere.
+
+    function deployed() {
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = cfg.params.jobParams.rules;
+        var byId = {};
+        rules.forEach(function (r, i) { byId[r.id] = { rule: r, index: i }; });
+        return byId;
+    }
+
+    test('the ANY-cancelled sibling exists, machine-only, directly after the named rule', function () {
+        var byId = deployed();
+        var named = byId['rerun-cancelled-checks'];
+        var sib = byId['rerun-any-cancelled-checks'];
+        assert.ok(sib, 'rerun-any-cancelled-checks exists in the deployed rules');
+        assert.equal(sib.rule.localAction, 'rerun_cancelled_checks', 'same localAction, ANY mode');
+        assert.equal(sib.rule.anyCancelled, true, 'ANY-cancelled mode flag is set');
+        assert.ok(!sib.rule.requiredContexts,
+            'ANY mode carries no name list (requiredContexts would narrow the rerun set)');
+        assert.equal(sib.rule.query.prMachineAuthor, true,
+            'auto-rerun of ANY context is machine-author-gated (fails closed)');
+        assert.equal(named.rule.query.notMachine, true,
+            'the named rule is now guest-only — author-disjoint twins');
+        assert.equal(sib.index, named.index + 1,
+            'the sibling sits immediately after the named rule (cancel remedies stay first)');
+        assert.ok(sib.index < byId['merge-validated'].index,
+            'still ahead of every verdict rule');
+        // Query parity with the named rule (same armed audience, same
+        // exclusions) — only the authorship gate differs.
+        assert.deepEqual(sib.rule.query.labels, named.rule.query.labels);
+        assert.deepEqual(sib.rule.query.notLabels, named.rule.query.notLabels);
+        assert.deepEqual(sib.rule.query.notMergeState, named.rule.query.notMergeState);
+        assert.equal(sib.rule.query.draft, false);
+        assert.equal(sib.rule.limit, named.rule.limit, 'same per-tick pacing');
+    });
+});
+suite('smAgent: rerun_cancelled_checks ANY mode (gh-755)', function () {
+
+    var RULE_ANY = {
+        description: 'any cancelled check -> rerun (machine-authored heads)',
+        source: 'github',
+        query: {
+            type: 'pr',
+            labels: ['ai_validating', 'ai_validated'],
+            notLabels: ['agent:rework'],
+            notMergeState: ['BEHIND', 'DIRTY'],
+            draft: false,
+            prMachineAuthor: true
+        },
+        localAction: 'rerun_cancelled_checks',
+        anyCancelled: true,
+        limit: 2,
+        id: 'rerun-any-cancelled-checks'
+    };
+
+    function prItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['ai_validating'], issueNumber: null,
+                   prNumber: n, draft: false, branch: 'ai/gh-755',
+                   pr: { headSha: '755abc' } };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function cliAny(opts) {
+        return function (cmdOpts) {
+            var c = cmdOpts.command;
+            if (c.indexOf('runs?head_sha=') !== -1) {
+                return JSON.stringify({ workflow_runs: opts.headRuns || [] });
+            }
+            var m = /runs\/(\d+)\/jobs/.exec(c);
+            if (m) {
+                return JSON.stringify({ jobs: (opts.jobsByRun || {})[m[1]] || [] });
+            }
+            return '';
+        };
+    }
+
+    function paramsAny() {
+        return { jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            machineAuthor: 'ai-teammate', rules: [RULE_ANY] } };
+    }
+
+    function smAny(checkRuns, cliOpts, prComments) {
+        return makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "IstiN", repo: "flutter_agent_harness" } };' },
+            github: {
+                items: [prItem(755)],
+                commitCheckRuns: checkRuns,
+                prComments: prComments || []
+            },
+            onCliExecute: cliAny(cliOpts || {})
+        });
+    }
+
+    test('ANY mode reruns cancelled contexts across MULTIPLE runs (two runs -> two reruns)', function () {
+        // The live gap (gh-755): sm-liveness died on the kicker run,
+        // docs-freshness on its own workflow run — neither is a
+        // branch-protection requiredContext, the named rule never saw
+        // them. ANY mode remediates both in one pass.
+        var sm = smAny(
+            { check_runs: [
+                { name: 'kicker / sm-liveness', conclusion: 'cancelled', status: 'completed' },
+                { name: 'docs-freshness', conclusion: 'cancelled', status: 'completed' }
+            ] },
+            { headRuns: [
+                { id: 555001, status: 'completed', conclusion: 'cancelled',
+                  head_sha: '755abc', run_attempt: 1,
+                  created_at: '2026-10-05T10:00:00Z', updated_at: '2026-10-05T10:00:02Z' },
+                { id: 555002, status: 'completed', conclusion: 'cancelled',
+                  head_sha: '755abc', run_attempt: 1,
+                  created_at: '2026-10-05T10:00:01Z', updated_at: '2026-10-05T10:00:03Z' }
+            ],
+              jobsByRun: {
+                  555001: [{ name: 'kicker / sm-liveness' }],
+                  555002: [{ name: 'docs-freshness' }]
+              } });
+
+        sm.action(paramsAny());
+
+        var reruns = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh run rerun') === 0;
+        });
+        assert.equal(reruns.length, 2, 'one rerun per cancelled RUN');
+        assert.ok(reruns.some(function (r) { return r.command.indexOf('gh run rerun 555001 ') === 0; }));
+        assert.ok(reruns.some(function (r) { return r.command.indexOf('gh run rerun 555002 ') === 0; }));
+        assert.equal(sm.capturedPrComments.length, 1, 'full coverage -> marker posts');
+        var body = sm.capturedPrComments[0].body;
+        assert.ok(body.indexOf('755abc') !== -1, 'carries the head sha (per-head dedup key)');
+        assert.ok(body.indexOf('kicker / sm-liveness') !== -1 && body.indexOf('docs-freshness') !== -1,
+            'names every rerun context');
+        assert.ok(body.indexOf('gh-755') !== -1, 'cites the gh-755 evidence (not the #682 wave)');
+    });
+
+    test('ANY mode ignores a present requiredContexts list — every latest-cancelled context acts', function () {
+        // anyCancelled is a superset by definition: a name list would only
+        // narrow the remedy back into the #752/#753 gap. Deliberate:
+        // anyCancelled WINS when both fields are present.
+        var sm = smAny(
+            { check_runs: [
+                { name: 'static', conclusion: 'success', status: 'completed' },
+                { name: 'docs-freshness', conclusion: 'cancelled', status: 'completed' }
+            ] },
+            { headRuns: [
+                { id: 555002, status: 'completed', conclusion: 'cancelled',
+                  head_sha: '755abc', run_attempt: 1,
+                  created_at: '2026-10-05T10:00:01Z', updated_at: '2026-10-05T10:00:03Z' }
+            ],
+              jobsByRun: { 555002: [{ name: 'docs-freshness' }] } });
+        var rule = Object.assign({}, RULE_ANY, { requiredContexts: ['static'] });
+
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            machineAuthor: 'ai-teammate', rules: [rule] } });
+
+        var reruns = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh run rerun') === 0;
+        });
+        assert.equal(reruns.length, 1, 'the non-required cancelled context reran (name list ignored)');
+        assert.equal(reruns[0].command, 'gh run rerun 555002 --repo IstiN/flutter_agent_harness');
+    });
+
+    test('#695 parity in ANY mode: stale cancel under a fresh green re-stamp does NOT act; a fresh cancel does', function () {
+        var sm = smAny(
+            { check_runs: [
+                { name: 'docs-freshness', conclusion: 'cancelled', status: 'completed',
+                  id: 11, started_at: '2026-10-05T10:00:00Z', completed_at: '2026-10-05T10:00:02Z' },
+                { name: 'docs-freshness', conclusion: 'success', status: 'completed',
+                  id: 12, started_at: '2026-10-05T10:05:00Z', completed_at: '2026-10-05T10:05:40Z' },
+                { name: 'kicker / sm-liveness', conclusion: 'success', status: 'completed',
+                  id: 13, started_at: '2026-10-05T10:00:00Z', completed_at: '2026-10-05T10:00:41Z' },
+                { name: 'kicker / sm-liveness', conclusion: 'cancelled', status: 'completed',
+                  id: 14, started_at: '2026-10-05T10:06:00Z', completed_at: '2026-10-05T10:06:40Z' }
+            ] },
+            { headRuns: [
+                { id: 555003, status: 'completed', conclusion: 'cancelled',
+                  head_sha: '755abc', run_attempt: 1,
+                  created_at: '2026-10-05T10:06:00Z', updated_at: '2026-10-05T10:06:40Z' }
+            ],
+              jobsByRun: { 555003: [{ name: 'kicker / sm-liveness' }] } });
+
+        sm.action(paramsAny());
+
+        var reruns = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh run rerun') === 0;
+        });
+        assert.equal(reruns.length, 1, 'only the context whose LATEST run is cancelled acts');
+        assert.equal(reruns[0].command, 'gh run rerun 555003 --repo IstiN/flutter_agent_harness');
+        assert.equal(sm.capturedPrComments.length, 1, 'full coverage -> marker posts');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('`kicker / sm-liveness`') !== -1);
+        assert.ok(sm.capturedPrComments[0].body.indexOf('`docs-freshness`') === -1,
+            'the re-stamped context is not claimed (backticked names = the rerun set only)');
+    });
+
+    test('once-per-head marker holds in ANY mode; attempt-2 runs are never re-rerun', function () {
+        var marker = '🔁 Cancelled required checks re-run: `docs-freshness` ended CANCELLED on this head — ' +
+            'evidence. (head `755abc`)';
+        var sm = smAny(
+            { check_runs: [
+                { name: 'docs-freshness', conclusion: 'cancelled', status: 'completed' }
+            ] },
+            { headRuns: [
+                { id: 555002, status: 'completed', conclusion: 'cancelled',
+                  head_sha: '755abc', run_attempt: 2,
+                  created_at: '2026-10-05T10:00:01Z', updated_at: '2026-10-05T10:00:03Z' }
+            ],
+              jobsByRun: { 555002: [{ name: 'docs-freshness' }] } },
+            [{ body: marker }]);
+
+        sm.action(paramsAny());
+
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh run rerun') === 0;
+        }).length, 0, 'marker on this head -> already remedied, waiting on the rerun');
+        assert.equal(sm.capturedPrComments.length, 0, 'no duplicate marker');
+    });
+});
+suite('smAgent: cancelled-only red is no-verdict — fail path skips (gh-755)', function () {
+    // gh-755 ask 2: fail-validation / rework armers must treat a
+    // cancelled-only rollup as NO verdict (skip, wait for the rerun) —
+    // never arm rework on it. The headline regression: a PR whose only
+    // red is a cancelled check gets a rerun (the remedy above), not an
+    // agent:rework leg.
+
+    var RULES = {
+        fail: { source: 'github', query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'red' },
+                localAction: 'fail_validation', limit: 1, id: 'fail-validation' }
+    };
+
+    function prItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved', 'ai_validating'], issueNumber: null,
+                   prNumber: n, draft: false, branch: 'ai/gh-755', author: 'ai-teammate',
+                   headSha: 'dead755aa' };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    function failRuns(checkRuns, extra) {
+        return Object.assign(config('a', 'b'), {
+            github: Object.assign({
+                items: [prItem(755)],
+                pr: { number: 755, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #750 — the thing' },
+                commitCheckRuns: checkRuns,
+                prComments: []
+            }, extra || {})
+        });
+    }
+
+    test('headline regression: only red is a cancelled check -> NO unarm, NO rework arm, NO report', function () {
+        // Query matched checks:red (the rollup snapshot read a red), but
+        // at ARM time every latest conclusion on the head is CANCELLED:
+        // the fail path must skip entirely — the rerun-cancelled-checks
+        // remedy re-stamps the contexts under the still-held ai_validating
+        // arm.
+        var sm = makeSmAgent(failRuns({ check_runs: [
+            { name: 'kicker / sm-liveness', conclusion: 'cancelled', status: 'completed' },
+            { name: 'docs-freshness', conclusion: 'cancelled', status: 'completed' }
+        ] }));
+
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'ai_validating stays armed — no verdict, the rerun re-stamps under it');
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'no agent:rework armed anywhere (issue or PR)');
+        assert.equal(sm.capturedPrComments.length, 0, 'no red report on a cancelled-only head');
+    });
+
+    test('a real FAILURE next to the cancels is still a verdict — the fail path proceeds', function () {
+        var sm = makeSmAgent(failRuns({ check_runs: [
+            { name: 'quality / validation', conclusion: 'failure', status: 'completed' },
+            { name: 'docs-freshness', conclusion: 'cancelled', status: 'completed' }
+        ] }));
+
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
+
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number + ':' + a.labels.join(','); }),
+            ['750:agent:rework'], 'the genuine failure re-arms rework on the linked issue');
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) { return r.label === 'ai_validating'; }),
+            'the arm is consumed as usual');
+        assert.equal(sm.capturedPrComments.length, 1, 'the red report posts');
+    });
+
+    test('#695 semantics in the guard: a FAILURE superseded by a fresh green re-stamp is no longer a verdict', function () {
+        // Latest-run-per-context: the failure history stays in the rollup,
+        // but the context now reads success — the guard mirrors
+        // computePrStatus (which would not call this head red either).
+        var sm = makeSmAgent(failRuns({ check_runs: [
+            { name: 'quality / validation', conclusion: 'failure', status: 'completed',
+              id: 21, started_at: '2026-10-05T10:00:00Z', completed_at: '2026-10-05T10:01:00Z' },
+            { name: 'quality / validation', conclusion: 'success', status: 'completed',
+              id: 22, started_at: '2026-10-05T10:05:00Z', completed_at: '2026-10-05T10:06:00Z' },
+            { name: 'docs-freshness', conclusion: 'cancelled', status: 'completed' }
+        ] }));
+
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'a re-stamped head is not a red head — no rework arm');
+        assert.equal(sm.capturedPrComments.length, 0, 'and no report');
+    });
+
+    test('TIMED_OUT counts as a real verdict; a bookkeeping FAILURE does not (#628 parity)', function () {
+        var timedOut = makeSmAgent(failRuns({ check_runs: [
+            { name: 'quality / validation', conclusion: 'timed_out', status: 'completed' }
+        ] }));
+        timedOut.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
+        assert.equal(timedOut.capturedPrLabelAdds.length, 1,
+            'TIMED_OUT is a verdict — the fail path proceeds');
+
+        var bookkeeping = makeSmAgent(failRuns({ check_runs: [
+            { name: 'kicker / sm-liveness', conclusion: 'failure', status: 'completed' },
+            { name: 'docs-freshness', conclusion: 'cancelled', status: 'completed' }
+        ] }));
+        bookkeeping.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
+        assert.equal(bookkeeping.capturedPrLabelAdds.length, 0,
+            'a bookkeeping FAILURE is not a verdict (#628: kicker noise is not CI) — no rework arm');
+    });
+
+    test('unreadable or empty action-time rollup fails OPEN — a degraded probe never launders a red', function () {
+        var errored = makeSmAgent(failRuns(null, { commitCheckRunsError: 'gh: 502 bad gateway' }));
+        errored.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
+        assert.equal(errored.capturedPrLabelAdds.length, 1,
+            'probe error -> the query-time red stands, rework arms');
+
+        var empty = makeSmAgent(failRuns({ check_runs: [] }));
+        empty.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [RULES.fail] } });
+        assert.equal(empty.capturedPrLabelAdds.length, 1,
+            'empty rollup (no check runs visible) is NOT a cancelled-only rollup — fail open');
     });
 });
 suite('smAgent: red yields the slot (owner directive 2026-10-04)', function () {

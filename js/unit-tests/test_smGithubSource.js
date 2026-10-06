@@ -984,6 +984,51 @@ suite('sm github source', function () {
         assert.equal(noKnob.length, 0, 'no machineAuthor configured — gate fails closed');
     });
 
+    test('gh-755 deployed rerun rules: author-disjoint twins route each PR to exactly one rerun rule', function () {
+        // The deployed sm_github.json split: rerun-cancelled-checks keeps
+        // the named branch-protection contexts for GUEST heads
+        // (notMachine); rerun-any-cancelled-checks reruns ANY cancelled
+        // context on MACHINE heads (prMachineAuthor, fails closed). The
+        // disjointness is what makes the rerun single-shot — one rule per
+        // PR, no double rerun, no marker interference.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var byId = {};
+        cfg.params.jobParams.rules.forEach(function (r) { byId[r.id] = r; });
+        var named = byId['rerun-cancelled-checks'];
+        var sib = byId['rerun-any-cancelled-checks'];
+        assert.ok(named && sib, 'both deployed rerun rules exist');
+
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    { number: 752, labels: [{ name: 'ai_validating' }], draft: false,
+                      author: { login: 'ai-teammate' } },
+                    { number: 753, labels: [{ name: 'ai_validating' }], draft: false,
+                      author: { login: 'vendor-guest' } }
+                ];
+            }
+        }, {}, {
+            752: { state: 'OPEN', checks: 'pending', mergeState: 'BLOCKED', mergeable: true },
+            753: { state: 'OPEN', checks: 'pending', mergeState: 'BLOCKED', mergeable: true }
+        });
+        var ctx = { repoInfo: { owner: 'a', repo: 'b' }, machineAuthor: 'ai-teammate' };
+
+        var namedItems = srcMod.query(named, ctx);
+        assert.equal(namedItems.map(function (i) { return i.key; }).join(','), 'pr-753',
+            'the named rule keeps GUEST heads only');
+
+        var sibItems = srcMod.query(sib, ctx);
+        assert.equal(sibItems.map(function (i) { return i.key; }).join(','), 'pr-752',
+            'the ANY-cancelled sibling claims MACHINE heads only');
+
+        var noKnob = srcMod.query(sib, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(noKnob.length, 0,
+            'no machineAuthor configured — the sibling fails closed; the named rule (notMachine inert) covers everyone');
+        var everyone = srcMod.query(named, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(everyone.map(function (i) { return i.key; }).join(','), 'pr-752,pr-753',
+            'degraded deployment: the named rule covers machine AND guest heads again');
+    });
+
     test('pr rules: release-bump PRs from the repo owner count as machine-authored (#1104)', function () {
         // Owner rule 2026-09-30: auto_release.sh (fa #1093) creates
         // chore/release-v* | chore(release): bump PRs through the owner's

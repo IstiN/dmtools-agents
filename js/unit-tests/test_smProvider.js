@@ -488,6 +488,39 @@ suite('smProvider', function () {
         assert.equal(st.mergeable, false);
     });
 
+    test('gitlab: prStatus — a cancelled pipeline is NOT a verdict (gh-755): cancelled-only reads pending', function () {
+        // gh-755 (owner directive 2026-10-05): a CANCELLED run is not a
+        // verdict — mapping it to red armed fail_validation/rework legs on
+        // heads whose only red was a cancel. GitHub parity (dart gh-191):
+        // cancelled folds to 'no verdict yet', validate-fresh/revalidate
+        // re-dispatch, the rerun-cancelled-checks remedy re-stamps.
+        var p = loadProvider('gitlab', {
+            gitlab_get_mr: function () { return { state: 'opened', merge_status: 'can_be_merged', has_conflicts: false }; },
+            gitlab_get_mr_pipelines: function () { return [{ status: 'canceled' }]; }
+        });
+        assert.equal(p.prStatus(11).checkConclusion, 'pending',
+            'cancelled-only rollup is pending — never red, never green');
+    });
+
+    test('gitlab: prStatus — cancelled next to green stays pending; failed next to cancelled still reads red', function () {
+        // GitHub parity: a cancel forces 'no verdict yet' EVEN next to a
+        // green pipeline (a cancelled run is the missing verdict), while a
+        // genuine failure anywhere keeps the rollup red.
+        var mixed = loadProvider('gitlab', {
+            gitlab_get_mr: function () { return { state: 'opened', merge_status: 'can_be_merged', has_conflicts: false }; },
+            gitlab_get_mr_pipelines: function () { return [{ status: 'success' }, { status: 'canceled' }]; }
+        });
+        assert.equal(mixed.prStatus(11).checkConclusion, 'pending',
+            'green + cancelled → pending (wait for the rerun)');
+
+        var failed = loadProvider('gitlab', {
+            gitlab_get_mr: function () { return { state: 'opened', merge_status: 'can_be_merged', has_conflicts: false }; },
+            gitlab_get_mr_pipelines: function () { return [{ status: 'failed' }, { status: 'canceled' }]; }
+        });
+        assert.equal(failed.prStatus(11).checkConclusion, 'red',
+            'a real failure is not laundered by a neighbouring cancel');
+    });
+
     test('gitlab: activeMachineRuns is conservative on API pipelines', function () {
         var p = loadProvider('gitlab', {
             gitlab_list_pipeline_runs: function () {
