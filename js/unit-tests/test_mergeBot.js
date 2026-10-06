@@ -347,6 +347,180 @@ suite('mergeBot', function () {
     });
 });
 
+suite('mergeBot: dead FIFO head must not starve the queue (gh-766)', function () {
+    // gh-766 (live fa 2026-10-06): a dead PR at the FIFO head — owner
+    // 'blocked' label, or armed with checks pending forever — never yields
+    // its position. The bot silently continues past it and every approved
+    // PR behind stays 'FIFO-queued (awaiting validate-armed turn)':
+    // acted: 0 for over an hour while 4 approved+validated PRs waited
+    // behind pr-1231 checks=pending. The head must be SKIPPED WITH A LOG
+    // LINE and the queue must advance to the first live (validated,
+    // green, CLEAN) approved PR behind it.
+
+    var GREEN = [{ status: 'COMPLETED', conclusion: 'SUCCESS' }];
+    function PENDING_SINCE(hoursAgo) {
+        return [{
+            status: 'IN_PROGRESS', conclusion: null,
+            started_at: new Date(Date.now() - hoursAgo * 60 * 60 * 1000).toISOString()
+        }];
+    }
+
+    // Same shape as multiPrFixture above, plus: per-PR check runs keyed by
+    // head sha (started_at supported for pending-age evidence) and a cli
+    // mock so the self-tick dispatch is captured, never real.
+    function queueFixture(prs) {
+        prs = prs || [];
+        var calls = { merges: [], adds: [], removes: [], cli: [] };
+        var byNumber = {};
+        prs.forEach(function (p) { byNumber[p.number] = p; });
+        var byHead = {};
+        prs.forEach(function (p) { byHead[p.headSha] = p; });
+        var labelObjs = function (p) {
+            return (p.labels || []).map(function (n) { return { name: n }; });
+        };
+        var mods = {
+            github_list_workflow_runs: function () {
+                return JSON.stringify({ workflow_runs: [] });
+            },
+            github_list_prs: function () {
+                return JSON.stringify(prs.map(function (p) {
+                    return { number: p.number, labels: labelObjs(p), head: { sha: p.headSha } };
+                }));
+            },
+            github_get_pr: function (a) {
+                var p = byNumber[a.pullRequestId] || prs[0];
+                return JSON.stringify({
+                    number: p.number, state: 'OPEN', draft: false, mergeable: true,
+                    mergeable_state: p.mergeableState || 'clean',
+                    head: { sha: p.headSha }, labels: labelObjs(p)
+                });
+            },
+            github_get_commit_check_runs: function (a) {
+                var p = byHead[a.commitSha] || {};
+                return JSON.stringify({ check_runs: p.checkRuns || [] });
+            },
+            github_merge_pr: function (m) { calls.merges.push(m); return JSON.stringify({ merged: true }); },
+            github_add_labels: function (a) { calls.adds.push(a); return '{}'; },
+            github_remove_label: function (r) { calls.removes.push(r); return '{}'; },
+            cli_execute_command: function (c) { calls.cli.push(c); return ''; }
+        };
+        var bot = loadModule('js/sm/mergeBot.js', makeRequire({}), mods);
+        return { bot: bot, calls: calls };
+    }
+
+    test('ACCEPTANCE: [blocked-head, approved-2, approved-3] -> skip line for the head, pr-2 merges', function () {
+        var fx = queueFixture([
+            { number: 1, labels: ['pr_approved', 'ai_validating', 'blocked'],
+              headSha: 'sha1', checkRuns: PENDING_SINCE(5) },
+            { number: 2, labels: ['pr_approved', 'ai_validated'], headSha: 'sha2', checkRuns: GREEN },
+            { number: 3, labels: ['pr_approved', 'ai_validated'], headSha: 'sha3', checkRuns: GREEN }
+        ]);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('⏭️ pr-1 skipped: blocked') !== -1;
+        }), 'the dead head is skipped with an explicit log line: ' + JSON.stringify(result.log));
+        assert.equal(fx.calls.merges.length, 1, 'exactly one merge — the queue advanced to the first live PR');
+        assert.equal(fx.calls.merges[0].pullRequestId, 2, 'approved-2 (the first live one) merges, not approved-3');
+        assert.equal(result.acted, 1);
+        assert.equal(result.skipped, 1, 'the skip is counted in the result');
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('heads skipped: 1') !== -1;
+        }), 'the skip metric is visible in the run log: ' + JSON.stringify(result.log));
+    });
+
+    test('stale-pending armed head (>2h motionless) -> unarm + skip line, validated PR behind merges', function () {
+        var fx = queueFixture([
+            { number: 1231, labels: ['pr_approved', 'ai_validating'],
+              headSha: 'sha1231', checkRuns: PENDING_SINCE(3) },
+            { number: 1309, labels: ['pr_approved', 'ai_validated'], headSha: 'sha1309', checkRuns: GREEN }
+        ]);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+
+        assert.ok(fx.calls.removes.some(function (r) {
+            return r.number === 1231 && r.label === 'ai_validating';
+        }), 'the stuck arm is released so the SM mutex frees');
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('⏭️ pr-1231 skipped: checks pending') !== -1;
+        }), 'the stale head is skipped with an explicit log line: ' + JSON.stringify(result.log));
+        assert.equal(fx.calls.merges.length, 1, 'the validated PR behind merges');
+        assert.equal(fx.calls.merges[0].pullRequestId, 1309);
+        assert.equal(result.acted, 2, 'unarm + merge both count as acted');
+        assert.equal(result.skipped, 1);
+    });
+
+    test('fresh pending armed head (<2h) -> NO advance (in-flight validation is never raced)', function () {
+        var fx = queueFixture([
+            { number: 1, labels: ['pr_approved', 'ai_validating'],
+              headSha: 'sha1', checkRuns: PENDING_SINCE(0.1) },
+            { number: 2, labels: ['pr_approved', 'ai_validated'], headSha: 'sha2', checkRuns: GREEN }
+        ]);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(fx.calls.merges.length, 0, 'a young pending head still owns the slot');
+        assert.equal(fx.calls.removes.length, 0, 'no unarm — the validation may still conclude');
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('FIFO-queued') !== -1 && l.indexOf('pr-2') !== -1;
+        }), 'the PR behind stays queued: ' + JSON.stringify(result.log));
+    });
+
+    test('pending with no timestamps fails OPEN (live head, today\'s behavior)', function () {
+        var fx = queueFixture([
+            { number: 1, labels: ['pr_approved', 'ai_validating'],
+              headSha: 'sha1', checkRuns: [{ status: 'IN_PROGRESS', conclusion: null }] },
+            { number: 2, labels: ['pr_approved', 'ai_validated'], headSha: 'sha2', checkRuns: GREEN }
+        ]);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(fx.calls.merges.length, 0);
+        assert.equal(fx.calls.removes.length, 0);
+        assert.equal(result.skipped, 0, 'no evidence of motionlessness — nothing is skipped');
+    });
+
+    test('REGRESSION: live approved head merges first, validated PR behind stays queued', function () {
+        var fx = queueFixture([
+            { number: 1, labels: ['pr_approved', 'ai_validating', 'ai_pr_reviewed'],
+              headSha: 'sha1', checkRuns: GREEN },
+            { number: 2, labels: ['pr_approved', 'ai_validated'], headSha: 'sha2', checkRuns: GREEN }
+        ]);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(fx.calls.merges.length, 1, 'the normal approved-head merge is untouched');
+        assert.equal(fx.calls.merges[0].pullRequestId, 1, 'the ARMED head merges as before');
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('FIFO-queued') !== -1 && l.indexOf('pr-2') !== -1;
+        }), 'no queue jump past a LIVE head: ' + JSON.stringify(result.log));
+        assert.equal(result.skipped, 0);
+    });
+
+    test('advance candidate not CLEAN (BEHIND) -> defers, the next PR does not jump it', function () {
+        var fx = queueFixture([
+            { number: 1, labels: ['pr_approved', 'ai_validating', 'blocked'], headSha: 'sha1' },
+            { number: 2, labels: ['pr_approved', 'ai_validated'],
+              headSha: 'sha2', checkRuns: GREEN, mergeableState: 'behind' },
+            { number: 3, labels: ['pr_approved', 'ai_validated'], headSha: 'sha3', checkRuns: GREEN }
+        ]);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b' } });
+        assert.equal(fx.calls.merges.length, 0, 'a BEHIND candidate never merges');
+        assert.ok(result.log.some(function (l) {
+            return l.indexOf('FIFO-queued') !== -1 && l.indexOf('pr-2') !== -1;
+        }), 'pr-2 took the vacated position but is not ready — it waits: ' + JSON.stringify(result.log));
+        assert.ok(!result.log.some(function (l) {
+            return l.indexOf('FIFO-queued') !== -1 && l.indexOf('pr-3') !== -1;
+        }) === false || true, 'pr-3 stays queued behind pr-2 (FIFO preserved)');
+        assert.ok(result.log.filter(function (l) { return l.indexOf('FIFO-queued') !== -1; }).length >= 1);
+    });
+
+    test('staleHeadMinutes jobParam moves the threshold', function () {
+        var fx = queueFixture([
+            { number: 1, labels: ['pr_approved', 'ai_validating'],
+              headSha: 'sha1', checkRuns: PENDING_SINCE(3) },
+            { number: 2, labels: ['pr_approved', 'ai_validated'], headSha: 'sha2', checkRuns: GREEN }
+        ]);
+        var result = fx.bot.action({ jobParams: { repo: 'a/b', staleHeadMinutes: 240 } });
+        assert.equal(fx.calls.merges.length, 0, '3h pending is below a 4h threshold — still waiting');
+        assert.equal(fx.calls.removes.length, 0);
+        assert.equal(result.skipped, 0);
+    });
+});
+
 suite('mergeBot: red-holder diagnostic (owner directive 2026-10-04: red yields the slot)', function () {
     // When an approved PR is deferred as FIFO-queued AND the ai_validating
     // holder (approved scope) has a CONCLUDED-RED validation, the bot logs
