@@ -157,6 +157,10 @@ body {
 .lane {
   background: var(--panel); border: 1px solid var(--line);
   border-radius: 12px; flex: 0 0 var(--lane-w, 290px);
+  /* min-width:auto (default) resolves to the widest card's nowrap
+     min-content and blows the lane past --lane-w; 0 pins the width and
+     lets the inner ellipsis/clamp rules handle long content. */
+  min-width: 0;
   border-top: 2px solid var(--accent, var(--line-2));
 }
 .lane-head {
@@ -190,8 +194,12 @@ body {
 .pr { color: var(--accent); font-weight: 700; white-space: nowrap; }
 .pos { color: var(--muted); font-size: 11px; }
 .title {
-  font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  flex: 1 1 auto; min-width: 0;
+  font-size: 12px; flex: 1 1 auto; min-width: 0;
+  /* multi-line, not a one-line ellipsis: long issue titles must wrap
+     inside the fixed lane (3-line clamp keeps the cards compact) */
+  white-space: normal;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow-wrap: anywhere;
 }
 .age {
   color: var(--muted); font-size: 11px; white-space: nowrap; flex: none;
@@ -202,7 +210,7 @@ body {
 .lbl {
   font-size: 10px; color: var(--muted); border: 1px solid var(--line);
   border-radius: 999px; padding: 0 7px; max-width: 100%;
-  overflow: hidden; text-overflow: ellipsis;
+  overflow: hidden; text-overflow: ellipsis; overflow-wrap: anywhere;
 }
 .lbl.hot {
   color: var(--text); border-color: var(--st-rev);
@@ -211,6 +219,7 @@ body {
 .meta {
   margin-top: 6px; display: flex; gap: 10px; align-items: center;
   color: var(--muted); font-size: 11px; flex-wrap: wrap;
+  overflow-wrap: anywhere;
 }
 .checks { display: flex; gap: 6px; align-items: center; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
