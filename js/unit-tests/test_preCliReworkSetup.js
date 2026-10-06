@@ -12,6 +12,9 @@
 
 var NOOP_MODULE = {};
 
+var reworkCommentMarkupModule = loadModule('js/common/commentMarkup.js',
+    makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
+
 function makeGhStub(fetchCalls) {
     return {
         buildOriginFetchCommand: function() {
@@ -34,6 +37,7 @@ function loadPreCliReworkSetup(configLoaderStub, mocks) {
             './configLoader.js': configLoaderStub,
             './common/githubHelpers.js': mocks.__ghStub,
             './common/gitOps.js': NOOP_MODULE,
+            './common/commentMarkup.js': reworkCommentMarkupModule,
             './fetchQuestionsToInput.js': NOOP_MODULE,
             './fetchParentContextToInput.js': NOOP_MODULE,
             './restoreFromReleases.js': NOOP_MODULE,
@@ -190,6 +194,68 @@ suite('preCliReworkSetup.truncateForComment', function() {
         assert.ok(truncated.length < 10000,
             'huge setup-failure output must be bounded before being embedded in a Jira comment, got ' + truncated.length);
         assert.ok(truncated.indexOf('truncated') !== -1, 'truncated message should say so');
+    });
+
+});
+
+// ── gh-770: per-tracker markup for the rework-started comment ────────────────
+// The rework setup historically hard-coded Jira wiki markup (h3., {panel},
+// {code}) in the "Automated Rework Started" comment; on a GitHub-backed
+// tracker that renders as raw text garbage. The builder is extracted so the
+// flavor choice (commentMarkup.forTicket) is testable per tracker.
+
+var reworkCommentMarkup = loadModule('js/common/commentMarkup.js',
+    makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
+
+suite('preCliReworkSetup.buildReworkStartedComment — per-tracker markup (gh-770)', function() {
+
+    var FULL_CTX = {
+        prNumber: 1308,
+        prUrl: 'https://github.com/acme/widgets/pull/1308',
+        branchName: 'ai/gh-1308',
+        conflictFiles: ['src/a.dart', 'src/b.dart'],
+        failedChecks: [{ name: 'build' }, { name: 'test' }]
+    };
+
+    function loadMod() {
+        return loadPreCliReworkSetup(makeConfigLoaderStub(null, []), { __ghStub: makeGhStub() });
+    }
+
+    test('jira flavor keeps wiki markup — h3., *bold*, [text|url], {code}, {panel}', function() {
+        var out = loadMod().buildReworkStartedComment(reworkCommentMarkup.forFlavor('jira'), FULL_CTX);
+        assert.ok(out.indexOf('h3. 🔧 Automated Rework Started\n') === 0, 'starts with the historical h3 heading');
+        assert.ok(out.indexOf('*Pull Request*: [PR #1308|https://github.com/acme/widgets/pull/1308]\n') !== -1);
+        assert.ok(out.indexOf('*Branch*: {code}ai/gh-1308{code}\n') !== -1);
+        assert.ok(out.indexOf('{panel:bgColor=#FFEBE6|borderColor=#DE350B}' +
+            '⚠️ *Merge conflicts detected* — 2 file(s) must be resolved before rework can be applied:\n' +
+            '* {code}src/a.dart{code}\n* {code}src/b.dart{code}') !== -1, 'conflict panel lists every file');
+        assert.ok(out.indexOf('⚠️ *CI checks failing* — 2 check(s) must pass before merge:\n' +
+            '* {code}build{code}\n* {code}test{code}\n' +
+            'Error logs: {code}ci_failures.md{code} (summary) and {code}ci_failures_full.log{code} (full logs).') !== -1,
+            'CI panel lists every failing check');
+        assert.ok(out.indexOf('_Fix results will be posted shortly..._') !== -1);
+    });
+
+    test('markdown flavor renders GitHub-safe markup — no wiki constructs survive', function() {
+        var out = loadMod().buildReworkStartedComment(reworkCommentMarkup.forFlavor('markdown'), FULL_CTX);
+        assert.ok(out.indexOf('### 🔧 Automated Rework Started\n') === 0, 'starts with a markdown heading');
+        assert.ok(out.indexOf('**Pull Request**: [PR #1308](https://github.com/acme/widgets/pull/1308)\n') !== -1);
+        assert.ok(out.indexOf('**Branch**') !== -1);
+        assert.ok(out.indexOf('**Merge conflicts detected**') !== -1);
+        assert.ok(out.indexOf('**CI checks failing**') !== -1);
+        assert.ok(out.indexOf('> ') !== -1, 'panel bodies are quoted');
+        assert.equal(out.indexOf('h3.'), -1, 'no wiki heading');
+        assert.equal(out.indexOf('{panel'), -1, 'no wiki panel');
+        assert.equal(out.indexOf('{code'), -1, 'no wiki code tag');
+        assert.equal(out.indexOf('[PR #1308|'), -1, 'no wiki link');
+    });
+
+    test('clean run: no conflict/CI panels are emitted', function() {
+        var out = loadMod().buildReworkStartedComment(reworkCommentMarkup.forFlavor('jira'), {
+            prNumber: 1, prUrl: 'https://x/1', branchName: 'b'
+        });
+        assert.equal(out.indexOf('{panel'), -1);
+        assert.ok(out.indexOf('AI Teammate is fixing issues raised in the code review.') !== -1);
     });
 
 });

@@ -15,11 +15,20 @@
 var NOOP_MODULE = {};
 var NOOP_CONFIG_JS = { GIT_CONFIG: {}, STATUSES: {}, resolveStatuses: function() { return {}; } };
 
+// Real setupCommands: buildSetupErrorComment binds setupCommands.truncateSetupError
+// at load time (the shared truncation bound), so the stub must actually export it.
+var devSetupCommandsReal = loadModule('js/common/setupCommands.js');
+var devCommentMarkupModule = loadModule('js/common/commentMarkup.js',
+    makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
+
 // The real tracker factory (provider probing is pure config/env reads) so
 // action() tests exercise the actual github/jira provider gating.
 var trackersModuleReal = loadModule(
     'js/common/trackers.js',
-    makeRequire({ '../config.js': configModule }),
+    makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }),
     {}
 );
 
@@ -59,7 +68,8 @@ function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
             './fetchLinkedTestsToInput.js': NOOP_MODULE,
             './fetchParentContextToInput.js': NOOP_MODULE,
             './restoreFromReleases.js': NOOP_MODULE,
-            './common/setupCommands.js': NOOP_MODULE,
+            './common/setupCommands.js': devSetupCommandsReal,
+            './common/commentMarkup.js': devCommentMarkupModule,
             './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
             './common/trackers.js': trackersModuleReal
         }),
@@ -553,6 +563,7 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
                     truncateSetupError: function (s) { return String(s); }
                 },
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
+                './common/commentMarkup.js': devCommentMarkupModule,
                 './common/trackers.js': trackersModuleReal
             }),
             {
@@ -635,6 +646,118 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
         mod.assertDevLegTransition('no-digits-here', makeActionConfig(), {});
 
         assert.equal(bag.events.length, 0);
+    });
+
+});
+
+// ── gh-770: per-tracker markup for the dev-leg setup error comment ───────────
+// postSetupErrorToJira historically hard-coded Jira wiki markup and posted via
+// raw jira_post_comment; on a GitHub-backed tracker the comment rendered as
+// raw text garbage. The builder is extracted and posting goes through the
+// probed tracker (trackers.js) so the flavor follows the ticket's tracker.
+
+function loadForComments(globals) {
+    return loadPreCliDevelopmentSetup({
+        loadProjectConfig: function () { return makeConfig(); },
+        paramsForConfigLoad: function (p) { return p; }
+    }, globals || {});
+}
+
+suite('preCliDevelopmentSetup.buildSetupErrorComment — per-tracker markup (gh-770)', function () {
+
+    test('jira flavor is byte-identical to the historical wiki template', function () {
+        var mod = loadForComments();
+        var out = mod.buildSetupErrorComment(devCommentMarkupModule.forFlavor('jira'), 'Git Branch Setup', 'boom');
+        assert.equal(out,
+            'h3. *Development Setup Error*\n\n' +
+            '*Stage:* Git Branch Setup\n' +
+            '*Error:* {code}boom{code}\n\n' +
+            'Development was stopped before code generation because the target git branch could not be prepared.');
+    });
+
+    test('markdown flavor renders headings, bold and fenced code — no wiki constructs', function () {
+        var mod = loadForComments();
+        var out = mod.buildSetupErrorComment(devCommentMarkupModule.forFlavor('markdown'), 'Environment Setup', 'npm ci failed');
+        assert.ok(out.indexOf('### **Development Setup Error**') === 0, 'starts with a markdown heading');
+        assert.ok(out.indexOf('**Stage:** Environment Setup') !== -1);
+        assert.ok(out.indexOf('**Error:**') !== -1);
+        assert.ok(out.indexOf('```') !== -1, 'error is fenced');
+        assert.ok(out.indexOf('npm ci failed') !== -1);
+        assert.equal(out.indexOf('h3.'), -1, 'no wiki heading');
+        assert.equal(out.indexOf('{code}'), -1, 'no wiki code tag');
+    });
+
+});
+
+suite('preCliDevelopmentSetup.postSetupErrorComment — routes through the probed tracker (gh-770)', function () {
+
+    // The tracker factory is stubbed: which canonical tool each provider
+    // dispatches to is covered by test_trackers.js — here we pin the WIRING
+    // (comment built with the ticket's markup flavor, posted via the tracker).
+    function loadWithTrackerStub(posted, postThrows) {
+        return loadModule(
+            'js/preCliDevelopmentSetup.js',
+            makeRequire({
+                './configLoader.js': {
+                    loadProjectConfig: function () { return makeConfig(); },
+                    paramsForConfigLoad: function (p) { return p; }
+                },
+                './common/pullRequest.js': DEFAULT_PR_HELPER_STUB,
+                './config.js': NOOP_CONFIG_JS,
+                './fetchQuestionsToInput.js': NOOP_MODULE,
+                './fetchLinkedTestsToInput.js': NOOP_MODULE,
+                './fetchParentContextToInput.js': NOOP_MODULE,
+                './restoreFromReleases.js': NOOP_MODULE,
+                './common/setupCommands.js': devSetupCommandsReal,
+                './common/commentMarkup.js': devCommentMarkupModule,
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
+                './common/trackers.js': {
+                    createTracker: function () {
+                        return {
+                            provider: function () { return 'stub'; },
+                            postComment: function (ticketKey, text) {
+                                if (postThrows) { throw new Error('tracker down'); }
+                                posted.push({ ticketKey: ticketKey, text: text });
+                            }
+                        };
+                    }
+                }
+            }),
+            {}
+        );
+    }
+
+    test('posts the flavored comment through the probed tracker', function () {
+        var posted = [];
+        var mod = loadWithTrackerStub(posted, false);
+        mod.postSetupErrorComment(
+            { tracker: { provider: 'github' } },
+            {},
+            'gh-12',
+            'Git Branch Setup',
+            'boom'
+        );
+        assert.equal(posted.length, 1);
+        assert.equal(posted[0].ticketKey, 'gh-12');
+        assert.ok(posted[0].text.indexOf('### **Development Setup Error**') === 0,
+            'github key renders markdown, got: ' + posted[0].text);
+    });
+
+    test('jira ticket receives byte-identical wiki markup', function () {
+        var posted = [];
+        var mod = loadWithTrackerStub(posted, false);
+        mod.postSetupErrorComment({}, {}, 'PROJ-12', 'Git Branch Setup', 'boom');
+        assert.equal(posted.length, 1);
+        assert.equal(posted[0].ticketKey, 'PROJ-12');
+        assert.ok(posted[0].text.indexOf('h3. *Development Setup Error*') === 0,
+            'jira key renders wiki markup, got: ' + posted[0].text);
+    });
+
+    test('a posting failure never breaks the setup flow (warn only)', function () {
+        var posted = [];
+        var mod = loadWithTrackerStub(posted, true);
+        mod.postSetupErrorComment({}, {}, 'PROJ-12', 'Git Branch Setup', 'boom');
+        assert.equal(posted.length, 0);
     });
 
 });

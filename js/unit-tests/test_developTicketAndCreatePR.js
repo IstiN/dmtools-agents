@@ -4,7 +4,8 @@
 
 // Declared once at module scope — every loader below references it in its
 // makeRequire() map, so it must exist before any of them run.
-var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+var commentMarkupModule = loadModule('js/common/commentMarkup.js',
+    makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 var gitStagingModule = loadModule('js/common/gitStaging.js');
 
 function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {

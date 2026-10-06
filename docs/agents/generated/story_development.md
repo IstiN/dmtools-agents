@@ -53,7 +53,7 @@ _Pre-CLI Development Setup Action_
 - Writes:
   - `input/<KEY>/merge_conflicts.md`
 - Side effects:
-  - post Jira comment
+  - post ticket comment (via tracker)
   - git push
   - git checkout
   - git merge

@@ -21,6 +21,12 @@ function loadPostTestReworkResults(cliMock) {
             },
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
             './common/feedbackLoop.js': {},
+            './common/commentMarkup.js': loadModule('js/common/commentMarkup.js',
+                makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') })),
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+            }), {}),
             './common/pullRequest.js': {
                 // Mirrors the real readStagedDiffStat(runCommand, workingDir).
                 readStagedDiffStat: function(runCommand) {
@@ -116,6 +122,71 @@ suite('postTestReworkResults — canonical MERGE_HEAD probe (gh-761)', function(
         });
         assert.ok(mergeCalls.length > 0,
             'prIsDirty + no merge in progress → base-branch merge must be started');
+    });
+
+});
+
+// ── gh-770: per-tracker markup for the test-rework completion comment ────────
+// Step 6 historically hard-coded Jira wiki markup (h3., *bold*, {code}) and
+// posted via raw jira_post_comment; on a GitHub-backed tracker the comment
+// rendered as raw text garbage. The builder is extracted so the flavor choice
+// (commentMarkup.forTicket) is testable per tracker, and posting goes through
+// the probed tracker (trackers.js).
+
+var testReworkCommentMarkup = loadModule('js/common/commentMarkup.js',
+    makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
+
+suite('postTestReworkResults.buildTestReworkResultComment — per-tracker markup (gh-770)', function() {
+
+    function build(flavor, ctx) {
+        return loadPostTestReworkResults(makeCli())
+            .buildTestReworkResultComment(flavor, ctx);
+    }
+
+    test('jira flavor is byte-identical to the historical wiki template', function() {
+        var out = build(testReworkCommentMarkup.forFlavor('jira'), {
+            passed: true,
+            testStatus: 'passed',
+            branchName: 'test/PROJ-9',
+            prUrl: 'https://github.com/acme/widgets/pull/9',
+            fixSummary: 'fixed the flaky assertion'
+        });
+        assert.equal(out,
+            'h3. 🔧 Test Rework Completed\n\n' +
+            '*Re-run result*: ✅ *PASSED*\n' +
+            '*Branch*: {code}test/PROJ-9{code}\n' +
+            '*Pull Request*: https://github.com/acme/widgets/pull/9\n' +
+            '\n' +
+            'fixed the flaky assertion');
+    });
+
+    test('markdown flavor renders the same facts GitHub-safe — no wiki constructs', function() {
+        var out = build(testReworkCommentMarkup.forFlavor('markdown'), {
+            passed: true,
+            testStatus: 'passed',
+            branchName: 'test/gh-9',
+            prUrl: 'https://github.com/acme/widgets/pull/9',
+            fixSummary: 'fixed the flaky assertion'
+        });
+        assert.ok(out.indexOf('### 🔧 Test Rework Completed\n') === 0, 'markdown heading');
+        assert.ok(out.indexOf('**Re-run result**: ✅ **PASSED**') !== -1);
+        assert.ok(out.indexOf('**Branch**') !== -1);
+        assert.ok(out.indexOf('**Pull Request**') !== -1);
+        assert.equal(out.indexOf('h3.'), -1, 'no wiki heading');
+        assert.equal(out.indexOf('{code'), -1, 'no wiki code tag');
+    });
+
+    test('failed re-run flips the emoji and the status emphasis', function() {
+        var out = build(testReworkCommentMarkup.forFlavor('jira'), {
+            passed: false,
+            testStatus: 'failed',
+            branchName: 'b',
+            fixSummary: 'still red'
+        });
+        assert.ok(out.indexOf('h3. 🔧 Test Rework Completed\n') === 0);
+        assert.ok(out.indexOf('*Re-run result*: ❌ *FAILED*') !== -1);
+        assert.ok(out.indexOf('*Pull Request*') === -1, 'no PR line when there is no PR');
+        assert.ok(out.indexOf('still red') !== -1);
     });
 
 });

@@ -12,13 +12,17 @@
 
 // Self-contained module load (do not rely on globals leaked by earlier test files —
 // each shard runs in its own engine).
-var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+var commentMarkupModule = loadModule('js/common/commentMarkup.js',
+    makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 
 // Real tracker factory (provider probing is pure config/env reads) —
 // preCliDevelopmentSetup requires it for the dev-leg label assertion.
 var trackersModuleReal = loadModule(
     'js/common/trackers.js',
-    makeRequire({ '../config.js': configModule }),
+    makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }),
     {}
 );
 
@@ -82,6 +86,7 @@ function loadPreCli(workingDir) {
             './restoreFromReleases.js': { action: function() {} },
             './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; }, buildSetupWarningsMarkdown: function() { return null; } },
             './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
+            './common/commentMarkup.js': commentMarkupModule,
             './common/trackers.js': trackersModuleReal
         }),
         {

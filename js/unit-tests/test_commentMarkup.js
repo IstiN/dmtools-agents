@@ -7,7 +7,11 @@
 
 suite('commentMarkup', function () {
 
-    var commentMarkup = loadModule('js/common/commentMarkup.js');
+    // Single owner of the GitHub key-shape convention (gh-770) — flavor
+    // detection must derive from it, so the loader wires the real module.
+    var ticketKeyShapesModule = loadModule('js/common/ticketKeyShapes.js');
+    var commentMarkup = loadModule('js/common/commentMarkup.js',
+        makeRequire({ './ticketKeyShapes.js': ticketKeyShapesModule }));
 
     test('flavorForTicket: Jira keys keep Jira wiki flavor', function () {
         assert.equal(commentMarkup.flavorForTicket('PROJ-74'), 'jira');
@@ -66,5 +70,21 @@ suite('commentMarkup', function () {
     test('forFlavor maps unknown values to jira (safe default)', function () {
         var m = commentMarkup.forFlavor('whatever');
         assert.equal(m.h(2, 'x'), 'h2. x');
+    });
+
+    test('flavor detection derives from the shared ticketKeyShapes owner (gh-770)', function () {
+        // Swap in a shared owner that accepts NO shapes: a GitHub-shaped key
+        // must then fall back to the jira flavor — proving there is no local
+        // shape copy left behind in commentMarkup.
+        var emptyShapes = {
+            GITHUB_KEY_SHAPES: [],
+            isGitHubKeyShape: function () { return false; },
+            githubIssueNumberIn: function () { return null; },
+            shapeSources: function () { return []; }
+        };
+        var isolated = loadModule('js/common/commentMarkup.js',
+            makeRequire({ './ticketKeyShapes.js': emptyShapes }));
+        assert.equal(isolated.flavorForTicket('gh-122'), 'jira');
+        assert.equal(isolated.flavorForTicket('acme/w#12'), 'jira');
     });
 });

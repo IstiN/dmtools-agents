@@ -18,6 +18,7 @@ var restoreFromReleases = require('./restoreFromReleases.js');
 var setupCommands = require('./common/setupCommands.js');
 var baseBranchMarker = require('./common/baseBranchMarker.js');
 var trackersModule = require('./common/trackers.js');
+var commentMarkup = require('./common/commentMarkup.js');
 
 // Universal working-directory-aware wrapper for cli_execute_command.
 // When config.workingDir is set (via customParams.targetRepository.workingDir),
@@ -481,15 +482,38 @@ function assertDevLegTransition(ticketKey, config, customParams) {
 // here could silently fail to post, leaving the ticket with no failure visibility).
 var truncateForComment = setupCommands.truncateSetupError;
 
-function postSetupErrorToJira(ticketKey, stage, errorMessage) {
+/**
+ * Build the "Development Setup Error" comment in the flavor of the ticket's
+ * tracker (gh-770). The template historically hard-coded Jira wiki markup
+ * (h3., *bold*, {code}) and was posted via raw jira_post_comment; on a
+ * GitHub-backed tracker that renders as raw text garbage.
+ *
+ * @param {Object} flavor       - a commentMarkup flavor bag (forTicket/forFlavor)
+ * @param {string} stage        - setup stage that failed (e.g. "Git Branch Setup")
+ * @param {string} errorMessage - the failure detail (truncated to the shared bound)
+ * @returns {string} the rendered comment
+ */
+function buildSetupErrorComment(flavor, stage, errorMessage) {
+    var m = flavor;
+    return m.h(3, m.bold('Development Setup Error')) + '\n\n' +
+        m.bold('Stage:') + ' ' + stage + '\n' +
+        m.bold('Error:') + ' ' + m.code(truncateForComment(errorMessage)) + '\n\n' +
+        'Development was stopped before code generation because the target git branch could not be prepared.';
+}
+
+/**
+ * Post the setup-error comment through the probed tracker (gh-770) so it
+ * lands on Jira/ADO/GitHub alike, in the ticket's markup flavor. Best-effort:
+ * a posting failure is warned, never fatal — the setup error itself is the
+ * signal that stops the leg.
+ */
+function postSetupErrorComment(config, customParams, ticketKey, stage, errorMessage) {
     try {
-        jira_post_comment({
-            key: ticketKey,
-            comment: 'h3. *Development Setup Error*\n\n' +
-                '*Stage:* ' + stage + '\n' +
-                '*Error:* {code}' + truncateForComment(errorMessage) + '{code}\n\n' +
-                'Development was stopped before code generation because the target git branch could not be prepared.'
-        });
+        var tracker = trackersModule.createTracker(config, customParams || {});
+        tracker.postComment(
+            ticketKey,
+            buildSetupErrorComment(commentMarkup.forTicket(ticketKey, customParams), stage, errorMessage)
+        );
     } catch (commentError) {
         console.warn('Failed to post setup error comment:', commentError);
     }
@@ -539,7 +563,7 @@ function action(params) {
         } catch (e) {
             var branchError = e && e.toString ? e.toString() : String(e);
             console.error('Branch checkout failed:', branchError);
-            postSetupErrorToJira(ticketKey, 'Git Branch Setup', branchError);
+            postSetupErrorComment(config, customParams, ticketKey, 'Git Branch Setup', branchError);
             throw new Error('Git branch setup failed: ' + branchError);
         }
 
@@ -585,7 +609,7 @@ function action(params) {
         } catch (e) {
             var setupError = e && e.toString ? e.toString() : String(e);
             console.error('Setup commands failed:', setupError);
-            postSetupErrorToJira(ticketKey, 'Environment Setup', setupError);
+            postSetupErrorComment(config, customParams, ticketKey, 'Environment Setup', setupError);
             throw new Error('Environment setup failed: ' + setupError);
         }
 
@@ -611,5 +635,12 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, checkoutBranch, reportExistingDevBranch, assertDevLegTransition };
+    module.exports = {
+        action,
+        checkoutBranch,
+        reportExistingDevBranch,
+        assertDevLegTransition,
+        buildSetupErrorComment,
+        postSetupErrorComment
+    };
 }

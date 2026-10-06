@@ -55,7 +55,7 @@ _Post Test Rework Results Action (postJSAction for pr_test_automation_rework)_
 
 - Source: `agents/js/postTestReworkResults.js`
 - Side effects:
-  - post Jira comment
+  - post ticket comment (via tracker)
   - git push
   - git checkout
   - git merge

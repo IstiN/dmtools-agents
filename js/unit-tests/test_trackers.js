@@ -20,7 +20,10 @@ function loadTrackers(mocks) {
         'js/common/trackers.js',
         makeRequire({
             '../config.js': configModule,
-            'config': configModule
+            'config': configModule,
+            // Single owner of the GitHub key-shape convention (gh-770) —
+            // the router's issue-number parser derives from it.
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
         }),
         mocks || {}
     );
@@ -600,6 +603,71 @@ suite('trackers.js github provider', function () {
             number: 8
         });
         assert.equal(ghClose.calls.length, 0, 'close/label fallback must not run when the dedicated tool exists');
+    });
+});
+
+suite('trackers.js github provider — gh-N router keys (gh-770)', function () {
+    var GH_CONFIG = {
+        tracker: { provider: 'github' },
+        repository: { owner: 'acme', repo: 'widgets' }
+    };
+
+    test('postComment parses the gh-N router key into the issue number', function () {
+        var ghPost = recorder('github_create_comment', '{}');
+        var trackers = loadTrackers({ github_create_comment: ghPost });
+        trackers.createTracker(GH_CONFIG).postComment('gh-1308', 'hello');
+        assert.deepEqual(ghPost.calls[0], {
+            workspace: 'acme',
+            repository: 'widgets',
+            pullRequestId: 1308,
+            text: 'hello'
+        });
+    });
+
+    test('getTicket / addLabel / moveToStatus parse gh-N keys too', function () {
+        var ghGet = recorder('github_get_issue', { number: 9, title: 'T', state: 'open' });
+        var ghAdd = recorder('github_add_labels', '{}');
+        var ghMove = recorder('github_move_issue_to_status', '{}');
+        var trackers = loadTrackers({
+            github_get_issue: ghGet,
+            github_add_labels: ghAdd,
+            github_move_issue_to_status: ghMove
+        });
+        var t = trackers.createTracker(GH_CONFIG);
+        t.getTicket('gh-9');
+        t.addLabel('gh-9', 'ai_generated');
+        t.moveToStatus('gh-9', 'done');
+        assert.equal(ghGet.calls[0].issueNumber, 9);
+        assert.equal(ghAdd.calls[0].number, 9);
+        assert.equal(ghMove.calls[0].number, 9);
+        assert.equal(ghMove.calls[0].key, 'gh-9');
+    });
+
+    test('composite owner/repo#N and bare-number keys keep working alongside gh-N', function () {
+        var ghPost = recorder('github_create_comment', '{}');
+        var trackers = loadTrackers({ github_create_comment: ghPost });
+        var t = trackers.createTracker(GH_CONFIG);
+        t.postComment('acme/widgets#7', 'a');
+        t.postComment('7', 'b');
+        assert.equal(ghPost.calls[0].pullRequestId, 7);
+        assert.equal(ghPost.calls[1].pullRequestId, 7);
+    });
+
+    test('the bare-hash #N dispatch-payload shape parses too (derived from the shared shape list)', function () {
+        // '#N' appears in dispatch payloads and is part of the shared
+        // convention (ticketKeyShapes.GITHUB_KEY_SHAPES) — a key the shared
+        // owner accepts must not die with "cannot parse GitHub issue key".
+        var ghPost = recorder('github_create_comment', '{}');
+        var trackers = loadTrackers({ github_create_comment: ghPost });
+        trackers.createTracker(GH_CONFIG).postComment('#12', 'hello');
+        assert.equal(ghPost.calls[0].pullRequestId, 12);
+    });
+
+    test('a jira-provider tracker passes gh-N keys through untouched (no overreach)', function () {
+        var jiraPost = recorder('jira_post_comment', '{}');
+        var trackers = loadTrackers({ jira_post_comment: jiraPost });
+        trackers.createTracker({ tracker: { provider: 'jira' } }).postComment('gh-5', 'x');
+        assert.equal(jiraPost.calls[0].key, 'gh-5');
     });
 });
 

@@ -3,8 +3,8 @@
  *
  * Post-action templates historically hard-code Jira wiki markup
  * (`h3.`, `{code}`, `*bold*`, `[text|url]`). When the ticket lives on
- * GitHub Issues (key shapes `gh-12`, `owner/repo#12`, `#12`, bare `12`)
- * those comments render as noise. These helpers render each construct in
+ * GitHub Issues (key shapes `gh-12`, `owner/repo#12`, `#12`, bare `12` —
+ * owned by common/ticketKeyShapes.js) those comments render as noise. These helpers render each construct in
  * the flavor of the ticket's tracker: Jira wiki for Jira keys, Markdown
  * for GitHub keys — with an explicit override via
  * `customParams.commentMarkup` (`'jira' | 'markdown'`, `'github'` is
@@ -21,12 +21,7 @@
  */
 'use strict';
 
-var GITHUB_KEY_SHAPES = [
-    /^gh-\d+$/i,               // gh-122 — GitHub router key convention
-    /^[\w.-]+\/[\w.-]+#\d+$/,  // epam/dmtools-dart#122
-    /^#\d+$/,                  // #122
-    /^\d+$/                    // 122
-];
+var ticketKeyShapes = require('./ticketKeyShapes.js');
 
 function flavorForTicket(ticketKey, customParams) {
     var explicit = customParams && customParams.commentMarkup;
@@ -35,10 +30,8 @@ function flavorForTicket(ticketKey, customParams) {
         if (norm === 'markdown' || norm === 'github') return 'markdown';
         if (norm === 'jira') return 'jira';
     }
-    var key = String(ticketKey == null ? '' : ticketKey).trim();
-    for (var i = 0; i < GITHUB_KEY_SHAPES.length; i++) {
-        if (GITHUB_KEY_SHAPES[i].test(key)) return 'markdown';
-    }
+    // Key shapes come from the single owner (gh-770): common/ticketKeyShapes.js.
+    if (ticketKeyShapes.isGitHubKeyShape(ticketKey)) return 'markdown';
     return 'jira';
 }
 

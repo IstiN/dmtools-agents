@@ -51,7 +51,8 @@ function loadPostStoryTestAutomationReview(mocks) {
     var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({
             './common/commentMarkup.js': commentMarkupModule,
         }), allMocks);
-var commentMarkupModule = loadModule('js/common/commentMarkup.js');
+var commentMarkupModule = loadModule('js/common/commentMarkup.js',
+    makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
 
     var prReviewComments = loadModule(
@@ -75,7 +76,10 @@ var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({
             './common/trackers.js': (function() {
                 var realTrackers = loadModule(
                     'js/common/trackers.js',
-                    makeRequire({ '../config.js': configModule }),
+                    makeRequire({
+                        '../config.js': configModule,
+                        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+                    }),
                     allMocks
                 );
                 return {
