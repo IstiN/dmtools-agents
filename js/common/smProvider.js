@@ -271,7 +271,12 @@ function githubProvider(cfg) {
             // matched either: armed → sweep → re-arm loop with a green,
             // merge-ready head. The merge lane's check is machine
             // bookkeeping, not a validation verdict.
-            var BOOKKEEPING_CHECK_PREFIXES = ['kicker /', 'Wake-up probe', 'merge /'];
+            // (hoisted to module scope + exported: smAgent.js's gh-755
+            // arm-time red-verdict probe must skip the same set — a
+            // bookkeeping FAILURE is no more a verdict than a cancelled
+            // one, and a drifted copy here would let the fail path arm
+            // rework on rollups computePrStatus itself never calls red.)
+            // (all-cancelled/bookkeeping still counts as 'no verdict yet')
             // (all-cancelled/bookkeeping still counts as 'no verdict yet')
             rollup.forEach(function (c) {
                 var concl = c.conclusion;
@@ -673,13 +678,23 @@ function gitlabProvider(cfg) {
             // Pipelines for the MR head — the CI verdict.
             var pipes = (gitlab_get_mr_pipelines({ workspace: owner, repository: repo, pullRequestId: String(mrNumber) }) || {});
             var list = pipes.pipelines || pipes || [];
-            var red = false, pending = false, any = false;
+            var red = false, pending = false, any = false, cancelled = 0;
             list.forEach(function (p) {
                 any = true;
                 var st = p.status || p.detailed_status;
-                if (st === 'failed' || st === 'canceled') red = true;
+                // gh-755 (owner directive 2026-10-05): CANCELLED is not a
+                // verdict — a cancelled pipeline says nothing about the
+                // head (superseded concurrency, quota sweeps). Counting it
+                // red armed fail_validation/rework legs on heads whose only
+                // red was a cancel (GitHub twin: dart gh-191). Fold to 'no
+                // verdict yet' exactly like the GitHub rollup: cancelled
+                // forces pending even next to green; a genuine failure
+                // elsewhere still reads red.
+                if (st === 'canceled') { cancelled++; return; }
+                if (st === 'failed') red = true;
                 else if (st === 'running' || st === 'pending' || st === 'created' || st === 'waiting_for_resource') pending = true;
             });
+            if (cancelled > 0) pending = true;
             var mergeState = 'UNKNOWN';
             if (mr.merge_status === 'can_be_merged' && !mr.has_conflicts) mergeState = 'CLEAN';
             else if (mr.has_conflicts) mergeState = 'BEHIND'; // conflicts ⇒ needs rebase
