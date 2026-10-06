@@ -65,3 +65,147 @@ suite('fetchQuestionsToInput.getAnswerValue', function() {
     });
 
 });
+
+// ── gh-770: tracker-aware query layer ────────────────────────────────────────
+// The questions query is Jira-speak ("parent = X AND issuetype = Subtask");
+// fired against a GitHub-tracker deployment it routes but silently returns
+// empty ("Failed to fetch questions, continuing without file"). The provider
+// must be probed first and the JQL only fired where it has meaning.
+
+var QUESTIONS_JQL = 'parent = {ticketKey} AND issuetype = Subtask ORDER BY created ASC';
+
+function loadFetchQuestionsWithMocks(options) {
+    options = options || {};
+    var parentCalls = [];
+    var parentContextMock = {
+        action: function (p) { parentCalls.push(p); }
+    };
+    var projectConfig = {
+        jira: {
+            questions: {
+                fetchJql: QUESTIONS_JQL,
+                answerField: 'Answer'
+            }
+        }
+    };
+    if (options.trackerProvider) {
+        projectConfig.tracker = { provider: options.trackerProvider };
+    }
+    var trackersModule = loadModule(
+        'js/common/trackers.js',
+        makeRequire({ '../config.js': configModule }),
+        {}
+    );
+    var mod = loadModule(
+        'js/fetchQuestionsToInput.js',
+        makeRequire({
+            './configLoader.js': {
+                loadProjectConfig: function () { return projectConfig; }
+            },
+            './common/trackers.js': trackersModule,
+            './fetchParentContextToInput.js': parentContextMock
+        }),
+        options.globals || {}
+    );
+    return { mod: mod, parentCalls: parentCalls };
+}
+
+suite('fetchQuestionsToInput.questionsFetchPlan', function() {
+
+    test('jira provider: search with the configured JQL and the ticket key interpolated', function() {
+        var mod = loadFetchQuestionsWithMocks({}).mod;
+        var plan = mod.questionsFetchPlan('jira', { fetchJql: QUESTIONS_JQL }, 'PROJ-7');
+        assert.equal(plan.skip, false);
+        assert.equal(plan.jql, 'parent = PROJ-7 AND issuetype = Subtask ORDER BY created ASC');
+    });
+
+    test('github provider: skip — the JQL is Jira-speak and silently returns nothing there', function() {
+        var mod = loadFetchQuestionsWithMocks({}).mod;
+        var plan = mod.questionsFetchPlan('github', { fetchJql: QUESTIONS_JQL }, 'gh-1308');
+        assert.equal(plan.skip, true);
+        assert.ok(plan.reason.indexOf('github') !== -1, 'reason names the provider');
+        assert.ok(plan.reason.indexOf('parent = {ticketKey}') !== -1, 'reason names the skipped query');
+    });
+
+    test('ado provider: skip for the same reason', function() {
+        var mod = loadFetchQuestionsWithMocks({}).mod;
+        var plan = mod.questionsFetchPlan('ado', { fetchJql: QUESTIONS_JQL }, '42');
+        assert.equal(plan.skip, true);
+        assert.ok(plan.reason.indexOf('ado') !== -1);
+    });
+
+});
+
+suite('fetchQuestionsToInput.action — tracker-aware query layer (gh-770)', function() {
+
+    test('github tracker: never fires jira_search_by_jql and still fetches parent context', function() {
+        var searchCalls = [];
+        var writes = [];
+        var loaded = loadFetchQuestionsWithMocks({
+            trackerProvider: 'github',
+            globals: {
+                jira_search_by_jql: function (args) { searchCalls.push(args); return []; },
+                file_write: function (args) { writes.push(args); return null; }
+            }
+        });
+        loaded.mod.action({ inputFolderPath: 'input/gh-1308', jobParams: {} });
+        assert.equal(searchCalls.length, 0, 'the Jira-speak JQL must not be fired on the github tracker');
+        assert.equal(writes.length, 0, 'no existing_questions.json without a meaningful query');
+        assert.equal(loaded.parentCalls.length, 1, 'parent-context enrichment still runs');
+    });
+
+    test('jira tracker: searches once with the interpolated JQL and writes every question found', function() {
+        var searchCalls = [];
+        var writes = [];
+        var loaded = loadFetchQuestionsWithMocks({
+            globals: {
+                jira_search_by_jql: function (args) {
+                    searchCalls.push(args);
+                    return [
+                        {
+                            key: 'PROJ-11',
+                            fields: {
+                                summary: 'Q: how?', description: 'd1',
+                                status: { name: 'Open' }, priority: { name: 'High' },
+                                'Answer': 'answer one'
+                            }
+                        },
+                        {
+                            key: 'PROJ-12',
+                            fields: {
+                                summary: 'Q: why?', description: 'd2',
+                                status: { name: 'Open' }, priority: { name: 'Low' }
+                            }
+                        }
+                    ];
+                },
+                file_write: function (args) { writes.push(args); return null; }
+            }
+        });
+        loaded.mod.action({ inputFolderPath: 'input/PROJ-10', jobParams: {} });
+        assert.equal(searchCalls.length, 1);
+        assert.equal(searchCalls[0].jql, 'parent = PROJ-10 AND issuetype = Subtask ORDER BY created ASC');
+        assert.equal(writes.length, 1);
+        assert.equal(writes[0].path, 'input/PROJ-10/existing_questions.json');
+        var payload = JSON.parse(writes[0].content);
+        assert.equal(payload.questions.length, 2, 'multi-question case: every row lands in the file');
+        assert.equal(payload.questions[0].key, 'PROJ-11');
+        assert.equal(payload.questions[0].answer, 'answer one');
+        assert.equal(payload.questions[1].answer, null);
+        assert.equal(loaded.parentCalls.length, 1);
+    });
+
+    test('jira tracker: a failing search stays non-fatal (no file, parent context still runs)', function() {
+        var writes = [];
+        var loaded = loadFetchQuestionsWithMocks({
+            globals: {
+                jira_search_by_jql: function () { throw new Error('jira down'); },
+                file_write: function (args) { writes.push(args); return null; }
+            }
+        });
+        loaded.mod.action({ inputFolderPath: 'input/PROJ-10', jobParams: {} });
+        assert.equal(writes.length, 0);
+        assert.equal(loaded.parentCalls.length, 1);
+    });
+
+});

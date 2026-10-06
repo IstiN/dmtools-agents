@@ -15,6 +15,11 @@
 var NOOP_MODULE = {};
 var NOOP_CONFIG_JS = { GIT_CONFIG: {}, STATUSES: {}, resolveStatuses: function() { return {}; } };
 
+// Real setupCommands: buildSetupErrorComment binds setupCommands.truncateSetupError
+// at load time (the shared truncation bound), so the stub must actually export it.
+var devSetupCommandsReal = loadModule('js/common/setupCommands.js');
+var devCommentMarkupModule = loadModule('js/common/commentMarkup.js');
+
 // The real tracker factory (provider probing is pure config/env reads) so
 // action() tests exercise the actual github/jira provider gating.
 var trackersModuleReal = loadModule(
@@ -59,7 +64,8 @@ function loadPreCliDevelopmentSetup(configLoaderStub, mocks) {
             './fetchLinkedTestsToInput.js': NOOP_MODULE,
             './fetchParentContextToInput.js': NOOP_MODULE,
             './restoreFromReleases.js': NOOP_MODULE,
-            './common/setupCommands.js': NOOP_MODULE,
+            './common/setupCommands.js': devSetupCommandsReal,
+            './common/commentMarkup.js': devCommentMarkupModule,
             './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
             './common/trackers.js': trackersModuleReal
         }),

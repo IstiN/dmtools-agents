@@ -603,6 +603,60 @@ suite('trackers.js github provider', function () {
     });
 });
 
+suite('trackers.js github provider — gh-N router keys (gh-770)', function () {
+    var GH_CONFIG = {
+        tracker: { provider: 'github' },
+        repository: { owner: 'acme', repo: 'widgets' }
+    };
+
+    test('postComment parses the gh-N router key into the issue number', function () {
+        var ghPost = recorder('github_create_comment', '{}');
+        var trackers = loadTrackers({ github_create_comment: ghPost });
+        trackers.createTracker(GH_CONFIG).postComment('gh-1308', 'hello');
+        assert.deepEqual(ghPost.calls[0], {
+            workspace: 'acme',
+            repository: 'widgets',
+            pullRequestId: 1308,
+            text: 'hello'
+        });
+    });
+
+    test('getTicket / addLabel / moveToStatus parse gh-N keys too', function () {
+        var ghGet = recorder('github_get_issue', { number: 9, title: 'T', state: 'open' });
+        var ghAdd = recorder('github_add_labels', '{}');
+        var ghClose = recorder('github_close_issue', '{}');
+        var trackers = loadTrackers({
+            github_get_issue: ghGet,
+            github_add_labels: ghAdd,
+            github_close_issue: ghClose
+        });
+        var t = trackers.createTracker(GH_CONFIG);
+        t.getTicket('gh-9');
+        t.addLabel('gh-9', 'ai_generated');
+        t.moveToStatus('gh-9', 'done');
+        assert.equal(ghGet.calls[0].issueNumber, 9);
+        assert.equal(ghAdd.calls[0].number, 9);
+        assert.deepEqual(ghClose.calls[0], { owner: 'acme', repo: 'widgets', number: 9 });
+    });
+
+    test('composite owner/repo#N and bare-number keys keep working alongside gh-N', function () {
+        var ghPost = recorder('github_create_comment', '{}');
+        var trackers = loadTrackers({ github_create_comment: ghPost });
+        var t = trackers.createTracker(GH_CONFIG);
+        t.postComment('acme/widgets#7', 'a');
+        t.postComment('7', 'b');
+        assert.equal(ghPost.calls[0].pullRequestId, 7);
+        assert.equal(ghPost.calls[1].pullRequestId, 7);
+    });
+
+    test('a jira-provider tracker passes gh-N keys through untouched (no overreach)', function () {
+        var jiraPost = recorder('jira_post_comment', '{}');
+        var trackers = loadTrackers({ jira_post_comment: jiraPost });
+        trackers.createTracker({ tracker: { provider: 'jira' } }).postComment('gh-5', 'x');
+        assert.equal(jiraPost.calls[0].key, 'gh-5');
+    });
+});
+
 suite('trackers.js normalizeTicket', function () {
     test('returns null for falsy input', function () {
         var trackers = loadTrackers({});
