@@ -383,6 +383,8 @@
     errEl.hidden = true;
     backlogEl.innerHTML = '';
     backlogEl.hidden = true;
+    flowEl.innerHTML = '';           // v4 strip: no stale factory's numbers
+    flowEl.hidden = true;
     lanesEl.innerHTML = CFG.lanes.map(function (l) {
       return '<div class="lane loading"><div class="lane-head"><span>' +
         esc(l.title) + '</span><span class="count">·</span></div>' +

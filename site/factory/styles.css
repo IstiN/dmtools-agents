@@ -404,10 +404,7 @@ body {
 .ciwait { color: var(--muted); white-space: nowrap; }
 .ciwait b { color: var(--st-val); font-weight: 700; }
 /* Σ token chip on cards — token-reporting factories visible w/o the drawer */
-.tok { color: var(--muted); white-space: nowrap; }
-.tok { color: var(--muted); }
-.card .tok b, .tok { font-variant-numeric: tabular-nums; }
-.tok:first-letter { color: var(--accent); }
+.tok { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 /* per-card "what happens next / what's blocking" */
 .next {
   margin-top: 7px; display: flex; gap: 6px; align-items: baseline;
