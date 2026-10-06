@@ -89,7 +89,7 @@ function autoCommitAndPush(customParams, ticketKey) {
     // gh-761: skip the tick while a merge is in progress. MERGE_HEAD present
     // means a conflicted merge of the base branch sits unconcluded in the
     // working tree (the rework setup leaves it there for the agent to
-    // resolve; the agent's own `git merge origin/main` may be mid-conflict).
+    // resolve; the agent's own merge of origin/main may be mid-conflict).
     // A blind `git add -A && git commit` here would stage the unmerged paths
     // — conflict markers and all — and FINALIZE that merge as a 'WIP
     // auto-save' commit pushed to origin: silent branch corruption. The
