@@ -6,6 +6,7 @@
 var configLoader = require('./configLoader.js');
 var autoStart = require('./common/autoStart.js');
 var prHelper = require('./common/pullRequest.js');
+var mergeState = require('./common/mergeState.js');
 const { LABELS } = require('./config.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
@@ -46,6 +47,20 @@ function runInRepo(command, workingDir) {
 
 function mergeMain(storyKey, config) {
     var workingDir = config.workingDir || null;
+
+    // gh-761: never start a merge on top of an unconcluded one. When
+    // MERGE_HEAD exists (the agent left a conflicted base-branch merge
+    // unresolved), the old flow finalized that FOREIGN merge: `git merge
+    // origin/main` failed with "You have not concluded your merge", the
+    // fallback then read the LEFTOVER unmerged paths, auto-resolved them
+    // with --ours/--theirs and committed — baking conflict markers into a
+    // merge nobody deliberately resolved. Refuse with an actionable error
+    // instead; the job fails visibly and the tree stays exactly as the
+    // agent left it.
+    if (mergeState.isMergeInProgress(runInRepo, workingDir)) {
+        throw new Error('mergeMain: a merge is already in progress (MERGE_HEAD exists) in ' +
+            (workingDir || '.') + ' — conclude or abort the unconcluded merge before rework can merge origin/main for ' + storyKey);
+    }
 
     try {
         runInRepo('git config user.name "' + config.git.authorName + '"', workingDir);
@@ -339,5 +354,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action };
+    module.exports = { action, mergeMain };
 }
