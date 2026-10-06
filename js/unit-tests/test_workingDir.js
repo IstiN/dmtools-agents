@@ -82,6 +82,7 @@ function loadPreCli(workingDir) {
             './restoreFromReleases.js': { action: function() {} },
             './common/setupCommands.js': { runSetupCommands: function() { return { ran: 0, results: [] }; }, buildSetupWarningsMarkdown: function() { return null; } },
             './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
+            './common/commentMarkup.js': commentMarkupModule,
             './common/trackers.js': trackersModuleReal
         }),
         {

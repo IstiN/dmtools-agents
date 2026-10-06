@@ -19,7 +19,12 @@ function loadFetchQuestionsToInput() {
                         }
                     };
                 }
-            }
+            },
+            './common/trackers.js': loadModule(
+                'js/common/trackers.js',
+                makeRequire({ '../config.js': configModule }),
+                {}
+            )
         }),
         {}
     );
@@ -145,7 +150,7 @@ suite('fetchQuestionsToInput.action — tracker-aware query layer (gh-770)', fun
             trackerProvider: 'github',
             globals: {
                 jira_search_by_jql: function (args) { searchCalls.push(args); return []; },
-                file_write: function (args) { writes.push(args); return null; }
+                file_write: function (path, content) { writes.push({ path: path, content: content }); return null; }
             }
         });
         loaded.mod.action({ inputFolderPath: 'input/gh-1308', jobParams: {} });
@@ -179,7 +184,7 @@ suite('fetchQuestionsToInput.action — tracker-aware query layer (gh-770)', fun
                         }
                     ];
                 },
-                file_write: function (args) { writes.push(args); return null; }
+                file_write: function (path, content) { writes.push({ path: path, content: content }); return null; }
             }
         });
         loaded.mod.action({ inputFolderPath: 'input/PROJ-10', jobParams: {} });
@@ -200,7 +205,7 @@ suite('fetchQuestionsToInput.action — tracker-aware query layer (gh-770)', fun
         var loaded = loadFetchQuestionsWithMocks({
             globals: {
                 jira_search_by_jql: function () { throw new Error('jira down'); },
-                file_write: function (args) { writes.push(args); return null; }
+                file_write: function (path, content) { writes.push({ path: path, content: content }); return null; }
             }
         });
         loaded.mod.action({ inputFolderPath: 'input/PROJ-10', jobParams: {} });

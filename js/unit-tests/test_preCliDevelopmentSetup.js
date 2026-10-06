@@ -690,30 +690,44 @@ suite('preCliDevelopmentSetup.postSetupErrorComment — routes through the probe
     // The tracker factory is stubbed: which canonical tool each provider
     // dispatches to is covered by test_trackers.js — here we pin the WIRING
     // (comment built with the ticket's markup flavor, posted via the tracker).
-    function trackerStub(provider, posted) {
-        return {
-            createTracker: function (config, customParams) {
-                return {
-                    provider: function () { return provider; },
-                    postComment: function (ticketKey, text) {
-                        posted.push({ ticketKey: ticketKey, text: text });
+    function loadWithTrackerStub(posted, postThrows) {
+        return loadModule(
+            'js/preCliDevelopmentSetup.js',
+            makeRequire({
+                './configLoader.js': {
+                    loadProjectConfig: function () { return makeConfig(); },
+                    paramsForConfigLoad: function (p) { return p; }
+                },
+                './common/pullRequest.js': DEFAULT_PR_HELPER_STUB,
+                './config.js': NOOP_CONFIG_JS,
+                './fetchQuestionsToInput.js': NOOP_MODULE,
+                './fetchLinkedTestsToInput.js': NOOP_MODULE,
+                './fetchParentContextToInput.js': NOOP_MODULE,
+                './restoreFromReleases.js': NOOP_MODULE,
+                './common/setupCommands.js': devSetupCommandsReal,
+                './common/commentMarkup.js': devCommentMarkupModule,
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
+                './common/trackers.js': {
+                    createTracker: function () {
+                        return {
+                            provider: function () { return 'stub'; },
+                            postComment: function (ticketKey, text) {
+                                if (postThrows) { throw new Error('tracker down'); }
+                                posted.push({ ticketKey: ticketKey, text: text });
+                            }
+                        };
                     }
-                };
-            }
-        };
+                }
+            }),
+            {}
+        );
     }
 
-    test('github ticket: posts markdown via the probed tracker', function () {
+    test('posts the flavored comment through the probed tracker', function () {
         var posted = [];
-        var mod = loadPreCliDevelopmentSetup({
-            loadProjectConfig: function () { return makeConfig(); },
-            paramsForConfigLoad: function (p) { return p; }
-        }, {});
-        // swap in the stubbed factory for this call
-        var realTrackers = trackersModuleReal;
-        var stub = trackerStub('github', posted);
+        var mod = loadWithTrackerStub(posted, false);
         mod.postSetupErrorComment(
-            { tracker: { provider: 'github' }, repository: { owner: 'acme', repo: 'widgets' } },
+            { tracker: { provider: 'github' } },
             {},
             'gh-12',
             'Git Branch Setup',
@@ -721,31 +735,25 @@ suite('preCliDevelopmentSetup.postSetupErrorComment — routes through the probe
         );
         assert.equal(posted.length, 1);
         assert.equal(posted[0].ticketKey, 'gh-12');
-        assert.ok(posted[0].text.indexOf('### **Development Setup Error**') === 0);
+        assert.ok(posted[0].text.indexOf('### **Development Setup Error**') === 0,
+            'github key renders markdown, got: ' + posted[0].text);
     });
 
-    test('jira ticket: posts byte-identical wiki markup via the probed tracker', function () {
+    test('jira ticket receives byte-identical wiki markup', function () {
         var posted = [];
-        var mod = loadPreCliDevelopmentSetup({
-            loadProjectConfig: function () { return makeConfig(); },
-            paramsForConfigLoad: function (p) { return p; }
-        }, {});
+        var mod = loadWithTrackerStub(posted, false);
         mod.postSetupErrorComment({}, {}, 'PROJ-12', 'Git Branch Setup', 'boom');
         assert.equal(posted.length, 1);
         assert.equal(posted[0].ticketKey, 'PROJ-12');
-        assert.ok(posted[0].text.indexOf('h3. *Development Setup Error*') === 0);
+        assert.ok(posted[0].text.indexOf('h3. *Development Setup Error*') === 0,
+            'jira key renders wiki markup, got: ' + posted[0].text);
     });
 
     test('a posting failure never breaks the setup flow (warn only)', function () {
-        var mod = loadPreCliDevelopmentSetup({
-            loadProjectConfig: function () { return makeConfig(); },
-            paramsForConfigLoad: function (p) { return p; }
-        }, {});
+        var posted = [];
+        var mod = loadWithTrackerStub(posted, true);
         mod.postSetupErrorComment({}, {}, 'PROJ-12', 'Git Branch Setup', 'boom');
-    });
-
-});
-        mod.postSetupErrorComment({}, {}, 'PROJ-12', 'Git Branch Setup', 'boom');
+        assert.equal(posted.length, 0);
     });
 
 });

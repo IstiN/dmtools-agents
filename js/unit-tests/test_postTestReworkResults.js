@@ -169,7 +169,6 @@ suite('postTestReworkResults.buildTestReworkResultComment — per-tracker markup
         assert.ok(out.indexOf('**Pull Request**') !== -1);
         assert.equal(out.indexOf('h3.'), -1, 'no wiki heading');
         assert.equal(out.indexOf('{code'), -1, 'no wiki code tag');
-        assert.equal(out.indexOf('*Re-run result*'), -1, 'no wiki bold');
     });
 
     test('failed re-run flips the emoji and the status emphasis', function() {

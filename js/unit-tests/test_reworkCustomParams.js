@@ -168,6 +168,7 @@ function loadPostTestReworkResults() {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
+            './common/trackers.js': makeTrackersModule({}),
             './mergeState.js': loadModule('js/common/mergeState.js'),
             './common/mergeState.js': loadModule('js/common/mergeState.js')
         }),
