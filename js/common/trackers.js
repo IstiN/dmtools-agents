@@ -39,6 +39,10 @@
  */
 
 const { STATUSES, LABELS } = require('../config.js');
+// Single owner of the GitHub key-shape convention (gh-770): the router's
+// issue-number parser derives from it, so a key the convention accepts can
+// never die with "cannot parse GitHub issue key".
+const ticketKeyShapes = require('./ticketKeyShapes.js');
 
 /**
  * Parse a tool result that may arrive as an object or a JSON string.
@@ -169,17 +173,15 @@ function createTracker(config, customParams) {
 
     function githubIssueNumber(key) {
         var k = expandKey(key);
-        // gh-N (gh-1308) is the GitHub router key convention — same shape
-        // list as commentMarkup's GITHUB_KEY_SHAPES. Without it every
-        // comment/label/status op on a gh-N ticket would throw and the
+        // gh-N (gh-1308) is the GitHub router key convention — parsed via the
+        // shared shape owner (common/ticketKeyShapes.js, gh-770). Without it
+        // every comment/label/status op on a gh-N ticket would throw and the
         // machine-loop scripts would silently lose their tracker updates.
-        var m = /^[\w.-]+\/[\w.-]+#(\d+)$/.exec(k) ||
-            /^gh-(\d+)$/i.exec(k) ||
-            /^(\d+)$/.exec(k);
-        if (!m) {
+        var n = ticketKeyShapes.githubIssueNumberIn(k);
+        if (n === null) {
             throw new Error('trackers: cannot parse GitHub issue key: ' + key);
         }
-        return parseInt(m[1], 10);
+        return n;
     }
 
     /**

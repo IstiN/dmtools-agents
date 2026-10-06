@@ -10,25 +10,22 @@
 // Accepts PROJECT-123 or PROJECT_CODE-123 (uppercase project key, numeric id)
 var TICKET_KEY_RE = /^[A-Z][A-Z0-9_]*-\d+$/;
 
-// GitHub issue key shapes (gh-770) — same convention list as
-// commentMarkup's GITHUB_KEY_SHAPES: 'gh-N' is the machine-loop router key,
-// 'owner/repo#N' the composite form, '#N' and bare 'N' appear in dispatch
-// payloads. A tracker-agnostic gate must not abort GitHub-backed legs with
-// "Invalid or missing Jira ticket key".
-var GITHUB_KEY_SHAPES = [
-    /^gh-\d+$/i,
-    /^[\w.-]+\/[\w.-]+#\d+$/,
-    /^#\d+$/,
-    /^\d+$/
-];
+// GitHub issue key shapes have a single owner (gh-770):
+// common/ticketKeyShapes.js. The gate below consults its isGitHubKeyShape()
+// and the extractor builds its alternation from shapeSources() — a local
+// copy here would drift the next time a shape is added.
+var ticketKeyShapes = require('./ticketKeyShapes.js');
 
-function isGitHubKeyShape(key) {
-    var k = String(key == null ? '' : key).trim();
-    for (var i = 0; i < GITHUB_KEY_SHAPES.length; i++) {
-        if (GITHUB_KEY_SHAPES[i].test(k)) return true;
-    }
-    return false;
-}
+// Jira-speak alternation first (uppercase normalization applies), then the
+// GitHub shapes so gh-N keys keep their original case — uppercasing would
+// mint 'GH-12', a different key from the 'gh-12' the machine loop created.
+// (A Jira project literally keyed 'GH' is unaffected: its keys already match
+// the Jira shape unchanged.)
+var KEY_EXTRACTION_RE = new RegExp(
+    'key\\s*(?:=|in\\s*\\()\\s*([A-Z][A-Z0-9_]*-\\d+|' +
+    ticketKeyShapes.shapeSources().join('|') + ')',
+    'i'
+);
 
 /**
  * Extract the ticket key from an inputJql string.
@@ -38,14 +35,11 @@ function isGitHubKeyShape(key) {
  */
 function extractTicketKeyFromJql(jql) {
     if (!jql || typeof jql !== 'string') return null;
-    // GitHub shapes are matched FIRST so gh-N keys keep their original case —
-    // uppercasing would mint 'GH-12', a different key from the 'gh-12' the
-    // machine loop created. (A Jira project literally keyed 'GH' is unaffected:
-    // its keys already match the Jira shape unchanged.)
-    var gh = jql.match(/key\s*(?:=|in\s*\()\s*(gh-\d+|[\w.-]+\/[\w.-]+#\d+|#\d+|\d+)/i);
-    if (gh && gh[1]) return gh[1];
-    var m = jql.match(/key\s*(?:=|in\s*\()\s*([A-Z][A-Z0-9_]*-\d+)/i);
-    return m ? m[1].toUpperCase() : null;
+    var m = jql.match(KEY_EXTRACTION_RE);
+    if (!m || !m[1]) return null;
+    // Jira keys are normalized to uppercase; GitHub shapes pass through as
+    // written (they cannot match the uppercase Jira branch's shape).
+    return ticketKeyShapes.isGitHubKeyShape(m[1]) ? m[1] : m[1].toUpperCase();
 }
 
 /**
@@ -54,7 +48,7 @@ function extractTicketKeyFromJql(jql) {
  * @param {string|null} key
  */
 function validateTicketKeyFormat(key) {
-    if (!key || (!TICKET_KEY_RE.test(key) && !isGitHubKeyShape(key))) {
+    if (!key || (!TICKET_KEY_RE.test(key) && !ticketKeyShapes.isGitHubKeyShape(key))) {
         throw new Error('Invalid or missing ticket key: "' + key +
             '". Expected a Jira key (PROJECT-123) or a GitHub issue key (gh-123, owner/repo#123, #123, 123)');
     }
@@ -62,18 +56,18 @@ function validateTicketKeyFormat(key) {
 
 /**
  * Fetch the ticket via jira_get_ticket and throw if it does not exist.
- * @param {string} key  Validated Jira ticket key
- * @returns {Object}    The Jira ticket object
+ * @param {string} key  Validated ticket key
+ * @returns {Object}    The ticket object
  */
 function requireTicketExists(key) {
     var ticket;
     try {
         ticket = jira_get_ticket({ key: key });
     } catch (e) {
-        throw new Error('Jira ticket not found: ' + key + ' — ' + (e.message || e));
+        throw new Error('Ticket not found: ' + key + ' — ' + (e.message || e));
     }
     if (!ticket || !ticket.key) {
-        throw new Error('Jira ticket not found: ' + key);
+        throw new Error('Ticket not found: ' + key);
     }
     return ticket;
 }

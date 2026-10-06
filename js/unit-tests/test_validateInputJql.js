@@ -7,10 +7,16 @@
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function makeValidator(jiraGetTicketMock) {
+// Single owner of the GitHub key-shape convention (gh-770) — validateInputJql
+// must derive its gate and extraction alternation from this module, so the
+// default loader wires the REAL one and the derivation suites below swap in
+// controlled fakes.
+var ticketKeyShapesModule = loadModule('js/common/ticketKeyShapes.js');
+
+function makeValidator(jiraGetTicketMock, ticketKeyShapesOverride) {
     return loadModule(
         'js/common/validateInputJql.js',
-        makeRequire({}),
+        makeRequire({ './ticketKeyShapes.js': ticketKeyShapesOverride || ticketKeyShapesModule }),
         { jira_get_ticket: jiraGetTicketMock || function() { return null; } }
     );
 }
@@ -130,7 +136,45 @@ suite('validateInputJql: validateAndRequireTicket — GitHub key shapes (gh-770)
 
 });
 
-// ── validateTicketKeyFormat ───────────────────────────────────────────────────
+// ── shared key-shape owner derivation (gh-770 review thread 2) ────────────────
+// The gate and the extraction alternation must be DERIVED from
+// common/ticketKeyShapes.js — a local copy would drift the next time a shape
+// is added. These suites swap in controlled fakes to prove the wiring.
+
+suite('validateInputJql: derives GitHub key shapes from ticketKeyShapes (gh-770)', function() {
+
+    test('gate consults the shared isGitHubKeyShape (no local copy)', function() {
+        var rejectingShapes = {
+            isGitHubKeyShape: function() { return false; },
+            shapeSources: function() { return []; }
+        };
+        var v = makeValidator(undefined, rejectingShapes);
+        assert.throws(function() { v.validateTicketKeyFormat('gh-12'); }, /Invalid or missing/);
+
+        var acceptingShapes = {
+            isGitHubKeyShape: function() { return true; },
+            shapeSources: function() { return []; }
+        };
+        var v2 = makeValidator(undefined, acceptingShapes);
+        assert.doesNotThrow(function() { v2.validateTicketKeyFormat('totally-not-a-key'); });
+    });
+
+    test('extraction alternation is built from the shared shapeSources', function() {
+        var ghOnlyShapes = {
+            isGitHubKeyShape: function(key) { return /^gh-\d+$/i.test(String(key)); },
+            shapeSources: function() { return ['gh-\\d+']; }
+        };
+        var v = makeValidator(undefined, ghOnlyShapes);
+        assert.equal(v.extractTicketKeyFromJql('key = gh-7'), 'gh-7');
+        // No local fallback list: a shape the shared owner does not list is
+        // simply not extracted.
+        assert.equal(v.extractTicketKeyFromJql('key = acme/widgets#12'), null);
+        assert.equal(v.extractTicketKeyFromJql('key = #12'), null);
+    });
+
+});
+
+// ── requireTicketExists ───────────────────────────────────────────────────────
 
 suite('validateInputJql: validateTicketKeyFormat', function() {
 
@@ -199,6 +243,21 @@ suite('validateInputJql: requireTicketExists', function() {
     test('throws and wraps Jira API error', function() {
         var v = makeValidator(throwingTicketMock('Connection refused'));
         assert.throws(function() { v.requireTicketExists('PROJ-9'); }, /not found/i);
+    });
+
+    test('error wording is tracker-neutral (gh-770: GitHub-shaped keys are valid keys)', function() {
+        var v = makeValidator(function() { return null; });
+        var thrown = null;
+        try {
+            v.requireTicketExists('gh-9');
+        } catch (e) {
+            thrown = e;
+        }
+        assert.notEqual(thrown, null, 'expected requireTicketExists to throw');
+        assert.equal(/^Ticket not found/.test(thrown.message), true,
+            'expected tracker-neutral wording, got: ' + thrown.message);
+        assert.equal(/Jira ticket not found/.test(thrown.message), false,
+            'stale Jira-only wording must not come back');
     });
 
 });

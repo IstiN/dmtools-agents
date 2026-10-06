@@ -20,7 +20,10 @@ function loadTrackers(mocks) {
         'js/common/trackers.js',
         makeRequire({
             '../config.js': configModule,
-            'config': configModule
+            'config': configModule,
+            // Single owner of the GitHub key-shape convention (gh-770) —
+            // the router's issue-number parser derives from it.
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
         }),
         mocks || {}
     );
@@ -648,6 +651,16 @@ suite('trackers.js github provider — gh-N router keys (gh-770)', function () {
         t.postComment('7', 'b');
         assert.equal(ghPost.calls[0].pullRequestId, 7);
         assert.equal(ghPost.calls[1].pullRequestId, 7);
+    });
+
+    test('the bare-hash #N dispatch-payload shape parses too (derived from the shared shape list)', function () {
+        // '#N' appears in dispatch payloads and is part of the shared
+        // convention (ticketKeyShapes.GITHUB_KEY_SHAPES) — a key the shared
+        // owner accepts must not die with "cannot parse GitHub issue key".
+        var ghPost = recorder('github_create_comment', '{}');
+        var trackers = loadTrackers({ github_create_comment: ghPost });
+        trackers.createTracker(GH_CONFIG).postComment('#12', 'hello');
+        assert.equal(ghPost.calls[0].pullRequestId, 12);
     });
 
     test('a jira-provider tracker passes gh-N keys through untouched (no overreach)', function () {
