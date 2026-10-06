@@ -66,6 +66,36 @@ suite('factoryFlow — tokenTotals', function () {
   });
 });
 
+suite('factoryFlow — legs bucket is prototype-safe (review thread 2)', function () {
+  test('__proto__ / constructor legs stay own data buckets — totals never corrupt', function () {
+    var t = flow.tokenTotals({ tokens: [
+      { leg: '__proto__', prompt: 7, completion: 0, total: 7 },
+      { leg: 'constructor', prompt: 5, completion: 0, total: 5 },
+      { leg: 'pr_rework', prompt: 10, completion: 2, total: 12 }
+    ] });
+    assert.equal(t.total, 24);
+    assert.deepEqual(Object.keys(t.legs).sort(),
+      ['__proto__', 'constructor', 'pr_rework'],
+      'special keys must not vanish from Object.keys (per-leg chips/drawer)');
+    assert.equal(t.legs['__proto__'].total, 7,
+      'must be a plain data bucket, not a prototype assignment');
+    assert.equal(t.legs['constructor'].total, 5,
+      'must not resolve to the inherited Object function');
+    assert.equal(t.legs['constructor'].prompt, 5,
+      'no NaN from += onto inherited properties');
+  });
+
+  test('flowSummary cross-card merge is prototype-safe too', function () {
+    var s = flow.flowSummary([
+      { tokens: [{ leg: '__proto__', prompt: 7, completion: 0, total: 7 }] },
+      { tokens: [{ leg: '__proto__', prompt: 5, completion: 0, total: 5 }] }
+    ], NOW);
+    assert.equal(s.tokens.total, 12);
+    assert.deepEqual(Object.keys(s.tokens.legs), ['__proto__']);
+    assert.equal(s.tokens.legs['__proto__'].total, 12, 'both cards accumulate');
+  });
+});
+
 suite('factoryFlow — ciSplit (CI wall-time vs queue wait, gh-769 #6)', function () {
   test('null without checks, without checks.at, or with a bad date', function () {
     assert.equal(flow.ciSplit({}, 0), null);
@@ -103,6 +133,17 @@ suite('factoryFlow — ciSplit (CI wall-time vs queue wait, gh-769 #6)', functio
     assert.equal(flow.ciSplit({ checks: { verdict: 'success',
       at: '2026-10-03T12:00:00Z' } }, iso('2026-10-03T13:00:00Z')), null);
   });
+
+  test('completed run without updatedAt: ciMs stays unknown (review thread 9)', function () {
+    var s = flow.ciSplit({ checks: { verdict: 'success',
+      at: '2026-10-03T12:00:00Z', runStartedAt: '2026-10-03T12:01:00Z' } },
+      iso('2026-10-03T13:00:00Z'));
+    assert.equal(s.running, false);
+    assert.equal(s.queueMs, 60000);
+    assert.equal(s.ciMs, null,
+      'the CI clock stopped at an unknown time — no fake nowMs - start');
+  });
+
 
   test('clock skew clamps to 0 — never a negative wait', function () {
     var s = flow.ciSplit({ checks: { verdict: 'in_progress', at: '2026-10-03T12:00:00Z',
@@ -266,6 +307,30 @@ suite('factoryFlow — nextStep (what happens next / blocking, gh-769 #2)', func
     assert.equal(n.next, 'validation');
     assert.equal(n.blocking, false);
   });
+
+  test('pr_validation queued run says CI queued, not CI running (review thread 5)', function () {
+    var n = flow.nextStep({ checks: { verdict: 'queued', at: '2026-10-03T12:00:00Z' } },
+      'pr_validation');
+    assert.equal(n.next, 'review');
+    assert.equal(n.detail, 'CI queued',
+      'a run sitting in the queue is idle-wait — exactly the CI-vs-idle ' +
+      'confusion gh-769 #6 set out to fix');
+  });
+
+  test('pr_validation waiting/pending verdicts also read CI queued', function () {
+    var waiting = flow.nextStep({ checks: { verdict: 'waiting' } }, 'pr_validation');
+    var pending = flow.nextStep({ checks: { verdict: 'pending' } }, 'pr_validation');
+    assert.equal(waiting.detail, 'CI queued');
+    assert.equal(pending.detail, 'CI queued');
+  });
+
+  test('pr_validation with runStartedAt says CI running', function () {
+    var n = flow.nextStep({ checks: { verdict: 'in_progress',
+      runStartedAt: '2026-10-03T12:01:00Z' } }, 'pr_validation');
+    assert.equal(n.next, 'review');
+    assert.equal(n.detail, 'CI running');
+  });
+
 
   test('issue-side lanes name their next handoff', function () {
     assert.equal(flow.nextStep({}, 'development').next, 'pr');
