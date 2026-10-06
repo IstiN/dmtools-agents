@@ -228,7 +228,8 @@ new "Value stream" drawer section shows lead time (created → merged or
 
 - **Labeled rollups** — the counts pill names each lane
   (`dev 1 · pr 1 · ci 2 · review 3 · queue 9 · mutex 1 · merged 5`); an
-  unlabeled `0 · 1 · 0 · 9` is how "scramled vs reality" read before.
+  unlabeled `0 · 1 · 0 · 9` is how the "scrambled vs reality" state looked
+  before.
 - **Stale snapshot guard** — a snapshot older than `config.staleAfterMs`
   (default 30m) turns the tick pill red with `STALE` and the age: a
   stalled SM tick can no longer masquerade as repo reality.

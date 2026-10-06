@@ -37,8 +37,8 @@
 
   // schema-2 card timestamp field → phase state — the drawer's history
   // fallback for cards accumulated before card.history existed (mirrors
-  // app.js TS_TO_STATE / js/factoryState.js LANE_ENTERED_AT, kept in sync
-  // deliberately)
+  // js/factoryState.js LANE_ENTERED_AT / app.js LANE_ENTERED_AT, kept in
+  // sync deliberately)
   var TS_TO_STATE = [
     { k: 'devStartedAt', state: 'development' },
     { k: 'prCreated',    state: 'pr_created' },
@@ -60,7 +60,11 @@
   function tokenTotals(card) {
     var rows = card && card.tokens;
     if (!rows || !rows.length) return null;
-    var out = { prompt: 0, completion: 0, total: 0, legs: {} };
+    // legs is prototype-less: leg names come from report input, so a
+    // '__proto__'/'constructor' key must stay a plain bucket — a plain {}
+    // would set the prototype (leg vanishes from Object.keys) or resolve
+    // to the inherited Object function (NaN totals) (review thread 2)
+    var out = { prompt: 0, completion: 0, total: 0, legs: Object.create(null) };
     rows.forEach(function (r) {
       if (!r) return;
       var p = +r.prompt || 0, c = +r.completion || 0, t = +r.total || (p + c);
@@ -178,7 +182,10 @@
       case 'pr_validation':
         return red
           ? { next: 'rework', detail: 'CI red', blocking: true }
-          : { next: 'review', detail: 'CI running', blocking: false };
+          : { next: 'review',
+              detail: card.checks && card.checks.runStartedAt
+                ? 'CI running' : 'CI queued',
+              blocking: false };
       case 'review':
         return { next: 'approve', detail: null, blocking: false };
       case 'approved_queue': {
@@ -198,15 +205,22 @@
   }
 
   // card → [{state, at(ms|null)}] — snapshot history preferred, schema-2
-  // timestamp fields as the fallback (pre-v3 cards still get a rail)
+  // timestamp fields as the fallback (pre-v3 cards still get a rail).
+  // Sorted chronological, nulls first: the machine appends in order, but
+  // hand-edited fixtures and legacy snapshots may not — phaseRail's
+  // positional durations need real time order to stay honest (the
+  // guarantee the v3 cardHistory carried; review thread 4).
   function entriesOf(card) {
-    if (card.history && card.history.length) {
-      return card.history.map(function (h) {
-        return { state: h.state, at: h.at ? parseMs(h.at) : null };
-      });
-    }
-    return TS_TO_STATE.filter(function (m) { return card[m.k]; })
-      .map(function (m) { return { state: m.state, at: parseMs(card[m.k]) }; });
+    var mapped = (card.history && card.history.length)
+      ? card.history.map(function (h) {
+          return { state: h.state, at: h.at ? parseMs(h.at) : null };
+        })
+      : TS_TO_STATE.filter(function (m) { return card[m.k]; })
+        .map(function (m) { return { state: m.state, at: parseMs(card[m.k]) }; });
+    mapped.sort(function (a, b) {
+      return (a.at == null ? 0 : a.at) - (b.at == null ? 0 : b.at);
+    });
+    return mapped;
   }
 
   // ── board-level value-stream summary (gh-769 #5) ───────────────────────────
@@ -237,7 +251,9 @@
       var tt = tokenTotals(card);
       if (tt) {
         if (!out.tokens) {
-          out.tokens = { prompt: 0, completion: 0, total: 0, legs: {} };
+          // same prototype-less legs map as tokenTotals (review thread 2)
+          out.tokens = { prompt: 0, completion: 0, total: 0,
+                         legs: Object.create(null) };
         }
         out.tokens.prompt += tt.prompt;
         out.tokens.completion += tt.completion;

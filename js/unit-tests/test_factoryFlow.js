@@ -242,6 +242,42 @@ suite('factoryFlow — phaseRail (named phases with boundaries, gh-769 #4)', fun
   }
 });
 
+suite('factoryFlow — entriesOf (chronological guarantee, review thread 4)', function () {
+  test('out-of-order history entries sort by timestamp, nulls first', function () {
+    var entries = flow.entriesOf({ history: [
+      { state: 'pr_created', at: '2026-10-03T10:30:00Z' },
+      { state: 'inbox', at: null },
+      { state: 'approved_queue', at: '2026-10-03T11:00:00Z' },
+      { state: 'review', at: '2026-10-03T10:00:00Z' }
+    ] });
+    assert.deepEqual(entries.map(function (e) { return e.state; }),
+      ['inbox', 'review', 'pr_created', 'approved_queue'],
+      'phaseRail durations are positional — they need real time order');
+  });
+
+  test('already-chronological history is preserved', function () {
+    var entries = flow.entriesOf({ history: [
+      { state: 'pr_created', at: '2026-10-03T09:00:00Z' },
+      { state: 'review', at: '2026-10-03T10:00:00Z' }
+    ] });
+    assert.deepEqual(entries.map(function (e) { return e.state; }),
+      ['pr_created', 'review']);
+  });
+
+  test('the schema-2 timestamp fallback is chronological too', function () {
+    var entries = flow.entriesOf({
+      reviewedAt: '2026-10-03T10:00:00Z',
+      prCreated: '2026-10-03T09:00:00Z'
+    });
+    assert.deepEqual(entries.map(function (e) { return e.state; }),
+      ['pr_created', 'review']);
+  });
+
+  test('no history and no timestamps → empty rail', function () {
+    assert.deepEqual(flow.entriesOf({}), []);
+  });
+});
+
 suite('factoryFlow — reworkOf (rework analytics, gh-769 #5)', function () {
   test('sums rounds and rework time across the rail', function () {
     var rail = flow.phaseRail(REWORK_ENTRIES, NOW, false);
