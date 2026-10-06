@@ -2,8 +2,19 @@
   "schema": 2,
   "factory": "flutter_agent_harness",
   "repo": "IstiN/flutter_agent_harness",
-  "tick": { "at": "2026-10-03T12:00:00Z", "dryRun": false, "processed": ["pr-817", "issue-402"] },
-  "checks": ["Quality gate", "JS engine integration (quickjs-ng)", "Binaries smoke gate"],
+  "tick": {
+    "at": "2026-10-03T12:00:00Z",
+    "dryRun": false,
+    "processed": [
+      "pr-817",
+      "issue-402"
+    ]
+  },
+  "checks": [
+    "Quality gate",
+    "JS engine integration (quickjs-ng)",
+    "Binaries smoke gate"
+  ],
   "lanes": {
     "development": [
       {
@@ -11,13 +22,24 @@
         "title": "feat: per-leg token counters on the bench report",
         "author": "owner",
         "assignee": "ai-teammate",
-        "labels": ["agent:dev", "factory-board"],
+        "labels": [
+          "agent:dev",
+          "factory-board"
+        ],
         "url": "https://github.com/IstiN/flutter_agent_harness/issues/402",
         "devStartedAt": "2026-10-03T11:02:00Z",
         "history": [
-          { "state": "inbox" },
-          { "state": "queued", "at": "2026-10-02T18:40:00Z" },
-          { "state": "in_dev", "at": "2026-10-03T11:02:00Z" }
+          {
+            "state": "inbox"
+          },
+          {
+            "state": "queued",
+            "at": "2026-10-02T18:40:00Z"
+          },
+          {
+            "state": "in_dev",
+            "at": "2026-10-03T11:02:00Z"
+          }
         ]
       }
     ],
@@ -28,12 +50,23 @@
         "author": "ai-teammate",
         "branch": "ai/gh-860",
         "head": "9f2c1ab4de5580d2a91c77f3a4c0b6e91d2f88ac",
-        "labels": ["dependencies"],
-        "checks": null,
+        "labels": [
+          "dependencies"
+        ],
+        "checks": {
+          "verdict": "failure",
+          "at": "2026-10-03T11:41:00Z",
+          "runStartedAt": "2026-10-03T11:38:00Z",
+          "updatedAt": "2026-10-03T11:41:00Z",
+          "url": "https://example.com/run/871"
+        },
         "prCreated": "2026-10-03T11:40:00Z",
         "queuePos": null,
         "history": [
-          { "state": "pr_created", "at": "2026-10-03T11:40:00Z" }
+          {
+            "state": "pr_created",
+            "at": "2026-10-03T11:40:00Z"
+          }
         ]
       }
     ],
@@ -45,12 +78,23 @@
         "branch": "ai/gh-872",
         "head": "aa10bb20cc30dd40ee50ff60aa70bb80cc90dd00",
         "labels": [],
-        "checks": { "verdict": "in_progress", "at": "2026-10-03T11:52:00Z", "url": "https://example.com/run/872" },
+        "checks": {
+          "verdict": "in_progress",
+          "at": "2026-10-03T11:52:00Z",
+          "runStartedAt": "2026-10-03T11:56:00Z",
+          "url": "https://example.com/run/872"
+        },
         "prCreated": "2026-10-03T11:45:00Z",
         "queuePos": null,
         "history": [
-          { "state": "pr_created", "at": "2026-10-03T11:45:00Z" },
-          { "state": "pr_validation", "at": "2026-10-03T11:52:00Z" }
+          {
+            "state": "pr_created",
+            "at": "2026-10-03T11:45:00Z"
+          },
+          {
+            "state": "pr_validation",
+            "at": "2026-10-03T11:52:00Z"
+          }
         ]
       }
     ],
@@ -61,14 +105,26 @@
         "author": "ai-teammate",
         "branch": "ai/gh-809",
         "head": "1b88e0c9aa112233445566778899aabbccddeeff",
-        "labels": ["ai_pr_reviewed"],
-        "checks": { "verdict": "success", "at": "2026-10-03T10:45:00Z", "url": "https://example.com/run/860" },
+        "labels": [
+          "ai_pr_reviewed"
+        ],
+        "checks": {
+          "verdict": "success",
+          "at": "2026-10-03T10:45:00Z",
+          "url": "https://example.com/run/860"
+        },
         "prCreated": "2026-10-03T09:58:00Z",
         "reviewedAt": "2026-10-03T10:30:00Z",
         "queuePos": null,
         "history": [
-          { "state": "pr_created", "at": "2026-10-03T09:58:00Z" },
-          { "state": "review", "at": "2026-10-03T10:30:00Z" }
+          {
+            "state": "pr_created",
+            "at": "2026-10-03T09:58:00Z"
+          },
+          {
+            "state": "review",
+            "at": "2026-10-03T10:30:00Z"
+          }
         ]
       }
     ],
@@ -79,20 +135,83 @@
         "author": "ai-teammate",
         "branch": "ai/gh-807",
         "head": "5d4c3b2a1100ffeeddccbbaa9988776655443322",
-        "labels": ["pr_approved", "ai_validated"],
-        "checks": { "verdict": "in_progress", "at": "2026-10-03T11:12:00Z", "url": "https://example.com/run/828" },
+        "labels": [
+          "pr_approved",
+          "ai_validated"
+        ],
+        "checks": {
+          "verdict": "in_progress",
+          "at": "2026-10-03T11:12:00Z",
+          "url": "https://example.com/run/828"
+        },
         "prCreated": "2026-10-03T10:12:00Z",
         "reviewedAt": "2026-10-03T10:40:00Z",
         "approvedAt": "2026-10-03T11:10:00Z",
         "queuePos": 1,
         "history": [
-          { "state": "pr_created", "at": "2026-10-03T10:12:00Z" },
-          { "state": "review", "at": "2026-10-03T10:40:00Z" },
-          { "state": "approved_queue", "at": "2026-10-03T11:10:00Z" }
+          {
+            "state": "pr_created",
+            "at": "2026-10-03T10:12:00Z"
+          },
+          {
+            "state": "review",
+            "at": "2026-10-03T10:40:00Z"
+          },
+          {
+            "state": "approved_queue",
+            "at": "2026-10-03T11:10:00Z"
+          }
         ],
         "tokens": [
-          { "leg": "story_development", "at": "2026-10-03T09:40:00Z", "prompt": 48210, "completion": 12980, "total": 61190 },
-          { "leg": "pr_review", "at": "2026-10-03T10:38:00Z", "prompt": 22140, "completion": 4310, "total": 26450 }
+          {
+            "leg": "story_development",
+            "at": "2026-10-03T09:40:00Z",
+            "prompt": 48210,
+            "completion": 12980,
+            "total": 61190
+          },
+          {
+            "leg": "pr_review",
+            "at": "2026-10-03T10:38:00Z",
+            "prompt": 22140,
+            "completion": 4310,
+            "total": 26450
+          }
+        ]
+      },
+      {
+        "pr": 829,
+        "title": "fix(cli): retry merge on 422",
+        "author": "ai-teammate",
+        "branch": "ai/gh-820",
+        "head": "6f5e4d3c2b1a00998877665544332211ffeeddcc",
+        "labels": [
+          "pr_approved"
+        ],
+        "checks": {
+          "verdict": "success",
+          "at": "2026-10-03T10:40:00Z",
+          "runStartedAt": "2026-10-03T10:36:00Z",
+          "updatedAt": "2026-10-03T10:44:00Z",
+          "url": "https://example.com/run/829"
+        },
+        "prCreated": "2026-10-03T09:20:00Z",
+        "reviewedAt": "2026-10-03T09:45:00Z",
+        "approvedAt": "2026-10-03T10:55:00Z",
+        "queuePos": 2,
+        "history": [
+          {
+            "state": "pr_created",
+            "at": "2026-10-03T09:20:00Z"
+          },
+          {
+            "state": "review",
+            "at": "2026-10-03T09:45:00Z"
+          },
+          {
+            "state": "approved_queue",
+            "at": "2026-10-03T10:55:00Z"
+          }
         ]
       }
     ],
@@ -103,23 +222,69 @@
         "author": "ai-teammate",
         "branch": "ai/gh-794",
         "head": "c0ffee00d15ea5e6b60b5ac1e5f00dba5e123456",
-        "labels": ["pr_approved", "ai_validating"],
-        "checks": { "verdict": "in_progress", "at": "2026-10-03T11:47:00Z", "url": "https://example.com/run/817" },
+        "labels": [
+          "pr_approved",
+          "ai_validating"
+        ],
+        "checks": {
+          "verdict": "in_progress",
+          "at": "2026-10-03T11:47:00Z",
+          "runStartedAt": "2026-10-03T11:49:00Z",
+          "url": "https://example.com/run/817"
+        },
         "prCreated": "2026-10-03T09:30:00Z",
         "reviewedAt": "2026-10-03T09:50:00Z",
         "approvedAt": "2026-10-03T10:20:00Z",
         "validatingAt": "2026-10-03T11:44:00Z",
         "queuePos": null,
         "history": [
-          { "state": "pr_created", "at": "2026-10-03T09:30:00Z" },
-          { "state": "review", "at": "2026-10-03T09:50:00Z" },
-          { "state": "approved_queue", "at": "2026-10-03T10:20:00Z" },
-          { "state": "validating", "at": "2026-10-03T11:44:00Z" }
+          {
+            "state": "pr_created",
+            "at": "2026-10-03T09:30:00Z"
+          },
+          {
+            "state": "review",
+            "at": "2026-10-03T09:50:00Z"
+          },
+          {
+            "state": "pr_created",
+            "at": "2026-10-03T10:05:00Z"
+          },
+          {
+            "state": "review",
+            "at": "2026-10-03T10:20:00Z"
+          },
+          {
+            "state": "approved_queue",
+            "at": "2026-10-03T10:40:00Z"
+          },
+          {
+            "state": "validating",
+            "at": "2026-10-03T11:44:00Z"
+          }
         ],
         "tokens": [
-          { "leg": "story_development", "at": "2026-10-03T08:55:00Z", "prompt": 61050, "completion": 18320, "total": 79370 },
-          { "leg": "pr_review", "at": "2026-10-03T09:48:00Z", "prompt": 18930, "completion": 2760, "total": 21690 },
-          { "leg": "pr_rework", "at": "2026-10-03T11:20:00Z", "prompt": 12040, "completion": 1980, "total": 14020 }
+          {
+            "leg": "story_development",
+            "at": "2026-10-03T08:55:00Z",
+            "prompt": 61050,
+            "completion": 18320,
+            "total": 79370
+          },
+          {
+            "leg": "pr_review",
+            "at": "2026-10-03T09:48:00Z",
+            "prompt": 18930,
+            "completion": 2760,
+            "total": 21690
+          },
+          {
+            "leg": "pr_rework",
+            "at": "2026-10-03T11:20:00Z",
+            "prompt": 12040,
+            "completion": 1980,
+            "total": 14020
+          }
         ]
       }
     ],
@@ -139,19 +304,48 @@
         "mergedAt": "2026-10-03T11:20:00Z",
         "queuePos": null,
         "history": [
-          { "state": "pr_created", "at": "2026-10-02T15:10:00Z" },
-          { "state": "review", "at": "2026-10-02T15:35:00Z" },
-          { "state": "approved_queue", "at": "2026-10-03T10:50:00Z" },
-          { "state": "validating", "at": "2026-10-03T11:05:00Z" },
-          { "state": "merged_recent", "at": "2026-10-03T11:20:00Z" }
+          {
+            "state": "pr_created",
+            "at": "2026-10-02T15:10:00Z"
+          },
+          {
+            "state": "review",
+            "at": "2026-10-02T15:35:00Z"
+          },
+          {
+            "state": "approved_queue",
+            "at": "2026-10-03T10:50:00Z"
+          },
+          {
+            "state": "validating",
+            "at": "2026-10-03T11:05:00Z"
+          },
+          {
+            "state": "merged_recent",
+            "at": "2026-10-03T11:20:00Z"
+          }
         ],
         "tokens": [
-          { "leg": "story_development", "at": "2026-10-02T14:20:00Z", "prompt": 39100, "completion": 9840, "total": 48940 }
+          {
+            "leg": "story_development",
+            "at": "2026-10-02T14:20:00Z",
+            "prompt": 39100,
+            "completion": 9840,
+            "total": 48940
+          }
         ]
       }
     ]
   },
-  "counts": { "development": 1, "pr_created": 1, "pr_validation": 1, "review": 1, "approved_queue": 1, "validating": 1, "merged_recent": 1 },
+  "counts": {
+    "development": 1,
+    "pr_created": 1,
+    "pr_validation": 1,
+    "review": 1,
+    "approved_queue": 2,
+    "validating": 1,
+    "merged_recent": 1
+  },
   "backlog": {
     "in_dev": [
       {
@@ -159,17 +353,34 @@
         "title": "feat: per-leg token counters on the bench report",
         "author": "owner",
         "assignee": "ai-teammate",
-        "labels": ["agent:dev", "factory-board"],
+        "labels": [
+          "agent:dev",
+          "factory-board"
+        ],
         "url": "https://github.com/IstiN/flutter_agent_harness/issues/402",
         "bucket": "in_dev",
         "devStartedAt": "2026-10-03T11:02:00Z",
         "history": [
-          { "state": "inbox" },
-          { "state": "queued", "at": "2026-10-02T18:40:00Z" },
-          { "state": "in_dev", "at": "2026-10-03T11:02:00Z" }
+          {
+            "state": "inbox"
+          },
+          {
+            "state": "queued",
+            "at": "2026-10-02T18:40:00Z"
+          },
+          {
+            "state": "in_dev",
+            "at": "2026-10-03T11:02:00Z"
+          }
         ],
         "tokens": [
-          { "leg": "story_development", "at": "2026-10-03T11:05:00Z", "prompt": 15400, "completion": 3620, "total": 19020 }
+          {
+            "leg": "story_development",
+            "at": "2026-10-03T11:05:00Z",
+            "prompt": 15400,
+            "completion": 3620,
+            "total": 19020
+          }
         ]
       },
       {
@@ -181,8 +392,13 @@
         "url": "https://github.com/IstiN/flutter_agent_harness/issues/399",
         "bucket": "in_dev",
         "history": [
-          { "state": "inbox" },
-          { "state": "in_dev", "at": "2026-10-03T09:15:00Z" }
+          {
+            "state": "inbox"
+          },
+          {
+            "state": "in_dev",
+            "at": "2026-10-03T09:15:00Z"
+          }
         ]
       }
     ],
@@ -192,12 +408,19 @@
         "title": "docs: board deploy runbook",
         "author": "owner",
         "assignee": null,
-        "labels": ["agent:dev"],
+        "labels": [
+          "agent:dev"
+        ],
         "url": "https://github.com/IstiN/flutter_agent_harness/issues/405",
         "bucket": "queued",
         "history": [
-          { "state": "inbox" },
-          { "state": "queued", "at": "2026-10-03T08:00:00Z" }
+          {
+            "state": "inbox"
+          },
+          {
+            "state": "queued",
+            "at": "2026-10-03T08:00:00Z"
+          }
         ]
       }
     ],
@@ -207,13 +430,24 @@
         "title": "feat: offline mode (needs product decision)",
         "author": "owner",
         "assignee": "owner",
-        "labels": ["blocked", "needs-human"],
+        "labels": [
+          "blocked",
+          "needs-human"
+        ],
         "url": "https://github.com/IstiN/flutter_agent_harness/issues/388",
         "bucket": "blocked",
         "history": [
-          { "state": "inbox" },
-          { "state": "in_dev", "at": "2026-10-01T10:00:00Z" },
-          { "state": "blocked", "at": "2026-10-02T09:30:00Z" }
+          {
+            "state": "inbox"
+          },
+          {
+            "state": "in_dev",
+            "at": "2026-10-01T10:00:00Z"
+          },
+          {
+            "state": "blocked",
+            "at": "2026-10-02T09:30:00Z"
+          }
         ]
       }
     ],
@@ -227,7 +461,9 @@
         "url": "https://github.com/IstiN/flutter_agent_harness/issues/410",
         "bucket": "inbox",
         "history": [
-          { "state": "inbox" }
+          {
+            "state": "inbox"
+          }
         ]
       },
       {
@@ -239,10 +475,17 @@
         "url": "https://github.com/IstiN/flutter_agent_harness/issues/411",
         "bucket": "inbox",
         "history": [
-          { "state": "inbox" }
+          {
+            "state": "inbox"
+          }
         ]
       }
     ]
   },
-  "backlogCounts": { "in_dev": 2, "queued": 1, "blocked": 1, "inbox": 2 }
+  "backlogCounts": {
+    "in_dev": 2,
+    "queued": 1,
+    "blocked": 1,
+    "inbox": 2
+  }
 }
