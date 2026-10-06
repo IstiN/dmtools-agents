@@ -47,6 +47,7 @@ function loadTimer(mocks, opts) {
     var requireFn = makeRequire({
         './common/releaseArtefacts.js': releaseArtefactsMock,
         './common/gitStaging.js': gitStagingModule,
+        './common/mergeState.js': loadModule('js/common/mergeState.js'),
         './configLoader.js': configLoaderMock
     });
 
@@ -89,6 +90,11 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
         var m = loadTimer({
             cli_execute_command: function(args) {
                 cliCalls.push(args.command);
+                // gh-761 probe: no MERGE_HEAD — cli_execute_command throws on
+                // the non-zero exit, simulated below by the probe branch.
+                if (args.command.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1) {
+                    throw new Error('Command execution failed (exit code 1)');
+                }
                 if (args.command.indexOf('git status') !== -1) return '';
                 return '';
             }
@@ -103,8 +109,117 @@ suite('timerAutoCommitAndSave — autoCommitAndPush', function() {
             },
             currentCliOutput: ''
         });
-        assert.equal(cliCalls.length, 1);
-        assert.contains(cliCalls[0], 'git status');
+        // MERGE_HEAD probe first, then the dirty-tree probe — nothing else.
+        assert.equal(cliCalls.length, 2);
+        assert.contains(cliCalls[0], 'git rev-parse --quiet --verify MERGE_HEAD');
+        assert.contains(cliCalls[1], 'git status');
+    });
+
+    test('gh-761: skips the auto-commit while MERGE_HEAD exists — a mid-merge add/commit would finalize the conflicted merge', function() {
+        // Live sequence (fa PR #1311, branch ai/gh-1308): WIP auto-saves every
+        // 5 minutes while a conflicted merge of the base branch sits
+        // unconcluded in the tree (MERGE_HEAD present). A blind
+        // `git add -A && git commit` stages the unmerged paths — conflict
+        // markers and all — and finalizes the merge as a 'WIP auto-save'
+        // commit pushed to origin: silent branch corruption. The tick must
+        // probe MERGE_HEAD BEFORE the dirty-tree probe (a mid-merge status is
+        // always dirty) and refuse to touch the tree.
+        var cliCalls = [];
+        var m = loadTimer({
+            cli_execute_command: function(args) {
+                cliCalls.push(args.command);
+                if (args.command.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1) {
+                    return '9a7e2aecommitsha\n'; // merge in progress
+                }
+                if (args.command.indexOf('git status') !== -1) return 'UU lib/app.dart\nAA lib/other.dart\n';
+                return '';
+            }
+        });
+        m.action({
+            ticket: { key: 'PROJ-123' },
+            jobParams: {
+                customParams: {
+                    targetRepository: { workingDir: '/some/dir' }
+                },
+                metadata: { contextId: 'sf_story_development' }
+            },
+            currentCliOutput: ''
+        });
+
+        assert.ok(cliCalls.some(function(c) {
+            return c.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1;
+        }), 'must probe MERGE_HEAD every tick');
+        assert.equal(cliCalls.filter(function(c) { return c.indexOf('git add') === 0; }).length, 0,
+            'must never stage anything during a merge — add would resolve the unmerged paths');
+        assert.equal(cliCalls.filter(function(c) { return c.indexOf('git commit') === 0; }).length, 0,
+            'must never commit during a merge — commit would finalize it');
+        assert.equal(cliCalls.filter(function(c) { return c.indexOf('git push') === 0; }).length, 0,
+            'must never push during a merge');
+        assert.equal(cliCalls.filter(function(c) { return c.indexOf('git ls-files -- ') === 0; }).length, 0,
+            'untrack cleanup must not run either');
+        var probeAt = cliCalls.map(function(c) { return c.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1; }).indexOf(true);
+        var statusAt = cliCalls.map(function(c) { return c.indexOf('git status') !== -1; }).indexOf(true);
+        assert.ok(statusAt === -1 || probeAt < statusAt,
+            'MERGE_HEAD probe must come BEFORE the dirty-tree probe (mid-merge status is always dirty)');
+    });
+
+    test('gh-761: resumes normal auto-saving once the merge concludes (MERGE_HEAD gone)', function() {
+        var cliCalls = [];
+        var m = loadTimer({
+            cli_execute_command: function(args) {
+                cliCalls.push(args.command);
+                if (args.command.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1) {
+                    throw new Error('Command execution failed (exit code 1)'); // no MERGE_HEAD
+                }
+                if (args.command.indexOf('git check-ignore') === 0) {
+                    throw new Error('Command execution failed (exit code 1)');
+                }
+                if (args.command.indexOf('git status') !== -1) return 'M fixed.js\n';
+                return '';
+            }
+        });
+        m.action({
+            ticket: { key: 'PROJ-123' },
+            jobParams: {
+                customParams: {
+                    targetRepository: { workingDir: '/some/dir' }
+                },
+                metadata: { contextId: 'sf_story_development' }
+            },
+            currentCliOutput: ''
+        });
+        assert.ok(cliCalls.filter(function(c) { return c.indexOf('git commit') === 0; }).length >= 1,
+            'after the merge concludes the WIP save must flow again');
+        assert.ok(cliCalls.some(function(c) { return c.indexOf('git push') === 0; }), 'push resumes too');
+    });
+
+    test('gh-761: a skipped auto-commit still uploads the session artefact — crash-safety is git-independent', function() {
+        var fileWriteCalls = [];
+        var m = loadTimer({
+            cli_execute_command: function(args) {
+                if (args.command.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1) {
+                    return '9a7e2aecommitsha\n'; // merge in progress
+                }
+                if (args.command.indexOf('git status') !== -1) return 'UU lib/app.dart\n';
+                return '';
+            },
+            file_write: function(args) { fileWriteCalls.push(args); },
+            file_delete: function() {}
+        });
+        m.action({
+            ticket: { key: 'PROJ-123' },
+            jobParams: {
+                customParams: {
+                    targetRepository: { workingDir: '/some/dir' },
+                    artefactRepository: { owner: 'Org', repo: 'repo' }
+                },
+                metadata: { contextId: 'sf_story_development' }
+            },
+            currentCliOutput: 'partial agent output while resolving conflicts'
+        });
+        assert.equal(m._uploadRawFileCalls.length, 1,
+            'session log snapshot must still upload while the merge is unconcluded');
+        assert.ok(fileWriteCalls.length >= 1, 'snapshot file written before upload');
     });
 
     test('commits and pushes when there are changes', function() {

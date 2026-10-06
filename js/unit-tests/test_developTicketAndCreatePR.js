@@ -46,6 +46,7 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
 function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks) {
     var realPrHelper = loadModule('js/common/pullRequest.js', makeRequire({
         './common/commentMarkup.js': commentMarkupModule,
+        './mergeState.js': loadModule('js/common/mergeState.js'),
     }), {});
     return loadModule(
         'js/developTicketAndCreatePR.js',
@@ -600,6 +601,7 @@ function loadForLandingGuard(mocks, opts) {
     opts = opts || {};
     var realPrHelper = loadModule('js/common/pullRequest.js', makeRequire({
         './common/commentMarkup.js': commentMarkupModule,
+        './mergeState.js': loadModule('js/common/mergeState.js'),
     }), {});
     var resumeCalls = [];
     var mod = loadModule(
@@ -805,6 +807,7 @@ function loadForPrTail(mocks, opts) {
     opts = opts || {};
     var realPrHelper = loadModule('js/common/pullRequest.js', makeRequire({
         './common/commentMarkup.js': commentMarkupModule,
+        './mergeState.js': loadModule('js/common/mergeState.js'),
     }), opts.prHelperGlobals || {});
     var logs = [];
     var errors = [];

@@ -36,6 +36,8 @@ function loadPreCli(mocks) {
         makeRequire({
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
+            './common/mergeState.js': loadModule('js/common/mergeState.js'),
+            './mergeState.js': loadModule('js/common/mergeState.js'),
             './common/pullRequest.js': {
                 buildTargetedOriginFetchCommand: function(branches) {
                     var list = (branches || []).filter(function(b) { return b; });
@@ -486,6 +488,60 @@ suite('preCliMobileTestAutomationSetup — branch checkout', function() {
         m.action(makeParams('PROJ-5678', '/tmp/automation-repo'));
         assert.ok(writtenFiles.hasOwnProperty('input/PROJ-5678/linked_test_cases.md'),
             'should write linked_test_cases.md even if git commands fail');
+    });
+
+    // ── gh-761: never rebase/merge (or auto-abort) on top of an unconcluded merge ──
+
+    test('gh-761: MERGE_HEAD present — skips base-branch sync entirely, leaves the in-flight merge untouched', function() {
+        var commands = [];
+
+        var m = loadPreCli({
+            jira_search_by_jql: function() { return []; },
+            file_write: function() {},
+            cli_execute_command: function(opts) {
+                commands.push(opts.command);
+                // Branch exists locally → syncWithBase() is reached
+                if (opts.command.indexOf('git branch --list') !== -1) return '  test/PROJ-5678';
+                // Canonical merge-state probe: a merge IS in progress
+                if (opts.command.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1) {
+                    return '9a7e2aecommitsha\n';
+                }
+                return '';
+            }
+        });
+
+        m.action(makeParams('PROJ-5678', '/tmp/automation-repo'));
+
+        assert.ok(commands.some(function(c) { return c.indexOf('git checkout test/PROJ-5678') !== -1; }),
+            'checkout itself still runs');
+        assert.equal(commands.filter(function(c) { return c.indexOf('git rebase') === 0; }).length, 0,
+            'must not rebase on top of an unconcluded merge');
+        assert.equal(commands.filter(function(c) { return c.indexOf('git merge') === 0; }).length, 0,
+            'must not start a second merge on top of MERGE_HEAD');
+        assert.equal(commands.filter(function(c) { return c.indexOf('git merge --abort') !== -1; }).length, 0,
+            'must never silently abort the agent\'s in-flight merge');
+    });
+
+    test('gh-761: no MERGE_HEAD — base-branch sync still runs (rebase attempted)', function() {
+        var commands = [];
+
+        var m = loadPreCli({
+            jira_search_by_jql: function() { return []; },
+            file_write: function() {},
+            cli_execute_command: function(opts) {
+                commands.push(opts.command);
+                if (opts.command.indexOf('git branch --list') !== -1) return '  test/PROJ-5678';
+                if (opts.command.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1) {
+                    throw new Error('Command execution failed (exit code 1)'); // no merge in progress
+                }
+                return '';
+            }
+        });
+
+        m.action(makeParams('PROJ-5678', '/tmp/automation-repo'));
+
+        assert.ok(commands.some(function(c) { return c.indexOf('git rebase origin/main') === 0; }),
+            'without a merge in progress the sync must behave exactly as before');
     });
 
 });

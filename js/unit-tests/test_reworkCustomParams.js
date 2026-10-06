@@ -167,7 +167,9 @@ function loadPostTestReworkResults() {
             './common/pullRequest.js': {},
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
-            './common/commentMarkup.js': commentMarkupModule
+            './common/commentMarkup.js': commentMarkupModule,
+            './mergeState.js': loadModule('js/common/mergeState.js'),
+            './common/mergeState.js': loadModule('js/common/mergeState.js')
         }),
         {}
     );

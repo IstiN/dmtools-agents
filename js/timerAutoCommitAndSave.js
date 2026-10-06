@@ -18,6 +18,7 @@
 
 var releaseArtefacts = require('./common/releaseArtefacts.js');
 var gitStaging = require('./common/gitStaging.js');
+var mergeState = require('./common/mergeState.js');
 var configLoader = require('./configLoader.js');
 
 function cleanCommandOutput(output) {
@@ -83,6 +84,26 @@ function autoCommitAndPush(customParams, ticketKey) {
                 '" — refusing to auto-commit/push (branch setup likely failed)');
             return false;
         }
+    }
+
+    // gh-761: skip the tick while a merge is in progress. MERGE_HEAD present
+    // means a conflicted merge of the base branch sits unconcluded in the
+    // working tree (the rework setup leaves it there for the agent to
+    // resolve; the agent's own merge of origin/main may be mid-conflict).
+    // A blind `git add -A && git commit` here would stage the unmerged paths
+    // — conflict markers and all — and FINALIZE that merge as a 'WIP
+    // auto-save' commit pushed to origin: silent branch corruption. The
+    // probe runs BEFORE the dirty-tree check (a mid-merge status is always
+    // dirty) and must come after the base-branch guard, which cheaply rules
+    // out the more dangerous wrong-branch case first. The next tick after
+    // the merge concludes (or is aborted) resumes normal auto-saving; the
+    // session artefact upload in action() is git-independent and still runs.
+    if (mergeState.isMergeInProgress(function (command) {
+        return cli_execute_command({ command: command, workingDirectory: workingDir });
+    }, workingDir)) {
+        console.warn('⏱️ timer: MERGE_HEAD exists — merge in progress, skipping auto-commit/push this tick ' +
+            '(a blind add/commit would finalize the conflicted merge and bake conflict markers into a WIP auto-save)');
+        return false;
     }
 
     // Check for changes using git status

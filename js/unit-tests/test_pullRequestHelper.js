@@ -3,9 +3,13 @@
  */
 
 function loadPullRequestHelper(mocks) {
+    var mergeStateModule = loadModule('js/common/mergeState.js');
     return loadModule(
         'js/common/pullRequest.js',
-        null,
+        makeRequire({
+            './mergeState.js': mergeStateModule,
+            './common/mergeState.js': mergeStateModule
+        }),
         Object.assign({
             cli_execute_command: function() { return ''; },
             file_read: function() { return null; },
@@ -164,6 +168,7 @@ suite('pullRequest helper', function() {
         assert.equal(result.success, true);
         assert.equal(result.updated, true);
         assert.deepEqual(commands, [
+            { command: 'git rev-parse --quiet --verify MERGE_HEAD', workingDirectory: 'repo' },
             { command: 'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/main:refs/remotes/origin/main', workingDirectory: 'repo' },
             { command: 'git rev-parse origin/main', workingDirectory: 'repo' },
             { command: 'git merge-base origin/main HEAD', workingDirectory: 'repo' },
@@ -191,6 +196,7 @@ suite('pullRequest helper', function() {
         assert.equal(result.success, true);
         assert.equal(result.updated, false);
         assert.deepEqual(commands, [
+            'git rev-parse --quiet --verify MERGE_HEAD',
             'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/release:refs/remotes/origin/release',
             'git rev-parse origin/release',
             'git merge-base origin/release HEAD'
@@ -217,6 +223,7 @@ suite('pullRequest helper', function() {
         assert.equal(result.success, true);
         assert.equal(result.updated, true);
         assert.deepEqual(commands, [
+            { command: 'git rev-parse --quiet --verify MERGE_HEAD', workingDirectory: 'repo' },
             { command: 'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/main:refs/remotes/origin/main', workingDirectory: 'repo' },
             { command: 'git rev-parse origin/main', workingDirectory: 'repo' },
             { command: 'git merge-base origin/main HEAD', workingDirectory: 'repo' },
@@ -249,6 +256,33 @@ suite('pullRequest helper', function() {
             'should deepen base history before declaring histories unrelated');
         assert.ok(commands.indexOf('git -c fetch.recurseSubmodules=no fetch --deepen=100 origin +refs/heads/feature/DMC-7:refs/remotes/origin/feature/DMC-7') !== -1,
             'should deepen head branch history before declaring histories unrelated');
+    });
+
+    test('gh-761: refuses to sync while a merge is already in progress (MERGE_HEAD) — never hijacks, resolves, or aborts the agent\'s merge', function() {
+        var commands = [];
+        var pr = loadPullRequestHelper();
+
+        var result = pr.syncBranchWithBase({
+            branchName: 'feature/DMC-9',
+            baseBranch: 'main',
+            workingDir: 'repo',
+            runCommand: function(command, workingDir) {
+                commands.push({ command: command, workingDirectory: workingDir || null });
+                if (command === 'git rev-parse --quiet --verify MERGE_HEAD') return '9a7e2aecommitsha';
+                return '';
+            }
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.mergeInProgress, true, 'must flag the refusal as mergeInProgress');
+        assert.contains(result.error, 'MERGE_HEAD');
+        // The refusal must be the FIRST decision — nothing mutating before it.
+        assert.equal(commands.length, 1, 'only the MERGE_HEAD probe may run');
+        assert.contains(commands[0].command, 'git rev-parse --quiet --verify MERGE_HEAD');
+        assert.equal(commands.filter(function(c) { return c.command.indexOf('git merge') === 0; }).length, 0,
+            'must not start, resolve, or abort any merge');
+        assert.equal(commands.filter(function(c) { return c.command.indexOf('git commit') === 0; }).length, 0,
+            'must not finalize someone else\'s merge');
     });
 
     test('deepens shallow history before merge-base refusal', function() {
