@@ -182,6 +182,62 @@ requires the key.
 - **Backlog section** — the four buckets render as columns under the PR
   pipeline; blocked is red-bordered. Same card interactions as the lanes.
 
+## v4 additions — Lean value stream (owner 2026-10-06, gh-769; additive, schema stays 2)
+
+Old snapshots render untouched; every new key is optional. New pure logic
+lives in `flow.js` (unit-tested, dual-exported like `steps.js`).
+
+### `checks.runStartedAt` / `checks.updatedAt` — CI wall-time vs queue wait
+
+The run verdict now carries the workflow run's `run_started_at` /
+`updated_at` (null when the payload lacks them — honest unknowns). The
+board splits a validating card's clock into what the owner actually asked
+about: `CI 12m · wait 35m` — real CI/CD wall-time vs queue idle (runner
+backlog, mutex, label-wait). A run still `queued` reports everything as
+wait; a completed run without `run_started_at` can't be split and renders
+no chip.
+
+### Phase rail + rework analytics (drawer)
+
+The drawer's history no longer repeats states per rework cycle ('PR
+created' 4×, 'PR validation' 3×). `flow.js phaseRail` collapses the raw
+`card.history` into named phases with boundaries and round counts:
+
+```
+PR created  ×2   09:30 (3h)   35m   rework ×1 · 15m
+Review      ×2   09:50 (2h)   35m   rework ×1 · 20m
+Approved queue    10:40 (1h)   1h4m
+Validating       11:44 (16m)   16m
+```
+
+`reworkOf` sums a card's re-visited phases into `rework ×N · total`; the
+new "Value stream" drawer section shows lead time (created → merged or
+"and counting"), that rework line, the CI-vs-wait split, and Σ tokens.
+
+### Card surfaces
+
+- `▸ next` line on every non-merged card — the next machine step and the
+  concrete blocker (`merge · queue #1 of 2 — next on the mutex`, `rework ·
+  CI red`, `unblock · owner hold`). Merged cards render none. `flow.js
+  nextStep`.
+- `Σ Nk tok` chip when the card reports token legs — token-reporting
+  factories are visible without opening the drawer.
+- `CI Xm · wait Ym` chip on cards with run clocks.
+
+### Board surfaces
+
+- **Labeled rollups** — the counts pill names each lane
+  (`dev 1 · pr 1 · ci 2 · review 3 · queue 9 · mutex 1 · merged 5`); an
+  unlabeled `0 · 1 · 0 · 9` is how the "scrambled vs reality" state looked
+  before.
+- **Stale snapshot guard** — a snapshot older than `config.staleAfterMs`
+  (default 30m) turns the tick pill red with `STALE` and the age: a
+  stalled SM tick can no longer masquerade as repo reality.
+- **Value-stream strip** (`flowHtml`) — under the lanes: `next up !N`
+  (the approved-queue head), per-phase `N cards · Σ · avg`, Σ rework,
+  Σ tokens per legs, lead avg/max. PR-pipeline lanes only — backlog twins
+  share one history with their lane cards and would double-count.
+
 ## Visual-check fixtures
 
 `visual-check/` holds the deterministic PNG fixtures + the bundled sample

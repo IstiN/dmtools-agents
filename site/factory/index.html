@@ -17,6 +17,13 @@
     open details drawer (state history, per-state timings, per-leg token
     table), and the issue backlog lanes fed by the same snapshots.
 
+    v4 value stream (gh-769): the drawer's history renders as a phase rail
+    (rework rounds collapse: 'PR created ×3', first pass vs rework time),
+    validating splits CI wall-time from queue wait (checks.runStartedAt),
+    every card names what happens next / what's blocking, token totals
+    show on cards, and a board-level value-stream strip aggregates phases,
+    rework and token spend. Stale snapshots announce themselves.
+
     DEPLOY:
       1. Copy this folder.
       2. Edit config.js — factories[] + lanes + backlogColumns (all knobs
@@ -87,6 +94,7 @@
       <span class="pill" id="schema-pill">schema 2</span>
     </section>
     <div class="lanes" id="lanes"></div>
+    <section class="flow" id="flow" aria-label="value stream"></section>
     <section class="backlog" id="backlog" aria-label="issue backlog"></section>
     <p class="error" id="error" hidden></p>
   </main>
@@ -101,6 +109,7 @@
 
   <script src="config.js"></script>
   <script src="steps.js"></script>
+  <script src="flow.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

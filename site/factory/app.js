@@ -32,13 +32,47 @@
  *    steps (dev → pr → valid → review → approve → merge), each colored by
  *    state (done / current / pending / failed); the exact pipeline position
  *    reads off the strip alone. Logic lives in steps.js (unit-tested).
+ *
+ * v4 value stream (gh-769, owner 2026-10-06):
+ *  - labeled rollups: the counts pill names each lane (dev · pr · ci · …)
+ *    and a snapshot older than config.staleAfterMs announces itself as
+ *    STALE — a stalled tick can no longer masquerade as repo reality;
+ *  - merge-readiness: every card carries a "▸ next" line (merge / rework /
+ *    approve …) with the concrete blocker (queue #1 of 3 — next on the
+ *    mutex, CI red, owner hold); the approved-queue head is the board's
+ *    "next up" chip. Logic lives in flow.js nextStep (unit-tested);
+ *  - CI vs idle: validating chips split CI wall-time from queue wait via
+ *    checks.runStartedAt/updatedAt (flow.js ciSplit);
+ *  - phase rail: the drawer's history collapses rework cycles into named
+ *    phases with round counts (PR created ×3) and first-pass vs rework
+ *    time (flow.js phaseRail);
+ *  - rework + token analytics: per-card rework ×N · time, Σ token chip on
+ *    cards, and a board-level value-stream strip (flow.js flowSummary).
  */
 (function () {
   'use strict';
   var CFG = window.FACTORY_BOARD_CONFIG;
+  // pure analytics (flow.js) — degraded no-ops if the script is missing,
+  // the board keeps rendering everything it rendered before v4
+  var FLOW = window.FACTORY_FLOW || {
+    tokenTotals: function () { return null; },
+    ciSplit: function () { return null; },
+    phaseRail: function () { return []; },
+    reworkOf: function () { return { rounds: 0, ms: 0 }; },
+    nextStep: function () { return null; },
+    entriesOf: function () { return []; },
+    flowSummary: function () { return null; }
+  };
   var tabsEl = document.getElementById('factory-tabs');
   var lanesEl = document.getElementById('lanes');
   var backlogEl = document.getElementById('backlog');
+  // cache-drift guard (review thread 3): skeleton()/render()/fail() all
+  // write flowEl — a browser serving a stale index.html without the v4
+  // <section id="flow"> next to this app.js must degrade to a no-op stub,
+  // exactly like the missing flow.js script degrades to FLOW no-ops,
+  // instead of throwing on first paint and killing the whole board.
+  var flowEl = document.getElementById('flow') ||
+    { innerHTML: '', hidden: true };
   var errEl = document.getElementById('error');
   var statusEl = document.getElementById('statusline');
   var drawerEl = document.getElementById('drawer');
@@ -74,6 +108,26 @@
   // schema 1 lane id → schema 2 rendering lane, as RENDER-lookup: the v2
   // lane id whose data lives under the v1 key (fresh → pr_created)
   var LANE_ALIASES = { pr_created: 'fresh' };
+
+  // lane id → the short name the counts pill uses (gh-769: an unlabeled
+  // "0 · 1 · 0 · 9" rollup is unreadable — the owner can't tell which
+  // number is which lane, so the header contradicts the repo at a glance)
+  var LANE_SHORT = {
+    development: 'dev', pr_created: 'pr', pr_validation: 'ci',
+    review: 'review', approved_queue: 'queue', validating: 'mutex',
+    merged_recent: 'merged'
+  };
+
+  // drawer value-stream row: the ciSplit label names the run's ROLE in the
+  // card's CURRENT state — a validating card is on the mutex, a review
+  // card's head run is the 'last run', not 'validating' (review thread 6;
+  // ciSplit works on any card carrying a run verdict). Lanes outside the
+  // PR pipeline (backlog columns) fall back to the neutral 'checks'.
+  var RUNNING_LABELS = {
+    pr_validation: 'validating',
+    validating: 'mutex',
+    review: 'last run'
+  };
 
   // ── labeled stepper (gh-726): named stages, colored by state ──────────────
   // Logic (state computation, lane→step mapping, failed-verdict detection)
@@ -111,17 +165,8 @@
     merged_recent: 'mergedAt'
   };
 
-  // schema-2 timestamp field → lane key — the drawer's history fallback
-  // for snapshots accumulated before card.history existed (v3 additive
-  // schema: old snapshots must still yield a usable timeline)
-  var TS_TO_STATE = [
-    { k: 'devStartedAt', state: 'development' },
-    { k: 'prCreated',    state: 'pr_created' },
-    { k: 'reviewedAt',   state: 'review' },
-    { k: 'approvedAt',   state: 'approved_queue' },
-    { k: 'validatingAt', state: 'validating' },
-    { k: 'mergedAt',     state: 'merged_recent' }
-  ];
+  // (the schema-2 → history fallback moved to flow.js entriesOf — the
+  // v4 phase rail owns timeline derivation, one tested implementation)
 
   function esc(s) {
     return String(s == null ? '' : s)
@@ -170,6 +215,58 @@
     var d = new Date(iso);
     if (isNaN(d.getTime())) return '';
     return d.toISOString().slice(5, 16).replace('T', ' ') + ' UTC';
+  }
+
+  // compact token count: 940 · 115.9k · 1.2M (card chips + flow strip)
+  function fmtK(n) {
+    if (n == null || isNaN(n)) return '—';
+    if (n >= 1e6) return (Math.round(n / 1e5) / 10) + 'M';
+    if (n >= 1e3) return (Math.round(n / 100) / 10) + 'k';
+    return String(n);
+  }
+
+  // ── v4 value-stream chips (gh-769) ──────────────────────────────────────────
+  // Σ token spend on the card itself — a factory that reports tokens is
+  // visible WITHOUT opening the drawer (the empty TOKEN SPEND drawer used
+  // to be the only surface, and it rendered "not reported").
+  function tokChipHtml(c) {
+    var t = FLOW.tokenTotals(c);
+    if (!t) return '';
+    var legs = Object.keys(t.legs).map(function (k) {
+      return k + ' ' + fmtK(t.legs[k].total);
+    }).join(', ');
+    return '<span class="tok" title="token spend — ' + esc(legs) +
+      '">Σ ' + esc(fmtK(t.total)) + ' tok</span>';
+  }
+
+  // CI wall-time vs queue wait (gh-769 #6): "CI 12m · wait 35m" reads as
+  // "the machine worked 12m and idled 35m" — the split the owner asked
+  // for. Renders whatever parts the snapshot knows; renders nothing when
+  // the run carried no timestamps.
+  function ciwaitHtml(c) {
+    var s = FLOW.ciSplit(c, nowMs());
+    if (!s) return '';
+    var bits = [];
+    if (s.ciMs != null) bits.push('<b>CI ' + esc(fmtDur(s.ciMs)) + '</b>');
+    if (s.queueMs != null) bits.push('wait ' + esc(fmtDur(s.queueMs)));
+    return bits.length
+      ? '<span class="ciwait" title="CI wall-time vs queue wait — ' +
+        'queue wait is runner backlog / mutex, not work">' +
+        bits.join(' · ') + '</span>'
+      : '';
+  }
+
+  // what happens next / what's blocking (gh-769 #2): every non-merged card
+  // names its next machine step and the concrete waiter.
+  function nextHtml(c, laneId, laneLen) {
+    var n = FLOW.nextStep(c, laneId, { queueLen: laneLen });
+    if (!n) return '';
+    var cls = n.next === 'unblock' ? ' blocked' : (n.blocking ? ' blocking' : '');
+    return '<div class="next' + cls + '">' +
+      '<span class="nx-arrow" aria-hidden="true">&#9656;</span>' +
+      '<span class="nx-next">' + esc(n.next) + '</span>' +
+      (n.detail ? '<span class="nx-detail">' + esc(n.detail) + '</span>' : '') +
+      '</div>';
   }
 
   function verdictClass(v) {
@@ -221,38 +318,6 @@
       '</div>';
   }
 
-  // ── card history + timings (drawer) ────────────────────────────────────────
-  // Prefer the snapshot-accumulated card.history (v3); fall back to the
-  // schema-2 timestamp fields so old snapshots still yield a timeline.
-  // Returns [{state, at}] oldest first (times as ms or null when unknown).
-  function cardHistory(c) {
-    var entries = (c.history && c.history.length)
-      ? c.history.map(function (h) {
-          return { state: h.state, at: h.at ? Date.parse(h.at) : null };
-        })
-      : TS_TO_STATE.filter(function (m) { return c[m.k]; })
-          .map(function (m) {
-            return { state: m.state, at: Date.parse(c[m.k]) };
-          });
-    return entries.sort(function (a, b) {
-      return (a.at == null ? 0 : a.at) - (b.at == null ? 0 : b.at);
-    });
-  }
-
-  // per-state durations: ms spent in each entry up to the next transition;
-  // the live (last) entry runs until now — unless terminal (merged)
-  function stateTimings(entries, terminal) {
-    return entries.map(function (e, i) {
-      var next = entries[i + 1];
-      var dur;
-      if (e.at == null) dur = null;
-      else if (next && next.at != null) dur = next.at - e.at;
-      else if (next) dur = null;
-      else dur = terminal ? null : Math.max(0, nowMs() - e.at);
-      return { state: e.state, at: e.at, dur: dur };
-    });
-  }
-
   function stateTitle(key) {
     var lanes = CFG.lanes || [];
     for (var i = 0; i < lanes.length; i++) {
@@ -282,7 +347,7 @@
     }).join('');
   }
 
-  function cardHtml(c, laneId) {
+  function cardHtml(c, laneId, laneLen) {
     var isIssue = c.issue != null;
     var num = isIssue ? c.issue : c.pr;
     var href = isIssue
@@ -297,6 +362,8 @@
     var pos = c.queuePos ? '<span class="pos">#' + esc(c.queuePos) + '</span>' : '';
     var who = isIssue && c.assignee
       ? '<span class="author">@' + esc(c.assignee) + '</span>' : '';
+    var tok = tokChipHtml(c);
+    var ciwait = ciwaitHtml(c);
     // age in the CURRENT lane (schema 2 timestamps; null on schema 1).
     // Backlog columns have no LANE_ENTERED_AT field — fall back to the
     // newest history entry (stamped on every bucket transition); the
@@ -317,12 +384,13 @@
       '<span class="pr">' + (isIssue ? '#' : '!') + esc(num) + '</span>' +
       '<span class="title">' + esc(c.title || '') + '</span>' + age + '</div>' +
       (badges ? '<div class="labels">' + badges + '</div>' : '') +
-      ((checks || who || c.author)
+      ((checks || who || c.author || tok || ciwait)
         ? '<div class="meta">' + who +
           (c.author && !isIssue ? '<span class="author">' +
-          esc(c.author) + '</span>' : '') + checks + '</div>'
+          esc(c.author) + '</span>' : '') + checks + ciwait + tok + '</div>'
         : '') +
       stepperHtml(c, laneId) +
+      nextHtml(c, laneId, laneLen) +
       '</a>';
   }
 
@@ -332,6 +400,8 @@
     errEl.hidden = true;
     backlogEl.innerHTML = '';
     backlogEl.hidden = true;
+    flowEl.innerHTML = '';           // v4 strip: no stale factory's numbers
+    flowEl.hidden = true;
     lanesEl.innerHTML = CFG.lanes.map(function (l) {
       return '<div class="lane loading"><div class="lane-head"><span>' +
         esc(l.title) + '</span><span class="count">·</span></div>' +
@@ -354,7 +424,7 @@
     var s = laneSummary(l.id, list);
     var cards = list.map(function (c) {
       c.repo = st_repo;
-      return cardHtml(c, l.id);
+      return cardHtml(c, l.id, list.length);
     }).join('');
     return '<div class="lane" style="--accent:' + esc(f.accent) + '">' +
       '<div class="lane-head"><span>' + esc(l.title) + '</span>' +
@@ -377,7 +447,7 @@
       var list = b[col.id] || [];
       var cards = list.map(function (c) {
         c.repo = st_repo;
-        return cardHtml(c, col.id);
+        return cardHtml(c, col.id, list.length);
       }).join('');
       html += '<div class="lane lane-backlog' +
         (col.id === 'blocked' ? ' lane-blocked' : '') +
@@ -388,6 +458,60 @@
         (cards || '<div class="empty">—</div>') + '</div></div>';
     });
     return html + '</div>';
+  }
+
+  // ── board-level value stream (gh-769) ──────────────────────────────────────
+  // The Lean strip under the lanes: where the flow's time actually goes
+  // (per phase), Σ rework, Σ token spend, average lead, and the queue head
+  // ("next up") — the aggregate the per-card chips roll up into. PR-pipeline
+  // lanes only: backlog twins share one story with their lane cards and
+  // would double-count every phase.
+  function flowHtml(f, st) {
+    var lanes = st.lanes || {};
+    var cards = [];
+    (CFG.lanes || []).forEach(function (l) {
+      (lanes[l.id] || []).forEach(function (c) { if (c) cards.push(c); });
+    });
+    if (!cards.length) return '';
+    var s = FLOW.flowSummary(cards, nowMs());
+    var chips = [];
+    // next up = the approved-queue head — "this one merges next" at a glance
+    var queue = lanes.approved_queue || [];
+    if (queue.length && queue[0].pr != null) {
+      chips.push('<span class="flow-chip fc-up"><span class="fc-next">next up !' +
+        esc(queue[0].pr) + '</span>' +
+        (queue[0].title ? ' · ' + esc(String(queue[0].title).slice(0, 42)) : '') +
+        '</span>');
+    }
+    (s.phases || []).forEach(function (p) {
+      if (!p.cards) return;
+      chips.push('<span class="flow-chip"><b>' + esc(stateTitle(p.state)) +
+        '</b> ' + p.cards + ' card' + (p.cards > 1 ? 's' : '') +
+        (p.totalMs ? ' · &Sigma; ' + esc(fmtDur(p.totalMs)) +
+          ' · avg ' + esc(fmtDur(Math.round(p.totalMs / p.cards))) : '') +
+        '</span>');
+    });
+    if (s.rework.rounds) {
+      chips.push('<span class="flow-chip rw"><b>rework &times;' + s.rework.rounds +
+        '</b>' + (s.rework.ms ? ' · &Sigma; ' + esc(fmtDur(s.rework.ms)) : '') +
+        '</span>');
+    }
+    if (s.tokens) {
+      chips.push('<span class="flow-chip" title="' +
+        esc(Object.keys(s.tokens.legs).map(function (k) {
+          return k + ' ' + fmtK(s.tokens.legs[k].total);
+        }).join(', ')) +
+        '"><b>&Sigma; ' + esc(fmtK(s.tokens.total)) + ' tok</b> · ' +
+        Object.keys(s.tokens.legs).length + ' legs</span>');
+    }
+    if (s.lead && s.lead.avgMs != null) {
+      chips.push('<span class="flow-chip"><b>lead avg ' + esc(fmtDur(s.lead.avgMs)) +
+        '</b>' + (s.lead.maxMs ? ' · max ' + esc(fmtDur(s.lead.maxMs)) : '') +
+        '</span>');
+    }
+    if (!chips.length) return '';
+    return '<h2 class="flow-title">Value stream · ' + s.cards + ' in view</h2>' +
+      '<div class="flow-chips">' + chips.join('') + '</div>';
   }
 
   // ── details drawer (v3) ────────────────────────────────────────────────────
@@ -418,34 +542,85 @@
       '</div></div>';
   }
 
-  function drawerHistoryHtml(c) {
-    var terminal = !!(c.mergedAt || (c.history || []).some(function (h) {
-      return h.state === 'merged_recent';
-    }));
-    var timings = stateTimings(cardHistory(c), terminal);
-    var maxDur = timings.reduce(function (m, t) {
-      return (t.dur != null && t.dur > m) ? t.dur : m;
-    }, 0);
-    if (!timings.length) {
+  // phase rail (gh-769 #4): the raw history repeats 'PR created' once per
+  // rework cycle with no phase boundaries — the rail collapses repeats into
+  // ONE named phase with round counts (PR created ×3) and splits first-pass
+  // vs rework time. Times unknown on old snapshots stay '—' (honest).
+  // `rail` is computed once per drawer open (openDrawer) and shared with
+  // drawerFlowHtml so the two sections can never disagree (review thread 6).
+  function drawerHistoryHtml(c, rail) {
+    if (!rail.length) {
       return '<section class="drawer-sec"><h3>State history</h3>' +
         '<p class="drawer-empty">—</p></section>';
     }
-    var rows = timings.slice().reverse().map(function (t) {
-      var w = (t.dur != null && maxDur)
-        ? Math.max(4, Math.round(100 * t.dur / maxDur)) : 0;
+    var maxDur = rail.reduce(function (m, p) {
+      return (p.totalMs != null && p.totalMs > m) ? p.totalMs : m;
+    }, 0);
+    var rows = rail.slice().reverse().map(function (p) {
+      var w = (p.totalMs != null && maxDur)
+        ? Math.max(4, Math.round(100 * p.totalMs / maxDur)) : 0;
       return '<div class="hist-row">' +
-        '<span class="hist-state">' + esc(stateTitle(t.state)) + '</span>' +
+        '<span class="hist-state">' + esc(stateTitle(p.state)) +
+        (p.rounds > 1 ? ' <span class="hist-x" title="' + p.rounds +
+          ' entries collapsed — rework rounds">×' + p.rounds + '</span>' : '') +
+        '</span>' +
         '<span class="hist-time">' +
-        (t.at != null ? esc(clockTime(new Date(t.at).toISOString())) : '—') +
-        (t.at != null ? ' <span class="hist-ago">(' + esc(ago(new Date(t.at).toISOString())) + ')</span>' : '') +
+        (p.from != null ? esc(clockTime(new Date(p.from).toISOString())) : '—') +
+        (p.from != null ? ' <span class="hist-ago">(' + esc(ago(new Date(p.from).toISOString())) + ')</span>' : '') +
         '</span>' +
         '<span class="hist-dur">' +
         '<span class="hist-bar"><span class="hist-fill" style="width:' + w + '%"></span></span>' +
-        '<span class="hist-durnum">' + (t.dur != null ? esc(fmtDur(t.dur)) : '—') + '</span>' +
-        '</span></div>';
+        '<span class="hist-durnum">' + (p.totalMs != null ? esc(fmtDur(p.totalMs)) : '—') + '</span>' +
+        '</span>' +
+        (p.reworkRounds
+          ? '<span class="hist-rw">rework ×' + p.reworkRounds +
+            (p.reworkMs ? ' · ' + esc(fmtDur(p.reworkMs)) : '') + '</span>'
+          : '') +
+        '</div>';
     }).join('');
-    return '<section class="drawer-sec"><h3>State history</h3>' + rows +
+    return '<section class="drawer-sec"><h3>State history · phases</h3>' + rows +
       '</section>';
+  }
+
+  // per-card value stream (gh-769): lead time, rework rounds, the CI-vs-
+  // wait split of the current validating stint, Σ tokens. Rendered only
+  // when at least one line is known — absent data never renders as zero.
+  // `rail` comes from openDrawer (shared with drawerHistoryHtml); the
+  // ciSplit row is labeled by the card's state, not a hard-coded
+  // 'validating' (review thread 6).
+  function drawerFlowHtml(c, laneId, rail) {
+    var rows = [];
+    var start = c.prCreated ? Date.parse(c.prCreated) : null;
+    if (!isNaN(start) && start != null) {
+      var end = c.mergedAt ? Date.parse(c.mergedAt) : nowMs();
+      var lead = Math.max(0, end - start);
+      rows.push(['lead time', '<b>' + esc(fmtDur(lead)) + '</b>' +
+        (c.mergedAt ? ' created &#8594; merged' : ' and counting')]);
+    }
+    var rw = FLOW.reworkOf(rail);
+    if (rw.rounds) {
+      rows.push(['rework', '<b>&times;' + rw.rounds + '</b>' +
+        (rw.ms ? ' · ' + esc(fmtDur(rw.ms)) : '') + ' in re-visited phases']);
+    }
+    var ci = FLOW.ciSplit(c, nowMs());
+    if (ci) {
+      rows.push([RUNNING_LABELS[laneId] || 'checks',
+        (ci.ciMs != null ? '<b>CI ' + esc(fmtDur(ci.ciMs)) + '</b>' : 'CI —') +
+        (ci.queueMs != null ? ' · wait ' + esc(fmtDur(ci.queueMs)) : '')]);
+    }
+    var t = FLOW.tokenTotals(c);
+    if (t) {
+      var legs = Object.keys(t.legs).map(function (k) {
+        return esc(k) + ' ' + esc(fmtK(t.legs[k].total));
+      }).join(', ');
+      rows.push(['tokens', '<b>&Sigma; ' + esc(fmtK(t.total)) + '</b> — ' + legs]);
+    }
+    if (!rows.length) return '';
+    var body = rows.map(function (r) {
+      return '<div class="vs-row"><span class="vs-k">' + r[0] + '</span>' +
+        '<span class="vs-v">' + r[1] + '</span></div>';
+    }).join('');
+    return '<section class="drawer-sec"><h3>Value stream</h3>' + body + '</section>';
   }
 
   function drawerTokensHtml(c) {
@@ -483,9 +658,17 @@
 
   function openDrawer(ctx) {
     openCtx = ctx;
+    var c = ctx.item;
+    // the phase rail feeds BOTH the history section and the value-stream
+    // section — computed once, provably consistent (review thread 6)
+    var terminal = !!(c.mergedAt || (c.history || []).some(function (h) {
+      return h.state === 'merged_recent';
+    }));
+    var rail = FLOW.phaseRail(FLOW.entriesOf(c), nowMs(), terminal);
     drawerEl.innerHTML =
       '<div class="drawer-inner">' + drawerHeaderHtml(ctx) +
-      drawerHistoryHtml(ctx.item) + drawerTokensHtml(ctx.item) + '</div>';
+      drawerHistoryHtml(c, rail) + drawerFlowHtml(c, ctx.laneId, rail) +
+      drawerTokensHtml(ctx.item) + '</div>';
     drawerEl.hidden = false;
     backdropEl.hidden = false;
     var x = document.getElementById('drawer-x');
@@ -505,6 +688,7 @@
     return {
       item: hit.item,
       repo: hit.repo,
+      laneId: hit.laneId,
       stateName: stateTitle(hit.laneId)
     };
   }
@@ -535,11 +719,26 @@
       if (!isNaN(t0)) NOW_OVERRIDE = t0 + 7000;  // deterministic screenshot "now"
     }
     var t = st.tick || {};
-    document.getElementById('tick-pill').innerHTML =
-      'tick ' + esc(ago(t.at)) + (t.dryRun ? ' · <b>DRY</b>' : '');
+    // gh-769 #1: a stalled SM tick used to leave lanes that contradicted
+    // the live repo with no hint anything was wrong. A snapshot older than
+    // staleAfterMs now announces itself — STALE pill, red, with the age.
+    var tickPill = document.getElementById('tick-pill');
+    var tickAge = t.at ? (nowMs() - Date.parse(t.at)) : null;
+    var staleAfter = CFG.staleAfterMs || 30 * 60 * 1000;
+    var stale = tickAge != null && !isNaN(tickAge) && tickAge > staleAfter;
+    tickPill.innerHTML = 'tick ' + esc(ago(t.at)) +
+      (t.dryRun ? ' · <b>DRY</b>' : '') + (stale ? ' · <b>STALE</b>' : '');
+    tickPill.classList.toggle('stale', stale);
+    tickPill.title = stale
+      ? 'snapshot is ' + fmtDur(Math.max(0, tickAge)) +
+        ' old — these lanes may not match the repo (SM tick stalled?)'
+      : 'state snapshot age';
+    // gh-769 #1: the unlabeled "0 · 1 · 0 · 9" rollup was unreadable —
+    // every number now names its lane.
     document.getElementById('counts-pill').textContent =
       CFG.lanes.map(function (l) {
-        return (st.counts && st.counts[l.id]) || 0;
+        return (LANE_SHORT[l.id] || l.id) + ' ' +
+          ((st.counts && st.counts[l.id]) || 0);
       }).join(' · ');
     var bc = st.backlogCounts || {};
     var backlogSummary = (CFG.backlogColumns || []).map(function (c) {
@@ -590,6 +789,8 @@
     });
     backlogEl.innerHTML = backlogHtml(f, st);
     backlogEl.hidden = !backlogEl.innerHTML;
+    flowEl.innerHTML = flowHtml(f, st);
+    flowEl.hidden = !flowEl.innerHTML;
     errEl.hidden = true;
     if (DEEP_LINK) {
       var ctx = drawerCtxFor(DEEP_LINK);

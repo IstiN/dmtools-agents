@@ -140,6 +140,44 @@ suite('factoryState — buildFactoryState', function () {
     assert.equal(st.lanes.approved_queue[0].checks.verdict, 'in_progress');
   });
 
+  test('checks carry runStartedAt/updatedAt when the run reports them (gh-769: CI vs queue-wait split)', function () {
+    var st = build({
+      prs: [
+        { number: 890, title: 'feat: split', labels: [{ name: 'ai_validating' },
+            { name: 'pr_approved' }],
+          head: { ref: 'ai/890', sha: 'sha890' }, user: { login: 'bot' },
+          created_at: '2026-10-01T12:00:00Z' },
+        { number: 891, title: 'feat: queued', labels: [],
+          head: { ref: 'ai/891', sha: 'sha891' }, user: { login: 'bot' },
+          created_at: '2026-10-01T12:05:00Z' }
+      ],
+      runs: [
+        // completed mutex run: created → started → updated all known
+        { event: 'workflow_dispatch', head_sha: 'sha890', status: 'completed',
+          conclusion: 'success', created_at: '2026-10-01T12:10:00Z',
+          run_started_at: '2026-10-01T12:13:00Z', updated_at: '2026-10-01T12:25:00Z',
+          html_url: 'http://run/890' },
+        // queued head run: run_started_at still null
+        { event: 'workflow_dispatch', head_sha: 'sha891', status: 'queued',
+          created_at: '2026-10-01T12:06:00Z', html_url: 'http://run/891' }
+      ]
+    });
+    var done = st.lanes.validating[0].checks;
+    assert.equal(done.verdict, 'success');
+    assert.equal(done.runStartedAt, '2026-10-01T12:13:00Z');
+    assert.equal(done.updatedAt, '2026-10-01T12:25:00Z');
+    var queued = st.lanes.pr_validation[0].checks;
+    assert.equal(queued.verdict, 'queued');
+    assert.equal(queued.runStartedAt, null, 'GitHub reports null until a runner picks it up');
+    assert.equal(queued.updatedAt, null);
+  });
+
+  test('checks omit runStartedAt/updatedAt when the run payload lacks them (old payloads, honest unknowns)', function () {
+    var st = build();
+    assert.equal(st.lanes.validating[0].checks.runStartedAt, null);
+    assert.equal(st.lanes.approved_queue[0].checks.updatedAt, null);
+  });
+
   test('prCreated is the GitHub created_at field (exact from snapshot 1)', function () {
     var st = build();
     assert.equal(st.lanes.pr_created[0].prCreated, '2026-10-01T12:40:00Z');

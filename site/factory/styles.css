@@ -393,3 +393,62 @@ body {
   .statusline, .factory-tabs { padding-left: 12px; padding-right: 12px; }
   .factory-tabs { top: 49px; }
 }
+
+/* ── v4 value stream (gh-769) ──────────────────────────────────────────── */
+/* stale snapshot: a stalled SM tick must never masquerade as repo reality */
+.pill.stale {
+  color: var(--bad); border-color: var(--bad); font-weight: 700;
+  animation: pulse 1.6s infinite;
+}
+/* CI wall-time vs queue wait on validating cards */
+.ciwait { color: var(--muted); white-space: nowrap; }
+.ciwait b { color: var(--st-val); font-weight: 700; }
+/* Σ token chip on cards — token-reporting factories visible w/o the drawer */
+.tok { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* per-card "what happens next / what's blocking" */
+.next {
+  margin-top: 7px; display: flex; gap: 6px; align-items: baseline;
+  font-size: 11px; color: var(--dim); min-width: 0;
+}
+.next .nx-arrow { flex: none; }
+.next .nx-next { color: var(--muted); font-weight: 700; }
+.next.blocking .nx-next { color: var(--run); }
+.next.blocking .nx-detail { color: var(--run); }
+.next.blocked .nx-next, .next.blocked .nx-detail { color: var(--bad); }
+.next .nx-detail { color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* drawer phase rail: round counts + rework badge */
+.hist-x { color: var(--accent); font-weight: 700; font-size: 10.5px; }
+.hist-rw {
+  grid-column: 1 / -1; color: var(--run); font-size: 10.5px;
+  padding-left: 2px;
+}
+/* drawer value-stream rows */
+.vs-row { display: flex; gap: 10px; font-size: 11.5px; padding: 2.5px 0; }
+.vs-k {
+  flex: none; width: 82px; color: var(--dim);
+  text-transform: uppercase; letter-spacing: .06em; font-size: 10px;
+  padding-top: 2px;
+}
+.vs-v { color: var(--muted); min-width: 0; }
+.vs-v b { color: var(--text); }
+/* board-level value-stream strip */
+.flow { padding: 14px 20px 0; }
+.flow.hidden { display: none; }
+.flow-title {
+  margin: 0 0 7px; font-size: 10.5px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--dim);
+}
+.flow-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.flow-chip {
+  border: 1px solid var(--line); border-radius: 8px; padding: 3px 9px;
+  font-size: 11px; color: var(--muted); background: var(--panel-2);
+  white-space: nowrap;
+}
+.flow-chip b { color: var(--text); font-weight: 700; }
+.flow-chip.rw b { color: var(--run); }
+.flow-chip .fc-next { color: var(--accent); font-weight: 700; }
+.flow-chip.fc-up { border-color: var(--accent); }
+
+@media (max-width: 720px) {
+  .flow { padding: 10px 12px 0; }
+}
