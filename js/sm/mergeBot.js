@@ -44,20 +44,26 @@ function labelNames(pr) {
 }
 
 /**
- * Check-rollup for a head sha: 'green' (all concluded SUCCESS), 'red'
- * (any FAILURE/TIMED_OUT/CANCELLED), 'pending' (queued/in flight),
- * 'none' (no evidence at all — nothing concluded anywhere).
- *
- * Fallback (live: fa #762, 2026-09-22): silent-update refreshes a branch
- * via the update-branch API, which fires NO pull_request event — the
- * gate waiter check run never re-runs on the new head, so commit check
- * runs come back EMPTY even though the dispatched CI (check suites) is
- * green on that exact sha. When check runs are empty, fall back to the
- * PR-level statusCheckRollup (suites + statuses aggregated by GitHub)
- * before declaring 'none' — otherwise a green approved CLEAN head waits
- * forever and only the SM tick's better-informed merge can land it.
+ * Epoch ms when the run started waiting (check-run started_at, workflow-run
+ * created_at) or null when the payload carries no usable timestamp — the
+ * gh-766 stale-head detection FAILS OPEN on null (treated as live).
  */
-function checksRollup(commitSha, pr, job, owner, name) {
+function pendingStartedAt(r) {
+    if (!r) return null;
+    var raw = r.started_at || r.startedAt || r.created_at || r.createdAt;
+    if (!raw) return null;
+    var ts = Date.parse(raw);
+    return isNaN(ts) ? null : ts;
+}
+
+/**
+ * Same rollup as checksRollup, plus pendingSince: the OLDEST start time
+ * among the pending evidence (gh-766) — an armed head whose checks have
+ * been motionless past staleHeadMinutes is a dead FIFO head (skipped with
+ * an explicit log line, unarmed, queue advances) instead of an eternal
+ * 'checks=pending — waiting'.
+ */
+function rollupDetail(commitSha, pr, job, owner, name) {
     var cr = parseMcp(github_get_commit_check_runs({
         workspace: owner, repository: name, commitSha: commitSha
     }));
@@ -82,23 +88,45 @@ function checksRollup(commitSha, pr, job, owner, name) {
             // newest first (API order); conclusion decides, in-flight waits
             var top = mine[0];
             var c = top.conclusion ? String(top.conclusion).toUpperCase() : null;
-            if (c === 'SUCCESS') return 'green';
-            if (c === 'FAILURE' || c === 'TIMED_OUT' || c === 'CANCELLED') return 'red';
-            return 'pending';
+            if (c === 'SUCCESS') return { state: 'green', pendingSince: null };
+            if (c === 'FAILURE' || c === 'TIMED_OUT' || c === 'CANCELLED') return { state: 'red', pendingSince: null };
+            return { state: 'pending', pendingSince: pendingStartedAt(top) };
         }
-        return 'none';
+        return { state: 'none', pendingSince: null };
     }
-    if (!runs.length) return 'none';
-    var red = false, pending = false;
+    if (!runs.length) return { state: 'none', pendingSince: null };
+    var red = false, pending = false, oldestPending = null;
     runs.forEach(function (r) {
         var c = r.conclusion ? String(r.conclusion).toUpperCase() : null;
         var s = r.status ? String(r.status).toUpperCase() : null;
         if (c === 'FAILURE' || c === 'TIMED_OUT' || c === 'CANCELLED') red = true;
-        else if (!c || s === 'QUEUED' || s === 'IN_PROGRESS' || s === 'WAITING' || s === 'PENDING') pending = true;
+        else if (!c || s === 'QUEUED' || s === 'IN_PROGRESS' || s === 'WAITING' || s === 'PENDING') {
+            pending = true;
+            var st = pendingStartedAt(r);
+            if (st !== null && (oldestPending === null || st < oldestPending)) oldestPending = st;
+        }
     });
-    if (red) return 'red';
-    if (pending) return 'pending';
-    return 'green';
+    if (red) return { state: 'red', pendingSince: null };
+    if (pending) return { state: 'pending', pendingSince: oldestPending };
+    return { state: 'green', pendingSince: null };
+}
+
+/**
+ * Check-rollup for a head sha: 'green' (all concluded SUCCESS), 'red'
+ * (any FAILURE/TIMED_OUT/CANCELLED), 'pending' (queued/in flight),
+ * 'none' (no evidence at all — nothing concluded anywhere).
+ *
+ * Fallback (live: fa #762, 2026-09-22): silent-update refreshes a branch
+ * via the update-branch API, which fires NO pull_request event — the
+ * gate waiter check run never re-runs on the new head, so commit check
+ * runs come back EMPTY even though the dispatched CI (check suites) is
+ * green on that exact sha. When check runs are empty, fall back to the
+ * PR-level statusCheckRollup (suites + statuses aggregated by GitHub)
+ * before declaring 'none' — otherwise a green approved CLEAN head waits
+ * forever and only the SM tick's better-informed merge can land it.
+ */
+function checksRollup(commitSha, pr, job, owner, name) {
+    return rollupDetail(commitSha, pr, job, owner, name).state;
 }
 
 /**
@@ -203,6 +231,18 @@ function action(params) {
     var list = Array.isArray(prs) ? prs : (prs.pullRequests || prs.items || []);
     var acted = 0;
     var deferredApproved = false;
+    // gh-766 dead-head skip: the FIFO head position is checked for liveness
+    // every tick. An owner-'blocked' PR, or an armed APPROVED PR whose
+    // checks have been motionless past staleHeadMinutes (default 120 = 2h),
+    // is skipped WITH AN EXPLICIT LOG LINE and the queue advances past it
+    // to the first live (validated + green + CLEAN) approved PR. A silent
+    // vanish here starved the whole queue behind the head — acted: 0 for
+    // over an hour while 4 approved+validated PRs waited (live fa
+    // 2026-10-06: pr-1231 checks=pending over pr-1309/1311/1313/1317).
+    var staleHeadMinutes = (typeof job.staleHeadMinutes === 'number' && job.staleHeadMinutes > 0)
+        ? job.staleHeadMinutes : 120;
+    var skippedHeads = 0;
+    var deadHeadPassed = false;
 
     // Owner directive 2026-10-04 ("red yields the slot") — diagnostic only:
     // once per run, when the first approved PR is deferred as FIFO-queued,
@@ -248,7 +288,17 @@ function action(params) {
         var labels = labelNames(pr);
         var headSha = pr.head && (pr.head.sha || pr.head);
         if (!headSha) continue;
-        if (labels.indexOf('blocked') !== -1) continue; // #939: owner-parked — the bot ignores it even when green
+        if (labels.indexOf('blocked') !== -1) {
+            // gh-766: owner-parked (#939 semantics unchanged — the bot still
+            // never acts on a blocked PR), but the skip is now EXPLICIT and
+            // the head position is dead: the queue may advance past it. The
+            // old bare `continue` made a blocked head invisible to the run
+            // log and a poison pill for everyone queued behind it.
+            say('⏭️ pr-' + pr.number + ' skipped: blocked');
+            skippedHeads++;
+            deadHeadPassed = true;
+            continue;
+        }
 
         var approved = labels.indexOf('pr_approved') !== -1;
         var validating = labels.indexOf('ai_validating') !== -1;
@@ -258,17 +308,72 @@ function action(params) {
             // a silent skip is indistinguishable from a stuck pipeline for
             // the operator (live: fa 2026-09-25, pr-948/pr-963 sat silent
             // for hours while the queue was healthy).
+            //
+            // gh-766: dead heads skipped above (blocked / stale-pending)
+            // VACATED the head position — the first approved PR behind them
+            // that already carries validation evidence (the ai_validated
+            // latch) takes the turn on the SAME evidence gates as the armed
+            // path: green rollup on the current head + CLEAN. One advance
+            // per skip-chain — the first candidate consumes it, so FIFO
+            // holds for everyone behind; never-validated, mid-review,
+            // draft, conflicted and not-ready candidates keep deferring.
             if (approved && labels.indexOf('agent:review') === -1) {
-                say('⏳ pr-' + pr.number + ' approved — FIFO-queued (awaiting validate-armed turn)');
-                deferredApproved = true;
-                noteRedSlotHolder(pr.number);
+                var advance = deadHeadPassed && labels.indexOf('ai_validated') !== -1;
+                if (advance) deadHeadPassed = false; // consumed by the first live candidate
+                var advanced = false;
+                if (advance) {
+                    var upRollup = checksRollup(String(headSha), pr, job, owner, name);
+                    if (upRollup === 'green' && mergeStateOf(pr) === 'CLEAN') {
+                        var um = squashMerge(owner, name, pr.number);
+                        if (um.merged) {
+                            say('🧲 pr-' + pr.number + ' squash-merged (approved + validated + green + CLEAN — advanced past a skipped dead head)');
+                            acted++;
+                            advanced = true;
+                        } else {
+                            say('❌ pr-' + pr.number + ' merge refused: ' + um.error);
+                        }
+                    }
+                }
+                if (!advanced) {
+                    say('⏳ pr-' + pr.number + ' approved — FIFO-queued (awaiting validate-armed turn)');
+                    deferredApproved = true;
+                    noteRedSlotHolder(pr.number);
+                }
             }
             continue; // mid-review: SM owns it
         }
+        // An armed PR is a LIVE head by default: it owns the FIFO position
+        // and nobody advances past it — unless the stale-pending check
+        // below declares it dead (gh-766).
+        deadHeadPassed = false;
         if (pr.mergeable === false) continue; // conflicts: conflict-rework (SM) owns it
 
-        var rollup = checksRollup(String(headSha), pr, job, owner, name);
+        var detail = rollupDetail(String(headSha), pr, job, owner, name);
+        var rollup = detail.state;
         if (rollup !== 'green') {
+            if (rollup === 'pending' && approved && detail.pendingSince &&
+                (Date.now() - detail.pendingSince) > staleHeadMinutes * 60 * 1000) {
+                // gh-766 dead head: the armed validation has been motionless
+                // past the threshold and will never conclude. Unarm — it
+                // frees the SM's validate-armed mutex so the next approved
+                // PR gets its turn (same remedy shape as the BEHIND/DIRTY
+                // unarm below) — and let the queue advance. Unapproved
+                // (dev-lane) arms don't hold the merge window (mutexAmong
+                // parity) and keep waiting untouched: re-dispatching a
+                // slow-CI dev lane every 2h would only lose its queue spot.
+                var stillHours = Math.round(((Date.now() - detail.pendingSince) / 3600000) * 10) / 10;
+                try {
+                    github_remove_label({ workspace: owner, repository: name, number: pr.number, label: 'ai_validating' });
+                    say('⏭️ pr-' + pr.number + ' skipped: checks pending ' + stillHours +
+                        'h (> ' + (Math.round(staleHeadMinutes / 6) / 10) + 'h motionless) — unarmed, queue advances');
+                    acted++;
+                } catch (eStale) {
+                    say('⚠️ pr-' + pr.number + ' stale-head unarm failed: ' + (eStale.message || eStale));
+                }
+                skippedHeads++;
+                deadHeadPassed = true;
+                continue;
+            }
             say('⏳ pr-' + pr.number + ' checks=' + rollup + ' — waiting');
             continue;
         }
@@ -341,10 +446,10 @@ function action(params) {
         }
     }
 
-    say('mergeBot complete — acted: ' + acted);
-    return { success: true, acted: acted, log: log };
+    say('mergeBot complete — acted: ' + acted + ', heads skipped: ' + skippedHeads);
+    return { success: true, acted: acted, skipped: skippedHeads, log: log };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action: action, checksRollup: checksRollup, mergeStateOf: mergeStateOf, labelNames: labelNames };
+    module.exports = { action: action, checksRollup: checksRollup, rollupDetail: rollupDetail, mergeStateOf: mergeStateOf, labelNames: labelNames };
 }
