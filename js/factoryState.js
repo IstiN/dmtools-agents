@@ -414,11 +414,20 @@ function buildFactoryState(input) {
     var issueHistory = {};   // issue-N → shared history (lane + backlog twin)
 
     // per-head dispatched run verdicts (newest-first list assumed, same as
-    // syncValidationChecks)
+    // syncValidationChecks). runStartedAt/updatedAt (gh-769) carry the
+    // run's run_started_at/updated_at so the board can split CI wall-time
+    // from queue wait — null when the payload lacks them (honest unknowns,
+    // the keys are always present so snapshots keep a stable shape).
     function headRuns(sha) {
         return runs.filter(function (r) {
             return r.event === 'workflow_dispatch' && r.head_sha === sha;
         });
+    }
+    function runClock(r) {
+        return {
+            runStartedAt: (r && r.run_started_at) || null,
+            updatedAt: (r && r.updated_at) || null
+        };
     }
     function headVerdict(sha) {
         var mine = headRuns(sha);
@@ -427,16 +436,20 @@ function buildFactoryState(input) {
                    r.conclusion !== 'cancelled';
         });
         if (terminal.length) {
+            var t = runClock(terminal[0]);
             return { state: terminal[0].conclusion, at: terminal[0].created_at,
-                     url: terminal[0].html_url };
+                     url: terminal[0].html_url,
+                     runStartedAt: t.runStartedAt, updatedAt: t.updatedAt };
         }
         var active = mine.filter(function (r) {
             return r.status === 'queued' || r.status === 'in_progress' ||
                    r.status === 'waiting' || r.status === 'pending';
         });
         if (active.length) {
+            var a = runClock(active[0]);
             return { state: active[0].status, at: active[0].created_at,
-                     url: active[0].html_url };
+                     url: active[0].html_url,
+                     runStartedAt: a.runStartedAt, updatedAt: a.updatedAt };
         }
         return null;
     }
@@ -509,7 +522,8 @@ function buildFactoryState(input) {
             labels: (pr.labels || []).map(function (l) {
                 return l && l.name || l;
             }),
-            checks: v ? { verdict: v.state, at: v.at, url: v.url } : null,
+            checks: v ? { verdict: v.state, at: v.at, url: v.url,
+                          runStartedAt: v.runStartedAt, updatedAt: v.updatedAt } : null,
             prCreated: iso(pr.created_at),
             // FIFO position inside approved_queue is filled after the sort
             queuePos: null,

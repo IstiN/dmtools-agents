@@ -13,6 +13,11 @@ window.FACTORY_BOARD_CONFIG = {
   // 60s polling just picks the new snapshot up promptly.
   refreshMs: 60000,
 
+  // A snapshot older than this announces itself as STALE (gh-769: a stalled
+  // SM tick used to leave lanes that contradicted the live repo — now the
+  // board says so instead of silently rendering old state).
+  staleAfterMs: 1800000,
+
   // Branding (the logo is an inline SVG in index.html — no emoji anywhere)
   title: 'Factory Board',
 
