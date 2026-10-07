@@ -3891,7 +3891,7 @@ function resolveHeadSha(repoInfo, ticket) {
     try {
         var pr = mcpParse(github_get_pr({
             workspace: repoInfo.owner, repository: repoInfo.repo,
-            number: ticket.prNumber
+            pullRequestId: ticket.prNumber
         }));
         var resolved = (pr && pr.head && pr.head.sha) || null;
         if (resolved) {
