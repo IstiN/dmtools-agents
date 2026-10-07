@@ -37,6 +37,7 @@
       "./agents/instructions/story_development/few_shots.md",
       "./agents/instructions/common/github_comment_format.md",
       "./agents/instructions/common/dmtools_cli.md",
+      "./agents/instructions/common/session_ephemerality.md",
       "./agents/prompts/bash_tools.md"
 ]
   }
