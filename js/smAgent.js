@@ -103,6 +103,14 @@ var smProviderModule = require('./common/smProvider.js');
 
 // Project config loaded once in action() — used as global default for rules without configPath
 var projectConfig = null;
+// Priority-tier label names (owner directive 2026-10-08), resolved once in
+// action() from config.smPriorityLabels — passed down to the source query
+// path (githubSource queryPrs' tier-aware FIFO sort).
+var PRIORITY_LABELS = {
+    blocker: 'priority_blocker',
+    medium: 'priority_medium',
+    low: 'priority_low'
+};
 var STALE_NON_RUNNING_WORKFLOW_MS = 6 * 60 * 60 * 1000;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -880,7 +888,8 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
         tickets = sourceMod.query(rule, {
             config: effectiveConfig, repoInfo: effectiveRepoInfo, jql: interpolatedJql,
             machineAuthor: machineAuthorModule.resolveMachineAuthor(
-                RUN_JOB_PARAMS, effectiveConfig)
+                RUN_JOB_PARAMS, effectiveConfig),
+            priorityLabels: PRIORITY_LABELS
         }) || [];
     } catch (e) {
         console.error('  ❌ state query failed: ' + (e.message || e));
@@ -1035,7 +1044,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         tickets = sourceMod.query(rule, {
             config: effectiveConfig, repoInfo: effectiveRepoInfo, jql: interpolatedJql,
             machineAuthor: machineAuthorModule.resolveMachineAuthor(
-                RUN_JOB_PARAMS, effectiveConfig)
+                RUN_JOB_PARAMS, effectiveConfig),
+            priorityLabels: PRIORITY_LABELS
         }) || [];
     } catch (e) {
         console.error('  ❌ state query failed: ' + (e.message || e));
@@ -2974,6 +2984,33 @@ function resolveWorkflowCap(jsonCap, projectCfg) {
     return normalizePositiveInt(jsonCap);
 }
 
+// Priority-tier label NAMES (owner directive 2026-10-08): FIFO within a
+// tier, blocker preempts, low sinks — see sources/githubSource.js. The
+// names are configurable per project via .dmtools/config.js
+// smPriorityLabels (a project may define only some tiers, e.g. just the
+// blocker). Absent mapping entries degrade to the defaults; absent labels
+// on a PR/issue mean medium. Values must be non-empty strings — garbage
+// entries are ignored with a one-line warn (same knob style as
+// resolveWorkflowCap).
+function resolvePriorityLabels(projectCfg) {
+    var out = {
+        blocker: 'priority_blocker',
+        medium: 'priority_medium',
+        low: 'priority_low'
+    };
+    var cfg = projectCfg && projectCfg.smPriorityLabels;
+    if (!cfg || typeof cfg !== 'object') return out;
+    Object.keys(out).forEach(function (tier) {
+        var v = cfg[tier];
+        if (typeof v === 'string' && v.trim() !== '') {
+            out[tier] = v;
+        } else if (typeof v !== 'undefined') {
+            console.warn('  ⚠️  config.smPriorityLabels.' + tier +
+                ' ignored — not a non-empty string: ' + JSON.stringify(v));
+        }
+    });
+    return out;
+}
 
 // Patches rules from project config smRuleOverrides, matched by rule id
 // (github rules carry stable ids) or configFile (jira rules).
@@ -4232,6 +4269,10 @@ function action(params) {
         projectConfig
     );
     var workflowBudget = configuredWorkflowCap ? { initial: configuredWorkflowCap, remaining: configuredWorkflowCap } : null;
+
+    // Priority-tier label names (owner directive 2026-10-08) — one resolve
+    // per tick; every rule query below carries them via ctx.priorityLabels.
+    PRIORITY_LABELS = resolvePriorityLabels(projectConfig);
 
     // Use smRules from config if provided (full override)
     if (projectConfig.smRules && Array.isArray(projectConfig.smRules) && projectConfig.smRules.length > 0) {

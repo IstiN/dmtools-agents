@@ -44,6 +44,7 @@ function makeSmAgent(opts) {
     var capturedEnvSets = [];
     var capturedScmConfigs = [];
     var capturedIoCacheDrops = [];
+    var capturedLogs = [];
 
     // Controlled file_read: config discovery paths from fileMap only; other paths from disk.
     var fileReadMock = function(readOpts) {
@@ -120,6 +121,17 @@ function makeSmAgent(opts) {
     // runAsync fake injection (spec: probeDispatchedState delegation pin) —
     // shadows the (absent) global inside the smAgent module scope.
     if (opts.runAsync) smMocks.runAsync = opts.runAsync;
+
+    // Console capture (owner directive 2026-10-08 priority-tier tests): the
+    // 🥇 preemption line prints from inside the source query (githubSource),
+    // so the mock shadows the module-scope console for every loadModule'd
+    // module that receives smMocks (smAgent, githubSource, smAsync).
+    if (opts.captureConsole) {
+        var captureInto = function () {
+            capturedLogs.push(Array.prototype.map.call(arguments, String).join(' '));
+        };
+        smMocks.console = { log: captureInto, warn: captureInto, error: captureInto };
+    }
 
     // SCM mock: intercepts triggerWorkflow so capturedTriggers is populated
     var mockScmProvider = {
@@ -211,11 +223,18 @@ function makeSmAgent(opts) {
         // (cross-repo/dangling) must degrade to a PR-anchored dispatch.
         // Live-bridge shape: the sync tool does NOT throw on 404 — it
         // returns the REST error BODY; issueLookupBody simulates that.
+        // issues (owner directive 2026-10-08): map issueNumber → issue
+        // payload — the priority-tier resolution reads linked-issue
+        // LABELS through this tool (githubSource cachedIssueLabels).
         smMocks.github_get_issue = function (issueOpts) {
             if (opts.github.issueLookupError) throw new Error(opts.github.issueLookupError);
             if (opts.github.onIssueLookup) opts.github.onIssueLookup(issueOpts && issueOpts.issueNumber);
             if (opts.github.issueLookupBody) return opts.github.issueLookupBody;
-            return opts.github.issue || { number: issueOpts && issueOpts.issueNumber };
+            var n = issueOpts && issueOpts.issueNumber;
+            if (opts.github.issues && opts.github.issues[n] !== undefined) {
+                return opts.github.issues[n];
+            }
+            return opts.github.issue || { number: n };
         };
         smMocks.github_get_pr_comments = function () {
             return JSON.stringify(opts.github.prComments || []);
@@ -234,6 +253,37 @@ function makeSmAgent(opts) {
     var machineAuthorModule = loadModule(
         'js/common/machineAuthor.js', makeRequire({}), {}
     );
+    // Real github source (owner directive 2026-10-08 priority tiers): the
+    // items-stub above replaces the whole source query, which would bypass
+    // queryPrs' tier-aware FIFO sort and the linked-issue label carrier.
+    // opts.github.realSource routes github rules through the REAL
+    // js/sm/sources/githubSource.js — opts.github.prList is the raw REST
+    // /pulls payload (served by smMocks.github_list_prs), prStatus comes
+    // from the provider stub (shared object, or prStatusByPr keyed by PR
+    // number), and github_get_issue serves opts.github.issues.
+    if (opts.github && opts.github.realSource) {
+        var realProvider = {
+            prStatus: function (n) {
+                if (opts.github.prStatusByPr) return opts.github.prStatusByPr[n] || null;
+                return opts.github.prStatus || null;
+            }
+        };
+        var smProviderStub = { createSmProvider: function () { return realProvider; } };
+        var smAsyncForSource = loadModule(
+            'js/common/smAsync.js',
+            makeRequire({ './common/smProvider.js': smProviderStub }),
+            smMocks
+        );
+        jiraSourceStub = loadModule(
+            'js/sm/sources/githubSource.js',
+            makeRequire({
+                '../../common/machineAuthor.js': machineAuthorModule,
+                '../../common/smProvider.js': smProviderStub,
+                '../../common/smAsync.js': smAsyncForSource
+            }),
+            smMocks
+        );
+    }
     var sm = loadModule(
         'js/smAgent.js',
         makeRequire({
@@ -281,7 +331,8 @@ function makeSmAgent(opts) {
         capturedPrComments: capturedPrComments,
         capturedEnvSets: capturedEnvSets,
         capturedScmConfigs: capturedScmConfigs,
-        capturedIoCacheDrops: capturedIoCacheDrops
+        capturedIoCacheDrops: capturedIoCacheDrops,
+        capturedLogs: capturedLogs
     };
 }
 
@@ -3418,6 +3469,157 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
         assert.ok(sm.capturedPrComments.some(function (c) {
             return c.body.indexOf('machine merges of main walked past') !== -1; }),
             'the un-park comment explains the walk');
+    });
+});
+
+suite('smAgent: PR priority tiers (owner directive 2026-10-08)', function () {
+    // FIFO within a tier: priority_blocker preempts the approved merge
+    // window (validation slot + merge priority ahead of older mediums),
+    // priority_low sinks below all mediums, no label anywhere = medium.
+    // Label carrier: the PR itself OR its linked issue; names configurable
+    // via .dmtools/config.js smPriorityLabels. Modeled on the silent-update
+    // park tests above, but routed through the REAL github source
+    // (makeSmAgent opts.github.realSource) — the items-stub replaces the
+    // whole source query and would bypass queryPrs' tier-aware sort.
+    // The arm side (validate_pr) makes the pick OBSERVABLE: exactly one
+    // PR gets ai_validating + a CI dispatch per tick.
+
+    var RULES_PT = {
+        armed: { source: 'github', query: { type: 'pr', labels: ['pr_approved'],
+            notLabels: ['ai_validating', 'validation_failed'],
+            notMergeState: ['BEHIND', 'DIRTY'], draft: false,
+            mutex: 'ai_validating', mutexAmong: ['pr_approved'] },
+            localAction: 'validate_pr', skipIfValidatedHead: true, redHeadSkip: true,
+            limit: 1, id: 'validate-armed', deferRedHead: true }
+    };
+
+    function ptConfig(owner, repo, extraCfg) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" }' +
+            (extraCfg ? ', ' + extraCfg : '') + ' };' } };
+    }
+
+    // Raw REST /pulls payload (github_list_prs serves it verbatim) — REST
+    // returns NEWEST-first, the starvation order the FIFO sort repairs.
+    function ptPr(n, labels, body) {
+        return { number: n, state: 'open', draft: false, body: body || '',
+                 head: { sha: 'ptsha' + n, ref: 'feat/pt-' + n },
+                 base: { sha: 'ptbase0' },
+                 labels: (labels || []).map(function (l) { return { name: l }; }),
+                 user: { login: 'ai-teammate' } };
+    }
+
+    // Every workflow-runs probe (dispatched-state, race guard, cancel
+    // scan) sees an empty list — nothing in flight anywhere, arm proceeds.
+    function ptRunsCli(cmd) {
+        if (cmd.command.indexOf('/runs') !== -1) {
+            return JSON.stringify({ workflow_runs: [] });
+        }
+        return '';
+    }
+
+    function ptArmed(sm) {
+        return sm.capturedPrLabelAdds.filter(function (a) {
+            return a.labels.indexOf('ai_validating') !== -1;
+        }).map(function (a) { return a.number; });
+    }
+
+    function ptDispatched(cmdList) {
+        return cmdList.some(function (c) { return c.command.indexOf('gh workflow run') === 0; });
+    }
+
+    function ptRun(opts) {
+        var sm = makeSmAgent(Object.assign(ptConfig('a', 'b', opts.cfg), {
+            captureConsole: true,
+            github: Object.assign({ realSource: true,
+                prStatus: { state: 'OPEN', checkConclusion: 'none', mergeState: 'CLEAN',
+                            mergeable: true, headSha: 'ptsha302', branch: 'feat/pt-302' } },
+                opts.github || {}),
+            onCliExecute: ptRunsCli
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_PT.armed] } });
+        return sm;
+    }
+
+    test('blocker jumps FIFO: a younger priority_blocker takes the arm slot over an older medium', function () {
+        var sm = ptRun({ github: { prList: JSON.stringify([
+            ptPr(302, ['pr_approved', 'priority_blocker']), // younger, blocker
+            ptPr(301, ['pr_approved'])                      // older, medium
+        ]) } });
+
+        assert.deepEqual(ptArmed(sm), [302],
+            'the BLOCKER is armed — the older medium yields the validation slot');
+        assert.ok(ptDispatched(sm.capturedCliCommands), 'validation CI dispatched for the blocker');
+        assert.ok(sm.capturedLogs.some(function (l) {
+            return l.indexOf('\uD83E\uDD47') !== -1 && l.indexOf('pr-302') !== -1;
+        }), 'the \uD83E\uDD47 preemption line names the preempting PR (grep-able in tick logs)');
+    });
+
+    test('low sinks: an older priority_low waits while a younger medium arms first', function () {
+        var sm = ptRun({ github: { prList: JSON.stringify([
+            ptPr(302, ['pr_approved']),                       // younger, medium
+            ptPr(301, ['pr_approved', 'priority_low'])        // older, low
+        ]) } });
+
+        assert.deepEqual(ptArmed(sm), [302],
+            'low sinks below ALL mediums — age never lifts it past one');
+        assert.ok(ptDispatched(sm.capturedCliCommands), 'the medium\'s validation dispatched');
+        assert.ok(!sm.capturedLogs.some(function (l) {
+            return l.indexOf('\uD83E\uDD47') !== -1;
+        }), 'no preemption marker — only blockers preempt');
+    });
+
+    test('issue carrier: priority_blocker on the LINKED ISSUE counts (either carrier)', function () {
+        var lookups = [];
+        var sm = ptRun({ github: {
+            prList: JSON.stringify([
+                ptPr(302, ['pr_approved'], 'Closes #55'), // no PR-side priority label
+                ptPr(301, ['pr_approved'])
+            ]),
+            issues: { 55: { number: 55, state: 'open',
+                            labels: [{ name: 'priority_blocker' }] } },
+            onIssueLookup: function (n) { lookups.push(n); }
+        } });
+
+        assert.deepEqual(ptArmed(sm), [302],
+            'the blocker label on the linked issue promotes the PR the same as a PR-side label');
+        assert.deepEqual(lookups, [55],
+            'the linked issue was read exactly once (per-tick cache, PR-side medium needs no fetch)');
+        assert.ok(sm.capturedLogs.some(function (l) {
+            return l.indexOf('\uD83E\uDD47') !== -1 && l.indexOf('pr-302') !== -1;
+        }), 'the preemption marker fires for the issue-carrier blocker too');
+    });
+
+    test('custom mapping: smPriorityLabels {blocker:"sev1"} — sev1 preempts, the default name stops', function () {
+        var sm = ptRun({
+            cfg: 'smPriorityLabels: { blocker: "sev1" }',
+            github: { prList: JSON.stringify([
+                ptPr(303, ['pr_approved', 'sev1']),            // youngest, custom blocker
+                ptPr(302, ['pr_approved', 'priority_blocker']), // default name — inert after remap
+                ptPr(301, ['pr_approved'])                      // oldest, medium
+            ]) }
+        });
+
+        assert.deepEqual(ptArmed(sm), [303],
+            'sev1 (custom blocker name) preempts; priority_blocker is no longer a tier label');
+        assert.ok(!ptArmed(sm).some(function (n) {
+            return n === 302 || n === 301;
+        }), 'the mediums stay FIFO-queued behind the remapped blocker');
+    });
+
+    test('no labels anywhere: every PR is medium — plain FIFO untouched (older arms first)', function () {
+        var sm = ptRun({ github: { prList: JSON.stringify([
+            ptPr(302, ['pr_approved']),
+            ptPr(301, ['pr_approved'])
+        ]) } });
+
+        assert.deepEqual(ptArmed(sm), [301],
+            'no priority label on any carrier — the 2026-09-22 FIFO rule picks the OLDEST');
+        assert.ok(ptDispatched(sm.capturedCliCommands), 'the older medium\'s validation dispatched');
+        assert.ok(!sm.capturedLogs.some(function (l) {
+            return l.indexOf('\uD83E\uDD47') !== -1;
+        }), 'no preemption marker without a blocker');
     });
 });
 

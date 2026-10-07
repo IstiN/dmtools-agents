@@ -108,6 +108,98 @@ function prLabels(p) {
     return (p.labels || []).map(function (l) { return (l && l.name) || l; });
 }
 
+// ── Priority tiers (owner directive 2026-10-08) ─────────────────────────────
+// A PR's priority tier breaks the FIFO tie inside the approved merge window:
+//   blocker (rank 0) — jumps the queue: gets the validation slot (the
+//                      ai_validating mutex) and merge priority FIRST, ahead
+//                      of older medium PRs;
+//   medium  (rank 1) — the default tier: a PR with NO priority label is
+//                      medium (the medium label is NOT required to exist);
+//   low     (rank 2) — sinks below all mediums.
+// The label may sit on the PR itself OR on its LINKED ISSUE (either carrier
+// counts — the issue is the machine-loop anchor, humans triage there).
+// Label NAMES are configurable per project (.dmtools/config.js
+// smPriorityLabels; smAgent validates + passes them through ctx) — a
+// project may define only some tiers; absent entries degrade to these
+// defaults, and absent labels always mean medium.
+var DEFAULT_PRIORITY_LABELS = {
+    blocker: 'priority_blocker',
+    medium: 'priority_medium',
+    low: 'priority_low'
+};
+var PRIORITY_RANKS = { blocker: 0, medium: 1, low: 2 };
+
+// Defensive twin of smAgent's resolvePriorityLabels: the ctx knob arrives
+// pre-validated, but this source is also called directly (tests, forges) —
+// anything that is not a non-empty string keeps the default name.
+function resolvePriorityLabels(cfg) {
+    var out = {
+        blocker: DEFAULT_PRIORITY_LABELS.blocker,
+        medium: DEFAULT_PRIORITY_LABELS.medium,
+        low: DEFAULT_PRIORITY_LABELS.low
+    };
+    if (cfg && typeof cfg === 'object') {
+        ['blocker', 'medium', 'low'].forEach(function (tier) {
+            var v = cfg[tier];
+            if (typeof v === 'string' && v) out[tier] = v;
+        });
+    }
+    return out;
+}
+
+// Linked-issue label cache — same per-tick TTL pattern as smProvider's
+// ioCache (60s): every PR-rule query in one tick re-runs queryPrs, and
+// without the cache each pass would re-fetch the same issues' labels.
+// Entry shape: [] labels (fetched) | null (fetch failed → PR-side labels
+// only, tier degrades toward medium — never wedges the queue on I/O).
+var PRIORITY_ISSUE_LABEL_TTL_MS = 60 * 1000;
+var _priorityIssueLabelCache = { entries: {} };
+
+function cachedIssueLabels(repoInfo, issueNumber) {
+    var key = (repoInfo.owner || '') + '/' + (repoInfo.repo || '') +
+        ':issueLabels:' + issueNumber;
+    var hit = _priorityIssueLabelCache.entries[key];
+    if (hit) {
+        if (Date.now() - hit.at > PRIORITY_ISSUE_LABEL_TTL_MS) {
+            delete _priorityIssueLabelCache.entries[key];
+        } else {
+            return hit.data;
+        }
+    }
+    var labels = null;
+    if (typeof github_get_issue === 'function') {
+        try {
+            // Exact call shape of the smAgent sites (gh-601): the sync tool
+            // does NOT throw on 404 — it returns the REST error body, which
+            // carries `message` and no usable labels.
+            var res = github_get_issue({
+                workspace: repoInfo.owner,
+                repository: repoInfo.repo,
+                issueNumber: issueNumber
+            });
+            var obj = (typeof res === 'string') ? parseMcp(res) : res;
+            if (obj && typeof obj === 'object' && !obj.message) {
+                labels = issueLabels(obj);
+            }
+        } catch (e) { labels = null; }
+    }
+    _priorityIssueLabelCache.entries[key] = { at: Date.now(), data: labels };
+    return labels;
+}
+
+// Tier of one PR-carrier item. The PR's own blocker label short-circuits
+// (nothing on the issue can outrank it, so the issue fetch is skipped);
+// otherwise the linked issue's labels join the PR's. Blocker wins over any
+// other combination, low only when neither carrier says blocker.
+function priorityTier(item, pl, repoInfo) {
+    var prLs = item.labels || [];
+    if (prLs.indexOf(pl.blocker) !== -1) return 'blocker';
+    var issLs = item.issueNumber ? cachedIssueLabels(repoInfo, item.issueNumber) : null;
+    if (issLs && issLs.indexOf(pl.blocker) !== -1) return 'blocker';
+    if (prLs.indexOf(pl.low) !== -1 || (issLs && issLs.indexOf(pl.low) !== -1)) return 'low';
+    return 'medium'; // no label anywhere — the default tier (label not required)
+}
+
 // `owner` (repoInfo.owner) rides through for the release-bump form of the
 // machine-authorship gate (#1104): chore/release-v* | chore(release): from
 // the repo owner counts as machine — see common/machineAuthor.js.
@@ -234,8 +326,12 @@ function query(rule, ctx) {
 
     var machineAuthor = machineAuthorModule.resolveMachineAuthor(ctx, ctx && ctx.config);
     var owner = repoInfo.owner || '';
+    // Priority-tier label names (owner directive 2026-10-08): pre-validated
+    // by smAgent from .dmtools/config.js smPriorityLabels; degrade to the
+    // defaults when absent.
+    var priorityLabels = resolvePriorityLabels(ctx && ctx.priorityLabels);
     if (q.type === 'pr') {
-        return queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner);
+        return queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorityLabels);
     }
     return queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAuthor, owner);
 }
@@ -391,7 +487,7 @@ function linkedIssueNumber(body) {
     return m ? parseInt(m[2], 10) : null;
 }
 
-function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner) {    var q = rule.query || {};
+function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorityLabels) {    var q = rule.query || {};
     // The open-PR list rides the provider's per-tick ioCache — this site
     // fired github_list_prs once PER RULE (measured: 18 calls, one idle
     // tick, all the same payload). Providers without the cache contract
@@ -571,7 +667,46 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner) {    va
     // rules — the queue drains oldest-to-newest. Blocked candidates
     // (conflicts, red/pending checks) never reach here: guards already
     // filtered them, so the head of this list is the oldest mergeable PR.
-    matched.sort(function (a, b) { return (a.prNumber || 0) - (b.prNumber || 0); });
+    //
+    // PRIORITY TIERS (owner directive 2026-10-08) amend the FIFO rule
+    // 2026-09-22: FIFO WITHIN a tier. Primary key = tier rank (blocker 0,
+    // medium 1, low 2), secondary = the age/FIFO key — a blocker jumps the
+    // queue (validation slot + merge priority ahead of older mediums), a
+    // low sinks below all mediums, and unlabeled PRs stay medium. Both
+    // limit:1 consumers (validate-armed's arm, merge-validated's merge)
+    // share this query, so one sort preempts both picks. Tiers resolve
+    // lazily — only when a tie exists to break (a single candidate's tier
+    // cannot change anything): a blocker label on the PR itself skips the
+    // linked-issue fetch entirely.
+    if (matched.length > 1) {
+        var pl = resolvePriorityLabels(priorityLabels);
+        matched.forEach(function (item) {
+            item.priorityTier = priorityTier(item, pl, repoInfo);
+            item.priorityRank = PRIORITY_RANKS[item.priorityTier];
+        });
+        matched.sort(function (a, b) {
+            if (a.priorityRank !== b.priorityRank) return a.priorityRank - b.priorityRank;
+            return (a.prNumber || 0) - (b.prNumber || 0);
+        });
+        // Preemption marker (grep-able in tick logs): a blocker took a slot
+        // a non-blocker would have held under plain FIFO. Fires only when
+        // the limit actually CUT a non-blocker while keeping the blocker —
+        // with everything kept (wide refresh rules) nothing was preempted.
+        var keptCount = Math.min(limit, matched.length);
+        if (keptCount < matched.length) {
+            var cutTiers = matched.slice(keptCount).map(function (it) { return it.priorityTier; });
+            matched.slice(0, keptCount).forEach(function (it) {
+                if (it.priorityTier === 'blocker' &&
+                    cutTiers.some(function (t) { return t !== 'blocker'; })) {
+                    console.log('   🥇 priority blocker pr-' + it.prNumber +
+                        ' preempts the FIFO queue — ' + (matched.length - keptCount) +
+                        ' non-blocker PR(s) yield the slot (owner rule 2026-10-08)');
+                }
+            });
+        }
+    } else {
+        matched.sort(function (a, b) { return (a.prNumber || 0) - (b.prNumber || 0); });
+    }
 
     return matched.slice(0, limit);
 }
