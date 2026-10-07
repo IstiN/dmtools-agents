@@ -2570,6 +2570,51 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
         assert.ok(vfRefreshed(sm.capturedCliCommands), 'refresh still runs');
     });
 
+    test('silent-update RESET (gh-1394): ticket WITHOUT headSha (park-reset rule shape, pr:null) — head resolved via github_get_pr, human push clears the park', function () {
+        // Live fa 2026-10-07 (#1394): the park-reset rule's query carries no
+        // mergeState/checks guard, so queryPrs hands the action pr:null with
+        // NO headSha; the old `(ticket.pr && ticket.pr.headSha) ||
+        // ticket.headSha` read null, the RESET ladder failed closed with
+        // ZERO API calls ("park probe failed" ~1s after the events probe,
+        // no /commits call), and nine parked guest PRs stayed frozen while
+        // every manual probe succeeded. The head must resolve explicitly.
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(203, { labels: ['validation_failed'], headSha: undefined })],
+                prStatus: { checkConclusion: 'none' },
+                pr: { number: 203, head: { sha: 'bb445566cc', ref: 'feat/vf-203' } }
+            },
+            onCliExecute: vfCli({
+                actors: { bb445566cc: { login: 'guest-human', date: '2026-10-07T20:06:13Z',
+                                         committer: 'Guest Human', sha: 'bb445566cc', parents: [] } },
+                parkedAt: '2026-10-07T20:02:05Z'
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
+            return r.label === 'validation_failed';
+        }), 'park cleared after the explicit head resolve');
+        assert.ok(vfRefreshed(sm.capturedCliCommands), 'refresh still runs');
+    });
+
+    test('silent-update RESET (gh-1394): unresolvable head keeps the park (fail closed preserved)', function () {
+        var sm = makeSmAgent(Object.assign(vfConfig('a', 'b'), {
+            github: {
+                items: [vfItem(205, { labels: ['validation_failed'], headSha: undefined })],
+                prStatus: { checkConclusion: 'none' },
+                pr: { number: 205, body: '' } // no head → resolve null
+            },
+            onCliExecute: vfCli({ parkedAt: '2026-10-07T20:02:05Z' })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [RULES_VF.refresh] } });
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'a head that cannot be resolved keeps the park (fail closed)');
+    });
+
     test('silent-update: clone/fetch failures are not masked as success (root fix 2026-10-01)', function () {
         // Live: fa approved cohort parked BEHIND since 2026-09-13 — the old
         // chain `clone && fetch && ! ancestor || exit 0 && merge…` swallowed

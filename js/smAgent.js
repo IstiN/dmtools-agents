@@ -1371,7 +1371,10 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 //     THAT actor + date.
                 var parkLabelVf = 'validation_failed';
                 var labelsVf = ticket.labels || [];
-                var uHead = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
+                // gh-1394: rules whose queries carry no mergeState/checks
+                // guard (the park-reset rule) never get the lazy prStatus
+                // enrichment — resolve the head explicitly, one call.
+                var uHead = resolveHeadSha(effectiveRepoInfo, ticket);
                 var prMachineAuthorU = machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, effectiveConfig);
                 var isMachinePrU = machineAuthorModule.isMachineAuthored(
                     ticket, prMachineAuthorU, effectiveRepoInfo.owner);
@@ -1654,7 +1657,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // main, which bury the retrigger, never replace it.
                 var vprMachineLogin = machineAuthorModule.resolveMachineAuthor(
                     RUN_JOB_PARAMS, effectiveConfig);
-                var vprActor = parkResetCommit(effectiveRepoInfo, ticket.headSha, vprMachineLogin);
+                // gh-1394: this backstop fires for parked PRs routed by the
+                // park-reset rule (no mergeState guard → no lazy head sha) —
+                // resolve the head before probing.
+                var vprHead = resolveHeadSha(effectiveRepoInfo, ticket);
+                var vprActor = parkResetCommit(effectiveRepoInfo, vprHead, vprMachineLogin);
                 var vprParkedAt = parkedSince(effectiveRepoInfo, ticket.prNumber);
                 var vprActorLogin = ((vprActor && vprActor.login) || '').toLowerCase();
                 // gh-728: the knob is a login LIST — any entry's push is
@@ -1677,8 +1684,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                 repository: effectiveRepoInfo.repo, number: ticket.prNumber,
                                 body: '🅿️→▶ validation_failed cleared — human push by `' +
                                     (vprActorLogin || 'unknown') + '` at ' + vprActor.date +
-                                    ' (last substantive commit `' + (vprActor.sha || ticket.headSha) +
-                                    '` of head `' + ticket.headSha + '`, machine merges of main walked past — #681)' +
+                                    ' (last substantive commit `' + (vprActor.sha || vprHead) +
+                                    '` of head `' + vprHead + '`, machine merges of main walked past — #681)' +
                                     ' is newer than the park (' + vprParkedAt +
                                     '). Re-entering validation (update_branch RESET never ' +
                                     'ran: the head is not BEHIND — live fa 2026-10-03).' });
@@ -3866,6 +3873,37 @@ function parkResetCommit(repoInfo, headSha, machineAuthor) {
     console.warn('  ⚠️  park-reset walk: 10 machine merges deep without a ' +
         'substantive commit — keeping the park (fail closed)');
     return null;
+}
+
+function resolveHeadSha(repoInfo, ticket) {
+    // gh-1394 (live fa 2026-10-07): queryPrs builds PR tickets with
+    // pr:null and NO headSha — the sha is attached lazily, and only when
+    // a rule's guards need mergeState/checks (prStatus). The park-reset
+    // rule's query {labels, notLabels, draft} carries no such guard, so
+    // the RESET ladder saw uHead=null and failed closed on EVERY tick
+    // with ZERO API calls (live: nine parked guest PRs, every head chain
+    // depth-2 with fresh human pushes; manual probes all succeeded — the
+    // tick simply never issued them; the ⚠️ landed ~1s after the events
+    // probe, no /commits call in sight). Resolve the head at the
+    // consumption site: one github_get_pr when the ticket carries none.
+    var head = (ticket && ticket.pr && ticket.pr.headSha) || (ticket && ticket.headSha);
+    if (head || !ticket || !ticket.prNumber) return head || null;
+    try {
+        var pr = mcpParse(github_get_pr({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            number: ticket.prNumber
+        }));
+        var resolved = (pr && pr.head && pr.head.sha) || null;
+        if (resolved) {
+            console.log('  ℹ️  ' + (ticket.key || ('pr-' + ticket.prNumber)) +
+                ': head sha resolved via github_get_pr (' + resolved.slice(0, 8) + ')');
+        }
+        return resolved;
+    } catch (eRhs) {
+        console.warn('  ⚠️  head sha resolve failed for ' +
+            (ticket.key || ('pr-' + ticket.prNumber)) + ': ' + (eRhs.message || eRhs));
+        return null;
+    }
 }
 
 function parkedSince(repoInfo, prNumber) {
