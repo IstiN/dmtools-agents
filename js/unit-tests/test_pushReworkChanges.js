@@ -1462,6 +1462,20 @@ suite('pushReworkChanges — PR-anchored lookup & loud lookup failure (fa #1212)
         );
     });
 
+    // gh-802 AC3d: the rework post-action closes the cycle by removing the
+    // configured labels (incl. agent:rework) EXACTLY ONCE. A second removal
+    // call would be a duplicate tracker write and confusing log noise — pin
+    // the single-removal invariant on the success path.
+    test('gh-802 AC3d: agent:rework is removed exactly once on a successful rework completion', function() {
+        var fx = loadAnchoredAction();
+        var result = fx.run();
+
+        assert.equal(result.success, true, 'the rework leg completes');
+        var reworkRemovals = fx.removedLabels.filter(function(l) { return l === 'agent:rework'; });
+        assert.equal(reworkRemovals.length, 1,
+            'exactly one agent:rework removal per completed rework, got ' + reworkRemovals.length);
+    });
+
     test('loud failure: PR lookup fails → leg fails, cycle-close steps never run', function() {
         var fx = loadAnchoredAction({
             getPr: function() { throw new Error('pulls/1212 not found'); },

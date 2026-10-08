@@ -219,4 +219,42 @@ suite('fetchQuestionsToInput.action — tracker-aware query layer (gh-770)', fun
         assert.equal(loaded.parentCalls.length, 1);
     });
 
+    test('gh-802 AC3c: the fetch error is logged WITH its content, not swallowed as {}', function() {
+        // The host console renders a raw Error object as "{}" (verified in the
+        // dmtools GraalJS runtime: console.error('x', new Error('m')) → "x {}"),
+        // so the ONLY way the cause stays visible is when the module passes a
+        // STRING containing the content. Pin exactly that.
+        var errorArgs = [];
+        var origError = console.error;
+        console.error = function () {
+            errorArgs.push(Array.prototype.slice.call(arguments));
+        };
+        try {
+            var loaded = loadFetchQuestionsWithMocks({
+                globals: {
+                    jira_search_by_jql: function () {
+                        throw new Error('jira down: 503 from rest/api/2/search');
+                    }
+                }
+            });
+            loaded.mod.action({ inputFolderPath: 'input/PROJ-10', jobParams: {} });
+        } finally {
+            console.error = origError;
+        }
+        assert.ok(errorArgs.length > 0, 'the failure is still announced');
+        var hasContentString = errorArgs.some(function (args) {
+            return args.some(function (a) {
+                return typeof a === 'string' && a.indexOf('jira down: 503 from rest/api/2/search') !== -1;
+            });
+        });
+        assert.ok(hasContentString,
+            'a string carrying the error content must reach the log (was swallowed as {} before the fix), got: ' +
+            JSON.stringify(errorArgs));
+        var passesRawObject = errorArgs.some(function (args) {
+            return args.some(function (a) { return a !== null && typeof a === 'object'; });
+        });
+        assert.ok(!passesRawObject,
+            'the raw error object must NOT be passed through (renders as {} on the host console)');
+    });
+
 });

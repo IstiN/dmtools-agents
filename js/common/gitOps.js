@@ -284,8 +284,31 @@ function detectMergeConflicts(baseBranch, inputFolder, workingDir) {
 
         cmd('git merge origin/' + baseBranch + ' --no-commit --no-ff');
 
-        // If we reach here the merge is clean — staged but not committed
-        console.log('No merge conflicts — base branch changes staged');
+        // If we reach here the merge is clean — staged but not committed.
+        // gh-802 AC3a: only claim "base branch changes staged" when the merge
+        // actually staged something — an up-to-date branch merges as a no-op
+        // and the old unconditional line was a false statement in the log.
+        var stagedChanges = true;
+        try {
+            cmd('git diff --cached --quiet HEAD'); // exit 0 → nothing staged
+            stagedChanges = false;
+        } catch (eQuiet) {
+            // exit 1 → the merge staged base changes (the expected signal).
+            // Any other failure is a git error, not evidence of staged
+            // content — keep the conservative "staged" assumption but say so.
+            // The host surfaces exit codes as COMMAND_EXIT_CODE=N in the
+            // thrown message (see the test mocks).
+            var quietMsg = eQuiet && eQuiet.message ? eQuiet.message : String(eQuiet);
+            var exitMatch = String(quietMsg).match(/COMMAND_EXIT_CODE=(\d+)/);
+            var quietExitCode = exitMatch ? parseInt(exitMatch[1], 10) : null;
+            if (quietExitCode !== 1) {
+                console.warn('git diff --cached --quiet failed (assuming staged):', quietMsg);
+            }
+            stagedChanges = true;
+        }
+        console.log(stagedChanges
+            ? 'No merge conflicts — base branch changes staged'
+            : 'No merge conflicts — branch already up to date with origin/' + baseBranch);
         return [];
 
     } catch (mergeError) {

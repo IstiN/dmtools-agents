@@ -988,6 +988,14 @@ module.exports = {
             // ... see config.js for all default status keys
         },
 
+        // Opt-in: move the ticket when a rework leg (post-review fixes) starts.
+        // Despite the historical name, the transition target is the ACTUAL
+        // rework status — statuses.IN_REWORK (default 'In Rework') — not
+        // 'In Development'. Projects whose Jira workflow has no 'In Rework'
+        // status: remap the target via statuses.IN_REWORK above, or leave this
+        // knob off (default false).
+        markReworkInDevelopment: false,
+
         // Override issue type names if different
         issueTypes: {
             STORY: 'Story',

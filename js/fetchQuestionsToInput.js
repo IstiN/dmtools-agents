@@ -143,7 +143,12 @@ function action(params) {
             file_write(folder + '/existing_questions.json', '{"questions":' + JSON.stringify(questions, null, 2) + '}');
             console.log('Wrote existing_questions.json to ' + folder);
         } catch (fetchError) {
-            console.error('Failed to fetch questions, continuing without file:', fetchError);
+            // gh-802 AC3c: the host console renders a raw Error object as "{}"
+            // (the cause was invisible in the logs) — log the CONTENT instead.
+            var fetchErrorDetail = fetchError && fetchError.message
+                ? fetchError.message
+                : String(fetchError);
+            console.error('Failed to fetch questions, continuing without file:', fetchErrorDetail);
         }
     } catch (error) {
         console.error('Error in fetchQuestionsToInput:', error);
