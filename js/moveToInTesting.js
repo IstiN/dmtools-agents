@@ -5,6 +5,7 @@
 
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+const trackersModule = require('./common/trackers.js');
 
 function action(params) {
     try {
@@ -14,16 +15,14 @@ function action(params) {
         }
         const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
         const jiraConfig = projectConfig.jira;
+        var tracker = trackersModule.createTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
 
         console.log('Moving ' + ticketKey + ' to ' + jiraConfig.statuses.IN_TESTING);
 
-        jira_move_to_status({
-            key: ticketKey,
-            statusName: jiraConfig.statuses.IN_TESTING
-        });
+        tracker.moveToStatus(ticketKey, jiraConfig.statuses.IN_TESTING);
 
         try {
-            jira_remove_label({ key: ticketKey, label: 'sm_test_cases_triggered' });
+            tracker.removeLabel(ticketKey, 'sm_test_cases_triggered');
         } catch (e) {
             console.log('Label sm_test_cases_triggered not found or already removed');
         }
@@ -33,7 +32,7 @@ function action(params) {
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
         try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
+            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }

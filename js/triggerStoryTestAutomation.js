@@ -6,6 +6,7 @@
 
 var autoStart = require('./common/autoStart.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
+var trackersModule = require('./common/trackers.js');
 
 function action(params) {
     try {
@@ -14,6 +15,8 @@ function action(params) {
             ? params.jobParams.config
             : (params.config || {});
         const customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+
+        var tracker = trackersModule.createTracker(config, customParams);
 
         console.log('=== Triggering story test automation for', storyKey, '===');
 
@@ -43,7 +46,7 @@ function action(params) {
         // Remove the SM trigger label so test_cases_generator does not keep re-running
         const smTriggerLabel = customParams.removeLabel || 'sm_test_cases_triggered';
         try {
-            jira_remove_label({ key: storyKey, label: smTriggerLabel });
+            tracker.removeLabel(storyKey, smTriggerLabel);
             console.log('✅ Removed SM trigger label:', smTriggerLabel);
         } catch (e) {
             console.warn('Failed to remove SM trigger label:', e);
@@ -51,7 +54,7 @@ function action(params) {
 
         // Post token usage summary comments from the test-case generation run
         try {
-            tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator });
+            tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator, tracker: tracker });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }

@@ -4,6 +4,7 @@
  */
 
 const configLoader = require('./configLoader.js');
+const trackersModule = require('./common/trackers.js');
 
 function action(params) {
     try {
@@ -13,13 +14,11 @@ function action(params) {
         }
         const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
         const jiraConfig = projectConfig.jira;
+        var tracker = trackersModule.createTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
 
         console.log('Moving ' + ticketKey + ' to ' + jiraConfig.statuses.READY_FOR_TESTING);
 
-        jira_move_to_status({
-            key: ticketKey,
-            statusName: jiraConfig.statuses.READY_FOR_TESTING
-        });
+        tracker.moveToStatus(ticketKey, jiraConfig.statuses.READY_FOR_TESTING);
 
         console.log('✅ ' + ticketKey + ' moved to ' + jiraConfig.statuses.READY_FOR_TESTING);
 

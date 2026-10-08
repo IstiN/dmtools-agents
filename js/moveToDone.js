@@ -6,6 +6,7 @@
 
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+const trackersModule = require('./common/trackers.js');
 
 function action(params) {
     try {
@@ -15,31 +16,26 @@ function action(params) {
         }
         const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
         const jiraConfig = projectConfig.jira;
+        var tracker = trackersModule.createTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
 
         console.log('Moving ' + ticketKey + ' to ' + jiraConfig.statuses.DONE + ' (bug with test cases generated)');
 
-        jira_move_to_status({
-            key: ticketKey,
-            statusName: jiraConfig.statuses.DONE
-        });
+        tracker.moveToStatus(ticketKey, jiraConfig.statuses.DONE);
 
         try {
-            jira_remove_label({ key: ticketKey, label: 'sm_bug_test_cases_triggered' });
+            tracker.removeLabel(ticketKey, 'sm_bug_test_cases_triggered');
         } catch (e) {
             console.log('Label sm_bug_test_cases_triggered not found or already removed');
         }
 
-        jira_post_comment({
-            key: ticketKey,
-            comment: 'Test cases generated. Bug marked as Done. If regression is detected, a new bug will be created automatically.'
-        });
+        tracker.postComment(ticketKey, 'Test cases generated. Bug marked as Done. If regression is detected, a new bug will be created automatically.');
 
         console.log('✅ ' + ticketKey + ' moved to ' + jiraConfig.statuses.DONE);
 
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
         try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
+            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }
