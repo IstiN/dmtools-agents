@@ -47,7 +47,9 @@ function extractKeyFromResult(result) {
         } catch (e) {}
         // fallback: try /browse/ URL pattern
         var urlMatch = result.match(/\/browse\/([A-Z]+-\d+)/);
-        return urlMatch ? urlMatch[1] : null;
+        if (urlMatch) return urlMatch[1];
+        // tracker.createTicket already returns the bare key (e.g. PROJ-123 or an ADO id)
+        return /^[A-Za-z0-9_.#\/-]+$/.test(result.trim()) ? result.trim() : null;
     }
     return result.key || null;
 }
