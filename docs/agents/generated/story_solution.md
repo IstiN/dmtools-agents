@@ -80,8 +80,9 @@ _Write Solution and Diagrams Post-Action_
 
 - Source: `agents/js/writeSolutionAndDiagrams.js`
 - Side effects:
-  - post Jira comment
-  - assign ticket
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
+  - assign ticket (via tracker)
 - Parameters (customParams):
   - `autoStartDevelopment`
   - `autoStartDevelopmentConfigFile`
