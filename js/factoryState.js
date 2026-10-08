@@ -150,6 +150,9 @@ var DEFAULT_MACHINE_AUTHOR = 'ai-teammate';   // back-compat/tests only — an
                                               // assignment bucketing (null)
 var HISTORY_CAP = 24;                         // bound snapshot growth
 var DEFAULT_TOKENS_FILE = 'outputs/token_usage/factory_tokens.json';
+var FACTORY_TOKENS_ASSET = 'fa-tokens.json';   // data/<asset> on the data
+                                               // branch (gh-781; the leg-side
+                                               // producer's publish path)
 var BACKLOG_CAP = 50;                         // per bucket — github_search_issues
                                               // returns ONE page (no perPage),
                                               // so the snapshot stays bounded
@@ -264,15 +267,48 @@ function normalizeTokens(input) {
 function readTokensFile(path, readFn) {
     if (!path || typeof readFn !== 'function') return null;
     try {
-        var parsed = JSON.parse(String(readFn(path) || ''));
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-            return null;
-        }
-        var out = {};
-        Object.keys(parsed).forEach(function (k) {
-            if (Array.isArray(parsed[k])) out[k] = parsed[k];
-        });
-        return Object.keys(out).length ? out : null;
+        return tokensMapOf(JSON.parse(String(readFn(path) || '')));
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * Validate a parsed tokens payload into the keyed-map form ('pr-N'/
+ * 'issue-N' → array rows): only array values survive, an empty result is
+ * a miss. Shared by the local-file reader (readTokensFile) and the branch
+ * fetcher (fetchTokensFromBranch) — one shape contract for both sources.
+ * Rows themselves normalize later, through normalizeTokens, when the
+ * snapshot builder attaches them to cards.
+ */
+function tokensMapOf(parsed) {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return null;
+    }
+    var out = {};
+    Object.keys(parsed).forEach(function (k) {
+        if (Array.isArray(parsed[k])) out[k] = parsed[k];
+    });
+    return Object.keys(out).length ? out : null;
+}
+
+/**
+ * Fetch the factory-published per-leg token usage off the data branch
+ * (gh-781; mirrors fetchPreviousState — one gh Contents probe, decoded
+ * in-shell): `data/fa-tokens.json` @ tagOf(cfg), produced by the leg-side
+ * publisher in the teammate workflow. The map validates through the same
+ * contract as the local file (tokensMapOf) and flows into normalizeTokens
+ * when attached to cards. ANY miss — 404 before the first publish,
+ * invalid JSON, non-map shape, rate limit — → null: tokens are
+ * decorative, never fatal, the tick publishes token-less cards exactly
+ * as today.
+ */
+function fetchTokensFromBranch(repo, cfg, exec) {
+    try {
+        var raw = execOut(exec, 'gh api repos/' + repo + '/contents/data/' +
+            FACTORY_TOKENS_ASSET + '?ref=' + tagOf(cfg) +
+            ' --jq .content | base64 -d');
+        return tokensMapOf(JSON.parse(raw));
     } catch (e) {
         return null;
     }

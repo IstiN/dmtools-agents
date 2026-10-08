@@ -110,6 +110,15 @@ function makeSmAgent(opts) {
                 ? github_list_workflow_runs(args)
                 : '{"workflow_runs":[]}';
         },
+        // Backlog source for the statePublish block (gh-769): safe default —
+        // without it the block hits the real bridge (dmtools runtime) or a
+        // ReferenceError (node harness) on every publish tick.
+        github_search_issues: function(args) {
+            if (opts.github && opts.github.issueSearch) {
+                return JSON.stringify(opts.github.issueSearch);
+            }
+            return '{"items":[]}';
+        },
         file_write: function(writeOpts) {
             if (opts.onFileWrite) opts.onFileWrite(writeOpts);
             return true;
@@ -7551,12 +7560,22 @@ suite('smAgent: statePublish tokens — local file first, branch fallback', func
         created_at: '2026-10-08T09:00:00Z' }]);
 
     /** One tick with statePublish on; returns {sm, state} — state parsed
-     *  from the fa-state.json PUT payload. */
+     *  from the fa-state.json PUT payload. Setting opts.github switches
+     *  the source stub to the items list — one quiet ticket walks
+     *  processRule past its per-ticket loop into the statePublish block
+     *  (an empty source returns before it). Bridge defaults keep every
+     *  source local: no real gh calls, no node-harness ReferenceErrors. */
     function publishTick(opts) {
         opts = opts || {};
+        opts.github = opts.github || {};
+        if (!opts.github.items) {
+            opts.github.items = [{ key: 'T-1', labels: [], pr: null }];
+        }
+        if (!opts.github.prList) opts.github.prList = '[]';
+        if (!opts.github.workflowApiRuns) opts.github.workflowApiRuns = [];
         var sm = makeSmAgent(opts);
         sm.action({ jobParams: {
-            owner: 'o', repo: 'r', rules: [], statePublish: SP
+            owner: 'o', repo: 'r', rules: [makeRule('project = T')], statePublish: SP
         } });
         var putCmd = null;
         sm.capturedCliCommands.forEach(function (c) {
