@@ -12,10 +12,11 @@ function sanitizeFilename(str) {
     return str.replace(/[\/\\:*?"<>|]/g, '-').replace(/\s+/g, ' ').substring(0, 100).trim();
 }
 
-function fetchHistoricalDoneBugs(ticketKey) {
+function fetchHistoricalDoneBugs(ticketKey, tracker) {
+    tracker = tracker || require('./common/trackers.js').createTracker(null, {});
     try {
-        return jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug AND status in (Done) ORDER BY updated DESC',
+        // JQL text: provider-specific query (WIQL on ado)
+        return tracker.searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug AND status in (Done) ORDER BY updated DESC', {
             fields: ['key', 'summary', 'description', 'status', 'updated'],
             maxResults: 10
         }) || [];
@@ -25,8 +26,8 @@ function fetchHistoricalDoneBugs(ticketKey) {
     }
 }
 
-function writeHistoricalDoneBugs(inputFolder, ticketKey) {
-    var doneBugs = fetchHistoricalDoneBugs(ticketKey);
+function writeHistoricalDoneBugs(inputFolder, ticketKey, tracker) {
+    var doneBugs = fetchHistoricalDoneBugs(ticketKey, tracker);
     if (!doneBugs || doneBugs.length === 0) {
         return 0;
     }
@@ -65,6 +66,7 @@ function action(params) {
         var ticketKey = inputFolder.split('/').pop();
 
         var customParams = actualParams.customParams || {};
+        var tracker = require('./common/trackers.js').createTracker(null, customParams);
         var openBugsJql = customParams.openBugsJql
             || 'project = ' + ticketKey.split('-')[0] + ' AND issuetype in (Bug) AND status not in (Done)';
 
@@ -73,7 +75,7 @@ function action(params) {
         // Fetch TC ticket details for context
         var tcTicket = null;
         try {
-            tcTicket = jira_get_ticket({ key: ticketKey });
+            tcTicket = tracker.getIssue(ticketKey);
         } catch (e) {
             console.warn('Could not fetch TC ticket:', e);
         }
@@ -92,14 +94,13 @@ function action(params) {
             console.log('Wrote ticket.md for', ticketKey);
         }
 
-        var historicalDoneCount = writeHistoricalDoneBugs(inputFolder, ticketKey);
+        var historicalDoneCount = writeHistoricalDoneBugs(inputFolder, ticketKey, tracker);
 
         // Fetch all open bugs
         console.log('Fetching open bugs with JQL:', openBugsJql);
         var bugs = [];
         try {
-            bugs = jira_search_by_jql({
-                jql: openBugsJql,
+            bugs = tracker.searchIssues(openBugsJql, {
                 fields: ['key', 'summary', 'description', 'status', 'priority'],
                 maxResults: 200
             }) || [];
@@ -138,15 +139,12 @@ function action(params) {
 
         // Post Jira comment
         try {
-            jira_post_comment({
-                key: ticketKey,
-                comment: 'h3. 🔍 Bug Detection Started\n\n' +
+            tracker.postComment(ticketKey, 'h3. 🔍 Bug Detection Started\n\n' +
                     'Checking ' + bugs.length + ' open bug(s) for duplicates...\n\n' +
                     (historicalDoneCount > 0
                         ? 'Also loaded ' + historicalDoneCount + ' linked Done bug(s) as recurrence history only.\n\n'
                         : '') +
-                    '_Result will be posted shortly._'
-            });
+                    '_Result will be posted shortly._');
         } catch (e) {
             console.warn('Failed to post Jira comment:', e);
         }

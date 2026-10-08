@@ -22,6 +22,19 @@ const autoStart = require('./common/autoStart.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 const outputFiles = require('./common/outputFiles.js');
 
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
+
 /**
  * Ensure summary starts with [Q] prefix
  */
@@ -89,10 +102,7 @@ function postNoQuestionsExplanation(ticketKey) {
     var explanation = outputFiles.readOutputFile('response.md', { ticketKey: ticketKey });
     if (explanation && explanation.trim()) {
         try {
-            jira_post_comment({
-                key: ticketKey,
-                comment: 'h3. \u2139\ufe0f No clarifying questions needed\n\n' + explanation.trim()
-            });
+            getTracker().postComment(ticketKey, 'h3. \u2139\ufe0f No clarifying questions needed\n\n' + explanation.trim());
             console.log('Posted no-questions explanation from outputs/response.md');
         } catch (e) {
             console.warn('Failed to post no-questions explanation comment:', e);
@@ -102,13 +112,10 @@ function postNoQuestionsExplanation(ticketKey) {
 
     console.warn('No questions were raised AND outputs/response.md is missing/empty — posting fallback warning comment.');
     try {
-        jira_post_comment({
-            key: ticketKey,
-            comment: 'h3. \u26a0\ufe0f No clarifying questions raised \u2014 no explanation provided\n\n' +
+        getTracker().postComment(ticketKey, 'h3. \u26a0\ufe0f No clarifying questions raised \u2014 no explanation provided\n\n' +
                 'The AI agent did not create any clarifying questions for this ticket, and did not write ' +
                 '{{outputs/response.md}} explaining why. Please verify manually whether the story is actually ' +
-                'clear enough to proceed, or re-run the agent.'
-        });
+                'clear enough to proceed, or re-run the agent.');
     } catch (e) {
         console.warn('Failed to post fallback no-questions warning comment:', e);
     }
@@ -148,11 +155,8 @@ function createQuestion(entry, parentKey, projectKey, jiraConfig, priorityMap) {
     }
 
     try {
-        var result = jira_create_ticket_with_json({
-            project: projectKey,
-            fieldsJson: fieldsJson
-        });
-        var key = extractTicketKey(result);
+        var result = getTracker().createTicketWithFields(projectKey, fieldsJson);
+        var key = (typeof result === 'string' && result) ? result : extractTicketKey(result);
         console.log('Created question subtask ' + (key || '(unknown key)') + ': ' + summary);
         return key;
     } catch (error) {
@@ -165,6 +169,7 @@ function action(params) {
     try {
         var ticketKey = params.ticket.key;
         var projectKey = ticketKey.split('-')[0];
+        initTracker(null, (params.jobParams && params.jobParams.customParams) || {});
         var initiatorId = params.initiator;
         var wipLabel = params.metadata && params.metadata.contextId
             ? params.metadata.contextId + '_wip'
@@ -181,13 +186,10 @@ function action(params) {
             var cliErrorMessage = params.currentCliErrorMessage || 'unknown CLI/provider error';
             console.error('Fatal CLI/provider error for ' + ticketKey + ' — leaving the ticket untouched instead of treating it as "no questions needed": ' + cliErrorMessage);
             try {
-                jira_post_comment({
-                    key: ticketKey,
-                    comment: 'h3. \u274c AI agent run failed \u2014 ticket left unchanged\n\n' +
+                getTracker().postComment(ticketKey, 'h3. \u274c AI agent run failed \u2014 ticket left unchanged\n\n' +
                         'The underlying CLI/AI provider call failed, so no clarifying questions could be generated:\n\n' +
                         '{code}' + cliErrorMessage + '{code}\n\n' +
-                        'This ticket was NOT moved to PO Review and no labels were changed. Please retry the agent.'
-                });
+                        'This ticket was NOT moved to PO Review and no labels were changed. Please retry the agent.');
             } catch (commentError) {
                 console.warn('Failed to post CLI-failure comment:', commentError);
             }
@@ -202,6 +204,7 @@ function action(params) {
         var jiraConfig = projectConfig.jira;
         var labels = projectConfig.labels;
         var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+        initTracker(projectConfig, customParams);
         var agentId = (params.metadata && params.metadata.agentId) || 'story_questions';
         var jobParamPatch = projectConfig.jobParamPatches && projectConfig.jobParamPatches[agentId];
         var priorityMap = customParams.priorityMap
@@ -244,20 +247,14 @@ function action(params) {
 
         // 3. Add ai_questions_asked label to parent ticket
         try {
-            jira_add_label({
-                key: ticketKey,
-                label: labels.AI_QUESTIONS_ASKED
-            });
+            getTracker().addLabel(ticketKey, labels.AI_QUESTIONS_ASKED);
         } catch (labelError) {
             console.warn('Failed to add ' + labels.AI_QUESTIONS_ASKED + ' label:', labelError);
         }
 
         // 4. Add ai_generated label
         try {
-            jira_add_label({
-                key: ticketKey,
-                label: labels.AI_GENERATED
-            });
+            getTracker().addLabel(ticketKey, labels.AI_GENERATED);
         } catch (labelError) {
             console.warn('Failed to add ' + labels.AI_GENERATED + ' label:', labelError);
         }
@@ -265,10 +262,7 @@ function action(params) {
         // 5. Assign to initiator
         try {
             if (initiatorId) {
-                jira_assign_ticket_to({
-                    key: ticketKey,
-                    accountId: initiatorId
-                });
+                getTracker().assignTo(ticketKey, initiatorId);
                 console.log('Assigned ' + ticketKey + ' to initiator');
             } else {
                 console.log('No initiator id — skipping assign');
@@ -284,10 +278,7 @@ function action(params) {
 
         // 6. Move parent story to PO Review
         try {
-            jira_move_to_status({
-                key: ticketKey,
-                statusName: jiraConfig.statuses.PO_REVIEW
-            });
+            getTracker().moveToStatus(ticketKey, jiraConfig.statuses.PO_REVIEW);
             console.log('Moved ' + ticketKey + ' to PO Review');
         } catch (statusError) {
             console.warn('Failed to move ' + ticketKey + ' to PO Review:', statusError);
@@ -296,10 +287,7 @@ function action(params) {
         // 7. Remove WIP label if present
         if (wipLabel) {
             try {
-                jira_remove_label({
-                    key: ticketKey,
-                    label: wipLabel
-                });
+                getTracker().removeLabel(ticketKey, wipLabel);
                 console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
             } catch (wipError) {
                 console.warn('Failed to remove WIP label:', wipError);

@@ -28,6 +28,19 @@ const { LABELS } = require('./config.js');
 var feedbackLoop = require('./common/feedbackLoop.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 var configLoader = require('./configLoader.js');
+
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
 const { JIRA_FIELDS } = require('./config.js');
 
 function readFile(path) {
@@ -65,19 +78,15 @@ function extractKeyFromResult(result) {
 }
 
 function linkBugToTC(tcKey, bugKey) {
-    jira_link_issues({
-        sourceKey: tcKey,
-        anotherKey: bugKey,
-        relationship: 'Blocks'
-    });
+    getTracker().linkIssues(tcKey, bugKey, 'Blocks');
     console.log('  ✅ Linked:', bugKey, 'blocks', tcKey);
 }
 
 function findLinkedStoryForTC(tcKey) {
-    if (!tcKey || typeof jira_search_by_jql !== 'function') return null;
+    if (!tcKey) return null;
     try {
-        var result = jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + tcKey + '") AND issuetype = Story',
+        // JQL text: provider-specific query (WIQL on ado)
+        var result = getTracker().searchIssues('issue in linkedIssues("' + tcKey + '") AND issuetype = Story', {
             fields: ['key'],
             maxResults: 1
         });
@@ -91,11 +100,7 @@ function findLinkedStoryForTC(tcKey) {
 
 function linkBugToStory(storyKey, bugKey) {
     try {
-        jira_link_issues({
-            sourceKey: bugKey,
-            anotherKey: storyKey,
-            relationship: 'relates to'
-        });
+        getTracker().linkIssues(bugKey, storyKey, 'relates to');
         console.log('  ✅ Linked bug', bugKey, 'to Story', storyKey);
     } catch (e) {
         console.warn('  ⚠️ Could not link bug', bugKey, 'to Story', storyKey, e);
@@ -131,10 +136,10 @@ function extractTickets(result) {
 }
 
 function findLinkedNonDoneBug(tcKey) {
-    if (!tcKey || typeof jira_search_by_jql !== 'function') return null;
+    if (!tcKey) return null;
     try {
-        var result = jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + tcKey + '") AND issuetype = Bug AND status not in (Done)',
+        // JQL text: provider-specific query (WIQL on ado)
+        var result = getTracker().searchIssues('issue in linkedIssues("' + tcKey + '") AND issuetype = Bug AND status not in (Done)', {
             fields: ['key', 'summary', 'status'],
             maxResults: 1
         });
@@ -156,7 +161,7 @@ function findAnyLinkedNonDoneBug(tcKeys) {
 
 function moveToBugToFix(tcKey, jiraConfig) {
     try {
-        jira_move_to_status({ key: tcKey, statusName: jiraConfig.statuses.BUG_TO_FIX });
+        getTracker().moveToStatus(tcKey, jiraConfig.statuses.BUG_TO_FIX);
         console.log('  📋 Moved to Bug To Fix:', tcKey);
     } catch (e) {
         console.warn('  ⚠️ Could not move to Bug To Fix:', tcKey, e);
@@ -165,7 +170,7 @@ function moveToBugToFix(tcKey, jiraConfig) {
 
 function addTriggerLabel(tcKey, label) {
     try {
-        jira_add_label({ key: tcKey, label: label });
+        getTracker().addLabel(tcKey, label);
     } catch (e) {
         console.warn('  ⚠️ Could not add label', label, 'to', tcKey, e);
     }
@@ -173,7 +178,7 @@ function addTriggerLabel(tcKey, label) {
 
 function postComment(tcKey, comment) {
     try {
-        jira_post_comment({ key: tcKey, comment: comment });
+        getTracker().postComment(tcKey, comment);
     } catch (e) {
         console.warn('  ⚠️ Could not post comment to', tcKey, e);
     }
@@ -189,7 +194,7 @@ function getFailedReasonFieldName(config, customParams) {
 function getFailedReasonForTc(tcKey, fieldName) {
     if (!tcKey || !fieldName) return '';
     try {
-        var result = jira_get_ticket({ key: tcKey });
+        var result = getTracker().getIssue(tcKey);
         var fields = result && result.fields ? result.fields : {};
         var raw = fields[fieldName];
         if (typeof raw === 'string') return raw;
@@ -214,12 +219,7 @@ function getFailedReasonForTc(tcKey, fieldName) {
 function attachFileToBug(bugKey, filePath) {
     if (!bugKey || !filePath) return false;
     try {
-        jira_attach_file_to_ticket({
-            ticketKey: bugKey,
-            name: filePath.split('/').pop(),
-            filePath: filePath,
-            contentType: 'text/markdown'
-        });
+        getTracker().attachFile(bugKey, filePath.split('/').pop(), filePath, 'text/markdown');
         console.log('  ✅ Attached description file to bug', bugKey, ':', filePath);
         return true;
     } catch (e) {
@@ -231,7 +231,7 @@ function attachFileToBug(bugKey, filePath) {
 function removeTriggerLabel(ticketKey, label) {
     if (!ticketKey || !label) return;
     try {
-        jira_remove_label({ key: ticketKey, label: label });
+        getTracker().removeLabel(ticketKey, label);
         console.log('  🏷️ Removed SM trigger label "' + label + '" from ' + ticketKey);
     } catch (e) {
         console.warn('  ⚠️ Could not remove label', label, 'from', ticketKey, e);
@@ -249,10 +249,10 @@ function markResolved(resolvedSet, tcKey) {
 }
 
 function moveSkippedTcToBacklog(tcKey, jiraConfig) {
-    jira_move_to_status({ key: tcKey, statusName: jiraConfig.statuses.BACKLOG });
+    getTracker().moveToStatus(tcKey, jiraConfig.statuses.BACKLOG);
     console.log('  🔧 Moved to ' + jiraConfig.statuses.BACKLOG + ':', tcKey);
     try {
-        jira_remove_label({ key: tcKey, label: 'sm_test_automation_triggered' });
+        getTracker().removeLabel(tcKey, 'sm_test_automation_triggered');
     } catch (e) {}
 }
 
@@ -263,6 +263,7 @@ function action(params) {
         var triggerLabel = customParams.removeLabel || 'sm_bug_creation_triggered';
         var smTriggerLabel = customParams.smTriggerLabel || 'sm_bulk_bugs_creation_triggered';
         var projectConfig = configLoader.loadProjectConfig(actualParams);
+        initTracker(projectConfig, customParams);
         var jiraConfig = projectConfig.jira;
         var failedReasonFieldName = getFailedReasonFieldName(projectConfig, customParams);
 
@@ -391,8 +392,8 @@ function action(params) {
             try {
                 var projectKey = (linkedTCs[0] || 'TS-1').split('-')[0];
                 var priority = bugDef.priority || 'Medium';
-                var result = jira_create_ticket_basic(projectKey, 'Bug', summary, description);
-                bugKey = extractKeyFromResult(result);
+                var result = getTracker().createTicket(projectKey, 'Bug', summary, description);
+                bugKey = (typeof result === 'string' && /^[A-Za-z0-9_-]+$/.test(result)) ? result : extractKeyFromResult(result);
             } catch (e) {
                 console.error('  ❌ Failed to create bug:', e);
                 results.errors.push({ summary: summary, error: e.toString() });

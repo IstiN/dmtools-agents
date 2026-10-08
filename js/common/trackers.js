@@ -248,17 +248,26 @@ function createTracker(config, customParams) {
 
 
 
+    // Jira payloads pass through UNCHANGED even when the requested fields omit
+    // summary (e.g. fields:['key','status']) — only non-Jira-shaped ones convert.
+    function _jiraView(raw) {
+        var t = _parseJson(raw);
+        if (t && typeof t === 'object' && t.fields && typeof t.fields === 'object'
+            && t.fields['System.Title'] === undefined) return t;
+        return toIssueView(t);
+    }
+
     function jiraGetIssue(key, fields) {
         var args = { key: key };
         if (fields) args.fields = fields;
-        return toIssueView(jira_get_ticket(args));
+        return _jiraView(jira_get_ticket(args));
     }
 
     function jiraSearchIssues(query, opts) {
         var args = { jql: query };
         if (opts && opts.fields) args.fields = opts.fields;
         if (opts && opts.maxResults) args.maxResults = opts.maxResults;
-        return _issueList(jira_search_by_jql(args), 'issues');
+        return _issueList(jira_search_by_jql(args), 'issues', _jiraView);
     }
 
     function jiraLinkIssues(sourceKey, targetKey, relationship) {
@@ -775,13 +784,14 @@ function createTracker(config, customParams) {
     }
 
     /** A search result (page object or bare array) as an array of Jira-shaped issue views. */
-    function _issueList(rawPage, listField) {
+    function _issueList(rawPage, listField, viewFn) {
+        viewFn = viewFn || toIssueView;
         var page = _parseJson(rawPage);
         var list = page && typeof page === 'object' && !Array.isArray(page)
             ? (page[listField] || []) : (Array.isArray(page) ? page : []);
         var out = [];
         for (var i = 0; i < list.length; i++) {
-            var v = toIssueView(list[i]);
+            var v = viewFn(list[i]);
             if (v) out.push(v);
         }
         return out;

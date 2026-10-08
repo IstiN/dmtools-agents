@@ -55,7 +55,11 @@ function loadPrepareBugFixBatchContext(mocks) {
             './config.js': configModule,
             './configLoader.js': configLoaderModule,
             './fetchQuestionsToInput.js': fetchQuestionsStub,
-            './fetchLinkedTestsToInput.js': fetchLinkedTestsStub
+            './fetchLinkedTestsToInput.js': fetchLinkedTestsStub,
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+            }), allMocks)
         }),
         allMocks
     );

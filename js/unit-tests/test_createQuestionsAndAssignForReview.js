@@ -1,3 +1,10 @@
+function d2Trackers(mocks) {
+    return loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), mocks);
+}
+
 /**
  * Unit tests for js/createQuestionsAndAssignForReview.js
  *
@@ -61,7 +68,8 @@ function loadCreateQuestionsModule(fileMap, extraGlobals) {
             './common/scm.js': { createScm: function () { return {}; } },
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function () { return false; } },
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
-            './common/outputFiles.js': outputFiles
+            './common/outputFiles.js': outputFiles,
+            './common/trackers.js': d2Trackers(globals)
         }),
         globals
     );

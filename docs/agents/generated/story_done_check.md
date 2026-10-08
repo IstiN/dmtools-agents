@@ -36,7 +36,8 @@ _Check Story Tests Passed — postJSAction for story_done_check agent._
 
 - Source: `agents/js/checkStoryTestsPassed.js`
 - Side effects:
-  - post Jira comment
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
 - Parameters (customParams):
   - `customStatuses`
   - `removeLabel`

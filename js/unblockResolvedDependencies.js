@@ -10,6 +10,7 @@
 
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+const trackersModule = require('./common/trackers.js');
 
 function isResolved(blocker, terminalStatuses) {
     // Deleted ticket — no inwardIssue object at all
@@ -30,6 +31,7 @@ function action(params) {
 
     var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
     var jiraConfig = projectConfig.jira;
+    var tracker = trackersModule.createTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || {});
     var terminalStatuses = [
         jiraConfig.statuses.DONE,
         jiraConfig.statuses.MERGED,
@@ -43,7 +45,7 @@ function action(params) {
 
     var ticket;
     try {
-        ticket = jira_get_ticket({ key: ticketKey, fields: ['issuelinks'] });
+        ticket = tracker.getIssue(ticketKey, ['issuelinks']);
     } catch (e) {
         console.warn('Failed to fetch ticket details:', e.message || e);
         return { success: false, action: 'fetch_failed', error: e.toString() };
@@ -67,13 +69,10 @@ function action(params) {
     if (blockers.length === 0) {
         console.log('No active blockers found — moving', ticketKey, 'to Backlog');
         try {
-            jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BACKLOG });
-            jira_post_comment({
-                key: ticketKey,
-                comment: 'h3. ✅ Auto-unblocked — No Active Blockers\n\n' +
+            tracker.moveToStatus(ticketKey, jiraConfig.statuses.BACKLOG);
+            tracker.postComment(ticketKey, 'h3. ✅ Auto-unblocked — No Active Blockers\n\n' +
                     'This ticket was in *Blocked* status but no active "is blocked by" dependencies were found.\n\n' +
-                    'Automatically moved back to *Backlog* for re-processing.'
-            });
+                    'Automatically moved back to *Backlog* for re-processing.');
             console.log('✅ Moved', ticketKey, 'to Backlog (no blockers)');
             return { success: true, action: 'moved_to_backlog_no_blockers', ticketKey };
         } catch (e) {
@@ -104,7 +103,7 @@ function action(params) {
     // All blockers resolved → move to Backlog
     console.log('All', blockers.length, 'blocker(s) resolved — moving', ticketKey, 'to Backlog');
     try {
-        jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BACKLOG });
+        tracker.moveToStatus(ticketKey, jiraConfig.statuses.BACKLOG);
     } catch (e) {
         console.warn('Failed to move ticket to Backlog:', e.message || e);
         return { success: false, action: 'move_failed', error: e.toString() };
@@ -115,13 +114,10 @@ function action(params) {
     }).join(', ');
 
     try {
-        jira_post_comment({
-            key: ticketKey,
-            comment: 'h3. ✅ Auto-unblocked — All Dependencies Resolved\n\n' +
+        tracker.postComment(ticketKey, 'h3. ✅ Auto-unblocked — All Dependencies Resolved\n\n' +
                 'All *' + blockers.length + '* blocker(s) are now in a terminal status:\n' +
                 resolvedKeys.split(', ').map(function(k) { return '- ' + k; }).join('\n') + '\n\n' +
-                'Automatically moved back to *Backlog* for re-processing.'
-        });
+                'Automatically moved back to *Backlog* for re-processing.');
         console.log('✅ Posted unblock comment to Jira');
     } catch (e) {
         console.warn('Failed to post comment:', e.message || e);

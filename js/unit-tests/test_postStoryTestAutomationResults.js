@@ -1,3 +1,10 @@
+function d2Trackers(mocks) {
+    return loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), mocks);
+}
+
 /**
  * Unit tests for js/postStoryTestAutomationResults.js
  */
@@ -55,7 +62,8 @@ function loadPostStoryTestAutomationResults(mocks) {
             './common/outputFiles.js': outputFiles,
             './common/tokenUsageComment.js': {
                 postTokenUsageComments: function() {}
-            }
+            },
+            './common/trackers.js': d2Trackers(allMocks)
         }),
         allMocks
     );

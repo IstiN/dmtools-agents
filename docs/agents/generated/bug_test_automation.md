@@ -60,8 +60,6 @@ _Post Story Test Automation Results Action_
 
 - Source: `agents/js/postStoryTestAutomationResults.js`
 - Side effects:
-  - post Jira comment
-  - attach file to ticket
   - git push
   - git merge
 - Parameters (customParams):

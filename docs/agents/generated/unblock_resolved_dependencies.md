@@ -29,7 +29,8 @@ _Unblock Resolved Dependencies — postJSAction for unblock_resolved_dependencie
 
 - Source: `agents/js/unblockResolvedDependencies.js`
 - Side effects:
-  - post Jira comment
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
 
 
 ## LLM step

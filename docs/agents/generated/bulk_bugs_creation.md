@@ -55,11 +55,6 @@ _Prepare Bulk Bugs Creation Context (preCliJSAction for bulk_bugs_creation agent
 _Post Bulk Bugs Creation Action (postJSAction for bulk_bugs_creation agent)_
 
 - Source: `agents/js/postBulkBugsCreation.js`
-- Side effects:
-  - remove label "sm_test_automation_triggered"
-  - post Jira comment
-  - link Jira issues
-  - attach file to ticket
 - Parameters (customParams):
   - `failedReasonField`
   - `removeLabel`
