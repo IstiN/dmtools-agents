@@ -40,7 +40,8 @@ _Check WIP Label Pre-Action_
 _Pre-CLI Bug-fix Batch Context Action_
 
 - Source: `agents/js/prepareBugFixBatchContext.js`
-- No detected file I/O or side effects.
+- Side effects:
+  - move ticket to status (via tracker)
 
 
 ### postJSAction: `developBugFixBatchAndCreatePR.js`

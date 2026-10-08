@@ -47,7 +47,7 @@ _Prepare Bug Creation Context (preCliJSAction for bug_creation agent)_
   - `input/<KEY>/no_open_bugs.md`
   - `input/<KEY>/ticket.md`
 - Side effects:
-  - post Jira comment
+  - post ticket comment (via tracker)
 - Parameters (customParams):
   - `openBugsJql`
 

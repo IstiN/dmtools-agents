@@ -37,8 +37,8 @@ _Create Repository Development Sub-tasks_
 
 - Source: `agents/js/createRepoTasks.js`
 - Side effects:
-  - post Jira comment
-  - link Jira issues
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
 - Parameters (customParams):
   - `blockedStatus`
   - `blocksRelationship`
