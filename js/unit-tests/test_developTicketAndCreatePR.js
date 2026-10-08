@@ -19,7 +19,8 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
                 runQualityGates: function () { return { success: true }; },
                 runPolicyGates: function () { return { success: true }; },
                 runPostPublishGates: function () { return { success: true }; },
-                resumeAgent: function () { return { attempted: false }; }
+                resumeAgent: function () { return { attempted: false }; },
+                resumeOnceForMissingResponse: function () { return { attempted: false }; }
             }, feedbackLoopOverrides || {}),
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': { readOutputFile: function () { return null; } },
@@ -59,7 +60,8 @@ function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks) {
                 runQualityGates: function () { return { success: true }; },
                 runPolicyGates: function () { return { success: true }; },
                 runPostPublishGates: function () { return { success: true }; },
-                resumeAgent: function () { return { attempted: false }; }
+                resumeAgent: function () { return { attempted: false }; },
+                resumeOnceForMissingResponse: function () { return { attempted: false }; }
             },
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': { readOutputFile: function () { return null; } },
@@ -323,7 +325,8 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                     runQualityGates: function () { return { success: true }; },
                     runPolicyGates: function () { return { success: true }; },
                     runPostPublishGates: function () { return { success: true }; },
-                    resumeAgent: function () { return { attempted: false }; }
+                    resumeAgent: function () { return { attempted: false }; },
+                    resumeOnceForMissingResponse: function () { return { attempted: false }; }
                 },
                 './common/autoStart.js': { triggerSmIfIdle: function () { } },
                 './common/outputFiles.js': { readOutputFile: function () { return null; } },
@@ -401,7 +404,8 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                     runQualityGates: function () { return { success: true }; },
                     runPolicyGates: function () { return { success: true }; },
                     runPostPublishGates: function () { return { success: true }; },
-                    resumeAgent: function () { return { attempted: false }; }
+                    resumeAgent: function () { return { attempted: false }; },
+                    resumeOnceForMissingResponse: function () { return { attempted: false }; }
                 },
                 './common/autoStart.js': { triggerSmIfIdle: function () { } },
                 './common/outputFiles.js': { readOutputFile: function () { return null; } },
@@ -479,7 +483,8 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                     runQualityGates: function () { return { success: true }; },
                     runPolicyGates: function () { return { success: true }; },
                     runPostPublishGates: function () { return { success: true }; },
-                    resumeAgent: function () { return { attempted: false }; }
+                    resumeAgent: function () { return { attempted: false }; },
+                    resumeOnceForMissingResponse: function () { return { attempted: false }; }
                 },
                 './common/autoStart.js': { triggerSmIfIdle: function () { } },
                 './common/outputFiles.js': { readOutputFile: function () { return null; } },
@@ -615,6 +620,7 @@ function loadForLandingGuard(mocks, opts) {
                 runQualityGates: function () { return { success: true }; },
                 runPolicyGates: function () { return { success: true }; },
                 runPostPublishGates: function () { return { success: true }; },
+                resumeOnceForMissingResponse: function () { return { attempted: false }; },
                 resumeAgent: function (options) {
                     resumeCalls.push(options);
                     return opts.resumeImpl ? opts.resumeImpl(options, resumeCalls.length)
@@ -822,7 +828,8 @@ function loadForPrTail(mocks, opts) {
                 runQualityGates: function () { return { success: true }; },
                 runPolicyGates: function () { return { success: true }; },
                 runPostPublishGates: function () { return { success: true }; },
-                resumeAgent: function () { return { attempted: false, reason: 'attempts-exhausted' }; }
+                resumeAgent: function () { return { attempted: false, reason: 'attempts-exhausted' }; },
+                resumeOnceForMissingResponse: function () { return { attempted: false, reason: 'attempts-exhausted' }; }
             },
             './common/autoStart.js': { triggerSmIfIdle: function () { } },
             './common/outputFiles.js': {
@@ -1040,3 +1047,346 @@ suite('developTicketAndCreatePR > PR-creation tail (gh-729)', function () {
 
 });
 
+
+// ── gh-775: resume-before-cold-reset ─────────────
+// Live fa gh-1341 (run 37521704313, 2026-10-06): a dev leg finished all its
+// edits, the background verification job hung, and the post-action cold-reset
+// a STILL-RESUMABLE session (interrupted comment + Ready For Development +
+// wip removal + red run) — the deliverable was one "write outputs/response.md"
+// step away. The post-action must make exactly ONE bounded resume attempt
+// (wrapper re-invoked via `bash -c "timeout -k 60 <N> bash agents/scripts/
+// run-agent.sh --continue <prompt>"`) BEFORE any tracker side effect, and only
+// fall back to the EXISTING cold-reset sequence when the attempt fails, times
+// out, or is not applicable. These tests use the REAL common/feedbackLoop.js
+// so the attempt marker, the prompt file and the wrapper command are observed
+// end-to-end through the mocked dmtools globals.
+function loadForMissingResponseResume(opts) {
+    opts = opts || {};
+    var files = {};        // shared file map (attempt marker, prompt, response.md)
+    var commands = [];     // captured cli_execute_command commands, in order
+    var events = [];       // ordering log across commands + tracker side effects
+    var comments = [];
+    var movedTo = [];
+    var removedLabels = [];
+
+    var sharedFileRead = function (args) {
+        var path = args && (args.path || args);
+        if (files[path] !== undefined) return files[path];
+        throw new Error('ENOENT: ' + path);
+    };
+    var sharedFileWrite = function (args) {
+        files[args && args.path] = args && args.content;
+    };
+    var gitMock = opts.gitMock || function () { return ''; };
+    var cliMock = function (args) {
+        commands.push(args.command);
+        events.push('command:' + args.command);
+        if (args.command.indexOf('run-agent.sh') !== -1 && opts.wrapperImpl) {
+            return opts.wrapperImpl(args.command);
+        }
+        return gitMock(args);
+    };
+
+    var realFeedbackLoop = loadModule('js/common/feedbackLoop.js', null, {
+        file_read: sharedFileRead,
+        file_write: sharedFileWrite,
+        cli_execute_command: cliMock
+    });
+    var realOutputFiles = loadModule('js/common/outputFiles.js', null, {
+        file_read: sharedFileRead
+    });
+    var realPrHelper = loadModule('js/common/pullRequest.js', makeRequire({
+        './common/commentMarkup.js': commentMarkupModule,
+        './mergeState.js': loadModule('js/common/mergeState.js')
+    }), {});
+    var mod = loadModule(
+        'js/developTicketAndCreatePR.js',
+        makeRequire({
+            './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
+            './common/pullRequest.js': realPrHelper,
+            './common/submodules.js': { pushManagedSubmodules: function () { } },
+            './common/feedbackLoop.js': realFeedbackLoop,
+            './common/autoStart.js': { triggerSmIfIdle: function () { } },
+            './common/outputFiles.js': realOutputFiles,
+            './cacheToReleases.js': {},
+            './common/gitStaging.js': gitStagingModule,
+            './configLoader.js': configLoaderModule,
+            './config.js': configModule,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
+            './common/commentMarkup.js': commentMarkupModule
+        }),
+        {
+            cli_execute_command: cliMock,
+            file_read: sharedFileRead,
+            file_write: sharedFileWrite,
+            file_delete: function () { },
+            jira_post_comment: function (args) {
+                comments.push(args);
+                events.push('comment:' + String(args.comment || '').substring(0, 40));
+            },
+            jira_move_to_status: function (args) {
+                movedTo.push(args.statusName);
+                events.push('move:' + args.statusName);
+            },
+            jira_remove_label: function (args) {
+                removedLabels.push(args.label);
+                events.push('label:' + args.label);
+            }
+        }
+    );
+    return {
+        mod: mod, files: files, commands: commands, events: events,
+        comments: comments, movedTo: movedTo, removedLabels: removedLabels
+    };
+}
+
+function wrapperCommandCount(commands) {
+    var n = 0;
+    for (var i = 0; i < commands.length; i++) {
+        if (commands[i].indexOf('run-agent.sh --continue') !== -1) n++;
+    }
+    return n;
+}
+
+function firstIndexOfEvent(events, pattern) {
+    for (var i = 0; i < events.length; i++) {
+        if (pattern.test(events[i])) return i;
+    }
+    return -1;
+}
+
+var MISSING_RESPONSE_FEEDBACK = { feedbackLoop: { enabled: true } };
+
+suite('developTicketAndCreatePR > resume-before-cold-reset (gh-775)', function () {
+
+    test('AC2+AC3: committed work + missing response.md + resumable → exactly ONE bounded wrapper invocation, then normal continuation (no cold reset)', function () {
+        var prUrl = 'https://github.com/acme/widgets/pull/775';
+        var state = { files: null };
+        var loaded = loadForMissingResponseResume({
+            gitMock: committedWorkGitMock('ai/TS-40', prUrl),
+            wrapperImpl: function () {
+                // the resumed fa session finishes and writes the deliverable
+                state.files['outputs/response.md'] = '### What changed\n- Fixed the parser (`js/parser.js`).\n';
+                return '';
+            }
+        });
+        state.files = loaded.files;
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-40', fields: { summary: 'hung verification, work done', description: '', labels: [] } },
+            metadata: { contextId: 'sm_story_development' },
+            customParams: MISSING_RESPONSE_FEEDBACK,
+            response: 'Agent hit a rate limit while writing the summary.'
+        });
+
+        // AC2: exactly ONE wrapper invocation, bounded, through the whitelisted token.
+        assert.equal(wrapperCommandCount(loaded.commands), 1,
+            'the wrapper must be re-invoked exactly once — commands: ' + JSON.stringify(loaded.commands));
+        var wrapper = loaded.commands.filter(function (c) { return c.indexOf('run-agent.sh --continue') !== -1; })[0];
+        assert.equal(wrapper,
+            'bash -c "timeout -k 60 2400 bash agents/scripts/run-agent.sh --continue outputs/feedback/TS-40_missing_response.md"',
+            'the resume is hard-capped (default 2400s) and enters cli_execute_command through `bash`');
+        assert.contains(loaded.files['outputs/feedback/TS-40_missing_response.md'], 'bash_job stop',
+            'the follow-up prompt tells the agent to dispose of the hung job');
+        assert.contains(loaded.files['outputs/feedback/TS-40_missing_response.md'], 'outputs/response.md',
+            'the follow-up prompt names the missing deliverable');
+        assert.equal(loaded.files['outputs/feedback/TS-40_missing_response.attempt'], '1',
+            'the one attempt is tracked in its own marker file');
+        // AC2 ordering invariant: zero tracker side effects before the outcome resolves.
+        var wrapperIdx = firstIndexOfEvent(loaded.events, /command:.*run-agent\.sh/);
+        var trackerIdx = firstIndexOfEvent(loaded.events, /^(comment|move|label):/);
+        assert.ok(wrapperIdx !== -1 && trackerIdx !== -1 && wrapperIdx < trackerIdx,
+            'no tracker side effect may fire before the resume outcome resolves — events: ' + JSON.stringify(loaded.events));
+        // AC3: normal continuation — PR created, no cold reset anywhere.
+        assert.equal(result.success, true);
+        assert.equal(result.prUrl, prUrl, 'the landed deliverable must continue into PR creation');
+        assert.deepEqual(loaded.movedTo, ['In Review'],
+            'the ticket moves to In Review — never to Ready For Development');
+        for (var c = 0; c < loaded.comments.length; c++) {
+            assert.notContains(loaded.comments[c].comment, 'Development Interrupted');
+        }
+    });
+
+    test('AC4: resume fails/times out (exit 124) → the existing cold-reset sequence runs verbatim', function () {
+        var loaded = loadForMissingResponseResume({
+            gitMock: committedWorkGitMock('ai/TS-41', ''),
+            wrapperImpl: function () {
+                throw new Error('Command failed (exit code 124): timeout -k 60 2400 bash agents/scripts/run-agent.sh --continue ...');
+            }
+        });
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-41', fields: { summary: 'resume timed out', description: '', labels: [] } },
+                metadata: { contextId: 'sm_story_development' },
+                customParams: MISSING_RESPONSE_FEEDBACK,
+                response: 'Agent hit a rate limit while writing the summary.'
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught, 'an un-recovered missing deliverable must still fail the run (gh-742 contract intact)');
+        assert.ok(caught && caught.interruptedReset === true, 'thrown error carries the interruptedReset marker');
+        assert.equal(wrapperCommandCount(loaded.commands), 1, 'exactly one bounded attempt was made');
+        assert.deepEqual(loaded.movedTo, ['Ready For Development'],
+            'the existing reset still moves the ticket to Ready For Development');
+        assert.deepEqual(loaded.removedLabels, ['sm_story_development_wip'],
+            'the existing reset still clears the WIP label');
+        assert.equal(loaded.comments.length, 1);
+        assert.contains(loaded.comments[0].comment, 'Development Interrupted');
+        assert.contains(loaded.comments[0].comment, 'ai/TS-41',
+            'the comment names the branch carrying the partial work — reset text unchanged');
+        assert.contains(loaded.comments[0].comment, 'resume from the existing branch');
+    });
+
+    test('AC5: feedback loop not enabled → cold reset directly, NO wrapper invocation', function () {
+        var loaded = loadForMissingResponseResume({
+            gitMock: committedWorkGitMock('ai/TS-42', '')
+        });
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-42', fields: { summary: 'not resumable', description: '', labels: [] } },
+                metadata: { contextId: 'sm_story_development' },
+                customParams: {},
+                response: 'Agent hit a rate limit while writing the summary.'
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught && caught.interruptedReset === true);
+        assert.equal(wrapperCommandCount(loaded.commands), 0,
+            'no wrapper invocation without the feedback-loop opt-in');
+        assert.deepEqual(loaded.movedTo, ['Ready For Development']);
+    });
+
+    test('AC6: fatal CLI/environment error → throwFatalCliEnvironmentError, resume never preempts it', function () {
+        var loaded = loadForMissingResponseResume({
+            gitMock: committedWorkGitMock('ai/TS-43', '')
+        });
+
+        assert.throws(function () {
+            loaded.mod.action({
+                ticket: { key: 'TS-43', fields: { summary: 'missing binary', description: '', labels: [] } },
+                metadata: { contextId: 'sm_story_development' },
+                customParams: MISSING_RESPONSE_FEEDBACK,
+                currentCliHasFatalError: true,
+                currentCliErrorMessage: 'cursor-agent not found in PATH'
+            });
+        }, 'the fatal CLI/environment class must fail the job explicitly');
+
+        assert.equal(wrapperCommandCount(loaded.commands), 0,
+            'the resume never fires for the fatal class');
+        assert.deepEqual(loaded.movedTo, [], 'no status move on a fatal environment error');
+        assert.equal(loaded.comments.length, 1);
+        assert.contains(loaded.comments[0].comment, 'AI CLI Environment Failure');
+    });
+
+    test('AC2/AC3 (no-changes site): resume lands an honest response → No Code Changes Needed path, no reset', function () {
+        var state = { files: null };
+        var loaded = loadForMissingResponseResume({
+            gitMock: noChangesGitCommandMock('TS-44', 'ai/TS-44'),
+            wrapperImpl: function () {
+                state.files['outputs/response.md'] = 'The fix is already present in the target branch — no code changes are required.';
+                return '';
+            }
+        });
+        state.files = loaded.files;
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-44', fields: { summary: 'hung analysis, no changes', description: '', labels: [] } },
+            metadata: { contextId: 'story_development' },
+            customParams: MISSING_RESPONSE_FEEDBACK,
+            response: ''
+        });
+
+        assert.equal(wrapperCommandCount(loaded.commands), 1);
+        assert.equal(result.success, true);
+        assert.equal(result.path, 'no-changes-needed');
+        assert.deepEqual(loaded.movedTo, ['In Review']);
+        assert.ok(loaded.comments.some(function (c) { return c.comment.indexOf('No Code Changes Needed') !== -1; }));
+        for (var c = 0; c < loaded.comments.length; c++) {
+            assert.notContains(loaded.comments[c].comment, 'Development Interrupted');
+        }
+    });
+
+    test('AC4 (no-changes site): resume fails → verbatim interrupted reset', function () {
+        var loaded = loadForMissingResponseResume({
+            gitMock: noChangesGitCommandMock('TS-45', 'ai/TS-45'),
+            wrapperImpl: function () {
+                throw new Error('Command failed (exit code 124): timed out');
+            }
+        });
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-45', fields: { summary: 'hung analysis', description: '', labels: [] } },
+                metadata: { contextId: 'story_development' },
+                customParams: MISSING_RESPONSE_FEEDBACK,
+                response: ''
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught && caught.interruptedReset === true);
+        assert.equal(wrapperCommandCount(loaded.commands), 1);
+        assert.deepEqual(loaded.movedTo, ['Ready For Development']);
+        assert.equal(loaded.comments.length, 1);
+        assert.contains(loaded.comments[0].comment, 'Development Interrupted');
+    });
+
+    test('missingResponse.timeoutSeconds override tightens the hard cap', function () {
+        var loaded = loadForMissingResponseResume({
+            gitMock: committedWorkGitMock('ai/TS-46', '')
+        });
+
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-46', fields: { summary: 'short budget', description: '', labels: [] } },
+                metadata: { contextId: 'sm_story_development' },
+                customParams: { feedbackLoop: { enabled: true, missingResponse: { timeoutSeconds: 600 } } },
+                response: 'Agent hit a rate limit while writing the summary.'
+            });
+        } catch (e) { /* the cold-reset throw is the expected fallback here */ }
+
+        var wrapper = loaded.commands.filter(function (c) { return c.indexOf('run-agent.sh --continue') !== -1; })[0];
+        assert.ok(wrapper, 'wrapper was invoked');
+        assert.contains(wrapper, 'timeout -k 60 600', 'the configured cap rides the wrapper command');
+    });
+
+});
+
+suite('prompts/bash_tools.md > B7 hung-job disposal rule (gh-775 AC1)', function () {
+    var bashTools = file_read({ path: 'prompts/bash_tools.md' });
+
+    test('BGJOBS chain ends with the B7 hung-job disposal node', function () {
+        assert.ok(bashTools, 'prompts/bash_tools.md is readable');
+        assert.contains(bashTools, 'B1 --> B2 --> B3 --> B4 --> B5 --> B6 --> B7',
+            'the disposal node extends the BGJOBS chain');
+        assert.contains(bashTools, 'B7[');
+    });
+
+    test('B7 carries the disposal semantics: stop the hung job, note it, finish the deliverable', function () {
+        var b7 = bashTools.substring(bashTools.indexOf('B7['));
+        b7 = b7.substring(0, b7.indexOf('"]') + 2);
+        assert.contains(b7, 'B6 covers a job still making progress',
+            'B7 cross-references B6 so in-flight (preserve) vs no-progress (hung) cannot be read as contradictory');
+        assert.contains(b7, 'bash_job stop', 'names the disposal command');
+        assert.contains(b7, 'outputs/response.md', 'the deliverable must still be written');
+        assert.contains(b7, 'MOVE ON', 'the agent must not hold the deliverable hostage');
+        assert.contains(b7, 'validation CI', 'PR CI is the stated safety net');
+    });
+
+    test('mermaid graph stays syntactically valid (balanced fences, flowchart header)', function () {
+        var fences = bashTools.match(/```/g) || [];
+        assert.equal(fences.length, 2, 'exactly one fenced mermaid block');
+        assert.contains(bashTools, '```mermaid\nflowchart TD');
+    });
+
+});

@@ -13,6 +13,9 @@
     "attachResponseAsFile": false,
     "skipAIProcessing": true,
     "alwaysPostComments": true,
+    "envVariables": {
+      "CLI_ALLOWED_COMMANDS": "find,ls,cat,mkdir,bash,run-agent.sh,gradlew"
+    },
     "preJSAction": "agents/js/checkWipLabel.js",
     "preCliJSAction": "agents/js/preCliDevelopmentSetup.js",
     "postJSAction": "agents/js/developBugAndCreatePR.js",

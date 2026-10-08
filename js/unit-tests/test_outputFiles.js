@@ -47,6 +47,47 @@ suite('outputFiles', function() {
             ticketKey: 'AITS-757',
             workingDir: '/tmp/repo'
         });
+        var exists = mod.hasOutputFile('pr_review.json', {
+            ticketKey: 'AITS-757',
+            workingDir: '/tmp/repo'
+        });
         assert.equal(content, '{"ok":"workingdir-ticket"}');
+        assert.equal(exists, true);
+    });
+
+    test('hasOutputFile: true when the file exists in the root outputs directory', function() {
+        var mod = loadOutputFiles({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/response.md') return '# done';
+                return null;
+            }
+        });
+
+        assert.equal(mod.hasOutputFile('response.md', { ticketKey: 'AITS-1' }), true);
+    });
+
+    test('hasOutputFile: true via the ticket-keyed candidate', function() {
+        var mod = loadOutputFiles({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/response.md') return null;
+                if (opts.path === 'outputs/AITS-757/response.md') return '# done';
+                return null;
+            }
+        });
+
+        assert.equal(mod.hasOutputFile('response.md', { ticketKey: 'AITS-757' }), true);
+    });
+
+    test('hasOutputFile: false when missing or blank', function() {
+        var mod = loadOutputFiles({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/blank.md') return '   \n  ';
+                return null;
+            }
+        });
+
+        assert.equal(mod.hasOutputFile('missing.md', {}), false);
+        assert.equal(mod.hasOutputFile('blank.md', {}), false);
+        assert.equal(mod.hasOutputFile('missing.md', { ticketKey: 'AITS-1' }), false);
     });
 });

@@ -79,9 +79,17 @@ var developTicketRealModule = loadModule(
             './common/outputFiles.js': outputFiles,
             './developTicketAndCreatePR.js': {
                 action: function() { return { success: true, path: 'delegated' }; },
-                throwInterruptedReset: developTicketRealModule.throwInterruptedReset
+                throwInterruptedReset: developTicketRealModule.throwInterruptedReset,
+                recoverMissingResponse: function () { return null; }
             }
         ,
+            './common/feedbackLoop.js': {
+                runQualityGates: function () { return { success: true }; },
+                runPolicyGates: function () { return { success: true }; },
+                runPostPublishGates: function () { return { success: true }; },
+                resumeAgent: function () { return { attempted: false }; },
+                resumeOnceForMissingResponse: function () { return { attempted: false }; }
+            },
             './common/commentMarkup.js': commentMarkupModule,
         }),
         allMocks
@@ -428,6 +436,13 @@ suite('developBugAndCreatePR', function() {
                     }
                 }),
                 './developTicketAndCreatePR.js': { action: function () { throw marked; } },
+                './common/feedbackLoop.js': {
+                    runQualityGates: function () { return { success: true }; },
+                    runPolicyGates: function () { return { success: true }; },
+                    runPostPublishGates: function () { return { success: true }; },
+                    resumeAgent: function () { return { attempted: false }; },
+                    resumeOnceForMissingResponse: function () { return { attempted: false }; }
+                },
                 './common/commentMarkup.js': commentMarkupMod
             }),
             {
@@ -461,4 +476,352 @@ suite('developBugAndCreatePR', function() {
         assert.equal(caught && caught.prCreationFailure, true, 'marker survives the passthrough');
     });
 
+});
+
+// ── gh-775: resume-before-cold-reset (bug pre-check path) ────────────
+// The bug post-action's own response.md-missing branch cold-resets BEFORE it
+// ever delegates to developTicketAndCreatePR — it must route through the SHARED
+// recoverMissingResponse() gate (fatal CLI/environment class first, then ONE
+// bounded resume attempt, then the re-read) instead of calling
+// feedbackLoop.resumeOnceForMissingResponse() directly. The developTicket mock
+// below therefore exposes the REAL shared gate, backed by the REAL
+// common/feedbackLoop.js + common/outputFiles.js (sharing the file map and cli
+// capture), while the bug module itself gets a feedbackLoop SPY — a direct
+// call from the bug leg is recorded and fails the delegation test.
+function loadBugForMissingResponseResume(opts) {
+    opts = opts || {};
+    var files = {};
+    var commands = [];
+    var comments = [];
+    var moves = [];
+    var removed = [];
+    var delegated = 0;
+    var recoverCalls = [];
+    var directFeedbackLoopCalls = [];
+
+    // Self-contained base modules (the older loader in this file declares its
+    // instances inside its own function scope).
+    var commentMarkupModuleLocal = loadModule('js/common/commentMarkup.js',
+        makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
+    var gitStagingModuleLocal = loadModule('js/common/gitStaging.js');
+
+    var sharedFileRead = function (args) {
+        var path = args && (args.path || args);
+        if (files[path] !== undefined) return files[path];
+        throw new Error('ENOENT: ' + path);
+    };
+    var sharedFileWrite = function (args) {
+        files[args && args.path] = args && args.content;
+    };
+    var baseCli = function (args) {
+        var command = args.command;
+        if (command.indexOf('gh pr list --head ') === 0) return '';
+        if (command.indexOf('git check-ignore') === 0) {
+            // gh-683 probe: not-ignored repo → keep exclusions
+            throw new Error('Command execution failed (exit code 1)');
+        }
+        if (command === 'git status --porcelain') return 'A  outputs/rca.md\n';
+        if (command === 'git branch --show-current') return 'main\n';
+        return '';
+    };
+    var cliMock = function (args) {
+        commands.push(args.command);
+        if (args.command.indexOf('run-agent.sh') !== -1 && opts.wrapperImpl) {
+            return opts.wrapperImpl(args.command);
+        }
+        return baseCli(args);
+    };
+
+    var realFeedbackLoop = loadModule('js/common/feedbackLoop.js', null, {
+        file_read: sharedFileRead,
+        file_write: sharedFileWrite,
+        cli_execute_command: cliMock
+    });
+    var realOutputFiles = loadModule('js/common/outputFiles.js', null, {
+        file_read: sharedFileRead
+    });
+
+    // The REAL developTicketAndCreatePR instance backing the shared gate —
+    // wired to the same real feedbackLoop/outputFiles so the attempt marker,
+    // prompt file and deliverable re-read are shared with the bug leg.
+    var sharedGateModule = loadModule(
+        'js/developTicketAndCreatePR.js',
+        makeRequire({
+            './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
+            './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
+            './common/submodules.js': {},
+            './common/feedbackLoop.js': realFeedbackLoop,
+            './common/autoStart.js': { triggerSmIfIdle: function () { } },
+            './common/outputFiles.js': realOutputFiles,
+            './cacheToReleases.js': {},
+            './common/gitStaging.js': gitStagingModuleLocal,
+            './configLoader.js': configLoaderModule,
+            './config.js': configModule,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
+            './common/commentMarkup.js': commentMarkupModuleLocal
+        }),
+        {
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { moves.push(args); },
+            jira_remove_label: function (args) { removed.push(args); }
+        }
+    );
+
+    var mod = loadModule(
+        'js/developBugAndCreatePR.js',
+        makeRequire({
+            './config.js': configModule,
+            './common/gitStaging.js': gitStagingModuleLocal,
+            './configLoader.js': configLoaderModule,
+            './common/outputFiles.js': realOutputFiles,
+            // SPY: a direct resumeOnceForMissingResponse call from the bug leg
+            // is forbidden — the shared gate owns the resume (gh-775 review
+            // round 1, IMPORTANT thread).
+            './common/feedbackLoop.js': {
+                resumeOnceForMissingResponse: function (options) {
+                    directFeedbackLoopCalls.push(options);
+                    return { attempted: false, reason: 'direct-bug-leg-call-forbidden' };
+                }
+            },
+            './developTicketAndCreatePR.js': {
+                action: function () { delegated++; return { success: true, path: 'delegated' }; },
+                throwInterruptedReset: sharedGateModule.throwInterruptedReset,
+                recoverMissingResponse: function (ticketKey, customParams, developmentSummary, cliHasFatalError, cliErrorMessage) {
+                    recoverCalls.push({
+                        ticketKey: ticketKey,
+                        customParams: customParams,
+                        developmentSummary: developmentSummary,
+                        cliHasFatalError: cliHasFatalError,
+                        cliErrorMessage: cliErrorMessage
+                    });
+                    if (opts.recoverMissingResponseImpl) {
+                        return opts.recoverMissingResponseImpl(ticketKey, customParams, developmentSummary, cliHasFatalError, cliErrorMessage);
+                    }
+                    return sharedGateModule.recoverMissingResponse(ticketKey, customParams, developmentSummary, cliHasFatalError, cliErrorMessage);
+                }
+            },
+            './common/commentMarkup.js': commentMarkupModuleLocal
+        }),
+        {
+            cli_execute_command: cliMock,
+            file_read: sharedFileRead,
+            file_write: sharedFileWrite,
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { moves.push(args); },
+            jira_remove_label: function (args) { removed.push(args); }
+        }
+    );
+
+    return {
+        mod: mod, files: files, commands: commands, comments: comments,
+        moves: moves, removed: removed,
+        recoverCalls: recoverCalls,
+        directFeedbackLoopCalls: directFeedbackLoopCalls,
+        delegatedCount: function () { return delegated; }
+    };
+}
+
+function bugWrapperCommandCount(commands) {
+    var n = 0;
+    for (var i = 0; i < commands.length; i++) {
+        if (commands[i].indexOf('run-agent.sh --continue') !== -1) n++;
+    }
+    return n;
+}
+
+suite('developBugAndCreatePR > resume-before-cold-reset (gh-775)', function () {
+
+    test('AC2+AC3 (bug): missing response.md + resumable → ONE bounded resume lands the deliverable → normal continuation, no reset, no partial-work push', function () {
+        var state = { files: null };
+        var loaded = loadBugForMissingResponseResume({
+            wrapperImpl: function () {
+                state.files['outputs/response.md'] = '### Root Cause Analysis\nBug fixed with a regression test.\n';
+                return '';
+            }
+        });
+        state.files = loaded.files;
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-50', fields: { summary: 'hung verification, bug fixed', description: '', labels: [] } },
+            metadata: { contextId: 'bug_development' },
+            jobParams: {
+                customParams: {
+                    removeLabel: 'sm_bug_development_triggered',
+                    feedbackLoop: { enabled: true }
+                }
+            }
+        });
+
+        assert.equal(bugWrapperCommandCount(loaded.commands), 1,
+            'exactly one bounded wrapper invocation — commands: ' + JSON.stringify(loaded.commands));
+        var wrapper = loaded.commands.filter(function (c) { return c.indexOf('run-agent.sh --continue') !== -1; })[0];
+        assert.equal(wrapper,
+            'bash -c "timeout -k 60 2400 bash agents/scripts/run-agent.sh --continue outputs/feedback/TS-50_missing_response.md"');
+        assert.equal(loaded.delegatedCount(), 1,
+            'the landed deliverable continues into the normal development path');
+        assert.equal(result.path, 'delegated');
+        assert.equal(loaded.comments.length, 0, 'no interrupted comment');
+        assert.deepEqual(loaded.moves, [], 'no status move');
+        var pushCommands = loaded.commands.filter(function (c) { return c.indexOf('git push') === 0; });
+        assert.equal(pushCommands.length, 0,
+            'no partial-work push — the resumed session finishes and the post-action commits normally');
+    });
+
+    test('AC4 (bug): resume fails → the existing interrupted sequence runs verbatim (partial-work push, comment, reset, wip removal, throw)', function () {
+        var loaded = loadBugForMissingResponseResume({
+            wrapperImpl: function () {
+                throw new Error('Command failed (exit code 124): timeout -k 60 2400 ...');
+            }
+        });
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-51', fields: { summary: 'resume timed out', description: '', labels: [] } },
+                metadata: { contextId: 'bug_development' },
+                jobParams: {
+                    customParams: {
+                        removeLabel: 'sm_bug_development_triggered',
+                        feedbackLoop: { enabled: true }
+                    }
+                }
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught && caught.interruptedReset === true,
+            'the verbatim cold reset still fails the run');
+        assert.equal(bugWrapperCommandCount(loaded.commands), 1, 'exactly one bounded attempt');
+        assert.ok(loaded.commands.indexOf('git checkout -B ai/TS-51') !== -1,
+            'partial analysis work is still switched to the development branch');
+        assert.ok(loaded.commands.indexOf('git push -u origin ai/TS-51 --force-with-lease') !== -1,
+            'partial analysis work is still pushed before the reset');
+        assert.deepEqual(loaded.moves, [{ key: 'TS-51', statusName: 'Ready For Development' }]);
+        assert.deepEqual(loaded.removed, [
+            { key: 'TS-51', label: 'bug_development_wip' },
+            { key: 'TS-51', label: 'sm_bug_development_triggered' }
+        ]);
+        assert.equal(loaded.comments.length, 1);
+        assert.contains(loaded.comments[0].comment, 'Development Interrupted');
+    });
+
+    test('AC5 (bug): not resumable → cold reset directly, NO wrapper invocation', function () {
+        var loaded = loadBugForMissingResponseResume();
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-52', fields: { summary: 'not resumable', description: '', labels: [] } },
+                metadata: { contextId: 'bug_development' },
+                jobParams: { customParams: { removeLabel: 'sm_bug_development_triggered' } }
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught && caught.interruptedReset === true);
+        assert.equal(bugWrapperCommandCount(loaded.commands), 0,
+            'no wrapper invocation without the feedback-loop opt-in');
+        assert.deepEqual(loaded.moves, [{ key: 'TS-52', statusName: 'Ready For Development' }]);
+    });
+
+
+    test('routes through the SHARED recoverMissingResponse gate — the bug leg never calls feedbackLoop directly', function () {
+        var state = { files: null };
+        var loaded = loadBugForMissingResponseResume({
+            wrapperImpl: function () {
+                state.files['outputs/response.md'] = '### Root Cause Analysis\nBug fixed with a regression test.\n';
+                return '';
+            }
+        });
+        state.files = loaded.files;
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-53', fields: { summary: 'hung verification, bug fixed', description: '', labels: [] } },
+            metadata: { contextId: 'bug_development' },
+            jobParams: {
+                customParams: {
+                    removeLabel: 'sm_bug_development_triggered',
+                    feedbackLoop: { enabled: true }
+                }
+            }
+        });
+
+        assert.equal(loaded.recoverCalls.length, 1,
+            'the bug leg must delegate to developTicket.recoverMissingResponse (the shared fatal-first gate)');
+        assert.equal(loaded.recoverCalls[0].ticketKey, 'TS-53');
+        assert.equal(loaded.recoverCalls[0].customParams.feedbackLoop.enabled, true,
+            'the leg feedback-loop opt-in rides into the shared gate');
+        assert.equal(loaded.recoverCalls[0].developmentSummary, '',
+            'the raw CLI response rides in as the fatal-text heuristic input');
+        assert.equal(loaded.recoverCalls[0].cliHasFatalError, false);
+        assert.equal(loaded.recoverCalls[0].cliErrorMessage, null);
+        assert.equal(loaded.directFeedbackLoopCalls.length, 0,
+            'the bug leg must NOT call feedbackLoop.resumeOnceForMissingResponse directly');
+        assert.equal(bugWrapperCommandCount(loaded.commands), 1,
+            'the shared gate still makes the ONE bounded attempt — commands: ' + JSON.stringify(loaded.commands));
+        assert.equal(result.path, 'delegated');
+    });
+
+    test('AC6 (bug): fatal CLI signal rides into the shared gate — resume preempted, fatal error propagates', function () {
+        var loaded = loadBugForMissingResponseResume();
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-54', fields: { summary: 'missing binary', description: '', labels: [] } },
+                metadata: { contextId: 'bug_development' },
+                currentCliHasFatalError: true,
+                currentCliErrorMessage: 'cursor-agent not found in PATH',
+                jobParams: {
+                    customParams: {
+                        removeLabel: 'sm_bug_development_triggered',
+                        feedbackLoop: { enabled: true }
+                    }
+                }
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught, 'the fatal CLI/environment class must fail the job explicitly');
+        assert.equal(caught && caught.fatalCliEnvironment, true, 'the fatal marker survives the bug post-action');
+        assert.equal(loaded.recoverCalls[0].cliHasFatalError, true,
+            'the bug leg passes its own CLI outcome signal into the shared gate');
+        assert.equal(bugWrapperCommandCount(loaded.commands), 0,
+            'the resume never fires for the fatal class (AC6)');
+        assert.ok(loaded.comments.some(function (c) { return c.comment.indexOf('AI CLI Environment Failure') !== -1; }),
+            'the fatal environment comment is posted');
+        assert.deepEqual(loaded.moves, [], 'no status move on a fatal environment error');
+        var pushCommands = loaded.commands.filter(function (c) { return c.indexOf('git push') === 0; });
+        assert.equal(pushCommands.length, 0, 'no doomed partial-work push on a fatal environment error');
+    });
+
+    test('AC6 (bug): text-heuristic fatal class (exit 127) rides the raw CLI response through the shared gate', function () {
+        var loaded = loadBugForMissingResponseResume();
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-55', fields: { summary: 'missing binary', description: '', labels: [] } },
+                metadata: { contextId: 'bug_development' },
+                response: 'Command failed (exit code 127): cursor-agent: not found in PATH',
+                jobParams: {
+                    customParams: {
+                        removeLabel: 'sm_bug_development_triggered',
+                        feedbackLoop: { enabled: true }
+                    }
+                }
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught && caught.fatalCliEnvironment === true,
+            'the exit-127 text heuristic must preempt the resume on the bug leg too');
+        assert.equal(loaded.recoverCalls[0].developmentSummary,
+            'Command failed (exit code 127): cursor-agent: not found in PATH');
+        assert.equal(bugWrapperCommandCount(loaded.commands), 0, 'no doomed wrapper invocation');
+    });
 });

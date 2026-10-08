@@ -54,6 +54,20 @@ function hasCodeGraphUsage() {
     }
 }
 
+/**
+ * True when outputs/response.md exists with content. Thin wrapper over the
+ * canonical outputFiles.hasOutputFile so the existence read shares one
+ * candidate-expansion shape with developTicketAndCreatePR's content reader
+ * (readResponseMd) — review round 1, duplicate-readers thread.
+ */
+function readHasResponseMd(ticketKey) {
+    try {
+        return outputFiles.hasOutputFile('response.md', { ticketKey: ticketKey });
+    } catch (e) {
+        return false;
+    }
+}
+
 function removeLabels(ticketKey, params) {
     const wipLabel = params.metadata && params.metadata.contextId
         ? params.metadata.contextId + '_wip' : null;
@@ -264,15 +278,28 @@ function action(params) {
             console.warn('Could not check git status:', e);
         }
 
-        let hasResponseMd = false;
-        try {
-            const r = outputFiles.readOutputFile('response.md', { ticketKey: ticketKeyForCheck });
-            hasResponseMd = !!(r && r.trim());
-        } catch (e) {}
+        let hasResponseMd = readHasResponseMd(ticketKeyForCheck);
 
         console.log('Working tree check: git changes present = ' + hasGitChanges +
             '; outputs/response.md = ' + (hasResponseMd ? 'present' : 'MISSING') +
             (hasGitChanges || hasResponseMd ? '' : ' — neither work nor a response; the agent produced nothing'));
+
+        // gh-775: ONE shared gate (developTicketAndCreatePR.recoverMissingResponse)
+        // for every response.md-missing cold-reset site — the gating order (fatal
+        // CLI/environment class FIRST: the resume never preempts it — AC6; then
+        // exactly ONE bounded resume attempt; then the re-read) lives in exactly
+        // one place. The bug leg passes its own CLI outcome signals so a fatally
+        // broken environment (missing binary, unknown provider, exit 127) skips
+        // the doomed attempt exactly like the story leg.
+        if (!hasResponseMd) {
+            const recovered = developTicket.recoverMissingResponse(
+                ticketKeyForCheck,
+                _customParams,
+                actualParamsForCheck.response || '',
+                actualParamsForCheck.currentCliHasFatalError === true,
+                actualParamsForCheck.currentCliErrorMessage || null);
+            hasResponseMd = !!(recovered && recovered.trim());
+        }
 
         if (!hasResponseMd) {
             // CLI agent did not finish (rate limit / crash). Push whatever partial work exists

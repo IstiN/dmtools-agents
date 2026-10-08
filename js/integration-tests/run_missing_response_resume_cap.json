@@ -1,0 +1,7 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "js/integration-tests/test_missing_response_resume_cap.js",
+    "jobParams": {}
+  }
+}

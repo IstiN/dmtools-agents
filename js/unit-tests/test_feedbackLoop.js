@@ -340,3 +340,97 @@ suite('feedbackLoop helper', function() {
     });
 
 });
+
+suite('feedbackLoop > resumeOnceForMissingResponse (gh-775)', function() {
+
+    test('disabled when the feedback loop is not enabled', function() {
+        var loaded = loadFeedbackLoop();
+        var result = loaded.mod.resumeOnceForMissingResponse({ ticketKey: 'TS-1' });
+
+        assert.equal(result.attempted, false);
+        assert.equal(result.reason, 'disabled');
+        assert.deepEqual(loaded.commands, []);
+    });
+
+    test('section-level disable wins over the root switch', function() {
+        var loaded = loadFeedbackLoop();
+        var result = loaded.mod.resumeOnceForMissingResponse({
+            ticketKey: 'TS-1',
+            customParams: { feedbackLoop: { enabled: true, missingResponse: { enabled: false } } }
+        });
+
+        assert.equal(result.attempted, false);
+        assert.deepEqual(loaded.commands, []);
+    });
+
+    test('resumes exactly once with the bounded wrapper command and the follow-up prompt', function() {
+        var loaded = loadFeedbackLoop();
+        var result = loaded.mod.resumeOnceForMissingResponse({
+            ticketKey: 'TS-775',
+            customParams: { feedbackLoop: { enabled: true } }
+        });
+
+        assert.equal(result.attempted, true);
+        assert.deepEqual(loaded.commands, [
+            'bash -c "mkdir -p outputs/feedback"',
+            'bash -c "timeout -k 60 2400 bash agents/scripts/run-agent.sh --continue outputs/feedback/TS-775_missing_response.md"'
+        ]);
+        assert.equal(loaded.files['outputs/feedback/TS-775_missing_response.attempt'], '1');
+        var prompt = loaded.files['outputs/feedback/TS-775_missing_response.md'];
+        assert.contains(prompt, 'Ticket: TS-775', 'the follow-up prompt stamps the ticket identifier like buildFeedbackPrompt — the context must not depend on --continue restoring the session');
+        assert.contains(prompt, 'bash_job stop', 'the follow-up prompt names the hung-job disposal');
+        assert.contains(prompt, 'outputs/response.md', 'the follow-up prompt names the missing deliverable');
+        assert.contains(prompt, 'Do not push', 'the no-push contract holds for the resume too');
+    });
+
+    test('exactly ONE attempt — a second call does not re-invoke the wrapper', function() {
+        var loaded = loadFeedbackLoop();
+        var first = loaded.mod.resumeOnceForMissingResponse({
+            ticketKey: 'TS-2',
+            customParams: { feedbackLoop: { enabled: true } }
+        });
+        var second = loaded.mod.resumeOnceForMissingResponse({
+            ticketKey: 'TS-2',
+            customParams: { feedbackLoop: { enabled: true } }
+        });
+
+        assert.equal(first.attempted, true);
+        assert.equal(second.attempted, false);
+        assert.equal(second.reason, 'attempts-exhausted');
+        var wrapperCalls = loaded.commands.filter(function(c) { return c.indexOf('run-agent.sh') !== -1; });
+        assert.equal(wrapperCalls.length, 1);
+    });
+
+    test('timeoutSeconds override tightens the hard cap', function() {
+        var loaded = loadFeedbackLoop();
+        loaded.mod.resumeOnceForMissingResponse({
+            ticketKey: 'TS-3',
+            customParams: { feedbackLoop: { enabled: true, missingResponse: { timeoutSeconds: 600 } } }
+        });
+
+        assert.equal(loaded.commands.length, 2);
+        assert.contains(loaded.commands[1], 'timeout -k 60 600 ');
+    });
+
+    test('a failed/timed-out wrapper invocation is a resume FAILURE, not a crash — the caller falls back to the cold reset', function() {
+        var commands = [];
+        var loaded = loadFeedbackLoop({
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command.indexOf('run-agent.sh') !== -1) {
+                    throw new Error('Command failed (exit code 124): timeout -k 60 2400 ...');
+                }
+                return '';
+            }
+        });
+        var result = loaded.mod.resumeOnceForMissingResponse({
+            ticketKey: 'TS-4',
+            customParams: { feedbackLoop: { enabled: true } }
+        });
+
+        assert.equal(result.attempted, true, 'the one bounded attempt was made');
+        assert.equal(result.failed, true, 'the failure is reported instead of thrown');
+        assert.equal(commands.filter(function(c) { return c.indexOf('run-agent.sh') !== -1; }).length, 1);
+    });
+
+});
