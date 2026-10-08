@@ -190,7 +190,9 @@ function _createGithubProvider(workspace, repository) {
         // callers can fall back gracefully.
         getDiffText: function(prId) {
             try {
-                return github_get_pr_diff_text({ workspace: workspace, repository: repository, pullRequestID: String(prId) });
+                // pullRequestId — the exact schema casing of the runtime tool
+                // (gh-802: the ADO-era pullRequestID was rejected on every call).
+                return github_get_pr_diff_text({ workspace: workspace, repository: repository, pullRequestId: String(prId) });
             } catch (e) {
                 console.warn('getDiffText (github) failed:', e && e.toString ? e.toString() : String(e));
                 return null;
@@ -264,7 +266,9 @@ function _createGithubProvider(workspace, repository) {
             // Primary: DMTools v1.7.210+ exposes a tool that returns the raw diff text.
             if (typeof github_get_pr_diff_text !== 'undefined') {
                 try {
-                    var textRaw = github_get_pr_diff_text({ workspace: workspace, repository: repository, pullRequestID: prIdStr });
+                    // pullRequestId — the exact schema casing of the runtime tool
+                    // (gh-802: the ADO-era pullRequestID failed every call here).
+                    var textRaw = github_get_pr_diff_text({ workspace: workspace, repository: repository, pullRequestId: prIdStr });
                     var textDiff = _extractDiffFromToolResult(textRaw);
                     if (_isUsableDiff(textDiff)) {
                         return textDiff;

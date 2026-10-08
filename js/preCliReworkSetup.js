@@ -356,18 +356,19 @@ function action(params) {
 
         console.log('=== Rework setup for:', ticketKey, '===');
 
-        // Move ticket to In Development (visible "actively being worked" marker, mirrors the
-        // same transition in preCliDevelopmentSetup.js for fresh development). Opt-in only
-        // (config.jira.markReworkInDevelopment) — projects whose rework bounce-back target
-        // already IS an "actively being worked" status (e.g. the default IN_REWORK) don't need
-        // this extra transition; enable it for projects that bounce back to a "queued" status
-        // instead (e.g. READY_FOR_DEVELOPMENT) so there is still a visible marker once work starts.
+        // Mark the ticket actively-worked with the ACTUAL rework-phase status
+        // (gh-802 AC3b): a rework leg used to write statuses.IN_DEVELOPMENT —
+        // the stale dev-phase status — so the board showed the card back in
+        // Development while rework (post-review fixes) was actually running.
+        // Opt-in (config.jira.markReworkInDevelopment) for projects whose
+        // rework bounce-back target is a "queued" status; the write is now the
+        // real transition target: statuses.IN_REWORK.
         if (config.jira && config.jira.markReworkInDevelopment && !prAnchor) {
             try {
-                tracker.moveToStatus(ticketKey, statuses.IN_DEVELOPMENT);
-                console.log('Moved ' + ticketKey + ' to ' + statuses.IN_DEVELOPMENT);
+                tracker.moveToStatus(ticketKey, statuses.IN_REWORK);
+                console.log('Moved ' + ticketKey + ' to ' + statuses.IN_REWORK);
             } catch (e) {
-                console.warn('Failed to move ticket to ' + statuses.IN_DEVELOPMENT + ':', e);
+                console.warn('Failed to move ticket to ' + statuses.IN_REWORK + ':', e);
             }
         }
 
