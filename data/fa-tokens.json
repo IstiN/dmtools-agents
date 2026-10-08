@@ -83,5 +83,14 @@
       "completion": 23098,
       "total": 92184
     }
+  ],
+  "pr-803": [
+    {
+      "leg": "rework",
+      "at": "2026-10-08T21:39:15Z",
+      "prompt": 90651,
+      "completion": 25800,
+      "total": 116451
+    }
   ]
 }
