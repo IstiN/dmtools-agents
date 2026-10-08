@@ -26,6 +26,20 @@ const { LABELS } = require('./config.js');
 const { extractTicketKey } = require('./common/jiraHelpers.js');
 const configLoader = require('./configLoader.js');
 
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
+
+
 var BUG_FIX_BATCH_LABEL = LABELS.BUG_FIX_BATCH || 'bug_fix_batch';
 
 function action(params) {
@@ -34,6 +48,7 @@ function action(params) {
     var removeLabel = customParams.removeLabel;
     var batchSize = customParams.batchSize || 5;
     var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+    initTracker(projectConfig, customParams);
     var jiraConfig = projectConfig.jira;
     var BATCH_STATUS = jiraConfig.statuses.READY_FOR_DEVELOPMENT;
     var DONE_STATUS = jiraConfig.statuses.DONE;
@@ -41,7 +56,7 @@ function action(params) {
     function releaseLock() {
         if (ticketKey && removeLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: removeLabel });
+                getTracker().removeLabel(ticketKey, removeLabel);
                 console.log('Released SM lock label', removeLabel, 'from', ticketKey);
             } catch (e) {
                 console.warn('Failed to remove SM lock label:', e);
@@ -67,11 +82,7 @@ function action(params) {
 
     function searchIssues(jql, fields, maxResults) {
         try {
-            var result = jira_search_by_jql({
-                jql: jql,
-                fields: fields || ['key', 'status', 'summary', 'labels'],
-                maxResults: maxResults || 50
-            });
+            var result = getTracker().searchIssues(jql, { maxResults: maxResults || 50, fields: fields || ['key', 'status', 'summary', 'labels'] });
             return extractIssues(result);
         } catch (e) {
             console.warn('JQL search failed:', jql, e);
@@ -86,6 +97,7 @@ function action(params) {
     function findCandidateBugs(storyKey) {
         // Only group bugs that have not been individually picked up yet.
         // In Development / In Progress bugs are left for the single-bug pipeline.
+        // JQL text: provider-specific query (WIQL on ado)
         var jql = 'issue in linkedIssues("' + storyKey + '") AND issuetype = Bug ' +
             'AND status in ("' + jiraConfig.statuses.BACKLOG + '", "' + jiraConfig.statuses.TODO + '", "' + jiraConfig.statuses.READY_FOR_DEVELOPMENT + '") ' +
             'AND (labels is EMPTY OR labels NOT IN ("' + BUG_FIX_BATCH_LABEL + '")) ' +
@@ -94,6 +106,7 @@ function action(params) {
     }
 
     function findExistingBatchEpic(storyKey) {
+        // JQL text: provider-specific query (WIQL on ado)
         var jql = 'issue in linkedIssues("' + storyKey + '") AND issuetype = Epic ' +
             'AND labels in ("' + BUG_FIX_BATCH_LABEL + '") ' +
             'AND status != "' + DONE_STATUS + '" ' +
@@ -103,6 +116,7 @@ function action(params) {
     }
 
     function bugStillRelevant(bugKey) {
+        // JQL text: provider-specific query (WIQL on ado)
         var jql = 'issue in linkedIssues("' + bugKey + '") AND issuetype = "Test Case" ' +
             'AND status in ("' + jiraConfig.statuses.FAILED + '", "' + jiraConfig.statuses.BUG_TO_FIX + '")';
         var tcs = searchIssues(jql, ['key', 'status'], 1);
@@ -125,11 +139,8 @@ function action(params) {
             labels: [BUG_FIX_BATCH_LABEL]
         };
 
-        var result = jira_create_ticket_with_json({
-            project: projectKey,
-            fieldsJson: fieldsJson
-        });
-        var epicKey = extractTicketKey(result);
+        var result = getTracker().createTicketWithFields(projectKey, fieldsJson);
+        var epicKey = extractTicketKey(result) || (typeof result === 'string' && result.trim()) || null; // tracker returns the key
         if (!epicKey) {
             throw new Error('Epic was created but key could not be extracted from result: ' + JSON.stringify(result));
         }
@@ -137,11 +148,7 @@ function action(params) {
 
         // Relate the batch Epic to the parent Story so it is visible on both sides.
         try {
-            jira_link_issues({
-                sourceKey: epicKey,
-                anotherKey: storyKey,
-                relationship: 'Relates'
-            });
+            getTracker().linkIssues(epicKey, storyKey, 'Relates');
             console.log('Linked Epic', epicKey, 'to Story', storyKey);
         } catch (e) {
             console.warn('Failed to link Epic to Story:', e);
@@ -151,27 +158,17 @@ function action(params) {
     }
 
     function linkBugToEpic(bugKey, epicKey) {
-        jira_link_issues({
-            sourceKey: epicKey,
-            anotherKey: bugKey,
-            relationship: 'Relates'
-        });
+        getTracker().linkIssues(epicKey, bugKey, 'Relates');
         console.log('Linked bug', bugKey, 'to Epic', epicKey);
     }
 
     function labelBugAsBatched(bugKey) {
-        jira_add_label({
-            key: bugKey,
-            label: BUG_FIX_BATCH_LABEL
-        });
+        getTracker().addLabel(bugKey, BUG_FIX_BATCH_LABEL);
         console.log('Added label', BUG_FIX_BATCH_LABEL, 'to', bugKey);
     }
 
     function moveEpicToReady(epicKey) {
-        jira_move_to_status({
-            key: epicKey,
-            statusName: BATCH_STATUS
-        });
+        getTracker().moveToStatus(epicKey, BATCH_STATUS);
         console.log('Moved Epic', epicKey, 'to', BATCH_STATUS);
     }
 
@@ -182,7 +179,7 @@ function action(params) {
             'Linked bugs from *' + storyKey + '*:\n' + bugList + '\n\n' +
             'These bugs are now labeled *' + BUG_FIX_BATCH_LABEL + '* and will be handled as a single batch.';
         try {
-            jira_post_comment({ key: epicKey, comment: epicComment });
+            getTracker().postComment(epicKey, epicComment);
         } catch (e) {
             console.warn('Failed to comment on Epic:', e);
         }
@@ -192,7 +189,7 @@ function action(params) {
             'Bugs added to batch:\n' + bugList + '\n\n' +
             'The Epic has been moved to *' + BATCH_STATUS + '*.';
         try {
-            jira_post_comment({ key: storyKey, comment: storyComment });
+            getTracker().postComment(storyKey, storyComment);
         } catch (e) {
             console.warn('Failed to comment on Story:', e);
         }

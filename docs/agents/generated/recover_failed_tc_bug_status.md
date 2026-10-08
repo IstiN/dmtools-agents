@@ -28,8 +28,7 @@ Full prompt / instruction set: [`agents/snapshots/recover_failed_tc_bug_status.m
 _Recover Failed Test Cases after bug triage._
 
 - Source: `agents/js/recoverFailedTCBugStatus.js`
-- Side effects:
-  - post Jira comment
+- No detected file I/O or side effects.
 
 
 ## LLM step

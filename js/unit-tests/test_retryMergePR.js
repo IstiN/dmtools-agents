@@ -1,3 +1,10 @@
+function d4TrackersWith(mocks) {
+    return loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), mocks || {});
+}
+
 /**
  * Unit tests for retryMergePR.js.
  */
@@ -41,6 +48,11 @@ function loadRetryMergePR(options) {
         removeLabel: function() {}
     };
 
+    var retryMocks = Object.assign({
+        jira_remove_label: function() {},
+        jira_post_comment: function() {},
+        jira_move_to_status: function() {}
+    }, options.mocks || {});
     var mod = loadModule(
         'js/retryMergePR.js',
         makeRequire({
@@ -56,13 +68,10 @@ function loadRetryMergePR(options) {
                     return true;
                 }
             },
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/trackers.js': d4TrackersWith(retryMocks)
         }),
-        {
-            jira_remove_label: function() {},
-            jira_post_comment: function() {},
-            jira_move_to_status: function() {}
-        }
+        retryMocks
     );
 
     return { mod: mod, autoStartCalls: autoStartCalls };
@@ -117,5 +126,33 @@ suite('retryMergePR', function() {
             'autoStartRework',
             'autoStartReworkConfigFile'
         ]);
+    });
+    test('ado: merge conflict -> ado_add_work_item_comment / ado_move_to_state / label removal, no jira_*', function() {
+        var calls = [];
+        function rec(n) { return function(a) { calls.push({ tool: n, args: a }); }; }
+        function forbid(n) { return function() { throw new Error(n + ' must not be called on ado'); }; }
+        var loaded = loadRetryMergePR({ mocks: {
+            ado_add_work_item_comment: rec('ado_add_work_item_comment'),
+            ado_move_to_state: rec('ado_move_to_state'),
+            ado_remove_work_item_label: rec('ado_remove_work_item_label'),
+            jira_remove_label: forbid('jira_remove_label'),
+            jira_post_comment: forbid('jira_post_comment'),
+            jira_move_to_status: forbid('jira_move_to_status')
+        } });
+        var result = loaded.mod.action({
+            ticket: { key: '125' },
+            jobParams: {
+                metadata: { contextId: 'retry_merge' },
+                customParams: { trackerProvider: 'ado', removeLabel: 'sm_pr_merge_triggered' }
+            }
+        });
+        assert.equal(result, true);
+        var moves = calls.filter(function(c) { return c.tool === 'ado_move_to_state'; });
+        assert.deepEqual(moves[0].args, { id: '125', state: configModule.STATUSES.IN_REWORK });
+        var comments = calls.filter(function(c) { return c.tool === 'ado_add_work_item_comment'; });
+        assert.equal(comments[0].args.id, '125');
+        assert.contains(comments[0].args.comment, 'MERGE CONFLICT');
+        var labels = calls.filter(function(c) { return c.tool === 'ado_remove_work_item_label'; }).map(function(c) { return c.args.label; });
+        assert.ok(labels.indexOf('sm_pr_merge_triggered') !== -1);
     });
 });

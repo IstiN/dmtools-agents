@@ -7,6 +7,20 @@
 const { assignForReview, extractTicketKey } = require('./common/jiraHelpers.js');
 const { ISSUE_TYPES, PRIORITIES, LABELS, SOLUTION_DESIGN_MODULES } = require('./config.js');
 
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
+
+
 /**
  * Parse AI response for module analysis
  * Expects JSON object with core, api, ui boolean flags and description
@@ -63,33 +77,21 @@ function createSolutionDesignTickets(moduleAnalysis, parentKey, parentSummary) {
             
             try {
                 // Create subtask using the dedicated parent method
-                const result = jira_create_ticket_with_parent({
-                    project: projectKey,
-                    issueType: ISSUE_TYPES.SUBTASK,
-                    summary: summary,
-                    description: description,
-                    parentKey: parentKey
-                });
+                const result = getTracker().createTicketWithParent(projectKey, ISSUE_TYPES.SUBTASK, summary, description, parentKey);
                 
-                const createdKey = extractTicketKey(result);
+                const createdKey = extractTicketKey(result) || (typeof result === 'string' && result.trim()) || null; // tracker returns the key
                 
                 if (createdKey) {
                     // Set priority using dedicated method
                     try {
-                        jira_set_priority({
-                            key: createdKey,
-                            priority: PRIORITIES.MEDIUM
-                        });
+                        getTracker().setPriority(createdKey, PRIORITIES.MEDIUM);
                     } catch (priorityError) {
                         console.warn('Failed to set priority on ' + createdKey + ':', priorityError);
                     }
                     
                     // Add module-specific label
                     try {
-                        jira_add_label({
-                            key: createdKey,
-                            label: module.label
-                        });
+                        getTracker().addLabel(createdKey, module.label);
                     } catch (labelError) {
                         console.warn('Failed to add label ' + module.label + ' to ' + createdKey + ':', labelError);
                     }
@@ -156,10 +158,7 @@ function postSummaryComment(parentKey, moduleAnalysis, createdTickets) {
         
         comment += '*Total Created:* ' + successfulTickets.length + ' solution design tickets';
         
-        jira_post_comment({
-            key: parentKey,
-            comment: comment
-        });
+        getTracker().postComment(parentKey, comment);
         
         console.log('Posted summary comment to ' + parentKey);
         
@@ -173,6 +172,7 @@ function action(params) {
         const ticketKey = params.ticket.key;
         const ticketSummary = params.ticket.fields.summary;
         const initiatorId = params.initiator;
+        initTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
         // Dynamically generate WIP label from contextId
         const wipLabel = params.metadata && params.metadata.contextId 
             ? params.metadata.contextId + '_wip' 
@@ -188,10 +188,7 @@ function action(params) {
             
             // Post error comment to ticket
             try {
-                jira_post_comment({
-                    key: ticketKey,
-                    comment: '*Error:* ' + errorMsg + '. Please check logs for details and retry the workflow.'
-                });
+                getTracker().postComment(ticketKey, '*Error:* ' + errorMsg + '. Please check logs for details and retry the workflow.');
             } catch (commentError) {
                 console.error('Failed to post error comment:', commentError);
             }
@@ -210,16 +207,13 @@ function action(params) {
 
         // Add solution design label
         try {
-            jira_add_label({
-                key: ticketKey,
-                label: LABELS.AI_SOLUTION_DESIGN_CREATED
-            });
+            getTracker().addLabel(ticketKey, LABELS.AI_SOLUTION_DESIGN_CREATED);
         } catch (labelError) {
             console.warn('Failed to add ai_solution_design_created label:', labelError);
         }
 
         // Use common assignForReview function for post-processing
-        const assignResult = assignForReview(ticketKey, initiatorId, wipLabel);
+        const assignResult = assignForReview(ticketKey, initiatorId, wipLabel, undefined, getTracker());
         
         if (!assignResult.success) {
             return assignResult;
@@ -240,10 +234,7 @@ function action(params) {
         // Try to post error comment to ticket
         try {
             if (params && params.ticket && params.ticket.key) {
-                jira_post_comment({
-                    key: params.ticket.key,
-                    comment: '*Workflow Error:* ' + error.toString() + '. Please check server logs for details.'
-                });
+                getTracker().postComment(params.ticket.key, '*Workflow Error:* ' + error.toString() + '. Please check server logs for details.');
             }
         } catch (commentError) {
             console.error('Failed to post error comment:', commentError);
@@ -256,3 +247,7 @@ function action(params) {
     }
 }
 
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { action };
+}

@@ -19,12 +19,27 @@
 
 var scmModule = require('./common/scm.js');
 
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
+
+
 function action(params) {
     var custom      = params.jobParams.customParams;
     var workspace   = custom.workspace;
     var repository  = custom.repository;
     var workflowId  = custom.workflowId || null;   // optional — null means all workflows
     var jiraProject = custom.jiraProject;
+    initTracker(null, custom);
 
     if (!workspace || !repository || !jiraProject) {
         console.error('❌ customParams must include workspace, repository, jiraProject');
@@ -73,11 +88,7 @@ function action(params) {
         // 2. Check if bug already exists by label
         var existing = [];
         try {
-            existing = jira_search_by_jql({
-                jql:    'project = ' + jiraProject + ' AND issuetype = Bug AND labels = "' + label + '"',
-                limit:  1,
-                fields: ['key']
-            }) || [];
+            existing = getTracker().searchIssues('project = ' + jiraProject + ' AND issuetype = Bug AND labels = "' + label + '"', { fields: ['key'] }) || [];
         } catch (e) {
             console.warn('  ⚠️  JQL search failed for run ' + runId + ': ' + (e.message || e));
         }
@@ -101,11 +112,7 @@ function action(params) {
             var ticketLabel = 'ci-ticket-' + ticketKey;
             var openBug = [];
             try {
-                openBug = jira_search_by_jql({
-                    jql:    'project = ' + jiraProject + ' AND issuetype = Bug AND labels = "' + ticketLabel + '" AND statusCategory != Done',
-                    limit:  1,
-                    fields: ['key', 'status']
-                }) || [];
+                openBug = getTracker().searchIssues('project = ' + jiraProject + ' AND issuetype = Bug AND labels = "' + ticketLabel + '" AND statusCategory != Done', { fields: ['key', 'status'] }) || [];
             } catch (e) {
                 console.warn('  ⚠️  JQL search for open ticket bug failed: ' + (e.message || e));
             }
@@ -131,7 +138,7 @@ function action(params) {
             '*Run ID:* ' + runId;
 
         try {
-            var result = jira_create_ticket_basic(jiraProject, 'Bug', summary, description);
+            var result = getTracker().createTicket(jiraProject, 'Bug', summary, description);
             var newKey = null;
             if (result) {
                 if (typeof result === 'string') {
@@ -140,6 +147,7 @@ function action(params) {
                         var parsed = JSON.parse(result);
                         if (parsed && parsed.key) newKey = parsed.key;
                     } catch (e) {}
+                    if (!newKey && /^[A-Za-z0-9_-]+$/.test(result.trim())) newKey = result.trim(); // tracker returns the bare key
                     if (!newKey) {
                         var urlMatch = result.match(/\/browse\/([A-Z]+-\d+)/);
                         if (urlMatch) newKey = urlMatch[1];
@@ -157,7 +165,7 @@ function action(params) {
 
             // 5. Add idempotency label
             try {
-                jira_add_label({ key: newKey, label: label });
+                getTracker().addLabel(newKey, label);
             } catch (e) {
                 console.warn('  ⚠️  Failed to add label ' + label + ' to ' + newKey + ': ' + (e.message || e));
             }
@@ -165,13 +173,13 @@ function action(params) {
             // 6. Link bug to ticket if detected + add ci-ticket label for dedup
             if (ticketKey) {
                 try {
-                    jira_link_issues({ sourceKey: ticketKey, anotherKey: newKey, relationship: 'is blocked by' });
+                    getTracker().linkIssues(ticketKey, newKey, 'is blocked by');
                     console.log('  🔗 Linked ' + ticketKey + ' is blocked by ' + newKey);
                 } catch (e) {
                     console.warn('  ⚠️  Failed to link ' + newKey + ' to ' + ticketKey + ': ' + (e.message || e));
                 }
                 try {
-                    jira_add_label({ key: newKey, label: 'ci-ticket-' + ticketKey });
+                    getTracker().addLabel(newKey, 'ci-ticket-' + ticketKey);
                 } catch (e) {
                     console.warn('  ⚠️  Failed to add ci-ticket label to ' + newKey + ': ' + (e.message || e));
                 }

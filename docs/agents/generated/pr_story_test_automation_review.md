@@ -45,7 +45,6 @@ _Prepare Test PR For Review Action (preJSAction for test-automation review agent
 
 - Source: `agents/js/prepareTestPRForReview.js`
 - Side effects:
-  - post Jira comment
   - git push
 
 

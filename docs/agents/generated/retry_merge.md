@@ -45,8 +45,6 @@ _Check WIP Label Pre-Action_
 _retryMergePR.js_
 
 - Source: `agents/js/retryMergePR.js`
-- Side effects:
-  - post Jira comment
 - Parameters (customParams):
   - `autoStartRework`
   - `autoStartReworkConfigFile`

@@ -21,17 +21,32 @@
  * Returns false to abort own processing — target agent handles everything.
  */
 
+
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
+
 function action(params) {
     var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
     var folder = actualParams.inputFolderPath || '';
     var customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams || {};
     var targetAgentName = customParams.targetAgentName || 'story_development.json';
+    initTracker(null, customParams);
 
     var ticket = params.ticket || actualParams.ticket;
     if (!ticket || !ticket.fields) {
         var keyFromFolder = folder.split('/').pop() || '';
         try {
-            ticket = jira_get_ticket({ key: keyFromFolder });
+            ticket = getTracker().getIssue(keyFromFolder);
         } catch (e) {
             console.error('redirectToRepoAgent: could not fetch ticket: ' + e);
             return false;

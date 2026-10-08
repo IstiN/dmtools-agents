@@ -12,21 +12,33 @@
  * It also surfaces prior fix attempts visible in the test case comments.
  */
 
+
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
+
 function action(params) {
     try {
         var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
         var folder = actualParams.inputFolderPath;
+        initTracker(null, (params.jobParams && params.jobParams.customParams) || actualParams.customParams || {});
         var ticketKey = folder.split('/').pop();
 
         console.log('Fetching linked test cases for', ticketKey, '...');
 
         var linkedTests = [];
         try {
-            linkedTests = jira_search_by_jql({
-                jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "Test Case"',
-                fields: ['key', 'summary', 'status', 'description', 'labels'],
-                maxResults: 10
-            });
+            // JQL text: provider-specific query (WIQL on ado)
+            linkedTests = getTracker().searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype = "Test Case"', { maxResults: 10, fields: ['key', 'summary', 'status', 'description', 'labels'] });
         } catch (e) {
             console.warn('Could not fetch linked test cases (skipping):', e);
             return;
@@ -60,7 +72,7 @@ function action(params) {
 
             // Fetch full ticket to get comments (test run history, failure details, prior attempts)
             try {
-                var tcDetails = jira_get_ticket({ key: tc.key });
+                var tcDetails = getTracker().getIssue(tc.key);
                 var tcFields = tcDetails && tcDetails.fields || {};
                 var commentBlock = tcFields.comment;
                 var comments = commentBlock && commentBlock.comments || [];

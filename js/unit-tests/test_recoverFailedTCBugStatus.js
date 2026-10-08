@@ -1,3 +1,10 @@
+function d4TrackersWith(mocks) {
+    return loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), mocks || {});
+}
+
 /**
  * Unit tests for js/recoverFailedTCBugStatus.js.
  */
@@ -25,7 +32,8 @@ function loadRecoverFailedTCBugStatus(mocks) {
         makeRequire({
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock(),
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/trackers.js': d4TrackersWith(Object.assign({}, defaults, mocks || {}))
         }),
         Object.assign({}, defaults, mocks || {})
     );

@@ -10,10 +10,24 @@
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
+
+
 function removeLabel(ticketKey, label) {
     if (!ticketKey || !label) return;
     try {
-        jira_remove_label({ key: ticketKey, label: label });
+        getTracker().removeLabel(ticketKey, label);
         console.log('Removed label:', label);
     } catch (e) {}
 }
@@ -24,14 +38,14 @@ function action(params) {
         throw new Error('params.ticket.key is missing');
     }
     var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+    initTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
     var jiraConfig = projectConfig.jira;
 
     console.log('=== Failed TC bug status recovery for', ticketKey, '===');
 
-    var linkedBugs = jira_search_by_jql({
-        jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug AND status not in ("' + jiraConfig.statuses.DONE + '")',
-        maxResults: 50
-    }) || [];
+    // JQL text: provider-specific query (WIQL on ado)
+
+    var linkedBugs = getTracker().searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug AND status not in ("' + jiraConfig.statuses.DONE + '")', { maxResults: 50 }) || [];
 
     if (linkedBugs.length === 0) {
         console.log('No linked non-Done Bugs found for', ticketKey);
@@ -43,19 +57,16 @@ function action(params) {
         return { success: true, action: 'released_for_bulk_bug_creation', ticketKey: ticketKey };
     }
 
-    jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BUG_TO_FIX });
+    getTracker().moveToStatus(ticketKey, jiraConfig.statuses.BUG_TO_FIX);
     console.log('Moved', ticketKey, 'to', jiraConfig.statuses.BUG_TO_FIX);
 
     removeLabel(ticketKey, 'sm_bug_creation_triggered');
     removeLabel(ticketKey, 'sm_bulk_bugs_creation_triggered');
     removeLabel(ticketKey, 'sm_test_automation_triggered');
 
-    jira_post_comment({
-        key: ticketKey,
-        comment: 'h3. 🐛 Linked Non-Done Bug Found — Moved to Bug To Fix\n\n' +
+    getTracker().postComment(ticketKey, 'h3. 🐛 Linked Non-Done Bug Found — Moved to Bug To Fix\n\n' +
             'This failed test case already has linked non-Done Bug issue(s), so it was moved to *' +
-            jiraConfig.statuses.BUG_TO_FIX + '* instead of staying in *Failed* and re-running bug creation.'
-    });
+            jiraConfig.statuses.BUG_TO_FIX + '* instead of staying in *Failed* and re-running bug creation.');
 
     // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
     // wrote outputs/*_usage.json during the agent run.
