@@ -53,6 +53,10 @@ function loadPostTestAutomation(mocks) {
                     return { success: true };
                 }
             },
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+            }), allMocks),
             './common/outputFiles.js': outputFiles,
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
@@ -350,4 +354,33 @@ suite('postTestAutomationResults: Jira comment formatting', function() {
         assert.notContains(comments[0], '```');
     });
 
+});
+
+suite('postTestAutomationResults: tracker layer (ADO)', function() {
+    test('ado: no-result failure path uses ado_* tools and no jira_* tool', function() {
+        var calls = [];
+        var mocks = {
+            file_read: function() { return null; },
+            cli_execute_command: function() { return ''; }
+        };
+        ['jira_post_comment', 'jira_move_to_status', 'jira_add_label', 'jira_remove_label'].forEach(function(n) {
+            mocks[n] = function(a) { calls.push({ tool: n, args: a }); };
+        });
+        mocks.ado_add_work_item_comment = function(a) { calls.push({ tool: 'ado_add_work_item_comment', args: a }); };
+        mocks.ado_move_to_state = function(a) { calls.push({ tool: 'ado_move_to_state', args: a }); };
+        mocks.ado_remove_work_item_label = function(a) { calls.push({ tool: 'ado_remove_work_item_label', args: a }); };
+        mocks.ado_add_work_item_label = function(a) { calls.push({ tool: 'ado_add_work_item_label', args: a }); };
+        var module = loadPostTestAutomation(mocks);
+        module.action({
+            ticket: { key: '42', fields: { summary: 'Automate' } },
+            metadata: { contextId: 'ctx' },
+            jobParams: { customParams: { trackerProvider: 'ado' } }
+        });
+        var tools = calls.map(function(c) { return c.tool; });
+        assert.equal(tools.filter(function(t) { return t.indexOf('jira_') === 0; }).length, 0);
+        assert.ok(tools.length > 0, 'expected at least one ado_* call');
+        assert.equal(tools.filter(function(t) { return t.indexOf('ado_') === 0; }).length, tools.length);
+        assert.ok(calls.every(function(c) { return String(c.args.id) === '42'; }));
+        assert.ok(tools.indexOf('ado_add_work_item_comment') >= 0);
+    });
 });
