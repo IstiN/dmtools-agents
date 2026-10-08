@@ -3601,6 +3601,8 @@ function hasActiveHeadRun(runs) {
             r.status === 'waiting' || r.status === 'pending';
     });
 
+}
+
 // gh-798 (live fa PR #1420 rework leg, run 37828431528): the in-flight-leg
 // exclusion for update_branch. A rework/review ai-teammate leg dispatched
 // with workflowRef={branch} lands ON the PR head (its run head_sha IS the
@@ -3629,7 +3631,6 @@ function hasActiveLegRun(runs, workflowFile) {
         return p.length >= suffix.length &&
             p.slice(p.length - suffix.length) === suffix;
     });
-}
 }
 
 // gh-748 dispatch-race probe over the FULL head rollup (all workflows, all

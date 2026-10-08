@@ -3388,7 +3388,13 @@ suite('smAgent: validation_failed sticky park (owner fa#923 2026-09-27)', functi
                 prStatus: { checkConclusion: 'none' }
             },
             onCliExecute: function (cmd) {
-                if (cmd.command.indexOf('/runs?head_sha=') !== -1) {
+                // gh-798: the update_branch leg exclusion probes the head
+                // rollup TOO (all workflows, no event filter) — that is a
+                // different probe. The pinned contract here is the
+                // dispatched-VERDICT probe (event=workflow_dispatch):
+                // #633 + gh-750 share ONE of those per tick.
+                if (cmd.command.indexOf('/runs?head_sha=') !== -1 &&
+                    cmd.command.indexOf('event=workflow_dispatch') !== -1) {
                     verdictProbeCalls += 1;
                     return JSON.stringify({ workflow_runs: [] });
                 }
