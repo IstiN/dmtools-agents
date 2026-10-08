@@ -657,3 +657,214 @@ suite('timerAutoCommitAndSave — saveSessionArtefact', function() {
         assert.equal(fileWriteCalls.length, 0);
     });
 });
+
+// ── gh-798: non-fast-forward push self-heal (AC3) ────────────────────────────
+// Live fa PR #1420 (gh-1415 rework leg, run 37828431528, 2026-10-08): the SM's
+// silent-update merged main into the branch mid-run; the leg's timer push
+// `git push origin HEAD` was rejected non-fast-forward and "⏱️ timer: git push
+// failed" surfaced to the running agent. The agent's manual recovery (merge
+// origin → push) is exactly what the wrapper encodes: ONE fetch+merge+retry,
+// then the honest failure.
+
+suite('timerAutoCommitAndSave — gh-798 push self-heal wrapper', function() {
+
+    var NON_FF_ERROR = 'remote: error: GH003: Sorry, ref-lock protection\n' +
+        'To https://github.com/acme/repo.git\n' +
+        '! [rejected]        HEAD -> ai/gh-1415 (non-fast-forward)\n' +
+        'hint: Updates were rejected because the tip of your current branch is behind';
+
+    function makeCmd(script) {
+        var calls = [];
+        var cmd = function(command) {
+            calls.push(command);
+            return script(command);
+        };
+        cmd.calls = calls;
+        return cmd;
+    }
+
+    test('push succeeds first try — no healing commands, no extra probes', function() {
+        var m = loadTimer({});
+        var cmd = makeCmd(function() { return ''; });
+        var result = m.pushBranchWithSelfHeal(cmd, function() { return 'ai/gh-1'; });
+        assert.ok(result && result.pushed, 'pushed');
+        assert.equal(result.healed, false, 'no healing needed');
+        assert.equal(cmd.calls.length, 1, 'exactly the bare push');
+        assert.equal(cmd.calls[0], 'git push origin HEAD');
+    });
+
+    test('non-FF rejection → fetch + merge + ONE retry lands the commit', function() {
+        var m = loadTimer({});
+        var pushes = 0;
+        var cmd = makeCmd(function(command) {
+            if (command.indexOf('git push') === 0) {
+                pushes++;
+                if (pushes === 1) throw new Error(NON_FF_ERROR);
+                return ''; // retry lands
+            }
+            return '';
+        });
+        var result = m.pushBranchWithSelfHeal(cmd, function() { return 'ai/gh-1415'; });
+        assert.ok(result && result.pushed && result.healed, 'pushed after the self-heal');
+        assert.equal(pushes, 2, 'exactly one retry');
+        var fetchAt = -1, mergeAt = -1, retryAt = -1;
+        cmd.calls.forEach(function(c, i) {
+            if (c.indexOf('git -c fetch.recurseSubmodules=no fetch origin ai/gh-1415') === 0) fetchAt = i;
+            if (c.indexOf('git merge --no-edit origin/ai/gh-1415') === 0) mergeAt = i;
+            if (c.indexOf('git push') === 0 && i > 0) retryAt = i;
+        });
+        assert.ok(fetchAt !== -1, 'fetches the branch refspec (pushReworkChanges shape)');
+        assert.ok(mergeAt !== -1, 'merge-style sync — matches the SM merge refreshes, no rebase of WIP commits');
+        assert.ok(fetchAt < mergeAt && mergeAt < retryAt,
+            'order: fetch → merge → retry push');
+        assert.equal(cmd.calls[retryAt], 'git push origin HEAD', 'retry is the same bare push');
+    });
+
+    test('branch resolver consulted ONLY on the healing path', function() {
+        var m = loadTimer({});
+        var resolves = 0;
+        var cmd = makeCmd(function() { return ''; });
+        m.pushBranchWithSelfHeal(cmd, function() { resolves++; return 'ai/gh-2'; });
+        assert.equal(resolves, 0, 'a clean push must not pay a branch probe');
+    });
+
+    test('retry also rejected → honest failure, exactly one retry (no force-push)', function() {
+        var m = loadTimer({});
+        var pushes = 0;
+        var cmd = makeCmd(function(command) {
+            if (command.indexOf('git push') === 0) {
+                pushes++;
+                throw new Error(NON_FF_ERROR);
+            }
+            return '';
+        });
+        var threw = null;
+        try { m.pushBranchWithSelfHeal(cmd, function() { return 'ai/gh-3'; }); }
+        catch (e) { threw = e; }
+        assert.ok(threw, 'the failure surfaces after the self-heal');
+        assert.ok(String(threw.message).indexOf('non-fast-forward') !== -1, 'the original rejection class');
+        assert.equal(pushes, 2, 'first attempt + ONE retry — never more, never a force-push');
+    });
+
+    test('merge conflict during the heal → merge aborted, failure surfaces (no MERGE_HEAD left behind)', function() {
+        // A MERGE_HEAD left in the tree would make every later timer tick
+        // skip (gh-761) and strand conflict markers in the agent's working
+        // state mid-run — abort restores the pre-merge tree, the push
+        // failure surfaces honestly.
+        var m = loadTimer({});
+        var aborted = false;
+        var cmd = makeCmd(function(command) {
+            if (command.indexOf('git push') === 0) throw new Error(NON_FF_ERROR);
+            if (command.indexOf('git merge --no-edit') === 0) {
+                throw new Error('CONFLICT (content): Merge conflict in app.js\n' +
+                    'Automatic merge failed; fix conflicts and then commit the result.');
+            }
+            if (command === 'git merge --abort') { aborted = true; return ''; }
+            return '';
+        });
+        var threw = null;
+        try { m.pushBranchWithSelfHeal(cmd, function() { return 'ai/gh-4'; }); }
+        catch (e) { threw = e; }
+        assert.ok(threw, 'the conflict surfaces — never swallowed');
+        assert.ok(String(threw.message).indexOf('CONFLICT') !== -1, 'the merge error, not the push error');
+        assert.ok(aborted, 'git merge --abort ran — the tree is back to the pre-merge state');
+    });
+
+    test('non-fast-forward ONLY: other push failures surface immediately, no healing', function() {
+        var m = loadTimer({});
+        var cmd = makeCmd(function(command) {
+            if (command.indexOf('git push') === 0) {
+                throw new Error('fatal: could not read Username for https://example.com: No such device');
+            }
+            return '';
+        });
+        var threw = null;
+        try { m.pushBranchWithSelfHeal(cmd, function() { return 'ai/gh-5'; }); }
+        catch (e) { threw = e; }
+        assert.ok(threw, 'auth/network failures are not for this wrapper to fix');
+        assert.equal(cmd.calls.length, 1, 'no fetch/merge/retry for a non-FF failure');
+    });
+
+    test('unresolvable branch name on a rejected push → surfaces the original failure', function() {
+        var m = loadTimer({});
+        var cmd = makeCmd(function(command) {
+            if (command.indexOf('git push') === 0) throw new Error(NON_FF_ERROR);
+            return '';
+        });
+        var threw = null;
+        try { m.pushBranchWithSelfHeal(cmd, function() { return ''; }); }
+        catch (e) { threw = e; }
+        assert.ok(threw, 'no refspec to fetch — the original rejection surfaces');
+        assert.equal(cmd.calls.length, 1, 'no half-applied healing');
+    });
+
+    test('isNonFastForwardError recognizes the rejection shapes', function() {
+        var m = loadTimer({});
+        assert.equal(m.isNonFastForwardError(new Error(NON_FF_ERROR)), true, '[rejected] + non-fast-forward');
+        assert.equal(m.isNonFastForwardError(new Error(
+            'error: failed to push some refs\nhint: Updates were rejected because the tip of your current branch is behind\nhint: Integrate the remote changes (e.g. git pull)')),
+            true, 'behind-hint shape (older git)');
+        assert.equal(m.isNonFastForwardError(new Error('fatal: could not read Username')), false);
+        assert.equal(m.isNonFastForwardError(null), false);
+    });
+
+    test('isNonFastForwardError anchors the behind hint by SHAPE, not the bare word (gh-798 review)', function() {
+        // "behind" is a common English word: a pre-receive hook, a proxy
+        // error or a path segment that merely contains it must not be
+        // misread as a healable non-fast-forward rejection — that wastes a
+        // merge attempt in the agent's working tree mid-run and muddies the
+        // failure class in the logs. Git's actual hint shape is
+        // "the tip of your current branch is behind its remote counterpart".
+        var m = loadTimer({});
+        assert.equal(m.isNonFastForwardError(new Error(
+            'remote: error: GH010: hook declined — this mirror runs behind its master')),
+            false, 'pre-receive hook mentioning "behind" — not healable');
+        assert.equal(m.isNonFastForwardError(new Error(
+            'error: RPC failed; the proxy replica is behind by 2 events (internal error)')),
+            false, 'proxy/infra error mentioning "behind" — not healable');
+        assert.equal(m.isNonFastForwardError(new Error(
+            "error: pathspec '.behind-the-scenes' did not match any file(s) known to git")),
+            false, 'a path segment containing "behind" — not healable');
+        assert.equal(m.isNonFastForwardError(new Error(
+            'error: failed to push some refs\nhint: Updates were rejected because the tip of your current branch is behind its remote counterpart')),
+            true, 'the real git hint shape still heals');
+    });
+
+    test('end-to-end: a timer tick whose push is rejected self-heals inside the same tick', function() {
+        var cliCalls = [];
+        var pushes = 0;
+        var m = loadTimer({
+            cli_execute_command: function(args) {
+                cliCalls.push(args.command);
+                if (args.command.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1) {
+                    throw new Error('Command execution failed (exit code 1)'); // no merge in progress
+                }
+                if (args.command.indexOf('git check-ignore') === 0) {
+                    throw new Error('Command execution failed (exit code 1)');
+                }
+                if (args.command.indexOf('git rev-parse --abbrev-ref HEAD') !== -1) return 'ai/gh-1415\n';
+                if (args.command.indexOf('git status') !== -1) return 'M fixed.js\n';
+                if (args.command.indexOf('git push') === 0) {
+                    pushes++;
+                    if (pushes === 1) throw new Error(NON_FF_ERROR);
+                    return '';
+                }
+                return '';
+            }
+        });
+        m.action({
+            ticket: { key: 'GH-1415' },
+            jobParams: {
+                customParams: { targetRepository: { workingDir: '/some/dir' } },
+                metadata: { contextId: 'pr_rework' }
+            },
+            currentCliOutput: ''
+        });
+        assert.equal(pushes, 2, 'first push rejected, retry landed');
+        assert.ok(cliCalls.some(function(c) { return c.indexOf('git merge --no-edit origin/ai/gh-1415') === 0; }),
+            'the merge ran in the target working dir');
+        assert.ok(cliCalls.some(function(c) { return c.indexOf('WIP auto-save') !== -1; }) ||
+                  cliCalls.filter(function(c) { return c.indexOf('git commit') === 0; }).length >= 1,
+            'the WIP commit still landed on the remote');
+    });
+});
