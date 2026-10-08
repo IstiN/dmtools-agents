@@ -35,10 +35,6 @@ Full prompt / instruction set: [`agents/snapshots/bug_fix_batch_coordinator.md`]
 _Bug-Fix Batch Coordinator — postJSAction for bug_fix_batch_coordinator._
 
 - Source: `agents/js/createBugFixBatchEpic.js`
-- Side effects:
-  - post Jira comment
-  - create Jira ticket
-  - link Jira issues
 - Parameters (customParams):
   - `batchSize`
   - `removeLabel`
