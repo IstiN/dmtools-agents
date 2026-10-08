@@ -2,6 +2,13 @@
  * Unit tests for js/publishDiscoveryToConfluence.js.
  */
 
+function loadTrackersPd(mocks) {
+    return loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), mocks || {});
+}
+
 function loadPublishDiscovery(mocks, discoveryConfig) {
     var defaults = {
         confluence_get_children_by_id: function() { return []; },
@@ -33,6 +40,7 @@ function loadPublishDiscovery(mocks, discoveryConfig) {
         'js/publishDiscoveryToConfluence.js',
         makeRequire({
             './configLoader.js': configLoaderMock,
+            './common/trackers.js': loadTrackersPd(globals),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/feedbackLoop.js': (mocks && mocks.__feedbackLoop) || { resumeAgent: function() { return { attempted: false, reason: 'disabled' }; } },
             './common/contentOutput.js': loadModule('js/common/contentOutput.js',
@@ -63,6 +71,20 @@ suite('publishDiscoveryToConfluence', function() {
         assert.equal(result.success, false);
         assert.equal(result.action, 'missing_ticket');
         assert.equal(called, false);
+    });
+
+    test('ado provider: not-configured comment goes through ado_add_work_item_comment, no jira_* (wave1c)', function() {
+        var adoComments = [];
+        var jiraComments = [];
+        var mod = loadPublishDiscovery({
+            jira_post_comment: function(args) { jiraComments.push(args); },
+            ado_add_work_item_comment: function(args) { adoComments.push(args); }
+        }, {});
+        var result = mod.action(makeParams({ ticket: { key: '2', fields: { summary: 'S' } }, jobParams: { customParams: { trackerProvider: 'ado' } } }));
+        assert.equal(result.action, 'not_configured');
+        assert.equal(jiraComments.length, 0);
+        assert.equal(adoComments.length, 1);
+        assert.contains(adoComments[0].comment, 'not published');
     });
 
     test('not configured — posts explanatory Jira comment, does not query Confluence', function() {

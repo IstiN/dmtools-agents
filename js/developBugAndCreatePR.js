@@ -25,6 +25,7 @@ const developTicket = require('./developTicketAndCreatePR.js');
 const commentMarkup = require('./common/commentMarkup.js');
 const outputFiles = require('./common/outputFiles.js');
 const gitStaging = require('./common/gitStaging.js');
+var trackersModule = require('./common/trackers.js');
 
 function cleanCliOutput(output) {
     return (output || '').split('\n').filter(function(l) {
@@ -68,18 +69,18 @@ function readHasResponseMd(ticketKey) {
     }
 }
 
-function removeLabels(ticketKey, params) {
+function removeLabels(ticketKey, params, tracker) {
     const wipLabel = params.metadata && params.metadata.contextId
         ? params.metadata.contextId + '_wip' : null;
     if (wipLabel) {
-        try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
+        try { tracker.removeLabel(ticketKey, wipLabel); } catch (e) {}
     }
 
     const customParams = params.jobParams && params.jobParams.customParams;
     const removeLabel = customParams && customParams.removeLabel;
     if (removeLabel) {
         try {
-            jira_remove_label({ key: ticketKey, label: removeLabel });
+            tracker.removeLabel(ticketKey, removeLabel);
             console.log('✅ Removed SM label:', removeLabel);
         } catch (e) {}
     }
@@ -94,6 +95,7 @@ function action(params) {
         var scm = configLoader.createScm(config);
         const _customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
         const statuses = resolveStatuses(_customParams, jiraConfig && jiraConfig.statuses);
+        var tracker = trackersModule.createTracker(config, _customParams || {});
 
         console.log('=== Bug development post-action for', ticketKey, '===');
 
@@ -110,18 +112,16 @@ function action(params) {
                     var existingUrl = existingPr.html_url || existingPr.url || ('#' + existingPr.number);
                     console.log('⚠️  PR already open for', ticketKey, ':', existingUrl, '— skipping re-development');
                     try {
-                        jira_post_comment({
-                            key: ticketKey,
-                            comment: commentMarkup.forTicket(ticketKey).h(3, 'ℹ️ PR Already Open') + '\n\n' +
+                        tracker.postComment(ticketKey, commentMarkup.forTicket(ticketKey).h(3, 'ℹ️ PR Already Open') + '\n\n' +
                                 'A pull/merge request already exists for this ticket: ' + existingUrl + '\n\n' +
                                 'Moved ticket to ' + commentMarkup.forTicket(ticketKey).bold('In Review') + ' for review.'
-                        });
+                        );
                     } catch (e) {}
                     try {
-                        jira_move_to_status({ key: ticketKey, statusName: statuses.IN_REVIEW });
+                        tracker.moveToStatus(ticketKey, statuses.IN_REVIEW);
                         console.log('✅ Moved', ticketKey, 'to In Review');
                     } catch (e) { console.warn('Failed to move to In Review:', e); }
-                    removeLabels(ticketKey, params);
+                    removeLabels(ticketKey, params, tracker);
                     return { success: true, path: 'pr_already_open', ticketKey };
             }
         } catch (prCheckErr) {
@@ -136,21 +136,19 @@ function action(params) {
             if (!hasCodeGraphUsage()) {
                 console.warn('outputs/blocked.json rejected — no CodeGraph usage was recorded');
                 try {
-                    jira_post_comment({
-                        key: ticketKey,
-                        comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ Blocked Claim Needs CodeGraph Verification') + '\n\n' +
+                    tracker.postComment(ticketKey, commentMarkup.forTicket(ticketKey).h(3, '⚠️ Blocked Claim Needs CodeGraph Verification') + '\n\n' +
                             'The agent wrote `outputs/blocked.json`, but no CodeGraph usage was recorded. ' +
                             'Source-code bugs must use CodeGraph before declaring the work blocked.\n\n' +
                             'Resetting to ' + commentMarkup.forTicket(ticketKey).bold('Ready For Development') + ' for an automatic retry.'
-                    });
+                    );
                 } catch (e) {}
                 try {
-                    jira_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
+                    tracker.moveToStatus(ticketKey, statuses.READY_FOR_DEVELOPMENT);
                     console.log('✅ Moved', ticketKey, 'to Ready For Development for CodeGraph retry');
                 } catch (e) {
                     console.warn('Failed to move ticket to Ready For Development:', e);
                 }
-                removeLabels(ticketKey, params);
+                removeLabels(ticketKey, params, tracker);
                 return { success: true, path: 'blocked_without_codegraph', ticketKey };
             }
 
@@ -166,16 +164,16 @@ function action(params) {
                 comment += m.bold('Needs from human') + ': ' + blocked.needs + '\n';
             }
 
-            try { jira_post_comment({ key: ticketKey, comment: comment }); } catch (e) {}
+            try { tracker.postComment(ticketKey, comment); } catch (e) {}
 
             try {
-                jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BLOCKED });
+                tracker.moveToStatus(ticketKey, jiraConfig.statuses.BLOCKED);
                 console.log('✅ Moved', ticketKey, 'to Blocked');
             } catch (e) {
                 console.warn('Failed to move to Blocked:', e);
             }
 
-            removeLabels(ticketKey, params);
+            removeLabels(ticketKey, params, tracker);
             return { success: true, path: 'blocked', ticketKey };
         }
 
@@ -202,18 +200,18 @@ function action(params) {
                 comment += 'No new PR required — fix is already in the codebase. Moved to *Done*.';
             }
 
-            try { jira_post_comment({ key: ticketKey, comment: comment }); } catch (e) {}
+            try { tracker.postComment(ticketKey, comment); } catch (e) {}
 
             try {
-                jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.DONE });
+                tracker.moveToStatus(ticketKey, jiraConfig.statuses.DONE);
                 console.log('✅ Moved', ticketKey, 'to Done');
             } catch (e) {
                 console.warn('Failed to move to Done:', e);
             }
 
-            try { jira_add_label({ key: ticketKey, label: LABELS.AI_DEVELOPED }); } catch (e) {}
+            try { tracker.addLabel(ticketKey, LABELS.AI_DEVELOPED); } catch (e) {}
 
-            removeLabels(ticketKey, params);
+            removeLabels(ticketKey, params, tracker);
             return { success: true, path: 'already_fixed', ticketKey };
         }
 
@@ -343,22 +341,20 @@ function action(params) {
 
             // Post informational comment
             try {
-                jira_post_comment({
-                    key: ticketKeyForCheck,
-                    comment: commentMarkup.forTicket(ticketKeyForCheck).h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted (likely hit a rate limit) before completing the implementation. The ticket has been reset to ' + commentMarkup.forTicket(ticketKeyForCheck).bold('Ready For Development') + ' and will be automatically retried.\n\n' +
+                tracker.postComment(ticketKeyForCheck, commentMarkup.forTicket(ticketKeyForCheck).h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted (likely hit a rate limit) before completing the implementation. The ticket has been reset to ' + commentMarkup.forTicket(ticketKeyForCheck).bold('Ready For Development') + ' and will be automatically retried.\n\n' +
                         (hasGitChanges ? 'Partial analysis work was saved to the branch.' : 'No partial work was produced.')
-                });
+                );
             } catch (e) {}
 
             // Move ticket back to Ready For Development for retry
             try {
-                jira_move_to_status({ key: ticketKeyForCheck, statusName: statuses.READY_FOR_DEVELOPMENT });
+                tracker.moveToStatus(ticketKeyForCheck, statuses.READY_FOR_DEVELOPMENT);
                 console.log('✅ Moved', ticketKeyForCheck, 'to Ready For Development for retry');
             } catch (e) {
                 console.warn('Failed to move ticket to Ready For Development:', e);
             }
 
-            removeLabels(ticketKeyForCheck, params);
+            removeLabels(ticketKeyForCheck, params, tracker);
             // gh-742: ticket is reset for retry — fail the RUN so this
             // interrupted half-exit is a visible dead letter, not a green
             // no-PR leg that arms review downstream. The marked
@@ -372,7 +368,7 @@ function action(params) {
 
         // Always remove SM idempotency label — even on failure — to avoid permanent lock
         // (developTicketAndCreatePR doesn't know about SM labels)
-        removeLabels(ticketKey, params);
+        removeLabels(ticketKey, params, tracker);
 
         return result;
 
@@ -389,10 +385,8 @@ function action(params) {
         try {
             const key = (params.ticket || (params.jobParams && params.jobParams.ticket) || {}).key;
             if (key) {
-                jira_post_comment({
-                    key: key,
-                    comment: commentMarkup.forTicket(key).h(3, '❌ Bug Development Error') + '\n\n' + commentMarkup.forTicket(key).code(error.toString())
-                });
+                tracker.postComment(key, commentMarkup.forTicket(key).h(3, '❌ Bug Development Error') + '\n\n' + commentMarkup.forTicket(key).code(error.toString())
+                );
             }
         } catch (e) {}
         return { success: false, error: error.toString() };

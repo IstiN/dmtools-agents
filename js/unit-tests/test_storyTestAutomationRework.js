@@ -12,6 +12,13 @@
  * Uses: loadModule(), makeRequire(), assert, test(), suite()
  */
 
+function loadTrackersSr(mocks) {
+    return loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), mocks || {});
+}
+
 function loadRework(mocks) {
     var requireMap = {
         './configLoader.js': {
@@ -30,14 +37,16 @@ function loadRework(mocks) {
             postTokenUsageComments: function () {}
         }
     };
+    var allMocks = Object.assign({
+        cli_execute_command: function () { return ''; },
+        file_read: function () { return null; },
+        file_write: function () {}
+    }, mocks || {});
+    requireMap['./common/trackers.js'] = loadTrackersSr(allMocks);
     return loadModule(
         'js/storyTestAutomationRework.js',
         makeRequire(requireMap),
-        Object.assign({
-            cli_execute_command: function () { return ''; },
-            file_read: function () { return null; },
-            file_write: function () {}
-        }, mocks || {})
+        allMocks
     );
 }
 
@@ -115,5 +124,42 @@ suite('storyTestAutomationRework — mergeMain mid-merge guard (gh-761)', functi
 
         assert.ok(threw, 'must refuse');
         assert.contains(threw.toString(), 'conclude', 'error must tell the operator what to do');
+    });
+
+    test('ado provider: push-failure comment + wip cleanup use ado_* tools, no jira_* (wave1c)', function() {
+        var tools = [];
+        var mocks = {
+            cli_execute_command: function () { throw new Error('git boom'); },
+            file_read: function () { return null; },
+            file_write: function () {}
+        };
+        ['jira_post_comment', 'jira_remove_label', 'ado_add_work_item_comment', 'ado_remove_work_item_label'].forEach(function (n) {
+            mocks[n] = function () { tools.push(n); };
+        });
+        var m = loadRework(mocks);
+        // loadRework's configLoader stub only formats templates; patch in the pieces action() needs.
+        var req = {
+            './configLoader.js': {
+                loadProjectConfig: function () { return Object.assign({}, TEST_CONFIG, { jira: { statuses: {} } }); },
+                createScm: function () { return {}; },
+                formatTemplate: function (t) { return t; }
+            },
+            './common/autoStart.js': { triggerSmIfIdle: function () {} },
+            './common/pullRequest.js': {},
+            './common/mergeState.js': loadModule('js/common/mergeState.js'),
+            './config.js': { LABELS: {} },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function () {} },
+            './common/trackers.js': loadTrackersSr(mocks)
+        };
+        var mod = loadModule('js/storyTestAutomationRework.js', makeRequire(req), mocks);
+        var result = mod.action({
+            ticket: { key: '88' },
+            metadata: { contextId: 'story_test_automation_rework' },
+            jobParams: { customParams: { trackerProvider: 'ado' } }
+        });
+        assert.equal(result.success, false);
+        assert.equal(tools.filter(function (t) { return t.indexOf('jira_') === 0; }).length, 0);
+        assert.ok(tools.indexOf('ado_add_work_item_comment') !== -1);
+        assert.ok(tools.indexOf('ado_remove_work_item_label') !== -1);
     });
 });

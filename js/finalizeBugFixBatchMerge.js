@@ -7,10 +7,11 @@
 
 var batchContext = require('./prepareBugFixBatchContext.js');
 const { STATUSES, resolveStatuses } = require('./config.js');
+var trackersModule = require('./common/trackers.js');
 
-function transitionTicket(key, statusName) {
+function transitionTicket(tracker, key, statusName) {
     try {
-        jira_move_to_status({ key: key, statusName: statusName });
+        tracker.moveToStatus(key, statusName);
         console.log('Moved ' + key + ' to ' + statusName);
         return true;
     } catch (e) {
@@ -28,6 +29,7 @@ function action(params) {
 
         var customParams = actualParams.customParams || {};
         var statuses = resolveStatuses(customParams);
+        var tracker = trackersModule.createTracker(null, customParams);
 
         var bugs = batchContext.findBugsInEpic(epicKey);
         console.log('Finalizing batch merge for', epicKey, '(' + bugs.length + ' linked bug(s))');
@@ -35,23 +37,21 @@ function action(params) {
         var movedBugs = [];
         for (var i = 0; i < bugs.length; i++) {
             var bugKey = bugs[i].key;
-            if (transitionTicket(bugKey, statuses.DONE)) {
+            if (transitionTicket(tracker, bugKey, statuses.DONE)) {
                 movedBugs.push(bugKey);
             }
         }
 
-        transitionTicket(epicKey, statuses.DONE);
+        transitionTicket(tracker, epicKey, statuses.DONE);
 
         try {
             var bugList = movedBugs.length > 0
                 ? movedBugs.join(', ')
                 : '(none)';
-            jira_post_comment({
-                key: epicKey,
-                comment: 'h3. *Bug-fix Batch Finalized*\n\n' +
+            tracker.postComment(epicKey, 'h3. *Bug-fix Batch Finalized*\n\n' +
                     'The batch PR has been merged. The following linked bugs have been moved to *Done*:\n' +
                     bugList
-            });
+            );
         } catch (e) {
             console.warn('Failed to post finalization comment on Epic (non-fatal):', e);
         }

@@ -48,7 +48,7 @@ _Publish Discovery To Confluence — postJSAction for the discovery agent._
 
 - Source: `agents/js/publishDiscoveryToConfluence.js`
 - Side effects:
-  - post Jira comment
+  - post ticket comment (via tracker)
 
 
 ## LLM step

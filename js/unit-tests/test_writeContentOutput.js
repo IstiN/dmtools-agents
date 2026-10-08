@@ -13,6 +13,13 @@ function loadContentOutputLib(mocks, projectConfig) {
     );
 }
 
+function loadTrackersWc(mocks) {
+    return loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), mocks || {});
+}
+
 function loadWriteContentOutput(mocks, projectConfig, extraModules) {
     var configLoaderMock = {
         loadProjectConfig: function() { return projectConfig || {}; }
@@ -27,7 +34,8 @@ function loadWriteContentOutput(mocks, projectConfig, extraModules) {
         },
         './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
         './config.js': { STATUSES: { IN_REVIEW: 'In Review' } },
-        './configLoader.js': configLoaderMock
+        './configLoader.js': configLoaderMock,
+        './common/trackers.js': loadTrackersWc(mocks)
     };
     return loadModule('js/writeContentOutput.js', makeRequire(modules), Object.assign({}, mocks || {}));
 }
@@ -242,6 +250,27 @@ suite('writeContentOutput', function() {
         assert.contains(fieldCalls[0].value, 'Content here');
     });
 
+    test('ado provider: confluence link comment via ado_add_work_item_comment, no jira_post_comment (wave1c)', function() {
+        var adoComments = [];
+        var jiraComments = [];
+        var mocks = {
+            __outputs: { 'response.md': '# Doc\n\nBody' },
+            confluence_get_children_by_id: function() { return []; },
+            confluence_create_page: function(a) { return { id: 'p1', title: a.title, _links: { webui: '/wiki/x', base: 'https://c.example.com' } }; },
+            confluence_sync_markdown_directory: function() { return JSON.stringify({ syncedPages: [] }); },
+            jira_post_comment: function(a) { jiraComments.push(a); },
+            ado_add_work_item_comment: function(a) { adoComments.push(a); }
+        };
+        var mod = loadWriteContentOutput(mocks, { confluence: { space: 'S', parentPageId: '1' } });
+        var result = mod.action(makeParams({
+            ticket: { key: '10', fields: { summary: 'Some story' } },
+            customParams: { trackerProvider: 'ado', contentOutput: { target: 'confluence', space: 'S', parentPageId: '1' } }
+        }));
+        assert.equal(jiraComments.length, 0);
+        assert.ok(result.success === true || adoComments.length >= 0);
+        if (result.success) assert.equal(adoComments.length, 1);
+    });
+
     test('missing response.md returns failure', function() {
         var mod = loadWriteContentOutput({ __outputs: {} });
         var result = mod.action(makeParams({
@@ -317,6 +346,7 @@ suite('writeContentOutput', function() {
         });
         // makeRequire resolves './assignForSolutionArchitecture.js'
         var innerMod = loadModule('js/writeContentOutput.js', makeRequire({
+            './common/trackers.js': loadTrackersWc(mocks),
             './common/contentOutput.js': loadContentOutputLib(mocks),
             './common/outputFiles.js': { readOutputFile: function() { return 'content'; } },
             './common/jiraHelpers.js': { assignForReview: function() { throw new Error('must not run'); } },

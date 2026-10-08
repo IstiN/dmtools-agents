@@ -125,6 +125,7 @@ function formatUsageComment(filePath, data, initiator) {
  * @param {string} ticketKey - Jira ticket key to comment on.
  * @param {object} options - Optional settings.
  * @param {string} options.outputsDir - Directory to scan for *_usage.json files (default: outputs).
+ * @param {object} options.tracker - Optional tracker (js/common/trackers.js); defaults to env/jira.
  * @param {string} options.initiator - Optional initiator account id to mention in the comment.
  * @returns {object} Result summary { posted: number, files: string[], errors: string[] }.
  */
@@ -135,6 +136,7 @@ function postTokenUsageComments(ticketKey, options) {
     var posted = 0;
     var files = [];
     var errors = [];
+    var tracker = options.tracker || null;
 
     var usageFiles = findUsageFiles(outputsDir);
     if (!usageFiles.length) {
@@ -151,7 +153,8 @@ function postTokenUsageComments(ticketKey, options) {
 
         var comment = formatUsageComment(filePath, data, initiator);
         try {
-            jira_post_comment({ key: ticketKey, comment: comment });
+            if (!tracker) tracker = require('./trackers.js').createTracker(null, {});
+            tracker.postComment(ticketKey, comment);
             console.log('Posted token usage comment for ' + ticketKey + ' from ' + filePath);
             posted += 1;
             files.push(filePath);

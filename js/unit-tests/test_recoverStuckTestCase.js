@@ -2,6 +2,13 @@
  * Unit tests for js/recoverStuckTestCase.js.
  */
 
+function loadTrackersRs(mocks) {
+    return loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), mocks || {});
+}
+
 function loadRecoverStuckTestCase(options) {
     options = options || {};
     var scm = options.scm || {
@@ -11,9 +18,15 @@ function loadRecoverStuckTestCase(options) {
     var removedLabels = [];
     var comments = [];
 
+    var jiraMocks = {
+        jira_move_to_status: function(args) { statusMoves.push(args); },
+        jira_remove_label: function(args) { removedLabels.push(args); },
+        jira_post_comment: function(args) { comments.push(args); }
+    };
     var mod = loadModule(
         'js/recoverStuckTestCase.js',
         makeRequire({
+            './common/trackers.js': loadTrackersRs(options.mocks || jiraMocks),
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock({
                 repository: { owner: 'IstiN', repo: 'trackstate' }
@@ -21,11 +34,7 @@ function loadRecoverStuckTestCase(options) {
             './common/scm.js': { createScm: function() { return scm; } },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         }),
-        {
-            jira_move_to_status: function(args) { statusMoves.push(args); },
-            jira_remove_label: function(args) { removedLabels.push(args); },
-            jira_post_comment: function(args) { comments.push(args); }
-        }
+        options.mocks || jiraMocks
     );
 
     return {
@@ -37,6 +46,19 @@ function loadRecoverStuckTestCase(options) {
 }
 
 suite('recoverStuckTestCase', function() {
+
+    test('ado provider: moves stuck TC back to Backlog via ado_* tools, no jira_* (wave1c)', function() {
+        var tools = [];
+        var mocks = {};
+        ['jira_move_to_status', 'jira_remove_label', 'jira_post_comment', 'ado_move_to_state',
+         'ado_remove_work_item_label', 'ado_add_work_item_comment'].forEach(function(n) {
+            mocks[n] = function() { tools.push(n); };
+        });
+        var loaded = loadRecoverStuckTestCase({ mocks: mocks });
+        var result = loaded.mod.action({ ticket: { key: '1290' }, jobParams: { customParams: { trackerProvider: 'ado' } } });
+        assert.equal(result.action, 'moved_to_backlog');
+        assert.deepEqual(tools, ['ado_move_to_state', 'ado_remove_work_item_label', 'ado_add_work_item_comment']);
+    });
 
     test('moves stuck TC back to Backlog when no open PR exists', function() {
         var loaded = loadRecoverStuckTestCase();

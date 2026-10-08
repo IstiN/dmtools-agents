@@ -49,7 +49,8 @@ _Fetch Parent Context To Input_
 _Close Question Ticket Post-Action_
 
 - Source: `agents/js/closeQuestionTicket.js`
-- No detected file I/O or side effects.
+- Side effects:
+  - move ticket to status (via tracker)
 
 
 ## LLM step

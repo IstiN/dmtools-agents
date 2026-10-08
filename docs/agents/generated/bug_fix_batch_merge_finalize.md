@@ -35,7 +35,8 @@ _Finalize Bug-fix Batch Merge_
 
 - Source: `agents/js/finalizeBugFixBatchMerge.js`
 - Side effects:
-  - post Jira comment
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
 
 
 ## LLM step

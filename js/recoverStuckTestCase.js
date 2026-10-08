@@ -21,6 +21,7 @@ var scmModule = require('./common/scm.js');
 var configLoader = require('./configLoader.js');
 const { LABELS } = require('./config.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
+var trackersModule = require('./common/trackers.js');
 
 function findPRForTicket(scm, ticketKey) {
     try {
@@ -41,6 +42,7 @@ function action(params) {
     var ticketKey = params.ticket && params.ticket.key;
     var config = configLoader.loadProjectConfig(params.jobParams || params || {});
     var jiraConfig = config.jira;
+    var tracker = trackersModule.createTracker(config, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
 
     if (!ticketKey) {
         console.error('No ticket key found');
@@ -55,17 +57,15 @@ function action(params) {
     if (!pr) {
         console.log('No open PR found for', ticketKey, '— moving back to Backlog');
         try {
-            jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BACKLOG });
+            tracker.moveToStatus(ticketKey, jiraConfig.statuses.BACKLOG);
             console.log('✅ Moved', ticketKey, 'to Backlog');
         } catch (e) {
             console.error('Failed to move to Backlog:', e);
         }
         // Remove automation label so SM can re-trigger
-        try { jira_remove_label({ key: ticketKey, label: 'sm_test_automation_triggered' }); } catch (e) {}
-        jira_post_comment({
-            key: ticketKey,
-            comment: '🔄 *Recovery*: Test Case was stuck in "In Development" with no open PR. Moved back to Backlog for re-automation.'
-        });
+        try { tracker.removeLabel(ticketKey, 'sm_test_automation_triggered'); } catch (e) {}
+        tracker.postComment(ticketKey, '🔄 *Recovery*: Test Case was stuck in "In Development" with no open PR. Moved back to Backlog for re-automation.'
+        );
         return { success: true, action: 'moved_to_backlog', ticketKey: ticketKey };
     }
 
@@ -87,39 +87,35 @@ function action(params) {
     if (mergeableState === 'dirty' || mergeableState === 'conflicting' || mergeable === false) {
         console.log('PR has conflicts — moving ticket to In Rework');
         try {
-            jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.IN_REWORK });
+            tracker.moveToStatus(ticketKey, jiraConfig.statuses.IN_REWORK);
             console.log('✅ Moved', ticketKey, 'to In Rework');
         } catch (e) {
             console.error('Failed to move to In Rework:', e);
         }
         // Remove stale labels so rework agent can pick it up
-        try { jira_remove_label({ key: ticketKey, label: 'sm_test_rework_triggered' }); } catch (e) {}
-        try { jira_remove_label({ key: ticketKey, label: 'sm_test_automation_triggered' }); } catch (e) {}
-        jira_post_comment({
-            key: ticketKey,
-            comment: '🔄 *Recovery*: Test Case was stuck in "In Development" with a conflicting PR #' + pr.number + '. Moved to In Rework for conflict resolution.'
-        });
+        try { tracker.removeLabel(ticketKey, 'sm_test_rework_triggered'); } catch (e) {}
+        try { tracker.removeLabel(ticketKey, 'sm_test_automation_triggered'); } catch (e) {}
+        tracker.postComment(ticketKey, '🔄 *Recovery*: Test Case was stuck in "In Development" with a conflicting PR #' + pr.number + '. Moved to In Rework for conflict resolution.'
+        );
         return { success: true, action: 'moved_to_rework', ticketKey: ticketKey, prNumber: pr.number };
     }
 
     // PR is clean/mergeable — move to In Review - Passed for review
     console.log('PR looks clean — moving ticket to In Review - Passed');
     try {
-        jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.IN_REVIEW_PASSED });
+        tracker.moveToStatus(ticketKey, jiraConfig.statuses.IN_REVIEW_PASSED);
         console.log('✅ Moved', ticketKey, 'to In Review - Passed');
     } catch (e) {
         console.error('Failed to move to In Review - Passed:', e);
     }
-    try { jira_remove_label({ key: ticketKey, label: 'sm_test_automation_triggered' }); } catch (e) {}
-    jira_post_comment({
-        key: ticketKey,
-        comment: '🔄 *Recovery*: Test Case was stuck in "In Development" with clean PR #' + pr.number + '. Moved to In Review - Passed for code review.'
-    });
+    try { tracker.removeLabel(ticketKey, 'sm_test_automation_triggered'); } catch (e) {}
+    tracker.postComment(ticketKey, '🔄 *Recovery*: Test Case was stuck in "In Development" with clean PR #' + pr.number + '. Moved to In Review - Passed for code review.'
+    );
 
     // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
     // wrote outputs/*_usage.json during the agent run.
     try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
     } catch (e) {
         console.warn('Failed to post token usage comments:', e);
     }

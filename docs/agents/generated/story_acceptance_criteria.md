@@ -68,7 +68,7 @@ _Write Content Output — unified post-action for content-generating agents_
 
 - Source: `agents/js/writeContentOutput.js`
 - Side effects:
-  - post Jira comment
+  - post ticket comment (via tracker)
 - Parameters (customParams):
   - `contentOutput`
 

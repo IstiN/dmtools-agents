@@ -14,6 +14,7 @@
 
 var scmModule = require('./common/scm.js');
 var configLoader = require('./configLoader.js');
+var trackersModule = require('./common/trackers.js');
 
 var PR_CACHE_FILE = 'outputs/.recover_dirty_prs_cache.json';
 var PR_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -102,6 +103,7 @@ function action(params) {
     var ticketKey = params.ticket && params.ticket.key;
     var config = configLoader.loadProjectConfig(params.jobParams || params || {});
     var jiraConfig = config.jira;
+    var tracker = trackersModule.createTracker(config, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
 
     if (!ticketKey) {
         console.error('No ticket key found');
@@ -145,7 +147,7 @@ function action(params) {
 
     console.log('PR #' + pr.number + ' is dirty — moving ticket to In Rework for conflict resolution');
     try {
-        jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.IN_REWORK });
+        tracker.moveToStatus(ticketKey, jiraConfig.statuses.IN_REWORK);
         console.log('Moved', ticketKey, 'to In Rework');
     } catch (e) {
         console.error('Failed to move to In Rework:', e);
@@ -153,15 +155,13 @@ function action(params) {
     }
 
     // Remove stale labels so the rework agent can pick it up
-    try { jira_remove_label({ key: ticketKey, label: 'sm_test_rework_triggered' }); } catch (e) {}
-    try { jira_remove_label({ key: ticketKey, label: 'sm_test_automation_triggered' }); } catch (e) {}
-    try { jira_remove_label({ key: ticketKey, label: 'sm_test_review_triggered' }); } catch (e) {}
+    try { tracker.removeLabel(ticketKey, 'sm_test_rework_triggered'); } catch (e) {}
+    try { tracker.removeLabel(ticketKey, 'sm_test_automation_triggered'); } catch (e) {}
+    try { tracker.removeLabel(ticketKey, 'sm_test_review_triggered'); } catch (e) {}
 
     try {
-        jira_post_comment({
-            key: ticketKey,
-            comment: '🔄 *Recovery*: Test Case PR #' + pr.number + ' became dirty while in code review. Moved to In Rework so the test-automation rework agent can resolve the merge conflicts.'
-        });
+        tracker.postComment(ticketKey, '🔄 *Recovery*: Test Case PR #' + pr.number + ' became dirty while in code review. Moved to In Rework so the test-automation rework agent can resolve the merge conflicts.'
+        );
     } catch (e) {
         console.warn('Failed to post recovery comment:', e);
     }

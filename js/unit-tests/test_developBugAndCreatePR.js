@@ -2,6 +2,13 @@
  * Unit tests for js/developBugAndCreatePR.js.
  */
 
+function loadTrackersDev(mocks) {
+    return loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), mocks || {});
+}
+
 function loadDevelopBugAndCreatePR(mocks) {
     mocks = mocks || {};
     var comments = [];
@@ -77,6 +84,7 @@ var developTicketRealModule = loadModule(
             './common/gitStaging.js': gitStagingModule,
             './configLoader.js': configLoaderModule,
             './common/outputFiles.js': outputFiles,
+            './common/trackers.js': loadTrackersDev(allMocks),
             './developTicketAndCreatePR.js': {
                 action: function() { return { success: true, path: 'delegated' }; },
                 throwInterruptedReset: developTicketRealModule.throwInterruptedReset,
@@ -230,6 +238,37 @@ suite('developBugAndCreatePR', function() {
             { key: 'TS-1303', label: 'bug_development_wip' },
             { key: 'TS-1303', label: 'sm_bug_development_triggered' }
         ]);
+    });
+
+    test('ado provider: already_fixed path uses ado_* tools and no jira_* tool (wave1c)', function() {
+        var adoCalls = [];
+        var jiraCalls = [];
+        var loaded = loadDevelopBugAndCreatePR({
+            file_read: function(args) {
+                if (args.path === 'outputs/already_fixed.json') {
+                    return JSON.stringify({ rca: 'covered', commit: 'abc123', description: 'ok' });
+                }
+                throw new Error('missing ' + args.path);
+            },
+            jira_post_comment: function(a) { jiraCalls.push(a); },
+            jira_move_to_status: function(a) { jiraCalls.push(a); },
+            jira_remove_label: function(a) { jiraCalls.push(a); },
+            jira_add_label: function(a) { jiraCalls.push(a); },
+            ado_move_to_state: function(a) { adoCalls.push(['move', a]); },
+            ado_add_work_item_comment: function(a) { adoCalls.push(['comment', a]); },
+            ado_remove_work_item_label: function(a) { adoCalls.push(['remove', a]); },
+            ado_add_work_item_label: function(a) { adoCalls.push(['add', a]); }
+        });
+        var result = loaded.mod.action({
+            ticket: { key: '1303', fields: { summary: 'x', description: '', labels: [] } },
+            metadata: { contextId: 'bug_development' },
+            jobParams: { customParams: { trackerProvider: 'ado' } }
+        });
+        assert.equal(result.success, true);
+        assert.equal(jiraCalls.length, 0);
+        assert.ok(adoCalls.some(function(c) { return c[0] === 'move' && c[1].state === 'Done'; }));
+        assert.ok(adoCalls.some(function(c) { return c[0] === 'comment'; }));
+        assert.ok(adoCalls.some(function(c) { return c[0] === 'remove'; }));
     });
 
     test('rejects blocked output when CodeGraph was not used', function() {
@@ -423,9 +462,24 @@ suite('developBugAndCreatePR', function() {
         var commentMarkupMod = loadModule('js/common/commentMarkup.js',
             makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
         var gitStagingMod = loadModule('js/common/gitStaging.js');
+        var inlineMocks = {
+            cli_execute_command: function (args) {
+                if (args.command.indexOf('gh pr list --head ') === 0) return '';
+                if (args.command.indexOf('git check-ignore') === 0) {
+                    throw new Error('Command execution failed (exit code 1)');
+                }
+                if (args.command === 'git status --porcelain') return '';
+                if (args.command === 'git branch --show-current') return 'ai/TS-1306';
+                return '';
+            },
+            jira_post_comment: function () { },
+            jira_move_to_status: function () { },
+            jira_remove_label: function () { }
+        };
         var mod = loadModule(
             'js/developBugAndCreatePR.js',
             makeRequire({
+                './common/trackers.js': loadTrackersDev(inlineMocks),
                 './config.js': configModule,
                 './common/gitStaging.js': gitStagingMod,
                 './configLoader.js': configLoaderModule,
@@ -445,20 +499,7 @@ suite('developBugAndCreatePR', function() {
                 },
                 './common/commentMarkup.js': commentMarkupMod
             }),
-            {
-                cli_execute_command: function (args) {
-                    if (args.command.indexOf('gh pr list --head ') === 0) return '';
-                    if (args.command.indexOf('git check-ignore') === 0) {
-                        throw new Error('Command execution failed (exit code 1)');
-                    }
-                    if (args.command === 'git status --porcelain') return '';
-                    if (args.command === 'git branch --show-current') return 'ai/TS-1306';
-                    return '';
-                },
-                jira_post_comment: function () { },
-                jira_move_to_status: function () { },
-                jira_remove_label: function () { }
-            }
+            inlineMocks
         );
 
         var caught = null;
@@ -567,9 +608,18 @@ function loadBugForMissingResponseResume(opts) {
         }
     );
 
+    var spyMocks = {
+        cli_execute_command: cliMock,
+        file_read: sharedFileRead,
+        file_write: sharedFileWrite,
+        jira_post_comment: function (args) { comments.push(args); },
+        jira_move_to_status: function (args) { moves.push(args); },
+        jira_remove_label: function (args) { removed.push(args); }
+    };
     var mod = loadModule(
         'js/developBugAndCreatePR.js',
         makeRequire({
+            './common/trackers.js': loadTrackersDev(spyMocks),
             './config.js': configModule,
             './common/gitStaging.js': gitStagingModuleLocal,
             './configLoader.js': configLoaderModule,
@@ -602,14 +652,7 @@ function loadBugForMissingResponseResume(opts) {
             },
             './common/commentMarkup.js': commentMarkupModuleLocal
         }),
-        {
-            cli_execute_command: cliMock,
-            file_read: sharedFileRead,
-            file_write: sharedFileWrite,
-            jira_post_comment: function (args) { comments.push(args); },
-            jira_move_to_status: function (args) { moves.push(args); },
-            jira_remove_label: function (args) { removed.push(args); }
-        }
+        spyMocks
     );
 
     return {

@@ -30,6 +30,7 @@ var contentOutput = require('./common/contentOutput.js');
 var outputFiles = require('./common/outputFiles.js');
 var jiraHelpers = require('./common/jiraHelpers.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
+var trackersModule = require('./common/trackers.js');
 var config = require('./config.js');
 
 function action(params) {
@@ -53,6 +54,7 @@ function action(params) {
     try {
         projectConfig = require('./configLoader.js').loadProjectConfig(params.jobParams || params);
     } catch (e) { /* optional */ }
+    var tracker = trackersModule.createTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
 
     var content = outputFiles.readOutputFile('response.md', {
         ticketKey: ticketKey,
@@ -111,11 +113,9 @@ function action(params) {
             }
 
             try {
-                jira_post_comment({
-                    key: ticketKey,
-                    comment: 'h3. 📄 Content published to Confluence\n\n' +
+                tracker.postComment(ticketKey, 'h3. 📄 Content published to Confluence\n\n' +
                         (result.pageUrl ? 'Page: ' + result.pageUrl : 'Page id: ' + result.pageId)
-                });
+                );
             } catch (e) {
                 console.warn('Failed to post Confluence link comment:', e);
             }
@@ -145,7 +145,7 @@ function action(params) {
         }
     } else if (cfg.assignForReview !== false) {
         try {
-            jiraHelpers.assignForReview(ticketKey, initiatorId, wipLabel, cfg.reviewStatus || config.STATUSES.IN_REVIEW);
+            jiraHelpers.assignForReview(ticketKey, initiatorId, wipLabel, cfg.reviewStatus || config.STATUSES.IN_REVIEW, tracker);
         } catch (e) {
             console.warn('assignForReview failed (non-fatal):', e);
         }
@@ -153,7 +153,7 @@ function action(params) {
 
     // 4. Token usage comments
     try {
-        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: initiatorId });
+        tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: initiatorId, tracker: tracker });
     } catch (e) {
         console.warn('Failed to post token usage comments:', e);
     }

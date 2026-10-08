@@ -61,9 +61,10 @@ _Story Test Automation Rework Action_
 
 - Source: `agents/js/storyTestAutomationRework.js`
 - Side effects:
-  - remove label "story_test_automation_rework_wip"
-  - remove label "bug_test_automation_rework_wip"
-  - post Jira comment
+  - remove label "story_test_automation_rework_wip" (via tracker)
+  - remove label "bug_test_automation_rework_wip" (via tracker)
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
   - git push
   - git checkout
   - git merge

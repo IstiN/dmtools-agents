@@ -14,49 +14,11 @@ const { STATUSES, LABELS } = require('../config.js');
  * @param {string} wipLabel - Optional WIP label to remove after processing
  * @returns {Object} Result object with success status and message
  */
-function assignForReview(ticketKey, initiatorId, wipLabel, targetStatus) {
+function assignForReview(ticketKey, initiatorId, wipLabel, targetStatus, tracker) {
     const statusName = targetStatus || STATUSES.IN_REVIEW;
     try {
-        console.log("Processing ticket:", ticketKey);
-
-        // Assign to initiator
-        jira_assign_ticket_to({
-            key: ticketKey,
-            accountId: initiatorId
-        });
-
-        // Move to target status
-        jira_move_to_status({
-            key: ticketKey,
-            statusName: statusName
-        });
-
-        // Add AI-generated label
-        jira_add_label({
-            key: ticketKey,
-            label: LABELS.AI_GENERATED
-        });
-
-        // Remove WIP label if provided
-        if (wipLabel) {
-            try {
-                jira_remove_label({
-                    key: ticketKey,
-                    label: wipLabel
-                });
-                console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
-            } catch (labelError) {
-                console.warn('Failed to remove WIP label "' + wipLabel + '":', labelError);
-            }
-        }
-
-        console.log('✅ Assigned to initiator and moved to ' + statusName);
-
-        return {
-            success: true,
-            message: 'Ticket ' + ticketKey + ' assigned and moved to ' + statusName
-        };
-
+        const t = tracker || require('./trackers.js').createTracker(null, {});
+        return t.assignForReview(ticketKey, initiatorId, wipLabel, statusName);
     } catch (error) {
         console.error("❌ Error in assignForReview:", error);
         return {
@@ -97,16 +59,14 @@ function extractTicketKey(result) {
  * @param {string} priority - Priority name (e.g., 'Low', 'Medium', 'High')
  * @returns {boolean} True if successful, false otherwise
  */
-function setTicketPriority(ticketKey, priority) {
+function setTicketPriority(ticketKey, priority, tracker) {
     if (!ticketKey || !priority) {
         return false;
     }
     
     try {
-        jira_set_priority({
-            key: ticketKey,
-            priority: priority
-        });
+        const t = tracker || require('./trackers.js').createTracker(null, {});
+        t.setPriority(ticketKey, priority);
         console.log('Set priority ' + priority + ' on ticket ' + ticketKey);
         return true;
     } catch (priorityError) {
