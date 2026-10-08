@@ -57,6 +57,10 @@ function loadPostCli(mocks) {
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
             './common/pullRequest.js': prHelper,
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+            }), allMocks),
             './common/outputFiles.js': outputFiles
         }),
         allMocks
@@ -487,4 +491,29 @@ suite('postMobileTestAutomationResults — git commit resilience', function() {
             'should read result from automation repo fallback path and move to Passed');
     });
 
+});
+
+suite('postMobileTestAutomationResults: tracker layer (ADO)', function() {
+    test('ado: error path uses ado_* tools and no jira_* tool', function() {
+        var calls = [];
+        var mocks = {
+            file_read: function() { return null; },
+            cli_execute_command: function() { throw new Error('boom'); }
+        };
+        ['jira_post_comment', 'jira_move_to_status', 'jira_add_label', 'jira_remove_label'].forEach(function(n) {
+            mocks[n] = function(a) { calls.push({ tool: n, args: a }); };
+        });
+        ['ado_add_work_item_comment', 'ado_move_to_state', 'ado_remove_work_item_label', 'ado_add_work_item_label'].forEach(function(n) {
+            mocks[n] = function(a) { calls.push({ tool: n, args: a }); };
+        });
+        var module = loadPostCli(mocks);
+        var params = makeParams('77', { trackerProvider: 'ado', removeLabel: 'sm_trigger' });
+        var res = module.action(params);
+        assert.equal(res.success, false);
+        var tools = calls.map(function(c) { return c.tool; });
+        assert.equal(tools.filter(function(t) { return t.indexOf('jira_') === 0; }).length, 0);
+        assert.ok(tools.length > 0, 'expected at least one ado_* call');
+        assert.ok(calls.every(function(c) { return String(c.args.id) === '77'; }));
+        assert.deepEqual(tools, ['ado_add_work_item_comment']);
+    });
 });

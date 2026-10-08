@@ -5,10 +5,23 @@
  */
 
 // Import common helper functions
-const { assignForReview, extractTicketKey } = require('./common/jiraHelpers.js');
+const { extractTicketKey } = require('./common/jiraHelpers.js');
 const { STATUSES, LABELS, DIAGRAM_DEFAULTS, DIAGRAM_FORMAT, JIRA_FIELDS } = require('./config.js');
 const outputFiles = require('./common/outputFiles.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+
+// Tracker-agnostic ticket operations — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
 
 /**
  * Read enhancement data from separate files
@@ -87,10 +100,7 @@ function updateSDCoreTicket(ticketKey, enhancementData) {
 
     try {
         // Update ticket description
-        jira_update_description({
-            key: ticketKey,
-            description: enhancementData.description
-        });
+        getTracker().updateDescription(ticketKey, enhancementData.description);
         results.descriptionUpdated = true;
         console.log('✅ Updated description for ' + ticketKey);
     } catch (error) {
@@ -101,11 +111,7 @@ function updateSDCoreTicket(ticketKey, enhancementData) {
     try {
         // Update Diagrams field with mermaid diagram wrapped in code tags for better visualization
         const wrappedDiagram = DIAGRAM_FORMAT.MERMAID_WRAPPER_START + enhancementData.diagram + DIAGRAM_FORMAT.MERMAID_WRAPPER_END;
-        jira_update_field({
-            key: ticketKey,
-            field: JIRA_FIELDS.DIAGRAMS,
-            value: wrappedDiagram
-        });
+        getTracker().updateField(ticketKey, JIRA_FIELDS.DIAGRAMS, wrappedDiagram);
         results.diagramUpdated = true;
         console.log('✅ Updated Diagrams field for ' + ticketKey);
     } catch (error) {
@@ -121,6 +127,7 @@ function action(params) {
     try {
         const ticketKey = params.ticket.key;
         const initiatorId = params.initiator;
+        initTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
         // Dynamically generate WIP label from contextId
         const wipLabel = params.metadata && params.metadata.contextId
             ? params.metadata.contextId + '_wip'
@@ -144,7 +151,7 @@ function action(params) {
         const updateResults = updateSDCoreTicket(ticketKey, enhancementData);
 
         // Use common assignForReview function for post-processing
-        const assignResult = assignForReview(ticketKey, initiatorId, wipLabel, STATUSES.READY_FOR_DEVELOPMENT);
+        const assignResult = getTracker().assignForReview(ticketKey, initiatorId, wipLabel, STATUSES.READY_FOR_DEVELOPMENT);
 
         if (!assignResult.success) {
             return assignResult;
@@ -176,4 +183,8 @@ function action(params) {
             error: error.toString()
         };
     }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { action };
 }

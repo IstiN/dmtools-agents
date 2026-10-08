@@ -56,8 +56,9 @@ _Post Test Automation Results Action (postJSAction for test_case_automation)_
 
 - Source: `agents/js/postTestAutomationResults.js`
 - Side effects:
-  - remove label "sm_test_automation_triggered"
-  - post Jira comment
+  - remove label "sm_test_automation_triggered" (via tracker)
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
   - git push
   - git merge
 - Parameters (customParams):
