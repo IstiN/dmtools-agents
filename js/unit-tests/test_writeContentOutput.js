@@ -378,7 +378,8 @@ suite('writeContentOutput', function() {
             './configLoader.js': { loadProjectConfig: function() { return { jira: { statuses: {} } }; } },
             './common/scm.js': { createScm: function() { return {}; } },
             './common/autoStart.js': {},
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/trackers.js': { createTracker: function() { return {}; } }
         }), {
             jira_assign_ticket_to: function() {},
             jira_move_to_status: function() {},
