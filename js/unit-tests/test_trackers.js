@@ -980,3 +980,85 @@ suite('trackers.js extended operations — github provider', function () {
         assert.equal(t.fieldCode('p', 'n'), null);
     });
 });
+
+// ── Jira-shaped issue view + ADO tag string (wave 2 foundation) ──────────────
+
+suite('trackers.js toIssueView and ADO tags', function () {
+    function t(provider) { return loadTrackers({}).createTracker({ tracker: { provider: provider } }); }
+
+    test('ADO System.Tags string is split into label names', function () {
+        var n = t('ado').normalizeTicket({ id: 5, fields: { 'System.Title': 'x', 'System.State': 'Active', 'System.Tags': 'sm_triggered; ai_generated ;wip' } });
+        assert.deepEqual(n.labels, ['sm_triggered', 'ai_generated', 'wip']);
+        assert.deepEqual(t('ado').normalizeTicket({ id: 6, fields: { 'System.Title': 'x', 'System.Tags': '' } }).labels, []);
+    });
+
+    test('a Jira payload passes through UNCHANGED (custom fields and issuelinks survive)', function () {
+        var raw = { key: 'A-1', id: '1', fields: { summary: 's', status: { name: 'Open' }, customfield_10091: 'sol', issuelinks: [{ id: 1 }] } };
+        var v = t('jira').toIssueView(raw);
+        assert.equal(v, raw);
+        assert.equal(v.fields.customfield_10091, 'sol');
+        assert.equal(t('jira').toIssueView(JSON.stringify(raw)).fields.issuelinks.length, 1);
+    });
+
+    test('an ADO work item becomes a Jira-shaped view the existing readers understand', function () {
+        var v = t('ado').toIssueView({ id: 77, fields: {
+            'System.Title': 'Fix it', 'System.State': 'Active', 'System.WorkItemType': 'Bug', 'System.Parent': 70,
+            'System.Tags': 'a; b', 'System.Description': 'd', 'System.AssignedTo': { displayName: 'Jane', uniqueName: 'j@x' } } });
+        assert.equal(v.key, '77');
+        assert.equal(v.fields.summary, 'Fix it');
+        assert.equal(v.fields.status.name, 'Active');
+        assert.equal(v.fields.issuetype.name, 'Bug');
+        assert.equal(v.fields.parent.key, '70');
+        assert.deepEqual(v.fields.labels, ['a', 'b']);
+        assert.equal(v.fields.description, 'd');
+        assert.equal(v.fields.assignee.displayName, 'Jane');
+    });
+
+    test('toIssueView returns null for empty/unparseable input', function () {
+        assert.equal(t('ado').toIssueView(null), null);
+        assert.equal(t('ado').toIssueView('not json'), null);
+    });
+});
+
+suite('trackers.js getIssue / searchIssues (Jira-shaped reads)', function () {
+    function make(provider, mocks) { return loadTrackers(mocks).createTracker({ tracker: { provider: provider } }); }
+
+    test('jira getIssue forwards key + fields and returns the payload unchanged', function () {
+        var raw = { key: 'A-1', fields: { summary: 's', status: { name: 'Open' }, customfield_1: 'v' } };
+        var g = recorder('jira_get_ticket', raw);
+        var v = make('jira', { jira_get_ticket: g }).getIssue('A-1', ['summary']);
+        assert.deepEqual(g.calls[0], { key: 'A-1', fields: ['summary'] });
+        assert.equal(v.fields.customfield_1, 'v');
+        var g2 = recorder('jira_get_ticket', raw);
+        make('jira', { jira_get_ticket: g2 }).getIssue('A-1');
+        assert.deepEqual(g2.calls[0], { key: 'A-1' });
+    });
+
+    test('jira searchIssues accepts a bare array AND a {issues} page, forwards maxResults/fields', function () {
+        var arr = recorder('jira_search_by_jql', [{ key: 'A-1', fields: { summary: 'a' } }]);
+        var r1 = make('jira', { jira_search_by_jql: arr }).searchIssues('project = A', { maxResults: 5, fields: ['key'] });
+        assert.deepEqual(arr.calls[0], { jql: 'project = A', fields: ['key'], maxResults: 5 });
+        assert.equal(r1.length, 1);
+        var page = recorder('jira_search_by_jql', JSON.stringify({ issues: [{ key: 'A-2', fields: { summary: 'b' } }] }));
+        assert.equal(make('jira', { jira_search_by_jql: page }).searchIssues('q')[0].key, 'A-2');
+        assert.deepEqual(make('jira', { jira_search_by_jql: recorder('x', null) }).searchIssues('q'), []);
+    });
+
+    test('ado getIssue returns a Jira-shaped view of the work item', function () {
+        var g = recorder('ado_get_work_item', { id: 9, fields: { 'System.Title': 't', 'System.State': 'New', 'System.WorkItemType': 'Task', 'System.Tags': 'x; y' } });
+        var v = make('ado', { ado_get_work_item: g }).getIssue(9);
+        assert.deepEqual(g.calls[0], { id: '9' });
+        assert.equal(v.key, '9');
+        assert.equal(v.fields.issuetype.name, 'Task');
+        assert.deepEqual(v.fields.labels, ['x', 'y']);
+    });
+
+    test('ado searchIssues sends the query as WIQL (no translation) and reads {value}', function () {
+        var s = recorder('ado_search_by_wiql', JSON.stringify({ value: [{ id: 3, fields: { 'System.Title': 'a', 'System.State': 'Active' } }] }));
+        var r = make('ado', { ado_search_by_wiql: s }).searchIssues("SELECT [System.Id] FROM WorkItems WHERE [System.State] = 'Active'");
+        assert.equal(s.calls[0].wiql, "SELECT [System.Id] FROM WorkItems WHERE [System.State] = 'Active'");
+        assert.equal(r[0].key, '3');
+        assert.equal(r[0].fields.status.name, 'Active');
+    });
+});
+

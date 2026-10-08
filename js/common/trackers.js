@@ -61,6 +61,10 @@ function _parseJson(raw) {
  * Jira/ADO give strings; GitHub gives [{ name: '...' }].
  */
 function _labelNames(raw) {
+    // ADO keeps tags as ONE string in System.Tags: "a; b; c".
+    if (typeof raw === 'string' && raw.indexOf('[') !== 0) {
+        return raw.split(';').map(function (x) { return x.trim(); }).filter(function (x) { return x; });
+    }
     var parsed = _parseJson(raw);
     if (!Array.isArray(parsed)) return [];
     var names = [];
@@ -243,6 +247,20 @@ function createTracker(config, customParams) {
     }
 
 
+
+    function jiraGetIssue(key, fields) {
+        var args = { key: key };
+        if (fields) args.fields = fields;
+        return toIssueView(jira_get_ticket(args));
+    }
+
+    function jiraSearchIssues(query, opts) {
+        var args = { jql: query };
+        if (opts && opts.fields) args.fields = opts.fields;
+        if (opts && opts.maxResults) args.maxResults = opts.maxResults;
+        return _issueList(jira_search_by_jql(args), 'issues');
+    }
+
     function jiraLinkIssues(sourceKey, targetKey, relationship) {
         return jira_link_issues({ sourceKey: sourceKey, anotherKey: targetKey, relationship: relationship });
     }
@@ -342,6 +360,19 @@ function createTracker(config, customParams) {
                 ' — not available in this runtime (epam/dm.ai#661)');
         }
         return fn;
+    }
+
+
+    function adoGetIssue(key, fields) {
+        var args = { id: String(key) };
+        if (fields) args.fields = fields;
+        return toIssueView(ado_get_work_item(args));
+    }
+
+    function adoSearchIssues(query, opts) {
+        var args = { wiql: query };
+        if (opts && opts.fields) args.fields = opts.fields;
+        return _issueList(ado_search_by_wiql(args), 'value');
     }
 
     function adoLinkIssues(sourceKey, targetKey, relationship) {
@@ -561,6 +592,8 @@ function createTracker(config, customParams) {
             moveToStatus: jiraMoveToStatus,
             assignTo: jiraAssignTo,
             createTicket: jiraCreateTicket,
+            getIssue: jiraGetIssue,
+            searchIssues: jiraSearchIssues,
             linkIssues: jiraLinkIssues,
             updateField: jiraUpdateField,
             updateDescription: jiraUpdateDescription,
@@ -580,6 +613,8 @@ function createTracker(config, customParams) {
             moveToStatus: adoMoveToStatus,
             assignTo: adoAssignTo,
             createTicket: adoCreateTicket,
+            getIssue: adoGetIssue,
+            searchIssues: adoSearchIssues,
             linkIssues: adoLinkIssues,
             updateField: adoUpdateField,
             updateDescription: adoUpdateDescription,
@@ -600,6 +635,10 @@ function createTracker(config, customParams) {
             assignTo: githubAssignTo,
             createTicket: githubCreateTicket,
             // Not expressible on GitHub issues — fail with a clear, provider-named error.
+            getIssue: function (key) { return toIssueView(githubGetTicket(key)); },
+            searchIssues: function (query) {
+                return githubSearch(query).map(function (n) { return toIssueView(n); });
+            },
             linkIssues: function () { unsupported('linkIssues'); },
             updateField: function () { unsupported('updateField'); },
             updateDescription: function () { unsupported('updateDescription'); },
@@ -705,6 +744,45 @@ function createTracker(config, customParams) {
         return flat;
     }
 
+
+    /**
+     * Jira-shaped view of any backend's ticket: { key, id, fields: { summary, status:{name},
+     * labels:[...], issuetype:{name}, description, assignee, parent:{key}, fixVersions:[{name}] }, raw }.
+     * Many scripts read ticket.fields.* (43 files); this keeps them provider-neutral without
+     * rewriting each reader. Jira payloads pass through UNCHANGED (full fidelity: custom fields,
+     * issuelinks, ...); other providers get the neutral subset built from normalizeTicket().
+     */
+    function toIssueView(rawTicket) {
+        var t = _parseJson(rawTicket);
+        if (t && typeof t === 'object' && t.fields && t.fields.summary !== undefined) return t;
+        var n = normalizeTicket(t);
+        if (!n) return null;
+        var fields = {
+            summary: n.title,
+            status: { name: n.status },
+            labels: n.labels || [],
+            issuetype: { name: n.issueType },
+            description: n.description,
+            assignee: n.assignee ? { displayName: n.assignee } : null,
+            fixVersions: (n.fixVersions || []).map(function (v) { return { name: v }; })
+        };
+        if (n.parentKey) fields.parent = { key: n.parentKey };
+        return { key: n.key, id: n.id, fields: fields, raw: t };
+    }
+
+    /** A search result (page object or bare array) as an array of Jira-shaped issue views. */
+    function _issueList(rawPage, listField) {
+        var page = _parseJson(rawPage);
+        var list = page && typeof page === 'object' && !Array.isArray(page)
+            ? (page[listField] || []) : (Array.isArray(page) ? page : []);
+        var out = [];
+        for (var i = 0; i < list.length; i++) {
+            var v = toIssueView(list[i]);
+            if (v) out.push(v);
+        }
+        return out;
+    }
+
     function _flatTicket(key, id, title, status, assignee, labels, description, url) {
         return {
             key: key,
@@ -788,6 +866,8 @@ function createTracker(config, customParams) {
         moveToStatus: function (k, s) { return impl.moveToStatus(k, s); },
         assignTo: function (k, u) { return impl.assignTo(k, u); },
         createTicket: function (p, t, ti, d) { return impl.createTicket(p, t, ti, d); },
+        getIssue: function (k, f) { return impl.getIssue(k, f); },
+        searchIssues: function (q, o) { return impl.searchIssues(q, o); },
         linkIssues: function (s, t, r) { return impl.linkIssues(s, t, r); },
         updateField: function (k, f, v) { return impl.updateField(k, f, v); },
         updateDescription: function (k, d) { return impl.updateDescription(k, d); },
@@ -797,6 +877,7 @@ function createTracker(config, customParams) {
         createTicketWithParent: function (p, t, ti, d, pk, x) { return impl.createTicketWithParent(p, t, ti, d, pk, x); },
         createTicketWithFields: function (p, f) { return impl.createTicketWithFields(p, f); },
         normalizeTicket: normalizeTicket,
+        toIssueView: toIssueView,
         extractTicketKey: extractTicketKey,
         assignForReview: assignForReview
     };
