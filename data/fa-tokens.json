@@ -7,5 +7,14 @@
       "completion": 33448,
       "total": 161109
     }
+  ],
+  "issue-799": [
+    {
+      "leg": "dev",
+      "at": "2026-10-08T20:03:26Z",
+      "prompt": 153716,
+      "completion": 65129,
+      "total": 218845
+    }
   ]
 }
