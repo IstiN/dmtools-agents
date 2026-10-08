@@ -64,7 +64,8 @@ _Develop Bug and Create PR Post-Action_
 
 - Source: `agents/js/developBugAndCreatePR.js`
 - Side effects:
-  - post Jira comment
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
   - git push
   - git checkout
 - Parameters (customParams):

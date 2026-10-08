@@ -29,10 +29,11 @@ _recoverDirtyReviewTestCase.js_
 
 - Source: `agents/js/recoverDirtyReviewTestCase.js`
 - Side effects:
-  - remove label "sm_test_rework_triggered"
-  - remove label "sm_test_automation_triggered"
-  - remove label "sm_test_review_triggered"
-  - post Jira comment
+  - remove label "sm_test_rework_triggered" (via tracker)
+  - remove label "sm_test_automation_triggered" (via tracker)
+  - remove label "sm_test_review_triggered" (via tracker)
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
 
 
 ## LLM step
