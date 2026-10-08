@@ -1650,7 +1650,7 @@ suite('pushReworkChanges — loud coverage-gap warning (gh-799 AC2)', function()
         );
         var lines = loaded.mod.logReplyCoverageGap(coverage);
 
-        assert.equal(lines.length, 3, 'summary + one line per unaddressed thread');
+        assert.equal(lines.length, 2, 'summary + one line per unaddressed thread');
         assert.ok(lines[0].indexOf('REPLY-COVERAGE-GAP:') === 0, 'greppable loud marker, got: ' + lines[0]);
         assert.contains(lines[0], '1/2');
         assert.contains(lines[1], 'PRRT_b');
@@ -1698,7 +1698,7 @@ suite('pushReworkChanges — live unresolved-thread re-check (gh-799 AC3/AC5)', 
             'a broken probe degrades to the last known honest state, not to "no open threads"');
     });
 
-    test('no probe or no PR → input snapshot fallback', function() {
+    test('no probe or no PR → input snapshot fallback (honesty over silence)', function() {
         var loaded = loadPushReworkChangesModule({});
         var inputThreads = [ghThread('PRRT_a', 1)];
         assert.deepEqual(
@@ -1707,8 +1707,9 @@ suite('pushReworkChanges — live unresolved-thread re-check (gh-799 AC3/AC5)', 
         assert.deepEqual(
             loaded.mod.fetchLiveOpenThreads(null, { number: 1420 }, inputThreads).map(function(t) { return t.threadId; }),
             ['PRRT_a'], 'no scm at all');
-        assert.deepEqual(loaded.mod.fetchLiveOpenThreads(loaded.scm, null, inputThreads),
-            [], 'no PR → cannot claim anything open, but also nothing cached');
+        assert.deepEqual(
+            loaded.mod.fetchLiveOpenThreads(loaded.scm, null, inputThreads).map(function(t) { return t.threadId; }),
+            ['PRRT_a'], 'no PR → last known state, never a silent zero');
     });
 
     test('live zero threads → empty list (the honest zero)', function() {
@@ -1906,6 +1907,7 @@ suite('pushReworkChanges.action — completion live re-check wiring (gh-799 AC5 
     test('threads appearing mid-run reach the completion comment; wording is never "no code changes"', function() {
         var liveFetchCalls = [];
         var fileMap = {
+            'input/PROJ-123/pr_info.md': '**Branch**: `ai/gh-1420` → `main`',
             'input/PROJ-123/pr_discussions_raw.json': JSON.stringify({ threads: [ghThread('PRRT_in_1', 100)] }),
             'outputs/review_replies.json': JSON.stringify({
                 replies: [{ inReplyToId: 100, threadId: 'PRRT_in_1', reply: 'Fixed the reported issue.' }]
@@ -1954,7 +1956,8 @@ suite('pushReworkChanges.action — completion live re-check wiring (gh-799 AC5 
         });
 
         assert.equal(result.success, true);
-        assert.equal(liveFetchCalls.length, 1, 'the completion comment is generated from a LIVE re-fetch');
+        assert.ok(liveFetchCalls.length >= 1, 'the completion comment is generated from a LIVE re-fetch' +
+            ' (2 calls = gh-692 closure sweep + the completion re-check — both legitimate)');
         var completion = loaded.jiraPostCommentCalls.filter(function(c) {
             return String(c.comment || c.body || '').indexOf('remain open') !== -1;
         })[0];

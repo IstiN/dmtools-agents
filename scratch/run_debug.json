@@ -1,9 +1,0 @@
-{
-  "name": "JSRunner",
-  "params": {
-    "jsPath": "js/unit-tests/testRunner.js",
-    "jobParams": {
-      "testFiles": ["scratch/debug_gh799.js"]
-    }
-  }
-}

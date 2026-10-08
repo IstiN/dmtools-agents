@@ -684,7 +684,7 @@ function buildReworkCompletionComment(m, ctx) {
         if (ctx.prUrl) comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
         comment += '\nAll review threads are now resolved, but ' + unaddressed.length +
             ' open thread(s) from the rework input had no targeted reply in ' +
-            m.code('outputs/review_replies.json') + ':\n';
+            m.inline('outputs/review_replies.json') + ':\n';
         comment += unaddressed.map(function(t) { return '* ' + threadLabel(t); }).join('\n') + '\n';
     } else if (wording === 'changes-requested-verdict') {
         comment = m.h(3, ctx.codeChangesCommitted ? '✅ Rework Completed' : '✅ Rework Analysis Completed') + '\n';

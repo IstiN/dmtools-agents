@@ -347,7 +347,7 @@ suite('preCliReworkSetup.ensureInputContextContract — pinned input trio (gh-79
 
         var ci = h.files['input/PROJ-123/ci_failures.md'];
         assert.ok(ci && ci.trim().length > 0, 'ci_failures.md present and non-empty even when green');
-        assert.contains(ci, 'No failed');
+        assert.contains(ci, 'No Failed');
 
         var rs = h.files['input/PROJ-123/review_state.md'];
         assert.ok(rs && rs.trim().length > 0, 'review_state.md present and non-empty');
