@@ -150,6 +150,14 @@ var DEFAULT_MACHINE_AUTHOR = 'ai-teammate';   // back-compat/tests only — an
                                               // assignment bucketing (null)
 var HISTORY_CAP = 24;                         // bound snapshot growth
 var DEFAULT_TOKENS_FILE = 'outputs/token_usage/factory_tokens.json';
+var FACTORY_TOKENS_ASSET = 'fa-tokens.json';   // data/<asset> on the data
+                                               // branch (gh-781; the leg-side
+                                               // producer's publish path).
+                                               // statePublish.tokensAsset
+                                               // overrides — multi-factory
+                                               // deployments sharing one
+                                               // branch keep their token
+                                               // streams apart
 var BACKLOG_CAP = 50;                         // per bucket — github_search_issues
                                               // returns ONE page (no perPage),
                                               // so the snapshot stays bounded
@@ -264,15 +272,65 @@ function normalizeTokens(input) {
 function readTokensFile(path, readFn) {
     if (!path || typeof readFn !== 'function') return null;
     try {
-        var parsed = JSON.parse(String(readFn(path) || ''));
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-            return null;
-        }
-        var out = {};
-        Object.keys(parsed).forEach(function (k) {
-            if (Array.isArray(parsed[k])) out[k] = parsed[k];
-        });
-        return Object.keys(out).length ? out : null;
+        return tokensMapOf(JSON.parse(String(readFn(path) || '')));
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * Validate a parsed tokens payload into the keyed-map form ('pr-N'/
+ * 'issue-N' → array rows): only array values survive, an empty result is
+ * a miss. Shared by the local-file reader (readTokensFile) and the branch
+ * fetcher (fetchTokensFromBranch) — one shape contract for both sources.
+ * Rows themselves normalize later, through normalizeTokens, when the
+ * snapshot builder attaches them to cards.
+ */
+function tokensMapOf(parsed) {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return null;
+    }
+    var out = {};
+    Object.keys(parsed).forEach(function (k) {
+        if (Array.isArray(parsed[k])) out[k] = parsed[k];
+    });
+    return Object.keys(out).length ? out : null;
+}
+
+/**
+ * Total leg rows across a tokens map ('pr-N'/'issue-N' → array rows) —
+ * the N in the tick's 🪙 provenance log line (smAgent statePublish block,
+ * sibling of the 📡 published line). Null/empty/non-array values → 0:
+ * tokens are decorative, the count never fails the tick.
+ */
+function tokensLegCount(map) {
+    var n = 0;
+    Object.keys(map || {}).forEach(function (k) {
+        if (Array.isArray(map[k])) n += map[k].length;
+    });
+    return n;
+}
+
+/**
+ * Fetch the factory-published per-leg token usage off the data branch
+ * (gh-781; mirrors fetchPreviousState — one gh Contents probe via the
+ * shared contentsOf transport): `data/<tokensAsset>.json` @ tagOf(cfg),
+ * produced by the leg-side publisher in the teammate workflow. The asset
+ * is statePublish.tokensAsset when set, else the fixed fa-tokens.json —
+ * the override mirrors assetName so multi-factory deployments sharing one
+ * data branch keep their token streams apart (token keys are repo-global,
+ * a shared fixed asset would cross-attach factories' rows). The map
+ * validates through the same contract as the local file (tokensMapOf) and
+ * flows into normalizeTokens when attached to cards. ANY miss — 404
+ * before the first publish, invalid JSON, non-map shape, rate limit — →
+ * null: tokens are decorative, never fatal, the tick publishes token-less
+ * cards exactly as today.
+ */
+function fetchTokensFromBranch(repo, cfg, exec) {
+    var asset = (cfg && cfg.tokensAsset) || FACTORY_TOKENS_ASSET;
+    try {
+        return tokensMapOf(JSON.parse(
+            contentsOf(repo, 'data/' + asset, cfg, exec)));
     } catch (e) {
         return null;
     }
@@ -630,9 +688,7 @@ function fetchPreviousState(repo, cfg, exec) {
     var path = 'data/' + (cfg && cfg.asset ? cfg.asset :
         (repo.split('/')[1] || 'factory') + '-state.json');
     try {
-        var raw = execOut(exec, 'gh api repos/' + repo + '/contents/' + path +
-            '?ref=' + tagOf(cfg) + ' --jq .content | base64 -d');
-        var parsed = JSON.parse(raw);
+        var parsed = JSON.parse(contentsOf(repo, path, cfg, exec));
         return (parsed && parsed.lanes) ? parsed : null;
     } catch (e) {
         return null;
@@ -755,6 +811,23 @@ function execOut(exec, command) {
     return String((res && (res.output || res.stdout)) || res || '').trim();
 }
 
+/**
+ * One home for the gh Contents CONTENT probe (rework gh-783): gh-first
+ * (executor whitelist), `--jq .content` + in-shell `| base64 -d` decode,
+ * ref rides tagOf(cfg). Transport miss (404, rate limit, exec throw) →
+ * null; an EMPTY exec response comes back as '' — callers JSON.parse-
+ * guard the result, so both degrade exactly as before. The `.sha` probes
+ * (publishFactoryState, updateHistory) keep their own shape: they read a
+ * different jq field and treat a 'Not Found' string as data (first
+ * publish), not as a miss.
+ */
+function contentsOf(repo, path, cfg, exec) {
+    try {
+        return execOut(exec, 'gh api repos/' + repo + '/contents/' + path +
+            '?ref=' + tagOf(cfg) + ' --jq .content | base64 -d');
+    } catch (e) { return null; }
+}
+
 function updateHistory(state, cfg, exec) {
     var repo = (cfg && cfg.repo) || state.repo;
     var branch = tagOf(cfg);
@@ -772,9 +845,8 @@ function updateHistory(state, cfg, exec) {
     } catch (e) { sha = ''; }
     if (sha) {
         try {
-            var cur = JSON.parse(execOut(exec, 'gh api repos/' + repo +
-                '/contents/' + indexPath + '?ref=' + branch +
-                ' --jq .content | base64 -d') || '{}');
+            var cur = JSON.parse(
+                contentsOf(repo, indexPath, cfg, exec) || '{}');
             snaps = (cur && cur.snapshots) || [];
         } catch (e2) { snaps = []; }
     }
@@ -815,6 +887,10 @@ module.exports = {
     nextHistory: nextHistory,
     normalizeTokens: normalizeTokens,
     readTokensFile: readTokensFile,
+    fetchTokensFromBranch: fetchTokensFromBranch,
+    tokensMapOf: tokensMapOf,
+    tokensLegCount: tokensLegCount,
+    contentsOf: contentsOf,
     LANE_ORDER: LANE_ORDER,
     LANE_ORDER_V1: LANE_ORDER_V1,
     TS_BY_LABEL: TS_BY_LABEL,

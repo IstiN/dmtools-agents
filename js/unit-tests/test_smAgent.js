@@ -110,6 +110,15 @@ function makeSmAgent(opts) {
                 ? github_list_workflow_runs(args)
                 : '{"workflow_runs":[]}';
         },
+        // Backlog source for the statePublish block (gh-769): safe default —
+        // without it the block hits the real bridge (dmtools runtime) or a
+        // ReferenceError (node harness) on every publish tick.
+        github_search_issues: function(args) {
+            if (opts.github && opts.github.issueSearch) {
+                return JSON.stringify(opts.github.issueSearch);
+            }
+            return '{"items":[]}';
+        },
         file_write: function(writeOpts) {
             if (opts.onFileWrite) opts.onFileWrite(writeOpts);
             return true;
@@ -7526,6 +7535,199 @@ suite('smAgent: validate-fresh-masked-green (gh-759 post-dev dead zone)', functi
             var b = matches(masked, [], rollup);
             assert.ok(!(a && b), 'rollup ' + rollup + ': both rules match — double arm');
         });
+    });
+
+});
+
+// ── Factory state publish: per-leg tokens (gh-781) ───────────────────────────
+// The tick's tokens pipeline: LOCAL outputs/token_usage/factory_tokens.json
+// first (pack-carrying factories keep working), factory-data branch
+// data/fa-tokens.json as the fallback (the leg-side producer's publish).
+// Any branch miss → token-less cards, the tick stays green.
+
+suite('smAgent: statePublish tokens — local file first, branch fallback', function() {
+
+    var SP = { channel: 'release', repo: 'o/r', asset: 'fa-state.json' };
+    var LOCAL_PATH = 'outputs/token_usage/factory_tokens.json';
+    var TOKENS_FETCH =
+        'gh api repos/o/r/contents/data/fa-tokens.json?ref=factory-data --jq .content | base64 -d';
+    var BRANCH_TOKENS = JSON.stringify({
+        'pr-31': [{ leg: 'dev', at: '2026-10-08T10:00:00Z', prompt: 10, completion: 5, total: 15 }],
+        'issue-7': [{ leg: 'review', at: '2026-10-08T11:00:00Z', prompt: 1, completion: 2, total: 3 }]
+    });
+    var PR31 = JSON.stringify([{ number: 31, title: 'feat: tokens', labels: [],
+        head: { ref: 'ai/gh-31', sha: 'abc123' }, user: { login: 'me' },
+        created_at: '2026-10-08T09:00:00Z' }]);
+
+    /** One tick with statePublish on; returns {sm, state} — state parsed
+     *  from the fa-state.json PUT payload. Setting opts.github switches
+     *  the source stub to the items list — one quiet ticket walks
+     *  processRule past its per-ticket loop into the statePublish block
+     *  (an empty source returns before it). Bridge defaults keep every
+     *  source local: no real gh calls, no node-harness ReferenceErrors. */
+    function publishTick(opts) {
+        opts = opts || {};
+        opts.github = opts.github || {};
+        if (!opts.github.items) {
+            opts.github.items = [{ key: 'T-1', labels: [], pr: null }];
+        }
+        if (!opts.github.prList) opts.github.prList = '[]';
+        if (!opts.github.workflowApiRuns) opts.github.workflowApiRuns = [];
+        var sm = makeSmAgent(opts);
+        sm.action({ jobParams: {
+            owner: 'o', repo: 'r', rules: [makeRule('project = T')], statePublish: SP
+        } });
+        var putCmd = null;
+        sm.capturedCliCommands.forEach(function (c) {
+            if (c.command.indexOf('-X PUT repos/o/r/contents/data/fa-state.json ') !== -1) {
+                putCmd = c.command;
+            }
+        });
+        assert.ok(putCmd, 'fa-state.json PUT captured — the tick published');
+        var m = putCmd.match(/printf %s '(.*)' \| base64/);
+        assert.ok(m, 'snapshot payload extractable from the PUT');
+        return { sm: sm, state: JSON.parse(m[1]) };
+    }
+
+    function branchServes(payload) {
+        return function (cmdOpts) {
+            if (cmdOpts.command === TOKENS_FETCH) return { output: payload };
+            return undefined;
+        };
+    }
+
+    test('AC1: no local file + branch file present → published cards carry tokens rows', function() {
+        var run = publishTick({
+            fileMap: {},   // no local tokens file
+            github: { prList: PR31 },
+            onCliExecute: branchServes(BRANCH_TOKENS)
+        });
+        assert.equal(run.state.schema, 2, 'snapshot schema stays 2 (AC4)');
+        var card = run.state.lanes.pr_created.filter(function (c) { return c.pr === 31; })[0];
+        assert.ok(card, 'pr-31 card published');
+        assert.ok(card.tokens && card.tokens.length === 1, 'card carries tokens rows');
+        assert.equal(card.tokens[0].leg, 'dev');
+        assert.equal(card.tokens[0].total, 15);
+    });
+
+    test('AC2: branch 404 → snapshot publishes WITHOUT tokens, tick stays green', function() {
+        var run = publishTick({
+            fileMap: {},
+            github: { prList: PR31 },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command === TOKENS_FETCH) throw new Error('gh: Not Found (HTTP 404)');
+                return undefined;
+            }
+        });
+        var card = run.state.lanes.pr_created.filter(function (c) { return c.pr === 31; })[0];
+        assert.ok(card, 'card still published');
+        assert.equal(card.tokens, undefined, 'token-less card — degradation pinned');
+    });
+
+    test('AC2: branch garbage JSON / non-map → snapshot publishes WITHOUT tokens', function() {
+        ['<<garbage>>', '[]', '{"pr-31":"not-an-array"}'].forEach(function (payload) {
+            var run = publishTick({
+                fileMap: {},
+                github: { prList: PR31 },
+                onCliExecute: branchServes(payload)
+            });
+            var card = run.state.lanes.pr_created.filter(function (c) { return c.pr === 31; })[0];
+            assert.equal(card.tokens, undefined,
+                'payload ' + payload + ' → token-less card');
+        });
+    });
+
+    test('AC3: local file present → branch NOT fetched, LOCAL rows win', function() {
+        var fileMap = {};
+        fileMap[LOCAL_PATH] = JSON.stringify({
+            'pr-31': [{ leg: 'rework', at: '2026-10-08T12:00:00Z', prompt: 2, completion: 3, total: 5 }]
+        });
+        var run = publishTick({
+            fileMap: fileMap,
+            github: { prList: PR31 },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('fa-tokens.json') !== -1) {
+                    throw new Error('local file present — the branch must not be fetched');
+                }
+                return undefined;
+            }
+        });
+        var branchFetches = run.sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('fa-tokens.json') !== -1;
+        });
+        assert.equal(branchFetches.length, 0, 'branch never fetched when the local file wins');
+        var card = run.state.lanes.pr_created.filter(function (c) { return c.pr === 31; })[0];
+        assert.ok(card.tokens && card.tokens[0].leg === 'rework', 'LOCAL rows attach');
+    });
+
+    test('AC3 edge: local file garbage → null → branch fallback (?? semantics)', function() {
+        var fileMap = {};
+        fileMap[LOCAL_PATH] = 'not json';
+        var run = publishTick({
+            fileMap: fileMap,
+            github: { prList: PR31 },
+            onCliExecute: branchServes(BRANCH_TOKENS)
+        });
+        var card = run.state.lanes.pr_created.filter(function (c) { return c.pr === 31; })[0];
+        assert.ok(card.tokens && card.tokens[0].leg === 'dev',
+            'unreadable local file falls through to the branch');
+    });
+
+    // ── rework (pr-783 thread 3): 🪙 provenance line next to 📡 published ───
+    // The tokens source (local|branch|none) must be grep-able in the tick
+    // log — a persistent miss (bad tag, revoked scope) is otherwise
+    // indistinguishable from "producer hasn't landed yet".
+
+    function publishTickLogged(opts) {
+        opts = opts || {};
+        opts.captureConsole = true;
+        return publishTick(opts);
+    }
+
+    test('branch-sourced tokens → 🪙 line names source branch with the leg count', function() {
+        var run = publishTickLogged({
+            fileMap: {},
+            github: { prList: PR31 },
+            onCliExecute: branchServes(BRANCH_TOKENS)
+        });
+        assert.ok(run.sm.capturedLogs.some(function (l) {
+            return l.indexOf('🪙 tokens: 2 legs (branch)') !== -1;
+        }), '🪙 tokens: 2 legs (branch) logged (pr-31 + issue-7 rows)');
+    });
+
+    test('local-sourced tokens → 🪙 line names source local, branch never probed', function() {
+        var fileMap = {};
+        fileMap[LOCAL_PATH] = JSON.stringify({
+            'pr-31': [{ leg: 'dev', at: '2026-10-08T10:00:00Z', prompt: 1, completion: 1, total: 2 }]
+        });
+        var run = publishTickLogged({
+            fileMap: fileMap,
+            github: { prList: PR31 },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command === TOKENS_FETCH) throw new Error('must not probe');
+                return undefined;
+            }
+        });
+        assert.ok(run.sm.capturedLogs.some(function (l) {
+            return l.indexOf('🪙 tokens: 1 legs (local)') !== -1;
+        }), '🪙 tokens: 1 legs (local) logged');
+    });
+
+    test('both sources miss → 🪙 tokens: 0 legs (none) — persistent miss is visible', function() {
+        var run = publishTickLogged({
+            fileMap: {},
+            github: { prList: PR31 },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command === TOKENS_FETCH) throw new Error('gh: Not Found (HTTP 404)');
+                return undefined;
+            }
+        });
+        assert.ok(run.sm.capturedLogs.some(function (l) {
+            return l.indexOf('🪙 tokens: 0 legs (none)') !== -1;
+        }), '🪙 tokens: 0 legs (none) logged — degradation diagnosable in one glance');
+        assert.ok(run.sm.capturedLogs.some(function (l) {
+            return l.indexOf('📡 factory state published') !== -1;
+        }), '📡 published line still present — the tick stayed green');
     });
 
 });
