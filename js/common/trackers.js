@@ -29,8 +29,9 @@
  *   { "customParams": { "trackerProvider": "ado" } }
  *
  * Provider capabilities: jira supports every operation; ado covers
- * tickets/search/comments/status/assign/create (labels are not exposed by
- * the ado toolset); github covers everything — search/assignTo/moveToStatus
+ * tickets/search/comments/status/assign/create and labels — add/remove
+ * route to the canonical ado_add_work_item_label / ado_remove_work_item_label
+ * tools (System.Tags); github covers everything — search/assignTo/moveToStatus
  * prefer the dedicated issue tools (github_search_issues, github_assign_issue,
  * github_move_issue_to_status) when the runtime exposes them (Java runtime),
  * with graceful degradation where it does not (Dart catalog): moveToStatus
@@ -267,6 +268,14 @@ function createTracker(config, customParams) {
         return ado_assign_work_item({ id: String(key), userEmail: user });
     }
 
+    function adoAddLabel(key, label) {
+        return ado_add_work_item_label({ id: String(key), label: label });
+    }
+
+    function adoRemoveLabel(key, label) {
+        return ado_remove_work_item_label({ id: String(key), label: label });
+    }
+
     function adoCreateTicket(project, type, title, description) {
         var raw = ado_create_work_item({
             project: project,
@@ -425,8 +434,8 @@ function createTracker(config, customParams) {
             search: adoSearch,
             postComment: adoPostComment,
             getComments: adoGetComments,
-            addLabel: function () { unsupported('addLabel'); },
-            removeLabel: function () { unsupported('removeLabel'); },
+            addLabel: adoAddLabel,
+            removeLabel: adoRemoveLabel,
             moveToStatus: adoMoveToStatus,
             assignTo: adoAssignTo,
             createTicket: adoCreateTicket

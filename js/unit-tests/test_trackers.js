@@ -336,11 +336,48 @@ suite('trackers.js ado provider', function () {
         assert.equal(key, '4300');
     });
 
-    test('labels are not supported on ado and fail with a clear error', function () {
-        var trackers = loadTrackers({});
+    test('addLabel routes onto ado_add_work_item_label with the id/label args', function () {
+        var adoAdd = recorder('ado_add_work_item_label', '{}');
+        var trackers = loadTrackers({ ado_add_work_item_label: adoAdd });
+        trackers.createTracker({ tracker: { provider: 'ado' } }).addLabel('4242', 'ai-generated');
+        assert.deepEqual(adoAdd.calls[0], { id: '4242', label: 'ai-generated' });
+    });
+
+    test('removeLabel routes onto ado_remove_work_item_label with the id/label args', function () {
+        var adoRemove = recorder('ado_remove_work_item_label', '{}');
+        var trackers = loadTrackers({ ado_remove_work_item_label: adoRemove });
+        trackers.createTracker({ tracker: { provider: 'ado' } }).removeLabel('4242', 'wip');
+        assert.deepEqual(adoRemove.calls[0], { id: '4242', label: 'wip' });
+    });
+
+    test('label keys are coerced with String(key) like every other ado helper', function () {
+        var adoAdd = recorder('ado_add_work_item_label', '{}');
+        var adoRemove = recorder('ado_remove_work_item_label', '{}');
+        var trackers = loadTrackers({
+            ado_add_work_item_label: adoAdd,
+            ado_remove_work_item_label: adoRemove
+        });
         var t = trackers.createTracker({ tracker: { provider: 'ado' } });
-        assert.throws(function () { t.addLabel('4242', 'x'); });
-        assert.throws(function () { t.removeLabel('4242', 'x'); });
+        t.addLabel(4242, 'ai-generated');
+        t.removeLabel(4242, 'wip');
+        assert.deepEqual(adoAdd.calls[0], { id: '4242', label: 'ai-generated' });
+        assert.deepEqual(adoRemove.calls[0], { id: '4242', label: 'wip' });
+    });
+
+    test('the WIP lifecycle (assignForReview) exercises the ado label impls without throwing', function () {
+        var adoAddLabel = recorder('ado_add_work_item_label', '{}');
+        var adoRemoveLabel = recorder('ado_remove_work_item_label', '{}');
+        var trackers = loadTrackers({
+            ado_assign_work_item: recorder('ado_assign_work_item', '{}'),
+            ado_move_to_state: recorder('ado_move_to_state', '{}'),
+            ado_add_work_item_label: adoAddLabel,
+            ado_remove_work_item_label: adoRemoveLabel
+        });
+        var result = trackers.createTracker({ tracker: { provider: 'ado' } })
+            .assignForReview('4242', 'jane@acme.dev', 'wip');
+        assert.ok(result.success, 'expected success: ' + JSON.stringify(result));
+        assert.deepEqual(adoAddLabel.calls[0], { id: '4242', label: configModule.LABELS.AI_GENERATED });
+        assert.deepEqual(adoRemoveLabel.calls[0], { id: '4242', label: 'wip' });
     });
 });
 
