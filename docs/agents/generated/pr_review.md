@@ -55,7 +55,7 @@ _Prepare PR for Review Action (preCliJSAction for pr_review agent)_
 
 - Source: `agents/js/preparePRForReview.js`
 - Side effects:
-  - post Jira comment
+  - post ticket comment (via tracker)
 
 
 ### postJSAction: `postPRReviewComments.js`
