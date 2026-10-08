@@ -208,7 +208,6 @@ var reworkCommentMarkup = loadModule('js/common/commentMarkup.js',
     makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 
 suite('preCliReworkSetup.buildReworkStartedComment — per-tracker markup (gh-770)', function() {
-
     var FULL_CTX = {
         prNumber: 1308,
         prUrl: 'https://github.com/acme/widgets/pull/1308',
@@ -258,4 +257,222 @@ suite('preCliReworkSetup.buildReworkStartedComment — per-tracker markup (gh-77
         assert.ok(out.indexOf('AI Teammate is fixing issues raised in the code review.') !== -1);
     });
 
+});
+
+// ── gh-799 AC1: pinned input trio, armer-independent ─────────────────────────
+// Whatever arms the rework leg (fail-validation CI-red, review-threads-resolved
+// armer, conflict-rework, manual dispatch), the input folder must ALWAYS carry:
+//   - pr_discussions_raw.json — unresolved threads WITH ids (placeholder {"threads": []}
+//     when the PR currently has zero threads),
+//   - ci_failures.md — the failed checks (explicit "nothing failed" contract file
+//     when every check is green or the probe failed),
+//   - review_state.md — the review verdict(s) + decision state
+//     (CHANGES_REQUESTED / APPROVED / NONE).
+// Today the first two "happen to be fetched"; this suite pins the trio so an
+// armer path that skips one is a regression.
+
+function makeContractHarness(opts) {
+    opts = opts || {};
+    var writes = [];
+    var files = opts.files || {};
+    var gitOpsStub = {
+        writeInputFile: function(path, content, label) {
+            writes.push({ path: path, content: content, label: label });
+            files[path] = content;
+        },
+        // The rest of action()'s usage is stubbed per test.
+        checkoutPRBranch: function() {},
+        detectMergeConflicts: function() { return []; },
+        getPRDiff: function() { return ''; },
+        writePRContext: function() {}
+    };
+    var mocks = {
+        file_write: function(args) { writes.push({ path: args.path, content: args.content }); return null; },
+        file_read: function(args) {
+            var p = args && (args.path || args);
+            if (files[p] !== undefined) return files[p];
+            throw new Error('File does not exist: ' + p);
+        },
+        cli_execute_command: function() { return ''; }
+    };
+    var mod = loadModule(
+        'js/preCliReworkSetup.js',
+        makeRequire({
+            './configLoader.js': { loadHookFn: function() { return null; } },
+            './common/githubHelpers.js': makeGhStub(),
+            './common/gitOps.js': gitOpsStub,
+            './common/commentMarkup.js': reworkCommentMarkupModule,
+            './fetchQuestionsToInput.js': NOOP_MODULE,
+            './fetchParentContextToInput.js': NOOP_MODULE,
+            './restoreFromReleases.js': NOOP_MODULE,
+            './common/trackers.js': { createTracker: function() { return {}; } },
+            './common/setupCommands.js': loadModule('js/common/setupCommands.js'),
+            './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
+            './config.js': { resolveStatuses: function() { return {}; } }
+        }),
+        mocks
+    );
+    return { mod: mod, writes: writes, files: files };
+}
+
+function contractThreads(ids) {
+    return { rawThreads: { threads: (ids || []).map(function(id) {
+        return { threadId: id, rootCommentId: 1, resolved: false, path: 'src/a.dart', line: 3, body: 'Fix this (' + id + ')' };
+    }) } };
+}
+
+suite('preCliReworkSetup.ensureInputContextContract — pinned input trio (gh-799 AC1)', function() {
+
+    test('CI-red armer fixture: threads + failures fetched → only review_state.md is added', function() {
+        var h = makeContractHarness();
+        var written = h.mod.ensureInputContextContract('input/PROJ-123', null, 7,
+            contractThreads(['PRRT_a', 'PRRT_b']), [{ name: 'build', conclusion: 'failure' }]);
+
+        assert.deepEqual(written, ['review_state.md'],
+            'the two fetched halves are already written by writePRContext/detectFailedChecks — no double write');
+        assert.ok(h.files['input/PROJ-123/review_state.md'], 'review_state.md always written');
+    });
+
+    test('manual-dispatch fixture: zero threads, zero failures → non-empty placeholders for all three', function() {
+        var h = makeContractHarness();
+        var written = h.mod.ensureInputContextContract('input/PROJ-123', null, 7, {}, []);
+
+        written.sort();
+        assert.deepEqual(written, ['ci_failures.md', 'pr_discussions_raw.json', 'review_state.md'],
+            'an armer that skips a file is a regression — the trio is pinned');
+
+        var raw = JSON.parse(h.files['input/PROJ-123/pr_discussions_raw.json']);
+        assert.ok(raw && Array.isArray(raw.threads) && raw.threads.length === 0,
+            'zero threads still ships the raw file in the documented shape');
+
+        var ci = h.files['input/PROJ-123/ci_failures.md'];
+        assert.ok(ci && ci.trim().length > 0, 'ci_failures.md present and non-empty even when green');
+        assert.contains(ci, 'No failed');
+
+        var rs = h.files['input/PROJ-123/review_state.md'];
+        assert.ok(rs && rs.trim().length > 0, 'review_state.md present and non-empty');
+        assert.contains(rs, 'NONE', 'no concluded review → decision NONE');
+    });
+
+    test('review_state.md carries the latest concluded verdict and reviewer', function() {
+        var h = makeContractHarness();
+        var scm = { listReviews: function() {
+            return [
+                { state: 'APPROVED', user: { login: 'reviewer1' }, submitted_at: '2026-10-08T18:00:00Z', body: 'LGTM' },
+                { state: 'CHANGES_REQUESTED', user: { login: 'reviewer2' }, submitted_at: '2026-10-08T18:56:00Z', body: 'Please fix the null deref\nand the typo' }
+            ];
+        } };
+        h.mod.ensureInputContextContract('input/PROJ-123', scm, 7, contractThreads(['PRRT_a']), []);
+
+        var rs = h.files['input/PROJ-123/review_state.md'];
+        assert.contains(rs, 'CHANGES_REQUESTED', 'latest concluded verdict by submitted_at wins');
+        assert.contains(rs, 'reviewer2');
+        assert.contains(rs, 'Please fix the null deref', 'review summary visible so the agent sees WHAT was asked');
+        assert.contains(rs, 'PRRT_a', 'open thread inventory with ids');
+        assert.contains(rs, 'blocking', 'CHANGES_REQUESTED is flagged as blocking');
+    });
+
+    test('review_state.md decision APPROVED when the last verdict approves', function() {
+        var h = makeContractHarness();
+        var scm = { listReviews: function() {
+            return [{ state: 'CHANGES_REQUESTED', user: { login: 'r1' }, submitted_at: '2026-10-08T10:00:00Z', body: 'fix' },
+                    { state: 'APPROVED', user: { login: 'r1' }, submitted_at: '2026-10-08T12:00:00Z', body: 'LGTM' }];
+        } };
+        h.mod.ensureInputContextContract('input/PROJ-123', scm, 7, {}, []);
+        var rs = h.files['input/PROJ-123/review_state.md'];
+        assert.contains(rs, 'APPROVED');
+        assert.notContains(rs, 'requires changes', 'no blocking banner for an approved PR');
+    });
+
+    test('SCM provider without listReviews → review_state.md still written (non-empty, verdict unavailable)', function() {
+        var h = makeContractHarness();
+        var written = h.mod.ensureInputContextContract('input/PROJ-123', { /* no listReviews */ }, 7, {}, []);
+        assert.contains(written.join(','), 'review_state.md');
+        var rs = h.files['input/PROJ-123/review_state.md'];
+        assert.ok(rs && rs.trim().length > 0);
+        assert.contains(rs, 'not available');
+    });
+
+    test('listReviews probe failure is non-fatal and still writes review_state.md', function() {
+        var h = makeContractHarness();
+        var scm = { listReviews: function() { throw new Error('GraphQL down'); } };
+        var written = h.mod.ensureInputContextContract('input/PROJ-123', scm, 7, {}, []);
+        assert.contains(written.join(','), 'review_state.md');
+        assert.ok(h.files['input/PROJ-123/review_state.md'].trim().length > 0);
+    });
+
+    test('existing contract files are never overwritten with placeholders', function() {
+        var h = makeContractHarness({
+            files: {
+                'input/PROJ-123/ci_failures.md': '# ⚠️ Failed CI Checks — Fix Before Completing Rework\n\nREAL FAILURE LOG',
+                'input/PROJ-123/pr_discussions_raw.json': '{"threads": [{"threadId": "PRRT_real"}]}'
+            }
+        });
+        var written = h.mod.ensureInputContextContract('input/PROJ-123', null, 7, {}, []);
+        assert.notContains(written.join(','), 'ci_failures.md', 'real failure log preserved');
+        assert.notContains(written.join(','), 'pr_discussions_raw.json', 'real thread data preserved');
+        assert.contains(h.files['input/PROJ-123/ci_failures.md'], 'REAL FAILURE LOG');
+    });
+
+    test('action() wires the contract into the rework setup flow', function() {
+        var writes = [];
+        var cliCalls = [];
+        var ghStub = makeGhStub();
+        ghStub.findPRForTicket = function() { return { number: 7 }; };
+        ghStub.getPRDetails = function() {
+            return { number: 7, title: 't', html_url: 'u', state: 'open',
+                head: { ref: 'ai/gh-123', sha: 'abc' }, base: { ref: 'master' }, user: { login: 'a' } };
+        };
+        ghStub.detectFailedChecks = function() { return []; };
+        ghStub.fetchDiscussionsAndRawData = function() { return { markdown: '## d', rawThreads: null }; };
+
+        var mod = loadModule(
+            'js/preCliReworkSetup.js',
+            makeRequire({
+                './configLoader.js': {
+                    loadProjectConfig: function() { return { git: { baseBranch: 'master' }, workingDir: null, repository: { owner: 'acme', repo: 'widgets' } }; },
+                    paramsForConfigLoad: function(p) { return p; },
+                    loadHookFn: function() { return null; },
+                    createScm: function() { return { getRemoteRepoInfo: function() { return { owner: 'acme', repo: 'widgets' }; } }; }
+                },
+                './common/githubHelpers.js': ghStub,
+                './common/gitOps.js': {
+                    checkoutPRBranch: function() {},
+                    detectMergeConflicts: function() { return []; },
+                    getPRDiff: function() { return ''; },
+                    writePRContext: function() {},
+                    writeInputFile: function(path, content, label) { writes.push({ path: path, content: content }); }
+                },
+                './common/commentMarkup.js': reworkCommentMarkupModule,
+                './fetchQuestionsToInput.js': NOOP_MODULE,
+                './fetchParentContextToInput.js': NOOP_MODULE,
+                './restoreFromReleases.js': NOOP_MODULE,
+                './common/trackers.js': { createTracker: function() {
+                    return { postComment: function() {}, moveToStatus: function() {} };
+                } },
+                './common/setupCommands.js': loadModule('js/common/setupCommands.js'),
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
+                './config.js': { resolveStatuses: function() { return { IN_DEVELOPMENT: 'In Development' }; } }
+            }),
+            {
+                file_write: function(args) { writes.push(args); },
+                file_read: function() { throw new Error('File does not exist'); },
+                cli_execute_command: function(args) { cliCalls.push(args.command); return ''; }
+            }
+        );
+
+        var result = mod.action({
+            inputFolderPath: 'input/PROJ-123',
+            jobParams: { inputFolderPath: 'input/PROJ-123', customParams: {} }
+        });
+
+        assert.equal(result.success, true, 'action succeeded — got: ' + JSON.stringify(result));
+        var contractPaths = writes.map(function(w) { return w.path; });
+        assert.ok(contractPaths.indexOf('input/PROJ-123/review_state.md') !== -1,
+            'review_state.md written by the real action flow, got: ' + JSON.stringify(contractPaths));
+        assert.ok(contractPaths.indexOf('input/PROJ-123/pr_discussions_raw.json') !== -1,
+            'pr_discussions_raw.json placeholder written (fetch returned rawThreads: null)');
+        assert.ok(contractPaths.indexOf('input/PROJ-123/ci_failures.md') !== -1,
+            'ci_failures.md placeholder written (no failed checks)');
+    });
 });

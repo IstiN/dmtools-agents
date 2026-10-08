@@ -837,7 +837,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
                 triggerSmIfIdle: function() {},
                 triggerConfiguredWorkflowForTicket: function() { return false; }
             },
-            './common/outputFiles.js': { readOutputFile: function() { return null; } },
+            './common/outputFiles.js': (opts && opts.outputFiles) || { readOutputFile: function() { return null; } },
             './config.js': configModule,
             './common/trackers.js': makeTrackersModule(mergedMocks),
             './cacheToReleases.js': { action: function() {} },
@@ -1543,5 +1543,427 @@ suite('pushReworkChanges — PR-anchored lookup & loud lookup failure (fa #1212)
             'completion comment to the Jira ticket preserved'
         );
         assert.equal(result.branchName, 'bug/PROJ-123');
+    });
+});
+
+// ── gh-799: complete rework picture + honest live-rechecked completion ───────
+// Live incident (fa PR #1420, run 37806292238, 2026-10-08): the post-action
+// posted "Rework Analysis Completed — ... no code changes are required" from
+// the STALE input snapshot while the PR's review state required changes, and
+// outputs/review_replies.json carried "threadId": null (untargeted reply →
+// combined PR comment). Three contract hardenings live here:
+//   1. reply coverage — N open threads in, fewer than N targeted replies out
+//      is a LOUD warning (log + completion comment), never a silent fold into
+//      a "nothing required" story;
+//   2. completion honesty — the completion comment is generated from a LIVE
+//      unresolved-threads re-fetch (same call as input prep), so threads that
+//      appeared mid-run are reported (the exact live incident shape);
+//   3. wording gate — "no code changes are required" is allowed ONLY when the
+//      live unresolved-thread count is 0 AND the verdict is not
+//      CHANGES_REQUESTED AND every input thread got a targeted reply.
+
+function ghThread(id, rootId, extra) {
+    var t = {
+        threadId: id,
+        rootCommentId: rootId,
+        resolved: false,
+        path: 'src/a.dart',
+        line: 12,
+        body: 'Fix the null deref here'
+    };
+    return Object.assign(t, extra || {});
+}
+
+suite('pushReworkChanges — reply coverage (gh-799 AC2)', function() {
+
+    test('counts only unresolved non-bot input threads as open', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var coverage = loaded.mod.buildReplyCoverage([
+            ghThread('PRRT_r', 1, { resolved: true }),
+            ghThread('PRRT_o1', 2),
+            ghThread('PRRT_bot', 3, { bot: true }),
+            ghThread('PRRT_o2', 4)
+        ], []);
+        assert.equal(coverage.openCount, 2, 'resolved and bot threads are not the agent\'s obligation');
+        assert.equal(coverage.unaddressed.length, 2);
+    });
+
+    test('every open thread targeted by threadId → no gap (2+ item case)', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var coverage = loaded.mod.buildReplyCoverage(
+            [ghThread('PRRT_a', 1), ghThread('PRRT_b', 2), ghThread('PRRT_c', 3)],
+            [{ threadId: 'PRRT_a', reply: 'one' }, { threadId: 'PRRT_b', reply: 'two' }, { threadId: 'PRRT_c', reply: 'three' }]
+        );
+        assert.equal(coverage.openCount, 3);
+        assert.equal(coverage.unaddressed.length, 0, 'fully targeted input — no warning state');
+    });
+
+    test('fewer targeted replies than open threads → unaddressed lists the uncovered threads', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var coverage = loaded.mod.buildReplyCoverage(
+            [ghThread('PRRT_a', 1), ghThread('PRRT_b', 2), ghThread('PRRT_c', 3)],
+            [{ threadId: 'PRRT_a', reply: 'one' }]
+        );
+        assert.equal(coverage.openCount, 3);
+        assert.equal(coverage.targetedCount, 1);
+        assert.deepEqual(
+            coverage.unaddressed.map(function(t) { return t.threadId; }),
+            ['PRRT_b', 'PRRT_c'],
+            'the coverage gap names exactly the threads without a targeted reply');
+    });
+
+    test('a null-threadId reply targets nothing (the live incident shape)', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var coverage = loaded.mod.buildReplyCoverage(
+            [ghThread('PRRT_a', 1)],
+            [{ threadId: null, reply: 'combined-comment fallback text' }]
+        );
+        assert.equal(coverage.unaddressed.length, 1, 'the untargeted reply must not mask the gap');
+        assert.equal(coverage.unaddressed[0].threadId, 'PRRT_a');
+    });
+
+    test('a reply matching by rootCommentId counts as targeted (post-enrichment parity with gh-692)', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var coverage = loaded.mod.buildReplyCoverage(
+            [ghThread('PRRT_a', 5550001)],
+            [{ threadId: null, rootCommentId: 5550001, reply: 'fixed' }]
+        );
+        assert.equal(coverage.unaddressed.length, 0,
+            'the reply IS thread-targeted (rootCommentId) — postThreadReplies enriches the threadId from it');
+    });
+
+    test('missing or empty inputs → zero counts, no crash', function() {
+        var loaded = loadPushReworkChangesModule({});
+        assert.equal(loaded.mod.buildReplyCoverage(null, null).openCount, 0);
+        assert.equal(loaded.mod.buildReplyCoverage([], []).unaddressed.length, 0);
+        assert.equal(loaded.mod.buildReplyCoverage([ghThread('PRRT_a', 1)], null).unaddressed.length, 1);
+    });
+});
+
+suite('pushReworkChanges — loud coverage-gap warning (gh-799 AC2)', function() {
+
+    test('one LOUD line per unaddressed thread with id and title, plus a summary line', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var coverage = loaded.mod.buildReplyCoverage(
+            [ghThread('PRRT_a', 1), ghThread('PRRT_b', 2, { path: 'src/b.dart', line: 40, body: 'Unused variable\nmore context' })],
+            [{ threadId: 'PRRT_a', reply: 'one' }]
+        );
+        var lines = loaded.mod.logReplyCoverageGap(coverage);
+
+        assert.equal(lines.length, 3, 'summary + one line per unaddressed thread');
+        assert.ok(lines[0].indexOf('REPLY-COVERAGE-GAP:') === 0, 'greppable loud marker, got: ' + lines[0]);
+        assert.contains(lines[0], '1/2');
+        assert.contains(lines[1], 'PRRT_b');
+        assert.contains(lines[1], 'src/b.dart');
+        assert.contains(lines[1], 'Unused variable', 'the thread title/first body line is in the log');
+    });
+
+    test('fully covered input produces no warning lines', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var coverage = loaded.mod.buildReplyCoverage(
+            [ghThread('PRRT_a', 1)],
+            [{ threadId: 'PRRT_a', reply: 'one' }]
+        );
+        assert.deepEqual(loaded.mod.logReplyCoverageGap(coverage), []);
+    });
+});
+
+suite('pushReworkChanges — live unresolved-thread re-check (gh-799 AC3/AC5)', function() {
+
+    test('uses the LIVE fetch, filtered to unresolved non-bot threads', function() {
+        var loaded = loadPushReworkChangesModule({}, {
+            fetchDiscussions: function() {
+                return { rawThreads: { threads: [
+                    ghThread('PRRT_open1', 1),
+                    ghThread('PRRT_done', 2, { resolved: true }),
+                    ghThread('PRRT_open2', 3),
+                    ghThread('PRRT_bot', 4, { bot: true })
+                ] } };
+            }
+        });
+        var live = loaded.mod.fetchLiveOpenThreads(loaded.scm, { number: 1420 }, []);
+        assert.deepEqual(
+            live.map(function(t) { return t.threadId; }),
+            ['PRRT_open1', 'PRRT_open2'],
+            'the completion decision is made from the PR state at completion time, not the stale snapshot');
+    });
+
+    test('probe failure falls back to the input snapshot (never silently to zero)', function() {
+        var loaded = loadPushReworkChangesModule({}, {
+            fetchDiscussions: function() { throw new Error('GraphQL down'); }
+        });
+        var inputThreads = [ghThread('PRRT_a', 1), ghThread('PRRT_done', 2, { resolved: true })];
+        var live = loaded.mod.fetchLiveOpenThreads(loaded.scm, { number: 1420 }, inputThreads);
+        assert.deepEqual(live.map(function(t) { return t.threadId; }), ['PRRT_a'],
+            'a broken probe degrades to the last known honest state, not to "no open threads"');
+    });
+
+    test('no probe or no PR → input snapshot fallback', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var inputThreads = [ghThread('PRRT_a', 1)];
+        assert.deepEqual(
+            loaded.mod.fetchLiveOpenThreads(loaded.scm, { number: 1420 }, inputThreads).map(function(t) { return t.threadId; }),
+            ['PRRT_a'], 'scm without fetchDiscussions');
+        assert.deepEqual(
+            loaded.mod.fetchLiveOpenThreads(null, { number: 1420 }, inputThreads).map(function(t) { return t.threadId; }),
+            ['PRRT_a'], 'no scm at all');
+        assert.deepEqual(loaded.mod.fetchLiveOpenThreads(loaded.scm, null, inputThreads),
+            [], 'no PR → cannot claim anything open, but also nothing cached');
+    });
+
+    test('live zero threads → empty list (the honest zero)', function() {
+        var loaded = loadPushReworkChangesModule({}, {
+            fetchDiscussions: function() { return { rawThreads: null }; }
+        });
+        assert.deepEqual(loaded.mod.fetchLiveOpenThreads(loaded.scm, { number: 1420 }, [ghThread('PRRT_a', 1)]), [],
+            'the input snapshot must NOT be used when the live PR genuinely has zero open threads');
+    });
+});
+
+suite('pushReworkChanges — latestConcludedVerdict (gh-799)', function() {
+
+    test('latest concluded review by submitted_at wins', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var scm = { listReviews: function() { return [
+            { state: 'APPROVED', submitted_at: '2026-10-08T18:00:00Z' },
+            { state: 'CHANGES_REQUESTED', submitted_at: '2026-10-08T18:56:00Z' }
+        ]; } };
+        assert.equal(loaded.mod.latestConcludedVerdict(scm, { number: 1 }), 'CHANGES_REQUESTED');
+    });
+
+    test('PENDING/COMMENTED reviews are not the verdict', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var scm = { listReviews: function() { return [
+            { state: 'COMMENTED', submitted_at: '2026-10-08T19:00:00Z' },
+            { state: 'APPROVED', submitted_at: '2026-10-08T18:00:00Z' }
+        ]; } };
+        assert.equal(loaded.mod.latestConcludedVerdict(scm, { number: 1 }), 'APPROVED');
+    });
+
+    test('fail-open: no reviews, no listReviews, probe throws, no PR → null', function() {
+        var loaded = loadPushReworkChangesModule({});
+        assert.equal(loaded.mod.latestConcludedVerdict({ listReviews: function() { return []; } }, { number: 1 }), null);
+        assert.equal(loaded.mod.latestConcludedVerdict({}, { number: 1 }), null);
+        assert.equal(loaded.mod.latestConcludedVerdict({ listReviews: function() { throw new Error('api down'); } }, { number: 1 }), null);
+        assert.equal(loaded.mod.latestConcludedVerdict({ listReviews: function() { return [{ state: 'APPROVED' }]; } }, null), null);
+    });
+});
+
+suite('pushReworkChanges — completion wording selection (gh-799 AC2–AC5)', function() {
+
+    test('live open threads win over everything else (AC3/AC5)', function() {
+        var loaded = loadPushReworkChangesModule({});
+        assert.equal(loaded.mod.selectReworkCompletionWording(2, 0, null), 'open-threads');
+        assert.equal(loaded.mod.selectReworkCompletionWording(2, 0, 'CHANGES_REQUESTED'), 'open-threads');
+        assert.equal(loaded.mod.selectReworkCompletionWording(1, 1, 'APPROVED'), 'open-threads');
+    });
+
+    test('zero live threads but unaddressed input threads → coverage-gap wording (AC2)', function() {
+        var loaded = loadPushReworkChangesModule({});
+        assert.equal(loaded.mod.selectReworkCompletionWording(0, 1, null), 'unaddressed-replies');
+    });
+
+    test('zero live threads, all covered, CHANGES_REQUESTED verdict → honest verdict wording', function() {
+        var loaded = loadPushReworkChangesModule({});
+        assert.equal(loaded.mod.selectReworkCompletionWording(0, 0, 'CHANGES_REQUESTED'), 'changes-requested-verdict');
+    });
+
+    test('zero live threads, all covered, no blocking verdict → clean (AC4)', function() {
+        var loaded = loadPushReworkChangesModule({});
+        assert.equal(loaded.mod.selectReworkCompletionWording(0, 0, 'APPROVED'), 'clean');
+        assert.equal(loaded.mod.selectReworkCompletionWording(0, 0, null), 'clean');
+    });
+});
+
+suite('pushReworkChanges — completion comment wording (gh-799 AC2–AC5)', function() {
+
+    var md = commentMarkupModule.forFlavor('markdown');
+
+    function ctx(overrides) {
+        return Object.assign({
+            ticketKey: 'PROJ-123',
+            prUrl: 'https://github.com/acme/widgets/pull/1420',
+            branchName: 'ai/gh-1420',
+            prCommentPosted: false,
+            codeChangesCommitted: true,
+            liveOpenThreads: [],
+            inputThreads: [],
+            unaddressed: [],
+            verdict: null
+        }, overrides || {});
+    }
+
+    test('2 live open threads NEVER produce the "no code changes are required" wording (AC3)', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var out = loaded.mod.buildReworkCompletionComment(md, ctx({
+            codeChangesCommitted: true,
+            liveOpenThreads: [ghThread('PRRT_1', 1), ghThread('PRRT_2', 2)],
+            inputThreads: [ghThread('PRRT_1', 1), ghThread('PRRT_2', 2)]
+        }));
+        assert.notContains(out, 'no code changes are required',
+            'the live incident: "no code changes required" posted while threads were open');
+        assert.contains(out, '2 review thread(s) remain open');
+        assert.contains(out, 're-arm a threads-rework');
+        assert.contains(out, 'PRRT_1');
+        assert.contains(out, 'PRRT_2');
+    });
+
+    test('threads that appeared mid-run are labeled as drift and listed (AC5)', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var out = loaded.mod.buildReworkCompletionComment(md, ctx({
+            liveOpenThreads: [ghThread('PRRT_new', 9, { path: 'src/new.dart', line: 7, body: 'Late review finding' })],
+            inputThreads: [],
+            unaddressed: []
+        }));
+        assert.contains(out, 'PRRT_new');
+        assert.contains(out, 'src/new.dart');
+        assert.contains(out, 'Late review finding');
+        assert.contains(out, 'appeared mid-run',
+            'exactly the live incident shape: threads arrived after the input snapshot was written');
+    });
+
+    test('unaddressed input threads are labeled as such (AC2)', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var out = loaded.mod.buildReworkCompletionComment(md, ctx({
+            liveOpenThreads: [ghThread('PRRT_1', 1), ghThread('PRRT_2', 2)],
+            inputThreads: [ghThread('PRRT_1', 1), ghThread('PRRT_2', 2)],
+            unaddressed: [ghThread('PRRT_2', 2)]
+        }));
+        var lines = out.split('\n');
+        var line1 = lines.filter(function(l) { return l.indexOf('PRRT_1') !== -1; })[0];
+        var line2 = lines.filter(function(l) { return l.indexOf('PRRT_2') !== -1; })[0];
+        assert.ok(line1, 'PRRT_1 listed');
+        assert.ok(line2, 'PRRT_2 listed');
+        assert.contains(line1, 'reply posted, thread still open');
+        assert.contains(line2, 'not addressed by any reply in `outputs/review_replies.json`');
+    });
+
+    test('a thread with a posted reply that is still open live is labeled as such', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var out = loaded.mod.buildReworkCompletionComment(md, ctx({
+            liveOpenThreads: [ghThread('PRRT_1', 1)],
+            inputThreads: [ghThread('PRRT_1', 1)],
+            unaddressed: []
+        }));
+        assert.contains(out, 'reply posted, thread still open');
+    });
+
+    test('clean path: no code changes committed → exact historical wording preserved (AC4)', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var out = loaded.mod.buildReworkCompletionComment(md, ctx({
+            codeChangesCommitted: false,
+            prCommentPosted: true
+        }));
+        assert.contains(out, '### ✅ Rework Analysis Completed');
+        assert.contains(out, 'AI Teammate analyzed all PR review comments and determined no code changes are required.');
+        assert.contains(out, 'A fix summary has been posted as a comment on the Pull Request.');
+    });
+
+    test('clean path: code changes committed → exact historical wording preserved (AC4)', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var out = loaded.mod.buildReworkCompletionComment(md, ctx({ codeChangesCommitted: true }));
+        assert.contains(out, '### ✅ Rework Completed');
+        assert.contains(out, 'AI Teammate has addressed all PR review comments and pushed the fixes.');
+    });
+
+    test('CHANGES_REQUESTED verdict with zero open threads → honest verdict wording, never "no code changes"', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var out = loaded.mod.buildReworkCompletionComment(md, ctx({
+            codeChangesCommitted: false,
+            verdict: 'CHANGES_REQUESTED'
+        }));
+        assert.notContains(out, 'no code changes are required');
+        assert.contains(out, 'CHANGES_REQUESTED');
+    });
+
+    test('unaddressed replies with zero live threads → coverage listing, never "no code changes" (AC2)', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var out = loaded.mod.buildReworkCompletionComment(md, ctx({
+            codeChangesCommitted: true,
+            inputThreads: [ghThread('PRRT_1', 1)],
+            unaddressed: [ghThread('PRRT_1', 1)]
+        }));
+        assert.notContains(out, 'no code changes are required');
+        assert.contains(out, 'PRRT_1');
+        assert.contains(out, 'review_replies.json');
+    });
+
+    test('jira flavor renders wiki markup for the open-threads wording', function() {
+        var loaded = loadPushReworkChangesModule({});
+        var jm = commentMarkupModule.forFlavor('jira');
+        var out = loaded.mod.buildReworkCompletionComment(jm, ctx({
+            liveOpenThreads: [ghThread('PRRT_1', 1)],
+            inputThreads: [ghThread('PRRT_1', 1)]
+        }));
+        assert.ok(out.indexOf('h3. ⚠️ Rework Completed') === 0, 'jira wiki heading, got: ' + out.substring(0, 40));
+        assert.contains(out, '*Branch*: {code}ai/gh-1420{code}');
+        assert.contains(out, '{code}PRRT_1{code}');
+    });
+});
+
+suite('pushReworkChanges.action — completion live re-check wiring (gh-799 AC5 drift)', function() {
+
+    test('threads appearing mid-run reach the completion comment; wording is never "no code changes"', function() {
+        var liveFetchCalls = [];
+        var fileMap = {
+            'input/PROJ-123/pr_discussions_raw.json': JSON.stringify({ threads: [ghThread('PRRT_in_1', 100)] }),
+            'outputs/review_replies.json': JSON.stringify({
+                replies: [{ inReplyToId: 100, threadId: 'PRRT_in_1', reply: 'Fixed the reported issue.' }]
+            })
+        };
+        var loaded = loadPushReworkChangesForAction({
+            file_read: function(args) {
+                var p = args && (args.path || args);
+                if (p && p.indexOf('rework_setup_failed.md') !== -1) throw new Error('File does not exist');
+                return fileMap[p] !== undefined ? fileMap[p] : null;
+            },
+            github_remove_label: function() { return '{}'; }
+        }, {
+            outputFiles: loadModule('js/common/outputFiles.js', makeRequire({}), {
+                file_read: function(args) {
+                    var p = args && (args.path || args);
+                    return fileMap[p] !== undefined ? fileMap[p] : null;
+                }
+            }),
+            scm: {
+                getRemoteRepoInfo: function() { return { owner: 'acme', repo: 'widgets' }; },
+                listPrs: function() {
+                    return [{ number: 1420, title: 'PROJ-123: rework fix', head: { ref: 'ai/gh-1420' },
+                        html_url: 'https://github.com/acme/widgets/pull/1420' }];
+                },
+                replyToThread: function() {},
+                resolveThread: function() {},
+                addComment: function() {},
+                listReviews: function() {
+                    return [{ state: 'CHANGES_REQUESTED', submitted_at: '2026-10-08T18:56:00Z' }];
+                },
+                fetchDiscussions: function(prId) {
+                    liveFetchCalls.push(prId);
+                    return { rawThreads: { threads: [
+                        ghThread('PRRT_in_1', 100, { resolved: true }),
+                        ghThread('PRRT_late_1', 200, { path: 'src/late.dart', line: 3, body: 'Late finding one' }),
+                        ghThread('PRRT_late_2', 300, { path: 'src/late2.dart', line: 9, body: 'Late finding two' })
+                    ] } };
+                }
+            }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'Fix summary long enough to be a meaningful rework completion summary.'
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(liveFetchCalls.length, 1, 'the completion comment is generated from a LIVE re-fetch');
+        var completion = loaded.jiraPostCommentCalls.filter(function(c) {
+            return String(c.comment || c.body || '').indexOf('remain open') !== -1;
+        })[0];
+        assert.ok(completion, 'an honest open-threads completion comment was posted');
+        var text = String(completion.comment || completion.body);
+        assert.notContains(text, 'no code changes are required');
+        assert.contains(text, '2 review thread(s) remain open');
+        assert.contains(text, 'PRRT_late_1');
+        assert.contains(text, 'PRRT_late_2');
+        assert.contains(text, 'appeared mid-run');
     });
 });
