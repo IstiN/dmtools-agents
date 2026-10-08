@@ -207,3 +207,57 @@ suite('gitOps.checkoutPRBranch', function() {
     });
 });
 
+
+// ── gh-802 AC3a: log hygiene in detectMergeConflicts ─────────────────────────
+// The old code logged "No merge conflicts — base branch changes staged" after
+// EVERY clean merge — including an already-up-to-date branch where the merge
+// staged nothing. The log must reflect what actually happened.
+
+suite('gitOps.detectMergeConflicts — clean-merge log wording (gh-802 AC3a)', function() {
+
+    function runDetect(quietDiffExit) {
+        var logs = [];
+        var origLog = console.log;
+        console.log = function() {
+            logs.push(Array.prototype.slice.call(arguments).join(' '));
+        };
+        try {
+            var gitOps = loadGitOps({
+                cli_execute_command: function(args) {
+                    var c = args.command || '';
+                    if (c === 'git rev-parse --is-shallow-repository') return 'false\nCOMMAND_EXIT_CODE=0';
+                    if (c === 'git merge origin/main --no-commit --no-ff') return 'Merge cleanup\nCOMMAND_EXIT_CODE=0';
+                    if (c === 'git diff --cached --quiet HEAD') {
+                        if (quietDiffExit === 0) return 'COMMAND_EXIT_CODE=0';
+                        throw new Error('exit 1 — the merge staged changes');
+                    }
+                    return 'COMMAND_EXIT_CODE=0';
+                }
+            });
+            var conflicts = gitOps.detectMergeConflicts('main', 'input/PROJ-123', null);
+            return { conflicts: conflicts, logs: logs };
+        } finally {
+            console.log = origLog;
+        }
+    }
+
+    test('an up-to-date merge (nothing staged) must NOT claim "base branch changes staged"', function() {
+        var fx = runDetect(0);
+
+        assert.deepEqual(fx.conflicts, [], 'clean merge — no conflicts');
+        var joined = fx.logs.join('\n');
+        assert.ok(joined.indexOf('base branch changes staged') === -1,
+            'no false "base branch changes staged" line on an up-to-date merge, got: ' + JSON.stringify(fx.logs));
+        assert.ok(joined.indexOf('already up to date') !== -1,
+            'the up-to-date case is named explicitly, got: ' + JSON.stringify(fx.logs));
+    });
+
+    test('a merge that stages base changes keeps the "base branch changes staged" wording', function() {
+        var fx = runDetect(1);
+
+        assert.deepEqual(fx.conflicts, [], 'clean merge — no conflicts');
+        var joined = fx.logs.join('\n');
+        assert.ok(joined.indexOf('No merge conflicts — base branch changes staged') !== -1,
+            'staged-changes case keeps the informative wording, got: ' + JSON.stringify(fx.logs));
+    });
+});

@@ -890,8 +890,15 @@ suite('scm GitHub provider getPrDiff fallback', function() {
         var diff = provider.getPrDiff('1789');
 
         assert.ok(diff.indexOf('diff --git') !== -1, 'should return diff from new tool');
+        // gh-802 AC2: tool mocked to succeed → exactly 1 call, 0 fallbacks
+        // (the legacy tool / github_get_pr / git mocks above all throw).
         assert.equal(calls.length, 1);
-        assert.equal(calls[0].pullRequestID, '1789');
+        // gh-802 AC1: exact schema casing — the runtime tool schema requires
+        // `pullRequestId`; the ADO-era `pullRequestID` is rejected
+        // ("host callback returned invalid JSON" on every call).
+        assert.equal(calls[0].pullRequestId, '1789');
+        assert.equal(calls[0].pullRequestID, undefined,
+            'pullRequestID is the wrong casing — the diff-text tool schema requires pullRequestId');
     });
 
     test('extracts diff from JSON result wrapper', function() {
@@ -1392,7 +1399,7 @@ suite('githubHelpers.findMergedPRForTicket', function() {
 
 suite('scm.getDiffText', function() {
 
-    test('GitHub provider calls github_get_pr_diff_text with workspace/repository/pullRequestID', function() {
+    test('GitHub provider calls github_get_pr_diff_text with workspace/repository/pullRequestId (gh-802 AC1 schema casing)', function() {
         var call = null;
         var scmModule = loadScm({
             github_get_pr_diff_text: function(args) {
@@ -1404,7 +1411,7 @@ suite('scm.getDiffText', function() {
         var provider = scmModule._createGithubProvider('example-org', 'example.repo');
         var diff = provider.getDiffText(42);
 
-        assert.deepEqual(call, { workspace: 'example-org', repository: 'example.repo', pullRequestID: '42' });
+        assert.deepEqual(call, { workspace: 'example-org', repository: 'example.repo', pullRequestId: '42' });
         assert.equal(diff, 'diff --git a/x b/x');
     });
 

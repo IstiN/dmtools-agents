@@ -476,3 +476,80 @@ suite('preCliReworkSetup.ensureInputContextContract — pinned input trio (gh-79
             'ci_failures.md placeholder written (no failed checks)');
     });
 });
+
+// ── gh-802 AC3b: the issue status write reflects the ACTUAL transition ───────
+// A rework leg used to write statuses.IN_DEVELOPMENT — the stale dev-phase
+// status — so the board showed the card back "In Development" while rework
+// (post-review fixes) was actually running. The write must be the real
+// rework phase: statuses.IN_REWORK.
+
+suite('preCliReworkSetup.action — rework status write reflects the actual transition (gh-802 AC3b)', function() {
+
+    test('markReworkInDevelopment writes IN_REWORK (the real phase), never the stale In Development', function() {
+        var moves = [];
+        var writes = [];
+        var ghStub = makeGhStub();
+        ghStub.findPRForTicket = function() { return { number: 7 }; };
+        ghStub.getPRDetails = function() {
+            return { number: 7, title: 't', html_url: 'u', state: 'open',
+                head: { ref: 'ai/gh-123', sha: 'abc' }, base: { ref: 'master' }, user: { login: 'a' } };
+        };
+        ghStub.detectFailedChecks = function() { return []; };
+        ghStub.fetchDiscussionsAndRawData = function() { return { markdown: '## d', rawThreads: null }; };
+
+        var mod = loadModule(
+            'js/preCliReworkSetup.js',
+            makeRequire({
+                './configLoader.js': {
+                    loadProjectConfig: function() {
+                        return {
+                            git: { baseBranch: 'master' }, workingDir: null,
+                            repository: { owner: 'acme', repo: 'widgets' },
+                            jira: { markReworkInDevelopment: true }
+                        };
+                    },
+                    paramsForConfigLoad: function(p) { return p; },
+                    loadHookFn: function() { return null; },
+                    createScm: function() { return { getRemoteRepoInfo: function() { return { owner: 'acme', repo: 'widgets' }; } }; }
+                },
+                './common/githubHelpers.js': ghStub,
+                './common/gitOps.js': {
+                    checkoutPRBranch: function() {},
+                    detectMergeConflicts: function() { return []; },
+                    getPRDiff: function() { return ''; },
+                    writePRContext: function() {},
+                    writeInputFile: function(path, content, label) { writes.push({ path: path, content: content }); }
+                },
+                './common/commentMarkup.js': reworkCommentMarkupModule,
+                './fetchQuestionsToInput.js': NOOP_MODULE,
+                './fetchParentContextToInput.js': NOOP_MODULE,
+                './restoreFromReleases.js': NOOP_MODULE,
+                './common/trackers.js': { createTracker: function() {
+                    return {
+                        postComment: function() {},
+                        moveToStatus: function(key, status) { moves.push(status); }
+                    };
+                } },
+                './common/setupCommands.js': loadModule('js/common/setupCommands.js'),
+                './common/baseBranchMarker.js': { writeBaseBranchMarker: function() {} },
+                './config.js': { resolveStatuses: function() {
+                    return { IN_DEVELOPMENT: 'In Development', IN_REWORK: 'In Rework' };
+                } }
+            }),
+            {
+                file_write: function(args) { writes.push(args); },
+                file_read: function() { throw new Error('File does not exist'); },
+                cli_execute_command: function() { return ''; }
+            }
+        );
+
+        var result = mod.action({
+            inputFolderPath: 'input/PROJ-123',
+            jobParams: { inputFolderPath: 'input/PROJ-123', customParams: {} }
+        });
+
+        assert.equal(result.success, true, 'action succeeded — got: ' + JSON.stringify(result));
+        assert.deepEqual(moves, ['In Rework'],
+            'the rework setup writes the ACTUAL rework transition, got: ' + JSON.stringify(moves));
+    });
+});

@@ -219,4 +219,30 @@ suite('fetchQuestionsToInput.action — tracker-aware query layer (gh-770)', fun
         assert.equal(loaded.parentCalls.length, 1);
     });
 
+    test('gh-802 AC3c: the fetch error is logged WITH its content, not swallowed as {}', function() {
+        var errors = [];
+        var origError = console.error;
+        console.error = function () {
+            errors.push(Array.prototype.slice.call(arguments).join(' '));
+        };
+        try {
+            var loaded = loadFetchQuestionsWithMocks({
+                globals: {
+                    jira_search_by_jql: function () {
+                        throw new Error('jira down: 503 from rest/api/2/search');
+                    }
+                }
+            });
+            loaded.mod.action({ inputFolderPath: 'input/PROJ-10', jobParams: {} });
+        } finally {
+            console.error = origError;
+        }
+        var joined = errors.join('\n');
+        assert.ok(joined.indexOf('Failed to fetch questions') !== -1,
+            'the failure is still announced, got: ' + JSON.stringify(joined));
+        assert.ok(joined.indexOf('jira down: 503 from rest/api/2/search') !== -1,
+            'the error CONTENT must reach the log (was swallowed as {} before the fix), got: ' + JSON.stringify(joined));
+        assert.ok(joined.indexOf('{}') === -1, 'no bare {} rendering of the error object');
+    });
+
 });
