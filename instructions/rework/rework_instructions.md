@@ -118,6 +118,9 @@ Use the `rootCommentId` as `inReplyToId` and `id` as `threadId`:
 - `threadId` — from `pr_discussions_raw.json` → `threads[i].id`
 - `reply` — short, specific description of the fix (1-3 sentences)
 - Include an entry for **every non-resolved thread**, even if you only partially addressed it
+- **Every entry MUST carry a non-null `threadId`** whenever `pr_discussions_raw.json` held at least one unresolved thread — a reply without a thread id cannot be posted inline into its thread and is reported as a coverage gap on the ticket
 - If `pr_discussions_raw.json` is absent or empty, write `{ "replies": [] }`
+
+**Review verdict context**: `review_state.md` in the input folder carries the latest review decision (`CHANGES_REQUESTED` / `APPROVED` / `NONE`) and the open-thread inventory. `CHANGES_REQUESTED` means the reviewer requires changes — treat every open thread as blocking.
 
 **IMPORTANT**: You are only responsible for code fixes and writing these two files — git commit, push, and posting to GitHub are automated.

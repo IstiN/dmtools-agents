@@ -401,6 +401,348 @@ function buildThreadLookup(threads) {
     return { byRoot: byRoot, byThread: byThread };
 }
 
+// ── gh-799: complete rework picture + honest live-rechecked completion ───────
+// Live incident (fa PR #1420, run 37806292238, 2026-10-08): the completion
+// comment was written from the STALE input snapshot ("...no code changes are
+// required") while the PR's review state required changes, and a reply carried
+// "threadId": null. These helpers close two of the three contract gaps:
+// reply-targeting coverage (LOUD, never silent) and completion honesty (the
+// completion comment is generated from a LIVE unresolved-threads re-fetch,
+// with per-thread accounting for drift and unaddressed threads).
+
+/**
+ * A thread the rework agent is accountable for: still unresolved and not
+ * bot-authored informational noise (bot flag present only on some providers —
+ * absent means human, per the SCM abstraction).
+ */
+function isOpenThread(t) {
+    return !!t && t.resolved !== true && t.bot !== true;
+}
+
+/**
+ * Stable key for cross-source thread matching: prefer the GraphQL thread id,
+ * fall back to the root comment db id (prefixed so the two id spaces can
+ * never collide in a shared key set). Returns null for an unnamed thread.
+ */
+function threadKeyOf(t) {
+    if (!t) return null;
+    if (t.threadId) return String(t.threadId);
+    if (t.rootCommentId !== null && t.rootCommentId !== undefined) return 'c' + t.rootCommentId;
+    return null;
+}
+
+function threadKeySet(threads) {
+    var keys = {};
+    (threads || []).forEach(function(t) {
+        var k = threadKeyOf(t);
+        if (k) keys[k] = true;
+    });
+    return keys;
+}
+
+/**
+ * Human-readable thread identification for logs and completion comments:
+ * id, file:line location, and the first body line (the reviewer's title).
+ */
+function threadLabel(t) {
+    if (!t) return '(unknown thread)';
+    var id = t.threadId ||
+        (t.rootCommentId !== null && t.rootCommentId !== undefined ? 'comment#' + t.rootCommentId : 'no-id');
+    var loc = t.path ? (t.path + (t.line ? ':' + t.line : '')) : null;
+    var body = String(t.body || '').split('\n')[0].trim();
+    if (body.length > 120) body = body.substring(0, 117) + '...';
+    return id + (loc ? ' (' + loc + ')' : '') + (body ? ' — "' + body + '"' : '');
+}
+
+/**
+ * Reads + parses outputs/review_replies.json. Returns { missing, replies } —
+ * missing=true only when the file itself is absent/blank, so callers can
+ * distinguish "no reply file" from "a reply file with zero rows".
+ */
+function readRepliesArray(outputOptions) {
+    var raw = outputFiles.readOutputFile('review_replies.json', outputOptions || {});
+    if (!raw) return { missing: true, replies: [] };
+    try {
+        var data = JSON.parse(raw);
+        return { missing: false, replies: (data && data.replies) ? data.replies : [] };
+    } catch (e) {
+        console.warn('Failed to parse review_replies.json:', e.message || e);
+        return { missing: false, replies: [] };
+    }
+}
+
+/**
+ * gh-799 AC2: reply-targeting coverage. N open threads in the input snapshot
+ * vs how many of them a reply row actually targets — matched by threadId OR
+ * rootCommentId/inReplyToId in either direction (post-enrichment parity: 
+ * postThreadReplies fills one id from the other, so either id proves the
+ * thread was addressed; the input snapshot and the AI output may carry
+ * different id kinds for the same thread). A null-threadId reply with no
+ * comment id (the live incident shape) targets nothing.
+ */
+function replyTargetsThread(reply, thread) {
+    if (!reply || !thread) return false;
+    if (thread.threadId && reply.threadId && String(thread.threadId) === String(reply.threadId)) return true;
+    var rootId = (thread.rootCommentId !== null && thread.rootCommentId !== undefined)
+        ? String(thread.rootCommentId) : null;
+    if (!rootId) return false;
+    if (reply.rootCommentId !== null && reply.rootCommentId !== undefined &&
+        String(reply.rootCommentId) === rootId) return true;
+    if (reply.inReplyToId !== null && reply.inReplyToId !== undefined &&
+        String(reply.inReplyToId) === rootId) return true;
+    return false;
+}
+
+function buildReplyCoverage(inputThreads, replies) {
+    var open = (inputThreads || []).filter(isOpenThread);
+    var unaddressed = open.filter(function(t) {
+        var targeted = false;
+        (replies || []).forEach(function(r) {
+            if (replyTargetsThread(r, t)) targeted = true;
+        });
+        return !targeted;
+    });
+    return {
+        openCount: open.length,
+        targetedCount: open.length - unaddressed.length,
+        unaddressed: unaddressed
+    };
+}
+
+/**
+ * Greppable loud marker for the reply-coverage gap (gh-799 AC2). Appears in
+ * the leg log AND (via buildReworkCompletionComment) in the completion comment
+ * — an untargeted reply must never be silently folded into a "nothing
+ * required" story.
+ */
+var REPLY_COVERAGE_GAP_PREFIX = 'REPLY-COVERAGE-GAP:';
+
+function logReplyCoverageGap(coverage) {
+    var unaddressed = (coverage && coverage.unaddressed) || [];
+    if (unaddressed.length === 0) return [];
+    var openCount = coverage.openCount || 0;
+    var lines = [REPLY_COVERAGE_GAP_PREFIX + ' only ' + (openCount - unaddressed.length) + '/' + openCount +
+        ' open review thread(s) have a targeted reply in outputs/review_replies.json'];
+    unaddressed.forEach(function(t) {
+        lines.push(REPLY_COVERAGE_GAP_PREFIX + ' thread NOT addressed by any reply: ' + threadLabel(t));
+    });
+    lines.forEach(function(line) { console.warn('⚠️ ' + line); });
+    return lines;
+}
+
+/**
+ * gh-799 AC3/AC5: LIVE unresolved-thread re-check — same call the input prep
+ * makes (scm.fetchDiscussions), executed at completion time. The completion
+ * comment must describe the PR as it is NOW, so threads that appeared mid-run
+ * are caught (the live incident: threads arrived 19 minutes after the leg
+ * started) instead of being masked by the stale snapshot.
+ *
+ * Fail-safe toward honesty: when the probe is unavailable or fails, fall back
+ * to the input snapshot (last known state) — never silently to zero.
+ */
+function fetchLiveOpenThreads(scm, pr, inputThreads) {
+    var fallback = (inputThreads || []).filter(isOpenThread);
+    if (!scm || typeof scm.fetchDiscussions !== 'function' || !pr || !pr.number) {
+        console.warn('⚠️ Live unresolved-thread re-check unavailable — falling back to the rework input snapshot (' +
+            fallback.length + ' open thread(s))');
+        return fallback;
+    }
+    try {
+        var data = scm.fetchDiscussions(String(pr.number));
+        var threads = (data && data.rawThreads && data.rawThreads.threads) || [];
+        var open = threads.filter(isOpenThread);
+        console.log('Live unresolved-thread re-check: ' + open.length + ' open thread(s) on PR #' + pr.number + ' at completion time');
+        return open;
+    } catch (e) {
+        console.warn('⚠️ Live unresolved-thread re-check failed (falling back to the input snapshot, ' +
+            fallback.length + ' open thread(s)):', e.message || e);
+        return fallback;
+    }
+}
+
+/**
+ * gh-799: the latest CONCLUDED review verdict (CHANGES_REQUESTED / APPROVED),
+ * or null when there is none / the probe is unavailable. Fail-open to null
+ * (same convention as headMovedSinceLastReview) — a broken verdict probe must
+ * not stall the completion, and the live-thread re-check is the primary gate.
+ */
+function latestConcludedVerdict(scm, pr) {
+    var concluded = concludedReviewsSorted(scm, pr);
+    return concluded.length > 0 ? concluded[concluded.length - 1].state : null;
+}
+
+/**
+ * Concluded (CHANGES_REQUESTED / APPROVED) reviews of a PR, oldest first.
+ * Shared by the token-burn guard and the completion verdict gate. Returns []
+ * when the provider exposes no reviews or the probe fails — callers apply
+ * their own fail-open semantics.
+ */
+function concludedReviewsSorted(scm, pr) {
+    try {
+        if (!scm || typeof scm.listReviews !== 'function' || !pr || !pr.number) return [];
+        var reviews = scm.listReviews(pr.number) || [];
+        var concluded = reviews.filter(function(r) {
+            return r && (r.state === 'CHANGES_REQUESTED' || r.state === 'APPROVED');
+        });
+        concluded.sort(function(a, b) {
+            return String(a.submitted_at || '') < String(b.submitted_at || '') ? -1 : 1;
+        });
+        return concluded;
+    } catch (e) {
+        console.warn('Review-verdict probe failed (fail-open):', e.message || e);
+        return [];
+    }
+}
+
+/**
+ * gh-799 wording selection over {input threads × live threads × verdict ×
+ * reply coverage}. Priority order is honesty-first:
+ *   open-threads            — live unresolved threads exist → list them (AC3/AC5)
+ *   unaddressed-replies     — threads closed but some input threads never got
+ *                             a targeted reply (AC2)
+ *   changes-requested-verdict — nothing open, but the reviewer still requires
+ *                             changes (never "no code changes required")
+ *   clean                   — nothing open, everything covered, no blocking
+ *                             verdict → the historical wording (AC4)
+ */
+function selectReworkCompletionWording(liveOpenCount, unaddressedCount, verdict) {
+    if (liveOpenCount > 0) return 'open-threads';
+    if (unaddressedCount > 0) return 'unaddressed-replies';
+    if (verdict === 'CHANGES_REQUESTED') return 'changes-requested-verdict';
+    return 'clean';
+}
+
+/**
+ * Per-thread accounting block for the open-threads completion comment: every
+ * live open thread listed with WHY it is still open — appeared mid-run (drift,
+ * AC5), never targeted by a reply (AC2), or replied to but still open.
+ * Membership is checked by either id kind (threadId or rootCommentId) because
+ * the live fetch and the input snapshot may disagree on which ids they carry.
+ */
+function threadKeySetContains(keySet, t) {
+    if (!t) return false;
+    if (t.threadId && keySet[String(t.threadId)]) return true;
+    if (t.rootCommentId !== null && t.rootCommentId !== undefined && keySet['c' + t.rootCommentId]) return true;
+    return false;
+}
+
+function buildOpenThreadAccountingBlock(m, liveOpen, inputThreads, unaddressed) {
+    var inputKeys = threadKeySet(inputThreads);
+    var unaddressedKeys = threadKeySet(unaddressed);
+    var lines = liveOpen.map(function(t) {
+        var key = threadKeyOf(t);
+        var reason;
+        if (!key || !threadKeySetContains(inputKeys, t)) {
+            reason = '🆕 appeared mid-run (not present in the rework input snapshot)';
+        } else if (threadKeySetContains(unaddressedKeys, t)) {
+            reason = 'not addressed by any reply in ' + m.inline('outputs/review_replies.json');
+        } else {
+            reason = 'reply posted, thread still open';
+        }
+        var id = t.threadId ||
+            (t.rootCommentId !== null && t.rootCommentId !== undefined ? 'comment#' + t.rootCommentId : 'no-id');
+        var loc = t.path ? (t.path + (t.line ? ':' + t.line : '')) : null;
+        var body = String(t.body || '').split('\n')[0].trim();
+        if (body.length > 120) body = body.substring(0, 117) + '...';
+        return '* ' + m.inline(id) +
+            (loc ? ' — ' + m.inline(loc) : '') +
+            (body ? ' — "' + body + '"' : '') +
+            ' — ' + reason;
+    });
+    return lines.join('\n') + '\n';
+}
+
+/**
+ * gh-799: builds the completion ticket comment from the LIVE PR state.
+ * "No code changes are required" is allowed ONLY on the clean path (zero live
+ * open threads, every input thread covered by a reply, verdict not
+ * CHANGES_REQUESTED) — where it is byte-identical to the historical wording
+ * (AC4, no regression). Everything else gets the truthful form with
+ * thread-by-thread accounting.
+ *
+ * @param {Object} m   - commentMarkup flavor bag (per-tracker rendering)
+ * @param {Object} ctx - { ticketKey, prUrl, branchName, prCommentPosted,
+ *                       codeChangesCommitted, liveOpenThreads, inputThreads,
+ *                       unaddressed, verdict }
+ */
+function buildReworkCompletionComment(m, ctx) {
+    var liveOpen = (ctx.liveOpenThreads || []).filter(isOpenThread);
+    var unaddressed = ctx.unaddressed || [];
+    var verdict = ctx.verdict || null;
+    var wording = selectReworkCompletionWording(liveOpen.length, unaddressed.length, verdict);
+
+    var comment;
+    if (wording === 'open-threads') {
+        comment = m.h(3, '⚠️ Rework Completed — ' + liveOpen.length + ' review thread(s) remain open') + '\n';
+        if (ctx.prUrl) comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
+        if (ctx.branchName) comment += m.bold('Branch') + ': ' + m.code(ctx.branchName) + '\n';
+        comment += '\n' + m.bold('Rework pushed; ' + liveOpen.length +
+            ' review thread(s) remain open — the SM will re-arm a threads-rework.') + '\n';
+        comment += buildOpenThreadAccountingBlock(m, liveOpen, ctx.inputThreads || [], unaddressed);
+    } else if (wording === 'unaddressed-replies') {
+        comment = m.h(3, '⚠️ Rework Completed — some review threads had no targeted reply') + '\n';
+        if (ctx.prUrl) comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
+        comment += '\nAll review threads are now resolved, but ' + unaddressed.length +
+            ' open thread(s) from the rework input had no targeted reply in ' +
+            m.inline('outputs/review_replies.json') + ':\n';
+        comment += unaddressed.map(function(t) { return '* ' + threadLabel(t); }).join('\n') + '\n';
+    } else if (wording === 'changes-requested-verdict') {
+        comment = m.h(3, ctx.codeChangesCommitted ? '✅ Rework Completed' : '✅ Rework Analysis Completed') + '\n';
+        if (ctx.prUrl) comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
+        if (ctx.codeChangesCommitted) {
+            comment += m.bold('Branch') + ': ' + m.code(ctx.branchName) + '\n';
+            comment += '\nRework changes were pushed.\n';
+        } else {
+            comment += '\nThe rework analysis completed without code changes.\n';
+        }
+        comment += '\n' + m.bold('The latest review verdict is still CHANGES_REQUESTED') +
+            ' — the SM will re-check before this PR can merge.\n';
+    } else {
+        // Clean path — the historical wording, byte-identical (AC4).
+        if (ctx.codeChangesCommitted) {
+            comment = m.h(3, '✅ Rework Completed') + '\n\n';
+            comment += m.bold('Branch') + ': ' + m.code(ctx.branchName) + '\n';
+            if (ctx.prUrl) {
+                comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
+            }
+            comment += '\nAI Teammate has addressed all PR review comments and pushed the fixes.\n';
+        } else {
+            comment = m.h(3, '✅ Rework Analysis Completed') + '\n\n';
+            if (ctx.prUrl) {
+                comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
+            }
+            comment += '\nAI Teammate analyzed all PR review comments and determined no code changes are required.\n';
+        }
+    }
+    if (ctx.prCommentPosted) {
+        if (wording === 'clean') {
+            comment += 'A fix summary has been posted as a comment on the Pull Request.';
+        } else {
+            comment += '\nA fix summary has been posted as a comment on the Pull Request.';
+        }
+    }
+    return comment;
+}
+
+/**
+ * gh-799: gathers the live completion state in one place — input snapshot,
+ * reply coverage (LOUD-logged when gapped), live open threads, verdict —
+ * for postJiraComment/buildReworkCompletionComment.
+ */
+function buildCompletionLiveState(scm, pr, ticketKey, config) {
+    var outputOpts = { ticketKey: ticketKey, workingDir: (config && config.workingDir) || null };
+    var inputThreads = readInputRawThreads(ticketKey, outputOpts);
+    var replies = readRepliesArray(outputOpts).replies;
+    var coverage = buildReplyCoverage(inputThreads, replies);
+    logReplyCoverageGap(coverage);
+    return {
+        inputThreads: inputThreads,
+        unaddressed: coverage.unaddressed,
+        liveOpenThreads: fetchLiveOpenThreads(scm, pr, inputThreads),
+        verdict: latestConcludedVerdict(scm, pr)
+    };
+}
+
 /**
  * gh-692 closure step: after posting replies, make ONE fresh API pass over the
  * PR's review threads and resolve every still-open thread this rework addressed —
@@ -501,21 +843,14 @@ function postThreadReplies(scm, pullRequestId, outputOptions) {
     outputOptions = outputOptions || {};
     var lookup = buildThreadLookup(readInputRawThreads(outputOptions.ticketKey, outputOptions));
 
-    let repliesJson = outputFiles.readOutputFile('review_replies.json', outputOptions);
-    if (!repliesJson) {
+    // gh-799: shared reader — the completion live-state reads the same file the
+    // same way, so coverage accounting and reply posting can never drift apart.
+    var repliesFile = readRepliesArray(outputOptions);
+    if (repliesFile.missing) {
         console.warn('outputs/review_replies.json not found — skipping thread replies');
     }
 
-    let data = null;
-    if (repliesJson) {
-        try {
-            data = JSON.parse(repliesJson);
-        } catch (e) {
-            console.warn('Failed to parse review_replies.json:', e.message || e);
-        }
-    }
-
-    const replies = (data && data.replies) ? data.replies : [];
+    const replies = repliesFile.replies;
     if (replies.length === 0) {
         console.log('No thread replies to post');
     }
@@ -647,27 +982,27 @@ function postPRComment(scm, pullRequestId, fixSummary, ticketKey, repliesPosted)
     }
 }
 
-function postJiraComment(tracker, ticketKey, prUrl, branchName, prCommentPosted, codeChangesCommitted, fixSummary) {
+/**
+ * gh-799: posts the completion comment generated from the LIVE PR state
+ * (buildCompletionLiveState — live unresolved-thread re-check + verdict probe
+ * + reply coverage). liveState may be null for legacy callers — that maps to
+ * the clean path, preserving the historical wording.
+ */
+function postJiraComment(tracker, ticketKey, prUrl, branchName, prCommentPosted, codeChangesCommitted, fixSummary, liveState) {
     try {
         const m = commentMarkup.forTicket(ticketKey);
-        let comment;
-        if (codeChangesCommitted) {
-            comment = m.h(3, '✅ Rework Completed') + '\n\n';
-            comment += m.bold('Branch') + ': ' + m.code(branchName) + '\n';
-            if (prUrl) {
-                comment += m.bold('Pull Request') + ': ' + prUrl + '\n';
-            }
-            comment += '\nAI Teammate has addressed all PR review comments and pushed the fixes.\n';
-        } else {
-            comment = m.h(3, '✅ Rework Analysis Completed') + '\n\n';
-            if (prUrl) {
-                comment += m.bold('Pull Request') + ': ' + prUrl + '\n';
-            }
-            comment += '\nAI Teammate analyzed all PR review comments and determined no code changes are required.\n';
-        }
-        if (prCommentPosted) {
-            comment += 'A fix summary has been posted as a comment on the Pull Request.';
-        }
+        const live = liveState || {};
+        const comment = buildReworkCompletionComment(m, {
+            ticketKey: ticketKey,
+            prUrl: prUrl,
+            branchName: branchName,
+            prCommentPosted: prCommentPosted,
+            codeChangesCommitted: codeChangesCommitted,
+            liveOpenThreads: live.liveOpenThreads || [],
+            inputThreads: live.inputThreads || [],
+            unaddressed: live.unaddressed || [],
+            verdict: live.verdict || null
+        });
 
         tracker.postComment(ticketKey, comment);
         console.log('✅ Posted completion comment to ticket:', ticketKey);
@@ -834,15 +1169,10 @@ function handleInterruptedRework(tracker, ticketKey, branchName, customParams, s
  */
 function headMovedSinceLastReview(scm, pr) {
     try {
-        if (!pr || !pr.number) { return true; }
-        var reviews = scm.listReviews(pr.number);
-        var concluded = (reviews || []).filter(function (r) {
-            return r && (r.state === 'CHANGES_REQUESTED' || r.state === 'APPROVED');
-        });
+        // gh-799: shared concluded-review probe (same filter + sort as
+        // latestConcludedVerdict) — one id-source of truth for review verdicts.
+        var concluded = concludedReviewsSorted(scm, pr);
         if (!concluded.length) { return true; }
-        concluded.sort(function (a, b) {
-            return String(a.submitted_at || '') < String(b.submitted_at || '') ? -1 : 1;
-        });
         var last = concluded[concluded.length - 1];
         var headSha = pr.head && (pr.head.sha || pr.head);
         if (last.commit_id && headSha && String(last.commit_id) === String(headSha)) {
@@ -1078,9 +1408,15 @@ function action(params) {
             console.warn('Failed to assign ticket:', e);
         }
 
-        // Post completion comment to the ticket
+        // Post completion comment to the ticket.
+        // gh-799: the comment is generated from a LIVE unresolved-thread
+        // re-check + verdict probe + reply coverage — never from the stale
+        // input snapshot. Open threads (including mid-run arrivals) are listed
+        // with per-thread accounting; "no code changes are required" only on
+        // the verified-clean path.
         const prUrl = pr ? pr.html_url : null;
-        postJiraComment(tracker, ticketKey, prUrl, branchName, prCommentPosted, codeChangesCommitted, fixSummaryWithWarnings);
+        postJiraComment(tracker, ticketKey, prUrl, branchName, prCommentPosted, codeChangesCommitted,
+            fixSummaryWithWarnings, buildCompletionLiveState(scm, pr, ticketKey, config));
 
         // Remove WIP label if present
         const wipLabel = actualParams.metadata && actualParams.metadata.contextId
@@ -1247,5 +1583,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads };
+    module.exports = { action, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment };
 }
