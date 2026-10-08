@@ -2923,13 +2923,21 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // publish — completes the pipeline the moment the producer
                 // lands). Any miss on EITHER source just publishes
                 // token-less cards (board renders "—"); the branch fetch
-                // happens only when the local file yields no map.
+                // happens only when the local file yields no map. The
+                // winning source rides the 🪙 provenance line below — a
+                // persistent miss (mis-typed tag, revoked Contents scope)
+                // must stay distinguishable from "producer hasn't landed".
                 var spTokens = factoryStateModule.readTokensFile(
                     (spCfg && spCfg.tokensFile) ||
                         factoryStateModule.DEFAULT_TOKENS_FILE,
-                    function (p) { return file_read({ path: p }); }) ||
-                    factoryStateModule.fetchTokensFromBranch(spFull, spCfg,
+                    function (p) { return file_read({ path: p }); });
+                var spTokensSrc = spTokens ? 'local' : 'none';
+                if (!spTokens) {
+                    spTokens = factoryStateModule.fetchTokensFromBranch(
+                        spFull, spCfg,
                         function (a) { return cli_execute_command(a); });
+                    if (spTokens) spTokensSrc = 'branch';
+                }
                 var spPrev = factoryStateModule.fetchPreviousState(
                     spFull, spCfg, function (a) {
                         return cli_execute_command(a);
@@ -2958,6 +2966,14 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         return cli_execute_command(args);
                     });
                 console.log('  📡 factory state published → ' + spUrl);
+                // 🪙 provenance (rework pr-783 thread 3): which source fed
+                // card.tokens this tick — local file, branch, or none. One
+                // sibling line next to 📡, ALWAYS logged: pre-producer the
+                // branch 404s every tick, so per-miss warns would just fill
+                // the log with noise; a single grep-able line does not.
+                console.log('  🪙 tokens: ' +
+                    factoryStateModule.tokensLegCount(spTokens) +
+                    ' legs (' + spTokensSrc + ')');
                 try {
                     var hUrl = factoryStateModule.updateHistory(
                         spState, spCfg, function (a) {

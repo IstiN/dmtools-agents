@@ -7673,4 +7673,61 @@ suite('smAgent: statePublish tokens — local file first, branch fallback', func
             'unreadable local file falls through to the branch');
     });
 
+    // ── rework (pr-783 thread 3): 🪙 provenance line next to 📡 published ───
+    // The tokens source (local|branch|none) must be grep-able in the tick
+    // log — a persistent miss (bad tag, revoked scope) is otherwise
+    // indistinguishable from "producer hasn't landed yet".
+
+    function publishTickLogged(opts) {
+        opts = opts || {};
+        opts.captureConsole = true;
+        return publishTick(opts);
+    }
+
+    test('branch-sourced tokens → 🪙 line names source branch with the leg count', function() {
+        var run = publishTickLogged({
+            fileMap: {},
+            github: { prList: PR31 },
+            onCliExecute: branchServes(BRANCH_TOKENS)
+        });
+        assert.ok(run.sm.capturedLogs.some(function (l) {
+            return l.indexOf('🪙 tokens: 2 legs (branch)') !== -1;
+        }), '🪙 tokens: 2 legs (branch) logged (pr-31 + issue-7 rows)');
+    });
+
+    test('local-sourced tokens → 🪙 line names source local, branch never probed', function() {
+        var fileMap = {};
+        fileMap[LOCAL_PATH] = JSON.stringify({
+            'pr-31': [{ leg: 'dev', at: '2026-10-08T10:00:00Z', prompt: 1, completion: 1, total: 2 }]
+        });
+        var run = publishTickLogged({
+            fileMap: fileMap,
+            github: { prList: PR31 },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command === TOKENS_FETCH) throw new Error('must not probe');
+                return undefined;
+            }
+        });
+        assert.ok(run.sm.capturedLogs.some(function (l) {
+            return l.indexOf('🪙 tokens: 1 legs (local)') !== -1;
+        }), '🪙 tokens: 1 legs (local) logged');
+    });
+
+    test('both sources miss → 🪙 tokens: 0 legs (none) — persistent miss is visible', function() {
+        var run = publishTickLogged({
+            fileMap: {},
+            github: { prList: PR31 },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command === TOKENS_FETCH) throw new Error('gh: Not Found (HTTP 404)');
+                return undefined;
+            }
+        });
+        assert.ok(run.sm.capturedLogs.some(function (l) {
+            return l.indexOf('🪙 tokens: 0 legs (none)') !== -1;
+        }), '🪙 tokens: 0 legs (none) logged — degradation diagnosable in one glance');
+        assert.ok(run.sm.capturedLogs.some(function (l) {
+            return l.indexOf('📡 factory state published') !== -1;
+        }), '📡 published line still present — the tick stayed green');
+    });
+
 });
