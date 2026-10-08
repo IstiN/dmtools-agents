@@ -190,9 +190,15 @@ function _createGithubProvider(workspace, repository) {
         // callers can fall back gracefully.
         getDiffText: function(prId) {
             try {
-                // pullRequestId — the exact schema casing of the runtime tool
-                // (gh-802: the ADO-era pullRequestID was rejected on every call).
-                return github_get_pr_diff_text({ workspace: workspace, repository: repository, pullRequestId: String(prId) });
+                // pullRequestID — the exact schema casing of the runtime tool.
+                // ⚠️ Casing asymmetry (do NOT "fix" to pullRequestId): the dmtools
+                // catalog declares pullRequestID (capital D) for BOTH diff tools
+                // (github_get_pr_diff_text, github_get_pr_diff) while all other
+                // github_* PR tools take pullRequestId. Verified live against the
+                // v1.7.256 schema: pullRequestId → "Required parameter
+                // 'pullRequestID' is missing". Same conclusion in repo history
+                // #193 (dc48d6b1) and #201 (92aea814).
+                return github_get_pr_diff_text({ workspace: workspace, repository: repository, pullRequestID: String(prId) });
             } catch (e) {
                 console.warn('getDiffText (github) failed:', e && e.toString ? e.toString() : String(e));
                 return null;
@@ -266,9 +272,10 @@ function _createGithubProvider(workspace, repository) {
             // Primary: DMTools v1.7.210+ exposes a tool that returns the raw diff text.
             if (typeof github_get_pr_diff_text !== 'undefined') {
                 try {
-                    // pullRequestId — the exact schema casing of the runtime tool
-                    // (gh-802: the ADO-era pullRequestID failed every call here).
-                    var textRaw = github_get_pr_diff_text({ workspace: workspace, repository: repository, pullRequestId: prIdStr });
+                    // pullRequestID — the exact schema casing of the runtime tool
+                    // (see the asymmetry note on getDiffText above: BOTH diff
+                    // tools take pullRequestID, unlike the other github_* PR tools).
+                    var textRaw = github_get_pr_diff_text({ workspace: workspace, repository: repository, pullRequestID: prIdStr });
                     var textDiff = _extractDiffFromToolResult(textRaw);
                     if (_isUsableDiff(textDiff)) {
                         return textDiff;

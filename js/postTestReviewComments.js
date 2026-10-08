@@ -109,7 +109,12 @@ function getPrDiff(repoInfo, prNumber) {
         return github_get_pr_diff({
             workspace: repoInfo.owner,
             repository: repoInfo.repo,
-            pullRequestId: String(prNumber)
+            // pullRequestID — the diff-tool schema casing (both github diff
+            // tools declare pullRequestID, unlike the other github_* PR
+            // tools that take pullRequestId). Wrong casing makes this call
+            // fail every time and the catch below silently skips inline
+            // comment validation.
+            pullRequestID: String(prNumber)
         }) || '';
     } catch (e) {
         console.warn('Could not fetch PR diff for inline comment validation:', e.message || e);

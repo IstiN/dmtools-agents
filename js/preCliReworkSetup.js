@@ -368,7 +368,10 @@ function action(params) {
                 tracker.moveToStatus(ticketKey, statuses.IN_REWORK);
                 console.log('Moved ' + ticketKey + ' to ' + statuses.IN_REWORK);
             } catch (e) {
-                console.warn('Failed to move ticket to ' + statuses.IN_REWORK + ':', e);
+                // Log the error CONTENT — the host console renders a raw Error
+                // object as "{}" (same log-hygiene rule as AC3c; matches the
+                // e.message || String(e) pattern used elsewhere in this file).
+                console.warn('Failed to move ticket to ' + statuses.IN_REWORK + ':', e && e.message ? e.message : String(e));
             }
         }
 

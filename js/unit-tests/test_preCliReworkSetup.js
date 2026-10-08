@@ -630,18 +630,24 @@ suite('preCliReworkSetup.action — rework status write reflects the actual tran
         }
 
         assert.ok(warnArgs.length > 0, 'the failure is still announced');
-        var hasContentString = warnArgs.some(function(args) {
+        var moveFailureEntries = warnArgs.filter(function(args) {
+            return args.some(function(a) {
+                return typeof a === 'string' && a.indexOf('Failed to move ticket to') !== -1;
+            });
+        });
+        assert.ok(moveFailureEntries.length > 0, 'the transition failure is announced');
+        var hasContentString = moveFailureEntries.some(function(args) {
             return args.some(function(a) {
                 return typeof a === 'string' && a.indexOf('status In Rework is not valid for this workflow') !== -1;
             });
         });
         assert.ok(hasContentString,
             'a string carrying the error content must reach the log (a raw Error renders as {} on the host console), got: ' +
-            JSON.stringify(warnArgs));
-        var passesRawObject = warnArgs.some(function(args) {
+            JSON.stringify(moveFailureEntries));
+        var passesRawObject = moveFailureEntries.some(function(args) {
             return args.some(function(a) { return a !== null && typeof a === 'object'; });
         });
         assert.ok(!passesRawObject,
-            'the raw error object must NOT be passed through (renders as {} on the host console)');
+            'the raw error object must NOT be passed through on this line (renders as {} on the host console)');
     });
 });

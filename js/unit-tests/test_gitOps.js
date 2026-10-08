@@ -235,7 +235,10 @@ suite('gitOps.detectMergeConflicts — clean-merge log wording (gh-802 AC3a)', f
                     if (c === 'git diff --cached --quiet HEAD') {
                         if (quietDiffExit === 0) return 'COMMAND_EXIT_CODE=0';
                         if (quietDiffExit === 'corrupt') throw new Error('fatal: unable to read the index — COMMAND_EXIT_CODE=128');
-                        throw new Error('exit 1 — the merge staged changes');
+                        // exit 1 — the expected "staged" signal; the runtime
+                        // surfaces exit codes as COMMAND_EXIT_CODE=N in the
+                        // thrown message.
+                        throw new Error('exit 1 — the merge staged changes\nCOMMAND_EXIT_CODE=1');
                     }
                     return 'COMMAND_EXIT_CODE=0';
                 }
