@@ -828,6 +828,22 @@ therefore sets `"envVariables": {"CLI_ALLOWED_COMMANDS": "bash"}`, which is appl
 thread-local override for the whole SM job run (see `CliCommandExecutor`/`PropertyReader`
 in `dmtools-core`) and needs no VM-side `dmtools.env` changes — it travels with the repo.
 
+**Dev-leg whitelist (`story_development.json` / `bug_development.json`):** both
+development legs set `"envVariables": {"CLI_ALLOWED_COMMANDS":
+"find,ls,cat,mkdir,bash,run-agent.sh,gradlew"}` at the job level. The `bash`
+entry is deliberate and load-bearing, not copy-paste: the gh-775 missing-response
+resume re-invokes the agent wrapper as
+`bash -c "timeout -k 60 <N> bash agents/scripts/run-agent.sh --continue <prompt>"`
+through `cli_execute_command`, which whitelists the command's **first token** —
+without `bash` the bounded resume (and the pre-existing feedback-loop resumes,
+which also shell out through `bash`) could never run on these legs. Accepted
+tradeoff, stated explicitly: whitelisting `bash` lets the agent execute arbitrary
+commands via `bash -c`, so the first-token whitelist is no longer a command
+boundary on this leg. That is accepted for the dev automation legs — the agent
+already holds full write access to the working tree and its commands are logged —
+but a config copied from these legs into a more restricted agent must re-make
+that decision consciously.
+
 ### Bootstrapping a Local/Cloud Dev Session
 
 `scripts/warmup-session.sh` prepares a fresh machine (cloud dev-environment session,
