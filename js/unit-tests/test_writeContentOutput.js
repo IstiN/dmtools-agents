@@ -267,8 +267,9 @@ suite('writeContentOutput', function() {
             customParams: { trackerProvider: 'ado', contentOutput: { target: 'confluence', space: 'S', parentPageId: '1' } }
         }));
         assert.equal(jiraComments.length, 0);
-        assert.ok(result.success === true || adoComments.length >= 0);
-        if (result.success) assert.equal(adoComments.length, 1);
+        assert.equal(result.success, true, 'confluence target must succeed on ado: ' + result.error);
+        assert.equal(adoComments.length, 1, 'exactly one confluence-link comment via ado_add_work_item_comment');
+        assert.equal(adoComments[0].id, '10');
     });
 
     test('missing response.md returns failure', function() {
