@@ -44,6 +44,7 @@ function markdownFlavor() {
         },
         bold: function (text) { return '**' + text + '**'; },
         italic: function (text) { return '_' + text + '_'; },
+        inline: function (text) { return '`' + text + '`'; },
         code: function (text, lang) {
             return '```' + (lang || '') + '\n' + text + '\n```';
         },
@@ -63,6 +64,7 @@ function jiraFlavor() {
         h: function (level, text) { return 'h' + level + '. ' + text; },
         bold: function (text) { return '*' + text + '*'; },
         italic: function (text) { return '_' + text + '_'; },
+        inline: function (text) { return '{code}' + text + '{code}'; },
         code: function (text, lang) {
             return '{code' + (lang ? ':' + lang : '') + '}' + text + '{code}';
         },
