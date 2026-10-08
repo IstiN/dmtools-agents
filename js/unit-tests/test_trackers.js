@@ -815,3 +815,168 @@ suite('trackers.js extractTicketKey', function () {
         assert.equal(t.extractTicketKey({ noKey: true }), null);
     });
 });
+
+// ── Extended operations (dm.ai#661 / tracker-agnostic agents) ────────────────
+
+suite('trackers.js extended operations — jira provider', function () {
+    function jira() { return { tracker: { provider: 'jira' } }; }
+
+    test('linkIssues maps to jira_link_issues {sourceKey, anotherKey, relationship}', function () {
+        var link = recorder('jira_link_issues', '{}');
+        loadTrackers({ jira_link_issues: link }).createTracker(jira()).linkIssues('A-1', 'A-2', 'Blocks');
+        assert.deepEqual(link.calls[0], { sourceKey: 'A-1', anotherKey: 'A-2', relationship: 'Blocks' });
+    });
+
+    test('updateField / updateDescription / setPriority map 1:1', function () {
+        var uf = recorder('jira_update_field', '{}'), ud = recorder('jira_update_description', '{}'), sp = recorder('jira_set_priority', '{}');
+        var t = loadTrackers({ jira_update_field: uf, jira_update_description: ud, jira_set_priority: sp }).createTracker(jira());
+        t.updateField('A-1', 'Solution', 'x'); t.updateDescription('A-1', 'd'); t.setPriority('A-1', 'High');
+        assert.deepEqual(uf.calls[0], { key: 'A-1', field: 'Solution', value: 'x' });
+        assert.deepEqual(ud.calls[0], { key: 'A-1', description: 'd' });
+        assert.deepEqual(sp.calls[0], { key: 'A-1', priority: 'High' });
+    });
+
+    test('attachFile maps to jira_attach_file_to_ticket {ticketKey, name, filePath}', function () {
+        var at = recorder('jira_attach_file_to_ticket', '{}');
+        loadTrackers({ jira_attach_file_to_ticket: at }).createTracker(jira()).attachFile('A-1', 'r.png', '/tmp/r.png', 'image/png');
+        assert.deepEqual(at.calls[0], { ticketKey: 'A-1', name: 'r.png', filePath: '/tmp/r.png', contentType: 'image/png' });
+    });
+
+    test('fieldCode returns the resolved customfield id (unwraps {result})', function () {
+        var fc = recorder('jira_get_field_custom_code', { result: 'customfield_10091' });
+        assert.equal(loadTrackers({ jira_get_field_custom_code: fc }).createTracker(jira()).fieldCode('P', 'Solution'), 'customfield_10091');
+        assert.deepEqual(fc.calls[0], { project: 'P', fieldName: 'Solution' });
+    });
+
+    test('createTicketWithParent returns the key and forwards labels', function () {
+        var c = recorder('jira_create_ticket_with_parent', '{"key":"A-9"}');
+        var key = loadTrackers({ jira_create_ticket_with_parent: c }).createTracker(jira())
+            .createTicketWithParent('A', 'Sub-task', 's', 'd', 'A-1', { labels: ['ai'] });
+        assert.equal(key, 'A-9');
+        assert.deepEqual(c.calls[0], { project: 'A', issueType: 'Sub-task', summary: 's', description: 'd', parentKey: 'A-1', labels: ['ai'] });
+    });
+
+    test('createTicketWithFields returns the key', function () {
+        var c = recorder('jira_create_ticket_with_json', '{"key":"A-7"}');
+        assert.equal(loadTrackers({ jira_create_ticket_with_json: c }).createTracker(jira()).createTicketWithFields('A', { summary: 's' }), 'A-7');
+        assert.deepEqual(c.calls[0], { project: 'A', fieldsJson: { summary: 's' } });
+    });
+
+    test('normalizeTicket exposes issueType, parentKey and fixVersions', function () {
+        var t = loadTrackers({}).createTracker(jira()).normalizeTicket({
+            key: 'A-1', fields: { summary: 's', status: { name: 'Open' }, issuetype: { name: 'Story' },
+                parent: { key: 'A-0' }, fixVersions: [{ name: '1.2' }], labels: [] }
+        });
+        assert.equal(t.issueType, 'Story');
+        assert.equal(t.parentKey, 'A-0');
+        assert.deepEqual(t.fixVersions, ['1.2']);
+    });
+});
+
+suite('trackers.js extended operations — ado provider', function () {
+    function ado() { return { tracker: { provider: 'ado' } }; }
+
+    test('linkIssues maps to ado_link_work_items {sourceId, targetId, relationship} with string ids', function () {
+        var link = recorder('ado_link_work_items', '{}');
+        loadTrackers({ ado_link_work_items: link }).createTracker(ado()).linkIssues(11, 12, 'blocks');
+        assert.deepEqual(link.calls[0], { sourceId: '11', targetId: '12', relationship: 'blocks' });
+    });
+
+    test('updateDescription -> ado_update_description', function () {
+        var ud = recorder('ado_update_description', '{}');
+        loadTrackers({ ado_update_description: ud }).createTracker(ado()).updateDescription('5', 'd');
+        assert.deepEqual(ud.calls[0], { id: '5', description: 'd' });
+    });
+
+    test('updateField on description/labels reuses the existing ado tools', function () {
+        var ud = recorder('ado_update_description', '{}'), ut = recorder('ado_update_tags', '{}');
+        var t = loadTrackers({ ado_update_description: ud, ado_update_tags: ut }).createTracker(ado());
+        t.updateField('5', 'Description', 'body');
+        t.updateField('5', 'labels', ['a', 'b']);
+        assert.deepEqual(ud.calls[0], { id: '5', description: 'body' });
+        assert.deepEqual(ut.calls[0], { id: '5', tags: 'a; b' });
+    });
+
+    test('updateField on a custom field needs ado_update_field and names the missing tool otherwise', function () {
+        var t = loadTrackers({}).createTracker(ado());
+        var msg = '';
+        try { t.updateField('5', 'Custom.Solution', 'x'); } catch (e) { msg = String(e.message || e); }
+        assert.ok(msg.indexOf('ado_update_field') !== -1 && msg.indexOf('#661') !== -1, 'got: ' + msg);
+        var uf = recorder('ado_update_field', '{}');
+        // a runtime that has the tool: it is used, with the human alias mapped to the reference name
+        var g = (typeof globalThis !== 'undefined') ? globalThis : this;
+        g.ado_update_field = uf;
+        try {
+            loadTrackers({}).createTracker(ado()).updateField('5', 'summary', 'New');
+            assert.deepEqual(uf.calls[0], { id: '5', field: 'System.Title', value: 'New' });
+        } finally { delete g.ado_update_field; }
+    });
+
+    test('setPriority maps Jira names to ADO 1-4 and falls back to updateField', function () {
+        var g = (typeof globalThis !== 'undefined') ? globalThis : this;
+        var uf = recorder('ado_update_field', '{}');
+        g.ado_update_field = uf;
+        try {
+            var t = loadTrackers({}).createTracker(ado());
+            t.setPriority('5', 'High'); t.setPriority('5', 'Lowest'); t.setPriority('5', '3');
+            assert.deepEqual(uf.calls.map(function (c) { return c.value; }), [2, 4, 3]);
+            assert.equal(uf.calls[0].field, 'Microsoft.VSTS.Common.Priority');
+            var bad = '';
+            try { t.setPriority('5', 'Whatever'); } catch (e) { bad = String(e.message); }
+            assert.ok(bad.indexOf('unknown priority') !== -1);
+        } finally { delete g.ado_update_field; }
+    });
+
+    test('createTicketWithParent creates, links the parent (Hierarchy) and adds labels', function () {
+        var create = recorder('ado_create_work_item', '{"id":77}');
+        var link = recorder('ado_link_work_items', '{}');
+        var lab = recorder('ado_add_work_item_label', '{}');
+        var id = loadTrackers({ ado_create_work_item: create, ado_link_work_items: link, ado_add_work_item_label: lab })
+            .createTracker(ado()).createTicketWithParent('P', 'Task', 'T', 'D', '70', { labels: ['ai_generated'] });
+        assert.equal(id, '77');
+        assert.deepEqual(link.calls[0], { sourceId: '77', targetId: '70', relationship: 'parent' });
+        assert.deepEqual(lab.calls[0], { id: '77', label: 'ai_generated' });
+    });
+
+    test('createTicketWithFields splits workItemType/title from the remaining ADO fields', function () {
+        var create = recorder('ado_create_work_item', '{"id":88}');
+        var id = loadTrackers({ ado_create_work_item: create }).createTracker(ado())
+            .createTicketWithFields('P', { workItemType: 'Bug', title: 'B', 'Microsoft.VSTS.Common.Priority': 1 });
+        assert.equal(id, '88');
+        assert.equal(create.calls[0].workItemType, 'Bug');
+        assert.equal(create.calls[0].title, 'B');
+        assert.deepEqual(JSON.parse(create.calls[0].fieldsJson), { 'Microsoft.VSTS.Common.Priority': 1 });
+        var msg = '';
+        try { loadTrackers({}).createTracker(ado()).createTicketWithFields('P', { 'System.Title': 'x' }); } catch (e) { msg = String(e.message); }
+        assert.ok(msg.indexOf('workItemType') !== -1);
+    });
+
+    test('attachFile names the missing ado_attach_file tool; fieldCode degrades to null', function () {
+        var t = loadTrackers({}).createTracker(ado());
+        var msg = '';
+        try { t.attachFile('5', 'a.png', '/tmp/a.png'); } catch (e) { msg = String(e.message); }
+        assert.ok(msg.indexOf('ado_attach_file') !== -1 && msg.indexOf('#661') !== -1, 'got: ' + msg);
+        assert.equal(t.fieldCode('P', 'Solution'), null);
+    });
+
+    test('normalizeTicket exposes issueType and parentKey from System.* fields', function () {
+        var t = loadTrackers({}).createTracker(ado()).normalizeTicket({
+            id: 9, fields: { 'System.Title': 't', 'System.State': 'Active', 'System.WorkItemType': 'Bug', 'System.Parent': 3 }
+        });
+        assert.equal(t.issueType, 'Bug');
+        assert.equal(t.parentKey, '3');
+        assert.deepEqual(t.fixVersions, []);
+    });
+});
+
+suite('trackers.js extended operations — github provider', function () {
+    test('operations GitHub cannot express fail with a provider-named error', function () {
+        var t = loadTrackers({}).createTracker({ tracker: { provider: 'github' } });
+        ['linkIssues', 'updateField', 'setPriority', 'attachFile', 'createTicketWithParent', 'createTicketWithFields', 'updateDescription'].forEach(function (op) {
+            var msg = '';
+            try { t[op]('k', 'a', 'b'); } catch (e) { msg = String(e.message); }
+            assert.ok(msg.indexOf('github') !== -1 && msg.indexOf(op) !== -1, op + ' -> ' + msg);
+        });
+        assert.equal(t.fieldCode('p', 'n'), null);
+    });
+});
