@@ -36,8 +36,6 @@ Full prompt / instruction set: [`agents/snapshots/pr_bug_test_automation_review.
 _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
-- Side effects:
-  - post Jira comment
 - Parameters (customParams):
   - `checkOpenPR`
 
@@ -56,9 +54,6 @@ _Prepare Test PR For Review Action (preJSAction for test-automation review agent
 _Post Story Test Automation Review Comments Action_
 
 - Source: `agents/js/postStoryTestAutomationReview.js`
-- Side effects:
-  - remove label "sm_story_test_review_triggered"
-  - post Jira comment
 - Parameters (customParams):
   - `autoStartMerge`
   - `autoStartMergeConfigFile`

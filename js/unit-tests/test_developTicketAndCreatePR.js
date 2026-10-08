@@ -2,6 +2,19 @@
  * Unit tests for js/developTicketAndCreatePR.js failure recovery.
  */
 
+// Real tracker layer loaded WITH the same tool mocks as the script under test
+// (loadModule mocks only shadow globals inside the module they are passed to).
+function trackersWith(mocks) {
+    return loadModule(
+        'js/common/trackers.js',
+        makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }),
+        mocks || {}
+    );
+}
+
 // Declared once at module scope — every loader below references it in its
 // makeRequire() map, so it must exist before any of them run.
 var commentMarkupModule = loadModule('js/common/commentMarkup.js',
@@ -9,9 +22,7 @@ var commentMarkupModule = loadModule('js/common/commentMarkup.js',
 var gitStagingModule = loadModule('js/common/gitStaging.js');
 
 function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
-    return loadModule(
-        'js/developTicketAndCreatePR.js',
-        makeRequire({
+    return (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
             './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
             './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
             './common/submodules.js': {},
@@ -31,14 +42,12 @@ function loadDevelopTicketAndCreatePR(mocks, feedbackLoopOverrides) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } }
             ,
             './common/commentMarkup.js': commentMarkupModule,
-        }),
-        Object.assign({
+        }, { './common/trackers.js': trackersWith(_m) })), _m); })(Object.assign({
             cli_execute_command: function () { return ''; },
             jira_post_comment: function () { },
             jira_move_to_status: function () { },
             jira_remove_label: function () { }
-        }, mocks || {})
-    );
+        }, mocks || {}));
 }
 
 // Loads developTicketAndCreatePR.js with the REAL common/pullRequest.js and
@@ -50,9 +59,7 @@ function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks) {
         './common/commentMarkup.js': commentMarkupModule,
         './mergeState.js': loadModule('js/common/mergeState.js'),
     }), {});
-    return loadModule(
-        'js/developTicketAndCreatePR.js',
-        makeRequire({
+    return (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
             './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
             './common/pullRequest.js': realPrHelper,
             './common/submodules.js': { pushManagedSubmodules: function () { } },
@@ -72,14 +79,12 @@ function loadDevelopTicketAndCreatePRWithRealGitHelpers(mocks) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } }
             ,
             './common/commentMarkup.js': commentMarkupModule,
-        }),
-        Object.assign({
+        }, { './common/trackers.js': trackersWith(_m) })), _m); })(Object.assign({
             cli_execute_command: function () { return ''; },
             jira_post_comment: function () { },
             jira_move_to_status: function () { },
             jira_remove_label: function () { }
-        }, mocks || {})
-    );
+        }, mocks || {}));
 }
 
 // Common git-command mock shared by the two tests below: simulates a ticket
@@ -315,9 +320,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 return c;
             }
         });
-        var mod = loadModule(
-            'js/developTicketAndCreatePR.js',
-            makeRequire({
+        var mod = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
                 './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
                 './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
                 './common/submodules.js': { pushManagedSubmodules: function () {} },
@@ -336,8 +339,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 './config.js': configModule,
                 './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
                 './common/commentMarkup.js': commentMarkupModule
-            }),
-            {
+            }, { './common/trackers.js': trackersWith(_m) })), _m); })({
                 cli_execute_command: function (args) {
                     commands.push(args.command);
                     if (args.command.indexOf('git check-ignore') === 0) {
@@ -353,8 +355,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 jira_post_comment: function () {},
                 jira_move_to_status: function () {},
                 jira_remove_label: function () {}
-            }
-        );
+            });
 
         // gh-683: the staging failure now fails the whole leg (thrown
         // gitOperationsFailure) instead of returning success-with-comment.
@@ -394,9 +395,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 return c;
             }
         });
-        var mod = loadModule(
-            'js/developTicketAndCreatePR.js',
-            makeRequire({
+        var mod = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
                 './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
                 './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
                 './common/submodules.js': { pushManagedSubmodules: function () {} },
@@ -415,8 +414,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 './config.js': configModule,
                 './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
                 './common/commentMarkup.js': commentMarkupModule
-            }),
-            {
+            }, { './common/trackers.js': trackersWith(_m) })), _m); })({
                 cli_execute_command: function (args) {
                     if (args.command.indexOf('git add . --') === 0) {
                         staging = args.command;
@@ -432,8 +430,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 jira_post_comment: function () {},
                 jira_move_to_status: function () {},
                 jira_remove_label: function () {}
-            }
-        );
+            });
 
         assert.throws(function () {
             mod.action({
@@ -473,9 +470,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 return c;
             }
         });
-        var mod = loadModule(
-            'js/developTicketAndCreatePR.js',
-            makeRequire({
+        var mod = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
                 './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
                 './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
                 './common/submodules.js': { pushManagedSubmodules: function () {} },
@@ -494,8 +489,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 './config.js': configModule,
                 './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
                 './common/commentMarkup.js': commentMarkupModule
-            }),
-            {
+            }, { './common/trackers.js': trackersWith(_m) })), _m); })({
                 cli_execute_command: function (args) {
                     if (args.command.indexOf('git ls-files -- ') === 0) {
                         cleanup = args.command;
@@ -514,8 +508,7 @@ suite('developTicketAndCreatePR > staging hygiene (factory kit)', function () {
                 jira_post_comment: function () {},
                 jira_move_to_status: function () {},
                 jira_remove_label: function () {}
-            }
-        );
+            });
 
         // gh-683: the staging failure now fails the whole leg (thrown
         // gitOperationsFailure) instead of returning success-with-comment.
@@ -610,9 +603,7 @@ function loadForLandingGuard(mocks, opts) {
         './mergeState.js': loadModule('js/common/mergeState.js'),
     }), {});
     var resumeCalls = [];
-    var mod = loadModule(
-        'js/developTicketAndCreatePR.js',
-        makeRequire({
+    var mod = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
             './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
             './common/pullRequest.js': realPrHelper,
             './common/submodules.js': { pushManagedSubmodules: function () { } },
@@ -637,14 +628,12 @@ function loadForLandingGuard(mocks, opts) {
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
             './common/commentMarkup.js': commentMarkupModule
-        }),
-        Object.assign({
+        }, { './common/trackers.js': trackersWith(_m) })), _m); })(Object.assign({
             cli_execute_command: noChangesGitCommandMock('TS-20', 'ai/TS-20'),
             jira_post_comment: function () { },
             jira_move_to_status: function () { },
             jira_remove_label: function () { }
-        }, mocks || {})
-    );
+        }, mocks || {}));
     return { mod: mod, resumeCalls: resumeCalls };
 }
 
@@ -818,9 +807,7 @@ function loadForPrTail(mocks, opts) {
     }), opts.prHelperGlobals || {});
     var logs = [];
     var errors = [];
-    var mod = loadModule(
-        'js/developTicketAndCreatePR.js',
-        makeRequire({
+    var mod = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
             './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
             './common/pullRequest.js': realPrHelper,
             './common/submodules.js': { pushManagedSubmodules: function () { } },
@@ -841,8 +828,7 @@ function loadForPrTail(mocks, opts) {
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
             './common/commentMarkup.js': commentMarkupModule
-        }),
-        Object.assign({
+        }, { './common/trackers.js': trackersWith(_m) })), _m); })(Object.assign({
             cli_execute_command: opts.gitMock || function () { return ''; },
             jira_post_comment: function () { },
             jira_move_to_status: function () { },
@@ -854,8 +840,7 @@ function loadForPrTail(mocks, opts) {
                 warn: function (msg) { logs.push('WARN: ' + String(msg)); },
                 error: function (msg) { errors.push(String(msg)); }
             }
-        }, mocks || {})
-    );
+        }, mocks || {}));
     return { mod: mod, logs: logs, errors: errors };
 }
 
@@ -1099,9 +1084,7 @@ function loadForMissingResponseResume(opts) {
         './common/commentMarkup.js': commentMarkupModule,
         './mergeState.js': loadModule('js/common/mergeState.js')
     }), {});
-    var mod = loadModule(
-        'js/developTicketAndCreatePR.js',
-        makeRequire({
+    var mod = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
             './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
             './common/pullRequest.js': realPrHelper,
             './common/submodules.js': { pushManagedSubmodules: function () { } },
@@ -1114,8 +1097,7 @@ function loadForMissingResponseResume(opts) {
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
             './common/commentMarkup.js': commentMarkupModule
-        }),
-        {
+        }, { './common/trackers.js': trackersWith(_m) })), _m); })({
             cli_execute_command: cliMock,
             file_read: sharedFileRead,
             file_write: sharedFileWrite,
@@ -1132,8 +1114,7 @@ function loadForMissingResponseResume(opts) {
                 removedLabels.push(args.label);
                 events.push('label:' + args.label);
             }
-        }
-    );
+        });
     return {
         mod: mod, files: files, commands: commands, events: events,
         comments: comments, movedTo: movedTo, removedLabels: removedLabels
@@ -1389,4 +1370,34 @@ suite('prompts/bash_tools.md > B7 hung-job disposal rule (gh-775 AC1)', function
         assert.contains(bashTools, '```mermaid\nflowchart TD');
     });
 
+});
+
+suite('developTicketAndCreatePR > ado tracker provider', function () {
+    test('failure reset goes through ado_* tools and never a jira_* tool', function () {
+        var calls = [];
+        var mod = loadDevelopTicketAndCreatePR({
+            cli_execute_command: function (args) {
+                if (args.command.indexOf('gh pr list --head ai/55') === 0) return '';
+                if (args.command === 'git config user.name "AI Teammate"') throw new Error('git config failed');
+                return '';
+            },
+            ado_add_work_item_comment: function (a) { calls.push(['comment', a]); },
+            ado_move_to_state: function (a) { calls.push(['move', a]); },
+            ado_remove_work_item_label: function (a) { calls.push(['rm', a]); },
+            jira_post_comment: function() { throw new Error('jira_* must not be called on ado'); },
+            jira_move_to_status: function() { throw new Error('jira_* must not be called on ado'); },
+            jira_remove_label: function() { throw new Error('jira_* must not be called on ado'); },
+            jira_add_label: function() { throw new Error('jira_* must not be called on ado'); },
+            jira_assign_ticket_to: function() { throw new Error('jira_* must not be called on ado'); },
+        });
+        var result = mod.action({
+            ticket: { key: '55', fields: { summary: 'x', description: '', labels: [] } },
+            metadata: { contextId: 'sm_bug_development' },
+            customParams: { trackerProvider: 'ado', removeLabel: 'sm_bug_development_triggered' }
+        });
+        assert.equal(result.path, 'development-reset-for-retry');
+        assert.ok(calls.some(function (c) { return c[0] === 'comment' && c[1].id === '55'; }));
+        assert.ok(calls.some(function (c) { return c[0] === 'move' && c[1].id === '55' && c[1].state === 'Ready For Development'; }));
+        assert.equal(calls.filter(function (c) { return c[0] === 'rm'; }).length, 2);
+    });
 });

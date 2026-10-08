@@ -5,8 +5,21 @@
  */
 
 // Import common helper functions
-const { assignForReview, extractTicketKey } = require('./common/jiraHelpers.js');
+const { extractTicketKey } = require('./common/jiraHelpers.js');
 const { LABELS, DIAGRAM_DEFAULTS, DIAGRAM_FORMAT, JIRA_FIELDS } = require('./config.js');
+
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
 
 /**
  * Parse AI response for SD API enhancement
@@ -66,10 +79,7 @@ function updateSDAPITicket(ticketKey, enhancementData) {
     
     try {
         // Update ticket description
-        jira_update_description({
-            key: ticketKey,
-            description: enhancementData.description
-        });
+        getTracker().updateDescription(ticketKey, enhancementData.description);
         results.descriptionUpdated = true;
         console.log('✅ Updated description for ' + ticketKey);
     } catch (error) {
@@ -80,11 +90,7 @@ function updateSDAPITicket(ticketKey, enhancementData) {
     try {
         // Update Diagrams field with mermaid sequence diagram wrapped in code tags for better visualization
         const wrappedDiagram = DIAGRAM_FORMAT.MERMAID_WRAPPER_START + enhancementData.diagram + DIAGRAM_FORMAT.MERMAID_WRAPPER_END;
-        jira_update_field({
-            key: ticketKey,
-            field: JIRA_FIELDS.DIAGRAMS,
-            value: wrappedDiagram
-        });
+        getTracker().updateField(ticketKey, JIRA_FIELDS.DIAGRAMS, wrappedDiagram);
         results.diagramUpdated = true;
         console.log('✅ Updated Diagrams field for ' + ticketKey);
     } catch (error) {
@@ -95,10 +101,7 @@ function updateSDAPITicket(ticketKey, enhancementData) {
     try {
         // Add implementation assessment label if needed
         if (enhancementData.apiSubtaskCreation) {
-            jira_add_label({
-                key: ticketKey,
-                label: LABELS.NEEDS_API_IMPLEMENTATION
-            });
+            getTracker().addLabel(ticketKey, LABELS.NEEDS_API_IMPLEMENTATION);
             results.labelAdded = true;
             console.log('✅ Added needs_api_implementation label to ' + ticketKey);
         } else {
@@ -116,6 +119,7 @@ function action(params) {
     try {
         const ticketKey = params.ticket.key;
         const initiatorId = params.initiator;
+        initTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
         // Dynamically generate WIP label from contextId
         const wipLabel = params.metadata && params.metadata.contextId 
             ? params.metadata.contextId + '_wip' 
@@ -139,7 +143,7 @@ function action(params) {
         const updateResults = updateSDAPITicket(ticketKey, enhancementData);
 
         // Use common assignForReview function for post-processing
-        const assignResult = assignForReview(ticketKey, initiatorId, wipLabel);
+        const assignResult = getTracker().assignForReview(ticketKey, initiatorId, wipLabel);
         
         if (!assignResult.success) {
             return assignResult;
@@ -166,3 +170,7 @@ function action(params) {
     }
 }
 
+
+if (typeof module !== "undefined" && module.exports) {
+    module.exports = { action };
+}

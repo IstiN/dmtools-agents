@@ -24,8 +24,7 @@ _Human doc: [`agents/docs/agents/recover_stuck_development.md`](agents/docs/agen
 _recoverStuckDevelopment.js_
 
 - Source: `agents/js/recoverStuckDevelopment.js`
-- Side effects:
-  - post Jira comment
+- No detected file I/O or side effects.
 
 
 ## LLM step

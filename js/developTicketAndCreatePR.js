@@ -17,6 +17,19 @@ const tokenUsageComment = require('./common/tokenUsageComment.js');
 const commentMarkup = require('./common/commentMarkup.js');
 const gitStaging = require('./common/gitStaging.js');
 
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
+
 function hasPrApprovedLabel(ticket) {
     var labels = (ticket && ticket.fields && ticket.fields.labels) ? ticket.fields.labels : [];
     return labels.indexOf(LABELS.PR_APPROVED) !== -1;
@@ -463,10 +476,7 @@ function postPRCommentToJira(ticketKey, prUrl, branchName) {
 
         comment += '\nAI Teammate has completed the implementation and created a pull request for review.';
 
-        jira_post_comment({
-            key: ticketKey,
-            comment: comment
-        });
+        getTracker().postComment(ticketKey, comment);
 
         console.log('✅ Posted PR comment to', ticketKey);
 
@@ -490,10 +500,7 @@ function postErrorCommentToJira(ticketKey, stage, errorMessage) {
         comment += m.bold('Error:') + ' ' + m.code(errorMessage) + '\n\n';
         comment += 'Please check the logs for more details and retry the workflow if needed.';
 
-        jira_post_comment({
-            key: ticketKey,
-            comment: comment
-        });
+        getTracker().postComment(ticketKey, comment);
 
         console.log('Posted error comment to', ticketKey);
 
@@ -530,12 +537,9 @@ function isFatalCliEnvironmentError(responseText, cliReportedFatalError) {
 function postFatalCliEnvironmentErrorToJira(ticketKey, errorMessage) {
     try {
         const m = commentMarkup.forTicket(ticketKey);
-        jira_post_comment({
-            key: ticketKey,
-            comment: m.h(3, '❌ AI CLI Environment Failure') + '\n\n' +
+        getTracker().postComment(ticketKey, m.h(3, '❌ AI CLI Environment Failure') + '\n\n' +
                 'The configured AI CLI tool could not run on the runner (e.g. missing binary or misconfigured provider):\n\n' + m.code(errorMessage) + '\n\n' +
-                'This is an infrastructure/setup problem, not a normal work-item issue — retrying will fail the same way until the runner environment is fixed. The job has been failed explicitly instead of silently looping on retry.'
-        });
+                'This is an infrastructure/setup problem, not a normal work-item issue — retrying will fail the same way until the runner environment is fixed. The job has been failed explicitly instead of silently looping on retry.');
     } catch (e) {
         console.error('Failed to post fatal CLI environment error comment:', e);
     }
@@ -690,7 +694,7 @@ function resetDevelopmentForRetry(ticketKey, statuses, customParams, metadata, s
     postErrorCommentToJira(ticketKey, stage, errorMessage);
 
     try {
-        jira_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
+        getTracker().moveToStatus(ticketKey, statuses.READY_FOR_DEVELOPMENT);
         console.log('✅ Moved', ticketKey, 'to', statuses.READY_FOR_DEVELOPMENT, 'after development workflow error');
     } catch (e) {
         console.warn('Failed to move ' + ticketKey + ' to ' + statuses.READY_FOR_DEVELOPMENT + ':', e);
@@ -698,7 +702,7 @@ function resetDevelopmentForRetry(ticketKey, statuses, customParams, metadata, s
 
     labelsToRemove(customParams, metadata).forEach(function (label) {
         try {
-            jira_remove_label({ key: ticketKey, label: label });
+            getTracker().removeLabel(ticketKey, label);
             console.log('✅ Removed retry-blocking label:', label);
         } catch (e) {
             console.warn('Failed to remove retry-blocking label ' + label + ':', e);
@@ -898,6 +902,7 @@ function action(params) {
 
         // Resolve statuses — allows per-project overrides via customParams.customStatuses
         const _customParams = (params.jobParams && params.jobParams.customParams) || actualParams.customParams;
+        initTracker(config, _customParams);
         const statuses = resolveStatuses(_customParams, config.jira && config.jira.statuses);
 
         console.log('Processing development workflow for ticket:', ticketKey);
@@ -916,15 +921,12 @@ function action(params) {
                 var existingUrl = existingPr.html_url || existingPr.url || '';
                 console.log('⚠️  PR already open for', ticketKey, ':', existingUrl || ('#' + existingPr.number), '— skipping re-development');
                 try {
-                    jira_post_comment({
-                        key: ticketKey,
-                        comment: commentMarkup.forTicket(ticketKey).h(3, 'ℹ️ PR Already Open') + '\n\n' +
+                    getTracker().postComment(ticketKey, commentMarkup.forTicket(ticketKey).h(3, 'ℹ️ PR Already Open') + '\n\n' +
                             'A pull/merge request already exists for this ticket: ' + (existingUrl || ('#' + existingPr.number)) + '\n\n' +
-                            'Moved ticket to ' + commentMarkup.forTicket(ticketKey).bold('In Review') + ' for review.'
-                    });
+                            'Moved ticket to ' + commentMarkup.forTicket(ticketKey).bold('In Review') + ' for review.');
                 } catch (e) { }
                 try {
-                    jira_move_to_status({ key: ticketKey, statusName: statuses.IN_REVIEW });
+                    getTracker().moveToStatus(ticketKey, statuses.IN_REVIEW);
                     console.log('✅ Moved', ticketKey, 'to In Review');
                 } catch (e) { console.warn('Failed to move to In Review:', e); }
                 return { success: true, path: 'pr_already_open', ticketKey };
@@ -941,7 +943,7 @@ function action(params) {
         if (hasPrApprovedLabel(actualParams.ticket)) {
             console.log('🧹 Removing stale pr_approved label from', ticketKey);
             try {
-                jira_remove_label({ key: ticketKey, label: LABELS.PR_APPROVED });
+                getTracker().removeLabel(ticketKey, LABELS.PR_APPROVED);
                 console.log('✅ Removed pr_approved from Jira ticket');
                 prApprovedCleaned = true;
             } catch (e) { console.warn('Could not remove pr_approved from Jira:', e); }
@@ -1057,21 +1059,18 @@ function action(params) {
                     // Case A: agent finished successfully, no code changes needed.
                     console.log('No git changes detected — agent completed successfully (response.md present). Treating as "no change needed".');
                     try {
-                        jira_post_comment({
-                            key: ticketKey,
-                            comment: commentMarkup.forTicket(ticketKey).h(3, 'ℹ️ No Code Changes Needed') + '\n\nThe AI agent completed its analysis and determined no code changes are required (e.g. the fix is already present in the target branch, or the ticket was resolved by a previous change).\n\n' + commentMarkup.forTicket(ticketKey).bold('Agent analysis:') + '\n\n' + agentResponse
-                        });
+                        getTracker().postComment(ticketKey, commentMarkup.forTicket(ticketKey).h(3, 'ℹ️ No Code Changes Needed') + '\n\nThe AI agent completed its analysis and determined no code changes are required (e.g. the fix is already present in the target branch, or the ticket was resolved by a previous change).\n\n' + commentMarkup.forTicket(ticketKey).bold('Agent analysis:') + '\n\n' + agentResponse);
                     } catch (e) {
                         console.warn('Failed to post agent analysis comment:', e);
                     }
                     try {
-                        jira_move_to_status({ key: ticketKey, statusName: statuses.IN_REVIEW });
+                        getTracker().moveToStatus(ticketKey, statuses.IN_REVIEW);
                         console.log('✅ Moved', ticketKey, 'to', statuses.IN_REVIEW, '(no code changes needed)');
                     } catch (e) {
                         console.warn('Failed to move ticket to ' + statuses.IN_REVIEW + ':', e);
                     }
                     if (wipLabelIfNoChanges) {
-                        try { jira_remove_label({ key: ticketKey, label: wipLabelIfNoChanges }); } catch (e) { }
+                        try { getTracker().removeLabel(ticketKey, wipLabelIfNoChanges); } catch (e) { }
                     }
                     return { success: true, path: 'no-changes-needed', ticketKey: ticketKey };
                 }
@@ -1084,19 +1083,16 @@ function action(params) {
                 // whose one bounded resume attempt (if any) did not land the deliverable.
                 console.log('No git changes detected AND no response.md — CLI agent was interrupted. Resetting ticket for retry.');
                 try {
-                    jira_post_comment({
-                        key: ticketKey,
-                        comment: commentMarkup.forTicket(ticketKey).h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted (likely hit a rate limit) before completing the implementation. The ticket has been reset to ' + commentMarkup.forTicket(ticketKey).bold('Ready For Development') + ' and will be automatically retried.'
-                    });
+                    getTracker().postComment(ticketKey, commentMarkup.forTicket(ticketKey).h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted (likely hit a rate limit) before completing the implementation. The ticket has been reset to ' + commentMarkup.forTicket(ticketKey).bold('Ready For Development') + ' and will be automatically retried.');
                 } catch (e) { }
                 try {
-                    jira_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
+                    getTracker().moveToStatus(ticketKey, statuses.READY_FOR_DEVELOPMENT);
                     console.log('✅ Moved', ticketKey, 'to Ready For Development for retry');
                 } catch (e) {
                     console.warn('Failed to move ticket to Ready For Development:', e);
                 }
                 if (wipLabelIfNoChanges) {
-                    try { jira_remove_label({ key: ticketKey, label: wipLabelIfNoChanges }); } catch (e) { }
+                    try { getTracker().removeLabel(ticketKey, wipLabelIfNoChanges); } catch (e) { }
                 }
                 // gh-742: ticket is reset for retry — fail the RUN so the leg
                 // is a visible dead letter (not a green no-PR leg the wrapper
@@ -1192,13 +1188,10 @@ function action(params) {
                 // before writing response.md. Reset ticket for retry rather than posting an error.
                 console.log('outputs/response.md missing after commit — CLI agent was interrupted mid-way. Resetting for retry.');
                 try {
-                    jira_post_comment({
-                        key: ticketKey,
-                        comment: commentMarkup.forTicket(ticketKey).h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted before completing the implementation (partial work was pushed to branch ' + commentMarkup.forTicket(ticketKey).bold(branchName) + '). The ticket has been reset to ' + commentMarkup.forTicket(ticketKey).bold('Ready For Development') + ' and will be automatically retried.\n\nThe agent can resume from the existing branch.'
-                    });
+                    getTracker().postComment(ticketKey, commentMarkup.forTicket(ticketKey).h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted before completing the implementation (partial work was pushed to branch ' + commentMarkup.forTicket(ticketKey).bold(branchName) + '). The ticket has been reset to ' + commentMarkup.forTicket(ticketKey).bold('Ready For Development') + ' and will be automatically retried.\n\nThe agent can resume from the existing branch.');
                 } catch (e) { }
                 try {
-                    jira_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
+                    getTracker().moveToStatus(ticketKey, statuses.READY_FOR_DEVELOPMENT);
                     console.log('✅ Moved', ticketKey, 'to Ready For Development for retry');
                 } catch (e) {
                     console.warn('Failed to move ticket to Ready For Development:', e);
@@ -1206,7 +1199,7 @@ function action(params) {
                 const wipLabel2 = actualParams.metadata && actualParams.metadata.contextId
                     ? actualParams.metadata.contextId + '_wip' : null;
                 if (wipLabel2) {
-                    try { jira_remove_label({ key: ticketKey, label: wipLabel2 }); } catch (e) { }
+                    try { getTracker().removeLabel(ticketKey, wipLabel2); } catch (e) { }
                 }
                 // gh-742: ticket is reset for retry — fail the RUN so this
                 // interrupted half-exit is a visible dead letter, not a green
@@ -1240,10 +1233,7 @@ function action(params) {
         try {
             const initiatorId = actualParams.initiator;
             if (initiatorId) {
-                jira_assign_ticket_to({
-                    key: ticketKey,
-                    accountId: initiatorId
-                });
+                getTracker().assignTo(ticketKey, initiatorId);
                 console.log('✅ Assigned ticket to initiator');
             }
         } catch (error) {
@@ -1252,10 +1242,7 @@ function action(params) {
 
         // Move ticket to In Review status
         try {
-            jira_move_to_status({
-                key: ticketKey,
-                statusName: statuses.IN_REVIEW
-            });
+            getTracker().moveToStatus(ticketKey, statuses.IN_REVIEW);
             console.log('✅ Moved ' + ticketKey + ' to In Review');
         } catch (error) {
             console.warn('Failed to move ticket to In Review:', error);
@@ -1266,10 +1253,7 @@ function action(params) {
 
         // Add label to indicate AI development
         try {
-            jira_add_label({
-                key: ticketKey,
-                label: LABELS.AI_DEVELOPED
-            });
+            getTracker().addLabel(ticketKey, LABELS.AI_DEVELOPED);
         } catch (error) {
             console.warn('Failed to add ai_developed label:', error);
         }
@@ -1280,10 +1264,7 @@ function action(params) {
             : null;
         if (wipLabel) {
             try {
-                jira_remove_label({
-                    key: ticketKey,
-                    label: wipLabel
-                });
+                getTracker().removeLabel(ticketKey, wipLabel);
                 console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
             } catch (labelError) {
                 console.warn('Failed to remove WIP label "' + wipLabel + '":', labelError);

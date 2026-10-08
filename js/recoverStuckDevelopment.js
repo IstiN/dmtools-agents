@@ -28,6 +28,19 @@
 var configLoader = require('./configLoader.js');
 const { resolveStatuses } = require('./config.js');
 
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
+
 function findPRForTicket(scm, ticketKey) {
     try {
         var prList = scm.listPrs('open');
@@ -48,6 +61,7 @@ function action(params) {
     var config = configLoader.loadProjectConfig(params.jobParams || params || {});
     var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams;
     var statuses = resolveStatuses(customParams, config.jira && config.jira.statuses);
+    initTracker(config, customParams);
 
     if (!ticketKey) {
         console.error('No ticket key found');
@@ -64,35 +78,29 @@ function action(params) {
     if (!pr) {
         console.log('No open PR found for', ticketKey, '— moving back to', statuses.READY_FOR_DEVELOPMENT);
         try {
-            jira_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
+            getTracker().moveToStatus(ticketKey, statuses.READY_FOR_DEVELOPMENT);
             console.log('✅ Moved', ticketKey, 'to', statuses.READY_FOR_DEVELOPMENT);
         } catch (e) {
             console.error('Failed to move to ' + statuses.READY_FOR_DEVELOPMENT + ':', e);
         }
         removableLabels.forEach(function(label) {
-            try { jira_remove_label({ key: ticketKey, label: label }); } catch (e) {}
+            try { getTracker().removeLabel(ticketKey, label); } catch (e) {}
         });
-        jira_post_comment({
-            key: ticketKey,
-            comment: '🔄 *Recovery*: Ticket was stuck in "' + statuses.IN_DEVELOPMENT + '" with no open PR. Moved back to ' + statuses.READY_FOR_DEVELOPMENT + ' for re-automation.'
-        });
+        getTracker().postComment(ticketKey, '🔄 *Recovery*: Ticket was stuck in "' + statuses.IN_DEVELOPMENT + '" with no open PR. Moved back to ' + statuses.READY_FOR_DEVELOPMENT + ' for re-automation.');
         return { success: true, action: 'moved_to_ready_for_development', ticketKey: ticketKey };
     }
 
     console.log('Found open PR #' + pr.number + ': ' + pr.title + ' — moving ticket to', statuses.IN_REVIEW);
     try {
-        jira_move_to_status({ key: ticketKey, statusName: statuses.IN_REVIEW });
+        getTracker().moveToStatus(ticketKey, statuses.IN_REVIEW);
         console.log('✅ Moved', ticketKey, 'to', statuses.IN_REVIEW);
     } catch (e) {
         console.error('Failed to move to ' + statuses.IN_REVIEW + ':', e);
     }
     removableLabels.forEach(function(label) {
-        try { jira_remove_label({ key: ticketKey, label: label }); } catch (e) {}
+        try { getTracker().removeLabel(ticketKey, label); } catch (e) {}
     });
-    jira_post_comment({
-        key: ticketKey,
-        comment: '🔄 *Recovery*: Ticket was stuck in "' + statuses.IN_DEVELOPMENT + '" with open PR #' + pr.number + '. Moved to ' + statuses.IN_REVIEW + ' for code review.'
-    });
+    getTracker().postComment(ticketKey, '🔄 *Recovery*: Ticket was stuck in "' + statuses.IN_DEVELOPMENT + '" with open PR #' + pr.number + '. Moved to ' + statuses.IN_REVIEW + ' for code review.');
 
     return { success: true, action: 'moved_to_review', ticketKey: ticketKey, prNumber: pr.number };
 }

@@ -40,8 +40,6 @@ Full prompt / instruction set: [`agents/snapshots/story_development.md`](agents/
 _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
-- Side effects:
-  - post Jira comment
 - Parameters (customParams):
   - `checkOpenPR`
 
@@ -68,8 +66,6 @@ _Develop Ticket and Create PR Action_
 
 - Source: `agents/js/developTicketAndCreatePR.js`
 - Side effects:
-  - post Jira comment
-  - assign ticket
   - git push
   - git checkout
 - Parameters (customParams):

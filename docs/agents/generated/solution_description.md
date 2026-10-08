@@ -36,8 +36,6 @@ Full prompt / instruction set: [`agents/snapshots/solution_description.md`](agen
 _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
-- Side effects:
-  - post Jira comment
 - Parameters (customParams):
   - `checkOpenPR`
 
