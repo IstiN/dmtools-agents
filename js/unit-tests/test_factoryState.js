@@ -792,6 +792,57 @@ suite('factoryState — fetchPreviousState', function () {
   });
 });
 
+// ── gh-781 — fetchTokensFromBranch (factory-published per-leg tokens) ────────
+
+suite('factoryState — fetchTokensFromBranch', function () {
+  var TOKENS = '{"pr-31":[{"leg":"dev","at":"2026-10-08T10:00:00Z","prompt":10,"completion":5,"total":15}],' +
+    '"issue-7":[{"leg":"review","at":"2026-10-08T11:00:00Z","prompt":1,"completion":2,"total":3}]}';
+
+  test('fetches data/fa-tokens.json off the data branch and returns the map', function () {
+    var seen = [];
+    var map = fsModule.fetchTokensFromBranch('o/r',
+      { tag: 'factory-data' }, function (a) {
+        seen.push(a.command);
+        return { output: TOKENS };
+      });
+    assert.ok(map && map['pr-31'] && map['pr-31'][0].total === 15, 'pr rows returned');
+    assert.ok(map['issue-7'] && map['issue-7'][0].leg === 'review',
+      'multi-key map survives (issue keys ride along pr keys)');
+    assert.equal(seen.length, 1, 'one gh probe per tick');
+    assert.equal(seen[0],
+      'gh api repos/o/r/contents/data/fa-tokens.json?ref=factory-data --jq .content | base64 -d',
+      'one gh probe: data/fa-tokens.json @ factory-data');
+  });
+
+  test('any miss → null, never a throw (404 / garbage JSON / rate limit)', function () {
+    assert.equal(fsModule.fetchTokensFromBranch('o/r', {},
+      function () { throw new Error('Not Found (HTTP 404)'); }), null, '404 → null');
+    assert.equal(fsModule.fetchTokensFromBranch('o/r', {},
+      function () { throw new Error('API rate limit exceeded'); }), null, 'rate limit → null');
+    assert.equal(fsModule.fetchTokensFromBranch('o/r', {},
+      function () { return { output: 'not json at all' }; }), null, 'garbage → null');
+  });
+
+  test('non-map shapes → null (array payload, scalar payload, no array values, empty map)', function () {
+    assert.equal(fsModule.fetchTokensFromBranch('o/r', {},
+      function () { return { output: '[]' }; }), null, 'array payload → null');
+    assert.equal(fsModule.fetchTokensFromBranch('o/r', {},
+      function () { return { output: '42' }; }), null, 'scalar payload → null');
+    assert.equal(fsModule.fetchTokensFromBranch('o/r', {},
+      function () { return { output: '{"pr-31":"not-an-array"}' }; }), null,
+      'map without array values → null');
+    assert.equal(fsModule.fetchTokensFromBranch('o/r', {},
+      function () { return { output: '{}' }; }), null, 'empty map → null');
+  });
+
+  test('tag override rides the fetch (multi-factory data branches)', function () {
+    var seen = [];
+    fsModule.fetchTokensFromBranch('o/r', { tag: 'factory-data-eu' },
+      function (a) { seen.push(a.command); return { output: TOKENS }; });
+    assert.contains(seen[0], 'data/fa-tokens.json?ref=factory-data-eu');
+  });
+});
+
 // ── publisher ────────────────────────────────────────────────────────────────
 
 suite('factoryState — publishFactoryState', function () {
