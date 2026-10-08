@@ -8,9 +8,15 @@ function loadTriggerStoryTestAutomation(mocks) {
         jira_post_comment: function() {}
     };
 
+    var allMocks = Object.assign({}, defaults, mocks);
+    var trackersMod = loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), allMocks);
     return loadModule(
         'js/triggerStoryTestAutomation.js',
         makeRequire({
+            './common/trackers.js': trackersMod,
             './common/autoStart.js': {
                 triggerConfiguredWorkflowForTicket: function(opts) {
                     return (mocks && mocks.triggerConfiguredWorkflowForTicket)
@@ -29,7 +35,7 @@ function loadTriggerStoryTestAutomation(mocks) {
                 }
             }
         }),
-        Object.assign({}, defaults, mocks)
+        allMocks
     );
 }
 

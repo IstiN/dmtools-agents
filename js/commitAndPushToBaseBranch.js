@@ -29,8 +29,10 @@
 const { extractTicketKey } = require('./common/jiraHelpers.js');
 var configLoader = require('./configLoader.js');
 var gitStaging = require('./common/gitStaging.js');
+var trackersModule = require('./common/trackers.js');
 
 var _workingDir = null;
+var _tracker = null;
 function runCmd(args) {
     if (_workingDir) args.workingDirectory = _workingDir;
     return cli_execute_command(args);
@@ -58,7 +60,7 @@ function render(template, ticketKey) {
 
 function postComment(ticketKey, message) {
     try {
-        jira_post_comment(ticketKey, message);
+        _tracker.postComment(ticketKey, message);
     } catch (e) {
         console.warn('commitAndPushToBaseBranch: comment failed:', e.toString());
     }
@@ -73,6 +75,7 @@ function action(params) {
 
     var config = configLoader.loadProjectConfig(params.jobParams || params);
     _workingDir = config.workingDir || null;
+    _tracker = trackersModule.createTracker(config, config.customParams || (params.jobParams && params.jobParams.customParams) || params.customParams || {});
     var baseBranch = (config.git && config.git.baseBranch) || 'main';
     var opts = (config.customParams && config.customParams.directPush) || {};
 
