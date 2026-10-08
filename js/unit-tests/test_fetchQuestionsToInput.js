@@ -105,7 +105,7 @@ function loadFetchQuestionsWithMocks(options) {
             '../config.js': configModule,
             './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
         }),
-        {}
+        options.globals || {}
     );
     var mod = loadModule(
         'js/fetchQuestionsToInput.js',

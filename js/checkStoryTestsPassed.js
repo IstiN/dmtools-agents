@@ -16,6 +16,7 @@
 
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+const trackersModule = require('./common/trackers.js');
 
 function action(params) {
     const ticketKey = params.ticket && params.ticket.key;
@@ -23,6 +24,7 @@ function action(params) {
     const removeLabel = customParams && customParams.removeLabel;
     const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
     const jiraConfig = projectConfig.jira;
+    const tracker = trackersModule.createTracker(projectConfig, customParams || {});
     // Legacy override channel: customParams.customStatuses still wins over .dmtools/config.js statuses
     const statuses = Object.assign({}, jiraConfig.statuses, (customParams && customParams.customStatuses) || {});
     const testCaseType = jiraConfig.issueTypes.TEST_CASE || 'Test Case';
@@ -31,7 +33,7 @@ function action(params) {
     function releaseLock() {
         if (ticketKey && removeLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: removeLabel });
+                tracker.removeLabel(ticketKey, removeLabel);
                 console.log('Released SM label — will re-check next cycle');
             } catch (e) {
                 console.warn('Failed to remove SM label:', e);
@@ -41,8 +43,8 @@ function action(params) {
 
     function findLinkedTCs() {
         try {
-            return jira_search_by_jql({
-                jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "' + testCaseType + '"',
+            // JQL text: provider-specific query (WIQL on ado)
+            return tracker.searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype = "' + testCaseType + '"', {
                 fields: ['key', 'status'],
                 maxResults: 100
             }) || [];
@@ -54,8 +56,8 @@ function action(params) {
 
     function findLinkedBugs(tcKey) {
         try {
-            return jira_search_by_jql({
-                jql: 'issue in linkedIssues("' + tcKey + '") AND issuetype = "' + bugType + '"',
+            // JQL text: provider-specific query (WIQL on ado)
+            return tracker.searchIssues('issue in linkedIssues("' + tcKey + '") AND issuetype = "' + bugType + '"', {
                 fields: ['key', 'status'],
                 maxResults: 50
             }) || [];
@@ -131,17 +133,11 @@ function action(params) {
         if (inFlightTCs.length === 0 && pendingBugTCs.length === 0 && waitingForBugsTCs.length === 0 && readyForRetestTCs.length === 0) {
             console.log('All', totalTCs, 'Test Case(s) passed — moving', ticketKey, 'to Done');
 
-            jira_move_to_status({
-                key: ticketKey,
-                statusName: statuses.DONE
-            });
+            tracker.moveToStatus(ticketKey, statuses.DONE);
 
-            jira_post_comment({
-                key: ticketKey,
-                comment: 'h3. ✅ Story Complete — All Test Cases Passed\n\n' +
+            tracker.postComment(ticketKey, 'h3. ✅ Story Complete — All Test Cases Passed\n\n' +
                     'All *' + totalTCs + '* linked Test Case(s) are in *Passed* status.\n\n' +
-                    'The story has been automatically moved to *Done*.'
-            });
+                    'The story has been automatically moved to *Done*.');
 
             console.log('✅ Story', ticketKey, 'moved to Done');
 
@@ -169,17 +165,11 @@ function action(params) {
 
             console.log('Found', pendingBugTCs.length, 'TC(s) with pending bugs — moving Story to Bug To Fix');
 
-            jira_move_to_status({
-                key: ticketKey,
-                statusName: statuses.BUG_TO_FIX
-            });
+            tracker.moveToStatus(ticketKey, statuses.BUG_TO_FIX);
 
-            jira_post_comment({
-                key: ticketKey,
-                comment: 'h3. 🐛 Story Moved to Bug To Fix\n\n' +
+            tracker.postComment(ticketKey, 'h3. 🐛 Story Moved to Bug To Fix\n\n' +
                     'The following linked Test Cases have open bugs:\n\n' + bugList + '\n\n' +
-                    'The Story has been moved to *Bug To Fix*. It will return to *Ready For Testing* once all linked bugs are *Done*.'
-            });
+                    'The Story has been moved to *Bug To Fix*. It will return to *Ready For Testing* once all linked bugs are *Done*.');
 
             console.log('✅ Story', ticketKey, 'moved to Bug To Fix');
             releaseLock();
@@ -203,16 +193,10 @@ function action(params) {
         // Step 5: All remaining non-passed TCs are ready for re-test → back to Ready For Testing
         console.log('All non-passed TCs are ready for re-test — moving Story to Ready For Testing');
 
-        jira_move_to_status({
-            key: ticketKey,
-            statusName: statuses.READY_FOR_TESTING
-        });
+        tracker.moveToStatus(ticketKey, statuses.READY_FOR_TESTING);
 
-        jira_post_comment({
-            key: ticketKey,
-            comment: 'h3. 🔄 Story Ready for Re-test\n\n' +
-                'All linked bugs are resolved. The Story has been moved back to *Ready For Testing* to re-run the linked Test Cases.'
-        });
+        tracker.postComment(ticketKey, 'h3. 🔄 Story Ready for Re-test\n\n' +
+                'All linked bugs are resolved. The Story has been moved back to *Ready For Testing* to re-run the linked Test Cases.');
 
         console.log('✅ Story', ticketKey, 'moved to Ready For Testing');
         releaseLock();

@@ -16,14 +16,19 @@ function loadUnblockResolvedDependencies(mocks) {
         jira_post_comment: function(args) { calls.comments.push(args); }
     };
 
+    var allMocks = Object.assign({}, defaults, mocks || {});
     var mod = loadModule(
         'js/unblockResolvedDependencies.js',
         makeRequire({
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock(),
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+            }), allMocks)
         }),
-        Object.assign({}, defaults, mocks || {})
+        allMocks
     );
 
     return { mod: mod, calls: calls };

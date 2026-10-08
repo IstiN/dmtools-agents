@@ -54,10 +54,7 @@ function makeDfManager(opts) {
         return null;
     };
 
-    var df = loadModule(
-        'js/dfManager.js',
-        makeRequire({ './configLoader.js': configLoader, './common/scm.js': scmModule }),
-        {
+    var dfMocks = {
             file_read: fileReadMock,
             file_write: function(arg1, arg2) {
                 if (typeof arg1 === 'string') {
@@ -77,7 +74,18 @@ function makeDfManager(opts) {
                 commands.push(args.command);
                 return '';
             }
-        }
+    };
+    var df = loadModule(
+        'js/dfManager.js',
+        makeRequire({
+            './configLoader.js': configLoader,
+            './common/scm.js': scmModule,
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+            }), dfMocks)
+        }),
+        dfMocks
     );
 
     return {

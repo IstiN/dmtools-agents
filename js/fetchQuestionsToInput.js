@@ -115,14 +115,14 @@ function action(params) {
         // Probe the tracker provider once (gh-770): the same script then runs
         // unchanged on Jira / ADO / GitHub deployments.
         var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
-        var provider = trackersModule.createTracker(projectConfig, customParams).provider();
+        var tracker = trackersModule.createTracker(projectConfig, customParams);
+        var provider = tracker.provider();
         var plan = questionsFetchPlan(provider, questionsConfig, ticketKey);
 
         if (plan.skip) {
             console.warn('Skipping question subtask fetch — ' + plan.reason);
         } else try {
-            var rawQuestions = jira_search_by_jql({
-                jql: plan.jql,
+            var rawQuestions = tracker.searchIssues(plan.jql, {
                 fields: ['key', 'summary', 'description', 'status', 'priority', answerField]
             });
             var questions = [];

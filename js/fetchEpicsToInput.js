@@ -27,17 +27,20 @@ function action(params) {
         const folder = params.inputFolderPath;
         var ticketKey = folder ? folder.split('/').pop() : '';
         var project = ticketKey ? ticketKey.split('-')[0] : '';
+        var trackersModule = require('./common/trackers.js');
+        var tracker = trackersModule.createTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
         console.log('Fetching existing epics for project ' + project + '...');
 
         try {
-            var rawEpics = jira_search_by_jql({
-                jql: 'project = ' + project + ' AND issuetype = Epic ORDER BY created DESC',
+            var rawEpics = tracker.searchIssues(
+                // JQL text: provider-specific query (WIQL on ado)
+                'project = ' + project + ' AND issuetype = Epic ORDER BY created DESC', {
                 fields: ['key', 'summary', 'description', 'priority', 'parent']
             });
             var epics = [];
             for (var i = 0; i < rawEpics.length; i++) {
                 try {
-                    var issue = jira_get_ticket(rawEpics[i].key);
+                    var issue = tracker.getIssue(rawEpics[i].key);
                     var f = issue.fields || {};
                     epics.push({
                         key: issue.key || '',
@@ -59,14 +62,15 @@ function action(params) {
         }
 
         try {
-            var rawStories = jira_search_by_jql({
-                jql: 'project = ' + project + ' AND issuetype = Story ORDER BY created DESC',
+            var rawStories = tracker.searchIssues(
+                // JQL text: provider-specific query (WIQL on ado)
+                'project = ' + project + ' AND issuetype = Story ORDER BY created DESC', {
                 fields: ['key', 'summary', 'status', 'priority', 'parent']
             });
             var stories = [];
             for (var j = 0; j < rawStories.length; j++) {
                 try {
-                    var s = jira_get_ticket(rawStories[j].key);
+                    var s = tracker.getIssue(rawStories[j].key);
                     var sf = s.fields || {};
                     stories.push({
                         key: s.key || '',

@@ -8,6 +8,7 @@
 
 var configLoader = require('./configLoader.js');
 var scmModule = require('./common/scm.js');
+var trackersModule = require('./common/trackers.js');
 
 var DEFAULT_SM_LABELS = [
     'sm_story_ba_check_triggered',
@@ -247,11 +248,11 @@ function buildSmLabelJql(projectKey, labels) {
     return 'project = ' + projectKey + ' AND labels in (' + quoted.join(', ') + ') ORDER BY updated ASC';
 }
 
-function searchJiraTickets(projectKey, labels, limit) {
+function searchJiraTickets(projectKey, labels, limit, tracker) {
     if (!labels.length) return [];
     var jql = buildSmLabelJql(projectKey, labels);
-    var result = jira_search_by_jql({
-        jql: jql,
+    // JQL text: provider-specific query (WIQL on ado)
+    var result = tracker.searchIssues(jql, {
         fields: ['summary', 'status', 'labels', 'updated', 'issuetype'],
         maxResults: limit || 100
     });
@@ -468,7 +469,7 @@ function applySafeRecovery(context) {
     context.anomalies.forEach(function(anomaly) {
         if (anomaly.type === 'stale-sm-label' || anomaly.type === 'obsolete-sm-label') {
             (anomaly.labels || []).forEach(function(label) {
-                jira_remove_label({ key: anomaly.ticketKey, label: label });
+                context.tracker.removeLabel(anomaly.ticketKey, label);
                 context.actions.push({ action: 'remove-label', ticketKey: anomaly.ticketKey, label: label });
             });
             if (anomaly.type === 'obsolete-sm-label') return;
@@ -502,7 +503,7 @@ function writeReport(path, report) {
     }
 }
 
-function buildContext(params, config, scm) {
+function buildContext(params, config, scm, tracker) {
     var rules = loadSmRules(params);
     var labels = resolveSmLabels(params, rules);
     var labelSet = {};
@@ -517,7 +518,7 @@ function buildContext(params, config, scm) {
     var failedRuns = listWorkflowRuns(scm, 'completed', params.workflowRunLimit)
         .filter(isFailedRun)
         .slice(0, params.failedRunLimit || 20);
-    var tickets = searchJiraTickets(projectKey, labels, params.jiraLimit || 100);
+    var tickets = searchJiraTickets(projectKey, labels, params.jiraLimit || 100, tracker);
     var ticketByKey = {};
     tickets.forEach(function(ticket) { if (ticket && ticket.key) ticketByKey[ticket.key] = ticket; });
 
@@ -525,6 +526,7 @@ function buildContext(params, config, scm) {
         params: params,
         config: config,
         scm: scm,
+        tracker: tracker,
         repoInfo: (config.repository || scm.getRemoteRepoInfo() || {}),
         nowMs: params.nowMs || Date.now(),
         staleMinutes: params.staleMinutes || 45,
@@ -547,7 +549,8 @@ function action(params) {
     var p = (params.jobParams && params.jobParams.customParams) || params.customParams || params.jobParams || params || {};
     var config = configLoader.loadProjectConfig(params.jobParams || params);
     var scm = scmModule.createScm(config);
-    var context = buildContext(p, config, scm);
+    var tracker = trackersModule.createTracker(config, p);
+    var context = buildContext(p, config, scm, tracker);
 
     if (!context.repoInfo.owner || !context.repoInfo.repo) {
         throw new Error('DF Manager requires repository.owner/repo in config or an SCM remote.');
