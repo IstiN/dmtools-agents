@@ -242,6 +242,45 @@ function createTracker(config, customParams) {
         }));
     }
 
+
+    function jiraLinkIssues(sourceKey, targetKey, relationship) {
+        return jira_link_issues({ sourceKey: sourceKey, anotherKey: targetKey, relationship: relationship });
+    }
+
+    function jiraUpdateField(key, field, value) {
+        return jira_update_field({ key: key, field: field, value: value });
+    }
+
+    function jiraUpdateDescription(key, description) {
+        return jira_update_description({ key: key, description: description });
+    }
+
+    function jiraSetPriority(key, priority) {
+        return jira_set_priority({ key: key, priority: priority });
+    }
+
+    function jiraAttachFile(key, name, filePath, contentType) {
+        var args = { ticketKey: key, name: name, filePath: filePath };
+        if (contentType) args.contentType = contentType;
+        return jira_attach_file_to_ticket(args);
+    }
+
+    function jiraFieldCode(project, fieldName) {
+        var r = jira_get_field_custom_code({ project: project, fieldName: fieldName });
+        if (r && typeof r === 'object' && r.result) r = r.result;
+        return typeof r === 'string' ? r : null;
+    }
+
+    function jiraCreateWithParent(project, type, title, description, parentKey, extra) {
+        var args = { project: project, issueType: type, summary: title, description: description, parentKey: parentKey };
+        if (extra && extra.labels) args.labels = extra.labels;
+        return extractTicketKey(jira_create_ticket_with_parent(args));
+    }
+
+    function jiraCreateWithFields(project, fieldsJson) {
+        return extractTicketKey(jira_create_ticket_with_json({ project: project, fieldsJson: fieldsJson }));
+    }
+
     // ── ado provider (canonical ado_* tools) ──────────────────────────────
 
     function adoGetTicket(key) {
@@ -284,6 +323,100 @@ function createTracker(config, customParams) {
             description: description
         });
         // ADO work items identify by numeric id, not by key.
+        var parsed = _parseJson(raw);
+        if (parsed && typeof parsed === 'object') {
+            if (typeof parsed.key === 'string') return parsed.key;
+            if (parsed.id != null) return String(parsed.id);
+        }
+        return extractTicketKey(raw);
+    }
+
+
+    // The Java runtime grows the ADO tools below over time (epam/dm.ai#661). Feature-detect so
+    // the same script keeps working on runtimes that already have them and fails with a precise
+    // message (not a TypeError) on those that do not yet.
+    function adoTool(name, why) {
+        var fn = (typeof globalThis !== 'undefined') ? globalThis[name] : undefined;
+        if (typeof fn !== 'function') {
+            throw new Error('trackers: ado provider needs the ' + name + ' tool for ' + why +
+                ' — not available in this runtime (epam/dm.ai#661)');
+        }
+        return fn;
+    }
+
+    function adoLinkIssues(sourceKey, targetKey, relationship) {
+        return ado_link_work_items({ sourceId: String(sourceKey), targetId: String(targetKey), relationship: relationship });
+    }
+
+    var ADO_FIELD_ALIASES = { summary: 'System.Title', title: 'System.Title', description: 'System.Description',
+        priority: 'Microsoft.VSTS.Common.Priority', labels: 'System.Tags', tags: 'System.Tags' };
+
+    function adoUpdateField(key, field, value) {
+        var f = String(field);
+        var lower = f.toLowerCase();
+        if (lower === 'description') return ado_update_description({ id: String(key), description: String(value) });
+        if (lower === 'labels' || lower === 'tags') {
+            return ado_update_tags({ id: String(key), tags: Array.isArray(value) ? value.join('; ') : String(value) });
+        }
+        return adoTool('ado_update_field', 'updating field "' + f + '"')({
+            id: String(key), field: ADO_FIELD_ALIASES[lower] || f, value: value
+        });
+    }
+
+    function adoUpdateDescription(key, description) {
+        return ado_update_description({ id: String(key), description: description });
+    }
+
+    var ADO_PRIORITY = { blocker: 1, highest: 1, critical: 1, high: 2, major: 2, medium: 3, normal: 3, low: 4, minor: 4, lowest: 4, trivial: 4 };
+
+    function adoSetPriority(key, priority) {
+        var n = /^\d+$/.test(String(priority)) ? parseInt(priority, 10) : ADO_PRIORITY[String(priority).toLowerCase()];
+        if (!n) throw new Error('trackers: unknown priority "' + priority + '" for the ado provider');
+        if (typeof globalThis !== 'undefined' && typeof globalThis.ado_set_priority === 'function') {
+            return globalThis.ado_set_priority({ id: String(key), priority: String(priority) });
+        }
+        return adoUpdateField(key, 'Microsoft.VSTS.Common.Priority', n);
+    }
+
+    function adoAttachFile(key, name, filePath, contentType) {
+        var args = { id: String(key), name: name, filePath: filePath };
+        if (contentType) args.contentType = contentType;
+        return adoTool('ado_attach_file', 'attaching "' + name + '"')(args);
+    }
+
+    function adoFieldCode(project, fieldName) {
+        var fn = (typeof globalThis !== 'undefined') ? globalThis.ado_get_field_code : undefined;
+        if (typeof fn !== 'function') return null;   // callers treat null as "use the human name"
+        var r = fn({ project: project, fieldName: fieldName });
+        if (r && typeof r === 'object' && r.result) r = r.result;
+        return typeof r === 'string' ? r : null;
+    }
+
+    function adoCreateWithParent(project, type, title, description, parentKey, extra) {
+        var id = adoCreateTicket(project, type, title, description);
+        if (id && parentKey) {
+            ado_link_work_items({ sourceId: String(id), targetId: String(parentKey), relationship: 'parent' });
+        }
+        if (id && extra && extra.labels) {
+            for (var i = 0; i < extra.labels.length; i++) {
+                ado_add_work_item_label({ id: String(id), label: extra.labels[i] });
+            }
+        }
+        return id;
+    }
+
+    function adoCreateWithFields(project, fieldsJson) {
+        var f = (typeof fieldsJson === 'string') ? JSON.parse(fieldsJson) : (fieldsJson || {});
+        var type = f.workItemType || f['System.WorkItemType'];
+        var title = f.title || f['System.Title'];
+        if (!type || !title) {
+            throw new Error('trackers: createTicketWithFields on ado needs workItemType and title (ADO field names)');
+        }
+        var rest = {};
+        Object.keys(f).forEach(function (k) {
+            if (k !== 'workItemType' && k !== 'System.WorkItemType' && k !== 'title' && k !== 'System.Title') rest[k] = f[k];
+        });
+        var raw = ado_create_work_item({ project: project, workItemType: type, title: title, fieldsJson: JSON.stringify(rest) });
         var parsed = _parseJson(raw);
         if (parsed && typeof parsed === 'object') {
             if (typeof parsed.key === 'string') return parsed.key;
@@ -427,7 +560,15 @@ function createTracker(config, customParams) {
             },
             moveToStatus: jiraMoveToStatus,
             assignTo: jiraAssignTo,
-            createTicket: jiraCreateTicket
+            createTicket: jiraCreateTicket,
+            linkIssues: jiraLinkIssues,
+            updateField: jiraUpdateField,
+            updateDescription: jiraUpdateDescription,
+            setPriority: jiraSetPriority,
+            attachFile: jiraAttachFile,
+            fieldCode: jiraFieldCode,
+            createTicketWithParent: jiraCreateWithParent,
+            createTicketWithFields: jiraCreateWithFields
         },
         ado: {
             getTicket: adoGetTicket,
@@ -438,7 +579,15 @@ function createTracker(config, customParams) {
             removeLabel: adoRemoveLabel,
             moveToStatus: adoMoveToStatus,
             assignTo: adoAssignTo,
-            createTicket: adoCreateTicket
+            createTicket: adoCreateTicket,
+            linkIssues: adoLinkIssues,
+            updateField: adoUpdateField,
+            updateDescription: adoUpdateDescription,
+            setPriority: adoSetPriority,
+            attachFile: adoAttachFile,
+            fieldCode: adoFieldCode,
+            createTicketWithParent: adoCreateWithParent,
+            createTicketWithFields: adoCreateWithFields
         },
         github: {
             getTicket: githubGetTicket,
@@ -449,7 +598,16 @@ function createTracker(config, customParams) {
             removeLabel: githubRemoveLabel,
             moveToStatus: githubMoveToStatus,
             assignTo: githubAssignTo,
-            createTicket: githubCreateTicket
+            createTicket: githubCreateTicket,
+            // Not expressible on GitHub issues — fail with a clear, provider-named error.
+            linkIssues: function () { unsupported('linkIssues'); },
+            updateField: function () { unsupported('updateField'); },
+            updateDescription: function () { unsupported('updateDescription'); },
+            setPriority: function () { unsupported('setPriority'); },
+            attachFile: function () { unsupported('attachFile'); },
+            fieldCode: function () { return null; },
+            createTicketWithParent: function () { unsupported('createTicketWithParent'); },
+            createTicketWithFields: function () { unsupported('createTicketWithFields'); }
         }
     };
     var impl = impls[providerName];
@@ -474,7 +632,7 @@ function createTracker(config, customParams) {
         // Jira: { key, id, fields: { summary, status: { name }, ... } }
         if (t.fields && typeof t.fields === 'object' && t.fields.summary !== undefined) {
             var f = t.fields;
-            return _flatTicket(
+            return _extraFields(_flatTicket(
                 t.key || (t.id != null ? String(t.id) : null),
                 t.id != null ? String(t.id) : null,
                 f.summary || null,
@@ -483,13 +641,17 @@ function createTracker(config, customParams) {
                 _labelNames(f.labels),
                 f.description || null,
                 null
-            );
+            ), {
+                issueType: f.issuetype && f.issuetype.name ? f.issuetype.name : null,
+                parentKey: f.parent && f.parent.key ? f.parent.key : null,
+                fixVersions: _namesOf(f.fixVersions)
+            });
         }
 
         // ADO: { id, fields: { 'System.Title', 'System.State', ... } }
         if (t.fields && t.fields['System.Title'] !== undefined) {
             var af = t.fields;
-            return _flatTicket(
+            return _extraFields(_flatTicket(
                 t.id != null ? String(t.id) : null,
                 t.id != null ? String(t.id) : null,
                 af['System.Title'] || null,
@@ -498,7 +660,11 @@ function createTracker(config, customParams) {
                 _labelNames(af['System.Tags']),
                 af['System.Description'] || null,
                 null
-            );
+            ), {
+                issueType: af['System.WorkItemType'] || null,
+                parentKey: af['System.Parent'] != null ? String(af['System.Parent']) : null,
+                fixVersions: []
+            });
         }
 
         // GitHub: { number, title, state, ... }
@@ -519,6 +685,24 @@ function createTracker(config, customParams) {
         }
 
         return null;
+    }
+
+    function _namesOf(list) {
+        var out = [];
+        if (!Array.isArray(list)) return out;
+        for (var i = 0; i < list.length; i++) {
+            if (typeof list[i] === 'string') out.push(list[i]);
+            else if (list[i] && typeof list[i].name === 'string') out.push(list[i].name);
+        }
+        return out;
+    }
+
+    /** Add the provider-neutral extras (issue type, parent, fix versions) to a flat view. */
+    function _extraFields(flat, extra) {
+        flat.issueType = extra.issueType || null;
+        flat.parentKey = extra.parentKey || null;
+        flat.fixVersions = extra.fixVersions || [];
+        return flat;
     }
 
     function _flatTicket(key, id, title, status, assignee, labels, description, url) {
@@ -604,6 +788,14 @@ function createTracker(config, customParams) {
         moveToStatus: function (k, s) { return impl.moveToStatus(k, s); },
         assignTo: function (k, u) { return impl.assignTo(k, u); },
         createTicket: function (p, t, ti, d) { return impl.createTicket(p, t, ti, d); },
+        linkIssues: function (s, t, r) { return impl.linkIssues(s, t, r); },
+        updateField: function (k, f, v) { return impl.updateField(k, f, v); },
+        updateDescription: function (k, d) { return impl.updateDescription(k, d); },
+        setPriority: function (k, p) { return impl.setPriority(k, p); },
+        attachFile: function (k, n, fp, ct) { return impl.attachFile(k, n, fp, ct); },
+        fieldCode: function (p, n) { return impl.fieldCode(p, n); },
+        createTicketWithParent: function (p, t, ti, d, pk, x) { return impl.createTicketWithParent(p, t, ti, d, pk, x); },
+        createTicketWithFields: function (p, f) { return impl.createTicketWithFields(p, f); },
         normalizeTicket: normalizeTicket,
         extractTicketKey: extractTicketKey,
         assignForReview: assignForReview
