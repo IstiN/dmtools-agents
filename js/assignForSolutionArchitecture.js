@@ -9,6 +9,7 @@ const { LABELS } = require('./config.js');
 const configLoader = require('./configLoader.js');
 const scmModule = require('./common/scm.js');
 const autoStart = require('./common/autoStart.js');
+var trackersModule = require('./common/trackers.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 
 const ACCEPTANCE_CRITERIA_TRIGGER_LABELS = [
@@ -27,13 +28,12 @@ function action(params) {
         var jiraConfig = projectConfig.jira;
         var customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
 
+        var tracker = trackersModule.createTracker(projectConfig, customParams);
+
         // Assign to initiator (skip if accountId is not available)
         if (initiatorId) {
             try {
-                jira_assign_ticket_to({
-                    key: ticketKey,
-                    accountId: initiatorId
-                });
+                tracker.assignTo(ticketKey, initiatorId);
             } catch (e) {
                 console.warn('Failed to assign ticket, continuing:', e);
             }
@@ -41,10 +41,7 @@ function action(params) {
 
         // Move to Solution Architecture — trigger labels are only removed on success
         try {
-            jira_move_to_status({
-                key: ticketKey,
-                statusName: jiraConfig.statuses.SOLUTION_ARCHITECTURE
-            });
+            tracker.moveToStatus(ticketKey, jiraConfig.statuses.SOLUTION_ARCHITECTURE);
         } catch (statusError) {
             console.error('Failed to move ' + ticketKey + ' to Solution Architecture — trigger labels NOT removed:', statusError);
             throw statusError;
@@ -53,7 +50,7 @@ function action(params) {
 
         // Add ai_generated label
         try {
-            jira_add_label({ key: ticketKey, label: LABELS.AI_GENERATED });
+            tracker.addLabel(ticketKey, LABELS.AI_GENERATED);
         } catch (e) {
             console.warn('Failed to add ai_generated label:', e);
         }
@@ -61,7 +58,7 @@ function action(params) {
         // Remove WIP label if present
         if (wipLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: wipLabel });
+                tracker.removeLabel(ticketKey, wipLabel);
                 console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
             } catch (e) {
                 console.warn('Failed to remove WIP label:', e);
@@ -70,7 +67,7 @@ function action(params) {
 
         ACCEPTANCE_CRITERIA_TRIGGER_LABELS.forEach(function(label) {
             try {
-                jira_remove_label({ key: ticketKey, label: label });
+                tracker.removeLabel(ticketKey, label);
                 console.log('Removed trigger label "' + label + '" from ' + ticketKey);
             } catch (e) {
                 console.warn('Failed to remove trigger label "' + label + '":', e);

@@ -11,6 +11,7 @@ const gh = require('./common/githubHelpers.js');
 const gitOps = require('./common/gitOps.js');
 const commentMarkup = require('./common/commentMarkup.js');
 const fetchParentContextToInput = require('./fetchParentContextToInput.js');
+var trackersModule = require('./common/trackers.js');
 
 function action(params) {
     try {
@@ -26,6 +27,7 @@ function action(params) {
         const noTicket = !!prAnchor;
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var scm = configLoader.createScm(config);
+        var tracker = trackersModule.createTracker(config, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
 
         console.log('=== Preparing PR for review:', ticketKey, '===');
         console.log('Input folder:', inputFolder);
@@ -47,7 +49,7 @@ function action(params) {
         if (!repoInfo) {
             const err = 'Could not determine GitHub repository from git remote';
             console.error('PR review setup failed at repository resolution:', err);
-            try { jira_post_comment({ key: ticketKey, comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Setup Failed') + '\n\n' + err + '\n\n_Review cancelled — no PR to review._' }); } catch (e) {}
+            try { tracker.postComment(ticketKey, commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Setup Failed') + '\n\n' + err + '\n\n_Review cancelled — no PR to review._'); } catch (e) {}
             return false;
         }
         console.log('Resolved repository:', repoInfo.owner + '/' + repoInfo.repo);
@@ -66,15 +68,14 @@ function action(params) {
             console.warn('No open PR found for ticket:', ticketKey);
             if (!noTicket) {
                 try {
-                    jira_post_comment({
-                        key: ticketKey,
-                        comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Setup Failed') + '\n\n' +
+                    tracker.postComment(ticketKey,
+                        commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Setup Failed') + '\n\n' +
                             'Could not find an open Pull Request associated with ' + commentMarkup.forTicket(ticketKey).bold(ticketKey) + '.\n\n' +
                             'Please ensure:\n' +
                             '* A PR has been created with the ticket key in the title or branch name\n' +
                             '* The PR is open and accessible\n\n' +
                             '_Review cancelled — no PR to review._'
-                    });
+                    );
                 } catch (e) {}
             }
             return false;
@@ -89,10 +90,9 @@ function action(params) {
             console.error('Failed to fetch PR details for PR #' + pr.number);
             if (!noTicket) {
                 try {
-                    jira_post_comment({
-                        key: ticketKey,
-                        comment: commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Setup Failed') + '\n\nCould not fetch details for PR #' + pr.number + '.\n\n_Review cancelled._'
-                    });
+                    tracker.postComment(ticketKey,
+                        commentMarkup.forTicket(ticketKey).h(3, '⚠️ PR Review Setup Failed') + '\n\nCould not fetch details for PR #' + pr.number + '.\n\n_Review cancelled._'
+                    );
                 } catch (e) {}
             }
             return false;
@@ -164,7 +164,7 @@ function action(params) {
                 '* 🧪 Testing adequacy\n\n' +
                 '_Review results will be posted shortly..._';
 
-            jira_post_comment({ key: ticketKey, comment: jiraComment });
+            tracker.postComment(ticketKey, jiraComment);
             console.log('Posted "review started" comment to Jira ticket:', ticketKey);
             } catch (e) {
                 console.warn('Failed to post review started comment:', e);
@@ -197,10 +197,9 @@ function action(params) {
         if (!noTicket) {
             try {
                 const ticketKey = params.inputFolderPath.split('/').pop();
-                jira_post_comment({
-                    key: ticketKey,
-                    comment: commentMarkup.forTicket(ticketKey).h(3, '❌ PR Review Setup Error') + '\n\n' + commentMarkup.forTicket(ticketKey).code(error.toString())
-                });
+                tracker.postComment(ticketKey,
+                    commentMarkup.forTicket(ticketKey).h(3, '❌ PR Review Setup Error') + '\n\n' + commentMarkup.forTicket(ticketKey).code(error.toString())
+                );
             } catch (e) {}
         }
         return false;
