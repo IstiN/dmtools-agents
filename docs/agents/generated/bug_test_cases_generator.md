@@ -25,7 +25,8 @@ Full prompt / instruction set: [`agents/snapshots/bug_test_cases_generator.md`](
 _Move To Ready For Testing Action (postJSAction for test_cases_generator)_
 
 - Source: `agents/js/moveToReadyForTesting.js`
-- No detected file I/O or side effects.
+- Side effects:
+  - move ticket to status (via tracker)
 
 
 
@@ -35,8 +36,9 @@ _Move To Done Action (postJSAction for bug_test_cases_generator)_
 
 - Source: `agents/js/moveToDone.js`
 - Side effects:
-  - remove label "sm_bug_test_cases_triggered"
-  - post Jira comment
+  - remove label "sm_bug_test_cases_triggered" (via tracker)
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
 
 
 ## LLM step

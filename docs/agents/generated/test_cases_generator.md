@@ -25,7 +25,8 @@ Full prompt / instruction set: [`agents/snapshots/test_cases_generator.md`](agen
 _Move To Ready For Testing Action (postJSAction for test_cases_generator)_
 
 - Source: `agents/js/moveToReadyForTesting.js`
-- No detected file I/O or side effects.
+- Side effects:
+  - move ticket to status (via tracker)
 
 
 
