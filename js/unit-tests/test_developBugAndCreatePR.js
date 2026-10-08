@@ -82,6 +82,13 @@ var developTicketRealModule = loadModule(
                 throwInterruptedReset: developTicketRealModule.throwInterruptedReset
             }
         ,
+            './common/feedbackLoop.js': {
+                runQualityGates: function () { return { success: true }; },
+                runPolicyGates: function () { return { success: true }; },
+                runPostPublishGates: function () { return { success: true }; },
+                resumeAgent: function () { return { attempted: false }; },
+                resumeOnceForMissingResponse: function () { return { attempted: false }; }
+            },
             './common/commentMarkup.js': commentMarkupModule,
         }),
         allMocks
@@ -428,6 +435,13 @@ suite('developBugAndCreatePR', function() {
                     }
                 }),
                 './developTicketAndCreatePR.js': { action: function () { throw marked; } },
+                './common/feedbackLoop.js': {
+                    runQualityGates: function () { return { success: true }; },
+                    runPolicyGates: function () { return { success: true }; },
+                    runPostPublishGates: function () { return { success: true }; },
+                    resumeAgent: function () { return { attempted: false }; },
+                    resumeOnceForMissingResponse: function () { return { attempted: false }; }
+                },
                 './common/commentMarkup.js': commentMarkupMod
             }),
             {
@@ -477,6 +491,36 @@ function loadBugForMissingResponseResume(opts) {
     var removed = [];
     var delegated = 0;
 
+    // Self-contained base modules (the older loader in this file declares its
+    // instances inside its own function scope).
+    var commentMarkupModuleLocal = loadModule('js/common/commentMarkup.js',
+        makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
+    var gitStagingModuleLocal = loadModule('js/common/gitStaging.js');
+    var developTicketRealModuleLocal = loadModule(
+        'js/developTicketAndCreatePR.js',
+        makeRequire({
+            './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
+            './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
+            './common/submodules.js': {},
+            './common/feedbackLoop.js': {
+                runQualityGates: function () { return { success: true }; },
+                runPolicyGates: function () { return { success: true }; },
+                runPostPublishGates: function () { return { success: true }; },
+                resumeAgent: function () { return { attempted: false }; },
+                resumeOnceForMissingResponse: function () { return { attempted: false }; }
+            },
+            './common/autoStart.js': { triggerSmIfIdle: function () { } },
+            './common/outputFiles.js': { readOutputFile: function () { return null; } },
+            './cacheToReleases.js': {},
+            './common/gitStaging.js': gitStagingModuleLocal,
+            './configLoader.js': configLoaderModule,
+            './config.js': configModule,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
+            './common/commentMarkup.js': commentMarkupModuleLocal
+        }),
+        {}
+    );
+
     var sharedFileRead = function (args) {
         var path = args && (args.path || args);
         if (files[path] !== undefined) return files[path];
@@ -517,15 +561,15 @@ function loadBugForMissingResponseResume(opts) {
         'js/developBugAndCreatePR.js',
         makeRequire({
             './config.js': configModule,
-            './common/gitStaging.js': gitStagingModule,
+            './common/gitStaging.js': gitStagingModuleLocal,
             './configLoader.js': configLoaderModule,
             './common/outputFiles.js': realOutputFiles,
             './common/feedbackLoop.js': realFeedbackLoop,
             './developTicketAndCreatePR.js': {
                 action: function () { delegated++; return { success: true, path: 'delegated' }; },
-                throwInterruptedReset: developTicketRealModule.throwInterruptedReset
+                throwInterruptedReset: developTicketRealModuleLocal.throwInterruptedReset
             },
-            './common/commentMarkup.js': commentMarkupModule
+            './common/commentMarkup.js': commentMarkupModuleLocal
         }),
         {
             cli_execute_command: cliMock,

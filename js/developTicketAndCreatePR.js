@@ -1215,6 +1215,7 @@ function action(params) {
             }
         }
         console.log('Using outputs/response.md as PR body (' + responseContent.length + ' characters)');
+
         // Create Pull Request
         const prTitle = configLoader.formatTemplate(config.formats.prTitle.development, { ticketKey: ticketKey, ticketSummary: ticketSummary });
         const prResult = createPullRequest(prTitle, branchName, prTarget, ticketKey);
