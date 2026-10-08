@@ -318,4 +318,57 @@ suite('postTestReviewComments: inline comments', function() {
         assert.contains(prComments[1].text, 'testing/tests/TS-250/config.yaml:59');
         assert.contains(prComments[1].text, 'Line is outside the diff');
     });
+
+    test('gh-802 rework: github_get_pr_diff receives pullRequestID (schema casing), never pullRequestId', function() {
+        // dmtools v1.7.256 declares `pullRequestID` (capital D) for BOTH diff
+        // tools — `pullRequestId` fails with "Required parameter
+        // 'pullRequestID' is missing", and the null-returning catch then
+        // silently skips inline-comment validation. Pin the schema casing.
+        var diffCalls = [];
+        var module = loadPostTestReviewComments({
+            file_read: function(opts) {
+                if (opts.path && opts.path.indexOf('.dmtools/config') !== -1) return null;
+                if (opts.path === 'outputs/pr_review.json') {
+                    return JSON.stringify({
+                        recommendation: 'COMMENT',
+                        generalComment: 'outputs/pr_review_general.md',
+                        inlineComments: [
+                            { path: 'testing/tests/TS-250/config.yaml', line: 59, body: 'Diff-backed finding.' }
+                        ]
+                    });
+                }
+                if (opts.path === 'outputs/pr_review_general.md') return 'General comment';
+                return null;
+            },
+            github_list_prs: function() {
+                return [{ number: 255, html_url: 'https://github.com/example-org/example-repo/pull/255', head: { ref: 'test/DMC-1105' } }];
+            },
+            cli_execute_command: function() {
+                return 'https://github.com/example-org/example-repo';
+            },
+            github_get_pr_diff: function(args) {
+                diffCalls.push(args);
+                return [
+                    'diff --git a/testing/tests/TS-250/config.yaml b/testing/tests/TS-250/config.yaml',
+                    '--- a/testing/tests/TS-250/config.yaml',
+                    '+++ b/testing/tests/TS-250/config.yaml',
+                    '@@ -1,3 +1,3 @@',
+                    ' name: TS-250',
+                    '+enabled: true',
+                    ' owner: qa'
+                ].join('\n');
+            }
+        });
+
+        var result = module.action({
+            ticket: { key: 'DMC-1105', fields: { summary: 'Diff arg casing pin' } }
+        });
+
+        assert.equal(result.success, true, 'action succeeded — got: ' + JSON.stringify(result));
+        assert.equal(diffCalls.length, 1, 'the PR diff is fetched once for inline prevalidation');
+        assert.equal(diffCalls[0].pullRequestID, '255',
+            'the diff tool schema requires pullRequestID (capital D) — got: ' + JSON.stringify(diffCalls[0]));
+        assert.equal(diffCalls[0].pullRequestId, undefined,
+            'pullRequestId is rejected by the runtime schema — must not be sent');
+    });
 });

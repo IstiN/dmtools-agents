@@ -217,9 +217,14 @@ suite('gitOps.detectMergeConflicts — clean-merge log wording (gh-802 AC3a)', f
 
     function runDetect(quietDiffExit) {
         var logs = [];
+        var warns = [];
         var origLog = console.log;
+        var origWarn = console.warn;
         console.log = function() {
             logs.push(Array.prototype.slice.call(arguments).join(' '));
+        };
+        console.warn = function() {
+            warns.push(Array.prototype.slice.call(arguments).join(' '));
         };
         try {
             var gitOps = loadGitOps({
@@ -229,15 +234,17 @@ suite('gitOps.detectMergeConflicts — clean-merge log wording (gh-802 AC3a)', f
                     if (c === 'git merge origin/main --no-commit --no-ff') return 'Merge cleanup\nCOMMAND_EXIT_CODE=0';
                     if (c === 'git diff --cached --quiet HEAD') {
                         if (quietDiffExit === 0) return 'COMMAND_EXIT_CODE=0';
+                        if (quietDiffExit === 'corrupt') throw new Error('fatal: unable to read the index — COMMAND_EXIT_CODE=128');
                         throw new Error('exit 1 — the merge staged changes');
                     }
                     return 'COMMAND_EXIT_CODE=0';
                 }
             });
             var conflicts = gitOps.detectMergeConflicts('main', 'input/PROJ-123', null);
-            return { conflicts: conflicts, logs: logs };
+            return { conflicts: conflicts, logs: logs, warns: warns };
         } finally {
             console.log = origLog;
+            console.warn = origWarn;
         }
     }
 
@@ -250,6 +257,7 @@ suite('gitOps.detectMergeConflicts — clean-merge log wording (gh-802 AC3a)', f
             'no false "base branch changes staged" line on an up-to-date merge, got: ' + JSON.stringify(fx.logs));
         assert.ok(joined.indexOf('already up to date') !== -1,
             'the up-to-date case is named explicitly, got: ' + JSON.stringify(fx.logs));
+        assert.equal(fx.warns.length, 0, 'the normal exit-0 quiet-diff path is silent — got: ' + JSON.stringify(fx.warns));
     });
 
     test('a merge that stages base changes keeps the "base branch changes staged" wording', function() {
@@ -259,5 +267,22 @@ suite('gitOps.detectMergeConflicts — clean-merge log wording (gh-802 AC3a)', f
         var joined = fx.logs.join('\n');
         assert.ok(joined.indexOf('No merge conflicts — base branch changes staged') !== -1,
             'staged-changes case keeps the informative wording, got: ' + JSON.stringify(fx.logs));
+        // gh-802 rework (thread 4): exit 1 IS the expected "staged" signal —
+        // it must not produce an anomaly warning.
+        assert.equal(fx.warns.length, 0,
+            'exit 1 is the expected staged-changes signal, no warn expected — got: ' + JSON.stringify(fx.warns));
+    });
+
+    test('a quiet-diff failure that is NOT exit 1 is flagged as a git error, not silently claimed as "staged"', function() {
+        var fx = runDetect('corrupt');
+
+        assert.deepEqual(fx.conflicts, [], 'the detection still completes with the staged assumption');
+        var joined = fx.logs.join('\n');
+        assert.ok(joined.indexOf('base branch changes staged') !== -1,
+            'the conservative "staged" fallback wording is kept, got: ' + JSON.stringify(fx.logs));
+        var joinedWarns = fx.warns.join('\n');
+        assert.ok(fx.warns.length > 0, 'a non-exit-1 quiet-diff failure is announced');
+        assert.ok(joinedWarns.indexOf('unable to read the index') !== -1,
+            'the warn carries the failure content, got: ' + JSON.stringify(fx.warns));
     });
 });
