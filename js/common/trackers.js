@@ -363,18 +363,14 @@ function createTracker(config, customParams) {
     }
 
 
-    // The Java runtime grows the ADO tools below over time (epam/dm.ai#661). Feature-detect so
-    // the same script keeps working on runtimes that already have them and fails with a precise
-    // message (not a TypeError) on those that do not yet.
-    function adoTool(name, why) {
-        var fn = (typeof globalThis !== 'undefined') ? globalThis[name] : undefined;
-        if (typeof fn !== 'function') {
-            throw new Error('trackers: ado provider needs the ' + name + ' tool for ' + why +
-                ' — not available in this runtime (epam/dm.ai#661)');
-        }
-        return fn;
+    // ado_update_field / ado_attach_file / ado_set_priority / ado_get_field_code ship with the Java
+    // (dm.ai#663) and Dart (dmtools-dart#373) runtimes. `typeof <identifier>` is safe for an
+    // undeclared name and resolves both real host globals and test mocks, so an older runtime that
+    // lacks a tool gets a precise message instead of a ReferenceError.
+    function adoMissingTool(name, why) {
+        return new Error('trackers: ado provider needs the ' + name + ' tool for ' + why +
+            ' — not available in this runtime (needs dmtools with epam/dm.ai#661)');
     }
-
 
     function adoGetIssue(key, fields) {
         var args = { id: String(key) };
@@ -402,9 +398,8 @@ function createTracker(config, customParams) {
         if (lower === 'labels' || lower === 'tags') {
             return ado_update_tags({ id: String(key), tags: Array.isArray(value) ? value.join('; ') : String(value) });
         }
-        return adoTool('ado_update_field', 'updating field "' + f + '"')({
-            id: String(key), field: ADO_FIELD_ALIASES[lower] || f, value: value
-        });
+        if (typeof ado_update_field !== 'function') throw adoMissingTool('ado_update_field', 'updating field "' + f + '"');
+        return ado_update_field({ id: String(key), field: ADO_FIELD_ALIASES[lower] || f, value: value });
     }
 
     function adoUpdateDescription(key, description) {
@@ -416,8 +411,8 @@ function createTracker(config, customParams) {
     function adoSetPriority(key, priority) {
         var n = /^\d+$/.test(String(priority)) ? parseInt(priority, 10) : ADO_PRIORITY[String(priority).toLowerCase()];
         if (!n) throw new Error('trackers: unknown priority "' + priority + '" for the ado provider');
-        if (typeof globalThis !== 'undefined' && typeof globalThis.ado_set_priority === 'function') {
-            return globalThis.ado_set_priority({ id: String(key), priority: String(priority) });
+        if (typeof ado_set_priority === 'function') {
+            return ado_set_priority({ id: String(key), priority: String(priority) });
         }
         return adoUpdateField(key, 'Microsoft.VSTS.Common.Priority', n);
     }
@@ -425,13 +420,13 @@ function createTracker(config, customParams) {
     function adoAttachFile(key, name, filePath, contentType) {
         var args = { id: String(key), name: name, filePath: filePath };
         if (contentType) args.contentType = contentType;
-        return adoTool('ado_attach_file', 'attaching "' + name + '"')(args);
+        if (typeof ado_attach_file !== 'function') throw adoMissingTool('ado_attach_file', 'attaching "' + name + '"');
+        return ado_attach_file(args);
     }
 
     function adoFieldCode(project, fieldName) {
-        var fn = (typeof globalThis !== 'undefined') ? globalThis.ado_get_field_code : undefined;
-        if (typeof fn !== 'function') return null;   // callers treat null as "use the human name"
-        var r = fn({ project: project, fieldName: fieldName });
+        if (typeof ado_get_field_code !== 'function') return null;   // callers treat null as "use the human name"
+        var r = ado_get_field_code({ project: project, fieldName: fieldName });
         if (r && typeof r === 'object' && r.result) r = r.result;
         return typeof r === 'string' ? r : null;
     }

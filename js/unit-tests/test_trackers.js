@@ -897,34 +897,42 @@ suite('trackers.js extended operations — ado provider', function () {
         assert.deepEqual(ut.calls[0], { id: '5', tags: 'a; b' });
     });
 
-    test('updateField on a custom field needs ado_update_field and names the missing tool otherwise', function () {
-        var t = loadTrackers({}).createTracker(ado());
+    // The ADO tools below ship with the Java (dm.ai#663) and Dart (dmtools-dart#373) runtimes. In the
+    // unit-test runtime the network guard makes every integration tool a throwing stub, so the
+    // "tool missing" path is simulated by shadowing the name with `undefined` inside trackers.js.
+    var NO_ADO_NEW_TOOLS = { ado_update_field: undefined, ado_set_priority: undefined, ado_attach_file: undefined, ado_get_field_code: undefined };
+
+    test('updateField on a custom field calls ado_update_field with the mapped reference name', function () {
+        var uf = recorder('ado_update_field', '{}');
+        var t = loadTrackers({ ado_update_field: uf }).createTracker(ado());
+        t.updateField('5', 'summary', 'New');
+        t.updateField('5', 'Custom.Solution', 'x');
+        assert.deepEqual(uf.calls[0], { id: '5', field: 'System.Title', value: 'New' });
+        assert.deepEqual(uf.calls[1], { id: '5', field: 'Custom.Solution', value: 'x' });
+    });
+
+    test('updateField on a runtime without ado_update_field names the missing tool', function () {
+        var t = loadTrackers(NO_ADO_NEW_TOOLS).createTracker(ado());
         var msg = '';
         try { t.updateField('5', 'Custom.Solution', 'x'); } catch (e) { msg = String(e.message || e); }
         assert.ok(msg.indexOf('ado_update_field') !== -1 && msg.indexOf('#661') !== -1, 'got: ' + msg);
-        var uf = recorder('ado_update_field', '{}');
-        // a runtime that has the tool: it is used, with the human alias mapped to the reference name
-        var g = (typeof globalThis !== 'undefined') ? globalThis : this;
-        g.ado_update_field = uf;
-        try {
-            loadTrackers({}).createTracker(ado()).updateField('5', 'summary', 'New');
-            assert.deepEqual(uf.calls[0], { id: '5', field: 'System.Title', value: 'New' });
-        } finally { delete g.ado_update_field; }
     });
 
-    test('setPriority maps Jira names to ADO 1-4 and falls back to updateField', function () {
-        var g = (typeof globalThis !== 'undefined') ? globalThis : this;
+    test('setPriority prefers ado_set_priority (the runtime maps the names)', function () {
+        var sp = recorder('ado_set_priority', '{}');
+        loadTrackers({ ado_set_priority: sp }).createTracker(ado()).setPriority('5', 'High');
+        assert.deepEqual(sp.calls[0], { id: '5', priority: 'High' });
+    });
+
+    test('setPriority without ado_set_priority maps Jira names to ADO 1-4 through updateField', function () {
         var uf = recorder('ado_update_field', '{}');
-        g.ado_update_field = uf;
-        try {
-            var t = loadTrackers({}).createTracker(ado());
-            t.setPriority('5', 'High'); t.setPriority('5', 'Lowest'); t.setPriority('5', '3');
-            assert.deepEqual(uf.calls.map(function (c) { return c.value; }), [2, 4, 3]);
-            assert.equal(uf.calls[0].field, 'Microsoft.VSTS.Common.Priority');
-            var bad = '';
-            try { t.setPriority('5', 'Whatever'); } catch (e) { bad = String(e.message); }
-            assert.ok(bad.indexOf('unknown priority') !== -1);
-        } finally { delete g.ado_update_field; }
+        var t = loadTrackers({ ado_update_field: uf, ado_set_priority: undefined }).createTracker(ado());
+        t.setPriority('5', 'High'); t.setPriority('5', 'Lowest'); t.setPriority('5', '3');
+        assert.deepEqual(uf.calls.map(function (c) { return c.value; }), [2, 4, 3]);
+        assert.equal(uf.calls[0].field, 'Microsoft.VSTS.Common.Priority');
+        var bad = '';
+        try { t.setPriority('5', 'Whatever'); } catch (e) { bad = String(e.message); }
+        assert.ok(bad.indexOf('unknown priority') !== -1);
     });
 
     test('createTicketWithParent creates, links the parent (Hierarchy) and adds labels', function () {
@@ -951,12 +959,24 @@ suite('trackers.js extended operations — ado provider', function () {
         assert.ok(msg.indexOf('workItemType') !== -1);
     });
 
-    test('attachFile names the missing ado_attach_file tool; fieldCode degrades to null', function () {
-        var t = loadTrackers({}).createTracker(ado());
+    test('attachFile calls ado_attach_file with {id, name, filePath, contentType}', function () {
+        var at = recorder('ado_attach_file', '{}');
+        loadTrackers({ ado_attach_file: at }).createTracker(ado()).attachFile('5', 'a.png', '/tmp/a.png', 'image/png');
+        assert.deepEqual(at.calls[0], { id: '5', name: 'a.png', filePath: '/tmp/a.png', contentType: 'image/png' });
+    });
+
+    test('attachFile on a runtime without ado_attach_file names the missing tool', function () {
+        var t = loadTrackers(NO_ADO_NEW_TOOLS).createTracker(ado());
         var msg = '';
         try { t.attachFile('5', 'a.png', '/tmp/a.png'); } catch (e) { msg = String(e.message); }
         assert.ok(msg.indexOf('ado_attach_file') !== -1 && msg.indexOf('#661') !== -1, 'got: ' + msg);
-        assert.equal(t.fieldCode('P', 'Solution'), null);
+    });
+
+    test('fieldCode resolves through ado_get_field_code and degrades to null without it', function () {
+        var fc = recorder('ado_get_field_code', { result: 'Custom.SolutionDesign' });
+        assert.equal(loadTrackers({ ado_get_field_code: fc }).createTracker(ado()).fieldCode('P', 'Solution Design'), 'Custom.SolutionDesign');
+        assert.deepEqual(fc.calls[0], { project: 'P', fieldName: 'Solution Design' });
+        assert.equal(loadTrackers(NO_ADO_NEW_TOOLS).createTracker(ado()).fieldCode('P', 'Solution Design'), null);
     });
 
     test('normalizeTicket exposes issueType and parentKey from System.* fields', function () {
