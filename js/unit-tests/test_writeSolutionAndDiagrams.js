@@ -2,6 +2,13 @@
  * Unit tests for js/writeSolutionAndDiagrams.js module loading.
  */
 
+function wd3Trackers(mocks) {
+    return loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), mocks || {});
+}
+
 suite('writeSolutionAndDiagrams — module export', function() {
     test('exports action for GraalJS require wrappers', function() {
         var outputFiles = loadModule('js/common/outputFiles.js', makeRequire({}), {});
@@ -9,6 +16,7 @@ suite('writeSolutionAndDiagrams — module export', function() {
         var module = loadModule(
             'js/writeSolutionAndDiagrams.js',
             makeRequire({
+                './common/trackers.js': wd3Trackers({}),
                 './config.js': configModule,
                 './configLoader.js': configLoaderModule,
                 './common/scm.js': { createScm: function() { return {}; } },
@@ -65,6 +73,7 @@ suite('writeSolutionAndDiagrams — diagram handling for Confluence targets', fu
         var module = loadModule(
             'js/writeSolutionAndDiagrams.js',
             makeRequire({
+                './common/trackers.js': wd3Trackers(globals),
                 './config.js': configModule,
                 './configLoader.js': { loadProjectConfig: function() { return {}; } },
                 './common/scm.js': { createScm: function() { return {}; } },
@@ -250,6 +259,7 @@ suite('writeSolutionAndDiagrams — required outputs', function() {
         var module = loadModule(
             'js/writeSolutionAndDiagrams.js',
             makeRequire({
+                './common/trackers.js': wd3Trackers({ file_read: function(opts) { var path = opts && (opts.path || opts); if (path === 'outputs/response.md') return 'h2. Solution'; throw new Error('not found: ' + path); } }),
                 './config.js': configModule,
                 './configLoader.js': configLoaderModule,
                 './common/scm.js': { createScm: function() { return {}; } },
@@ -281,5 +291,51 @@ suite('writeSolutionAndDiagrams — required outputs', function() {
 
         assert.equal(result.success, false, 'action fails');
         assert.equal(result.error, 'outputs/diagram.md is required but empty', 'clear error');
+    });
+});
+
+suite('writeSolutionAndDiagrams — ado tracker (wave2d3)', function() {
+    test('ado provider: field/assign/state/label go through ado_* tools, no jira_*', function() {
+        var calls = [];
+        var rec = function(n) { return function(a) { calls.push({ tool: n, args: a }); }; };
+        var jiraGuard = function(n) { return function() { throw new Error(n + ' must not be called'); }; };
+        var globals = {
+            ado_update_description: rec('ado_update_description'),
+            ado_assign_work_item: rec('ado_assign_work_item'),
+            ado_move_to_state: rec('ado_move_to_state'),
+            ado_add_work_item_label: rec('ado_add_work_item_label'),
+            ado_remove_work_item_label: rec('ado_remove_work_item_label'),
+            ado_add_work_item_comment: rec('ado_add_work_item_comment'),
+            jira_update_field: jiraGuard('jira_update_field'),
+            jira_get_ticket: jiraGuard('jira_get_ticket'),
+            jira_assign_ticket_to: jiraGuard('jira_assign_ticket_to'),
+            jira_move_to_status: jiraGuard('jira_move_to_status'),
+            jira_add_label: jiraGuard('jira_add_label'),
+            jira_remove_label: jiraGuard('jira_remove_label'),
+            jira_post_comment: jiraGuard('jira_post_comment')
+        };
+        var outputFilesMock = { readOutputFile: function(n) { return n === 'response.md' ? 'Solution body' : null; } };
+        var module = loadModule('js/writeSolutionAndDiagrams.js', makeRequire({
+            './common/trackers.js': wd3Trackers(globals),
+            './config.js': configModule,
+            './configLoader.js': { loadProjectConfig: function() { return { jira: { statuses: { READY_FOR_DEVELOPMENT: 'Ready' } } }; } },
+            './common/scm.js': { createScm: function() { return {}; } },
+            './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; }, triggerSmIfIdle: function() {} },
+            './common/outputFiles.js': outputFilesMock,
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/contentOutput.js': loadModule('js/common/contentOutput.js',
+                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': wd3Trackers(globals) }), globals)
+        }), globals);
+        var result = module.action({
+            ticket: { key: '55', fields: { summary: 's' } },
+            initiator: 'user@x',
+            customParams: { trackerProvider: 'ado', solutionField: 'description', diagramField: '' }
+        });
+        assert.equal(result.success, true);
+        var tools = calls.map(function(c) { return c.tool; });
+        assert.ok(tools.indexOf('ado_update_description') !== -1, 'ado_update_description called');
+        assert.ok(tools.indexOf('ado_assign_work_item') !== -1, 'ado_assign_work_item called');
+        assert.ok(tools.indexOf('ado_move_to_state') !== -1, 'ado_move_to_state called');
+        calls.forEach(function(c) { assert.equal(String(c.args.id), '55'); });
     });
 });

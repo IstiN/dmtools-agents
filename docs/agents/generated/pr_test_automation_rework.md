@@ -43,7 +43,8 @@ _Pre-CLI Test Rework Setup Action (preCliJSAction for pr_test_automation_rework)
 
 - Source: `agents/js/preCliTestReworkSetup.js`
 - Side effects:
-  - post Jira comment
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
   - git checkout
 
 

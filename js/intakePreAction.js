@@ -5,11 +5,14 @@
  *    (file_write creates parent dirs, so this runs before dmtools creates input/<KEY>/)
  */
 
+var trackersModule = require('./common/trackers.js');
+
 function action(params) {
     try {
         var ticket = params.ticket;
         var metadata = params.metadata;
         var ticketKey = ticket.key;
+        var tracker = trackersModule.createTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
 
         // --- WIP label check ---
         if (metadata && metadata.contextId) {
@@ -19,13 +22,10 @@ function action(params) {
             if (labels.includes(wipLabel)) {
                 console.log('Ticket ' + ticketKey + ' has WIP label "' + wipLabel + '" - skipping');
                 try {
-                    jira_post_comment({
-                        key: ticketKey,
-                        comment: 'h3. *Processing Skipped*\n\n' +
-                            'This ticket has the *' + wipLabel + '* label indicating work is in progress.\n' +
-                            'Processing will be skipped until the label is removed.\n\n' +
-                            '_Remove the label to allow automated processing._'
-                    });
+                    tracker.postComment(ticketKey, 'h3. *Processing Skipped*\n\n' +
+                        'This ticket has the *' + wipLabel + '* label indicating work is in progress.\n' +
+                        'Processing will be skipped until the label is removed.\n\n' +
+                        '_Remove the label to allow automated processing._');
                 } catch (e) {
                     console.warn('Failed to post skip comment:', e);
                 }
@@ -43,8 +43,7 @@ function action(params) {
         console.log('Fetching existing epics for ' + ticketKey + '...');
 
         try {
-            var rawEpics = jira_search_by_jql({
-                jql: 'project = ' + project + ' AND issuetype = Epic ORDER BY created DESC',
+            var rawEpics = tracker.searchIssues('project = ' + project + ' AND issuetype = Epic ORDER BY created DESC', {
                 fields: ['key', 'summary', 'description', 'priority', 'diagrams', 'parent']
             });
             var epics = [];
@@ -68,8 +67,7 @@ function action(params) {
         }
 
         try {
-            var rawStories = jira_search_by_jql({
-                jql: 'project = ' + project + ' AND issuetype = Story ORDER BY created DESC',
+            var rawStories = tracker.searchIssues('project = ' + project + ' AND issuetype = Story ORDER BY created DESC', {
                 fields: ['key', 'summary', 'status', 'priority', 'diagrams', 'parent']
             });
             var stories = [];
@@ -98,4 +96,8 @@ function action(params) {
         console.error('Error in intakePreAction:', error);
         return true; // don't block on unexpected error
     }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { action: action };
 }

@@ -56,14 +56,16 @@ function validateTicketKeyFormat(key) {
 }
 
 /**
- * Fetch the ticket via jira_get_ticket and throw if it does not exist.
+ * Fetch the ticket via the tracker layer and throw if it does not exist.
  * @param {string} key  Validated ticket key
+ * @param {Object} [tracker] optional tracker (defaults to env/jira)
  * @returns {Object}    The ticket object
  */
-function requireTicketExists(key) {
+function requireTicketExists(key, tracker) {
     var ticket;
     try {
-        ticket = jira_get_ticket({ key: key });
+        if (!tracker) tracker = require('./trackers.js').createTracker(null, {});
+        ticket = tracker.getIssue(key);
     } catch (e) {
         throw new Error('Ticket not found: ' + key + ' — ' + (e.message || e));
     }
@@ -79,12 +81,16 @@ function requireTicketExists(key) {
  * @param {Object} params  jobParams or full params block containing inputJql
  * @returns {Object}       The Jira ticket object
  */
-function validateAndRequireTicket(params) {
+function validateAndRequireTicket(params, tracker) {
     var jobParams = (params && params.jobParams) ? params.jobParams : params;
     var inputJql = (jobParams && jobParams.inputJql) || '';
     var key = extractTicketKeyFromJql(inputJql);
     validateTicketKeyFormat(key);
-    return requireTicketExists(key);
+    if (!tracker) {
+        var cp = (jobParams && jobParams.customParams) || (params && params.customParams) || {};
+        tracker = require('./trackers.js').createTracker(null, cp);
+    }
+    return requireTicketExists(key, tracker);
 }
 
 if (typeof module !== 'undefined' && module.exports) {

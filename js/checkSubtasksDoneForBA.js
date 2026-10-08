@@ -2,7 +2,7 @@
  * Check Subtasks Done For BA — postJSAction for story_ba_check agent.
  *
  * Runs on every SM cycle for each Story in "PO Review".
- * Fetches subtasks via JQL (jira_search_by_jql returns a plain array).
+ * Fetches subtasks via JQL (searchIssues returns a plain array).
  *
  * - If no clarification subtasks exist, or all subtasks are Done → moves the Story to "BA Analysis".
  * - Otherwise → removes the SM idempotency label so the SM re-triggers
@@ -14,6 +14,7 @@
  */
 
 var configLoader = require('./configLoader.js');
+var trackersModule = require('./common/trackers.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
 function action(params) {
@@ -24,11 +25,12 @@ function action(params) {
     const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
     const questionsJql = projectConfig.jira.questions.fetchJql;
     const baAnalysisStatus = projectConfig.jira.statuses.BA_ANALYSIS;
+    const tracker = trackersModule.createTracker(projectConfig, customParams || {});
 
     function releaseLock() {
         if (ticketKey && removeLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: removeLabel });
+                tracker.removeLabel(ticketKey, removeLabel);
                 console.log('Released SM label — will re-check next cycle');
             } catch (e) {
                 console.warn('Failed to remove SM label:', e);
@@ -40,39 +42,28 @@ function action(params) {
         if (!ticketKey) throw new Error('params.ticket.key is missing');
         console.log('=== BA readiness check for', ticketKey, '===');
 
-        // Step 1: Fetch subtasks via JQL — jira_search_by_jql returns a plain array
+        // Step 1: Fetch subtasks via JQL — searchIssues returns a plain array
         const allJql = questionsJql.replace('{ticketKey}', ticketKey);
-        const subtasks = jira_search_by_jql({
-            jql: allJql,
-            maxResults: 100
-        }) || [];
+        const subtasks = tracker.searchIssues(allJql, { maxResults: 100 }) || [];
         const totalSubtasks = subtasks.length;
         console.log('Total subtasks:', totalSubtasks);
 
         if (totalSubtasks === 0) {
             console.log('No subtasks found — no PO clarifications are required, moving', ticketKey, 'to', baAnalysisStatus);
 
-            jira_move_to_status({
-                key: ticketKey,
-                statusName: baAnalysisStatus
-            });
+            tracker.moveToStatus(ticketKey, baAnalysisStatus);
 
-            jira_post_comment({
-                key: ticketKey,
-                comment: 'h3. ✅ PO Review Complete — Moving to ' + baAnalysisStatus + '\n\n' +
+            tracker.postComment(ticketKey, 'h3. ✅ PO Review Complete — Moving to ' + baAnalysisStatus + '\n\n' +
                     'No clarification subtasks were created for this story, so there is nothing waiting for PO answers.\n\n' +
                     'The story has been automatically moved to *' + baAnalysisStatus + '*.'
-            });
+            );
 
             console.log('✅ Story', ticketKey, 'moved to BA Analysis (no subtasks required)');
             return { success: true, action: 'moved_to_ba_analysis_no_subtasks', total: totalSubtasks, ticketKey };
         }
 
         // Step 2: Find subtasks NOT yet Done via JQL (more reliable than client-side field check)
-        const notDoneSubtasks = jira_search_by_jql({
-            jql: allJql.replace('ORDER BY created ASC', '') + ' AND status != "' + projectConfig.jira.statuses.DONE + '"',
-            maxResults: 1
-        }) || [];
+        const notDoneSubtasks = tracker.searchIssues(allJql.replace('ORDER BY created ASC', '') + ' AND status != "' + projectConfig.jira.statuses.DONE + '"', { maxResults: 1 }) || [];
         const notDoneCount = notDoneSubtasks.length;
         console.log('Subtasks not yet Done:', notDoneCount, '/', totalSubtasks);
 
@@ -85,24 +76,19 @@ function action(params) {
         // All subtasks Done → move to BA Analysis
         console.log('All', totalSubtasks, 'subtask(s) done — moving', ticketKey, 'to', baAnalysisStatus);
 
-        jira_move_to_status({
-            key: ticketKey,
-            statusName: baAnalysisStatus
-        });
+        tracker.moveToStatus(ticketKey, baAnalysisStatus);
 
-        jira_post_comment({
-            key: ticketKey,
-            comment: 'h3. ✅ PO Review Complete — Moving to ' + baAnalysisStatus + '\n\n' +
+        tracker.postComment(ticketKey, 'h3. ✅ PO Review Complete — Moving to ' + baAnalysisStatus + '\n\n' +
                 'All *' + totalSubtasks + '* subtask(s) are *Done*.\n\n' +
                 'The story has been automatically moved to *' + baAnalysisStatus + '*.'
-        });
+        );
 
         console.log('✅ Story', ticketKey, 'moved to BA Analysis');
 
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
         try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
+            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }

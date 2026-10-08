@@ -11,6 +11,7 @@
  */
 
 const configLoader = require('./configLoader.js');
+const trackersModule = require('./common/trackers.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 
 function action(params) {
@@ -19,11 +20,12 @@ function action(params) {
     const removeLabel = customParams && customParams.removeLabel;
     const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
     const jiraConfig = projectConfig.jira;
+    const tracker = trackersModule.createTracker(projectConfig, customParams || {});
 
     function releaseLock() {
         if (ticketKey && removeLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: removeLabel });
+                tracker.removeLabel(ticketKey, removeLabel);
                 console.log('Released SM label — will re-check next cycle');
             } catch (e) {
                 console.warn('Failed to remove SM label:', e);
@@ -35,11 +37,9 @@ function action(params) {
         if (!ticketKey) throw new Error('params.ticket.key is missing');
         console.log('=== Task done check for', ticketKey, '===');
 
+        // JQL text: provider-specific query (WIQL on ado)
         // Step 1: Count all linked Stories and Bugs
-        const allItems = jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype in (Story, Bug)',
-            maxResults: 100
-        }) || [];
+        const allItems = tracker.searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype in (Story, Bug)', { maxResults: 100 }) || [];
         const totalItems = allItems.length;
         console.log('Linked Stories + Bugs:', totalItems);
 
@@ -50,10 +50,7 @@ function action(params) {
         }
 
         // Step 2: Find linked Stories/Bugs NOT yet Done
-        const notDoneItems = jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype in (Story, Bug) AND status != "' + jiraConfig.statuses.DONE + '"',
-            maxResults: 1
-        }) || [];
+        const notDoneItems = tracker.searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype in (Story, Bug) AND status != "' + jiraConfig.statuses.DONE + '"', { maxResults: 1 }) || [];
         const notDoneCount = notDoneItems.length;
         console.log('Stories/Bugs not yet Done:', notDoneCount, '/', totalItems);
 
@@ -66,24 +63,19 @@ function action(params) {
         // Step 3: All Stories/Bugs Done → move Task to Ready For Testing
         console.log('All', totalItems, 'Story/Bug(s) done — moving', ticketKey, 'to Ready For Testing');
 
-        jira_move_to_status({
-            key: ticketKey,
-            statusName: jiraConfig.statuses.READY_FOR_TESTING
-        });
+        tracker.moveToStatus(ticketKey, jiraConfig.statuses.READY_FOR_TESTING);
 
-        jira_post_comment({
-            key: ticketKey,
-            comment: 'h3. ✅ Task Complete — All Stories & Bugs Done\n\n' +
+        tracker.postComment(ticketKey, 'h3. ✅ Task Complete — All Stories & Bugs Done\n\n' +
                 'All *' + totalItems + '* linked Story/Bug(s) are in *Done* status.\n\n' +
                 'The task has been automatically moved to *Ready For Testing*.'
-        });
+        );
 
         console.log('✅ Task', ticketKey, 'moved to Ready For Testing');
 
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
         try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
+            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }

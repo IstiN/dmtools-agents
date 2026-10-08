@@ -49,7 +49,8 @@ _Post-CLI Bug-fix Batch Development Action_
 
 - Source: `agents/js/developBugFixBatchAndCreatePR.js`
 - Side effects:
-  - post Jira comment
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
 
 
 ## LLM step

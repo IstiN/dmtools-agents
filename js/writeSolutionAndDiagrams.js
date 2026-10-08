@@ -27,6 +27,7 @@ const configLoader = require('./configLoader.js');
 const scmModule = require('./common/scm.js');
 const autoStart = require('./common/autoStart.js');
 const outputFiles = require('./common/outputFiles.js');
+const trackersModule = require('./common/trackers.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 const contentOutput = require('./common/contentOutput.js');
 
@@ -83,6 +84,7 @@ function action(params) {
         var customParams = (params.customParams) || (params.jobParams && params.jobParams.customParams) || {};
         var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
         var jiraConfig = projectConfig.jira;
+        var tracker = trackersModule.createTracker(projectConfig, customParams);
         var solutionField = customParams.solutionField || JIRA_FIELDS.SOLUTION;
         var diagramField  = (customParams.diagramField !== undefined) ? customParams.diagramField : JIRA_FIELDS.DIAGRAMS;
         var outputType    = customParams.outputType || 'replace'; // 'replace' | 'append'
@@ -147,7 +149,7 @@ function action(params) {
                 if (outputType === 'append') {
                     var existing = '';
                     try {
-                        var freshTicket = jira_get_ticket({ key: ticketKey, fields: [solutionField] });
+                        var freshTicket = tracker.getIssue(ticketKey, [solutionField]);
                         var freshFields = (freshTicket && freshTicket.fields) ? freshTicket.fields : freshTicket;
                         var rawValue = freshFields ? freshFields[solutionField] : null;
                         if (rawValue && typeof rawValue === 'object') {
@@ -165,7 +167,7 @@ function action(params) {
                         : solution;
                     console.log('Appending to "' + solutionField + '" (' + (existing ? existing.length : 0) + ' existing chars)');
                 }
-                jira_update_field({ key: ticketKey, field: solutionField, value: valueToWrite });
+                tracker.updateField(ticketKey, solutionField, valueToWrite);
                 console.log('Updated "' + solutionField + '" field for ' + ticketKey + ' (mode: ' + outputType + ')');
             } catch (e) {
                 console.error('Failed to update solution field "' + solutionField + '":', e);
@@ -175,7 +177,7 @@ function action(params) {
             // 5. Write to diagram field if configured and diagram exists
             if (diagram && diagramField) {
                 try {
-                    jira_update_field({ key: ticketKey, field: diagramField, value: diagram });
+                    tracker.updateField(ticketKey, diagramField, diagram);
                     console.log('Updated "' + diagramField + '" field for ' + ticketKey);
                 } catch (e) {
                     console.warn('Failed to update diagram field "' + diagramField + '":', e);
@@ -238,18 +240,15 @@ function action(params) {
                         ? 'Solution published to Confluence: ' + pageUrl
                         : 'Solution published to Confluence page ' + (published.page && published.page.id);
                     try {
-                        jira_update_field({ key: ticketKey, field: solutionField, value: linkText });
+                        tracker.updateField(ticketKey, solutionField, linkText);
                     } catch (linkError) {
                         console.warn('Failed to write Confluence link to "' + solutionField + '":', linkError);
                     }
                 }
 
                 try {
-                    jira_post_comment({
-                        key: ticketKey,
-                        comment: 'h3. 📐 Solution published to Confluence\n\n' +
-                            (pageUrl ? 'Page: ' + pageUrl : 'Page id: ' + (published.page && published.page.id))
-                    });
+                    tracker.postComment(ticketKey, 'h3. 📐 Solution published to Confluence\n\n' +
+                        (pageUrl ? 'Page: ' + pageUrl : 'Page id: ' + (published.page && published.page.id)));
                 } catch (commentError) {
                     console.warn('Failed to post Confluence link comment:', commentError);
                 }
@@ -261,7 +260,7 @@ function action(params) {
 
         // 6. Assign to initiator
         try {
-            jira_assign_ticket_to({ key: ticketKey, accountId: initiatorId });
+            tracker.assignTo(ticketKey, initiatorId);
             console.log('Assigned ' + ticketKey + ' to initiator');
         } catch (e) {
             console.warn('Failed to assign ticket:', e);
@@ -269,7 +268,7 @@ function action(params) {
 
         // 7. Move to Ready For Development
         try {
-            jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.READY_FOR_DEVELOPMENT });
+            tracker.moveToStatus(ticketKey, jiraConfig.statuses.READY_FOR_DEVELOPMENT);
             console.log('Moved ' + ticketKey + ' to Ready For Development');
         } catch (e) {
             console.warn('Failed to move to Ready For Development:', e);
@@ -277,7 +276,7 @@ function action(params) {
 
         // 8. Add ai_generated label
         try {
-            jira_add_label({ key: ticketKey, label: LABELS.AI_GENERATED });
+            tracker.addLabel(ticketKey, LABELS.AI_GENERATED);
         } catch (e) {
             console.warn('Failed to add ai_generated label:', e);
         }
@@ -285,7 +284,7 @@ function action(params) {
         // 9. Remove WIP label if present
         if (wipLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: wipLabel });
+                tracker.removeLabel(ticketKey, wipLabel);
                 console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
             } catch (e) {
                 console.warn('Failed to remove WIP label:', e);
@@ -296,7 +295,7 @@ function action(params) {
         var smTriggerLabel = customParams.removeLabel;
         if (smTriggerLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: smTriggerLabel });
+                tracker.removeLabel(ticketKey, smTriggerLabel);
                 console.log('Removed SM trigger label "' + smTriggerLabel + '" from ' + ticketKey);
             } catch (e) {
                 console.warn('Failed to remove SM trigger label:', e);
@@ -329,7 +328,7 @@ function action(params) {
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
         try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
+            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }

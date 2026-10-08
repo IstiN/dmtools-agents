@@ -53,12 +53,9 @@ _Create Intake Tickets Post-Action_
   - `outputs/comment.md`
   - `outputs/stories.json`
 - Side effects:
-  - update field "Story Points"
-  - post Jira comment
-  - create Jira ticket
-  - link Jira issues
-  - assign ticket
-  - attach file to ticket
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
+  - assign ticket (via tracker)
 
 
 ## LLM step

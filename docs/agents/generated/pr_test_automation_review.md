@@ -45,9 +45,10 @@ _Post Test Automation Review Comments Action (postJSAction for pr_test_automatio
 
 - Source: `agents/js/postTestReviewComments.js`
 - Side effects:
-  - add label "sm_test_rework_triggered"
-  - remove label "sm_test_review_triggered"
-  - post Jira comment
+  - add label "sm_test_rework_triggered" (via tracker)
+  - remove label "sm_test_review_triggered" (via tracker)
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
 - Parameters (customParams):
   - `autoStartRework`
   - `autoStartReworkConfigFile`

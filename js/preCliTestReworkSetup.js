@@ -8,6 +8,7 @@ var configLoader = require('./configLoader.js');
 const gh = require('./common/githubHelpers.js');
 const gitOps = require('./common/gitOps.js');
 const prHelper = require('./common/pullRequest.js');
+const trackersModule = require('./common/trackers.js');
 const fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 const fetchLinkedBugsToInput = require('./fetchLinkedBugsToInput.js');
 
@@ -34,12 +35,14 @@ function findTestPRForTicket(scm, ticketKey) {
 }
 
 function action(params) {
+    var tracker = null;
     try {
         var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
         var inputFolder = actualParams.inputFolderPath;
         var ticketKey = inputFolder.split('/').pop();
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var scm = configLoader.createScm(config);
+        tracker = trackersModule.createTracker(config, actualParams.customParams || (params.jobParams && params.jobParams.customParams) || {});
 
         console.log('=== Test rework setup for:', ticketKey, '===');
 
@@ -58,7 +61,7 @@ function action(params) {
         var repoInfo = scm.getRemoteRepoInfo();
         if (!repoInfo) {
             const err = 'Could not determine GitHub repository from git remote';
-            try { jira_post_comment({ key: ticketKey, comment: 'h3. ❌ Test Rework Setup Failed\n\n' + err }); } catch (e) {}
+            try { tracker.postComment(ticketKey, 'h3. ❌ Test Rework Setup Failed\n\n' + err); } catch (e) {}
             return { success: false, error: err };
         }
 
@@ -80,8 +83,8 @@ function action(params) {
             if (!branchExists) {
                 const err = 'No test PR and no remote branch found for ' + testBranchName + '. Moving to Backlog for re-automation.';
                 try {
-                    jira_post_comment({ key: ticketKey, comment: 'h3. ❌ Test Rework Setup Failed\n\n' + err });
-                    jira_move_to_status({ key: ticketKey, statusName: config.jira.statuses.BACKLOG });
+                    tracker.postComment(ticketKey, 'h3. ❌ Test Rework Setup Failed\n\n' + err);
+                    tracker.moveToStatus(ticketKey, config.jira.statuses.BACKLOG);
                 } catch (e) {}
                 return { success: false, error: err };
             }
@@ -104,7 +107,7 @@ function action(params) {
 
             console.log('Creating PR for rework from existing branch...');
             try {
-                const ticket = jira_get_ticket({ key: ticketKey });
+                const ticket = tracker.getIssue(ticketKey);
                 const summary = ticket && ticket.fields ? (ticket.fields.summary || ticketKey) : ticketKey;
                 const prTitle = configLoader.formatTemplate(config.formats.prTitle.rework, {ticketKey: ticketKey, ticketSummary: summary});
 
@@ -129,12 +132,12 @@ function action(params) {
                 // PR creation failed — CLI is already on correct branch, postTestReworkResults will create PR
                 console.warn('PR auto-creation failed (CLI will run on correct branch, PR will be created post-rework):', createErr.toString());
                 try {
-                    jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ PR Auto-Creation Warning\n\nBranch {code}' + testBranchName + '{code} is checked out and rework will proceed.\nA PR will be created automatically after rework completes.\n\nError: ' + createErr.toString() });
+                    tracker.postComment(ticketKey, 'h3. ⚠️ PR Auto-Creation Warning\n\nBranch {code}' + testBranchName + '{code} is checked out and rework will proceed.\nA PR will be created automatically after rework completes.\n\nError: ' + createErr.toString());
                 } catch (e) {}
 
                 // Write minimal context so CLI knows what to do
                 try {
-                    const ticket2 = jira_get_ticket({ key: ticketKey });
+                    const ticket2 = tracker.getIssue(ticketKey);
                     const summary2 = ticket2 && ticket2.fields ? (ticket2.fields.summary || '') : '';
                     gitOps.writePRContext(inputFolder, { number: 0, title: ticketKey + ' ' + summary2, html_url: '' }, '', 'No PR exists yet — re-run tests from scratch on this branch.', []);
                 } catch (e) { console.warn('Could not write fallback context:', e); }
@@ -205,7 +208,7 @@ function action(params) {
             jiraComment += 'AI Teammate is fixing test code issues raised in the review.\n\n' +
                 '_Results will be posted shortly..._';
 
-            jira_post_comment({ key: ticketKey, comment: jiraComment });
+            tracker.postComment(ticketKey, jiraComment);
         } catch (e) {
             console.warn('Failed to post Jira comment:', e);
         }
@@ -224,13 +227,11 @@ function action(params) {
     } catch (error) {
         console.error('❌ Error in preCliTestReworkSetup:', error);
         try {
+            if (!tracker) tracker = trackersModule.createTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
             const ticketKey = (params.inputFolderPath ||
                 (params.jobParams && params.jobParams.inputFolderPath) || '').split('/').pop();
             if (ticketKey) {
-                jira_post_comment({
-                    key: ticketKey,
-                    comment: 'h3. ❌ Test Rework Setup Error\n\n{code}' + error.toString() + '{code}'
-                });
+                tracker.postComment(ticketKey, 'h3. ❌ Test Rework Setup Error\n\n{code}' + error.toString() + '{code}');
             }
         } catch (e) {}
         return { success: false, error: error.toString() };

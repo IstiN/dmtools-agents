@@ -2,6 +2,13 @@
  * Unit tests for js/checkSubtasksDoneForBA.js
  */
 
+function baTrackers(mocks) {
+    return loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), mocks);
+}
+
 function loadBaCheck(mocks) {
     mocks = mocks || {};
     var configLoaderMock = {
@@ -26,7 +33,8 @@ function loadBaCheck(mocks) {
         'js/checkSubtasksDoneForBA.js',
         makeRequire({
             './configLoader.js': configLoaderMock,
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/trackers.js': baTrackers(mocks)
         }),
         mocks
     );
@@ -84,5 +92,28 @@ suite('checkSubtasksDoneForBA', function() {
             key: 'DMC-975',
             label: 'sm_story_ba_check_triggered'
         });
+    });
+
+    test('ado provider: uses ado_* tools only, no jira_* (wave2d3)', function() {
+        var calls = [];
+        var mocks = {
+            ado_search_by_wiql: function(a) { calls.push({ t: 'search', a: a }); return { value: [] }; },
+            ado_move_to_state: function(a) { calls.push({ t: 'move', a: a }); },
+            ado_add_work_item_comment: function(a) { calls.push({ t: 'comment', a: a }); },
+            jira_search_by_jql: function() { throw new Error('jira_search_by_jql must not be called'); },
+            jira_move_to_status: function() { throw new Error('jira_move_to_status must not be called'); },
+            jira_post_comment: function() { throw new Error('jira_post_comment must not be called'); }
+        };
+        var baCheck = loadBaCheck(mocks);
+        var result = baCheck.action({
+            ticket: { key: '42' },
+            jobParams: { customParams: { trackerProvider: 'ado' } }
+        });
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'moved_to_ba_analysis_no_subtasks');
+        var move = calls.filter(function(c) { return c.t === 'move'; })[0];
+        assert.equal(String(move.a.id), '42');
+        assert.equal(calls.filter(function(c) { return c.t === 'comment'; }).length, 1);
+        assert.equal(calls[0].t, 'search');
     });
 });

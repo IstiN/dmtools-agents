@@ -35,7 +35,8 @@ _Check Task Stories Done — postJSAction for task_done_check agent._
 
 - Source: `agents/js/checkTaskStoriesDone.js`
 - Side effects:
-  - post Jira comment
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
 - Parameters (customParams):
   - `removeLabel`
 
