@@ -1023,6 +1023,135 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedCliCommands.length, 0, 'no command without a branch name');
     });
 
+    // ── gh-798: in-flight rework/review leg excludes the silent refresh ──
+    // Live fa PR #1420 (gh-1415 rework leg, run 37828431528, 2026-10-08):
+    // 19:15 silent-update merged main into ai/gh-1415 WHILE the rework leg
+    // was running on that branch; 19:23 the leg's timer push
+    // `git push origin HEAD` was rejected non-fast-forward and the agent
+    // had to self-recover mid-run. Same invariant as the ai_validating
+    // exclusion: a head with a leg in flight must not move.
+
+    function legRun(status) {
+        // The SM dispatches review/rework legs with workflowRef={branch}, so
+        // the run's head_sha IS the PR head — the rollup probe keyed on the
+        // head sha finds it.
+        return { id: 9001, status: status, path: '.github/workflows/ai-teammate.yml' };
+    }
+
+    function headShaProbeMock(headSha, runs) {
+        return function (cmdOpts) {
+            if (cmdOpts.command.indexOf('runs?head_sha=' + headSha) !== -1) {
+                return { workflow_runs: runs };
+            }
+            return '';
+        };
+    }
+
+    function updateCommands(sm) {
+        return sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh repo clone ') === 0;
+        });
+    }
+
+    test('gh-798: RUNNING rework leg defers the silent refresh (head owned mid-run)', function () {
+        var CUR = 'cccc1111cccc1111cccc1111cccc1111cccc1111';
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            github: { items: [prItem(1420, { branch: 'ai/gh-1415', headSha: CUR })] },
+            onCliExecute: headShaProbeMock(CUR, [legRun('in_progress')])
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            silentToken: 'SILENT-TOKEN', sourceToken: 'PAT-TOKEN', rules: [RULES.update] } });
+
+        assert.equal(updateCommands(sm).length, 0,
+            'no silent refresh while a leg runs on the head — the leg is anchored to the checked-out state');
+    });
+
+    test('gh-798: QUEUED rework leg defers the silent refresh too (AC1 queued variant)', function () {
+        var CUR = 'dddd2222dddd2222dddd2222dddd2222dddd2222';
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            github: { items: [prItem(1421, { branch: 'ai/gh-1416', headSha: CUR })] },
+            onCliExecute: headShaProbeMock(CUR, [legRun('queued')])
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            silentToken: 'SILENT-TOKEN', sourceToken: 'PAT-TOKEN', rules: [RULES.update] } });
+
+        assert.equal(updateCommands(sm).length, 0,
+            'a queued leg is about to own the head — the refresh must not race its checkout');
+    });
+
+    test('gh-798: leg FINISHED between ticks — the refresh flows again (AC2 per-tick freshness)', function () {
+        var CUR = 'eeee3333eeee3333eeee3333eeee3333eeee3333';
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            github: { items: [prItem(1422, { branch: 'ai/gh-1417', headSha: CUR })] },
+            onCliExecute: headShaProbeMock(CUR, [
+                { id: 9002, status: 'completed', conclusion: 'success',
+                  path: '.github/workflows/ai-teammate.yml' }
+            ])
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            silentToken: 'SILENT-TOKEN', sourceToken: 'PAT-TOKEN', rules: [RULES.update] } });
+
+        assert.equal(updateCommands(sm).length, 1,
+            'the deferred refresh is not lost — the PR is BEHIND and refreshes on the first tick after the leg finishes');
+    });
+
+    test('gh-798: an active NON-leg workflow on the head never blocks the refresh', function () {
+        // Only the ai-teammate leg workflow owns the head (it pushes WIP
+        // auto-saves from the timer). Unrelated CI (quality.yml dispatches,
+        // kicker runs) must not freeze branch freshness.
+        var CUR = 'aaaa4444aaaa4444aaaa4444aaaa4444aaaa4444';
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            github: { items: [prItem(1423, { branch: 'ai/gh-1418', headSha: CUR })] },
+            onCliExecute: headShaProbeMock(CUR, [
+                { id: 9003, status: 'in_progress', path: '.github/workflows/quality.yml' }
+            ])
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            silentToken: 'SILENT-TOKEN', sourceToken: 'PAT-TOKEN', rules: [RULES.update] } });
+
+        assert.equal(updateCommands(sm).length, 1,
+            'CI on the head is not a leg — freshness stays free');
+    });
+
+    test('gh-798: head-run probe failure defers the refresh (fail closed)', function () {
+        // Skipping a refresh costs one tick; racing a live leg costs the
+        // leg's push stream. A broken probe must not push under an
+        // unproven head.
+        var CUR = 'bbbb5555bbbb5555bbbb5555bbbb5555bbbb5555';
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            github: { items: [prItem(1424, { branch: 'ai/gh-1419', headSha: CUR })] },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('runs?head_sha=' + CUR) !== -1) {
+                    throw new Error('gh api exploded');
+                }
+                return '';
+            }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            silentToken: 'SILENT-TOKEN', sourceToken: 'PAT-TOKEN', rules: [RULES.update] } });
+
+        assert.equal(updateCommands(sm).length, 0,
+            'probe error — no refresh this tick, retried next tick');
+    });
+
+    test('gh-798: resolvable head with NO active leg still refreshes (enrichment path)', function () {
+        // Production silent-update-behind items carry headSha (prStatus
+        // enrichment) — the new guard probes the rollup and finds nothing;
+        // the refresh must be command-identical to the pre-gh-798 shape.
+        var CUR = 'ffff6666ffff6666ffff6666ffff6666ffff6666';
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            github: { items: [prItem(1425, { branch: 'ai/gh-1420', headSha: CUR })] },
+            onCliExecute: headShaProbeMock(CUR, [])
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            silentToken: 'SILENT-TOKEN', sourceToken: 'PAT-TOKEN', rules: [RULES.update] } });
+
+        var cmds = updateCommands(sm);
+        assert.equal(cmds.length, 1, 'one update command');
+        assert.ok(cmds[0].command.indexOf('merge --no-edit FETCH_HEAD') !== -1,
+            'merge-style refresh unchanged');
+    });
+
     test('validate_pr: dispatches the CI workflow on the head + ai_validating label on the PR', function () {
         // Dispatch-only CI: no push ever fires CI — the SM is the only
         // trigger. The PAT update-branch dance is retired.

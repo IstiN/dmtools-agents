@@ -1642,8 +1642,42 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     console.log('  🅿️  ' + key + ' head checks red on a guest PR — ' +
                         parkLabelVf + ' set, merge window advances');
                 }
-                silentUpdateBranch(ticket.branch);
-                console.log('  ✅ ' + key + ' branch silently updated (no CI)');
+                // gh-798 (live fa PR #1420 rework leg, run 37828431528): a
+                // rework/review leg dispatched with workflowRef={branch} runs
+                // ON the PR head and its timer pushes WIP auto-saves to that
+                // ref every few minutes. silent-update merged main under the
+                // leg and the leg's next push was rejected non-fast-forward
+                // mid-run. The ai_validating exclusion already establishes
+                // the invariant (a head with a leg in flight must not move);
+                // this extends it to rework/review legs. The exclusion is
+                // probed FRESH every tick (a leg that finished between ticks
+                // does not block — AC2), and the refresh is not lost — the
+                // PR is still BEHIND and refreshes on the first tick after
+                // the leg finishes.
+                var legWorkflowUb = rule.workflowFile || 'ai-teammate.yml';
+                if (uHead) {
+                    var headRunsUb = headWorkflowRunsSafe(effectiveRepoInfo, uHead);
+                    if (headRunsUb !== null &&
+                        hasActiveLegRun(headRunsUb, legWorkflowUb)) {
+                        console.log('  ⏭️  ' + key + ' branch refresh deferred — an ai-teammate leg is in flight on the head' +
+                            ' (refreshes on the first tick after it finishes)');
+                    } else if (headRunsUb === null) {
+                        // Probe failure FAILS CLOSED: one deferred refresh
+                        // costs a tick; racing a live leg costs the leg's
+                        // whole push stream.
+                        console.warn('  ⚠️  ' + key +
+                            ' head-run probe failed — branch refresh deferred (fail closed, gh-798)');
+                    } else {
+                        silentUpdateBranch(ticket.branch);
+                        console.log('  ✅ ' + key + ' branch silently updated (no CI)');
+                    }
+                } else {
+                    // No resolvable head sha: no probe possible — the
+                    // pre-gh-798 behavior stands (refresh rides the branch
+                    // name alone).
+                    silentUpdateBranch(ticket.branch);
+                    console.log('  ✅ ' + key + ' branch silently updated (no CI)');
+                }
                 processedKeys.push(key);
             } catch (e) {
                 console.error('  ❌ update_branch failed for ' + key + ': ' + (e.message || e));
@@ -3566,6 +3600,36 @@ function hasActiveHeadRun(runs) {
         return r.status === 'queued' || r.status === 'in_progress' ||
             r.status === 'waiting' || r.status === 'pending';
     });
+
+// gh-798 (live fa PR #1420 rework leg, run 37828431528): the in-flight-leg
+// exclusion for update_branch. A rework/review ai-teammate leg dispatched
+// with workflowRef={branch} lands ON the PR head (its run head_sha IS the
+// PR head), so an ACTIVE run of the leg workflow in the head rollup means
+// the head is owned mid-run — the leg's timer pushes WIP auto-saves to that
+// ref, and a silent refresh merged under it rejects the leg's next push
+// non-fast-forward ("timer: git push failed" surfaced to the running
+// agent). Same invariant as the ai_validating exclusion: a head with a leg
+// in flight must not move. hasActiveHeadRun semantics (any
+// queued/in_progress/waiting/pending run), NARROWED to the leg workflow
+// path so unrelated CI on the head never blocks freshness, plus the same
+// stale-zombie window the dispatch guard applies (a leg stuck 'queued' for
+// hours ages out). Takes the pre-fetched head rollup (headWorkflowRunsSafe —
+// the probe itself fails CLOSED in update_branch, unlike the rerun rule's
+// fail-open read: one deferred refresh costs a tick, racing a live leg
+// costs the leg's whole push stream).
+function hasActiveLegRun(runs, workflowFile) {
+    var suffix = '/' + String(workflowFile || 'ai-teammate.yml');
+    return (runs || []).some(function (r) {
+        if (!r) return false;
+        var status = r.status;
+        if (status !== 'queued' && status !== 'in_progress' &&
+            status !== 'waiting' && status !== 'pending') return false;
+        if (status !== 'in_progress' && isStaleNonRunningWorkflowRun(r, status)) return false;
+        var p = String(r.path || '');
+        return p.length >= suffix.length &&
+            p.slice(p.length - suffix.length) === suffix;
+    });
+}
 }
 
 // gh-748 dispatch-race probe over the FULL head rollup (all workflows, all
@@ -4476,5 +4540,6 @@ if (typeof module !== 'undefined' && module.exports) {
         probeDispatchedState: probeDispatchedState,
         failedRunLinksLine: failedRunLinksLine,
         hasRecentHeadRun: hasRecentHeadRun,
+        hasActiveLegRun: hasActiveLegRun,
         dispatchRaceGraceMs: dispatchRaceGraceMs };
 }
