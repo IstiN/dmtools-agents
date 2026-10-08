@@ -34,8 +34,6 @@ Full prompt / instruction set: [`agents/snapshots/bug_merged.md`](agents/snapsho
 _Notify Bug Merged Post-Action_
 
 - Source: `agents/js/notifyBugMerged.js`
-- Side effects:
-  - post Jira comment
 - Parameters (customParams):
   - `removeLabel`
 

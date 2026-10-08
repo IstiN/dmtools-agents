@@ -28,8 +28,7 @@ Full prompt / instruction set: [`agents/snapshots/recover_merged_pr.md`](agents/
 _Recover Jira tickets whose GitHub PR was already merged while Jira stayed in_
 
 - Source: `agents/js/recoverMergedPRTicket.js`
-- Side effects:
-  - post Jira comment
+- No detected file I/O or side effects.
 
 
 ## LLM step

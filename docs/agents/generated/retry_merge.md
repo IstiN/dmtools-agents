@@ -35,8 +35,6 @@ Full prompt / instruction set: [`agents/snapshots/retry_merge.md`](agents/snapsh
 _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
-- Side effects:
-  - post Jira comment
 - Parameters (customParams):
   - `checkOpenPR`
 

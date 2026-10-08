@@ -36,8 +36,6 @@ Full prompt / instruction set: [`agents/snapshots/story_test_automation.md`](age
 _Check WIP Label Pre-Action_
 
 - Source: `agents/js/checkWipLabel.js`
-- Side effects:
-  - post Jira comment
 - Parameters (customParams):
   - `checkOpenPR`
 

@@ -34,8 +34,7 @@ _Move To Ready For Testing Action (postJSAction for test_cases_generator)_
 _Finish Test Cases Generation (postJSAction for test_cases_generator)_
 
 - Source: `agents/js/finishTestCasesGeneration.js`
-- Side effects:
-  - remove label "sm_test_cases_triggered"
+- No detected file I/O or side effects.
 
 
 ## LLM step
