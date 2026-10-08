@@ -20,6 +20,13 @@
       "prompt": 77867,
       "completion": 16727,
       "total": 94594
+    },
+    {
+      "leg": "review",
+      "at": "2026-10-08T20:34:37Z",
+      "prompt": 80735,
+      "completion": 4856,
+      "total": 85591
     }
   ],
   "issue-799": [
