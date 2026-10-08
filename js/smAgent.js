@@ -2916,14 +2916,20 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     spIssues = Array.isArray(spD) ? spD :
                         ((spD && (spD.items || spD.data)) || []);
                 } catch (eDevs) { /* development + backlog empty this tick */ }
-                // v3: OPTIONAL per-leg token usage — factories whose legs
-                // report usage (fa's bench) drop a keyed JSON file in the
-                // tick's checkout (statePublish.tokensFile); any miss just
-                // publishes token-less cards (board renders "—").
+                // v3: OPTIONAL per-leg token usage — LOCAL first (factories
+                // whose legs drop a keyed JSON file in the tick's checkout,
+                // statePublish.tokensFile), factory-data branch fallback
+                // (gh-781: data/fa-tokens.json, the leg-side producer's
+                // publish — completes the pipeline the moment the producer
+                // lands). Any miss on EITHER source just publishes
+                // token-less cards (board renders "—"); the branch fetch
+                // happens only when the local file yields no map.
                 var spTokens = factoryStateModule.readTokensFile(
                     (spCfg && spCfg.tokensFile) ||
                         factoryStateModule.DEFAULT_TOKENS_FILE,
-                    function (p) { return file_read({ path: p }); });
+                    function (p) { return file_read({ path: p }); }) ||
+                    factoryStateModule.fetchTokensFromBranch(spFull, spCfg,
+                        function (a) { return cli_execute_command(a); });
                 var spPrev = factoryStateModule.fetchPreviousState(
                     spFull, spCfg, function (a) {
                         return cli_execute_command(a);

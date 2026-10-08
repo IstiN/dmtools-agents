@@ -851,6 +851,8 @@ module.exports = {
     nextHistory: nextHistory,
     normalizeTokens: normalizeTokens,
     readTokensFile: readTokensFile,
+    fetchTokensFromBranch: fetchTokensFromBranch,
+    tokensMapOf: tokensMapOf,
     LANE_ORDER: LANE_ORDER,
     LANE_ORDER_V1: LANE_ORDER_V1,
     TS_BY_LABEL: TS_BY_LABEL,
