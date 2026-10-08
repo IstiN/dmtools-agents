@@ -46,7 +46,8 @@ function makeLabelsModule(fileMap, extraGlobals) {
             './configLoader.js': configLoaderModule,
             './common/scm.js': { createScm: function() { return {}; } },
             './common/autoStart.js': { triggerSmIfIdle: function() {}, triggerConfiguredWorkflowForTicket: function() { return false; } },
-            './common/tokenUsageComment.js': tokenUsageComment
+            './common/tokenUsageComment.js': tokenUsageComment,
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), globals)
         }),
         globals
     );
@@ -291,6 +292,11 @@ suite('writeSolutionAndLabels — repo label flow', function() {
         });
         var failingBase = { action: function() { return { success: false, error: 'base failed' }; } };
 
+        var trackerMocks = {
+            file_read: function() { return null; },
+            jira_add_label: function(opts) { addedLabels.push(opts.label); },
+            jira_remove_label: function() {}
+        };
         var module = loadModule(
             'js/writeSolutionAndLabels.js',
             makeRequire({
@@ -300,13 +306,10 @@ suite('writeSolutionAndLabels — repo label flow', function() {
                 './configLoader.js': configLoaderModule,
                 './common/scm.js': { createScm: function() { return {}; } },
                 './common/autoStart.js': {},
-                './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+                './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+                './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), trackerMocks)
             }),
-            {
-                file_read: function() { return null; },
-                jira_add_label: function(opts) { addedLabels.push(opts.label); },
-                jira_remove_label: function() {}
-            }
+            trackerMocks
         );
 
         var result = module.action({

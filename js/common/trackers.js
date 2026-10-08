@@ -53,6 +53,10 @@ function _parseJson(raw) {
     if (typeof raw === 'string') {
         try { return JSON.parse(raw); } catch (e) { return raw; }
     }
+    // GraalJS host objects expose their data only through toJSON() — materialise them.
+    if (raw && typeof raw === 'object' && typeof raw.toJSON === 'function') {
+        try { return JSON.parse(JSON.stringify(raw)); } catch (e) { return raw; }
+    }
     return raw;
 }
 

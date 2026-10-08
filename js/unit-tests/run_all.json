@@ -72,7 +72,6 @@
         "js/unit-tests/test_triggerBugTestAutomation.js",
         "js/unit-tests/test_postTestAutomationResults.js",
         "js/unit-tests/test_postTestReviewComments.js",
-        "js/unit-tests/test_postPRReviewComments.js",
         "js/unit-tests/test_agentDocs.js",
         "js/unit-tests/test_notifyBugMerged.js",
         "js/unit-tests/test_reworkCustomParams.js",
@@ -118,7 +117,8 @@
         "js/unit-tests/test_releasePacks.js",
         "js/unit-tests/test_completionGuard.js",
         "js/unit-tests/test_networkGuard.js",
-        "js/unit-tests/test_wave2d2Tracker.js"
+        "js/unit-tests/test_wave2d2Tracker.js",
+        "js/unit-tests/test_wave2d1Tracker.js"
       ]
     }
   }

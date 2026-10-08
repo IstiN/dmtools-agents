@@ -38,6 +38,7 @@ function loadPreCli(mocks) {
             './config.js': configModule,
             './common/mergeState.js': loadModule('js/common/mergeState.js'),
             './mergeState.js': loadModule('js/common/mergeState.js'),
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), allMocks),
             './common/pullRequest.js': {
                 buildTargetedOriginFetchCommand: function(branches) {
                     var list = (branches || []).filter(function(b) { return b; });

@@ -20,6 +20,7 @@
  */
 
 var configModule = require('./config.js');
+var trackersModule = require('./common/trackers.js');
 var truncateSummary = configModule.truncateSummary;
 var JIRA_SUMMARY_MAX_LENGTH = configModule.JIRA_SUMMARY_MAX_LENGTH;
 
@@ -177,7 +178,8 @@ function action(params) {
         var blockedStatus      = customParams.blockedStatus      || 'Blocked';
         var ticketLabels       = customParams.labels             || ['development'];
 
-        var saTicket = jira_get_ticket({ key: saKey, fields: ['description', 'summary', 'parent'] });
+        var tracker = trackersModule.createTracker(null, customParams);
+        var saTicket = tracker.getIssue(saKey, ['description', 'summary', 'parent']);
         var saFields = saTicket && saTicket.fields ? saTicket.fields : saTicket;
         var description = saFields.description ? saFields.description.toString() : '';
 
@@ -188,7 +190,7 @@ function action(params) {
         }
         console.log('Parent ticket: ' + parentKey);
 
-        var parentTicket = jira_get_ticket({ key: parentKey, fields: ['summary'] });
+        var parentTicket = tracker.getIssue(parentKey, ['summary']);
         var parentFields = parentTicket && parentTicket.fields ? parentTicket.fields : parentTicket;
         var parentSummary = (parentFields.summary || parentKey).toString();
 
@@ -209,8 +211,8 @@ function action(params) {
         // in the same repo don't falsely collide.
         var existingSummaries = [];
         try {
-            var existing = jira_search_by_jql({
-                jql: 'parent = ' + parentKey + ' AND issuetype = Sub-task',
+            // JQL text: provider-specific query (WIQL on ado)
+            var existing = tracker.searchIssues('parent = ' + parentKey + ' AND issuetype = Sub-task', {
                 fields: ['summary']
             });
             if (Array.isArray(existing)) {
@@ -249,19 +251,12 @@ function action(params) {
                        ' and parent acceptance criteria ' + parRef;
 
             try {
-                var result = jira_create_ticket_with_parent({
-                    project: projectKey,
-                    issueType: 'Sub-task',
-                    summary: summary,
-                    description: descBody,
-                    parentKey: parentKey,
-                    labels: ticketLabels
-                });
+                var result = tracker.createTicketWithParent(projectKey, 'Sub-task', summary, descBody, parentKey, { labels: ticketLabels });
 
                 var createdKey = null;
                 try {
-                    var parsed = typeof result === 'string' ? JSON.parse(result) : result;
-                    createdKey = parsed && (parsed.key || parsed.id) ? (parsed.key || parsed.id) : null;
+                    // tracker.createTicketWithParent already returns the extracted key
+                    createdKey = typeof result === 'string' ? (result || null) : (result && (result.key || result.id)) || null;
                 } catch (e) { /* key extraction failed — non-critical */ }
 
                 console.log('Created Sub-task ' + (createdKey || '(key unavailable)') + ': ' + summary);
@@ -285,7 +280,7 @@ function action(params) {
                     return;
                 }
                 try {
-                    jira_link_issues({ sourceKey: blockerKey, anotherKey: c.key, relationship: blocksRelationship });
+                    tracker.linkIssues(blockerKey, c.key, blocksRelationship);
                     console.log(blockerKey + ' ' + blocksRelationship + ' ' + c.key);
                     anyLinked = true;
                 } catch (e) {
@@ -294,7 +289,7 @@ function action(params) {
             });
             if (anyLinked) {
                 try {
-                    jira_move_to_status({ key: c.key, statusName: blockedStatus });
+                    tracker.moveToStatus(c.key, blockedStatus);
                     console.log('Moved ' + c.key + ' to ' + blockedStatus);
                 } catch (e) {
                     console.warn('Failed to move ' + c.key + ' to ' + blockedStatus + ':', e);
@@ -317,7 +312,7 @@ function action(params) {
                 if (skipped.length > 0) {
                     comment += '\n_Skipped (already exist): ' + skipped.join(', ') + '_\n';
                 }
-                jira_post_comment({ key: saKey, comment: comment });
+                tracker.postComment(saKey, comment);
             } catch (e) {
                 console.warn('Failed to post summary comment on ' + saKey + ':', e);
             }

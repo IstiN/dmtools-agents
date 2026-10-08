@@ -12,18 +12,20 @@
  * creating a new bug → infinite loop.
  */
 
+var trackersModule = require('./common/trackers.js');
+
 function action(params) {
     try {
         var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
         var folder = actualParams.inputFolderPath;
         var ticketKey = folder.split('/').pop();
+        var tracker = trackersModule.createTracker(null, actualParams.customParams || (params.jobParams && params.jobParams.customParams) || {});
 
         console.log('Fetching linked bugs for', ticketKey, '...');
 
         var linkedBugs = [];
         try {
-            linkedBugs = jira_search_by_jql({
-                jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug AND status not in (Done)',
+            linkedBugs = tracker.searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug AND status not in (Done)', {
                 fields: ['key', 'summary', 'status', 'description', 'Solution', 'labels'],
                 maxResults: 10
             });
@@ -64,7 +66,7 @@ function action(params) {
 
             // Fetch full ticket to get comments (especially the AI fix comment)
             try {
-                var bugDetails = jira_get_ticket({ key: bug.key });
+                var bugDetails = tracker.getIssue(bug.key);
                 var bugFields = bugDetails && bugDetails.fields || {};
                 var commentBlock = bugFields.comment;
                 var comments = commentBlock && commentBlock.comments || [];

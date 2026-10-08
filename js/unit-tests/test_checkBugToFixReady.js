@@ -9,7 +9,8 @@ function loadCheckBugToFixReady(mocks) {
         makeRequire({
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock(),
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks)
         }),
         mocks
     );
@@ -19,6 +20,7 @@ function makeTicket(key, issueType) {
     return {
         key: key,
         fields: {
+            summary: 's',
             issuetype: { name: issueType }
         }
     };
@@ -36,7 +38,7 @@ suite('checkBugToFixReady', function() {
                 if (args.jql.indexOf('status != "Done"') !== -1) {
                     return [];
                 }
-                return [{ key: 'TS-91', fields: { status: { name: 'Done' } } }];
+                return [{ key: 'TS-91', fields: { summary: 's', status: { name: 'Done' } } }];
             },
             jira_move_to_status: function(args) { moved.push(args); },
             jira_post_comment: function(args) { comments.push(args); },
@@ -66,8 +68,8 @@ suite('checkBugToFixReady', function() {
                     return [];
                 }
                 return [
-                    { key: 'TS-92', fields: { status: { name: 'Done' } } },
-                    { key: 'TS-93', fields: { status: { name: 'Done' } } }
+                    { key: 'TS-92', fields: { summary: 's', status: { name: 'Done' } } },
+                    { key: 'TS-93', fields: { summary: 's', status: { name: 'Done' } } }
                 ];
             },
             jira_move_to_status: function(args) { moved.push(args); },
@@ -94,9 +96,9 @@ suite('checkBugToFixReady', function() {
         var module = loadCheckBugToFixReady({
             jira_search_by_jql: function(args) {
                 if (args.jql.indexOf('status != "Done"') !== -1) {
-                    return [{ key: 'TS-94', fields: { status: { name: 'In Progress' } } }];
+                    return [{ key: 'TS-94', fields: { summary: 's', status: { name: 'In Progress' } } }];
                 }
-                return [{ key: 'TS-94', fields: { status: { name: 'In Progress' } } }];
+                return [{ key: 'TS-94', fields: { summary: 's', status: { name: 'In Progress' } } }];
             },
             jira_move_to_status: function(args) { moved.push(args); },
             jira_post_comment: function() {},
@@ -127,19 +129,19 @@ suite('checkBugToFixReady', function() {
                     if (jql.indexOf('status != "Done"') !== -1) {
                         return [];
                     }
-                    return [{ key: 'TS-92', fields: { status: { name: 'Done' } } }];
+                    return [{ key: 'TS-92', fields: { summary: 's', status: { name: 'Done' } } }];
                 }
                 // Linked Test Cases of the Story.
                 if (jql.indexOf('linkedIssues("TS-90")') !== -1 && jql.indexOf('issuetype = "Test Case"') !== -1) {
-                    return [{ key: 'TS-TC-1', fields: { status: { name: 'Bug To Fix' } } }];
+                    return [{ key: 'TS-TC-1', fields: { summary: 's', status: { name: 'Bug To Fix' } } }];
                 }
                 // Bugs linked to the Test Case: one not-Done bug.
                 if (jql.indexOf('linkedIssues("TS-TC-1")') !== -1 && jql.indexOf('issuetype = Bug') !== -1) {
                     if (jql.indexOf('status != "Done"') !== -1) {
-                        return [{ key: 'TS-95', fields: { status: { name: 'Ready For Testing' } } }];
+                        return [{ key: 'TS-95', fields: { summary: 's', status: { name: 'Ready For Testing' } } }];
                     }
                     return [
-                        { key: 'TS-95', fields: { status: { name: 'Ready For Testing' } } }
+                        { key: 'TS-95', fields: { summary: 's', status: { name: 'Ready For Testing' } } }
                     ];
                 }
                 return [];
@@ -169,7 +171,7 @@ suite('checkBugToFixReady', function() {
         function hostIssue(key, statusName) {
             return {
                 toJSON: function() {
-                    return { key: key, fields: { status: { name: statusName } } };
+                    return { key: key, fields: { summary: 's', status: { name: statusName } } };
                 }
             };
         }

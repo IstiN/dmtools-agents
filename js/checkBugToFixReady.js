@@ -17,6 +17,7 @@
 
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+const trackersModule = require('./common/trackers.js');
 
 function action(params) {
     const ticketKey = params.ticket && params.ticket.key;
@@ -26,6 +27,7 @@ function action(params) {
     const removeLabel = customParams && customParams.removeLabel;
     const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
     const jiraConfig = projectConfig.jira;
+    const tracker = trackersModule.createTracker(projectConfig, customParams || {});
 
     /**
      * DMTools returns issue search results as host objects. In some runtime
@@ -42,7 +44,7 @@ function action(params) {
     function releaseLock() {
         if (ticketKey && removeLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: removeLabel });
+                tracker.removeLabel(ticketKey, removeLabel);
                 console.log('Released SM label — will re-check next cycle');
             } catch (e) {
                 console.warn('Failed to remove SM label:', e);
@@ -52,25 +54,19 @@ function action(params) {
 
     function findLinkedBugs(entityKey) {
         var key = entityKey || ticketKey;
-        return toPlain(jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + key + '") AND issuetype = Bug',
-            maxResults: 50
-        })) || [];
+        // JQL text: provider-specific query (WIQL on ado)
+        return toPlain(tracker.searchIssues('issue in linkedIssues("' + key + '") AND issuetype = Bug', { maxResults: 50 })) || [];
     }
 
     function findNotDoneBugs(entityKey) {
         var key = entityKey || ticketKey;
-        return toPlain(jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + key + '") AND issuetype = Bug AND status != "' + jiraConfig.statuses.DONE + '"',
-            maxResults: 50
-        })) || [];
+        // JQL text: provider-specific query (WIQL on ado)
+        return toPlain(tracker.searchIssues('issue in linkedIssues("' + key + '") AND issuetype = Bug AND status != "' + jiraConfig.statuses.DONE + '"', { maxResults: 50 })) || [];
     }
 
     function findLinkedTestCases() {
-        return toPlain(jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "Test Case"',
-            maxResults: 100
-        })) || [];
+        // JQL text: provider-specific query (WIQL on ado)
+        return toPlain(tracker.searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype = "Test Case"', { maxResults: 100 })) || [];
     }
 
     function findPendingBugsInLinkedTestCases() {
@@ -132,14 +128,11 @@ function action(params) {
             // All linked Bugs are Done → move Story back to Ready For Testing for re-test
             console.log('All', totalBugs, 'linked Bug(s) are Done — moving Story', ticketKey, 'to Ready For Testing');
 
-            jira_move_to_status({
-                key: ticketKey,
-                statusName: jiraConfig.statuses.READY_FOR_TESTING
-            });
+            tracker.moveToStatus(ticketKey, jiraConfig.statuses.READY_FOR_TESTING);
 
             // Remove the story_done_check lock so it can re-run after the Story returns to In Testing
             try {
-                jira_remove_label({ key: ticketKey, label: 'sm_story_done_check_triggered' });
+                tracker.removeLabel(ticketKey, 'sm_story_done_check_triggered');
                 console.log('Removed sm_story_done_check_triggered — story_done_check will run after re-test');
             } catch (e) {
                 console.warn('Failed to remove sm_story_done_check_triggered label:', e);
@@ -147,26 +140,20 @@ function action(params) {
 
             releaseLock();
 
-            jira_post_comment({
-                key: ticketKey,
-                comment: 'h3. 🔄 Story Ready for Re-test\n\n' +
+            tracker.postComment(ticketKey, 'h3. 🔄 Story Ready for Re-test\n\n' +
                     'All *' + totalBugs + '* linked Bug(s) are now in *Done* status.\n\n' +
-                    'The Story has been automatically moved back to *Ready For Testing* to re-run all linked Test Cases.'
-            });
+                    'The Story has been automatically moved back to *Ready For Testing* to re-run all linked Test Cases.');
 
             console.log('✅ Story', ticketKey, 'moved to Ready For Testing');
         } else {
             // All linked Bugs are Done → move TC back to Backlog
             console.log('All', totalBugs, 'linked Bug(s) are Done — moving', ticketKey, 'to Backlog');
 
-            jira_move_to_status({
-                key: ticketKey,
-                statusName: jiraConfig.statuses.BACKLOG
-            });
+            tracker.moveToStatus(ticketKey, jiraConfig.statuses.BACKLOG);
 
             // Remove test automation label so SM can re-trigger automation
             try {
-                jira_remove_label({ key: ticketKey, label: 'sm_test_automation_triggered' });
+                tracker.removeLabel(ticketKey, 'sm_test_automation_triggered');
                 console.log('Removed sm_test_automation_triggered — TC will be re-automated next SM cycle');
             } catch (e) {
                 console.warn('Failed to remove sm_test_automation_triggered label:', e);
@@ -174,12 +161,9 @@ function action(params) {
 
             releaseLock();
 
-            jira_post_comment({
-                key: ticketKey,
-                comment: 'h3. 🔄 Test Case Ready for Re-automation\n\n' +
+            tracker.postComment(ticketKey, 'h3. 🔄 Test Case Ready for Re-automation\n\n' +
                     'All *' + totalBugs + '* linked Bug(s) are now in *Done* status.\n\n' +
-                    'This Test Case has been automatically moved back to *Backlog* to be re-automated against the fixed code.'
-            });
+                    'This Test Case has been automatically moved back to *Backlog* to be re-automated against the fixed code.');
 
             console.log('✅ TC', ticketKey, 'moved to Backlog');
         }

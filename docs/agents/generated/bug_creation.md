@@ -58,9 +58,10 @@ _Post Bug Creation Action (postJSAction for bug_creation agent)_
 
 - Source: `agents/js/postBugCreation.js`
 - Side effects:
-  - remove label "sm_test_automation_triggered"
-  - post Jira comment
-  - link Jira issues
+  - remove label "sm_test_automation_triggered" (via tracker)
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
+  - create ticket (via tracker)
 - Parameters (customParams):
   - `removeLabel`
 

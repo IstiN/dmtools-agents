@@ -25,6 +25,7 @@ var configLoader = require('./configLoader.js');
 var prHelper = require('./common/pullRequest.js');
 var mergeState = require('./common/mergeState.js');
 const { STATUSES } = require('./config.js');
+var trackersModule = require('./common/trackers.js');
 
 function cleanCommandOutput(output) {
     if (!output) return '';
@@ -126,13 +127,13 @@ function checkoutAutomationBranch(ticketKey, config) {
 }
 
 /** Fetch all Test Cases linked via "is tested by" and write to input folder. */
-function fetchLinkedTestCases(ticketKey, folder) {
+function fetchLinkedTestCases(ticketKey, folder, tracker) {
     var linkedTCs = [];
 
     // Primary: "is tested by" relationship
     try {
-        linkedTCs = jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + ticketKey + '", "is tested by") AND issuetype = "Test Case"',
+        // JQL text: provider-specific query (WIQL on ado)
+        linkedTCs = tracker.searchIssues('issue in linkedIssues("' + ticketKey + '", "is tested by") AND issuetype = "Test Case"', {
             fields: ['key', 'summary', 'status', 'description', 'priority', 'labels', 'comment'],
             maxResults: 30
         });
@@ -143,8 +144,8 @@ function fetchLinkedTestCases(ticketKey, folder) {
     // Fallback: any linked test cases (broader search)
     if (!linkedTCs || linkedTCs.length === 0) {
         try {
-            linkedTCs = jira_search_by_jql({
-                jql: 'issue in linkedIssues("' + ticketKey + '") AND issuetype = "Test Case"',
+            // JQL text: provider-specific query (WIQL on ado)
+            linkedTCs = tracker.searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype = "Test Case"', {
                 fields: ['key', 'summary', 'status', 'description', 'priority', 'labels', 'comment'],
                 maxResults: 30
             });
@@ -182,7 +183,7 @@ function fetchLinkedTestCases(ticketKey, folder) {
 
         // Fetch full ticket for comments (run history, prior failures)
         try {
-            var tcDetails = jira_get_ticket({ key: tc.key });
+            var tcDetails = tracker.getIssue(tc.key);
             var tcFields = tcDetails && tcDetails.fields || {};
             var commentBlock = tcFields.comment;
             var comments = commentBlock && commentBlock.comments || [];
@@ -508,12 +509,13 @@ function action(params) {
         var ticketKey = folder.split('/').pop();
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var customParams = (params.jobParams || params).customParams || {};
+        var tracker = trackersModule.createTracker(config, customParams);
 
         console.log('=== Mobile test automation setup for:', ticketKey, '===');
 
         // Step 1: Move trigger ticket to In Development
         try {
-            jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_DEVELOPMENT });
+            tracker.moveToStatus(ticketKey, STATUSES.IN_DEVELOPMENT);
             console.log('✅ Moved', ticketKey, 'to In Development');
         } catch (e) {
             console.warn('Failed to move ticket to In Development:', e);
@@ -521,7 +523,7 @@ function action(params) {
 
         // Step 2: Fetch linked Test Cases and write to input folder
         try {
-            fetchLinkedTestCases(ticketKey, folder);
+            fetchLinkedTestCases(ticketKey, folder, tracker);
         } catch (e) {
             console.error('Failed to fetch linked test cases:', e);
         }
