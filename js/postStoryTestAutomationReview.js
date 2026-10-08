@@ -17,6 +17,19 @@ const outputFiles = require('./common/outputFiles.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 const prReviewComments = require('./postPRReviewComments.js');
 
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
+
 function readFile(path) {
     return outputFiles.readOutputFile(path, {});
 }
@@ -312,13 +325,13 @@ function removeAutomationLabels(storyKey, params, customParams) {
         const wipLabel = params.metadata && params.metadata.contextId
             ? params.metadata.contextId + '_wip'
             : 'pr_story_test_automation_review_wip';
-        jira_remove_label({ key: storyKey, label: wipLabel });
+        getTracker().removeLabel(storyKey, wipLabel);
     } catch (e) {}
 
     try {
         const smTriggerLabel = customParams && customParams.removeLabel;
         if (smTriggerLabel) {
-            jira_remove_label({ key: storyKey, label: smTriggerLabel });
+            getTracker().removeLabel(storyKey, smTriggerLabel);
             console.log('✅ Removed SM trigger label:', smTriggerLabel);
         }
     } catch (e) {}
@@ -329,6 +342,7 @@ function action(params) {
         const storyKey = params.ticket.key;
         const config = configLoader.loadProjectConfig(params.jobParams || params);
         const customParams = resolveCustomParams(params, config);
+        initTracker(config, customParams);
         const workingDir = config.workingDir || null;
         const scm = scmModule.createScm(config);
 
@@ -336,10 +350,7 @@ function action(params) {
 
         const reviewData = readReviewJson(storyKey, workingDir);
         if (!reviewData) {
-            jira_post_comment({
-                key: storyKey,
-                comment: 'h3. ⚠️ Story Test Review Error\n\nCould not read pr_review.json. Removed SM trigger label so SM can retry.'
-            });
+            getTracker().postComment(storyKey, 'h3. ⚠️ Story Test Review Error\n\nCould not read pr_review.json. Removed SM trigger label so SM can retry.');
             removeAutomationLabels(storyKey, params, customParams);
             return { success: false, error: 'No review data found' };
         }
@@ -377,7 +388,7 @@ function action(params) {
                     console.warn('Failed to add pr_approved to GitHub PR:', e);
                 }
                 try {
-                    jira_add_label({ key: storyKey, label: LABELS.PR_APPROVED });
+                    getTracker().addLabel(storyKey, LABELS.PR_APPROVED);
                     console.log('✅ Added pr_approved label to Jira Story');
                 } catch (e) {
                     console.warn('Failed to add pr_approved to Jira Story:', e);
@@ -390,7 +401,7 @@ function action(params) {
                     console.warn('Failed to add test_pr_rework_needed to GitHub PR:', e);
                 }
                 try {
-                    jira_add_label({ key: storyKey, label: LABELS.TEST_PR_REWORK_NEEDED });
+                    getTracker().addLabel(storyKey, LABELS.TEST_PR_REWORK_NEEDED);
                     console.log('✅ Added test_pr_rework_needed label to Jira Story');
                 } catch (e) {
                     console.warn('Failed to add test_pr_rework_needed to Jira Story:', e);
@@ -402,7 +413,7 @@ function action(params) {
 
         if (params.response) {
             try {
-                jira_post_comment({ key: storyKey, comment: params.response });
+                getTracker().postComment(storyKey, params.response);
             } catch (e) {
                 console.warn('Failed to post Jira review comment:', e);
             }
@@ -430,7 +441,7 @@ function action(params) {
                         feedback += 'h4. General comment\n\n{code}' + generalBody.trim() + '{code}\n';
                     }
                 }
-                jira_post_comment({ key: storyKey, comment: feedback });
+                getTracker().postComment(storyKey, feedback);
                 console.log('✅ Posted detailed rework feedback to Jira');
             } catch (e) {
                 console.warn('Failed to post detailed rework feedback:', e);
@@ -450,7 +461,7 @@ function action(params) {
         }
 
         try {
-            jira_add_label({ key: storyKey, label: LABELS.AI_PR_REVIEWED });
+            getTracker().addLabel(storyKey, LABELS.AI_PR_REVIEWED);
         } catch (e) {}
 
         removeAutomationLabels(storyKey, params, customParams);
@@ -473,11 +484,8 @@ function action(params) {
         try {
             const storyKey = params.ticket ? params.ticket.key : null;
             if (storyKey) {
-                jira_remove_label({ key: storyKey, label: 'sm_story_test_review_triggered' });
-                jira_post_comment({
-                    key: storyKey,
-                    comment: 'h3. ❌ Story Test Review Error\n\n{code}' + error.toString() + '{code}'
-                });
+                getTracker().removeLabel(storyKey, 'sm_story_test_review_triggered');
+                getTracker().postComment(storyKey, 'h3. ❌ Story Test Review Error\n\n{code}' + error.toString() + '{code}');
             }
         } catch (e) {}
         return { success: false, error: error.toString() };

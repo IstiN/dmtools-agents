@@ -8,6 +8,19 @@
  * Uses: configModule, configLoaderModule, loadModule(), makeRequire(), assert, test(), suite()
  */
 
+// Real tracker layer loaded WITH the same tool mocks as the script under test
+// (loadModule mocks only shadow globals inside the module they are passed to).
+function trackersWith(mocks) {
+    return loadModule(
+        'js/common/trackers.js',
+        makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }),
+        mocks || {}
+    );
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 // Self-contained module load (do not rely on globals leaked by earlier test files —
@@ -432,9 +445,7 @@ function loadPreCliTestAutomation(workingDir) {
         { file_read: fileReadMock }
     );
 
-    var mod = loadModule(
-        'js/preCliTestAutomationSetup.js',
-        makeRequire({
+    var mod = (function (_m) { return loadModule('js/preCliTestAutomationSetup.js', makeRequire(Object.assign({}, {
             './configLoader.js': freshConfigLoader,
             './config.js': configModule,
             './common/pullRequest.js': {
@@ -454,13 +465,11 @@ function loadPreCliTestAutomation(workingDir) {
             './fetchLinkedBugsToInput.js': { action: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
-        }),
-        {
+        }, { './common/trackers.js': trackersWith(_m) })), _m); })({
             cli_execute_command: mockCli,
             file_read: fileReadMock,
             jira_move_to_status: function() {}
-        }
-    );
+        });
 
     var jobParams = {};
     if (workingDir) {
@@ -528,9 +537,7 @@ suite('preCliTestAutomationSetup > workingDir', function() {
             } }
         );
 
-        var mod = loadModule(
-            'js/preCliTestAutomationSetup.js',
-            makeRequire({
+        var mod = (function (_m) { return loadModule('js/preCliTestAutomationSetup.js', makeRequire(Object.assign({}, {
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
                 './common/pullRequest.js': {
@@ -550,16 +557,14 @@ suite('preCliTestAutomationSetup > workingDir', function() {
                 './fetchLinkedBugsToInput.js': { action: function() {} }
             ,
             './common/commentMarkup.js': commentMarkupModule,
-        }),
-            {
+        }, { './common/trackers.js': trackersWith(_m) })), _m); })({
                 cli_execute_command: mockCli,
                 file_read: function(opts) {
                     try { return file_read(opts); } catch (e) { return null; }
                 },
                 file_write: function() {},
                 jira_move_to_status: function() {}
-            }
-        );
+            });
 
         mod.action({
             inputFolderPath: 'input/TS-1324',
@@ -601,9 +606,7 @@ suite('preCliTestAutomationSetup > workingDir', function() {
             } }
         );
 
-        var mod = loadModule(
-            'js/preCliTestAutomationSetup.js',
-            makeRequire({
+        var mod = (function (_m) { return loadModule('js/preCliTestAutomationSetup.js', makeRequire(Object.assign({}, {
                 './configLoader.js': freshConfigLoader,
                 './config.js': configModule,
                 './common/pullRequest.js': {
@@ -623,16 +626,14 @@ suite('preCliTestAutomationSetup > workingDir', function() {
                 './fetchLinkedBugsToInput.js': { action: function() {} }
             ,
             './common/commentMarkup.js': commentMarkupModule,
-        }),
-            {
+        }, { './common/trackers.js': trackersWith(_m) })), _m); })({
                 cli_execute_command: mockCli,
                 file_read: function(opts) {
                     try { return file_read(opts); } catch (e) { return null; }
                 },
                 file_write: function(args) { writes.push(args); },
                 jira_move_to_status: function() {}
-            }
-        );
+            });
 
         mod.action({
             inputFolderPath: 'input/TS-1325',

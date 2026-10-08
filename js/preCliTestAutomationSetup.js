@@ -9,6 +9,19 @@ var prHelper = require('./common/pullRequest.js');
 const { GIT_CONFIG, STATUSES } = require('./config.js');
 const fetchLinkedBugsToInput = require('./fetchLinkedBugsToInput.js');
 
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
+
 function cleanCommandOutput(output) {
     if (!output) return '';
     return output.split('\n').filter(function(line) {
@@ -166,12 +179,13 @@ function action(params) {
         var folder = actualParams.inputFolderPath;
         var ticketKey = folder.split('/').pop();
         var config = configLoader.loadProjectConfig(params.jobParams || params);
+        initTracker(config, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
 
         console.log('=== Test automation setup for:', ticketKey, '===');
 
         // Step 1: Move ticket to In Development
         try {
-            jira_move_to_status({ key: ticketKey, statusName: STATUSES.IN_DEVELOPMENT });
+            getTracker().moveToStatus(ticketKey, STATUSES.IN_DEVELOPMENT);
             console.log('✅ Moved ' + ticketKey + ' to ' + STATUSES.IN_DEVELOPMENT);
         } catch (e) {
             console.warn('Failed to move ticket to In Development:', e);

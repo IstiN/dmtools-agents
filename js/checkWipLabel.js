@@ -16,6 +16,19 @@
 var configLoader = require('./configLoader.js');
 var gh = require('./common/githubHelpers.js');
 
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
+
 function action(params) {
     try {
         const ticket = params.ticket;
@@ -36,6 +49,7 @@ function action(params) {
         // Dynamically generate WIP label from contextId
         const wipLabel = metadata.contextId + '_wip';
         const ticketKey = ticket.key;
+        initTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
         
         // Get ticket labels
         const labels = ticket.fields && ticket.fields.labels ? ticket.fields.labels : [];
@@ -48,13 +62,10 @@ function action(params) {
             
             // Post comment to ticket explaining why it was skipped
             try {
-                jira_post_comment({
-                    key: ticketKey,
-                    comment: 'h3. *Processing Skipped*\n\n' +
+                getTracker().postComment(ticketKey, 'h3. *Processing Skipped*\n\n' +
                             'This ticket has the *' + wipLabel + '* label indicating work is in progress.\n' +
                             'Processing will be skipped until the label is removed.\n\n' +
-                            '_Remove the label to allow automated processing._'
-                });
+                            '_Remove the label to allow automated processing._');
                 console.log('Posted skip notification comment to ' + ticketKey);
             } catch (commentError) {
                 console.warn('Failed to post skip comment:', commentError);
@@ -77,10 +88,7 @@ function action(params) {
                 if (!pr) {
                     console.log('⏸️  No open PR found for ' + ticketKey + ' - skipping processing');
                     try {
-                        jira_post_comment({
-                            key: ticketKey,
-                            comment: 'h3. *Processing Skipped*\n\nNo open Pull Request found for this ticket. The review/rework agent cannot run without an existing PR.\n\n_Ticket will be processed again once a PR is available._'
-                        });
+                        getTracker().postComment(ticketKey, 'h3. *Processing Skipped*\n\nNo open Pull Request found for this ticket. The review/rework agent cannot run without an existing PR.\n\n_Ticket will be processed again once a PR is available._');
                     } catch (commentError) {
                         console.warn('Failed to post skip comment:', commentError);
                     }

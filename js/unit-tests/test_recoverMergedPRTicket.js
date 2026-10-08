@@ -2,6 +2,19 @@
  * Unit tests for js/recoverMergedPRTicket.js.
  */
 
+// Real tracker layer loaded WITH the same tool mocks as the script under test
+// (loadModule mocks only shadow globals inside the module they are passed to).
+function trackersWith(mocks) {
+    return loadModule(
+        'js/common/trackers.js',
+        makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }),
+        mocks || {}
+    );
+}
+
 function loadRecoverMergedPRTicket(options) {
     options = options || {};
     var scm = options.scm || {
@@ -11,22 +24,18 @@ function loadRecoverMergedPRTicket(options) {
     var removedLabels = [];
     var comments = [];
 
-    var mod = loadModule(
-        'js/recoverMergedPRTicket.js',
-        makeRequire({
+    var mod = (function (_m) { return loadModule('js/recoverMergedPRTicket.js', makeRequire(Object.assign({}, {
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock({
                 repository: { owner: 'IstiN', repo: 'trackstate' }
             }),
             './common/scm.js': { createScm: function() { return scm; } },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
-        }),
-        {
+        }, { './common/trackers.js': trackersWith(_m) })), _m); })({
             jira_move_to_status: function(args) { statusMoves.push(args); },
             jira_remove_label: function(args) { removedLabels.push(args); },
             jira_post_comment: function(args) { comments.push(args); }
-        }
-    );
+        });
 
     return {
         mod: mod,
@@ -150,4 +159,35 @@ suite('recoverMergedPRTicket', function() {
         assert.deepEqual(loaded.removedLabels, []);
     });
 
+});
+
+
+suite('recoverMergedPRTicket: ado tracker provider', function() {
+    test('uses ado_* tools and no jira_* tool', function() {
+        var calls = [];
+        var mocks = {
+            ado_move_to_state: function(a) { calls.push(['move', a]); },
+            ado_remove_work_item_label: function(a) { calls.push(['rm', a]); },
+            ado_add_work_item_comment: function(a) { calls.push(['comment', a]); },
+            jira_move_to_status: function() { throw new Error('jira_move_to_status must not be called on ado'); },
+            jira_remove_label: function() { throw new Error('jira_remove_label must not be called on ado'); },
+            jira_post_comment: function() { throw new Error('jira_post_comment must not be called on ado'); }
+        };
+        var scm = { listPrs: function(state) {
+            if (state === 'open') return [];
+            return [{ number: 7, title: '55 fix', html_url: 'u', head: { ref: 'ai/55' }, merged_at: '2026-01-01T00:00:00Z' }];
+        } };
+        var mod = loadModule('js/recoverMergedPRTicket.js', makeRequire({
+            './config.js': configModule,
+            './configLoader.js': makeDefaultConfigLoaderMock({ repository: { owner: 'o', repo: 'r' } }),
+            './common/scm.js': { createScm: function() { return scm; } },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/trackers.js': trackersWith(mocks)
+        }), mocks);
+        var result = mod.action({ ticket: { key: '55' }, jobParams: { customParams: { trackerProvider: 'ado' } } });
+        assert.equal(result.action, 'moved_to_merged');
+        assert.deepEqual(calls[0], ['move', { id: '55', state: 'Merged' }]);
+        assert.equal(calls.filter(function(c) { return c[0] === 'rm'; }).length, 4);
+        assert.equal(calls.filter(function(c) { return c[0] === 'comment'; }).length, 1);
+    });
 });

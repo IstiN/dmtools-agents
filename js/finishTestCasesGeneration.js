@@ -10,6 +10,19 @@
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
+
 function action(params) {
     const ticketKey = params.ticket && params.ticket.key;
     if (!ticketKey) {
@@ -17,18 +30,19 @@ function action(params) {
     }
     const projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
     const jiraConfig = projectConfig.jira;
+    initTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
 
     console.log('=== Finishing test case generation for', ticketKey, '===');
 
     try {
-        jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.READY_FOR_TESTING });
+        getTracker().moveToStatus(ticketKey, jiraConfig.statuses.READY_FOR_TESTING);
         console.log('✅ Moved', ticketKey, 'to', jiraConfig.statuses.READY_FOR_TESTING);
     } catch (e) {
         console.warn('Could not move Story to Ready For Testing:', e);
     }
 
     try {
-        jira_remove_label({ key: ticketKey, label: 'sm_test_cases_triggered' });
+        getTracker().removeLabel(ticketKey, 'sm_test_cases_triggered');
         console.log('Removed sm_test_cases_triggered — story_test_automation can run next cycle');
     } catch (e) {
         console.warn('Could not remove sm_test_cases_triggered label:', e);

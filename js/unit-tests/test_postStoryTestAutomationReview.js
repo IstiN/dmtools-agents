@@ -119,8 +119,15 @@ var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({
                 fetchDiscussionsAndRawData: function() { return { rawThreads: { threads: [] } }; }
             },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
-            './postPRReviewComments.js': prReviewComments
-        ,
+            './postPRReviewComments.js': prReviewComments,
+            './common/trackers.js': loadModule(
+                'js/common/trackers.js',
+                makeRequire({
+                    '../config.js': configModule,
+                    './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+                }),
+                allMocks
+            ),
             './common/commentMarkup.js': commentMarkupModule,
         }),
         allMocks
@@ -357,6 +364,34 @@ suite('postStoryTestAutomationReview', function() {
         assert.equal(module._scmCalls.addInlineComment.length, 1);
         assert.equal(module._scmCalls.addInlineComment[0].side, 'LEFT');
         assert.equal(module._scmCalls.addInlineComment[0].line, 5);
+    });
+
+    test('ado provider: labels go through ado_* tools and never a jira_* tool', function() {
+        var calls = [];
+        var boom = function() { throw new Error('jira_* must not be called on ado'); };
+        var module = loadPostStoryTestAutomationReview({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/pr_review.json') {
+                    return JSON.stringify({ recommendation: 'APPROVE', summary: 'LGTM', inlineComments: [] });
+                }
+                if (opts.path === 'input/300/pr_info.md') {
+                    return '**PR #**: 30\n**URL**: https://github.com/IstiN/trackstate/pull/30';
+                }
+                return null;
+            },
+            ado_add_work_item_label: function(a) { calls.push(['add', a]); },
+            ado_remove_work_item_label: function(a) { calls.push(['rm', a]); },
+            ado_add_work_item_comment: function(a) { calls.push(['comment', a]); },
+            ado_move_to_state: function(a) { calls.push(['move', a]); },
+            jira_add_label: boom, jira_remove_label: boom, jira_post_comment: boom, jira_move_to_status: boom
+        });
+        var result = module.action({
+            ticket: { key: '300' },
+            jobParams: { customParams: { trackerProvider: 'ado', removeLabel: 'sm_story_test_review_triggered' } }
+        });
+        assert.equal(result.success, true);
+        assert.ok(calls.some(function(c) { return c[0] === 'add' && c[1].id === '300' && c[1].label === 'pr_approved'; }));
+        assert.ok(calls.some(function(c) { return c[0] === 'rm' && c[1].label === 'sm_story_test_review_triggered'; }));
     });
 
 });

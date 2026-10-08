@@ -2,11 +2,22 @@
  * Unit tests for js/checkWipLabel.js
  */
 
+// Real tracker layer loaded WITH the same tool mocks as the script under test
+// (loadModule mocks only shadow globals inside the module they are passed to).
+function trackersWith(mocks) {
+    return loadModule(
+        'js/common/trackers.js',
+        makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }),
+        mocks || {}
+    );
+}
+
 function loadCheckWipLabel(mocks) {
     mocks = mocks || {};
-    return loadModule(
-        'js/checkWipLabel.js',
-        makeRequire({
+    return (function (_m) { return loadModule('js/checkWipLabel.js', makeRequire(Object.assign({}, {
             './configLoader.js': {
                 loadProjectConfig: function() { return {}; },
                 createScm: function() { return {}; }
@@ -14,9 +25,7 @@ function loadCheckWipLabel(mocks) {
             './common/githubHelpers.js': {
                 findPRForTicket: function() { return null; }
             }
-        }),
-        mocks
-    );
+        }, { './common/trackers.js': trackersWith(_m) })), _m); })(mocks);
 }
 
 function makeTicket(key, labels) {
@@ -77,9 +86,7 @@ suite('checkWipLabel', function() {
     });
 
     test('continues when checkOpenPR is set and an open PR exists', function() {
-        var module = loadModule(
-            'js/checkWipLabel.js',
-            makeRequire({
+        var module = (function (_m) { return loadModule('js/checkWipLabel.js', makeRequire(Object.assign({}, {
                 './configLoader.js': {
                     loadProjectConfig: function() { return {}; },
                     createScm: function() { return {}; }
@@ -87,11 +94,9 @@ suite('checkWipLabel', function() {
                 './common/githubHelpers.js': {
                     findPRForTicket: function() { return { number: 42 }; }
                 }
-            }),
-            {
+            }, { './common/trackers.js': trackersWith(_m) })), _m); })({
                 jira_post_comment: function() {}
-            }
-        );
+            });
 
         var result = module.action({
             ticket: makeTicket('TS-1'),
@@ -176,17 +181,13 @@ suite('checkWipLabel — PR-anchored start gate (githubSource pr-N, fa #1212)', 
             }),
             {}
         );
-        return loadModule(
-            'js/checkWipLabel.js',
-            makeRequire({
+        return (function (_m) { return loadModule('js/checkWipLabel.js', makeRequire(Object.assign({}, {
                 './configLoader.js': {
                     loadProjectConfig: function() { return {}; },
                     createScm: function() { return scm; }
                 },
                 './common/githubHelpers.js': gh
-            }),
-            mocks || {}
-        );
+            }, { './common/trackers.js': trackersWith(_m) })), _m); })(mocks || {});
     }
 
     var anchoredPr = {
@@ -274,4 +275,24 @@ suite('checkWipLabel — PR-anchored start gate (githubSource pr-N, fa #1212)', 
         assert.equal(getPrCalls.length, 0, 'jira keys never take the anchor fetch');
     });
 
+});
+
+
+suite('checkWipLabel: ado tracker provider', function() {
+    test('posts the skip comment through ado_add_work_item_comment, no jira_* call', function() {
+        var calls = [];
+        var module = loadCheckWipLabel({
+            ado_add_work_item_comment: function(a) { calls.push(a); },
+            jira_post_comment: function() { throw new Error('jira_post_comment must not be called on ado'); }
+        });
+        var result = module.action({
+            ticket: makeTicket('101', ['pr_review_wip']),
+            metadata: { contextId: 'pr_review' },
+            jobParams: { customParams: { trackerProvider: 'ado' } }
+        });
+        assert.equal(result, false);
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].id, '101');
+        assert.contains(calls[0].comment, 'work is in progress');
+    });
 });

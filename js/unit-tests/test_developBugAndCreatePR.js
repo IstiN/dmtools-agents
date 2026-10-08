@@ -9,6 +9,19 @@ function loadTrackersDev(mocks) {
     }), mocks || {});
 }
 
+// Real tracker layer loaded WITH the same tool mocks as the script under test
+// (loadModule mocks only shadow globals inside the module they are passed to).
+function trackersWith(mocks) {
+    return loadModule(
+        'js/common/trackers.js',
+        makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }),
+        mocks || {}
+    );
+}
+
 function loadDevelopBugAndCreatePR(mocks) {
     mocks = mocks || {};
     var comments = [];
@@ -53,9 +66,7 @@ var gitStagingModule = loadModule('js/common/gitStaging.js');
 // exported helper (single source of truth for the marker/message contract)
 // instead of a byte-copy. The bug tests never invoke the delegated
 // developTicketAndCreatePR action(), so its stubbed deps are never touched.
-var developTicketRealModule = loadModule(
-    'js/developTicketAndCreatePR.js',
-    makeRequire({
+var developTicketRealModule = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
         './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
         './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
         './common/submodules.js': {},
@@ -73,9 +84,7 @@ var developTicketRealModule = loadModule(
         './config.js': configModule,
         './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
         './common/commentMarkup.js': commentMarkupModule
-    }),
-    {}
-);
+    }, { './common/trackers.js': trackersWith(_m) })), _m); })({});
 
     var mod = loadModule(
         'js/developBugAndCreatePR.js',
@@ -585,9 +594,7 @@ function loadBugForMissingResponseResume(opts) {
     // The REAL developTicketAndCreatePR instance backing the shared gate —
     // wired to the same real feedbackLoop/outputFiles so the attempt marker,
     // prompt file and deliverable re-read are shared with the bug leg.
-    var sharedGateModule = loadModule(
-        'js/developTicketAndCreatePR.js',
-        makeRequire({
+    var sharedGateModule = (function (_m) { return loadModule('js/developTicketAndCreatePR.js', makeRequire(Object.assign({}, {
             './common/jiraHelpers.js': { extractTicketKey: function (key) { return key; } },
             './common/pullRequest.js': { cleanCommandOutput: function (output) { return (output || '').trim(); } },
             './common/submodules.js': {},
@@ -600,13 +607,11 @@ function loadBugForMissingResponseResume(opts) {
             './config.js': configModule,
             './common/tokenUsageComment.js': { postTokenUsageComments: function () { } },
             './common/commentMarkup.js': commentMarkupModuleLocal
-        }),
-        {
+        }, { './common/trackers.js': trackersWith(_m) })), _m); })({
             jira_post_comment: function (args) { comments.push(args); },
             jira_move_to_status: function (args) { moves.push(args); },
             jira_remove_label: function (args) { removed.push(args); }
-        }
-    );
+        });
 
     var spyMocks = {
         cli_execute_command: cliMock,

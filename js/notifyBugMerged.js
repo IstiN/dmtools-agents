@@ -13,6 +13,19 @@ const { loadProjectConfig } = require('./configLoader.js');
 const { aiChat } = require('./common/aiChat.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
+
 /**
  * Find the bug fix development comment from Jira comments.
  * The bug_development agent posts a comment that contains "Bug Fix Summary"
@@ -70,11 +83,7 @@ function updateSolutionField(ticketKey, ticketDescription, comments, params) {
             return;
         }
 
-        jira_update_field({
-            key: ticketKey,
-            field: solutionField,
-            value: solution.trim()
-        });
+        getTracker().updateField(ticketKey, solutionField, solution.trim());
         console.log('✅ Updated ' + solutionField + ' field with RCA + prevention summary');
     } catch (e) {
         console.warn('Failed to update Solution field:', e.message || e);
@@ -84,6 +93,7 @@ function updateSolutionField(ticketKey, ticketDescription, comments, params) {
 function action(params) {
     try {
         const ticketKey = params.ticket.key;
+        initTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
         const ticketDescription = params.ticket.fields && params.ticket.fields.description
             ? params.ticket.fields.description : '';
         console.log('=== Bug merged notification for', ticketKey, '===');
@@ -91,7 +101,7 @@ function action(params) {
         // Step 1: Fetch ticket comments for RCA extraction
         let comments = [];
         try {
-            comments = jira_get_comments({ key: ticketKey }) || [];
+            comments = getTracker().getComments(ticketKey) || [];
             console.log('Fetched', comments.length, 'comments for RCA extraction');
         } catch (e) {
             console.warn('Could not fetch comments:', e);
@@ -102,10 +112,7 @@ function action(params) {
 
         // Step 3: Post merge notification
         try {
-            jira_post_comment({
-                key: ticketKey,
-                comment: 'h3. ✅ Bug Fix Merged — Ready for Testing\n\nThe bug fix PR has been merged and the ticket has been moved to *Ready For Testing*.\n\nThe *Solution* field has been updated with the Root Cause Analysis and prevention notes for use by the test case generator.'
-            });
+            getTracker().postComment(ticketKey, 'h3. ✅ Bug Fix Merged — Ready for Testing\n\nThe bug fix PR has been merged and the ticket has been moved to *Ready For Testing*.\n\nThe *Solution* field has been updated with the Root Cause Analysis and prevention notes for use by the test case generator.');
             console.log('✅ Posted merge notification to Jira');
         } catch (e) {
             console.warn('Failed to post Jira comment:', e);
@@ -115,7 +122,7 @@ function action(params) {
         const wipLabel = params.metadata && params.metadata.contextId
             ? params.metadata.contextId + '_wip' : null;
         if (wipLabel) {
-            try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
+            try { getTracker().removeLabel(ticketKey, wipLabel); } catch (e) {}
         }
 
         // Step 5: Remove SM idempotency label
@@ -123,7 +130,7 @@ function action(params) {
         const removeLabel = customParams && customParams.removeLabel;
         if (removeLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: removeLabel });
+                getTracker().removeLabel(ticketKey, removeLabel);
                 console.log('✅ Removed SM label:', removeLabel);
             } catch (e) {}
         }
