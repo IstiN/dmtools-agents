@@ -49,6 +49,70 @@ function getContextId(params) {
 }
 
 /**
+ * gh-798 (live fa PR #1420 rework leg, run 37828431528): is this push failure
+ * a non-fast-forward rejection? Only THAT class self-heals (below) — auth,
+ * network, and ref-lock failures are surfaced untouched. The git hint is
+ * matched by SHAPE ('current branch is behind' — git's "Updates were
+ * rejected because the tip of your current branch is behind its remote
+ * counterpart"), never by the bare word or the short " is behind" phrase: a
+ * hook/proxy message that happens to contain "behind" must not trigger a
+ * heal (gh-798 review).
+ */
+function isNonFastForwardError(error) {
+    var text = String((error && error.message) || error || '');
+    return text.indexOf('non-fast-forward') !== -1 ||
+        text.indexOf('[rejected]') !== -1 ||
+        text.indexOf('fetch first') !== -1 ||
+        text.indexOf('current branch is behind') !== -1;
+}
+
+/**
+ * gh-798: the timer's bare `git push origin HEAD`, hardened. When the SM's
+ * silent-update legitimately refreshes the branch mid-run (any residual race
+ * around the in-flight-leg exclusion), the rejection must self-heal exactly
+ * the way the agent manually recovered in the live incident: fetch the
+ * branch, merge origin into it (merge-style — matching the SM's own
+ * merge refreshes; a rebase would rewrite the leg's WIP commits), and retry
+ * the push ONCE. Anything else surfaces honestly.
+ *
+ * `resolveBranchName` is consulted ONLY on the healing path (a clean push
+ * pays no branch probe). A conflicted heal merge is ABORTED — a MERGE_HEAD
+ * left behind would make every later timer tick skip (gh-761) and strand
+ * conflict markers in the agent's working state mid-run.
+ *
+ * Returns { pushed: true, healed: false } on the plain push,
+ * { pushed: true, healed: true } after a self-heal; throws when the push
+ * cannot land (the caller logs the honest failure).
+ */
+function pushBranchWithSelfHeal(cmd, resolveBranchName) {
+    try {
+        cmd('git push origin HEAD');
+        return { pushed: true, healed: false };
+    } catch (pushError) {
+        if (!isNonFastForwardError(pushError)) throw pushError;
+        var branchName = '';
+        try {
+            branchName = String(resolveBranchName() || '').trim();
+        } catch (eBranch) {
+            branchName = '';
+        }
+        if (!branchName) throw pushError;
+        console.warn('⏱️ timer: push rejected non-fast-forward — merging origin/' +
+            branchName + ' and retrying once (gh-798 self-heal)');
+        cmd('git -c fetch.recurseSubmodules=no fetch origin ' +
+            branchName + ':refs/remotes/origin/' + branchName);
+        try {
+            cmd('git merge --no-edit origin/' + branchName);
+        } catch (mergeError) {
+            try { cmd('git merge --abort'); } catch (eAbort) { /* already clean */ }
+            throw mergeError;
+        }
+        cmd('git push origin HEAD');
+        return { pushed: true, healed: true };
+    }
+}
+
+/**
  * Auto-commit and push any uncommitted changes in the target repo working dir.
  * Returns true if a commit was made.
  */
@@ -196,9 +260,16 @@ function autoCommitAndPush(customParams, ticketKey) {
     }
 
     try {
-        cli_execute_command({
-            command: 'git push origin HEAD',
-            workingDirectory: workingDir
+        pushBranchWithSelfHeal(function (command) {
+            return cli_execute_command({
+                command: command,
+                workingDirectory: workingDir
+            });
+        }, function () {
+            return cleanCommandOutput(cli_execute_command({
+                command: 'git rev-parse --abbrev-ref HEAD',
+                workingDirectory: workingDir
+            }) || '');
         });
         console.log('⏱️ timer: ✅ auto-committed and pushed: ' + commitMsg);
         return true;
@@ -287,5 +358,9 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action: action };
+    module.exports = {
+        action: action,
+        pushBranchWithSelfHeal: pushBranchWithSelfHeal,
+        isNonFastForwardError: isNonFastForwardError
+    };
 }
