@@ -841,6 +841,84 @@ suite('factoryState — fetchTokensFromBranch', function () {
       function (a) { seen.push(a.command); return { output: TOKENS }; });
     assert.contains(seen[0], 'data/fa-tokens.json?ref=factory-data-eu');
   });
+
+  test('statePublish.tokensAsset overrides the fixed asset (multi-factory shared branch)', function () {
+    var seen = [];
+    var map = fsModule.fetchTokensFromBranch('o/r',
+      { tag: 'factory-data', tokensAsset: 'factoryB-tokens.json' },
+      function (a) { seen.push(a.command); return { output: TOKENS }; });
+    assert.ok(map && map['pr-31'], 'map still validates through tokensMapOf');
+    assert.contains(seen[0], 'data/factoryB-tokens.json?ref=factory-data',
+      'the override asset is probed');
+    assert.ok(seen[0].indexOf('fa-tokens.json') === -1,
+      'the fixed default must NOT be probed when tokensAsset is set');
+  });
+
+  test('tokensAsset absent → the fixed gh-781 default (back-compat)', function () {
+    var seen = [];
+    fsModule.fetchTokensFromBranch('o/r', { tag: 'factory-data' },
+      function (a) { seen.push(a.command); return { output: TOKENS }; });
+    assert.contains(seen[0], 'data/fa-tokens.json?ref=factory-data');
+  });
+
+  test('tokensAsset rides a tag override too (both knobs compose)', function () {
+    var seen = [];
+    fsModule.fetchTokensFromBranch('o/r',
+      { tag: 'factory-data-eu', tokensAsset: 'factoryB-tokens.json' },
+      function (a) { seen.push(a.command); return { output: TOKENS }; });
+    assert.contains(seen[0], 'data/factoryB-tokens.json?ref=factory-data-eu');
+  });
+});
+
+// ── rework — contentsOf (shared gh Contents CONTENT probe) ───────────────────
+// One home for the probe/decode transport (gh-first whitelist + in-shell
+// base64 decode): fetchPreviousState, fetchTokensFromBranch and the
+// updateHistory index read all ride it.
+
+suite('factoryState — contentsOf (shared transport)', function () {
+  test('returns the decoded content from one gh Contents probe', function () {
+    var seen = [];
+    var raw = fsModule.contentsOf('o/r', 'data/fa-tokens.json',
+      { tag: 'factory-data' }, function (a) {
+        seen.push(a.command);
+        return { output: '{"pr-31":[]}' };
+      });
+    assert.equal(raw, '{"pr-31":[]}');
+    assert.equal(seen.length, 1, 'one probe per call');
+    assert.equal(seen[0],
+      'gh api repos/o/r/contents/data/fa-tokens.json?ref=factory-data --jq .content | base64 -d',
+      'gh-first whitelist + in-shell base64 decode, pinned in ONE place');
+  });
+
+  test('transport miss → null, never a throw (404 / rate limit)', function () {
+    assert.equal(fsModule.contentsOf('o/r', 'data/x.json', {},
+      function () { throw new Error('Not Found (HTTP 404)'); }), null, '404 → null');
+    assert.equal(fsModule.contentsOf('o/r', 'data/x.json', {},
+      function () { throw new Error('API rate limit exceeded'); }), null,
+      'rate limit → null');
+  });
+
+  test('empty exec response → empty string (callers JSON.parse-guard it)', function () {
+    assert.equal(fsModule.contentsOf('o/r', 'data/x.json', {},
+      function () { return undefined; }), '');
+  });
+});
+
+// ── rework — tokensLegCount (the 🪙 provenance line) ─────────────────────────
+
+suite('factoryState — tokensLegCount', function () {
+  test('sums rows across keys (pr + issue keys alike)', function () {
+    assert.equal(fsModule.tokensLegCount({
+      'pr-31': [{ leg: 'dev' }, { leg: 'review' }],
+      'issue-7': [{ leg: 'rework' }]
+    }), 3, '2 pr rows + 1 issue row');
+  });
+
+  test('null / empty / non-array values → 0 (decorative, never fatal)', function () {
+    assert.equal(fsModule.tokensLegCount(null), 0);
+    assert.equal(fsModule.tokensLegCount({}), 0);
+    assert.equal(fsModule.tokensLegCount({ 'pr-31': 'not-an-array' }), 0);
+  });
 });
 
 // ── publisher ────────────────────────────────────────────────────────────────
