@@ -16,9 +16,16 @@ function loadStoryPlanAction(mocks) {
             './config.js': configModule,
             './common/jiraHelpers.js': loadModule(
                 'js/common/jiraHelpers.js',
-                makeRequire({ '../config.js': configModule }),
+                makeRequire({ '../config.js': configModule, './trackers.js': loadModule('js/common/trackers.js', makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+            }), allMocks) }),
                 allMocks
             ),
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+            }), allMocks),
             './common/aiResponseParser.js': loadModule(
                 'js/common/aiResponseParser.js',
                 makeRequire({ '../config.js': configModule }),

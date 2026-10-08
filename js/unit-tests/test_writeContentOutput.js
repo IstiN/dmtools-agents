@@ -8,7 +8,13 @@ function loadContentOutputLib(mocks, projectConfig) {
     };
     return loadModule(
         'js/common/contentOutput.js',
-        makeRequire({ '../configLoader.js': configLoaderMock }),
+        makeRequire({
+            '../configLoader.js': configLoaderMock,
+            './trackers.js': loadModule('js/common/trackers.js', makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+            }), Object.assign({}, mocks || {}))
+        }),
         Object.assign({}, mocks || {})
     );
 }
@@ -114,6 +120,21 @@ suite('contentOutput lib', function() {
         });
         lib.writeToTrackerField('PROJ-10', 'Description', 'new', 'append');
         assert.equal(calls[0].value, 'new');
+    });
+
+    test('writeToTrackerField with an ado tracker calls ado_update_description {id}, never jira_* (wave2d3)', function() {
+        var adoCalls = [];
+        var mocks = {
+            ado_update_description: function(a) { adoCalls.push(a); },
+            jira_update_field: function() { throw new Error('jira_update_field must not be called'); }
+        };
+        var lib = loadContentOutputLib(mocks);
+        var tracker = loadTrackersWc(mocks).createTracker(null, { trackerProvider: 'ado' });
+        var r = lib.writeToTrackerField('77', 'description', 'body', 'replace', tracker);
+        assert.equal(adoCalls.length, 1);
+        assert.equal(String(adoCalls[0].id), '77');
+        assert.equal(adoCalls[0].description, 'body');
+        assert.equal(r.length, 4);
     });
 
     test('publishPage creates a page when none exists', function() {

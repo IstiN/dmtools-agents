@@ -6,8 +6,12 @@
  */
 
 const { ISSUE_TYPES, STATUSES } = require('./config.js');
-const { extractTicketKey, setTicketPriority } = require('./common/jiraHelpers.js');
+const trackersModule = require('./common/trackers.js');
+const { setTicketPriority } = require('./common/jiraHelpers.js');
 const { buildSummary } = require('./common/aiResponseParser.js');
+
+// Tracker for the current action() run (built inside action(), never at module load).
+var tracker = null;
 
 function tryReadFile(path) {
     try {
@@ -124,8 +128,8 @@ function fetchExistingStoriesByParent(parentKey, issueTypeName) {
     var summaryToKey = {};
     if (!parentKey) return summaryToKey;
 
-    var issues = jira_search_by_jql({
-        jql: 'parent = ' + parentKey + ' AND issuetype = "' + issueTypeName + '" ORDER BY created ASC',
+    // JQL text: provider-specific query (WIQL on ado)
+    var issues = tracker.searchIssues('parent = ' + parentKey + ' AND issuetype = "' + issueTypeName + '" ORDER BY created ASC', {
         fields: ['key', 'summary']
     }) || [];
 
@@ -158,26 +162,17 @@ function createStory(entry, resolvedParentKey, params, config) {
         fieldsJson.priority = { name: priority };
     }
 
-    var result = jira_create_ticket_with_json({
-        project: projectKey,
-        fieldsJson: fieldsJson
-    });
-
-    var createdKey = extractTicketKey(result);
+    var createdKey = tracker.createTicketWithFields(projectKey, fieldsJson);
     if (!createdKey) {
         throw new Error('Could not extract Jira key from create response');
     }
 
     if (priority) {
-        setTicketPriority(createdKey, priority);
+        setTicketPriority(createdKey, priority, tracker);
     }
 
     if (entry.storyPoints != null && !isNaN(entry.storyPoints)) {
-        jira_update_field({
-            key: createdKey,
-            field: 'Story Points',
-            value: Number(entry.storyPoints)
-        });
+        tracker.updateField(createdKey, 'Story Points', Number(entry.storyPoints));
     }
 
     return createdKey;
@@ -186,11 +181,7 @@ function createStory(entry, resolvedParentKey, params, config) {
 function linkToSource(createdKey, sourceKey, relationship) {
     if (!createdKey || !sourceKey || !relationship) return;
 
-    jira_link_issues({
-        sourceKey: createdKey,
-        anotherKey: sourceKey,
-        relationship: relationship
-    });
+    tracker.linkIssues(createdKey, sourceKey, relationship);
 }
 
 function linkStory(createdKey, params, config, isExisting) {
@@ -274,6 +265,7 @@ function action(params) {
         var jobParams = params.jobParams || {};
         var customParams = (params.customParams) || (jobParams.customParams) || {};
         var config = customParams.storyPlanCreation || {};
+        tracker = trackersModule.createTracker(null, customParams);
         var sourceTicketKey = params.ticket && params.ticket.key;
         var sourceLabels = getSourceLabels(params);
 
@@ -410,11 +402,7 @@ function action(params) {
                 var blockerKey = resolveKey(story.blockedBy[b]);
                 if (!blockerKey) continue;
                 try {
-                    jira_link_issues({
-                        sourceKey: blockedKey,
-                        anotherKey: blockerKey,
-                        relationship: blockedByRelationship
-                    });
+                    tracker.linkIssues(blockedKey, blockerKey, blockedByRelationship);
                     anyBlocked = true;
                 } catch (e) {
                     console.warn('Failed to create ' + blockedByRelationship + ' link between ' + blockerKey + ' and ' + blockedKey + ':', e);
@@ -423,10 +411,7 @@ function action(params) {
 
             if (anyBlocked && config.blockedStatusName !== false) {
                 try {
-                    jira_move_to_status({
-                        key: blockedKey,
-                        statusName: config.blockedStatusName || STATUSES.BLOCKED
-                    });
+                    tracker.moveToStatus(blockedKey, config.blockedStatusName || STATUSES.BLOCKED);
                 } catch (statusError) {
                     console.warn('Failed to move ' + blockedKey + ' to Blocked:', statusError);
                 }
@@ -442,11 +427,7 @@ function action(params) {
                 var otherKey = resolveKey(storyForLinking.integrates[l]);
                 if (!otherKey || otherKey === storyKey) continue;
                 try {
-                    jira_link_issues({
-                        sourceKey: storyKey,
-                        anotherKey: otherKey,
-                        relationship: 'Relates'
-                    });
+                    tracker.linkIssues(storyKey, otherKey, 'Relates');
                 } catch (e) {
                     console.warn('Failed to create Relates link between ' + storyKey + ' and ' + otherKey + ':', e);
                 }
@@ -458,10 +439,7 @@ function action(params) {
 
         if (config.postSummaryComment !== false) {
             try {
-                jira_post_comment({
-                    key: sourceTicketKey,
-                    comment: buildSummaryComment(results, config.summaryCommentTitle || 'Planned Follow-up Stories')
-                });
+                tracker.postComment(sourceTicketKey, buildSummaryComment(results, config.summaryCommentTitle || 'Planned Follow-up Stories'));
             } catch (commentError) {
                 console.warn('Failed to post story plan summary comment to ' + sourceTicketKey + ':', commentError);
             }
@@ -469,7 +447,7 @@ function action(params) {
 
         if (successfulCount > 0 && config.addLabel) {
             try {
-                jira_add_label({ key: sourceTicketKey, label: config.addLabel });
+                tracker.addLabel(sourceTicketKey, config.addLabel);
             } catch (labelError) {
                 console.warn('Failed to add label "' + config.addLabel + '" to ' + sourceTicketKey + ':', labelError);
             }

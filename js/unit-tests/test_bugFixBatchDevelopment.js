@@ -103,6 +103,10 @@ function loadDevelopBugFixBatchAndCreatePR(mocks) {
             './config.js': configModule,
             './configLoader.js': configLoaderModule,
             './common/pullRequest.js': prHelperStub,
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+            }), allMocks),
             './prepareBugFixBatchContext.js': mocks.batchContextStub || { findBugsInEpic: function() { return []; } }
         }),
         allMocks
@@ -250,6 +254,30 @@ suite('developBugFixBatchAndCreatePR', function() {
 
         assert.equal(loaded.comments.length, 1);
         assert.contains(loaded.comments[0].comment, 'https://github.com/IstiN/trackstate/pull/9999');
+    });
+
+    test('ado provider: transitions, labels and comment use ado_* tools only (wave2d3)', function() {
+        var adoCalls = [];
+        var loaded = loadDevelopBugFixBatchAndCreatePR({
+            batchContextStub: { findBugsInEpic: function() { return [makeBug('11')]; } },
+            ado_move_to_state: function(a) { adoCalls.push({ t: 'move', a: a }); },
+            ado_add_work_item_label: function(a) { adoCalls.push({ t: 'label', a: a }); },
+            ado_add_work_item_comment: function(a) { adoCalls.push({ t: 'comment', a: a }); },
+            jira_move_to_status: function() { throw new Error('jira_move_to_status must not be called'); },
+            jira_add_label: function() { throw new Error('jira_add_label must not be called'); },
+            jira_post_comment: function() { throw new Error('jira_post_comment must not be called'); }
+        });
+        loaded.mod.action({
+            inputFolderPath: 'input/10',
+            ticket: makeEpic('10'),
+            jobParams: { customParams: { trackerProvider: 'ado' } }
+        });
+        var moves = adoCalls.filter(function(c) { return c.t === 'move'; }).map(function(c) { return String(c.a.id); }).sort();
+        assert.deepEqual(moves, ['10', '11']);
+        assert.equal(adoCalls.filter(function(c) { return c.t === 'label'; }).length, 2);
+        var cm = adoCalls.filter(function(c) { return c.t === 'comment'; });
+        assert.equal(cm.length, 1);
+        assert.equal(String(cm[0].a.id), '10');
     });
 
     test('reuses existing PR and skips creation', function() {

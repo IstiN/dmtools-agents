@@ -97,12 +97,13 @@ function isJiraFieldTarget(cfg) {
  * modes. Append reads the current field value; ADF values (Jira v3) cannot be
  * merged with wiki markup and fall back to replace.
  */
-function writeToTrackerField(ticketKey, field, content, operationType) {
+function writeToTrackerField(ticketKey, field, content, operationType, tracker) {
     var valueToWrite = content;
+    if (!tracker) tracker = require('./trackers.js').createTracker(null, {});
     if (operationType === 'append') {
         var existing = '';
         try {
-            var freshTicket = jira_get_ticket({ key: ticketKey, fields: [field] });
+            var freshTicket = tracker.getIssue(ticketKey, [field]);
             var freshFields = (freshTicket && freshTicket.fields) ? freshTicket.fields : freshTicket;
             var rawValue = freshFields ? freshFields[field] : null;
             if (rawValue && typeof rawValue === 'object') {
@@ -115,7 +116,7 @@ function writeToTrackerField(ticketKey, field, content, operationType) {
         }
         valueToWrite = existing ? existing + '\n\n----\n\n' + content : content;
     }
-    jira_update_field({ key: ticketKey, field: field, value: valueToWrite });
+    tracker.updateField(ticketKey, field, valueToWrite);
     return { field: field, operationType: operationType, length: valueToWrite.length };
 }
 

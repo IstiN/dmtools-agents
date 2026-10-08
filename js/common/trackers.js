@@ -755,6 +755,10 @@ function createTracker(config, customParams) {
     function toIssueView(rawTicket) {
         var t = _parseJson(rawTicket);
         if (t && typeof t === 'object' && t.fields && t.fields.summary !== undefined) return t;
+        // Jira payload fetched with a fields filter (e.g. fields:['Description']) carries no summary —
+        // still a Jira payload: pass it through unchanged (ADO items always carry System.Title).
+        if (t && typeof t === 'object' && !Array.isArray(t) && t.fields && typeof t.fields === 'object' &&
+            t.fields['System.Title'] === undefined) return t;
         var n = normalizeTicket(t);
         if (!n) return null;
         var fields = {

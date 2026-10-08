@@ -16,7 +16,13 @@ var ticketKeyShapesModule = loadModule('js/common/ticketKeyShapes.js');
 function makeValidator(jiraGetTicketMock, ticketKeyShapesOverride) {
     return loadModule(
         'js/common/validateInputJql.js',
-        makeRequire({ './ticketKeyShapes.js': ticketKeyShapesOverride || ticketKeyShapesModule }),
+        makeRequire({
+            './ticketKeyShapes.js': ticketKeyShapesOverride || ticketKeyShapesModule,
+            './trackers.js': loadModule('js/common/trackers.js', makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': ticketKeyShapesModule
+            }), { jira_get_ticket: jiraGetTicketMock || function() { return null; } })
+        }),
         { jira_get_ticket: jiraGetTicketMock || function() { return null; } }
     );
 }
@@ -312,4 +318,30 @@ suite('validateInputJql: validateAndRequireTicket', function() {
         }, /Invalid or missing/);
     });
 
+});
+
+suite('validateInputJql: ado tracker (wave2d3)', function() {
+    test('requireTicketExists uses the injected ado tracker (ado_get_work_item {id}), no jira_get_ticket', function() {
+        var adoCalls = [];
+        var mocks = {
+            ado_get_work_item: function(a) {
+                adoCalls.push(a);
+                return { id: 7, fields: { 'System.Title': 'T', 'System.State': 'New' } };
+            },
+            jira_get_ticket: function() { throw new Error('jira_get_ticket must not be called'); }
+        };
+        var trackers = loadModule('js/common/trackers.js', makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': ticketKeyShapesModule
+        }), mocks);
+        var v = loadModule('js/common/validateInputJql.js', makeRequire({
+            './ticketKeyShapes.js': ticketKeyShapesModule,
+            './trackers.js': trackers
+        }), mocks);
+        var tracker = trackers.createTracker(null, { trackerProvider: 'ado' });
+        var t = v.requireTicketExists('7', tracker);
+        assert.equal(adoCalls.length, 1);
+        assert.equal(String(adoCalls[0].id), '7');
+        assert.equal(String(t.key), '7');
+    });
 });

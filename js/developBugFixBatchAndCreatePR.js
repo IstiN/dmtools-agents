@@ -8,6 +8,7 @@
  */
 
 var configLoader = require('./configLoader.js');
+var trackersModule = require('./common/trackers.js');
 var prHelper = require('./common/pullRequest.js');
 var batchContext = require('./prepareBugFixBatchContext.js');
 const { LABELS, STATUSES, resolveStatuses } = require('./config.js');
@@ -101,10 +102,10 @@ function ensurePRExists(branchName, epic, config, bugs) {
     });
 }
 
-function transitionTickets(keys, statusName) {
+function transitionTickets(keys, statusName, tracker) {
     for (var i = 0; i < keys.length; i++) {
         try {
-            jira_move_to_status({ key: keys[i], statusName: statusName });
+            tracker.moveToStatus(keys[i], statusName);
             console.log('Moved ' + keys[i] + ' to ' + statusName);
         } catch (e) {
             console.warn('Failed to move ' + keys[i] + ' to ' + statusName + ':', e);
@@ -112,10 +113,10 @@ function transitionTickets(keys, statusName) {
     }
 }
 
-function addLabels(keys, label) {
+function addLabels(keys, label, tracker) {
     for (var i = 0; i < keys.length; i++) {
         try {
-            jira_add_label({ key: keys[i], label: label });
+            tracker.addLabel(keys[i], label);
             console.log('Added label ' + label + ' to ' + keys[i]);
         } catch (e) {
             console.warn('Failed to add label ' + label + ' to ' + keys[i] + ':', e);
@@ -128,13 +129,14 @@ function action(params) {
         var actualParams = params.inputFolderPath ? params : (params.jobParams || params);
         var config = configLoader.loadProjectConfig(actualParams);
         _workingDir = config.workingDir || null;
+        var tracker = trackersModule.createTracker(config, actualParams.customParams || {});
 
         var epicFolder = actualParams.inputFolderPath;
         var epicKey = epicFolder.split('/').pop();
         var epic = actualParams.ticket || { key: epicKey, fields: {} };
         if (!epic.fields) {
             try {
-                epic = jira_get_ticket({ key: epicKey, fields: ['summary', 'description', 'status', 'labels'] });
+                epic = tracker.getIssue(epicKey, ['summary', 'description', 'status', 'labels']);
             } catch (e) {
                 console.warn('Could not fetch Epic details (non-fatal):', e);
                 epic = { key: epicKey, fields: {} };
@@ -162,17 +164,14 @@ function action(params) {
             keysToUpdate.push(bugs[i].key);
         }
 
-        transitionTickets(keysToUpdate, statuses.IN_REVIEW);
-        addLabels(keysToUpdate, LABELS.AI_DEVELOPED);
+        transitionTickets(keysToUpdate, statuses.IN_REVIEW, tracker);
+        addLabels(keysToUpdate, LABELS.AI_DEVELOPED, tracker);
 
         if (prResult && prResult.prUrl) {
             try {
-                jira_post_comment({
-                    key: epicKey,
-                    comment: 'h3. *Bug-fix Batch PR Created/Updated*\n\n' +
-                        'PR: ' + prResult.prUrl + '\n\n' +
-                        'Linked bugs: ' + bugs.map(function(b) { return b.key; }).join(', ')
-                });
+                tracker.postComment(epicKey, 'h3. *Bug-fix Batch PR Created/Updated*\n\n' +
+                    'PR: ' + prResult.prUrl + '\n\n' +
+                    'Linked bugs: ' + bugs.map(function(b) { return b.key; }).join(', '));
             } catch (e) {
                 console.warn('Failed to post PR comment on Epic (non-fatal):', e);
             }

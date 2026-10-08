@@ -4,10 +4,13 @@
  * posts an analysis comment, labels the source ticket, and moves it to Done.
  */
 
-const { extractTicketKey } = require('./common/jiraHelpers.js');
+const trackersModule = require('./common/trackers.js');
 const { buildSummary } = require('./common/aiResponseParser.js');
 const { ISSUE_TYPES, LABELS, STATUSES } = require('./config.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+
+// Tracker for the current action() run (built inside action(), never at module load).
+var tracker = null;
 
 /**
  * Read and parse outputs/stories.json
@@ -108,12 +111,7 @@ function attachFilesToTicket(key, entry) {
     entry.attachments.forEach(function(filePath) {
         try {
             var fileName = filePath.split('/').pop();
-            jira_attach_file_to_ticket({
-                ticketKey: key,
-                name: fileName,
-                filePath: filePath,
-                contentType: getContentType(filePath)
-            });
+            tracker.attachFile(key, fileName, filePath, getContentType(filePath));
             console.log('Attached ' + fileName + ' to ' + key);
         } catch (error) {
             console.warn('Failed to attach ' + filePath + ' to ' + key + ':', error);
@@ -127,11 +125,7 @@ function attachFilesToTicket(key, entry) {
 function setStoryPoints(key, entry) {
     if (!key || entry.storyPoints == null || isNaN(entry.storyPoints)) return;
     try {
-        jira_update_field({
-            key: key,
-            field: 'Story Points',
-            value: Number(entry.storyPoints)
-        });
+        tracker.updateField(key, 'Story Points', Number(entry.storyPoints));
         console.log('Set Story Points=' + entry.storyPoints + ' on ' + key);
     } catch (error) {
         console.warn('Failed to set Story Points on ' + key + ':', error);
@@ -158,11 +152,7 @@ function createBug(entry, projectKey) {
         if (entry.priority) {
             bugFields.priority = { name: entry.priority };
         }
-        var result = jira_create_ticket_with_json({
-            project: projectKey,
-            fieldsJson: bugFields
-        });
-        var key = extractTicketKey(result);
+        var key = tracker.createTicketWithFields(projectKey, bugFields);
         console.log('Created Bug: ' + (key || '(unknown key)') + ' - ' + summary);
         return key;
     } catch (error) {
@@ -190,11 +180,7 @@ function createEpic(entry, projectKey) {
         if (entry.priority) {
             epicFields.priority = { name: entry.priority };
         }
-        var result = jira_create_ticket_with_json({
-            project: projectKey,
-            fieldsJson: epicFields
-        });
-        var key = extractTicketKey(result);
+        var key = tracker.createTicketWithFields(projectKey, epicFields);
         console.log('Created Epic: ' + (key || '(unknown key)') + ' - ' + summary);
         return key;
     } catch (error) {
@@ -224,11 +210,7 @@ function createStory(entry, resolvedParent, projectKey) {
         if (entry.priority) {
             storyFields.priority = { name: entry.priority };
         }
-        var result = jira_create_ticket_with_json({
-            project: projectKey,
-            fieldsJson: storyFields
-        });
-        var key = extractTicketKey(result);
+        var key = tracker.createTicketWithFields(projectKey, storyFields);
         console.log('Created Story: ' + (key || '(unknown key)') + ' under ' + resolvedParent + ' - ' + summary);
         return key;
     } catch (error) {
@@ -245,11 +227,7 @@ function createStory(entry, resolvedParent, projectKey) {
 function linkToSource(createdKey, sourceKey) {
     if (!createdKey) return;
     try {
-        jira_link_issues({
-            sourceKey: createdKey,
-            anotherKey: sourceKey,
-            relationship: 'Relates'
-        });
+        tracker.linkIssues(createdKey, sourceKey, 'Relates');
         console.log('Linked ' + createdKey + ' relates to ' + sourceKey);
     } catch (error) {
         console.warn('Failed to link ' + createdKey + ' to ' + sourceKey + ':', error);
@@ -290,6 +268,7 @@ function buildFinalComment(results, aiComment) {
 }
 
 function action(params) {
+    tracker = trackersModule.createTracker(null, (params && params.jobParams && params.jobParams.customParams) || (params && params.customParams) || {});
     try {
         var ticketKey = params.ticket.key;
         var projectKey = ticketKey.split('-')[0];
@@ -326,7 +305,7 @@ function action(params) {
 
                 // Move bug to Ready For Development so SM picks it up immediately
                 try {
-                    jira_move_to_status({ key: key, statusName: STATUSES.READY_FOR_DEVELOPMENT });
+                    tracker.moveToStatus(key, STATUSES.READY_FOR_DEVELOPMENT);
                     console.log('Moved Bug ' + key + ' to Ready For Development');
                 } catch (e) {
                     console.warn('Failed to move bug ' + key + ' to Ready For Development:', e);
@@ -430,7 +409,7 @@ function action(params) {
                     return;
                 }
                 try {
-                    jira_link_issues({ sourceKey: blockedKey, anotherKey: blockerKey, relationship: 'Blocks' });
+                    tracker.linkIssues(blockedKey, blockerKey, 'Blocks');
                     console.log(blockerKey + ' blocks ' + blockedKey);
                     anyLinked = true;
                 } catch (e) {
@@ -439,7 +418,7 @@ function action(params) {
             });
             if (anyLinked) {
                 try {
-                    jira_move_to_status({ key: blockedKey, statusName: STATUSES.BLOCKED });
+                    tracker.moveToStatus(blockedKey, STATUSES.BLOCKED);
                     console.log('Set ' + blockedKey + ' to Blocked');
                 } catch (e) {
                     console.warn('Failed to set Blocked status on ' + blockedKey + ':', e);
@@ -455,7 +434,7 @@ function action(params) {
                 var otherKey = resolveKey(ref);
                 if (!otherKey || otherKey === storyKey) return;
                 try {
-                    jira_link_issues({ sourceKey: storyKey, anotherKey: otherKey, relationship: 'Relates' });
+                    tracker.linkIssues(storyKey, otherKey, 'Relates');
                     console.log(storyKey + ' relates to ' + otherKey + ' (integration)');
                 } catch (e) {
                     console.warn('Failed to link integration ' + storyKey + ' <-> ' + otherKey + ':', e);
@@ -469,10 +448,7 @@ function action(params) {
         // 6. Post combined comment to source ticket
         try {
             var finalComment = buildFinalComment(results, aiComment);
-            jira_post_comment({
-                key: ticketKey,
-                comment: finalComment
-            });
+            tracker.postComment(ticketKey, finalComment);
             console.log('Posted intake analysis comment to ' + ticketKey);
         } catch (commentError) {
             console.warn('Failed to post comment to ' + ticketKey + ':', commentError);
@@ -480,30 +456,21 @@ function action(params) {
 
         // 7. Add ai_intake label
         try {
-            jira_add_label({
-                key: ticketKey,
-                label: LABELS.AI_INTAKE
-            });
+            tracker.addLabel(ticketKey, LABELS.AI_INTAKE);
         } catch (labelError) {
             console.warn('Failed to add ' + LABELS.AI_INTAKE + ' label:', labelError);
         }
 
         // 8. Add ai_generated label
         try {
-            jira_add_label({
-                key: ticketKey,
-                label: LABELS.AI_GENERATED
-            });
+            tracker.addLabel(ticketKey, LABELS.AI_GENERATED);
         } catch (labelError) {
             console.warn('Failed to add ' + LABELS.AI_GENERATED + ' label:', labelError);
         }
 
         // 9. Assign to initiator
         try {
-            jira_assign_ticket_to({
-                key: ticketKey,
-                accountId: initiatorId
-            });
+            tracker.assignTo(ticketKey, initiatorId);
             console.log('Assigned ' + ticketKey + ' to initiator');
         } catch (assignError) {
             console.warn('Failed to assign ticket:', assignError);
@@ -511,10 +478,7 @@ function action(params) {
 
         // 10. Move to In Development (transition name is 'In Progress' in this Jira instance)
         try {
-            jira_move_to_status({
-                key: ticketKey,
-                statusName: STATUSES.IN_PROGRESS
-            });
+            tracker.moveToStatus(ticketKey, STATUSES.IN_PROGRESS);
             console.log('Moved ' + ticketKey + ' to In Development');
         } catch (statusError) {
             console.warn('Failed to move ticket to In Development:', statusError);
@@ -523,10 +487,7 @@ function action(params) {
         // 11. Remove WIP label if present
         if (wipLabel) {
             try {
-                jira_remove_label({
-                    key: ticketKey,
-                    label: wipLabel
-                });
+                tracker.removeLabel(ticketKey, wipLabel);
                 console.log('Removed WIP label "' + wipLabel + '" from ' + ticketKey);
             } catch (wipError) {
                 console.warn('Failed to remove WIP label:', wipError);
@@ -538,7 +499,7 @@ function action(params) {
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
         try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
+            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }
@@ -554,10 +515,7 @@ function action(params) {
 
         try {
             if (params && params.ticket && params.ticket.key) {
-                jira_post_comment({
-                    key: params.ticket.key,
-                    comment: '*Intake Workflow Error:* ' + error.toString() + '. Please check server logs for details.'
-                });
+                tracker.postComment(params.ticket.key, '*Intake Workflow Error:* ' + error.toString() + '. Please check server logs for details.');
             }
         } catch (commentError) {
             console.error('Failed to post error comment:', commentError);
@@ -568,4 +526,8 @@ function action(params) {
             error: error.toString()
         };
     }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { action: action };
 }

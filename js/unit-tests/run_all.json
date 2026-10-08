@@ -44,6 +44,7 @@
         "js/unit-tests/test_wave1aiiTrackerMigration.js",
         "js/unit-tests/test_wave1aTrackerMigration.js",
         "js/unit-tests/test_wave1bTrackers.js",
+        "js/unit-tests/test_wave2d3Tracker.js",
         "js/unit-tests/test_recoverFailedTCBugStatus.js",
         "js/unit-tests/test_unblockResolvedDependencies.js",
         "js/unit-tests/test_prepareDiscoveryContext.js",

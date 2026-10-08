@@ -16,6 +16,7 @@ const gh = require('./common/githubHelpers.js');
 const autoStart = require('./common/autoStart.js');
 const configLoader = require('./configLoader.js');
 const outputFiles = require('./common/outputFiles.js');
+const trackersModule = require('./common/trackers.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 
 function readFile(path) {
@@ -36,9 +37,9 @@ function readReviewJson(ticketKey, workingDir) {
     }
 }
 
-function getCurrentTicketStatus(ticketKey) {
+function getCurrentTicketStatus(ticketKey, tracker) {
     try {
-        const ticket = jira_get_ticket({ key: ticketKey });
+        const ticket = tracker.getIssue(ticketKey);
         return ticket && ticket.fields && ticket.fields.status
             ? ticket.fields.status.name
             : null;
@@ -247,9 +248,9 @@ function triggerReworkIfConfigured(ticketKey, config, customParams) {
     }
 }
 
-function markForSmTestRework(ticketKey) {
+function markForSmTestRework(ticketKey, tracker) {
     try {
-        jira_add_label({ key: ticketKey, label: 'sm_test_rework_triggered' });
+        tracker.addLabel(ticketKey, 'sm_test_rework_triggered');
         console.log('✅ Added SM rework label: sm_test_rework_triggered');
         return true;
     } catch (e) {
@@ -278,6 +279,7 @@ function resolveCustomParams(params, config) {
 }
 
 function action(params) {
+    var tracker = null;
     try {
         const ticketKey = params.ticket.key;
         const jiraComment = params.response || '';
@@ -285,19 +287,17 @@ function action(params) {
         const jiraConfig = config.jira;
         const customParams = resolveCustomParams(params, config);
         const workingDir = config.workingDir || null;
+        tracker = trackersModule.createTracker(config, customParams);
 
         console.log('=== Processing test automation review for', ticketKey, '===');
 
         // Step 1: Read review data
         const reviewData = readReviewJson(ticketKey, workingDir);
         if (!reviewData) {
-            jira_post_comment({
-                key: ticketKey,
-                comment: 'h3. ⚠️ Review Error\n\nCould not read pr_review.json. Removed SM trigger label so SM can retry.'
-            });
+            tracker.postComment(ticketKey, 'h3. ⚠️ Review Error\n\nCould not read pr_review.json. Removed SM trigger label so SM can retry.');
             try {
                 const smTriggerLabel = customParams.removeLabel || 'sm_test_review_triggered';
-                jira_remove_label({ key: ticketKey, label: smTriggerLabel });
+                tracker.removeLabel(ticketKey, smTriggerLabel);
                 console.log('✅ Removed SM trigger label after missing review:', smTriggerLabel);
             } catch (e) {
                 console.warn('Failed to remove SM trigger label after missing review:', e);
@@ -306,7 +306,7 @@ function action(params) {
                 const wipLabelMissingReview = params.metadata && params.metadata.contextId
                     ? params.metadata.contextId + '_wip'
                     : 'pr_test_automation_review_wip';
-                jira_remove_label({ key: ticketKey, label: wipLabelMissingReview });
+                tracker.removeLabel(ticketKey, wipLabelMissingReview);
             } catch (e) {
                 console.warn('Failed to remove WIP label after missing review:', e);
             }
@@ -326,7 +326,7 @@ function action(params) {
         console.log('Review recommendation:', reviewData.recommendation);
 
         // Step 2: Get current ticket status (to determine Passed vs Failed on approval)
-        const currentStatus = getCurrentTicketStatus(ticketKey);
+        const currentStatus = getCurrentTicketStatus(ticketKey, tracker);
         console.log('Current ticket status:', currentStatus);
 
         // Step 3: Get repo info + PR number
@@ -378,7 +378,7 @@ function action(params) {
                     console.warn('Failed to add pr_approved to GitHub PR:', e);
                 }
                 try {
-                    jira_add_label({ key: ticketKey, label: LABELS.PR_APPROVED });
+                    tracker.addLabel(ticketKey, LABELS.PR_APPROVED);
                     console.log('✅ Added pr_approved label to Jira ticket');
                 } catch (e) {
                     console.warn('Failed to add pr_approved to Jira ticket:', e);
@@ -393,7 +393,7 @@ function action(params) {
         // Step 5: Post Jira comment
         try {
             if (jiraComment) {
-                jira_post_comment({ key: ticketKey, comment: jiraComment });
+                tracker.postComment(ticketKey, jiraComment);
                 console.log('✅ Posted review comment to Jira');
             }
         } catch (e) {
@@ -407,10 +407,10 @@ function action(params) {
             autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
         } else {
             try {
-                jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.IN_REWORK });
+                tracker.moveToStatus(ticketKey, jiraConfig.statuses.IN_REWORK);
                 console.log('✅ Changes requested — moved', ticketKey, 'to In Rework');
                 if (!triggerReworkIfConfigured(ticketKey, config, customParams)) {
-                    markForSmTestRework(ticketKey);
+                    markForSmTestRework(ticketKey, tracker);
                     autoStart.triggerSmIfIdle({ config: config, customParams: customParams });
                 }
             } catch (e) {
@@ -420,18 +420,18 @@ function action(params) {
 
         // Step 7: Add label + remove WIP
         try {
-            jira_add_label({ key: ticketKey, label: LABELS.AI_PR_REVIEWED });
+            tracker.addLabel(ticketKey, LABELS.AI_PR_REVIEWED);
         } catch (e) {}
 
         const wipLabel = params.metadata && params.metadata.contextId
             ? params.metadata.contextId + '_wip'
             : 'pr_test_automation_review_wip';
         try {
-            jira_remove_label({ key: ticketKey, label: wipLabel });
+            tracker.removeLabel(ticketKey, wipLabel);
         } catch (e) {}
 
         try {
-            jira_remove_label({ key: ticketKey, label: 'sm_test_review_triggered' });
+            tracker.removeLabel(ticketKey, 'sm_test_review_triggered');
             console.log('✅ Removed SM label: sm_test_review_triggered');
         } catch (e) {}
 
@@ -463,17 +463,15 @@ function action(params) {
 
     } catch (error) {
         console.error('❌ Error in postTestReviewComments:', error);
+        if (!tracker) tracker = trackersModule.createTracker(null, (params && params.customParams) || (params && params.jobParams && params.jobParams.customParams) || {});
         try {
             const ticketKey = params.ticket ? params.ticket.key : (params.inputFolderPath ? params.inputFolderPath.split('/').pop() : null);
             if (ticketKey) {
-                jira_remove_label({ key: ticketKey, label: 'sm_test_review_triggered' });
+                tracker.removeLabel(ticketKey, 'sm_test_review_triggered');
             }
         } catch (e) {}
         try {
-            jira_post_comment({
-                key: params.ticket.key,
-                comment: 'h3. ❌ Test Review Error\n\n{code}' + error.toString() + '{code}'
-            });
+            tracker.postComment(params.ticket.key, 'h3. ❌ Test Review Error\n\n{code}' + error.toString() + '{code}');
         } catch (e) {}
         return { success: false, error: error.toString() };
     }
