@@ -462,3 +462,191 @@ suite('developBugAndCreatePR', function() {
     });
 
 });
+
+// ── gh-775: resume-before-cold-reset (bug pre-check path) ────────────
+// The bug post-action's own response.md-missing branch cold-resets BEFORE it
+// ever delegates to developTicketAndCreatePR — it needs the same ONE bounded
+// resume attempt in front of the reset. Uses the REAL common/feedbackLoop.js
+// so the wrapper invocation is observed through the captured cli commands.
+function loadBugForMissingResponseResume(opts) {
+    opts = opts || {};
+    var files = {};
+    var commands = [];
+    var comments = [];
+    var moves = [];
+    var removed = [];
+    var delegated = 0;
+
+    var sharedFileRead = function (args) {
+        var path = args && (args.path || args);
+        if (files[path] !== undefined) return files[path];
+        throw new Error('ENOENT: ' + path);
+    };
+    var sharedFileWrite = function (args) {
+        files[args && args.path] = args && args.content;
+    };
+    var baseCli = function (args) {
+        var command = args.command;
+        if (command.indexOf('gh pr list --head ') === 0) return '';
+        if (command.indexOf('git check-ignore') === 0) {
+            // gh-683 probe: not-ignored repo → keep exclusions
+            throw new Error('Command execution failed (exit code 1)');
+        }
+        if (command === 'git status --porcelain') return 'A  outputs/rca.md\n';
+        if (command === 'git branch --show-current') return 'main\n';
+        return '';
+    };
+    var cliMock = function (args) {
+        commands.push(args.command);
+        if (args.command.indexOf('run-agent.sh') !== -1 && opts.wrapperImpl) {
+            return opts.wrapperImpl(args.command);
+        }
+        return baseCli(args);
+    };
+
+    var realFeedbackLoop = loadModule('js/common/feedbackLoop.js', null, {
+        file_read: sharedFileRead,
+        file_write: sharedFileWrite,
+        cli_execute_command: cliMock
+    });
+    var realOutputFiles = loadModule('js/common/outputFiles.js', null, {
+        file_read: sharedFileRead
+    });
+
+    var mod = loadModule(
+        'js/developBugAndCreatePR.js',
+        makeRequire({
+            './config.js': configModule,
+            './common/gitStaging.js': gitStagingModule,
+            './configLoader.js': configLoaderModule,
+            './common/outputFiles.js': realOutputFiles,
+            './common/feedbackLoop.js': realFeedbackLoop,
+            './developTicketAndCreatePR.js': {
+                action: function () { delegated++; return { success: true, path: 'delegated' }; },
+                throwInterruptedReset: developTicketRealModule.throwInterruptedReset
+            },
+            './common/commentMarkup.js': commentMarkupModule
+        }),
+        {
+            cli_execute_command: cliMock,
+            file_read: sharedFileRead,
+            file_write: sharedFileWrite,
+            jira_post_comment: function (args) { comments.push(args); },
+            jira_move_to_status: function (args) { moves.push(args); },
+            jira_remove_label: function (args) { removed.push(args); }
+        }
+    );
+
+    return {
+        mod: mod, files: files, commands: commands, comments: comments,
+        moves: moves, removed: removed,
+        delegatedCount: function () { return delegated; }
+    };
+}
+
+function bugWrapperCommandCount(commands) {
+    var n = 0;
+    for (var i = 0; i < commands.length; i++) {
+        if (commands[i].indexOf('run-agent.sh --continue') !== -1) n++;
+    }
+    return n;
+}
+
+suite('developBugAndCreatePR > resume-before-cold-reset (gh-775)', function () {
+
+    test('AC2+AC3 (bug): missing response.md + resumable → ONE bounded resume lands the deliverable → normal continuation, no reset, no partial-work push', function () {
+        var state = { files: null };
+        var loaded = loadBugForMissingResponseResume({
+            wrapperImpl: function () {
+                state.files['outputs/response.md'] = '### Root Cause Analysis\nBug fixed with a regression test.\n';
+                return '';
+            }
+        });
+        state.files = loaded.files;
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-50', fields: { summary: 'hung verification, bug fixed', description: '', labels: [] } },
+            metadata: { contextId: 'bug_development' },
+            jobParams: {
+                customParams: {
+                    removeLabel: 'sm_bug_development_triggered',
+                    feedbackLoop: { enabled: true }
+                }
+            }
+        });
+
+        assert.equal(bugWrapperCommandCount(loaded.commands), 1,
+            'exactly one bounded wrapper invocation — commands: ' + JSON.stringify(loaded.commands));
+        var wrapper = loaded.commands.filter(function (c) { return c.indexOf('run-agent.sh --continue') !== -1; })[0];
+        assert.equal(wrapper,
+            'bash -c "timeout -k 60 2400 bash agents/scripts/run-agent.sh --continue outputs/feedback/TS-50_missing_response.md"');
+        assert.equal(loaded.delegatedCount(), 1,
+            'the landed deliverable continues into the normal development path');
+        assert.equal(result.path, 'delegated');
+        assert.equal(loaded.comments.length, 0, 'no interrupted comment');
+        assert.deepEqual(loaded.moves, [], 'no status move');
+        var pushCommands = loaded.commands.filter(function (c) { return c.indexOf('git push') === 0; });
+        assert.equal(pushCommands.length, 0,
+            'no partial-work push — the resumed session finishes and the post-action commits normally');
+    });
+
+    test('AC4 (bug): resume fails → the existing interrupted sequence runs verbatim (partial-work push, comment, reset, wip removal, throw)', function () {
+        var loaded = loadBugForMissingResponseResume({
+            wrapperImpl: function () {
+                throw new Error('Command failed (exit code 124): timeout -k 60 2400 ...');
+            }
+        });
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-51', fields: { summary: 'resume timed out', description: '', labels: [] } },
+                metadata: { contextId: 'bug_development' },
+                jobParams: {
+                    customParams: {
+                        removeLabel: 'sm_bug_development_triggered',
+                        feedbackLoop: { enabled: true }
+                    }
+                }
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught && caught.interruptedReset === true,
+            'the verbatim cold reset still fails the run');
+        assert.equal(bugWrapperCommandCount(loaded.commands), 1, 'exactly one bounded attempt');
+        assert.ok(loaded.commands.indexOf('git checkout -B ai/TS-51') !== -1,
+            'partial analysis work is still switched to the development branch');
+        assert.ok(loaded.commands.indexOf('git push -u origin ai/TS-51 --force-with-lease') !== -1,
+            'partial analysis work is still pushed before the reset');
+        assert.deepEqual(loaded.moves, [{ key: 'TS-51', statusName: 'Ready For Development' }]);
+        assert.deepEqual(loaded.removed, [
+            { key: 'TS-51', label: 'bug_development_wip' },
+            { key: 'TS-51', label: 'sm_bug_development_triggered' }
+        ]);
+        assert.equal(loaded.comments.length, 1);
+        assert.contains(loaded.comments[0].comment, 'Development Interrupted');
+    });
+
+    test('AC5 (bug): not resumable → cold reset directly, NO wrapper invocation', function () {
+        var loaded = loadBugForMissingResponseResume();
+
+        var caught = null;
+        try {
+            loaded.mod.action({
+                ticket: { key: 'TS-52', fields: { summary: 'not resumable', description: '', labels: [] } },
+                metadata: { contextId: 'bug_development' },
+                jobParams: { customParams: { removeLabel: 'sm_bug_development_triggered' } }
+            });
+        } catch (e) {
+            caught = e;
+        }
+
+        assert.ok(caught && caught.interruptedReset === true);
+        assert.equal(bugWrapperCommandCount(loaded.commands), 0,
+            'no wrapper invocation without the feedback-loop opt-in');
+        assert.deepEqual(loaded.moves, [{ key: 'TS-52', statusName: 'Ready For Development' }]);
+    });
+
+});

@@ -554,6 +554,63 @@ function throwFatalCliEnvironmentError(ticketKey, errorMessage) {
 }
 
 /**
+ * Reads outputs/response.md (with ticketKey/workingDir candidate expansion),
+ * returning null when it is missing or blank. Shared by the missing-response
+ * cold-reset sites below so the read shape stays identical everywhere.
+ */
+function readResponseMd(ticketKey) {
+    try {
+        return outputFiles.readOutputFile('response.md', {
+            ticketKey: ticketKey,
+            workingDir: _workingDir
+        });
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * gh-775: recovery gate for a missing/blank outputs/response.md, shared by
+ * both cold-reset sites. Order is fixed by the acceptance criteria:
+ *
+ *   1. Fatal CLI/environment class (missing provider binary, unknown provider,
+ *      fatal provider error) → throwFatalCliEnvironmentError. A resume can
+ *      never fix that class, so the resume never preempts it (AC6).
+ *   2. Otherwise exactly ONE bounded resume attempt re-invokes the provider
+ *      wrapper with the follow-up prompt — "the verification run hung:
+ *      bash_job stop it, note it, write outputs/response.md and finish" — so
+ *      a session that lost time to a hung background child can still land the
+ *      deliverable (AC2). Zero tracker side effects happen before the attempt
+ *      resolves; the caller only reaches its comment/status/wip sequence when
+ *      the deliverable is STILL missing (AC4).
+ *
+ * Returns the re-read response content, or null when the resume is not
+ * applicable / did not land — the caller then continues into its existing
+ * cold-reset path unchanged.
+ */
+function recoverMissingResponse(ticketKey, customParams, developmentSummary, cliHasFatalError, cliErrorMessage) {
+    if (isFatalCliEnvironmentError(developmentSummary, cliHasFatalError)) {
+        console.error('CLI/environment failure detected (e.g. AI CLI binary missing from PATH, or a fatal provider/network error reported by dmtools) — failing the job explicitly instead of resetting for retry.');
+        throwFatalCliEnvironmentError(ticketKey, cliErrorMessage || developmentSummary);
+    }
+    var resume = feedbackLoop.resumeOnceForMissingResponse({
+        ticketKey: ticketKey,
+        customParams: customParams
+    });
+    if (!resume.attempted) {
+        console.log('Bounded resume for the missing deliverable not attempted (' + (resume.reason || 'disabled') + ') — continuing to the existing reset path.');
+        return null;
+    }
+    var recovered = readResponseMd(ticketKey);
+    if (recovered && recovered.trim()) {
+        console.log('✅ Bounded resume landed outputs/response.md — continuing the normal path (no cold reset).');
+        return recovered;
+    }
+    console.log('Bounded resume did not land outputs/response.md — continuing to the existing reset path.');
+    return null;
+}
+
+/**
  * Throws a marked Error so a Git-Operations failure propagates out of
  * action() and the workflow run is RED — the SM (and any human watching
  * the run list) can tell a dead dev letter from a green one.
@@ -970,14 +1027,14 @@ function action(params) {
                 //   (B) Agent was interrupted mid-analysis (e.g. rate limit, crash).
                 //       outputs/response.md is missing or empty.
                 //       → Reset to Ready For Development for automatic retry.
-                var agentResponse = null;
-                try {
-                    agentResponse = outputFiles.readOutputFile('response.md', {
-                        ticketKey: ticketKey,
-                        workingDir: _workingDir
-                    });
-                } catch (e) {
-                    agentResponse = null;
+                var agentResponse = readResponseMd(ticketKey);
+                // gh-775: response.md missing/blank AND the session may still be resumable
+                // (a hung background verification job stalled the run after the real work
+                // was done). Fatal CLI/environment errors are checked FIRST — a resume
+                // can never fix them — then exactly ONE bounded resume attempt runs,
+                // before ANY tracker side effect in the paths below.
+                if (!agentResponse || !agentResponse.trim()) {
+                    agentResponse = recoverMissingResponse(ticketKey, _customParams, developmentSummary, cliHasFatalError, cliErrorMessage);
                 }
                 var wipLabelIfNoChanges = actualParams.metadata && actualParams.metadata.contextId
                     ? actualParams.metadata.contextId + '_wip' : null;
@@ -1021,11 +1078,10 @@ function action(params) {
 
                 // Case B: agent was genuinely interrupted, OR the CLI/environment itself is
                 // broken (e.g. missing AI CLI binary, or a fatal provider/network error) —
-                // the latter can never self-resolve via retry.
-                if (isFatalCliEnvironmentError(developmentSummary, cliHasFatalError)) {
-                    console.error('CLI/environment failure detected (e.g. AI CLI binary missing from PATH, or a fatal provider/network error reported by dmtools) — failing the job explicitly instead of resetting for retry.');
-                    throwFatalCliEnvironmentError(ticketKey, cliErrorMessage || developmentSummary);
-                }
+                // the latter can never self-resolve via retry. The fatal class was already
+                // diverted by recoverMissingResponse() above (gh-775 AC6: the resume never
+                // preempts it), so this block only runs for a genuinely interrupted agent
+                // whose one bounded resume attempt (if any) did not land the deliverable.
                 console.log('No git changes detected AND no response.md — CLI agent was interrupted. Resetting ticket for retry.');
                 try {
                     jira_post_comment({
@@ -1122,49 +1178,43 @@ function action(params) {
         }
 
         // Verify outputs/response.md exists (must be created by cursor-agent or workflow)
-        let responseContent;
-        try {
-            responseContent = outputFiles.readOutputFile('response.md', {
-                ticketKey: ticketKey,
-                workingDir: _workingDir
-            });
-        } catch (e) {
-            responseContent = null;
-        }
+        let responseContent = readResponseMd(ticketKey);
         if (!responseContent || !responseContent.trim()) {
-            // Same distinction as above: an unrecoverable CLI/environment failure must fail
-            // the job explicitly rather than reset for an endless retry loop.
-            if (isFatalCliEnvironmentError(developmentSummary, cliHasFatalError)) {
-                console.error('CLI/environment failure detected (e.g. AI CLI binary missing from PATH, or a fatal provider/network error reported by dmtools) — failing the job explicitly instead of resetting for retry.');
-                throwFatalCliEnvironmentError(ticketKey, cliErrorMessage || developmentSummary);
+            // gh-775: fatal CLI/environment errors are checked FIRST (a resume can
+            // never fix them — AC6), then exactly ONE bounded resume attempt: the
+            // session may still be alive with a hung background verification child,
+            // one step away from writing the deliverable (live fa gh-1341). The
+            // tracker side effects below fire only if the deliverable is still
+            // missing after the attempt resolves.
+            responseContent = recoverMissingResponse(ticketKey, _customParams, developmentSummary, cliHasFatalError, cliErrorMessage) || responseContent;
+            if (!responseContent || !responseContent.trim()) {
+                // Agent was interrupted after committing partial work (e.g. outputs/rca.md) but
+                // before writing response.md. Reset ticket for retry rather than posting an error.
+                console.log('outputs/response.md missing after commit — CLI agent was interrupted mid-way. Resetting for retry.');
+                try {
+                    jira_post_comment({
+                        key: ticketKey,
+                        comment: commentMarkup.forTicket(ticketKey).h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted before completing the implementation (partial work was pushed to branch ' + commentMarkup.forTicket(ticketKey).bold(branchName) + '). The ticket has been reset to ' + commentMarkup.forTicket(ticketKey).bold('Ready For Development') + ' and will be automatically retried.\n\nThe agent can resume from the existing branch.'
+                    });
+                } catch (e) { }
+                try {
+                    jira_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
+                    console.log('✅ Moved', ticketKey, 'to Ready For Development for retry');
+                } catch (e) {
+                    console.warn('Failed to move ticket to Ready For Development:', e);
+                }
+                const wipLabel2 = actualParams.metadata && actualParams.metadata.contextId
+                    ? actualParams.metadata.contextId + '_wip' : null;
+                if (wipLabel2) {
+                    try { jira_remove_label({ key: ticketKey, label: wipLabel2 }); } catch (e) { }
+                }
+                // gh-742: ticket is reset for retry — fail the RUN so this
+                // interrupted half-exit is a visible dead letter, not a green
+                // no-PR leg that arms review downstream.
+                throwInterruptedReset(ticketKey);
             }
-            // Agent was interrupted after committing partial work (e.g. outputs/rca.md) but
-            // before writing response.md. Reset ticket for retry rather than posting an error.
-            console.log('outputs/response.md missing after commit — CLI agent was interrupted mid-way. Resetting for retry.');
-            try {
-                jira_post_comment({
-                    key: ticketKey,
-                    comment: commentMarkup.forTicket(ticketKey).h(3, '⏸️ Development Interrupted') + '\n\nThe AI agent was interrupted before completing the implementation (partial work was pushed to branch ' + commentMarkup.forTicket(ticketKey).bold(branchName) + '). The ticket has been reset to ' + commentMarkup.forTicket(ticketKey).bold('Ready For Development') + ' and will be automatically retried.\n\nThe agent can resume from the existing branch.'
-                });
-            } catch (e) { }
-            try {
-                jira_move_to_status({ key: ticketKey, statusName: statuses.READY_FOR_DEVELOPMENT });
-                console.log('✅ Moved', ticketKey, 'to Ready For Development for retry');
-            } catch (e) {
-                console.warn('Failed to move ticket to Ready For Development:', e);
-            }
-            const wipLabel2 = actualParams.metadata && actualParams.metadata.contextId
-                ? actualParams.metadata.contextId + '_wip' : null;
-            if (wipLabel2) {
-                try { jira_remove_label({ key: ticketKey, label: wipLabel2 }); } catch (e) { }
-            }
-            // gh-742: ticket is reset for retry — fail the RUN so this
-            // interrupted half-exit is a visible dead letter, not a green
-            // no-PR leg that arms review downstream.
-            throwInterruptedReset(ticketKey);
         }
         console.log('Using outputs/response.md as PR body (' + responseContent.length + ' characters)');
-
         // Create Pull Request
         const prTitle = configLoader.formatTemplate(config.formats.prTitle.development, { ticketKey: ticketKey, ticketSummary: ticketSummary });
         const prResult = createPullRequest(prTitle, branchName, prTarget, ticketKey);

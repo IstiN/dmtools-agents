@@ -25,6 +25,7 @@ const developTicket = require('./developTicketAndCreatePR.js');
 const commentMarkup = require('./common/commentMarkup.js');
 const outputFiles = require('./common/outputFiles.js');
 const gitStaging = require('./common/gitStaging.js');
+const feedbackLoop = require('./common/feedbackLoop.js');
 
 function cleanCliOutput(output) {
     return (output || '').split('\n').filter(function(l) {
@@ -49,6 +50,19 @@ function hasCodeGraphUsage() {
     try {
         const raw = file_read({ path: '.dmtools/codegraph-usage.log' });
         return !!(raw && raw.trim());
+    } catch (e) {
+        return false;
+    }
+}
+
+/**
+ * True when outputs/response.md exists with content (shared by the initial
+ * tree check and the gh-775 post-resume re-check so both use one read shape).
+ */
+function readHasResponseMd(ticketKey) {
+    try {
+        const r = outputFiles.readOutputFile('response.md', { ticketKey: ticketKey });
+        return !!(r && r.trim());
     } catch (e) {
         return false;
     }
@@ -264,15 +278,26 @@ function action(params) {
             console.warn('Could not check git status:', e);
         }
 
-        let hasResponseMd = false;
-        try {
-            const r = outputFiles.readOutputFile('response.md', { ticketKey: ticketKeyForCheck });
-            hasResponseMd = !!(r && r.trim());
-        } catch (e) {}
+        let hasResponseMd = readHasResponseMd(ticketKeyForCheck);
 
         console.log('Working tree check: git changes present = ' + hasGitChanges +
             '; outputs/response.md = ' + (hasResponseMd ? 'present' : 'MISSING') +
             (hasGitChanges || hasResponseMd ? '' : ' — neither work nor a response; the agent produced nothing'));
+
+        // gh-775: before the cold reset, give a still-resumable session exactly
+        // ONE bounded chance to land the missing deliverable (e.g. a hung
+        // background verification job stalled the run after the real work was
+        // done). The tracker side effects below fire only if this fails.
+        if (!hasResponseMd) {
+            feedbackLoop.resumeOnceForMissingResponse({
+                ticketKey: ticketKeyForCheck,
+                customParams: _customParams
+            });
+            hasResponseMd = readHasResponseMd(ticketKeyForCheck);
+            if (hasResponseMd) {
+                console.log('✅ Bounded resume landed outputs/response.md — continuing the normal development path (no cold reset).');
+            }
+        }
 
         if (!hasResponseMd) {
             // CLI agent did not finish (rate limit / crash). Push whatever partial work exists
