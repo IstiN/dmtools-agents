@@ -112,8 +112,9 @@ suite('wave1a-ii tracker migration — enhanceSolutionDesignDescriptionAndAssess
         assert.equal(r.success, true);
         w2NoJira(rec.calls);
         var t = w2Tools(rec.calls);
-        // ado_update_field resolves via a global (not module mock) and soft-fails here; it must never hit jira_*
-        assert.deepEqual(t, ['ado_update_description', 'ado_assign_work_item', 'ado_move_to_state', 'ado_add_work_item_label', 'ado_remove_work_item_label']);
+        // ado_update_field is a real tool now (dm.ai#663); recorded through the same mock set.
+        assert.deepEqual(t, ['ado_update_description', 'ado_update_field', 'ado_assign_work_item', 'ado_move_to_state',
+            'ado_add_work_item_label', 'ado_remove_work_item_label']);
         assert.ok(t.indexOf('ado_move_to_state') >= 0);
         assert.ok(t.indexOf('ado_assign_work_item') >= 0);
     });
