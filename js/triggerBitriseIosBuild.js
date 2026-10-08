@@ -14,11 +14,26 @@
  *   featurePR.repo     — GitHub repo name of the mobile app repo
  */
 
+
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
+
 function action(params) {
     try {
         var configLoader = require('./configLoader.js');
         var jobParams = params.jobParams || {};
         var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
+        initTracker(projectConfig, jobParams.customParams || {});
         // params.inputJql (from Jira encoded_config) takes priority over jobParams default
         var inputJql = params.inputJql || jobParams.inputJql || '';
         var bb = jobParams.bitriseBuild || {};
@@ -43,7 +58,7 @@ function action(params) {
             if (keyMatch) {
                 ticketKey = keyMatch[1].toUpperCase();
                 try {
-                    var ticket = jira_get_ticket({ key: ticketKey });
+                    var ticket = getTracker().getIssue(ticketKey);
                     ticketSummary = (ticket && ticket.fields && ticket.fields.summary) || ticketKey;
                     console.log('✅ Ticket fetched:', ticketKey, '—', ticketSummary);
                 } catch (e) {
@@ -53,7 +68,7 @@ function action(params) {
                 // Fallback: jira_search_by_jql
                 console.log('Fetching ticket by JQL:', inputJql);
                 try {
-                    var results = jira_search_by_jql({ jql: inputJql, maxResults: 1 });
+                    var results = getTracker().searchIssues(inputJql, { maxResults: 1 });
                     var parsed = (typeof results === 'string') ? JSON.parse(results) : results;
                     var issues = (parsed && parsed.issues) ? parsed.issues : (Array.isArray(parsed) ? parsed : []);
                     if (issues.length > 0) {
@@ -144,7 +159,7 @@ function action(params) {
         if (featurePrUrl) comment += '\n| Feature PR | ' + featurePrUrl + ' |';
 
         try {
-            jira_post_comment({ key: ticketKey, comment: comment });
+            getTracker().postComment(ticketKey, comment);
             console.log('✅ Posted Jira comment');
         } catch (e) {
             console.warn('⚠️ Could not post Jira comment:', e.message || e);

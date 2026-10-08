@@ -16,6 +16,20 @@ var configLoader = require('./configLoader.js');
 var autoStart = require('./common/autoStart.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
+
+
 function getGitHubRepoInfo() {
     try {
         const rawOutput = cli_execute_command({ command: 'git config --get remote.origin.url' }) || '';
@@ -54,7 +68,7 @@ function removeApprovedLabels(scm, prNumber, ticketKey) {
         console.warn('Could not remove pr_approved from PR:', e);
     }
     try {
-        jira_remove_label({ key: ticketKey, label: LABELS.PR_APPROVED });
+        getTracker().removeLabel(ticketKey, LABELS.PR_APPROVED);
         console.log('Removed pr_approved label from Jira ticket');
     } catch (e) {
         console.warn('Could not remove pr_approved from Jira ticket:', e);
@@ -64,7 +78,7 @@ function removeApprovedLabels(scm, prNumber, ticketKey) {
 function releaseLock(ticketKey, customParams) {
     const removeLabel = customParams && customParams.removeLabel;
     if (removeLabel && ticketKey) {
-        try { jira_remove_label({ key: ticketKey, label: removeLabel }); } catch (e) {}
+        try { getTracker().removeLabel(ticketKey, removeLabel); } catch (e) {}
     }
 }
 
@@ -125,6 +139,7 @@ function action(params) {
     var jiraConfig = config.jira;
     var scm = scmModule.createScm(config);
     var customParams = resolveCustomParams(params, config);
+    initTracker(config, customParams);
 
     const repoInfo = scm.getRemoteRepoInfo();
     if (!repoInfo) {
@@ -194,11 +209,8 @@ function action(params) {
         console.log('PR has merge conflict — moving ticket to In Rework');
         removeApprovedLabels(scm, prNumber, ticketKey);
         releaseLock(ticketKey, customParams);
-        jira_post_comment({
-            key: ticketKey,
-            comment: '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *MERGE CONFLICT* — PR #' + prNumber + ' has a merge conflict with main. Please resolve conflicts and re-push.\n\n[View PR|' + prUrl + ']{panel}'
-        });
-        jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.IN_REWORK });
+        getTracker().postComment(ticketKey, '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *MERGE CONFLICT* — PR #' + prNumber + ' has a merge conflict with main. Please resolve conflicts and re-push.\n\n[View PR|' + prUrl + ']{panel}');
+        getTracker().moveToStatus(ticketKey, jiraConfig.statuses.IN_REWORK);
         console.log('✅ Ticket moved to In Rework (merge conflict)');
         triggerAutoStartRework(ticketKey, customParams, config, scm);
         return true;
@@ -225,19 +237,19 @@ function action(params) {
         // the review-trigger rule (JQL: NOT IN pr_approved) naturally skips the ticket.
         const isTestCase = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.testCaseMerge;
         if (isTestCase) {
-            var ticketDetail = jira_get_ticket({ key: ticketKey });
+            var ticketDetail = getTracker().getIssue(ticketKey);
             var currentStatus = ticketDetail && ticketDetail.fields && ticketDetail.fields.status && ticketDetail.fields.status.name;
             var finalStatus = (currentStatus === jiraConfig.statuses.IN_REVIEW_PASSED) ? jiraConfig.statuses.PASSED : jiraConfig.statuses.FAILED;
-            jira_move_to_status({ key: ticketKey, statusName: finalStatus });
+            getTracker().moveToStatus(ticketKey, finalStatus);
             console.log('✅ Ticket moved to ' + finalStatus);
         } else {
-            jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.MERGED });
+            getTracker().moveToStatus(ticketKey, jiraConfig.statuses.MERGED);
             console.log('✅ Ticket moved to Merged');
         }
 
         // Now safe to remove pr_approved from Jira — status is already updated
         try {
-            jira_remove_label({ key: ticketKey, label: LABELS.PR_APPROVED });
+            getTracker().removeLabel(ticketKey, LABELS.PR_APPROVED);
             console.log('Removed pr_approved label from Jira ticket');
         } catch (e) {
             console.warn('Could not remove pr_approved from Jira ticket:', e);
@@ -258,11 +270,8 @@ function action(params) {
         const reason = isConflict ? 'merge conflict' : 'CI checks failing or PR not mergeable';
         removeApprovedLabels(scm, prNumber, ticketKey);
         releaseLock(ticketKey, customParams);
-        jira_post_comment({
-            key: ticketKey,
-            comment: '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *MERGE FAILED* — Could not merge PR #' + prNumber + ': ' + reason + '. Please check and re-push.\n\n[View PR|' + prUrl + ']{panel}'
-        });
-        jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.IN_REWORK });
+        getTracker().postComment(ticketKey, '{panel:bgColor=#FFEBE6|borderColor=#DE350B}⚠️ *MERGE FAILED* — Could not merge PR #' + prNumber + ': ' + reason + '. Please check and re-push.\n\n[View PR|' + prUrl + ']{panel}');
+        getTracker().moveToStatus(ticketKey, jiraConfig.statuses.IN_REWORK);
         console.log('✅ Ticket moved to In Rework (' + reason + ')');
         triggerAutoStartRework(ticketKey, customParams, config, scm);
 

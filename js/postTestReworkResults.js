@@ -20,6 +20,19 @@ var tokenUsageComment = require('./common/tokenUsageComment.js');
 var trackersModule = require('./common/trackers.js');
 var commentMarkup = require('./common/commentMarkup.js');
 
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
+
+
 /**
  * Build the "Test Rework Completed" comment in the flavor of the ticket's
  * tracker (gh-770). The template historically hard-coded Jira wiki markup
@@ -305,7 +318,7 @@ function createPRIfMissing(scm, branchName, ticketKey, config) {
 
         console.log('No open PR/MR found — creating one...');
         var ticket;
-        try { ticket = jira_get_ticket({ key: ticketKey }); } catch (e) { ticket = null; }
+        try { ticket = getTracker().getIssue(ticketKey); } catch (e) { ticket = null; }
         const summary = ticket && ticket.fields ? (ticket.fields.summary || ticketKey) : ticketKey;
         const prTitle = ticketKey + ' ' + summary;
 
@@ -423,16 +436,17 @@ function action(params) {
     var jiraConfig = config.jira;
     var scm = configLoader.createScm(config);
     const customParams = resolveCustomParams(params, actualParams, config);
+    initTracker(config, customParams);
     const removeLabel = customParams && customParams.removeLabel;
     const wipLabel = actualParams.metadata && actualParams.metadata.contextId
         ? actualParams.metadata.contextId + '_wip'
         : 'pr_test_automation_rework_wip';
 
     function releaseLock() {
-        try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
+        try { getTracker().removeLabel(ticketKey, wipLabel); } catch (e) {}
         if (removeLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: removeLabel });
+                getTracker().removeLabel(ticketKey, removeLabel);
                 console.log('✅ Removed SM label:', removeLabel);
             } catch (e) {}
         }
@@ -554,7 +568,7 @@ function action(params) {
         // Bug creation/linking is handled by the bug_creation agent when TC reaches Failed status
         const targetStatus = passed ? jiraConfig.statuses.IN_REVIEW_PASSED : jiraConfig.statuses.IN_REVIEW_FAILED;
         try {
-            jira_move_to_status({ key: ticketKey, statusName: targetStatus });
+            getTracker().moveToStatus(ticketKey, targetStatus);
             console.log('✅ Moved', ticketKey, 'to', targetStatus);
         } catch (e) {
             console.warn('Failed to move ticket status:', e);

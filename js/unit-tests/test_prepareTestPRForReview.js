@@ -1,3 +1,10 @@
+function d4TrackersWith(mocks) {
+    return loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), mocks || {});
+}
+
 /**
  * Unit tests for js/prepareTestPRForReview.js
  */
@@ -58,7 +65,8 @@ function loadPrepareTestPRForReview(mocks) {
             './common/githubHelpers.js': githubHelpers,
             './common/gitOps.js': gitOpsMock,
             './common/scm.js': { createScm: function() { return scmMock; } },
-            './common/pullRequest.js': prHelper
+            './common/pullRequest.js': prHelper,
+            './common/trackers.js': d4TrackersWith(allMocks)
         }),
         allMocks
     );
@@ -182,4 +190,32 @@ suite('prepareTestPRForReview', function() {
         assert.equal(contextWritten, true);
     });
 
+    test('ado: merged PR -> ado_add_work_item_label / ado_get_work_item / ado_move_to_state, no jira_*', function() {
+        var calls = [];
+        function forbid(n) { return function() { throw new Error(n + ' must not be called on ado'); }; }
+        var module = loadPrepareTestPRForReview({
+            ado_add_work_item_label: function(a) { calls.push({ tool: 'add', args: a }); },
+            ado_get_work_item: function(a) { calls.push({ tool: 'get', args: a }); return { id: 92, fields: { 'System.Title': 't', 'System.State': 'In Review' } }; },
+            ado_move_to_state: function(a) { calls.push({ tool: 'move', args: a }); },
+            ado_add_work_item_comment: function(a) { calls.push({ tool: 'comment', args: a }); },
+            jira_get_ticket: forbid('jira_get_ticket'),
+            jira_move_to_status: forbid('jira_move_to_status'),
+            jira_add_label: forbid('jira_add_label'),
+            jira_post_comment: forbid('jira_post_comment'),
+            scmMock: {
+                listPrs: function(state) {
+                    if (state === 'open') return [];
+                    return [{ number: 57, head: { ref: 'test/92' }, html_url: 'https://github.com/IstiN/trackstate/pull/57', merged_at: '2026-06-21T14:00:00Z' }];
+                }
+            }
+        });
+        var result = module.action({
+            inputFolderPath: 'input/92',
+            ticket: { key: '92', fields: { issuetype: { name: 'Story' } } },
+            jobParams: { customParams: { trackerProvider: 'ado' } }
+        });
+        assert.equal(result, false);
+        assert.deepEqual(calls.filter(function(c) { return c.tool === 'add'; })[0].args, { id: '92', label: 'test_pr_merged' });
+        assert.deepEqual(calls.filter(function(c) { return c.tool === 'move'; })[0].args, { id: '92', state: 'In Testing' });
+    });
 });

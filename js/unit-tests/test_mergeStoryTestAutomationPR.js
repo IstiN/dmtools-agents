@@ -1,3 +1,10 @@
+function d4TrackersWith(mocks) {
+    return loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), mocks || {});
+}
+
 /**
  * Unit tests for js/mergeStoryTestAutomationPR.js
  */
@@ -46,7 +53,8 @@ function loadMergeStoryTestAutomationPR(mocks) {
             },
             './common/tokenUsageComment.js': {
                 postTokenUsageComments: function() {}
-            }
+            },
+            './common/trackers.js': d4TrackersWith(allMocks)
         }),
         allMocks
     );
@@ -259,4 +267,48 @@ suite('mergeStoryTestAutomationPR', function() {
         ]);
     });
 
+    test('ado: merges PR, moves linked TCs via ado_move_to_state, no jira_* tool', function() {
+        var calls = [];
+        function forbid(n) { return function() { throw new Error(n + ' must not be called on ado'); }; }
+        var module = loadMergeStoryTestAutomationPR({
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git config --get remote.origin.url') return 'https://github.com/IstiN/trackstate.git';
+                return '';
+            },
+            github_list_prs: function() {
+                return [{ number: 55, head: { ref: 'test/50' }, html_url: 'https://github.com/IstiN/trackstate/pull/55' }];
+            },
+            github_get_pr: function() { return { mergeable: true, mergeable_state: 'clean' }; },
+            github_merge_pr: function() {},
+            github_remove_pr_label: function() {},
+            ado_search_by_wiql: function(a) {
+                calls.push({ tool: 'wiql', args: a });
+                return [
+                    { id: 51, fields: { 'System.Title': 'a', 'System.State': 'In Review - Passed' } },
+                    { id: 52, fields: { 'System.Title': 'b', 'System.State': 'In Review - Failed' } }
+                ];
+            },
+            ado_move_to_state: function(a) { calls.push({ tool: 'move', args: a }); },
+            ado_remove_work_item_label: function(a) { calls.push({ tool: 'rm', args: a }); },
+            ado_add_work_item_label: function(a) { calls.push({ tool: 'add', args: a }); },
+            ado_add_work_item_comment: function(a) { calls.push({ tool: 'comment', args: a }); },
+            jira_search_by_jql: forbid('jira_search_by_jql'),
+            jira_move_to_status: forbid('jira_move_to_status'),
+            jira_remove_label: forbid('jira_remove_label'),
+            jira_add_label: forbid('jira_add_label'),
+            jira_post_comment: forbid('jira_post_comment')
+        });
+        var result = module.action({
+            ticket: { key: '50' },
+            jobParams: { customParams: { trackerProvider: 'ado', removeLabel: 'sm_lock' } }
+        });
+        assert.equal(result, true);
+        var moves = calls.filter(function(c) { return c.tool === 'move'; }).map(function(c) { return c.args; });
+        assert.deepEqual(moves, [
+            { id: '51', state: 'Passed' },
+            { id: '52', state: 'Failed' }
+        ]);
+        assert.contains(calls[0].args.wiql, 'linkedIssues("50")');
+        assert.ok(calls.some(function(c) { return c.tool === 'rm' && c.args.id === '50' && c.args.label === 'sm_lock'; }));
+    });
 });
