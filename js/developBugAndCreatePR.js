@@ -25,7 +25,6 @@ const developTicket = require('./developTicketAndCreatePR.js');
 const commentMarkup = require('./common/commentMarkup.js');
 const outputFiles = require('./common/outputFiles.js');
 const gitStaging = require('./common/gitStaging.js');
-const feedbackLoop = require('./common/feedbackLoop.js');
 
 function cleanCliOutput(output) {
     return (output || '').split('\n').filter(function(l) {
@@ -56,13 +55,14 @@ function hasCodeGraphUsage() {
 }
 
 /**
- * True when outputs/response.md exists with content (shared by the initial
- * tree check and the gh-775 post-resume re-check so both use one read shape).
+ * True when outputs/response.md exists with content. Thin wrapper over the
+ * canonical outputFiles.hasOutputFile so the existence read shares one
+ * candidate-expansion shape with developTicketAndCreatePR's content reader
+ * (readResponseMd) — review round 1, duplicate-readers thread.
  */
 function readHasResponseMd(ticketKey) {
     try {
-        const r = outputFiles.readOutputFile('response.md', { ticketKey: ticketKey });
-        return !!(r && r.trim());
+        return outputFiles.hasOutputFile('response.md', { ticketKey: ticketKey });
     } catch (e) {
         return false;
     }
@@ -284,19 +284,21 @@ function action(params) {
             '; outputs/response.md = ' + (hasResponseMd ? 'present' : 'MISSING') +
             (hasGitChanges || hasResponseMd ? '' : ' — neither work nor a response; the agent produced nothing'));
 
-        // gh-775: before the cold reset, give a still-resumable session exactly
-        // ONE bounded chance to land the missing deliverable (e.g. a hung
-        // background verification job stalled the run after the real work was
-        // done). The tracker side effects below fire only if this fails.
+        // gh-775: ONE shared gate (developTicketAndCreatePR.recoverMissingResponse)
+        // for every response.md-missing cold-reset site — the gating order (fatal
+        // CLI/environment class FIRST: the resume never preempts it — AC6; then
+        // exactly ONE bounded resume attempt; then the re-read) lives in exactly
+        // one place. The bug leg passes its own CLI outcome signals so a fatally
+        // broken environment (missing binary, unknown provider, exit 127) skips
+        // the doomed attempt exactly like the story leg.
         if (!hasResponseMd) {
-            feedbackLoop.resumeOnceForMissingResponse({
-                ticketKey: ticketKeyForCheck,
-                customParams: _customParams
-            });
-            hasResponseMd = readHasResponseMd(ticketKeyForCheck);
-            if (hasResponseMd) {
-                console.log('✅ Bounded resume landed outputs/response.md — continuing the normal development path (no cold reset).');
-            }
+            const recovered = developTicket.recoverMissingResponse(
+                ticketKeyForCheck,
+                _customParams,
+                actualParamsForCheck.response || '',
+                actualParamsForCheck.currentCliHasFatalError === true,
+                actualParamsForCheck.currentCliErrorMessage || null);
+            hasResponseMd = !!(recovered && recovered.trim());
         }
 
         if (!hasResponseMd) {

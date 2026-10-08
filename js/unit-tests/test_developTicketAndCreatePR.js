@@ -1375,6 +1375,8 @@ suite('prompts/bash_tools.md > B7 hung-job disposal rule (gh-775 AC1)', function
     test('B7 carries the disposal semantics: stop the hung job, note it, finish the deliverable', function () {
         var b7 = bashTools.substring(bashTools.indexOf('B7['));
         b7 = b7.substring(0, b7.indexOf('"]') + 2);
+        assert.contains(b7, 'B6 covers a job still making progress',
+            'B7 cross-references B6 so in-flight (preserve) vs no-progress (hung) cannot be read as contradictory');
         assert.contains(b7, 'bash_job stop', 'names the disposal command');
         assert.contains(b7, 'outputs/response.md', 'the deliverable must still be written');
         assert.contains(b7, 'MOVE ON', 'the agent must not hold the deliverable hostage');

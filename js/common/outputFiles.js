@@ -70,6 +70,15 @@ function readOutputFile(pathOrName, options) {
     return null;
 }
 
+/**
+ * Canonical existence/blank check over the same candidate expansion as
+ * readOutputFile — callers that only need "is the deliverable present with
+ * content?" use this instead of growing their own boolean read wrappers.
+ */
+function hasOutputFile(pathOrName, options) {
+    return !!readOutputFile(pathOrName, options);
+}
+
 function readOutputFileDetailed(pathOrName, options) {
     var candidates = buildOutputCandidates(pathOrName, options);
     for (var i = 0; i < candidates.length; i++) {
@@ -86,6 +95,7 @@ if (typeof module !== 'undefined' && module.exports) {
         normalizeToOutputsPath: normalizeToOutputsPath,
         buildOutputCandidates: buildOutputCandidates,
         readOutputFile: readOutputFile,
+        hasOutputFile: hasOutputFile,
         readOutputFileDetailed: readOutputFileDetailed
     };
 }

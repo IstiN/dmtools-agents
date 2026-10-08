@@ -1412,5 +1412,5 @@ function action(params) {
 }
 // Export for dmtools standalone execution
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, throwInterruptedReset };
+    module.exports = { action, throwInterruptedReset, recoverMissingResponse };
 }

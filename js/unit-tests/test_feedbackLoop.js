@@ -377,6 +377,7 @@ suite('feedbackLoop > resumeOnceForMissingResponse (gh-775)', function() {
         ]);
         assert.equal(loaded.files['outputs/feedback/TS-775_missing_response.attempt'], '1');
         var prompt = loaded.files['outputs/feedback/TS-775_missing_response.md'];
+        assert.contains(prompt, 'Ticket: TS-775', 'the follow-up prompt stamps the ticket identifier like buildFeedbackPrompt — the context must not depend on --continue restoring the session');
         assert.contains(prompt, 'bash_job stop', 'the follow-up prompt names the hung-job disposal');
         assert.contains(prompt, 'outputs/response.md', 'the follow-up prompt names the missing deliverable');
         assert.contains(prompt, 'Do not push', 'the no-push contract holds for the resume too');

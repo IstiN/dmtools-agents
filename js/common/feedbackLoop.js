@@ -107,8 +107,11 @@ function buildFeedbackPrompt(options) {
 // runtime file-read failure mode for no versioning benefit — this file IS the
 // versioned home of the resume mechanics).
 function buildMissingResponsePrompt(options) {
+    options = options || {};
     return [
         'Your previous run finished its real work but was interrupted before outputs/response.md could be written — most likely a background verification job (test suite, coverage, build) hung and the session stalled watching it.',
+        '',
+        'Ticket: ' + (options.ticketKey || 'unknown'),
         '',
         'Resume and finish the task now:',
         '- Check running background jobs (bash_job status) and STOP any job with no progress: bash_job stop <id>.',
