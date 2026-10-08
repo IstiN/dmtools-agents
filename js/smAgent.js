@@ -100,6 +100,7 @@ var factoryStateModule = require('./factoryState.js');
 var buildEncodedConfigModule = require('./common/buildEncodedConfig.js');
 var machineAuthorModule = require('./common/machineAuthor.js');
 var smProviderModule = require('./common/smProvider.js');
+var trackersModule = require('./common/trackers.js');
 
 // Project config loaded once in action() — used as global default for rules without configPath
 var projectConfig = null;
@@ -645,10 +646,21 @@ function runTeammateLocally(ticketKey, rule, effectiveConfig) {
     return ok;
 }
 
+
+// Tracker for the ticket operations the engine performs on non-GitHub items (status move, label
+// add/remove, full-ticket fetch). Built lazily per call from the effective project config and the
+// per-run customParams: the provider (jira | ado | github) follows config.tracker.provider /
+// customParams.trackerProvider / DEFAULT_TRACKER, exactly like every other agent script.
+function smTracker(config) {
+    var cfg = config || projectConfig || {};
+    var cp = (RUN_JOB_PARAMS && RUN_JOB_PARAMS.customParams) || {};
+    return trackersModule.createTracker(cfg, cp);
+}
+
 function moveStatus(ticketKey, targetStatus) {
     try {
         if (DRY) { console.log('  [dry] 🔀 ' + ticketKey + ' → ' + targetStatus); }
-        else { jira_move_to_status({ key: ticketKey, statusName: targetStatus }); }
+        else { smTracker().moveToStatus(ticketKey, targetStatus); }
         console.log('  ✅ ' + ticketKey + ' → ' + targetStatus);
     } catch (e) {
         console.warn('  ⚠️  Status transition failed for ' + ticketKey + ': ' + (e.message || e));
@@ -702,7 +714,7 @@ function addRuleLabels(ticketKey, rule, repoInfo) {
                 }
             } else {
                 if (DRY) { console.log('  [dry] 🏷️ ' + ticketKey + ' +' + label); }
-                else { jira_add_label({ key: ticketKey, label: label }); }
+                else { smTracker().addLabel(ticketKey, label); }
             }
         } catch (e) {}
     });
@@ -749,7 +761,7 @@ function removeRuleLabel(ticketKey, label, rule, repoInfo) {
             }
         } else {
             if (DRY) { console.log('  [dry] 🏷️ ' + ticketKey + ' -' + label); }
-            else { jira_remove_label({ key: ticketKey, label: label }); }
+            else { smTracker().removeLabel(ticketKey, label); }
         }
         console.log('  🏷️  Removed stale trigger label "' + label + '" from ' + ticketKey);
     } catch (e) {
@@ -935,11 +947,11 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
 
         var fullTicket;
         try {
-            var ticketRaw = jira_get_ticket(key);
-            fullTicket = (typeof ticketRaw === 'string') ? JSON.parse(ticketRaw) : ticketRaw;
+            // Jira-shaped view (Jira payload passes through unchanged; ADO/GitHub get the neutral subset).
+            fullTicket = smTracker(effectiveConfig).getIssue(key);
             if (!fullTicket || !fullTicket.key) throw new Error('Empty ticket returned');
         } catch (e) {
-            console.warn('  ⚠️  jira_get_ticket(' + key + ') failed (' + e + '), falling back to search-result data');
+            console.warn('  ⚠️  getIssue(' + key + ') failed (' + e + '), falling back to search-result data');
             fullTicket = ticket;
             if (!fullTicket || !fullTicket.key) {
                 console.error('  ❌ Search-result fallback also has no key for ' + key);

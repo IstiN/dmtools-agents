@@ -130,6 +130,7 @@ function makeSmAgent(opts) {
     // runAsync fake injection (spec: probeDispatchedState delegation pin) —
     // shadows the (absent) global inside the smAgent module scope.
     if (opts.runAsync) smMocks.runAsync = opts.runAsync;
+    if (opts.extraMocks) { for (var em in opts.extraMocks) { if (opts.extraMocks.hasOwnProperty(em)) smMocks[em] = opts.extraMocks[em]; } }
 
     // Console capture (owner directive 2026-10-08 priority-tier tests): the
     // 🥇 preemption line prints from inside the source query (githubSource),
@@ -293,9 +294,20 @@ function makeSmAgent(opts) {
             smMocks
         );
     }
+    // The real tracker layer with the SAME mocks: smAgent's status/label/ticket operations now
+    // go through js/common/trackers.js (dm.ai#661), which only sees globals handed to ITS loadModule.
+    var trackersForSm = loadModule(
+        'js/common/trackers.js',
+        makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }),
+        smMocks
+    );
     var sm = loadModule(
         'js/smAgent.js',
         makeRequire({
+            './common/trackers.js': trackersForSm,
             './configLoader.js': freshConfigLoader,
             './sm/sourceResolver.js': { resolve: function () { return jiraSourceStub; } },
             './common/scm.js': mockScmModule,
@@ -4905,6 +4917,43 @@ suite('smAgent: targetStatus', function() {
         assert.equal(sm.capturedTriggers.length, 1, 'workflow also triggered');
     });
 
+});
+
+// ── tracker-agnostic ticket operations (dm.ai#661) ───────────────────────────
+
+suite('smAgent: ticket operations through the tracker layer', function() {
+
+    function adoParams(rules) {
+        var p = baseParams('o', 'r', rules);
+        p.jobParams.customParams = { trackerProvider: 'ado' };
+        return p;
+    }
+
+    test('ado: targetStatus move goes through ado_move_to_state, never jira_move_to_status', function() {
+        var adoMoves = [];
+        var sm = makeSmAgent({
+            fileMap: {},
+            tickets: [{ key: '42', fields: { labels: [] } }],
+            extraMocks: {
+                ado_move_to_state: function(a) { adoMoves.push(a); },
+                ado_add_work_item_label: function() {},
+                ado_get_work_item: function() { return { id: 42, fields: { 'System.Title': 't', 'System.State': 'Active' } }; }
+            }
+        });
+
+        sm.action(adoParams([makeRule("SELECT [System.Id] FROM WorkItems", { targetStatus: 'In Development' })]));
+
+        assert.equal(adoMoves.length, 1);
+        assert.deepEqual(adoMoves[0], { id: '42', state: 'In Development' });
+        assert.equal(sm.capturedStatusMoves.length, 0, 'no jira_move_to_status call on ado');
+    });
+
+    test('jira (default): the same rule still moves through jira_move_to_status', function() {
+        var sm = makeSmAgent({ fileMap: {}, tickets: [{ key: 'T-1', fields: { labels: [] } }] });
+        sm.action(baseParams('o', 'r', [makeRule("project = X", { targetStatus: 'In Development' })]));
+        assert.equal(sm.capturedStatusMoves.length, 1);
+        assert.deepEqual(sm.capturedStatusMoves[0], { key: 'T-1', statusName: 'In Development' });
+    });
 });
 
 // ── Per-rule configPath (multi-project) ───────────────────────────────────────

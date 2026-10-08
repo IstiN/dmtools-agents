@@ -6,10 +6,17 @@
 
 suite('sm jira source', function () {
 
+    function trackersWith(mocks) {
+        return loadModule('js/common/trackers.js', makeRequire({
+            '../config.js': configModule,
+            './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }), mocks);
+    }
+
     function load(jqlResults) {
-        return loadModule('js/sm/sources/jiraSource.js', makeRequire({}), {
-            jira_search_by_jql: function () { return jqlResults; }
-        });
+        var mocks = { jira_search_by_jql: function () { return jqlResults; } };
+        return loadModule('js/sm/sources/jiraSource.js',
+            makeRequire({ '../../common/trackers.js': trackersWith(mocks) }), mocks);
     }
 
     test('FIFO: newest-first API order comes back oldest-first (owner rule 2026-10-04)', function () {
@@ -51,3 +58,27 @@ suite('sm jira source', function () {
         assert.deepEqual(empty, [], 'null API payload → no tickets, no crash');
     });
 });
+
+suite('sm jira source on ado (dm.ai#661)', function () {
+    test('queries ado_search_by_wiql with the query AS-IS and maps System.Tags to labels', function () {
+        var calls = [];
+        var mocks = { ado_search_by_wiql: function (a) {
+            calls.push(a);
+            return JSON.stringify({ value: [
+                { id: 12, fields: { 'System.Title': 'b', 'System.State': 'Active', 'System.Tags': 'sm_triggered; wip' } },
+                { id: 3, fields: { 'System.Title': 'a', 'System.State': 'New', 'System.Tags': '' } }
+            ] });
+        }, jira_search_by_jql: function () { throw new Error('jira tool must not be called on ado'); } };
+        var trackers = loadModule('js/common/trackers.js', makeRequire({
+            '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+        }), mocks);
+        var src = loadModule('js/sm/sources/jiraSource.js', makeRequire({ '../../common/trackers.js': trackers }), mocks);
+        var wiql = "SELECT [System.Id] FROM WorkItems WHERE [System.State] = 'Active'";
+        var items = src.query({ jql: wiql }, { jql: wiql, config: { tracker: { provider: 'ado' } } });
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].wiql, wiql);
+        assert.deepEqual(items.map(function (i) { return i.key; }), ['3', '12'], 'oldest id first');
+        assert.deepEqual(items[1].labels, ['sm_triggered', 'wip']);
+    });
+});
+
