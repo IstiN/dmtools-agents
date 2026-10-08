@@ -35,9 +35,10 @@ _Check Bug To Fix Ready — postJSAction for bug_to_fix_check agent._
 
 - Source: `agents/js/checkBugToFixReady.js`
 - Side effects:
-  - remove label "sm_story_done_check_triggered"
-  - remove label "sm_test_automation_triggered"
-  - post Jira comment
+  - remove label "sm_story_done_check_triggered" (via tracker)
+  - remove label "sm_test_automation_triggered" (via tracker)
+  - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
 - Parameters (customParams):
   - `removeLabel`
 
