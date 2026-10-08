@@ -97,3 +97,7 @@ function action(params) {
         console.error('Error in fetchEpicsToInput:', error);
     }
 }
+
+if (typeof module !== "undefined" && module.exports) {
+    module.exports = { action, findField };
+}

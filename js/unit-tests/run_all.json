@@ -116,7 +116,8 @@
         "js/unit-tests/test_packLaunchContract.js",
         "js/unit-tests/test_releasePacks.js",
         "js/unit-tests/test_completionGuard.js",
-        "js/unit-tests/test_networkGuard.js"
+        "js/unit-tests/test_networkGuard.js",
+        "js/unit-tests/test_wave2d2Tracker.js"
       ]
     }
   }
