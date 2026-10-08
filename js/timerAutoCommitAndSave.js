@@ -51,14 +51,19 @@ function getContextId(params) {
 /**
  * gh-798 (live fa PR #1420 rework leg, run 37828431528): is this push failure
  * a non-fast-forward rejection? Only THAT class self-heals (below) — auth,
- * network, and ref-lock failures are surfaced untouched.
+ * network, and ref-lock failures are surfaced untouched. The git hint is
+ * matched by SHAPE ('current branch is behind' — git's "Updates were
+ * rejected because the tip of your current branch is behind its remote
+ * counterpart"), never by the bare word or the short " is behind" phrase: a
+ * hook/proxy message that happens to contain "behind" must not trigger a
+ * heal (gh-798 review).
  */
 function isNonFastForwardError(error) {
     var text = String((error && error.message) || error || '');
     return text.indexOf('non-fast-forward') !== -1 ||
         text.indexOf('[rejected]') !== -1 ||
         text.indexOf('fetch first') !== -1 ||
-        text.indexOf('behind') !== -1;
+        text.indexOf('current branch is behind') !== -1;
 }
 
 /**

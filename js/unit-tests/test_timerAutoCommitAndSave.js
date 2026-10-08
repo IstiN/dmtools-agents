@@ -808,6 +808,28 @@ suite('timerAutoCommitAndSave — gh-798 push self-heal wrapper', function() {
         assert.equal(m.isNonFastForwardError(null), false);
     });
 
+    test('isNonFastForwardError anchors the behind hint by SHAPE, not the bare word (gh-798 review)', function() {
+        // "behind" is a common English word: a pre-receive hook, a proxy
+        // error or a path segment that merely contains it must not be
+        // misread as a healable non-fast-forward rejection — that wastes a
+        // merge attempt in the agent's working tree mid-run and muddies the
+        // failure class in the logs. Git's actual hint shape is
+        // "the tip of your current branch is behind its remote counterpart".
+        var m = loadTimer({});
+        assert.equal(m.isNonFastForwardError(new Error(
+            'remote: error: GH010: hook declined — this mirror runs behind its master')),
+            false, 'pre-receive hook mentioning "behind" — not healable');
+        assert.equal(m.isNonFastForwardError(new Error(
+            'error: RPC failed; the proxy replica is behind by 2 events (internal error)')),
+            false, 'proxy/infra error mentioning "behind" — not healable');
+        assert.equal(m.isNonFastForwardError(new Error(
+            "error: pathspec '.behind-the-scenes' did not match any file(s) known to git")),
+            false, 'a path segment containing "behind" — not healable');
+        assert.equal(m.isNonFastForwardError(new Error(
+            'error: failed to push some refs\nhint: Updates were rejected because the tip of your current branch is behind its remote counterpart')),
+            true, 'the real git hint shape still heals');
+    });
+
     test('end-to-end: a timer tick whose push is rejected self-heals inside the same tick', function() {
         var cliCalls = [];
         var pushes = 0;

@@ -1079,6 +1079,28 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
             'a queued leg is about to own the head — the refresh must not race its checkout');
     });
 
+    test('gh-798: a STALE queued leg (zombie) ages out and does not block', function () {
+        // The stale-zombie window the dispatch guard applies: a leg stuck
+        // 'queued' for hours (runner-capacity starved) must not freeze
+        // branch freshness for STALE_NON_RUNNING_WORKFLOW_MS (6h). The
+        // aging line in hasActiveLegRun drops the zombie, so the refresh
+        // flows — dropping that line silently parks every BEHIND branch
+        // behind a dead run for 6h (gh-798 review: this path was untested).
+        var CUR = '7777bbbb7777bbbb7777bbbb7777bbbb7777bbbb';
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            github: { items: [prItem(1426, { branch: 'ai/gh-1421', headSha: CUR })] },
+            onCliExecute: headShaProbeMock(CUR, [
+                { id: 9004, status: 'queued', path: '.github/workflows/ai-teammate.yml',
+                  created_at: '2020-01-01T00:00:00Z', updated_at: '2020-01-01T00:00:00Z' }
+            ])
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            silentToken: 'SILENT-TOKEN', sourceToken: 'PAT-TOKEN', rules: [RULES.update] } });
+
+        assert.equal(updateCommands(sm).length, 1,
+            'a zombie queued leg ages out — freshness must not stay frozen for 6h');
+    });
+
     test('gh-798: leg FINISHED between ticks — the refresh flows again (AC2 per-tick freshness)', function () {
         var CUR = 'eeee3333eeee3333eeee3333eeee3333eeee3333';
         var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {

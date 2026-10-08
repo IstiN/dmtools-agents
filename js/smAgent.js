@@ -1674,7 +1674,14 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 } else {
                     // No resolvable head sha: no probe possible — the
                     // pre-gh-798 behavior stands (refresh rides the branch
-                    // name alone).
+                    // name alone). Residual race, DELIBERATE fail-open
+                    // (gh-798 review): a leg landing on an unprobed head is
+                    // NOT prevented here — the timer's
+                    // pushBranchWithSelfHeal heals that push harness-side
+                    // (fetch+merge+retry). Deferring on an
+                    // unresolvable-but-existing head would close the hole
+                    // for one tick of delay; the heal backstop was chosen
+                    // instead so a flaky API never freezes freshness.
                     silentUpdateBranch(ticket.branch);
                     console.log('  ✅ ' + key + ' branch silently updated (no CI)');
                 }

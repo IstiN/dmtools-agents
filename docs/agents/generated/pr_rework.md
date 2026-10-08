@@ -82,6 +82,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - Source: `agents/js/timerAutoCommitAndSave.js`
 - Side effects:
   - git push
+  - git merge
 - Parameters (customParams):
   - `cacheToReleases`
   - `cacheToReleases.releaseNameTemplate`
