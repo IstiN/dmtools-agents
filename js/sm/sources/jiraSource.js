@@ -10,6 +10,8 @@
  */
 'use strict';
 
+var trackersModule = require('../../common/trackers.js');
+
 /**
  * Queries Jira by the rule's JQL.
  * @param {Object} rule - the SM rule (uses rule.jql, interpolated upstream)
@@ -21,11 +23,15 @@ function query(rule, ctx) {
     // ctx.jql carries the interpolated JQL from the rule processor
     // ({jiraProject}/{parentTicket} placeholders already resolved).
     var jql = (ctx && ctx.jql) || rule.jql;
-    var tickets = jira_search_by_jql({ jql: jql, fields: ['key', 'labels'] }) || [];
+    // The query is provider-specific text: JQL on Jira, WIQL on ADO (no translation). The tracker
+    // picks the backend from the effective project config / DEFAULT_TRACKER and returns Jira-shaped
+    // issues; labels live in fields.labels (the flat t.labels is kept as a fallback for old shapes).
+    var tracker = trackersModule.createTracker((ctx && ctx.config) || {}, {});
+    var tickets = tracker.searchIssues(jql, { fields: ['key', 'labels'] }) || [];
     var items = (Array.isArray(tickets) ? tickets : []).map(function (t) {
         return {
             key: t.key,
-            labels: t.labels || [],
+            labels: (t.fields && t.fields.labels) || t.labels || [],
             pr: null,
             issueNumber: null,
             prNumber: null
