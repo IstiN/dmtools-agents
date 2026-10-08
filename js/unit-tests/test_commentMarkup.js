@@ -72,6 +72,19 @@ suite('commentMarkup', function () {
         assert.equal(m.h(2, 'x'), 'h2. x');
     });
 
+    test('inline renders a single-line code span for use inside bullets (gh-799)', function () {
+        // m.code() renders a fenced BLOCK in the markdown flavor — inside a
+        // bullet-list line it breaks the layout onto separate lines. Thread
+        // ids/paths in the rework completion comment need an INLINE code span.
+        var md = commentMarkup.forFlavor('markdown');
+        assert.equal(md.inline('PRRT_abc'), '`PRRT_abc`');
+        assert.equal(md.inline('src/a.dart:12'), '`src/a.dart:12`');
+        assert.notContains(md.inline('x'), '\n', 'inline span must stay on one line');
+
+        var jm = commentMarkup.forFlavor('jira');
+        assert.equal(jm.inline('PRRT_abc'), '{code}PRRT_abc{code}');
+    });
+
     test('flavor detection derives from the shared ticketKeyShapes owner (gh-770)', function () {
         // Swap in a shared owner that accepts NO shapes: a GitHub-shaped key
         // must then fall back to the jira flavor — proving there is no local

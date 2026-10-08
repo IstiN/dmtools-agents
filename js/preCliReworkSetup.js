@@ -6,6 +6,9 @@
  *    see the comment above the detectMergeConflicts() call for why the order matters)
  * 4. Runs project-specific setup commands (build/verify) against the now-updated branch
  * 5. Writes input folder: pr_info.md, pr_diff.txt, pr_discussions.md, pr_discussions_raw.json
+ *    plus the pinned gh-799 input contract: pr_discussions_raw.json (even with 0 threads),
+ *    ci_failures.md (even with 0 failed checks) and review_state.md (review verdicts +
+ *    decision state) — the complete open-item picture regardless of which armer fired.
  * 6. Fetches question subtasks with answers (extra context)
  * 7. Posts "Rework Started" comment to the ticket (Jira/ADO/GitHub via common/trackers.js),
  *    rendered in the ticket's markup flavor (Markdown on GitHub, wiki on Jira — gh-770)
@@ -108,6 +111,194 @@ function buildReworkStartedComment(flavor, ctx) {
     comment += 'AI Teammate is fixing issues raised in the code review.\n\n' +
         m.italic('Fix results will be posted shortly...');
     return comment;
+}
+
+// ── gh-799: pinned input contract — armer-independent rework picture ─────────
+// Whatever arms the leg (fail-validation CI-red, review-threads-resolved
+// armer, conflict-rework, manual dispatch), the input folder must ALWAYS carry
+// the complete open-item picture:
+//   1. pr_discussions_raw.json — unresolved threads WITH ids (a {"threads": []}
+//      placeholder when the PR currently has zero threads — the shared
+//      fetchDiscussions only produces data when threads exist);
+//   2. ci_failures.md — failed checks, or an explicit "nothing failed" contract
+//      file when every check is green or the probe failed;
+//   3. review_state.md — the review verdict(s) + decision state
+//      (CHANGES_REQUESTED / APPROVED / NONE), so the agent sees WHAT the
+//      reviewer decided, not just raw threads.
+// ensureInputContextContract() pins the trio; an armer path that skips one is
+// a regression (fixture-tested per armer shape).
+
+var CI_NO_FAILURES_MD = [
+    '# CI Checks — No Failed Checks',
+    '',
+    'All CI checks passed on the rework head (or no check reported a failure).',
+    '',
+    '- `ci_failures_full.log` will not exist when nothing failed.',
+    '- If CI was expected to be red, re-check the PR checks page — this file was',
+    '  written once by rework setup at leg start.'
+].join('\n');
+
+var NO_THREADS_RAW_JSON = JSON.stringify({ threads: [] }, null, 2);
+
+/**
+ * True when the input file exists with non-blank content. Used to avoid
+ * clobbering real data (written by detectFailedChecks / writePRContext) with
+ * contract placeholders.
+ */
+function inputContextFileExists(path) {
+    try {
+        var content = file_read({ path: path });
+        return !!(content && String(content).trim());
+    } catch (e) {
+        return false;
+    }
+}
+
+/**
+ * First line of a text as a bounded excerpt — review bodies and thread bodies
+ * can be arbitrarily long; review_state.md is a summary, not a dump.
+ */
+function firstLineExcerpt(text, maxLen) {
+    var line = String(text || '').split('\n')[0].trim();
+    var limit = maxLen || 200;
+    if (line.length > limit) line = line.substring(0, limit - 3) + '...';
+    return line;
+}
+
+/**
+ * Latest CONCLUDED review (CHANGES_REQUESTED / APPROVED), oldest first sort,
+ * last one wins — same verdict semantics as pushReworkChanges.
+ * Returns null when there is no concluded review.
+ */
+function latestConcludedReview(reviews) {
+    var concluded = (reviews || []).filter(function(r) {
+        return r && (r.state === 'CHANGES_REQUESTED' || r.state === 'APPROVED');
+    });
+    concluded.sort(function(a, b) {
+        return String(a.submitted_at || '') < String(b.submitted_at || '') ? -1 : 1;
+    });
+    return concluded.length > 0 ? concluded[concluded.length - 1] : null;
+}
+
+/**
+ * Builds review_state.md — the reviewer-verdict context for the rework agent:
+ * the latest concluded review decision, who asked for what, and the open
+ * thread inventory with ids. Providers without review support (no
+ * listReviews) and probe failures degrade to an honest "not available" note —
+ * the file is still written (the contract is non-optional), never fatal.
+ */
+function buildReviewStateMd(scm, prNumber, discussionData) {
+    var lines = [];
+    lines.push('# Review State — Reviewer Verdict Context');
+    lines.push('');
+    lines.push('What the reviewer decided on this PR and which threads are still open.');
+    lines.push('Decision values: `CHANGES_REQUESTED` (blocking — reviewer asked for changes), `APPROVED`, or `NONE` (no concluded review yet).');
+    lines.push('');
+
+    var reviews = null;
+    if (scm && typeof scm.listReviews === 'function') {
+        try {
+            reviews = scm.listReviews(String(prNumber)) || [];
+        } catch (e) {
+            console.warn('review_state: listReviews probe failed (non-fatal):', e.message || e);
+            reviews = null;
+        }
+    }
+
+    if (reviews === null) {
+        lines.push('> Review verdicts are not available from this SCM provider — rely on the open threads below.');
+        lines.push('');
+    } else {
+        var latest = latestConcludedReview(reviews);
+        lines.push('**Review decision: `' + (latest ? latest.state : 'NONE') + '`**');
+        lines.push('');
+        if (latest) {
+            lines.push('Latest concluded review:');
+            lines.push('');
+            lines.push('- **State**: ' + latest.state);
+            var author = (latest.user && latest.user.login) ||
+                (latest.author && (latest.author.login || latest.author.name)) || 'unknown';
+            lines.push('- **Reviewer**: ' + author);
+            lines.push('- **Submitted**: ' + (latest.submitted_at || 'unknown'));
+            var summary = firstLineExcerpt(latest.body);
+            if (summary) lines.push('- **Summary**: ' + summary);
+            lines.push('');
+        } else {
+            lines.push('No concluded review (CHANGES_REQUESTED/APPROVED) exists yet.');
+            lines.push('');
+        }
+    }
+
+    var rawThreads = (discussionData && discussionData.rawThreads && discussionData.rawThreads.threads) || [];
+    var openThreads = rawThreads.filter(function(t) {
+        return !!t && t.resolved !== true && t.bot !== true;
+    });
+    lines.push('**Open review threads at rework start: ' + openThreads.length + '**');
+    lines.push('');
+    if (openThreads.length > 0) {
+        lines.push('Each open thread below is blocking reviewer feedback — fix it and reply via `outputs/review_replies.json`:');
+        lines.push('');
+        openThreads.forEach(function(t) {
+            var id = t.threadId ||
+                (t.rootCommentId !== null && t.rootCommentId !== undefined ? 'comment#' + t.rootCommentId : 'no-id');
+            var loc = t.path ? (t.path + (t.line ? ':' + t.line : '')) : '';
+            var excerpt = firstLineExcerpt(t.body, 160);
+            lines.push('- `' + id + '`' + (loc ? ' — `' + loc + '`' : '') + (excerpt ? ' — "' + excerpt + '"' : ''));
+        });
+        lines.push('');
+    }
+    if (reviews !== null && latestConcludedReview(reviews) &&
+        latestConcludedReview(reviews).state === 'CHANGES_REQUESTED') {
+        lines.push('⚠️ The reviewer **requires changes** before this PR can merge — treat every open thread as blocking.');
+        lines.push('');
+    }
+    return lines.join('\n');
+}
+
+/**
+ * gh-799 AC1: enforces the pinned input trio. Writes ONLY what is missing —
+ * real thread data and real failure logs (written by writePRContext /
+ * detectFailedChecks) are never clobbered; review_state.md is refreshed every
+ * leg because the verdict can move between legs. Non-fatal by contract: the
+ * caller wraps it in try/catch so a placeholder write failure never kills the
+ * leg (the leg can still run on whatever picture it has).
+ *
+ * @returns {string[]} the files this call wrote
+ */
+function ensureInputContextContract(inputFolder, scm, prNumber, discussionData, failedChecks) {
+    var written = [];
+    var rawThreads = discussionData && discussionData.rawThreads;
+    var hasThreadData = !!(rawThreads && rawThreads.threads && rawThreads.threads.length > 0);
+    if (!hasThreadData && !inputContextFileExists(inputFolder + '/pr_discussions_raw.json')) {
+        gitOps.writeInputFile(
+            inputFolder + '/pr_discussions_raw.json',
+            NO_THREADS_RAW_JSON,
+            'pr_discussions_raw.json (contract placeholder — 0 threads at leg start)'
+        );
+        written.push('pr_discussions_raw.json');
+    }
+
+    var hasFailures = !!(failedChecks && failedChecks.length > 0);
+    if (!hasFailures && !inputContextFileExists(inputFolder + '/ci_failures.md')) {
+        gitOps.writeInputFile(
+            inputFolder + '/ci_failures.md',
+            CI_NO_FAILURES_MD,
+            'ci_failures.md (contract placeholder — 0 failed checks at leg start)'
+        );
+        written.push('ci_failures.md');
+    }
+
+    gitOps.writeInputFile(
+        inputFolder + '/review_state.md',
+        buildReviewStateMd(scm, prNumber, discussionData),
+        'review_state.md (review verdict + open threads)'
+    );
+    written.push('review_state.md');
+
+    if (written.length > 0) {
+        console.log('✅ Input contract (gh-799): ensured ' + written.join(', '));
+    }
+    return written;
 }
 
 function failSetup(tracker, ticketKey, inputFolder, message, customParams) {
@@ -292,6 +483,16 @@ function action(params) {
         // Step 6: Write all context files
         gitOps.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
 
+        // gh-799: pinned input contract — whatever armed this leg, the input
+        // folder now ALWAYS carries the complete open-item picture (threads
+        // with ids, CI failures, review verdict). Non-fatal: a placeholder
+        // write failure must not kill the leg.
+        try {
+            ensureInputContextContract(inputFolder, scm, prDetails.number, discussionData, failedChecks);
+        } catch (e) {
+            console.warn('Input contract enforcement failed (non-fatal):', e);
+        }
+
         // Step 7: Fetch question subtasks with answers
         try {
             fetchQuestionsToInput.action(actualParams);
@@ -375,5 +576,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, syncBaseBranchIfConfigured, truncateForComment, buildReworkStartedComment };
+    module.exports = { action, syncBaseBranchIfConfigured, truncateForComment, buildReworkStartedComment, buildReviewStateMd, ensureInputContextContract };
 }
