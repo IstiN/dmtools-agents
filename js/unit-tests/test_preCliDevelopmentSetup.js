@@ -546,7 +546,7 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
         return loadPreCliDevelopmentSetupWithExtras(bag, config, githubBehavior);
     }
 
-    function loadPreCliDevelopmentSetupWithExtras(bag, config, githubBehavior) {
+    function loadPreCliDevelopmentSetupWithExtras(bag, config, githubBehavior, extraMocks) {
         return loadModule(
             'js/preCliDevelopmentSetup.js',
             makeRequire({
@@ -564,9 +564,12 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
                 },
                 './common/baseBranchMarker.js': { writeBaseBranchMarker: function () {} },
                 './common/commentMarkup.js': devCommentMarkupModule,
-                './common/trackers.js': trackersModuleReal
+                './common/trackers.js': extraMocks ? loadModule('js/common/trackers.js', makeRequire({
+                    '../config.js': configModule,
+                    './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+                }), extraMocks) : trackersModuleReal
             }),
-            {
+            Object.assign({
                 cli_execute_command: makeCliMock(bag.cliCalls, {}),
                 jira_move_to_status: function (args) { bag.moves.push(args); },
                 file_write: function (args) { bag.writes.push(args); },
@@ -582,7 +585,7 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
                         throw new Error('label absent');
                     }
                 }
-            }
+            }, extraMocks || {})
         );
     }
 
@@ -615,6 +618,20 @@ suite('preCliDevelopmentSetup.action — dev-leg transition label assertion (gh-
         // setup kept going: branch checkout happened after the assertion
         assert.ok(bag.cliCalls.indexOf('git checkout -b ai/gh-716') !== -1,
             'branch setup still ran');
+    });
+
+    test('ado tracker: moves to In Development via ado_move_to_state, no jira_move_to_status (wave1c)', function () {
+        var bag = makeBag();
+        var adoMoves = [];
+        var mod = loadPreCliDevelopmentSetupWithExtras(bag, makeActionConfig({ tracker: { provider: 'ado' } }), {}, {
+            ado_move_to_state: function (args) { adoMoves.push(args); }
+        });
+
+        mod.action({ inputFolderPath: 'input/77', ticket: { key: '77', fields: {} }, customParams: {} });
+
+        assert.equal(bag.moves.length, 0, 'no jira_move_to_status call on ADO');
+        assert.equal(adoMoves.length, 1);
+        assert.equal(adoMoves[0].id, '77');
     });
 
     test('non-github tracker (jira default): never touches GitHub labels', function () {

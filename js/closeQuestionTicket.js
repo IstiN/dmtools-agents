@@ -7,19 +7,21 @@
 const { LABELS } = require('./config.js');
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+const trackersModule = require('./common/trackers.js');
 
 function action(params) {
     try {
         var ticketKey = params.ticket.key;
         var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
         var jiraConfig = projectConfig.jira;
+        var tracker = trackersModule.createTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
         var wipLabel = params.metadata && params.metadata.contextId
             ? params.metadata.contextId + '_wip'
             : null;
 
         // Add ai_generated label
         try {
-            jira_add_label({ key: ticketKey, label: LABELS.AI_GENERATED });
+            tracker.addLabel(ticketKey, LABELS.AI_GENERATED);
         } catch (e) {
             console.warn('Failed to add ai_generated label:', e);
         }
@@ -27,20 +29,20 @@ function action(params) {
         // Remove WIP label if present
         if (wipLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: wipLabel });
+                tracker.removeLabel(ticketKey, wipLabel);
             } catch (e) {
                 console.warn('Failed to remove WIP label:', e);
             }
         }
 
         // Move to Done
-        jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.DONE });
+        tracker.moveToStatus(ticketKey, jiraConfig.statuses.DONE);
         console.log('Moved ' + ticketKey + ' to Done');
 
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
         try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
+            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }
@@ -51,4 +53,8 @@ function action(params) {
         console.error('Error in closeQuestionTicket:', error);
         return { success: false, error: error.toString() };
     }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { action };
 }

@@ -9,6 +9,7 @@ var prHelper = require('./common/pullRequest.js');
 var mergeState = require('./common/mergeState.js');
 const { LABELS } = require('./config.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
+var trackersModule = require('./common/trackers.js');
 
 function smLabelForContext(contextId) {
     if (!contextId) return null;
@@ -222,21 +223,22 @@ function action(params) {
     const jiraConfig = config.jira;
     const scm = configLoader.createScm(config);
     const customParams = (params.jobParams && params.jobParams.customParams) || params.customParams || {};
+    var tracker = trackersModule.createTracker(config, customParams);
     const contextId = actualParams.metadata && actualParams.metadata.contextId;
     const removeLabel = customParams.removeLabel || smLabelForContext(contextId);
     const wipLabel = contextId ? contextId + '_wip' : null;
 
     function releaseWipLock() {
         if (wipLabel) {
-            try { jira_remove_label({ key: storyKey, label: wipLabel }); } catch (e) {}
+            try { tracker.removeLabel(storyKey, wipLabel); } catch (e) {}
         } else {
             // If contextId is missing, clean up both known WIP labels defensively.
-            try { jira_remove_label({ key: storyKey, label: 'story_test_automation_rework_wip' }); } catch (e) {}
-            try { jira_remove_label({ key: storyKey, label: 'bug_test_automation_rework_wip' }); } catch (e) {}
+            try { tracker.removeLabel(storyKey, 'story_test_automation_rework_wip'); } catch (e) {}
+            try { tracker.removeLabel(storyKey, 'bug_test_automation_rework_wip'); } catch (e) {}
         }
         if (removeLabel) {
             try {
-                jira_remove_label({ key: storyKey, label: removeLabel });
+                tracker.removeLabel(storyKey, removeLabel);
                 console.log('✅ Removed SM label:', removeLabel);
             } catch (e) {}
         }
@@ -245,7 +247,7 @@ function action(params) {
     function releaseLock() {
         releaseWipLock();
         try {
-            jira_remove_label({ key: storyKey, label: LABELS.TEST_PR_REWORK_NEEDED });
+            tracker.removeLabel(storyKey, LABELS.TEST_PR_REWORK_NEEDED);
             console.log('✅ Removed test_pr_rework_needed label');
         } catch (e) {}
 
@@ -269,10 +271,8 @@ function action(params) {
             branchName = commitAndPush(storyKey, config);
         } catch (e) {
             console.error('Git operations failed:', e);
-            jira_post_comment({
-                key: storyKey,
-                comment: 'h3. ❌ Story Test Rework Push Failed\n\n{code}' + e.toString() + '{code}'
-            });
+            tracker.postComment(storyKey, 'h3. ❌ Story Test Rework Push Failed\n\n{code}' + e.toString() + '{code}'
+            );
             releaseWipLock();
             return { success: false, error: e.toString() };
         }
@@ -290,7 +290,7 @@ function action(params) {
 
         // Step 3: Move Story back to In Testing
         try {
-            jira_move_to_status({ key: storyKey, statusName: jiraConfig.statuses.IN_TESTING });
+            tracker.moveToStatus(storyKey, jiraConfig.statuses.IN_TESTING);
             console.log('✅ Moved Story', storyKey, 'to', jiraConfig.statuses.IN_TESTING);
         } catch (e) {
             console.warn('Failed to move Story to In Testing:', e);
@@ -302,7 +302,7 @@ function action(params) {
             comment += '*Branch*: {code}' + branchName + '{code}\n';
             if (pr) comment += '*Pull Request*: ' + pr.html_url + '\n';
             comment += '\n' + fixSummary;
-            jira_post_comment({ key: storyKey, comment: comment });
+            tracker.postComment(storyKey, comment);
         } catch (e) {
             console.warn('Failed to post Jira comment:', e);
         }
@@ -329,7 +329,7 @@ function action(params) {
         }
 
         try {
-            tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator });
+            tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator, tracker: tracker });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }
@@ -343,10 +343,8 @@ function action(params) {
     } catch (error) {
         console.error('❌ Error in storyTestAutomationRework:', error);
         try {
-            jira_post_comment({
-                key: storyKey,
-                comment: 'h3. ❌ Story Test Rework Error\n\n{code}' + error.toString() + '{code}'
-            });
+            tracker.postComment(storyKey, 'h3. ❌ Story Test Rework Error\n\n{code}' + error.toString() + '{code}'
+            );
         } catch (e) {}
         releaseLock();
         return { success: false, error: error.toString() };

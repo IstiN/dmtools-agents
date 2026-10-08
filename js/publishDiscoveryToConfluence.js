@@ -27,6 +27,7 @@
 
 var configLoader = require('./configLoader.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
+var trackersModule = require('./common/trackers.js');
 var contentOutput = require('./common/contentOutput.js');
 var feedbackLoop = require('./common/feedbackLoop.js');
 
@@ -139,6 +140,7 @@ function action(params) {
     try {
         var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
         var discoveryConfig = projectConfig.discovery || {};
+        var tracker = trackersModule.createTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
         var space = discoveryConfig.space;
         var parentPageId = discoveryConfig.parentPageId;
         var deleteOrphans = !!discoveryConfig.deleteOrphans;
@@ -149,7 +151,7 @@ function action(params) {
                 'Set them in `.dmtools/config.js` to enable publishing.';
             console.warn(msg);
             try {
-                jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Discovery drafted, not published\n\n' + msg });
+                tracker.postComment(ticketKey, 'h3. ⚠️ Discovery drafted, not published\n\n' + msg);
             } catch (commentError) {
                 console.warn('Failed to post not-configured comment:', commentError);
             }
@@ -237,13 +239,13 @@ function action(params) {
             (replyResult.posted > 0 ? '\n\nReplied to *' + replyResult.posted + '* inline comment(s).' : '') +
             (replyResult.failed > 0 ? ' (' + replyResult.failed + ' reply attempt(s) failed — see job log.)' : '');
         try {
-            jira_post_comment({ key: ticketKey, comment: comment });
+            tracker.postComment(ticketKey, comment);
         } catch (commentError) {
             console.warn('Failed to post discovery-published comment:', commentError);
         }
 
         try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
+            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }
@@ -263,10 +265,8 @@ function action(params) {
     } catch (error) {
         console.error('Error in publishDiscoveryToConfluence:', error);
         try {
-            jira_post_comment({
-                key: ticketKey,
-                comment: 'h3. ⚠️ Discovery publish failed\n\n' + (error.message || error.toString())
-            });
+            tracker.postComment(ticketKey, 'h3. ⚠️ Discovery publish failed\n\n' + (error.message || error.toString())
+            );
         } catch (commentError) {
             console.warn('Failed to post failure comment:', commentError);
         }

@@ -540,7 +540,7 @@ function action(params) {
 
         // 1. Move ticket to In Development
         try {
-            jira_move_to_status({ key: ticketKey, statusName: statuses.IN_DEVELOPMENT });
+            trackersModule.createTracker(config, customParams || {}).moveToStatus(ticketKey, statuses.IN_DEVELOPMENT);
             console.log('Moved ' + ticketKey + ' to ' + statuses.IN_DEVELOPMENT);
         } catch (e) {
             console.warn('Failed to move ticket to ' + statuses.IN_DEVELOPMENT + ':', e);
