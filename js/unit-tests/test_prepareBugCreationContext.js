@@ -1,3 +1,10 @@
+function d2Trackers(mocks) {
+    return loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), mocks);
+}
+
 /**
  * Unit tests for bug creation context preparation scripts.
  */
@@ -29,7 +36,7 @@ function loadPrepareBugCreationContext(mocks) {
 
     var mod = loadModule(
         'js/prepareBugCreationContext.js',
-        makeRequire({}),
+        makeRequire({ './common/trackers.js': d2Trackers(Object.assign({}, defaults, mocks || {})) }),
         Object.assign({}, defaults, mocks || {})
     );
 

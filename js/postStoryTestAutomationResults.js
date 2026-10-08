@@ -17,6 +17,19 @@ const { GIT_CONFIG, LABELS, JIRA_FIELDS } = require('./config.js');
 var outputFiles = require('./common/outputFiles.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 
+// Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
+var trackersModule = require('./common/trackers.js');
+var _trackerCtx = { config: null, customParams: {} };
+var _trackerInst = null;
+function initTracker(config, customParams) {
+    _trackerCtx = { config: config || null, customParams: customParams || {} };
+    _trackerInst = null;
+}
+function getTracker() {
+    if (!_trackerInst) _trackerInst = trackersModule.createTracker(_trackerCtx.config, _trackerCtx.customParams);
+    return _trackerInst;
+}
+
 var RESUME_MARKER = 'outputs/.story-test-resume-attempted';
 
 function cleanCommandOutput(output) {
@@ -74,7 +87,8 @@ function readLinkedTestCases(storyKey, testCaseType) {
 
     try {
         var jql = 'issue in linkedIssues("' + storyKey + '") AND issuetype = "' + testCaseType + '"';
-        var results = jira_search_by_jql({ jql: jql, maxResults: 100, fields: ['key'] });
+        // JQL text: provider-specific query (WIQL on ado)
+        var results = getTracker().searchIssues(jql, { maxResults: 100, fields: ['key'] });
         return Array.isArray(results) ? results : [];
     } catch (e) {
         console.warn('Failed to fetch linked Test Cases from Jira:', e);
@@ -410,12 +424,7 @@ function attachFailedDescription(tcKey, filePath) {
     try {
         if (!filePath) return null;
         var name = filePath.split('/').pop();
-        jira_attach_file_to_ticket({
-            ticketKey: tcKey,
-            name: name,
-            filePath: filePath,
-            contentType: 'text/markdown'
-        });
+        getTracker().attachFile(tcKey, name, filePath, 'text/markdown');
         console.log('✅ Attached failed description to', tcKey, ':', name);
         return name;
     } catch (e) {
@@ -430,7 +439,7 @@ function updateFailedReasonField(tcKey, attachmentName, failureSummary, fieldNam
         if (attachmentName) {
             value += '*Attachment*: [^' + attachmentName + ']\n';
         }
-        jira_update_field({ key: tcKey, field: fieldName, value: value });
+        getTracker().updateField(tcKey, fieldName, value);
         console.log('✅ Updated Failed Reason field for', tcKey);
     } catch (e) {
         console.warn('Failed to update Failed Reason field for', tcKey, ':', e);
@@ -440,7 +449,7 @@ function updateFailedReasonField(tcKey, attachmentName, failureSummary, fieldNam
 function updateTestCaseStatus(tcKey, status, workingDir, storyKey, config) {
     try {
         var targetStatus = status === 'passed' ? config.jira.statuses.IN_REVIEW_PASSED : config.jira.statuses.IN_REVIEW_FAILED;
-        jira_move_to_status({ key: tcKey, statusName: targetStatus });
+        getTracker().moveToStatus(tcKey, targetStatus);
         console.log('✅ Moved', tcKey, 'to', targetStatus);
 
         if (status === 'failed') {
@@ -463,7 +472,7 @@ function updateTestCaseStatus(tcKey, status, workingDir, storyKey, config) {
 function finalizeTestCaseStatus(tcKey, status, jiraConfig) {
     try {
         var targetStatus = status === 'passed' ? jiraConfig.statuses.PASSED : jiraConfig.statuses.FAILED;
-        jira_move_to_status({ key: tcKey, statusName: targetStatus });
+        getTracker().moveToStatus(tcKey, targetStatus);
         console.log('✅ Finalized', tcKey, 'to', targetStatus, '(no code changes)');
     } catch (e) {
         console.warn('Failed to finalize Test Case', tcKey, ':', e);
@@ -472,7 +481,7 @@ function finalizeTestCaseStatus(tcKey, status, jiraConfig) {
 
 function moveSkippedTcToStatus(tcKey, skippedStatus) {
     try {
-        jira_move_to_status({ key: tcKey, statusName: skippedStatus });
+        getTracker().moveToStatus(tcKey, skippedStatus);
         console.log('✅ Moved', tcKey, 'to', skippedStatus, '(skipped)');
     } catch (e) {
         console.warn('Failed to move skipped Test Case', tcKey, ':', e);
@@ -496,7 +505,7 @@ function deleteTestCaseCode(tcKey, testFilesPath, workingDir) {
 
 function moveIrrelevantTcToStatus(tcKey, irrelevantStatus, testFilesPath, workingDir) {
     try {
-        jira_move_to_status({ key: tcKey, statusName: irrelevantStatus });
+        getTracker().moveToStatus(tcKey, irrelevantStatus);
         console.log('✅ Moved', tcKey, 'to', irrelevantStatus, '(irrelevant)');
     } catch (e) {
         console.warn('Failed to move irrelevant Test Case', tcKey, ':', e);
@@ -532,13 +541,13 @@ function removeAutomationLabels(storyKey, params) {
         const wipLabel = params.metadata && params.metadata.contextId
             ? params.metadata.contextId + '_wip'
             : 'story_test_automation_wip';
-        jira_remove_label({ key: storyKey, label: wipLabel });
+        getTracker().removeLabel(storyKey, wipLabel);
     } catch (e) {}
 
     try {
         const smTriggerLabel = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.removeLabel;
         if (smTriggerLabel) {
-            jira_remove_label({ key: storyKey, label: smTriggerLabel });
+            getTracker().removeLabel(storyKey, smTriggerLabel);
             console.log('✅ Removed SM trigger label:', smTriggerLabel);
         }
     } catch (e) {}
@@ -547,7 +556,7 @@ function removeAutomationLabels(storyKey, params) {
     // new bulk PR can go through review/merge again.
     [LABELS.PR_APPROVED, LABELS.TEST_PR_MERGED, LABELS.TEST_PR_FINALIZED, LABELS.TEST_PR_REWORK_NEEDED].forEach(function(staleLabel) {
         try {
-            jira_remove_label({ key: storyKey, label: staleLabel });
+            getTracker().removeLabel(storyKey, staleLabel);
             console.log('✅ Removed stale label:', staleLabel);
         } catch (e) {}
     });
@@ -560,6 +569,7 @@ function action(params) {
         var config = configLoader.loadProjectConfig(params.jobParams || params);
         var jiraConfig = config.jira;
         var customParams = (params.jobParams || params).customParams || {};
+        initTracker(config, customParams);
         // Legacy override channel: customParams.customStatuses still wins over .dmtools/config.js statuses
         var statuses = Object.assign({}, jiraConfig.statuses, customParams.customStatuses || {});
         var scm = configLoader.createScm(config);
@@ -584,7 +594,7 @@ function action(params) {
 
         if (!result) {
             var commentMsg = 'h3. ⚠️ Story Test Automation Error\n\nCLI exited without producing result JSON. The Story will stay in Ready For Testing so SM can retry.';
-            jira_post_comment({ key: storyKey, comment: commentMsg });
+            getTracker().postComment(storyKey, commentMsg);
             removeAutomationLabels(storyKey, params);
             return { success: false, error: 'No story test result JSON found' };
         }
@@ -596,7 +606,7 @@ function action(params) {
                 'The automation could not verify all linked Test Cases. Missing results for:\n\n' +
                 stillMissingKeys.map(function(k) { return '* ' + k; }).join('\n') + '\n\n' +
                 'The Story will stay in Ready For Testing so SM can retry.';
-            jira_post_comment({ key: storyKey, comment: missingComment });
+            getTracker().postComment(storyKey, missingComment);
             removeAutomationLabels(storyKey, params);
             return { success: false, error: 'Missing Test Case results: ' + stillMissingKeys.join(', ') };
         }
@@ -623,7 +633,7 @@ function action(params) {
 
             var bugReturnStatus = statuses.READY_FOR_DEVELOPMENT;
             try {
-                jira_move_to_status({ key: storyKey, statusName: bugReturnStatus });
+                getTracker().moveToStatus(storyKey, bugReturnStatus);
                 console.log('✅ Moved Bug', storyKey, 'back to', bugReturnStatus);
             } catch (moveErr) {
                 console.warn('Failed to move Bug', storyKey, 'to', bugReturnStatus, ':', moveErr);
@@ -631,10 +641,7 @@ function action(params) {
 
             try {
                 var failureList = failedResults.map(function(r) { return '* ' + r.testCaseKey + (r.failureSummary ? ' — ' + r.failureSummary : ''); }).join('\n');
-                jira_post_comment({
-                    key: storyKey,
-                    comment: 'h3. ⚠️ Bug Fix Did Not Pass Automated Tests\n\nThe following Test Cases failed with a product regression:\n' + failureList + '\n\nThe Bug is being returned to *Ready For Development* for a corrected fix.'
-                });
+                getTracker().postComment(storyKey, 'h3. ⚠️ Bug Fix Did Not Pass Automated Tests\n\nThe following Test Cases failed with a product regression:\n' + failureList + '\n\nThe Bug is being returned to *Ready For Development* for a corrected fix.');
             } catch (e) {
                 console.warn('Failed to post bug return comment:', e);
             }
@@ -674,7 +681,7 @@ function action(params) {
                 prUrl = prResult.prUrl;
                 if (!prResult.success || !prUrl) {
                     console.error('PR creation failed');
-                    jira_post_comment({ key: storyKey, comment: 'h3. ⚠️ PR Creation Failed\n\nTest code was pushed to branch {code}' + branchName + '{code} but the Pull Request could not be created.' });
+                    getTracker().postComment(storyKey, 'h3. ⚠️ PR Creation Failed\n\nTest code was pushed to branch {code}' + branchName + '{code} but the Pull Request could not be created.');
                     removeAutomationLabels(storyKey, params);
                     return { success: false, error: 'PR creation failed' };
                 }
@@ -683,7 +690,7 @@ function action(params) {
                 console.log('ℹ️ No test code changes — skipping PR review, moving Story directly');
             } else {
                 console.warn('Git operations failed:', gitResult.error);
-                jira_post_comment({ key: storyKey, comment: 'h3. ⚠️ Git Operations Failed\n\n' + gitResult.error });
+                getTracker().postComment(storyKey, 'h3. ⚠️ Git Operations Failed\n\n' + gitResult.error);
                 removeAutomationLabels(storyKey, params);
                 return { success: false, error: 'Git operations failed: ' + gitResult.error };
             }
@@ -699,7 +706,7 @@ function action(params) {
                 comment += '\n\nℹ️ _Test code unchanged from previous run._';
             }
             if (comment) {
-                jira_post_comment({ key: storyKey, comment: comment });
+                getTracker().postComment(storyKey, comment);
                 console.log('✅ Posted story test result comment to Jira');
             }
         } catch (e) {
@@ -712,8 +719,8 @@ function action(params) {
                 (result.blockedReason || 'Missing credentials or test data.') + '\n\n' +
                 'Once setup is complete, move this Story back to *Ready For Testing* to trigger re-run.';
             try {
-                jira_post_comment({ key: storyKey, comment: blockedComment });
-                jira_move_to_status({ key: storyKey, statusName: jiraConfig.statuses.BLOCKED });
+                getTracker().postComment(storyKey, blockedComment);
+                getTracker().moveToStatus(storyKey, jiraConfig.statuses.BLOCKED);
                 console.log('✅ Blocked — moved', storyKey, 'to', jiraConfig.statuses.BLOCKED);
             } catch (e) {
                 console.warn('Failed to handle blocked story:', e);
@@ -746,7 +753,7 @@ function action(params) {
 
         // Step 8: Move Story to In Testing
         try {
-            jira_move_to_status({ key: storyKey, statusName: jiraConfig.statuses.IN_TESTING });
+            getTracker().moveToStatus(storyKey, jiraConfig.statuses.IN_TESTING);
             console.log('✅ Moved Story', storyKey, 'to', jiraConfig.statuses.IN_TESTING);
         } catch (e) {
             console.warn('Failed to move Story to In Testing:', e);
@@ -762,7 +769,7 @@ function action(params) {
         // Step 10: Labels cleanup
         removeAutomationLabels(storyKey, params);
         try {
-            jira_add_label({ key: storyKey, label: LABELS.AI_TEST_AUTOMATION });
+            getTracker().addLabel(storyKey, LABELS.AI_TEST_AUTOMATION);
         } catch (e) {
             console.warn('Failed to add ai_test_automation label:', e);
         }
@@ -784,10 +791,7 @@ function action(params) {
     } catch (error) {
         console.error('❌ Error in postStoryTestAutomationResults:', error);
         try {
-            jira_post_comment({
-                key: params.ticket.key,
-                comment: 'h3. ❌ Story Test Automation Error\n\n{code}' + error.toString() + '{code}'
-            });
+            getTracker().postComment(params.ticket.key, 'h3. ❌ Story Test Automation Error\n\n{code}' + error.toString() + '{code}');
         } catch (e) {}
         removeAutomationLabels(params.ticket.key, params);
         return { success: false, error: error.toString() };

@@ -1,3 +1,10 @@
+function d2Trackers(mocks) {
+    return loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), mocks);
+}
+
 /**
  * Unit tests for js/createRepoTasks.js
  */
@@ -16,7 +23,7 @@ function makeModule(globals) {
 
     return loadModule(
         'js/createRepoTasks.js',
-        makeRequire({ './config.js': configModule }),
+        makeRequire({ './config.js': configModule, './common/trackers.js': d2Trackers(defaultGlobals) }),
         defaultGlobals
     );
 }

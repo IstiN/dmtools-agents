@@ -1,3 +1,10 @@
+function d2Trackers(mocks) {
+    return loadModule('js/common/trackers.js', makeRequire({
+        '../config.js': configModule,
+        './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+    }), mocks);
+}
+
 /**
  * Unit tests for js/postBulkBugsCreation.js
  */
@@ -37,7 +44,8 @@ function loadPostBulkBugsCreation(mocks) {
             },
             './common/tokenUsageComment.js': {
                 postTokenUsageComments: function() {}
-            }
+            },
+            './common/trackers.js': d2Trackers(Object.assign({}, defaults, mocks))
         }),
         Object.assign({}, defaults, mocks)
     );
@@ -334,7 +342,8 @@ suite('postBulkBugsCreation', function() {
                     }
                 };
             },
-            jira_create_ticket_basic: function(project, type, summary, description) {
+            jira_create_ticket_basic: function(args) {
+                var summary = args.summary, description = args.description;
                 created.push({ summary: summary, description: description });
                 return '{"key":"TS-7000"}';
             },
@@ -392,7 +401,8 @@ suite('postBulkBugsCreation', function() {
                     }
                 };
             },
-            jira_create_ticket_basic: function(project, type, summary, description) {
+            jira_create_ticket_basic: function(args) {
+                var summary = args.summary, description = args.description;
                 created.push({ summary: summary, description: description });
                 return '{"key":"TS-7001"}';
             },
@@ -449,7 +459,8 @@ suite('postBulkBugsCreation', function() {
                     }
                 };
             },
-            jira_create_ticket_basic: function(project, type, summary, description) {
+            jira_create_ticket_basic: function(args) {
+                var summary = args.summary, description = args.description;
                 created.push({ summary: summary, description: description });
                 return '{"key":"TS-7002"}';
             },

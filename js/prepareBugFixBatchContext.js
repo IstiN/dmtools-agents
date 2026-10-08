@@ -13,6 +13,7 @@ var configLoader = require('./configLoader.js');
 var fetchQuestionsToInput = require('./fetchQuestionsToInput.js');
 var fetchLinkedTestsToInput = require('./fetchLinkedTestsToInput.js');
 const { LABELS, STATUSES, resolveStatuses } = require('./config.js');
+var trackersModule = require('./common/trackers.js');
 
 var _workingDir = null;
 function runCmd(args) {
@@ -67,7 +68,8 @@ function fetchBugContext(bug, jobParams) {
     }
 }
 
-function findBugsInEpic(epicKey) {
+function findBugsInEpic(epicKey, tracker) {
+    tracker = tracker || trackersModule.createTracker(null, {});
     var jqlParts = [
         'issue in linkedIssues("' + epicKey + '")',
         'AND issuetype = Bug',
@@ -78,8 +80,8 @@ function findBugsInEpic(epicKey) {
 
     var results = [];
     try {
-        results = jira_search_by_jql({
-            jql: jql,
+        // JQL text: provider-specific query (WIQL on ado)
+        results = tracker.searchIssues(jql, {
             fields: ['key', 'summary', 'status', 'description', 'labels', 'issuetype']
         }) || [];
     } catch (e) {
@@ -177,12 +179,13 @@ function action(params) {
         var config = configLoader.loadProjectConfig(actualParams);
         _workingDir = config.workingDir || null;
 
+        var tracker = trackersModule.createTracker(config, actualParams.customParams || {});
         var epicFolder = actualParams.inputFolderPath;
         var epicKey = epicFolder.split('/').pop();
         var epic = actualParams.ticket || { key: epicKey, fields: {} };
         if (!epic.fields) {
             try {
-                epic = jira_get_ticket({ key: epicKey, fields: ['summary', 'description', 'status', 'labels'] });
+                epic = tracker.getIssue(epicKey, ['summary', 'description', 'status', 'labels']);
             } catch (e) {
                 console.warn('Could not fetch Epic details (non-fatal):', e);
                 epic = { key: epicKey, fields: {} };
@@ -192,7 +195,7 @@ function action(params) {
         var customParams = actualParams.customParams || {};
         var statuses = resolveStatuses(customParams);
 
-        var bugs = findBugsInEpic(epicKey);
+        var bugs = findBugsInEpic(epicKey, tracker);
         console.log('Found', bugs.length, 'bug(s) in batch Epic', epicKey);
 
         for (var i = 0; i < bugs.length; i++) {
@@ -203,7 +206,7 @@ function action(params) {
 
         // Move Epic to In Development
         try {
-            jira_move_to_status({ key: epicKey, statusName: statuses.IN_DEVELOPMENT });
+            tracker.moveToStatus(epicKey, statuses.IN_DEVELOPMENT);
             console.log('Moved Epic ' + epicKey + ' to ' + statuses.IN_DEVELOPMENT);
         } catch (e) {
             console.warn('Failed to move Epic to In Development (non-fatal):', e);
