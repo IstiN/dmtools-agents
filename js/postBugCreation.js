@@ -15,6 +15,7 @@
 const { LABELS } = require('./config.js');
 const configLoader = require('./configLoader.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
+const trackersModule = require('./common/trackers.js');
 
 function readFile(path) {
     try {
@@ -51,31 +52,29 @@ function extractKeyFromResult(result) {
     return result.key || null;
 }
 
-function linkBugToTC(ticketKey, bugKey) {
+function linkBugToTC(tracker, ticketKey, bugKey) {
     // Bug "blocks" TC: sourceKey=TC, anotherKey=Bug, relationship='Blocks'
     // → Bug is the blocker, TC is blocked (TC cannot pass until bug is fixed)
-    jira_link_issues({
-        sourceKey: ticketKey,
-        anotherKey: bugKey,
-        relationship: 'Blocks'
-    });
+    tracker.linkIssues(ticketKey, bugKey, 'Blocks');
     console.log('✅ Linked:', bugKey, 'blocks', ticketKey);
 }
 
-function moveFailedTcToRework(ticketKey, jiraConfig) {
-    jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.IN_REWORK });
+function moveFailedTcToRework(tracker, ticketKey, jiraConfig) {
+    tracker.moveToStatus(ticketKey, jiraConfig.statuses.IN_REWORK);
     console.log('🔧 Moved', ticketKey, 'to', jiraConfig.statuses.IN_REWORK);
     try {
-        jira_remove_label({ key: ticketKey, label: 'sm_test_automation_triggered' });
+        tracker.removeLabel(ticketKey, 'sm_test_automation_triggered');
         console.log('✅ Removed sm_test_automation_triggered');
     } catch (e) {}
 }
 
 function action(params) {
+    var tracker;
     try {
         var ticketKey = params.ticket.key;
         var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
         var jiraConfig = projectConfig.jira;
+        tracker = trackersModule.createTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
         console.log('=== Processing bug creation decision for', ticketKey, '===');
 
         var customParams = params.jobParams && params.jobParams.customParams;
@@ -87,11 +86,8 @@ function action(params) {
 
         var decision = readDecisionJson();
         if (!decision) {
-            jira_post_comment({
-                key: ticketKey,
-                comment: 'h3. ⚠️ Bug Creation Error\n\nCould not read bug_decision.json. Check workflow logs.'
-            });
-            try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
+            tracker.postComment(ticketKey, 'h3. ⚠️ Bug Creation Error\n\nCould not read bug_decision.json. Check workflow logs.');
+            try { tracker.removeLabel(ticketKey, wipLabel); } catch (e) {}
             // KEEP sm_bug_creation_triggered label — TC stays in Failed, removing
             // the label would cause SM to re-trigger in an infinite loop.
             return { success: false, error: 'No bug_decision.json' };
@@ -107,7 +103,7 @@ function action(params) {
             // Link to existing bug
             bugKey = decision.existingKey;
             try {
-                linkBugToTC(ticketKey, bugKey);
+                linkBugToTC(tracker, ticketKey, bugKey);
                 bugLinked = true;
                 comment = 'h3. 🔗 Existing Bug Linked\n\n' +
                     'Found matching bug: *' + bugKey + '*\n\n' +
@@ -127,19 +123,19 @@ function action(params) {
                 || summary;
 
             if (!summary) {
-                jira_post_comment({ key: ticketKey, comment: 'h3. ⚠️ Bug Creation Skipped\n\nNo summary provided in bug_decision.json.' });
-                try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
+                tracker.postComment(ticketKey, 'h3. ⚠️ Bug Creation Skipped\n\nNo summary provided in bug_decision.json.');
+                try { tracker.removeLabel(ticketKey, wipLabel); } catch (e) {}
                 // KEEP sm_bug_creation_triggered — TC stays Failed, prevent re-fire loop.
                 return { success: false, error: 'No bug summary' };
             }
 
             try {
                 var projectKey = ticketKey.split('-')[0];
-                var result = jira_create_ticket_basic(projectKey, 'Bug', summary, description);
+                var result = tracker.createTicket(projectKey, 'Bug', summary, description);
                 bugKey = extractKeyFromResult(result);
 
                 if (bugKey) {
-                    linkBugToTC(ticketKey, bugKey);
+                    linkBugToTC(tracker, ticketKey, bugKey);
                     bugLinked = true;
                     comment = 'h3. 🐛 New Bug Created\n\n' +
                         'Created: *' + bugKey + '*\n' +
@@ -159,16 +155,16 @@ function action(params) {
                 (decision.reason || 'All tests passed in the most recent run — the underlying issue has been fixed.') +
                 '\n\n_Ticket status was stale. TC automatically moved to *Passed*._';
 
-            try { jira_post_comment({ key: ticketKey, comment: comment }); } catch (e) {}
+            try { tracker.postComment(ticketKey, comment); } catch (e) {}
             try {
-                jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.PASSED });
+                tracker.moveToStatus(ticketKey, jiraConfig.statuses.PASSED);
                 console.log('✅ Tests pass — moved', ticketKey, 'to', jiraConfig.statuses.PASSED);
             } catch (e) {
                 console.warn('Failed to move to Passed:', e);
             }
-            try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
+            try { tracker.removeLabel(ticketKey, wipLabel); } catch (e) {}
             if (smTriggerLabel) {
-                try { jira_remove_label({ key: ticketKey, label: smTriggerLabel }); } catch (e) {}
+                try { tracker.removeLabel(ticketKey, smTriggerLabel); } catch (e) {}
             }
             return { success: true, ticketKey: ticketKey, bugKey: null, action: 'tests_pass' };
 
@@ -178,11 +174,11 @@ function action(params) {
                 (decision.reason || 'AI determined no bug creation or linking is required.') +
                 '\n\n_TC moved to *In Rework* so the test automation can be fixed instead of staying in *Failed*._';
 
-            try { jira_post_comment({ key: ticketKey, comment: comment }); } catch (e) {}
-            moveFailedTcToRework(ticketKey, jiraConfig);
-            try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
+            try { tracker.postComment(ticketKey, comment); } catch (e) {}
+            moveFailedTcToRework(tracker, ticketKey, jiraConfig);
+            try { tracker.removeLabel(ticketKey, wipLabel); } catch (e) {}
             if (smTriggerLabel) {
-                try { jira_remove_label({ key: ticketKey, label: smTriggerLabel }); } catch (e) {}
+                try { tracker.removeLabel(ticketKey, smTriggerLabel); } catch (e) {}
             }
             console.log('ℹ️ No product bug for', ticketKey, '— moved to In Rework for test automation fixes');
             return { success: true, ticketKey: ticketKey, bugKey: null, action: 'none' };
@@ -190,7 +186,7 @@ function action(params) {
 
         // Post Jira comment
         try {
-            jira_post_comment({ key: ticketKey, comment: comment });
+            tracker.postComment(ticketKey, comment);
         } catch (e) {
             console.warn('Failed to post Jira comment:', e);
         }
@@ -198,7 +194,7 @@ function action(params) {
         // Move TC to Bug To Fix after successful link or create
         if (bugLinked) {
             try {
-                jira_move_to_status({ key: ticketKey, statusName: jiraConfig.statuses.BUG_TO_FIX });
+                tracker.moveToStatus(ticketKey, jiraConfig.statuses.BUG_TO_FIX);
                 console.log('✅ Moved', ticketKey, 'to', jiraConfig.statuses.BUG_TO_FIX);
             } catch (e) {
                 console.warn('Failed to move to Bug To Fix:', e);
@@ -207,7 +203,7 @@ function action(params) {
             // Move the bug to Ready For Development so it gets picked up
             if (bugKey) {
                 try {
-                    jira_move_to_status({ key: bugKey, statusName: jiraConfig.statuses.READY_FOR_DEVELOPMENT });
+                    tracker.moveToStatus(bugKey, jiraConfig.statuses.READY_FOR_DEVELOPMENT);
                     console.log('✅ Moved bug', bugKey, 'to', jiraConfig.statuses.READY_FOR_DEVELOPMENT);
                 } catch (e) {
                     console.warn('Failed to move bug to Ready For Development:', e);
@@ -216,12 +212,12 @@ function action(params) {
         }
 
         // Remove WIP label
-        try { jira_remove_label({ key: ticketKey, label: wipLabel }); } catch (e) {}
+        try { tracker.removeLabel(ticketKey, wipLabel); } catch (e) {}
 
         // Remove SM trigger label (TC is now in Bug To Fix, not Failed — rule won't re-fire anyway)
         if (smTriggerLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: smTriggerLabel });
+                tracker.removeLabel(ticketKey, smTriggerLabel);
                 console.log('✅ Removed SM trigger label:', smTriggerLabel);
             } catch (e) {}
         }
@@ -230,7 +226,7 @@ function action(params) {
         // The test automation agent leaves this label on Failed TCs — it must be
         // cleaned up here so the TC can be re-triggered after the bug is fixed.
         try {
-            jira_remove_label({ key: ticketKey, label: 'sm_test_automation_triggered' });
+            tracker.removeLabel(ticketKey, 'sm_test_automation_triggered');
             console.log('✅ Removed sm_test_automation_triggered');
         } catch (e) {}
 
@@ -249,16 +245,13 @@ function action(params) {
     } catch (error) {
         console.error('❌ Error in postBugCreation:', error);
         try {
-            jira_post_comment({
-                key: params.ticket.key,
-                comment: 'h3. ❌ Bug Creation Error\n\n{code}' + error.toString() + '{code}'
-            });
+            tracker.postComment(params.ticket.key, 'h3. ❌ Bug Creation Error\n\n{code}' + error.toString() + '{code}');
         } catch (e) {}
         // Release SM trigger label so SM can retry next cycle
         var customParamsOnErr = params.jobParams && params.jobParams.customParams;
         var smLabelOnErr = customParamsOnErr && customParamsOnErr.removeLabel;
         if (smLabelOnErr) {
-            try { jira_remove_label({ key: params.ticket.key, label: smLabelOnErr }); } catch (e) {}
+            try { tracker.removeLabel(params.ticket.key, smLabelOnErr); } catch (e) {}
         }
         return { success: false, error: error.toString() };
     }

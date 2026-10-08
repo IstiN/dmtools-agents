@@ -13,6 +13,7 @@ var prHelper = require('./common/pullRequest.js');
 var scmModule = require('./common/scm.js');
 var gh = require('./common/githubHelpers.js');
 const { STATUSES, resolveStatuses } = require('./config.js');
+var trackersModule = require('./common/trackers.js');
 
 function cleanCommandOutput(output) {
     if (!output) return '';
@@ -182,11 +183,12 @@ function checkoutBranch(storyKey, config, inputFolder) {
     console.log('✅ Branch ready:', branchName);
 }
 
-function fetchLinkedTestCases(storyKey, testCaseType) {
+function fetchLinkedTestCases(storyKey, testCaseType, tracker) {
     var jql = 'issue in linkedIssues("' + storyKey + '") AND issuetype = "' + testCaseType + '"';
     console.log('Fetching linked Test Cases with JQL:', jql);
     try {
-        var results = jira_search_by_jql({ jql: jql, maxResults: 100, fields: ['key', 'summary', 'status'] });
+        // JQL text: provider-specific query (WIQL on ado)
+        var results = tracker.searchIssues(jql, { maxResults: 100, fields: ['key', 'summary', 'status'] });
         return Array.isArray(results) ? results : [];
     } catch (e) {
         console.warn('Failed to fetch linked Test Cases:', e);
@@ -345,13 +347,14 @@ function action(params) {
             ? projectConfig.jira.issueTypes.TEST_CASE
             : 'Test Case';
         var customParams = (params.jobParams || params).customParams || {};
+        var tracker = trackersModule.createTracker(projectConfig, customParams);
         var statuses = resolveStatuses(customParams);
         var testFilesPath = customParams.testFilesGlob || 'testing/';
 
         console.log('=== Story test automation setup for:', storyKey, '===');
 
         // Step 1: Fetch linked test cases
-        var testCases = fetchLinkedTestCases(storyKey, testCaseType);
+        var testCases = fetchLinkedTestCases(storyKey, testCaseType, tracker);
         console.log('Found', testCases.length, 'linked Test Case(s)');
 
         if (testCases.length === 0) {

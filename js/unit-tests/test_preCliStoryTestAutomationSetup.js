@@ -34,16 +34,18 @@ function loadPreCliStoryTestAutomationSetup(mocks) {
         trimLargeTextForInput: function(text) { return text || ''; }
     };
 
+    var allMocks = Object.assign({}, defaults, mocks);
     return loadModule(
         'js/preCliStoryTestAutomationSetup.js',
         makeRequire({
             './config.js': configModule,
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), allMocks),
             './configLoader.js': freshConfigLoader,
             './common/pullRequest.js': prHelper,
             './common/githubHelpers.js': githubHelpers,
             './common/scm.js': { createScm: function() { return {}; } }
         }),
-        Object.assign({}, defaults, mocks)
+        allMocks
     );
 }
 
@@ -166,6 +168,7 @@ suite('preCliStoryTestAutomationSetup', function() {
             'js/preCliStoryTestAutomationSetup.js',
             makeRequire({
                 './config.js': configModule,
+                './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
                 './configLoader.js': loadModule(
                     'js/configLoader.js',
                     makeRequire({
@@ -225,6 +228,7 @@ suite('preCliStoryTestAutomationSetup', function() {
             'js/preCliStoryTestAutomationSetup.js',
             makeRequire({
                 './config.js': configModule,
+                './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), { jira_search_by_jql: function() { return []; } }),
                 './configLoader.js': loadModule(
                     'js/configLoader.js',
                     makeRequire({

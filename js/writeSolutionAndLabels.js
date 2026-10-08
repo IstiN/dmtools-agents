@@ -13,6 +13,7 @@
 
 const base = require('./writeSolutionAndDiagrams.js');
 const outputFiles = require('./common/outputFiles.js');
+var trackersModule = require('./common/trackers.js');
 const { JIRA_FIELDS } = require('./config.js');
 
 // ---------------------------------------------------------------------------
@@ -198,6 +199,7 @@ function action(params) {
             var raw = JSON.parse(reposJson);
             if (Array.isArray(raw) && raw.length > 0) {
                 var sorted = topologicalSort(raw);
+                var tracker = trackersModule.createTracker(null, customParams);
                 var trackerType = detectTrackerType();
                 var section = (trackerType === 'ado')
                     ? buildMarkdownSection(sorted)
@@ -211,7 +213,7 @@ function action(params) {
                 try {
                     var existingBase = '';
                     try {
-                        var freshTicket = jira_get_ticket({ key: ticketKey, fields: [solutionField] });
+                        var freshTicket = tracker.getIssue(ticketKey, [solutionField]);
                         var freshFields = (freshTicket && freshTicket.fields) ? freshTicket.fields : freshTicket;
                         var rawValue = freshFields ? freshFields[solutionField] : null;
                         if (rawValue && typeof rawValue === 'object') {
@@ -229,11 +231,7 @@ function action(params) {
                     } else {
                         console.log('Using current Jira field as base (' + existingBase.length + ' chars)');
                     }
-                    jira_update_field({
-                        key: ticketKey,
-                        field: solutionField,
-                        value: existingBase + '\n\n' + section
-                    });
+                    tracker.updateField(ticketKey, solutionField, existingBase + '\n\n' + section);
                     console.log('Appended affected repos section to "' + solutionField + '" for ' + ticketKey);
                 } catch (fe) {
                     console.warn('Failed to append affected repos section:', fe);
@@ -244,7 +242,7 @@ function action(params) {
                     var label = (r.name || '').toString().trim();
                     if (label) {
                         try {
-                            jira_add_label({ key: ticketKey, label: label });
+                            tracker.addLabel(ticketKey, label);
                             console.log('Added repo label "' + label + '" to ' + ticketKey);
                         } catch (le) {
                             console.warn('Failed to add repo label "' + label + '":', le);

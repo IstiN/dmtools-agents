@@ -12,7 +12,12 @@
 function loadFetchParentContext(mocks) {
     return loadModule(
         'js/fetchParentContextToInput.js',
-        makeRequire({}),
+        makeRequire({
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
+                '../config.js': configModule,
+                './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
+            }), mocks || {})
+        }),
         mocks || {}
     );
 }

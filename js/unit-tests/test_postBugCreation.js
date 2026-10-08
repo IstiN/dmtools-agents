@@ -12,14 +12,16 @@ function loadPostBugCreation(mocks) {
         file_read: function() { return null; }
     };
 
+    var allMocks = Object.assign({}, defaults, mocks);
     return loadModule(
         'js/postBugCreation.js',
         makeRequire({
             './config.js': configModule,
             './configLoader.js': makeDefaultConfigLoaderMock(),
-            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), allMocks)
         }),
-        Object.assign({}, defaults, mocks)
+        allMocks
     );
 }
 

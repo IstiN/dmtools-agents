@@ -54,6 +54,7 @@
 
 var configLoader = null;
 try { configLoader = require('./configLoader.js'); } catch (e) { /* optional in unit tests */ }
+var trackersModule = require('./common/trackers.js');
 
 // Note: "[" / "]" are Lucene range-query metacharacters, so inside a JQL quoted
 // string they must be escaped with a literal backslash (\\[ / \\]) to be treated
@@ -152,7 +153,7 @@ function isSystemField(fieldName) {
         fieldName === 'comment';
 }
 
-function resolveFieldName(fieldName, projectKey, fieldLabels, shouldResolve) {
+function resolveFieldName(fieldName, projectKey, fieldLabels, shouldResolve, tracker) {
     if (!fieldName || isSystemField(fieldName) || fieldName.indexOf('customfield_') === 0) {
         return fieldName;
     }
@@ -161,12 +162,12 @@ function resolveFieldName(fieldName, projectKey, fieldLabels, shouldResolve) {
         return fieldName;
     }
 
-    if (typeof jira_get_field_custom_code !== 'function') {
+    if (!tracker) {
         return fieldName;
     }
 
     try {
-        var resolved = jira_get_field_custom_code({ project: projectKey, fieldName: fieldName });
+        var resolved = tracker.fieldCode(projectKey, fieldName);
         if (resolved && typeof resolved === 'object' && resolved.result) resolved = resolved.result;
         if (resolved && typeof resolved === 'string' && resolved.indexOf('customfield_') === 0) {
             fieldLabels[resolved] = fieldName;
@@ -179,11 +180,11 @@ function resolveFieldName(fieldName, projectKey, fieldLabels, shouldResolve) {
     return fieldName;
 }
 
-function resolveFetchFields(fields, projectKey, fieldLabels, shouldResolve) {
+function resolveFetchFields(fields, projectKey, fieldLabels, shouldResolve, tracker) {
     var resolved = [];
     for (var i = 0; i < fields.length; i++) {
         var fieldName = fields[i];
-        var resolvedName = resolveFieldName(fieldName, projectKey, fieldLabels, shouldResolve);
+        var resolvedName = resolveFieldName(fieldName, projectKey, fieldLabels, shouldResolve, tracker);
         if (resolved.indexOf(resolvedName) === -1) {
             resolved.push(resolvedName);
         }
@@ -286,17 +287,17 @@ function renderCommentsMarkdown(commentField) {
  *   description: 'Short explanation...'   // optional blurb shown to AI
  * }
  */
-function fetchParentStory(folder, parentKey, cfg, projectConfig, projectKey, fieldLabels) {
+function fetchParentStory(folder, parentKey, cfg, projectConfig, projectKey, fieldLabels, tracker) {
     var parentFields = cfg.parentFields || cfg.fields || buildDefaultFields(projectConfig);
     // Ensure base fields are present
     var fetchParentFields = parentFields.slice();
     ['key', 'summary', 'status'].forEach(function(f) {
         if (fetchParentFields.indexOf(f) === -1) fetchParentFields.unshift(f);
     });
-    fetchParentFields = resolveFetchFields(fetchParentFields, projectKey, fieldLabels, cfg.resolveFieldNames === true);
+    fetchParentFields = resolveFetchFields(fetchParentFields, projectKey, fieldLabels, cfg.resolveFieldNames === true, tracker);
 
     try {
-        var parentTicket = jira_get_ticket({ key: parentKey, fields: fetchParentFields });
+        var parentTicket = tracker.getIssue(parentKey, fetchParentFields);
         if (!parentTicket || !parentTicket.fields) {
             console.warn('fetchParentContextToInput: parent ticket ' + parentKey + ' returned empty fields');
             return;
@@ -355,6 +356,7 @@ function action(params) {
             ? configLoader.loadProjectConfig(jobParams)
             : null;
         var cfg = resolveParentContextConfig(projectConfig, customParams);
+        var tracker = trackersModule.createTracker(projectConfig, customParams);
 
         if (!cfg) {
             // Feature not enabled for this project/agent — silent no-op
@@ -374,7 +376,7 @@ function action(params) {
         var ticketFields = ticket && ticket.fields;
         if (!ticketFields) {
             try {
-                var fetched = jira_get_ticket({ key: ticketKey });
+                var fetched = tracker.getIssue(ticketKey);
                 ticketFields = fetched && fetched.fields;
             } catch (e) {
                 console.warn('fetchParentContextToInput: could not fetch ticket ' + ticketKey + ' — skipping', e);
@@ -401,7 +403,7 @@ function action(params) {
 
         // 2. Fetch parent story itself (unless explicitly disabled)
         if (cfg.includeParentStory !== false) {
-            fetchParentStory(folder, parentKey, cfg, projectConfig, projectKey, fieldLabels);
+            fetchParentStory(folder, parentKey, cfg, projectConfig, projectKey, fieldLabels, tracker);
         }
 
         // Always ensure base fields are present for sibling search
@@ -409,7 +411,7 @@ function action(params) {
         ['key', 'summary', 'status'].forEach(function(f) {
             if (fetchFields.indexOf(f) === -1) fetchFields.unshift(f);
         });
-        fetchFields = resolveFetchFields(fetchFields, projectKey, fieldLabels, cfg.resolveFieldNames === true);
+        fetchFields = resolveFetchFields(fetchFields, projectKey, fieldLabels, cfg.resolveFieldNames === true, tracker);
 
         // 3. Run JQL with {parentKey} replaced
         var jql = jqlTemplate.replace(/\{parentKey\}/g, parentKey);
@@ -417,7 +419,8 @@ function action(params) {
 
         var results = [];
         try {
-            results = jira_search_by_jql({ jql: jql, fields: fetchFields }) || [];
+            // JQL text: provider-specific query (WIQL on ado)
+            results = tracker.searchIssues(jql, { fields: fetchFields }) || [];
         } catch (e) {
             console.warn('fetchParentContextToInput: JQL search failed — skipping', e);
             return;
@@ -443,7 +446,7 @@ function action(params) {
                 });
                 if (needsFullFetch) {
                     try {
-                        var full = jira_get_ticket({ key: item.key });
+                        var full = tracker.getIssue(item.key);
                         if (full && full.fields) {
                             // Merge: full ticket fields override partial search result
                             var merged = {};
@@ -483,8 +486,7 @@ function action(params) {
                         var qJql = (childQuestionsCfg.jql || 'parent = {contextTicketKey} AND labels = Q ORDER BY created ASC')
                             .replace(/\{contextTicketKey\}/g, item.key);
                         var answerField = childQuestionsCfg.answerField || 'description';
-                        var qResults = jira_search_by_jql({
-                            jql: qJql,
+                        var qResults = tracker.searchIssues(qJql, {
                             fields: ['key', 'summary', 'description', 'status', answerField]
                         }) || [];
                         if (qResults.length > 0) {

@@ -15,6 +15,7 @@
 
 var configLoader = require('./configLoader.js');
 const { JIRA_FIELDS } = require('./config.js');
+var trackersModule = require('./common/trackers.js');
 
 function summarizeDoneBug(bug) {
     var fields = bug.fields || {};
@@ -58,10 +59,11 @@ function extractAttachmentNames(fields) {
     return attachments.map(function(a) { return a.filename || ''; }).filter(function(n) { return n; });
 }
 
-function fetchHistoricalDoneBugs(tcKey) {
+function fetchHistoricalDoneBugs(tcKey, tracker) {
     try {
-        var bugs = jira_search_by_jql({
-            jql: 'issue in linkedIssues("' + tcKey + '") AND issuetype = Bug AND status in (Done) ORDER BY updated DESC',
+        tracker = tracker || trackersModule.createTracker(null, {});
+        // JQL text: provider-specific query (WIQL on ado)
+        var bugs = tracker.searchIssues('issue in linkedIssues("' + tcKey + '") AND issuetype = Bug AND status in (Done) ORDER BY updated DESC', {
             fields: ['key', 'summary', 'description', 'status', 'updated'],
             maxResults: 10
         }) || [];
@@ -91,6 +93,7 @@ function action(params) {
             .replace('{jiraProject}', projectKey);
 
         var config = configLoader.loadProjectConfig(actualParams);
+        var tracker = trackersModule.createTracker(config, customParams);
         var failedReasonFieldName = getFailedReasonFieldName(config, customParams);
         console.log('Failed Reason field name:', failedReasonFieldName);
 
@@ -105,8 +108,7 @@ function action(params) {
             if (failedReasonFieldName && failedReasonFieldName.indexOf('customfield_') !== -1) {
                 tcFields.push(failedReasonFieldName);
             }
-            var tcResults = jira_search_by_jql({
-                jql: failedTCsJql,
+            var tcResults = tracker.searchIssues(failedTCsJql, {
                 fields: tcFields,
                 maxResults: batchSize
             });
@@ -131,7 +133,7 @@ function action(params) {
             var lastComment = comments && comments.length > 0
                 ? comments[comments.length - 1].body
                 : '';
-            var historicalDoneBugs = fetchHistoricalDoneBugs(tc.key);
+            var historicalDoneBugs = fetchHistoricalDoneBugs(tc.key, tracker);
             totalHistoricalDoneBugs += historicalDoneBugs.length;
             return {
                 key: tc.key,
@@ -152,8 +154,7 @@ function action(params) {
         console.log('Fetching non-Done bugs with JQL:', openBugsJql);
         var bugs = [];
         try {
-            var bugResults = jira_search_by_jql({
-                jql: openBugsJql,
+            var bugResults = tracker.searchIssues(openBugsJql, {
                 fields: ['key', 'summary', 'description', 'status', 'priority'],
                 maxResults: 300
             });

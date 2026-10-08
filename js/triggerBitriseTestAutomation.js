@@ -25,9 +25,11 @@
 
 var configLoader = require('./configLoader.js');
 const { STATUSES, LABELS, resolveStatuses } = require('./config.js');
+var trackersModule = require('./common/trackers.js');
 
 function action(params) {
     try {
+        var tracker = trackersModule.createTracker(null, (params.jobParams && (params.jobParams.customParams || params.jobParams)) || params.customParams || {});
         // JSRunner mode: no ticket context — fetch it from inputJql in jobParams
         if (!params.ticket) {
             // params.inputJql (from Jira encoded_config) takes priority over jobParams default
@@ -37,7 +39,7 @@ function action(params) {
                 var ticketKeyFromJql = keyMatch[1].toUpperCase();
                 console.log('JSRunner mode — fetching ticket by key:', ticketKeyFromJql);
                 try {
-                    var t = jira_get_ticket({ key: ticketKeyFromJql });
+                    var t = tracker.getIssue(ticketKeyFromJql);
                     if (t && t.key) {
                         params = { ticket: t, jobParams: params.jobParams };
                     } else {
@@ -47,10 +49,10 @@ function action(params) {
                     return { success: false, error: 'Failed to fetch ticket ' + ticketKeyFromJql + ': ' + fetchErr };
                 }
             } else {
-                // Fallback to jira_search_by_jql
+                // Fallback to a tracker search (JQL text: provider-specific query, WIQL on ado)
                 console.log('JSRunner mode — fetching ticket by JQL:', jql);
                 try {
-                    var results = jira_search_by_jql({ jql: jql, maxResults: 1 });
+                    var results = tracker.searchIssues(jql, { maxResults: 1 });
                     var parsed = (typeof results === 'string') ? JSON.parse(results) : results;
                     var issues = (parsed && parsed.issues) ? parsed.issues : (Array.isArray(parsed) ? parsed : []);
                     if (!issues.length) {
@@ -68,6 +70,7 @@ function action(params) {
         var ticketKey = actualParams.ticket.key;
         var ticketSummary = (actualParams.ticket.fields && actualParams.ticket.fields.summary) || ticketKey;
         var customParams = (params.jobParams && params.jobParams.customParams) || (params.jobParams && params.jobParams) || actualParams.customParams || {};
+        tracker = trackersModule.createTracker(projectConfig, customParams);
         var statuses = resolveStatuses(customParams);
 
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -190,12 +193,9 @@ function action(params) {
         } catch (bitriseErr) {
             console.error('❌ Failed to trigger Bitrise build:', bitriseErr.message || bitriseErr);
             try {
-                jira_post_comment({
-                    key: ticketKey,
-                    comment: 'h3. ❌ Test Automation Trigger Failed\n\n' +
+                tracker.postComment(ticketKey, 'h3. ❌ Test Automation Trigger Failed\n\n' +
                         'Could not trigger Bitrise workflow *' + workflowId + '*.\n\n' +
-                        '{code}' + (bitriseErr.message || bitriseErr) + '{code}'
-                });
+                        '{code}' + (bitriseErr.message || bitriseErr) + '{code}');
             } catch (_) {}
             return { success: false, error: 'Failed to trigger Bitrise: ' + bitriseErr };
         }
@@ -233,7 +233,7 @@ function action(params) {
         jiraComment += '\n\nTest results will be posted here and on the feature PR once the build completes.';
 
         try {
-            jira_post_comment({ key: ticketKey, comment: jiraComment });
+            tracker.postComment(ticketKey, jiraComment);
             console.log('✅ Posted Jira comment with Bitrise build info');
         } catch (e) {
             console.warn('⚠️ Failed to post Jira comment:', e.message || e);
@@ -241,7 +241,7 @@ function action(params) {
 
         // ── 6. Move ticket to In Testing ─────────────────────────────────────
         try {
-            jira_move_to_status({ key: ticketKey, statusName: statuses.IN_TESTING });
+            tracker.moveToStatus(ticketKey, statuses.IN_TESTING);
             console.log('✅ Moved', ticketKey, 'to In Testing');
         } catch (e) {
             console.warn('⚠️ Could not move ticket to In Testing:', e.message || e);
@@ -251,7 +251,7 @@ function action(params) {
         var removeLabel = customParams.removeLabel;
         if (removeLabel) {
             try {
-                jira_remove_label({ key: ticketKey, label: removeLabel });
+                tracker.removeLabel(ticketKey, removeLabel);
                 console.log('✅ Removed SM label:', removeLabel);
             } catch (e) {}
         }
@@ -260,7 +260,7 @@ function action(params) {
         var wipLabel = params.metadata && params.metadata.contextId
             ? params.metadata.contextId + '_wip' : 'test_automation_wip';
         try {
-            jira_remove_label({ key: ticketKey, label: wipLabel });
+            tracker.removeLabel(ticketKey, wipLabel);
         } catch (e) {}
 
         console.log('✅ Bitrise test automation proxy completed for', ticketKey);
@@ -276,11 +276,8 @@ function action(params) {
         console.error('❌ Error in triggerBitriseTestAutomation:', error);
         try {
             if (params && params.ticket && params.ticket.key) {
-                jira_post_comment({
-                    key: params.ticket.key,
-                    comment: 'h3. ❌ Test Automation Proxy Error\n\n' +
-                        '{code}' + error.toString() + '{code}'
-                });
+                tracker.postComment(params.ticket.key, 'h3. ❌ Test Automation Proxy Error\n\n' +
+                        '{code}' + error.toString() + '{code}');
             }
         } catch (_) {}
         return { success: false, error: error.toString() };

@@ -19,6 +19,7 @@ function loadCheckBugTestsPassed(mocks) {
             './config.js': configModule,
             './configLoader.js': configLoaderMock,
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), mocks),
             './common/scm.js': {
                 createScm: function() {
                     return { listPrs: function() { return []; } };
@@ -30,7 +31,7 @@ function loadCheckBugTestsPassed(mocks) {
 }
 
 function makeTc(key, status) {
-    return { key: key, fields: { status: { name: status }, issuetype: { name: 'Test Case' } } };
+    return { key: key, fields: { summary: 's', status: { name: status }, issuetype: { name: 'Test Case' } } };
 }
 
 suite('checkBugTestsPassed', function() {
@@ -46,6 +47,7 @@ suite('checkBugTestsPassed', function() {
                 assert.equal(args.key, 'TS-10');
                 return {
                     fields: {
+                        summary: 's',
                         issuelinks: [
                             { outwardIssue: makeTc('TS-11', 'Passed') }
                         ]
@@ -83,6 +85,7 @@ suite('checkBugTestsPassed', function() {
             jira_get_ticket: function() {
                 return {
                     fields: {
+                        summary: 's',
                         issuelinks: [
                             { outwardIssue: makeTc('TS-11', 'Passed') }
                         ]
@@ -123,6 +126,7 @@ suite('checkBugTestsPassed', function() {
             jira_get_ticket: function() {
                 return {
                     fields: {
+                        summary: 's',
                         issuelinks: [
                             { outwardIssue: makeTc('TS-21', 'In Review - Passed') }
                         ]
@@ -154,6 +158,7 @@ suite('checkBugTestsPassed', function() {
             jira_get_ticket: function() {
                 return {
                     fields: {
+                        summary: 's',
                         issuelinks: [
                             { outwardIssue: makeTc('TS-31', 'Passed') },
                             { outwardIssue: makeTc('TS-32', 'Skipped') },
@@ -187,8 +192,9 @@ suite('checkBugTestsPassed', function() {
             jira_get_ticket: function() {
                 return {
                     fields: {
+                        summary: 's',
                         issuelinks: [
-                            { outwardIssue: { key: 'TS-S1', fields: { issuetype: { name: 'Story' } } } }
+                            { outwardIssue: { key: 'TS-S1', fields: { summary: 's', issuetype: { name: 'Story' } } } }
                         ]
                     }
                 };
@@ -220,7 +226,7 @@ suite('checkBugTestsPassed', function() {
 
         var module = loadCheckBugTestsPassed({
             jira_get_ticket: function() {
-                return { fields: { issuelinks: [] } };
+                return { fields: { summary: 's', issuelinks: [] } };
             },
             jira_search_by_jql: function(args) {
                 if (args.jql.indexOf('issuetype = "Test Case"') !== -1) {
@@ -253,6 +259,7 @@ suite('checkBugTestsPassed', function() {
             jira_get_ticket: function() {
                 return {
                     fields: {
+                        summary: 's',
                         issuelinks: [
                             { outwardIssue: makeTc('TS-61', 'Passed') },
                             { outwardIssue: makeTc('TS-62', 'Bug To Fix') }
@@ -263,7 +270,7 @@ suite('checkBugTestsPassed', function() {
             jira_search_by_jql: function(args) {
                 // Query for linked Bugs of TS-62
                 if (args.jql.indexOf('TS-62') !== -1 && args.jql.indexOf('issuetype = "Bug"') !== -1) {
-                    return [{ key: 'TS-70', fields: { status: { name: 'In Progress' } } }];
+                    return [{ key: 'TS-70', fields: { summary: 's', status: { name: 'In Progress' } } }];
                 }
                 return [];
             },
@@ -292,6 +299,7 @@ suite('checkBugTestsPassed', function() {
             jira_get_ticket: function() {
                 return {
                     fields: {
+                        summary: 's',
                         issuelinks: [
                             { outwardIssue: makeTc('TS-81', 'Passed') },
                             { outwardIssue: makeTc('TS-82', 'Bug To Fix') }
@@ -301,7 +309,7 @@ suite('checkBugTestsPassed', function() {
             },
             jira_search_by_jql: function(args) {
                 if (args.jql.indexOf('TS-82') !== -1 && args.jql.indexOf('issuetype = "Bug"') !== -1) {
-                    return [{ key: 'TS-80', fields: { status: { name: 'In Progress' } } }];
+                    return [{ key: 'TS-80', fields: { summary: 's', status: { name: 'In Progress' } } }];
                 }
                 return [];
             },
@@ -331,6 +339,7 @@ suite('checkBugTestsPassed', function() {
             jira_get_ticket: function() {
                 return {
                     fields: {
+                        summary: 's',
                         labels: ['test_pr_finalized'],
                         issuelinks: [
                             { outwardIssue: makeTc('TS-91', 'Passed') },
@@ -369,6 +378,7 @@ suite('checkBugTestsPassed', function() {
             jira_get_ticket: function() {
                 return {
                     fields: {
+                        summary: 's',
                         labels: ['test_pr_finalized'],
                         issuelinks: [
                             { outwardIssue: makeTc('TS-91', 'Passed') },
@@ -380,8 +390,8 @@ suite('checkBugTestsPassed', function() {
             jira_search_by_jql: function(args) {
                 if (args.jql.indexOf('TS-92') !== -1 && args.jql.indexOf('issuetype = "Bug"') !== -1) {
                     return [
-                        { key: 'TS-90', fields: { status: { name: 'In Testing' } } },
-                        { key: 'TS-99', fields: { status: { name: 'Done' } } }
+                        { key: 'TS-90', fields: { summary: 's', status: { name: 'In Testing' } } },
+                        { key: 'TS-99', fields: { summary: 's', status: { name: 'Done' } } }
                     ];
                 }
                 return [];

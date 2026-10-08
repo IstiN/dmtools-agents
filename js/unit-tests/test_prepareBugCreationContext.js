@@ -57,13 +57,15 @@ function loadPrepareBulkBugsCreationContext(mocks) {
         file_write: function(path, content) { calls.writes.push({ path: path, content: content }); }
     };
 
+    var allMocks = Object.assign({}, defaults, mocks || {});
     var mod = loadModule(
         'js/prepareBulkBugsCreationContext.js',
         makeRequire({
             './configLoader.js': configLoaderModule,
-            './config.js': configModule
+            './config.js': configModule,
+            './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), allMocks)
         }),
-        Object.assign({}, defaults, mocks || {})
+        allMocks
     );
 
     return { mod: mod, calls: calls };

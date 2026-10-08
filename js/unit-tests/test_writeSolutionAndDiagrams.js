@@ -90,7 +90,8 @@ suite('writeSolutionAndDiagrams — diagram handling for Confluence targets', fu
                     makeRequire({
                         './writeSolutionAndDiagrams.js': { action: function() { return { success: true }; } },
                         './common/outputFiles.js': outputFilesMock,
-                        './config.js': configModule
+                        './config.js': configModule,
+                        './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), globals)
                     }),
                     globals)
             }),
