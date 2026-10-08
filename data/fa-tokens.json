@@ -60,5 +60,14 @@
       "completion": 5667,
       "total": 119446
     }
+  ],
+  "issue-802": [
+    {
+      "leg": "dev",
+      "at": "2026-10-08T21:09:35Z",
+      "prompt": 130630,
+      "completion": 41797,
+      "total": 172427
+    }
   ]
 }
