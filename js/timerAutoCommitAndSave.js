@@ -49,10 +49,6 @@ function getContextId(params) {
 }
 
 /**
- * Auto-commit and push any uncommitted changes in the target repo working dir.
- * Returns true if a commit was made.
- */
-/**
  * gh-798 (live fa PR #1420 rework leg, run 37828431528): is this push failure
  * a non-fast-forward rejection? Only THAT class self-heals (below) — auth,
  * network, and ref-lock failures are surfaced untouched.
@@ -111,6 +107,10 @@ function pushBranchWithSelfHeal(cmd, resolveBranchName) {
     }
 }
 
+/**
+ * Auto-commit and push any uncommitted changes in the target repo working dir.
+ * Returns true if a commit was made.
+ */
 function autoCommitAndPush(customParams, ticketKey) {
     var targetRepo = customParams.targetRepository || {};
     // Fallback: explicit runner customParams → the job working directory.

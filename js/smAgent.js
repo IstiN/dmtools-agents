@@ -3600,7 +3600,6 @@ function hasActiveHeadRun(runs) {
         return r.status === 'queued' || r.status === 'in_progress' ||
             r.status === 'waiting' || r.status === 'pending';
     });
-
 }
 
 // gh-798 (live fa PR #1420 rework leg, run 37828431528): the in-flight-leg
