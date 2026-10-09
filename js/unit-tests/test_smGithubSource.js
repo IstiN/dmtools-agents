@@ -14,10 +14,17 @@ suite('sm github source', function () {
         prStatus: function (n) { return providerStub._status[n] || null; },
         lastReview: function (n) { return providerStub._reviews[n] || null; },
         reviewThreads: function (n) { return providerStub._threads[n] || null; },
+        // gh-807 verdict records: {headSha: {record, conflict}|null} — the
+        // query guards (latestVerdict / notLatestVerdict) read through this.
+        latestVerdictRecord: function (n, headSha) {
+            if (!providerStub._verdictRecords) return null;
+            return providerStub._verdictRecords[n] || null;
+        },
         _prs: {},
         _status: {},
         _reviews: {},
-        _threads: {}
+        _threads: {},
+        _verdictRecords: {}
     };
 
     function load(tools, prs, statuses, reviews, threads) {

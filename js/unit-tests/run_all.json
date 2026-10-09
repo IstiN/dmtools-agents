@@ -102,6 +102,7 @@
         "js/unit-tests/test_smProvider.js",
         "js/unit-tests/test_smGithubSource.js",
         "js/unit-tests/test_reviewVerdict.js",
+        "js/unit-tests/test_reviewVerdicts.js",
         "js/unit-tests/test_mergeBot.js",
         "js/unit-tests/test_mergeTrigger.js",
         "js/unit-tests/test_smJiraSource.js",

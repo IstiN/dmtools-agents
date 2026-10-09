@@ -313,6 +313,7 @@ function makeSmAgent(opts) {
             './common/scm.js': mockScmModule,
             './common/buildEncodedConfig.js': buildEncodedConfigModule,
             './common/machineAuthor.js': machineAuthorModule,
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
             './common/smProvider.js': {
                 createSmProvider: function () {
                     return {
@@ -909,6 +910,306 @@ suite('smAgent: sm_github.json rule hygiene', function () {
         var rtr = byId['review-threads-resolved'];
         assert.ok((rtr.query.notLabels || []).indexOf('pr_approved') !== -1,
             'review-threads-resolved keeps excluding pr_approved (sticky approval)');
+    });
+
+    test('gh-807 note on gh-710: the QUERY still lets pr_approved match — the ACTION decides from the verdict records', function () {
+        // gh-807 supersedes the "verdict being APPROVE is irrelevant"
+        // wording of gh-710 at the ACTION level: the query still matches
+        // (the blocking-thread exception needs the census, which only the
+        // action can read), but an APPROVE record with zero BLOCKING
+        // findings withholds the arm (see the localAction suite below).
+        // This test pins the layering so nobody "fixes" it back.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+        var rule = byId['rework-unresolved-threads'];
+        assert.equal((rule.query.notLabels || []).indexOf('pr_approved'), -1,
+            'query unchanged — pr_approved still matches (the census lives in the records)');
+        assert.ok((rule.description || '').indexOf('gh-807 ARMING-SIDE STICKY APPROVAL') !== -1,
+            'the rule documents the arming-side gate');
+    });
+});
+
+suite('smAgent: localAction reconcile_verdicts (gh-807 verdict reconciliation)', function () {
+
+    var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
+
+    function verdictMarker(head, verdict, at, blocking) {
+        return '<!-- dmtools:review-verdict ' + JSON.stringify({
+            head: head, verdict: verdict, blocking: blocking || 0,
+            important: 0, suggestions: 0, at: at, source: 'pr_review.json'
+        }) + ' -->';
+    }
+
+    test('#1428 replay: contradictory verdicts one head → loser pr_approved comes off with a both-sources comment', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1428', labels: ['pr_approved', 'ai_pr_reviewed'], issueNumber: null, prNumber: 1428 }
+                ],
+                pr: { number: 1428, head: { sha: HEAD }, labels: ['pr_approved', 'ai_pr_reviewed'] },
+                prComments: [
+                    { body: verdictMarker(HEAD, 'APPROVE', '2026-10-09T05:47:30.000Z') },
+                    { body: verdictMarker(HEAD, 'REQUEST_CHANGES', '2026-10-09T05:47:40.000Z') }
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'agent:rework'],
+                     latestVerdict: ['APPROVE', 'REQUEST_CHANGES', 'BLOCK'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-review-verdicts'
+        }]));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 1, 'exactly one label removal');
+        assert.equal(sm.capturedPrLabelRemoves[0].number, 1428, 'the loser label comes off the PR');
+        assert.equal(sm.capturedPrLabelRemoves[0].label, 'pr_approved',
+            'newest (REQUEST_CHANGES) wins — pr_approved is the loser');
+        assert.equal(sm.capturedPrComments.length, 1, 'exactly one reconciliation comment');
+        assert.contains(sm.capturedPrComments[0].body, 'APPROVE at 2026-10-09T05:47:30.000Z',
+            'the comment cites BOTH verdict sources');
+        assert.contains(sm.capturedPrComments[0].body, 'REQUEST_CHANGES at 2026-10-09T05:47:40.000Z');
+        assert.contains(sm.capturedPrComments[0].body, 'Newest wins: **REQUEST_CHANGES**');
+        assert.equal(sm.capturedTriggers.length, 0, 'reconciliation never dispatches');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'reconciliation never arms');
+    });
+
+    test('APPROVE winner → agent:rework comes off BOTH carriers', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1429', labels: ['pr_approved', 'agent:rework', 'ai_pr_reviewed'],
+                      issueNumber: 807, prNumber: 1429 }
+                ],
+                pr: { number: 1429, head: { sha: HEAD }, labels: ['pr_approved', 'agent:rework', 'ai_pr_reviewed'] },
+                prComments: [
+                    { body: verdictMarker(HEAD, 'REQUEST_CHANGES', '2026-10-09T05:47:30.000Z') },
+                    { body: verdictMarker(HEAD, 'APPROVE', '2026-10-09T05:47:40.000Z') }
+                ],
+                issues: { 807: JSON.stringify({ number: 807, labels: [{ name: 'agent:rework' }] }) }
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'agent:rework'],
+                     latestVerdict: ['APPROVE', 'REQUEST_CHANGES', 'BLOCK'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-review-verdicts'
+        }]));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 2, 'PR and linked issue both lose the loser label');
+        var targets = {};
+        sm.capturedPrLabelRemoves.forEach(function (r) { targets[r.number] = r.label; });
+        assert.equal(targets[1429], 'agent:rework', 'off the PR');
+        assert.equal(targets[807], 'agent:rework', 'off the linked issue');
+        assert.equal(sm.capturedPrComments.length, 1, 'ONE comment for the whole reconciliation');
+        assert.contains(sm.capturedPrComments[0].body, 'Newest wins: **APPROVE**');
+        assert.contains(sm.capturedPrComments[0].body, 'suggestions do not justify a rework arm');
+    });
+
+    test('already-consistent state → no label churn, no comment (converged)', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1430', labels: ['pr_approved', 'ai_pr_reviewed'], issueNumber: null, prNumber: 1430 }
+                ],
+                pr: { number: 1430, head: { sha: HEAD }, labels: ['pr_approved', 'ai_pr_reviewed'] },
+                prComments: [
+                    { body: verdictMarker(HEAD, 'APPROVE', '2026-10-09T05:47:30.000Z') }
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'agent:rework'],
+                     latestVerdict: ['APPROVE', 'REQUEST_CHANGES', 'BLOCK'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-review-verdicts'
+        }]));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'approval stands, no rework label → nothing to do');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment when nothing was removed');
+    });
+
+    test('no verdict records (pre-gh-807 PR) → fail open, labels untouched', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1431', labels: ['pr_approved', 'agent:rework'], issueNumber: null, prNumber: 1431 }
+                ],
+                pr: { number: 1431, head: { sha: HEAD }, labels: ['pr_approved', 'agent:rework'] },
+                prComments: []
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'agent:rework'],
+                     latestVerdict: ['APPROVE', 'REQUEST_CHANGES', 'BLOCK'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-review-verdicts'
+        }]));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'no records → no reconciliation (legacy behavior)');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment');
+    });
+
+    test('free-form verdict text in comments NEVER drives reconciliation (AC4)', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1432', labels: ['pr_approved', 'ai_pr_reviewed'], issueNumber: null, prNumber: 1432 }
+                ],
+                pr: { number: 1432, head: { sha: HEAD }, labels: ['pr_approved', 'ai_pr_reviewed'] },
+                prComments: [
+                    { body: 'Human: REQUEST_CHANGES! Block the merge!' },
+                    { body: 'AI review returned REQUEST_CHANGES. See PR comments for details.' }
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'agent:rework'],
+                     latestVerdict: ['APPROVE', 'REQUEST_CHANGES', 'BLOCK'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-review-verdicts'
+        }]));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'text-only comments carry no records — pr_approved stands');
+        assert.equal(sm.capturedPrComments.length, 0, 'no reconciliation comment');
+    });
+});
+
+suite('smAgent: arm_rework arming-side sticky approval (gh-807 AC3)', function () {
+
+    var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
+
+    function armRule() {
+        return {
+            description: 'unresolved review threads on a machine-authored reviewed PR -> arm agent:rework',
+            source: 'github',
+            query: {
+                type: 'pr',
+                labels: ['ai_pr_reviewed'],
+                notLabels: ['agent:rework', 'agent:review', 'ai_validating', 'validation_failed'],
+                prMachineAuthor: true,
+                threadsResolved: false,
+                draft: false
+            },
+            localAction: 'arm_rework',
+            limit: 5,
+            id: 'rework-unresolved-threads'
+        };
+    }
+
+    function verdictMarker(verdict, blocking) {
+        return '<!-- dmtools:review-verdict ' + JSON.stringify({
+            head: HEAD, verdict: verdict, blocking: blocking || 0,
+            important: 0, suggestions: 0, at: '2026-10-09T05:47:40.000Z', source: 'pr_review.json'
+        }) + ' -->';
+    }
+
+    test('APPROVE verdict with zero BLOCKING findings withholds the arm', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1428', labels: ['ai_pr_reviewed'], issueNumber: null, prNumber: 1428 }
+                ],
+                pr: { number: 1428, head: { sha: HEAD }, labels: ['pr_approved', 'ai_pr_reviewed'] },
+                prComments: [
+                    { body: verdictMarker('APPROVE', 0) }
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [armRule()]));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'no agent:rework arm — the APPROVE verdict is authoritative (suggestions never arm rework)');
+        assert.equal(sm.capturedPrComments.length, 0, 'no arming comment either');
+        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch');
+    });
+
+    test('APPROVE verdict with BLOCKING findings still arms (the blocking-thread exception)', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1428', labels: ['ai_pr_reviewed'], issueNumber: null, prNumber: 1428 }
+                ],
+                pr: { number: 1428, head: { sha: HEAD }, labels: ['ai_pr_reviewed'] },
+                prComments: [
+                    { body: verdictMarker('APPROVE', 2) }
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [armRule()]));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'blocking threads qualify the arm');
+        assert.equal(sm.capturedPrLabelAdds[0].labels.join(','), 'agent:rework');
+    });
+
+    test('REQUEST_CHANGES verdict arms as before', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1428', labels: ['ai_pr_reviewed'], issueNumber: null, prNumber: 1428 }
+                ],
+                pr: { number: 1428, head: { sha: HEAD }, labels: ['ai_pr_reviewed'] },
+                prComments: [
+                    { body: verdictMarker('REQUEST_CHANGES', 1) }
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [armRule()]));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'changes-requested → rework arms');
+        assert.equal(sm.capturedPrLabelAdds[0].labels.join(','), 'agent:rework');
+        assert.equal(sm.capturedPrComments.length, 1, 'the explanatory comment still posts');
+    });
+
+    test('no verdict records (pre-gh-807 PR) → arms as before (fail-open)', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1428', labels: ['ai_pr_reviewed'], issueNumber: null, prNumber: 1428 }
+                ],
+                pr: { number: 1428, head: { sha: HEAD }, labels: ['ai_pr_reviewed'] },
+                prComments: []
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [armRule()]));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'legacy PRs keep today\u2019s behavior');
+        assert.equal(sm.capturedPrLabelAdds[0].labels.join(','), 'agent:rework');
     });
 });
 
