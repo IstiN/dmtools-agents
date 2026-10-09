@@ -1178,3 +1178,289 @@ suite('factoryState — reworkInFlight (gh-806 latch persistence)', function () 
     assert.deepEqual(state.reworkInFlight, {});
   });
 });
+
+// ── gh-816 — merge-lane citation integrity ───────────────────────────────────
+// The lane cite is the discharge evidence watchers and audits read. Two
+// integrity rules (gh-816):
+//   1. REAL validation runs (repo CI via push/pull_request/schedule events +
+//      the machine's own validation-workflow dispatch) are cited freshest
+//      first; SM side-run legs (review/develop/rework dispatches of other
+//      workflows) are auxiliary evidence, never the discharge cite.
+//   2. The merged_recent lane PERSISTS the checks record at merge time
+//      (run id + name + sha + conclusion) instead of dropping it.
+suite('factoryState — merge-lane citation integrity (gh-816)', function () {
+  var NOW = '2026-10-09T12:30:00Z';
+  var HEAD = '0096ba5c9212a7bb6df03471dbe54d7ab32ff4b2';
+
+  // Real validation runs on the merged head (the #1437 timeline): full CI
+  // (push event) and the dynamic PR-validation dispatch (the deployment's
+  // validation workflow) — both green pre-merge.
+  function realRun(over) {
+    return Object.assign({
+      id: 37925202998, name: 'CI', event: 'push',
+      path: '.github/workflows/ci.yml', head_sha: HEAD,
+      status: 'completed', conclusion: 'success',
+      created_at: '2026-10-09T11:50:00Z', updated_at: '2026-10-09T11:56:44Z',
+      html_url: 'http://run/ci'
+    }, over || {});
+  }
+  function dynRun(over) {
+    return realRun(Object.assign({
+      id: 37921773706, name: 'PR acme/factory#1437', event: 'workflow_dispatch',
+      path: '.github/workflows/quality.yml',
+      created_at: '2026-10-09T11:05:00Z', updated_at: '2026-10-09T11:12:19Z',
+      html_url: 'http://run/dyn'
+    }, over || {}));
+  }
+  // SM side-run leg: a review leg dispatched on the SAME head — newer than
+  // both real runs, which is exactly how it stole the cite (gh-816).
+  function legRun(over) {
+    return realRun(Object.assign({
+      id: 37923501714, name: 'review (SM)', event: 'workflow_dispatch',
+      path: '.github/workflows/ai-teammate.yml',
+      created_at: '2026-10-09T11:20:00Z', updated_at: '2026-10-09T11:24:00Z',
+      html_url: 'http://run/review'
+    }, over || {}));
+  }
+  function openPr(sha) {
+    return { number: 1437, title: 'feat: t', labels: [],
+      head: { ref: 'ai/1437', sha: sha || HEAD }, user: { login: 'bot' },
+      created_at: '2026-10-09T10:00:00Z' };
+  }
+  function mergedPr(sha) {
+    return { number: 1437, title: 'feat: t', labels: [],
+      head: { ref: 'ai/1437', sha: sha || HEAD }, user: { login: 'bot' },
+      created_at: '2026-10-09T10:00:00Z', merged_at: '2026-10-09T11:57:03Z' };
+  }
+  function build(extra) {
+    var input = Object.assign({
+      repoInfo: { owner: 'acme', repo: 'factory' },
+      prs: [openPr()], mergedPrs: [], issues: [],
+      runs: [legRun(), dynRun(), realRun()],
+      now: NOW
+    }, extra || {});
+    return fsModule.buildFactoryState(input);
+  }
+
+  // ── 1. lane writer preference: real runs beat fresher SM side-runs ────────
+
+  test('cite prefers the real validation run over a fresher SM side-run leg (gh-816 repro)', function () {
+    var st = build({ prs: [openPr()] });
+    var card = st.lanes.pr_created[0];
+    assert.ok(card.checks, 'a real green run exists → a discharge cite exists');
+    // rework thread 2: among real runs the machine's own validation
+    // workflow (quality.yml path match) outranks every other real run —
+    // score, not recency, picks between two honest evidences.
+    assert.equal(card.checks.runId, 37921773706,
+      'the validation-workflow dispatch (quality.yml) is the cite — ' +
+      'score 2 outranks the plain-real CI push run');
+    assert.equal(card.checks.name, 'PR acme/factory#1437');
+    assert.equal(card.checks.verdict, 'success');
+    assert.notEqual(card.checks.runId, 37923501714,
+      'the review (SM) side-run must never be the discharge cite');
+  });
+
+  test('an SM side-run alone is never a discharge cite (checks stay null)', function () {
+    var st = build({ runs: [legRun()] });
+    var card = st.lanes.pr_created[0];
+    assert.equal(card.checks, null,
+      'no real validation run on the head → no cite (review leg is not validation)');
+    assert.equal(st.lanes.pr_validation.length, 0,
+      'a review leg in flight must not read as validation in flight');
+  });
+
+  test('the side-run leg rides the cite as auxiliary evidence (never the cite itself)', function () {
+    var st = build({ prs: [openPr()] });
+    var aux = st.lanes.pr_created[0].checks.auxiliary;
+    assert.ok(aux, 'the leg is preserved as auxiliary evidence');
+    assert.equal(aux.runId, 37923501714);
+    assert.equal(aux.name, 'review (SM)');
+    // rework thread 4: auxiliary speaks the cite's vocabulary — verdict
+    // (status, or conclusion when terminal) — never a third name.
+    assert.equal(aux.verdict, 'success');
+    assert.equal(aux.conclusion, 'success');
+    assert.equal(aux.at, '2026-10-09T11:20:00Z');
+    assert.equal(aux.url, 'http://run/review');
+  });
+
+  test('freshest run wins within a score tier (same score → recency decides)', function () {
+    var st = build({ runs: [
+      realRun(),
+      realRun({ id: 37925202997, updated_at: '2026-10-09T11:40:00Z',
+        html_url: 'http://run/ci-older' })
+    ] });   // same workflow, same event, same tier → freshest decides
+    assert.equal(st.lanes.pr_created[0].checks.runId, 37925202998,
+      'freshest first within a tier');
+  });
+
+  test('within a tier the freshest terminal decides even when it is red (truth wins)', function () {
+    var st = build({ runs: [
+      realRun({ conclusion: 'failure', updated_at: '2026-10-09T12:00:00Z',
+        html_url: 'http://run/ci-red' }),
+      realRun({ id: 37925202997, updated_at: '2026-10-09T11:50:00Z',
+        html_url: 'http://run/ci-green' })
+    ] });
+    var checks = st.lanes.pr_created[0].checks;
+    assert.equal(checks.verdict, 'failure');
+    assert.equal(checks.runId, 37925202998, 'red real beats older green real');
+  });
+
+  // ── rework thread 2 (IMPORTANT): score-first citing among real runs ──────
+  // The runs list is repo-wide (every workflow), so an unrelated repo
+  // workflow (labeler/docs/lint on push/pull_request/schedule) is fail-open
+  // real too — but it must only cite when nothing better exists: the
+  // machine's own validation workflow (ciWorkflow path match, score 2)
+  // outranks every bare real run (score 1), however fresh.
+
+  function noiseRun(over) {   // an unrelated repo workflow, non-dispatch
+    return realRun(Object.assign({
+      id: 424242, name: 'labeler', event: 'pull_request',
+      path: '.github/workflows/labeler.yml',
+      created_at: '2026-10-09T12:00:00Z', updated_at: '2026-10-09T12:10:00Z',
+      html_url: 'http://run/labeler'
+    }, over || {}));
+  }
+
+  test('the validation workflow outranks a FRESHER unrelated repo workflow (score beats recency)', function () {
+    var st = build({ runs: [noiseRun(), dynRun()] });
+    assert.equal(st.lanes.pr_created[0].checks.runId, 37921773706,
+      'labeler completed 20s later but the quality.yml dispatch is the cite');
+    assert.equal(st.lanes.pr_created[0].checks.name, 'PR acme/factory#1437');
+  });
+
+  test('an in-flight validation dispatch outranks a green unrelated repo workflow (score tier first)', function () {
+    var st = build({ runs: [
+      noiseRun(),   // green, terminal, fresher
+      dynRun({ status: 'in_progress', conclusion: null,
+        updated_at: '2026-10-09T12:15:00Z', html_url: 'http://run/dyn-live' })
+    ] });
+    var card = st.lanes.pr_validation[0];
+    assert.ok(card, 'the card sits in pr_validation — real validation in flight');
+    assert.equal(card.checks.runId, 37921773706,
+      'the machine\'s validation IN FLIGHT is the cite — a green unrelated ' +
+      'workflow must not front for it');
+    assert.equal(card.checks.verdict, 'in_progress',
+      'the board reads the honest in-flight state');
+    assert.deepEqual(st.lanes.pr_validation.map(function (c) {
+      return c.pr;
+    }), [1437], 'pr_validation lights because REAL validation is in flight');
+  });
+
+  test('an unrelated repo workflow still cites when nothing better exists (documented fail-open residual)', function () {
+    var st = build({ runs: [noiseRun()] });
+    assert.equal(st.lanes.pr_created[0].checks.runId, 424242,
+      'fail-open stays: a non-dispatch run is assumed real when it is all ' +
+      'the head has (dynamic per-PR validation workflows have arbitrary ' +
+      'paths — the residual mis-cite risk is owned in the classifier)');
+  });
+
+  test('cancelled real runs are never the cite (gh-191 semantics hold for real runs)', function () {
+    var st = build({ runs: [realRun({ conclusion: 'cancelled',
+        updated_at: '2026-10-09T12:10:00Z' }), dynRun()] });
+    assert.equal(st.lanes.pr_created[0].checks.runId, 37921773706,
+      'newest terminal NON-cancelled real run decides');
+  });
+
+  test('an active real CI run is a valid in-flight cite (pr_validation lane)', function () {
+    var st = build({ runs: [realRun({ status: 'in_progress',
+        conclusion: null })] });
+    assert.deepEqual(st.lanes.pr_validation.map(function (c) { return c.pr; }), [1437]);
+    assert.equal(st.lanes.pr_validation[0].checks.verdict, 'in_progress');
+    assert.equal(st.lanes.pr_validation[0].checks.runId, 37925202998);
+  });
+
+  test('dispatched runs without a path fail open as real (payload shape drift)', function () {
+    var st = build({ runs: [{ event: 'workflow_dispatch', head_sha: HEAD,
+      status: 'completed', conclusion: 'success', id: 42, name: 'quality',
+      created_at: '2026-10-09T11:00:00Z', updated_at: '2026-10-09T11:05:00Z',
+      html_url: 'http://run/42' }] });
+    assert.equal(st.lanes.pr_created[0].checks.runId, 42,
+      'a path-less dispatch is assumed real — never silently uncitable');
+  });
+
+  test('ciWorkflow knob: the named validation workflow dispatch is real, other dispatches are legs', function () {
+    var st = build({
+      ciWorkflow: 'mycheck.yml',
+      runs: [dynRun({ path: '.github/workflows/mycheck.yml' }), legRun()]
+    });
+    assert.equal(st.lanes.pr_created[0].checks.runId, 37921773706,
+      'the machine\'s own validation dispatch is a real cite');
+  });
+
+  // ── 2. merged_recent persists the checks record (gh-816 ask 2) ────────────
+
+  test('merged card persists the real checks record at merge time (run id + name + sha + conclusion)', function () {
+    var st = build({ prs: [], mergedPrs: [mergedPr()] });
+    var card = st.lanes.merged_recent[0];
+    assert.ok(card.checks, 'checks record must NOT be dropped at the merge transition');
+    assert.equal(card.checks.runId, 37921773706,
+      'the score-2 validation dispatch is the persisted cite');
+    assert.equal(card.checks.name, 'PR acme/factory#1437');
+    assert.equal(card.checks.sha, HEAD);
+    assert.equal(card.checks.conclusion, 'success');
+    assert.equal(card.checks.verdict, 'success');
+  });
+
+  test('merged card falls back to the carried record when the runs list rotated past the head', function () {
+    var prev = { lanes: { validating: [{ pr: 1437, labels: ['pr_approved', 'ai_validating'],
+      checks: { verdict: 'success', runId: 99, name: 'CI', sha: HEAD,
+        conclusion: 'success', at: '2026-10-09T11:56:44Z',
+        url: 'http://run/carried' } }] } };
+    var st = build({ prs: [], mergedPrs: [mergedPr()], runs: [], prev: prev });
+    var checks = st.lanes.merged_recent[0].checks;
+    assert.ok(checks, 'carried record survives the merge');
+    assert.equal(checks.runId, 99);
+    assert.equal(checks.conclusion, 'success');
+    assert.equal(checks.carried, undefined,
+      'a TERMINAL carried record is a resolved verdict — no marker needed');
+  });
+
+  // ── rework thread 3 (suggestion): carried ACTIVE records must not read live ──
+  // If the head's runs rotate out of the repo-wide window between the last
+  // open-life snapshot and the merge tick, the carried record is all the
+  // audit trail gets — an in-flight copy would pin "validation in flight"
+  // on the merged card for the whole 24h window. Carry it, but marked.
+
+  test('a carried in-flight record rides the merged card marked carried (never reads live)', function () {
+    var prev = { lanes: { validating: [{ pr: 1437, labels: ['pr_approved', 'ai_validating'],
+      checks: { verdict: 'in_progress', runId: 99, name: 'CI', sha: HEAD,
+        conclusion: null, at: '2026-10-09T11:50:00Z',
+        url: 'http://run/stale' } }] } };
+    var st = build({ prs: [], mergedPrs: [mergedPr()], runs: [], prev: prev });
+    var checks = st.lanes.merged_recent[0].checks;
+    assert.ok(checks, 'the audit record still rides — never dropped');
+    assert.equal(checks.runId, 99);
+    assert.equal(checks.conclusion, null);
+    assert.equal(checks.carried, true,
+      'an ACTIVE carried record is marked unverified — the board can tell ' +
+      'it apart from a live verdict');
+  });
+
+  test('merged card prefers a fresh real cite over the stale carried record', function () {
+    var prev = { lanes: { validating: [{ pr: 1437, labels: ['pr_approved', 'ai_validating'],
+      checks: { verdict: 'in_progress', runId: 99, name: 'CI', sha: HEAD,
+        conclusion: null, at: '2026-10-09T11:50:00Z', url: 'http://run/stale' } }] } };
+    var st = build({ prs: [], mergedPrs: [mergedPr()], prev: prev });
+    assert.equal(st.lanes.merged_recent[0].checks.runId, 37921773706,
+      'the runs list still names the head → the exact discharge run is resolved');
+  });
+
+  test('merged card with neither fresh nor carried evidence stays checks-null (no invention)', function () {
+    var st = build({ prs: [], mergedPrs: [mergedPr()], runs: [legRun()] });
+    assert.equal(st.lanes.merged_recent[0].checks, null,
+      'a side-run alone still never becomes the discharge cite');
+  });
+
+  test('merged card persists the checks record across the whole 24h window (re-derived ticks)', function () {
+    var prev = { lanes: { validating: [{ pr: 1437, labels: ['pr_approved', 'ai_validating'],
+      checks: { verdict: 'success', runId: 99, name: 'CI', sha: HEAD,
+        conclusion: 'success', at: '2026-10-09T11:56:44Z', url: 'http://run/99' } }] } };
+    var st = null;
+    for (var i = 0; i < 5; i++) {   // ticks 2..N: prev is the MERGED card
+      st = build({ prs: [], mergedPrs: [mergedPr()], runs: [],
+        prev: st ? { lanes: { merged_recent: [st.lanes.merged_recent[0]] } } : prev });
+    }
+    assert.equal(st.lanes.merged_recent[0].checks.runId, 99,
+      'the record rides the merged card tick-over-tick — never dropped again');
+  });
+});

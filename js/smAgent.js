@@ -3106,6 +3106,18 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     tokens: spTokens,
                     runs: spRunList,
                     checkNames: validationCheckNames() || [],
+                    // gh-816: the lane writer must know which workflow is
+                    // the machine's own validation — its dispatches are
+                    // real cites, every other dispatch is a side-run leg
+                    // (auxiliary, never the discharge cite). Same
+                    // precedence chain as dispatchCiWorkflow and the five
+                    // sibling sites above: rule.ciWorkflow >
+                    // jobParams.ciWorkflow > default (gh-816 rework
+                    // thread 1 — forwarding only the jobParams knob
+                    // misclassified per-rule validation dispatches as
+                    // side-run legs: no cite, dead pr_validation lane).
+                    ciWorkflow: rule.ciWorkflow ||
+                        ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
                     prev: spPrev,
                     dryRun: DRY,
                     processed: processedKeys,

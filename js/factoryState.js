@@ -46,6 +46,21 @@
  * from snapshot one. Snapshot history (the `<base>-history.json` index)
  * keeps the raw evidence for time travel either way.
  *
+ * ── Schema 2, checks records (gh-816 citation integrity) ────────────────────
+ * card.checks is one uniform record shape everywhere it appears — open card
+ * cite, merged_recent cite, checks.auxiliary side-run leg, carried record:
+ *
+ *   verdict       status, or the conclusion once terminal (ONE vocabulary —
+ *                 auxiliary and carried records never invent a third name)
+ *   at / url      run created_at / html_url
+ *   runId/name/sha/conclusion   audit identity (merged_recent persistence)
+ *   runStartedAt/updatedAt      gh-769 CI wall-time vs queue-wait split
+ *   auxiliary     the freshest SM side-run leg on the head — evidence, never
+ *                 the cite (same shape, no carried flag: it is live evidence)
+ *   carried       true ONLY on a carried record whose conclusion never
+ *                 landed — unverified, not live (never set on terminal
+ *                 records; nothing resolves a merged card in flight)
+ *
  * Pure functions here (no tool globals) — smAgent wires deps; tests inject
  * mocks. CommonJS module like every other js/ module.
  */
@@ -85,6 +100,42 @@ function hasLabel(pr, name) {
 // active filter of buildFactoryState's headVerdict() (single source: a
 // state listed here but not there, or vice versa, would mislane cards).
 var ACTIVE_RUN_STATES = ['queued', 'in_progress', 'waiting', 'pending'];
+
+// gh-816 citation integrity — what counts as a REAL validation run on a
+// head. The lane cite is the discharge evidence watchers and audits read,
+// so only real validation runs may carry it:
+//   (a) repo CI arriving on a non-dispatch event (push/pull_request/
+//       schedule — full CI + dynamic PR-validation workflows), or
+//   (b) the machine's own validation-workflow dispatch (path
+//       .github/workflows/<ciWorkflow>, e.g. quality.yml).
+// ANY other workflow_dispatch run on the head is an SM side-run leg
+// (review/develop/rework on ai-teammate.yml) — auxiliary evidence at
+// most, never the discharge cite. A dispatch without a path (payload
+// shape drift) fails OPEN as real — a run that cannot be classified must
+// not silently lose citability.
+// RESIDUAL RISK (gh-816 rework thread 2): the runs list is repo-wide, so
+// `event !== 'workflow_dispatch'` means ANY repo workflow (labeler, docs,
+// lint, translation bots — not necessarily "validation"). Such a run can
+// only cite when nothing better exists (see the score-tier preference in
+// headVerdict: the ciWorkflow path match outranks every bare real run),
+// but a path-less dynamic-validation deployment still accepts this
+// breadth by design — a path allowlist cannot express arbitrary
+// per-PR validation workflows.
+var WORKFLOW_PATH_PREFIX = '.github/workflows/';
+
+function isValidationWorkflowPath(p, ciWorkflow) {
+    if (!p || !ciWorkflow) return false;
+    if (p === WORKFLOW_PATH_PREFIX + ciWorkflow) return true;
+    var suffix = '/' + ciWorkflow;
+    return p.length >= suffix.length &&
+        p.slice(p.length - suffix.length) === suffix;
+}
+
+function isValidationRun(r, ciWorkflow) {
+    if (!r) return false;
+    if (r.event !== 'workflow_dispatch') return true;   // repo CI events
+    return !r.path || isValidationWorkflowPath(r.path, ciWorkflow);
+}
 
 function laneOf(pr) {
     if (hasLabel(pr, 'ai_validating')) return 'validating';
@@ -453,9 +504,12 @@ function firstAssignee(it) {
  * issues). `tokens` = OPTIONAL per-leg token usage (map keyed
  * 'pr-N'/'issue-N', or rows carrying pr/issue fields). `runs` = dispatched
  * ci runs for the repo. `checkNames` = the stamped required checks
- * (jobParams.validationChecks). `prev` = the previous published snapshot
- * (parsed) or null — the timestamp AND history accumulation source (see
- * the schema 2 note above).
+ * (jobParams.validationChecks). `ciWorkflow` = the deployment's validation
+ * workflow FILE name (default 'quality.yml') — gh-816: dispatches of THIS
+ * workflow count as real validation runs; other dispatches are SM side-run
+ * legs (auxiliary, never the discharge cite). `prev` = the previous
+ * published snapshot (parsed) or null — the timestamp AND history
+ * accumulation source (see the schema 2 note above).
  */
 function buildFactoryState(input) {
     var prs = input.prs || [];
@@ -474,15 +528,23 @@ function buildFactoryState(input) {
     var tmap = normalizeTokens(input.tokens);
     var issueHistory = {};   // issue-N → shared history (lane + backlog twin)
 
-    // per-head dispatched run verdicts (newest-first list assumed, same as
-    // syncValidationChecks). runStartedAt/updatedAt (gh-769) carry the
-    // run's run_started_at/updated_at so the board can split CI wall-time
-    // from queue wait — null when the payload lacks them (honest unknowns,
-    // the keys are always present so snapshots keep a stable shape).
+    // Per-head run verdicts (gh-816 citation integrity): classify the
+    // head's runs, then cite. The runs list is repo-wide and newest-first;
+    // sorting is explicit (same idiom as syncValidationChecks/
+    // failedRunLinksLine) because the list is shared with side-run legs
+    // whose clocks interleave with CI. runStartedAt/updatedAt (gh-769)
+    // carry the run's run_started_at/updated_at so the board can split CI
+    // wall-time from queue wait — null when the payload lacks them
+    // (honest unknowns, the keys are always present so snapshots keep a
+    // stable shape).
+    var ciWorkflow = input.ciWorkflow || 'quality.yml';
     function headRuns(sha) {
         return runs.filter(function (r) {
-            return r.event === 'workflow_dispatch' && r.head_sha === sha;
+            return r && r.head_sha === sha;
         });
+    }
+    function isRealRun(r) {
+        return isValidationRun(r, ciWorkflow);
     }
     function runClock(r) {
         return {
@@ -490,29 +552,69 @@ function buildFactoryState(input) {
             updatedAt: (r && r.updated_at) || null
         };
     }
+    function freshestRun(list) {
+        return (list || []).slice().sort(function (a, b) {
+            return String((b && (b.updated_at || b.created_at)) || '')
+                .localeCompare(String((a && (a.updated_at || a.created_at)) || ''));
+        })[0] || null;
+    }
+    // The audit record for one run: verdict + the identity fields the
+    // merged_recent persistence needs (run id + name + sha + conclusion,
+    // gh-816) alongside the gh-769 clock split.
+    function runCite(r) {
+        var t = runClock(r);
+        var done = r.status === 'completed';
+        return {
+            verdict: done ? (r.conclusion || r.status) : r.status,
+            at: r.created_at,
+            url: r.html_url,
+            runId: r.id == null ? null : r.id,
+            name: r.name || null,
+            sha: r.head_sha || null,
+            conclusion: done ? (r.conclusion || null) : null,
+            runStartedAt: t.runStartedAt,
+            updatedAt: t.updatedAt
+        };
+    }
+    // Cite resolution (gh-816 + rework threads 2/4): the runs list is
+    // repo-wide, so REAL runs come in tiers — score 2: the machine's own
+    // validation workflow (ciWorkflow path match); score 1: every other
+    // real run (repo CI, dynamic PR-validation, unrelated push/pull_request
+    // workflows under the documented fail-open). The best AVAILABLE tier
+    // cites — the validation workflow outranks any bare real run however
+    // fresh, and an unrelated workflow only cites when nothing better
+    // exists. Within the winning tier the newest TERMINAL non-cancelled
+    // run decides (cancelled is never a verdict — gh-191), else the newest
+    // active run, else NO cite — a head carrying only SM side-run legs has
+    // no validation evidence to discharge. The freshest side-run leg, when
+    // any, rides along as checks.auxiliary (runCite-shaped — same
+    // vocabulary as the cite: verdict/conclusion/runId/name/sha) —
+    // evidence, never the cite.
+    function citeTier(r) {
+        return isValidationWorkflowPath(r.path, ciWorkflow) ? 2 : 1;
+    }
     function headVerdict(sha) {
         var mine = headRuns(sha);
-        var terminal = mine.filter(function (r) {
-            return r.status === 'completed' && r.conclusion &&
-                   r.conclusion !== 'cancelled';
+        var real = mine.filter(isRealRun);
+        var legs = mine.filter(function (r) { return !isRealRun(r); });
+        var cite = null;
+        [2, 1].forEach(function (tier) {
+            if (cite) return;
+            var pool = real.filter(function (r) {
+                return citeTier(r) === tier;
+            });
+            cite = freshestRun(pool.filter(function (r) {
+                return r.status === 'completed' && r.conclusion &&
+                       r.conclusion !== 'cancelled';
+            })) || freshestRun(pool.filter(function (r) {
+                return ACTIVE_RUN_STATES.indexOf(r.status) !== -1;
+            }));
         });
-        if (terminal.length) {
-            var t = runClock(terminal[0]);
-            return { state: terminal[0].conclusion, at: terminal[0].created_at,
-                     url: terminal[0].html_url,
-                     runStartedAt: t.runStartedAt, updatedAt: t.updatedAt };
-        }
-        var active = mine.filter(function (r) {
-            return r.status === 'queued' || r.status === 'in_progress' ||
-                   r.status === 'waiting' || r.status === 'pending';
-        });
-        if (active.length) {
-            var a = runClock(active[0]);
-            return { state: active[0].status, at: active[0].created_at,
-                     url: active[0].html_url,
-                     runStartedAt: a.runStartedAt, updatedAt: a.updatedAt };
-        }
-        return null;
+        if (!cite) return null;
+        var out = runCite(cite);
+        var leg = freshestRun(legs);
+        if (leg) out.auxiliary = runCite(leg);
+        return out;
     }
 
     var lanes = {}; LANE_ORDER.forEach(function (l) { lanes[l] = []; });
@@ -583,8 +685,8 @@ function buildFactoryState(input) {
             labels: (pr.labels || []).map(function (l) {
                 return l && l.name || l;
             }),
-            checks: v ? { verdict: v.state, at: v.at, url: v.url,
-                          runStartedAt: v.runStartedAt, updatedAt: v.updatedAt } : null,
+            // headVerdict already returns the card-shaped record (or null)
+            checks: v || null,
             prCreated: iso(pr.created_at),
             // FIFO position inside approved_queue is filled after the sort
             queuePos: null,
@@ -607,6 +709,25 @@ function buildFactoryState(input) {
         return !isNaN(t) && (nowMs - t) < MERGED_WINDOW_MS;
     }).map(function (pr) {
         var prevCard = pix.pr[pr.number];
+        // gh-816: PERSIST the checks record at merge time — resolve the
+        // head's real validation cite from the current runs list (the list
+        // is repo-wide, the merged head still matches), else carry the
+        // record the card accumulated during its open life. The terminal
+        // lane is the audit trail: dropping the record forced retrospectives
+        // to re-derive run history to tell legit merges from false-green.
+        // Rework thread 3: a carried record whose conclusion never landed
+        // (the runs rotated out of the window while validation was still
+        // in flight) is carried MARKED — without the marker the merged
+        // card would read "validation in flight" for the whole 24h window,
+        // since nothing ever resolves it. Terminal records carry as-is
+        // (a resolved verdict), and the audit fields stay uniform across
+        // cite/auxiliary/carried records (all runCite-shaped, thread 4).
+        var mergedChecks = (pr.head && pr.head.sha &&
+                headVerdict(pr.head.sha)) || null;
+        if (!mergedChecks && prevCard && prevCard.checks) {
+            mergedChecks = Object.assign({}, prevCard.checks);
+            if (mergedChecks.conclusion == null) mergedChecks.carried = true;
+        }
         var card = {
             pr: pr.number,
             title: pr.title,
@@ -616,7 +737,7 @@ function buildFactoryState(input) {
             labels: (pr.labels || []).map(function (l) {
                 return l && l.name || l;
             }),
-            checks: null,
+            checks: mergedChecks,
             prCreated: iso(pr.created_at),
             mergedAt: iso(pr.merged_at),
             queuePos: null,
@@ -908,6 +1029,9 @@ module.exports = {
     laneOf: laneOf,
     hasLabel: hasLabel,
     ACTIVE_RUN_STATES: ACTIVE_RUN_STATES,
+    isValidationRun: isValidationRun,
+    isValidationWorkflowPath: isValidationWorkflowPath,
+    WORKFLOW_PATH_PREFIX: WORKFLOW_PATH_PREFIX,
     prevIndex: prevIndex,
     mergeLabelTimestamps: mergeLabelTimestamps,
     carryTimestamps: carryTimestamps,
