@@ -303,6 +303,24 @@ suite('reviewVerdicts — label reconciliation (gh-807 AC2)', function () {
         assert.equal(decision.removeFromPr, true);
         assert.equal(decision.removeFromIssue, true);
     });
+
+    // gh-807 rework-round-2 SUGGESTION: the census the winning APPROVE
+    // record itself reports is also arm-preserving evidence. AC3's
+    // blocking-threads exception means rework-unresolved-threads LEGITIMATELY
+    // arms the PR carrier when the record says blocking > 0 — on a GREEN
+    // head (checksRed false) that arm is evidence-driven, not a review
+    // loser; stripping it costs a tick of dispatch delay plus a ⚖️ comment
+    // claiming "suggestions do not justify a rework arm" while the record
+    // says the findings were BLOCKING.
+    test('APPROVE winner with blocking>0 census keeps the arm on a green head (evidence-driven)', function () {
+        var blockingRecord = { head: HEAD, verdict: 'APPROVE', blocking: 2, important: 0,
+                               suggestions: 0, at: '2026-10-09T05:47:40.000Z', source: 'pr_review.json' };
+        var decision = rv.reconcileDecision([blockingRecord], HEAD, {
+            prHasApproved: true, prHasRework: true, issueHasRework: false, checksRed: false
+        });
+        assert.equal(decision, null,
+            'the arm was granted BECAUSE of the blocking census the record reports — not review-driven');
+    });
 });
 
 suite('reviewVerdicts — arming-side sticky approval (gh-807 AC3)', function () {

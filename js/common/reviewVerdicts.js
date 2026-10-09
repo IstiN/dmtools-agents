@@ -248,15 +248,24 @@ function buildReconciliationComment(effective, loserLabel, headSha) {
  *   - conflict-rework arms (a DIRTY head carries no CI — the probe's
  *     fail-open red keeps the arm, killing the strip/re-add yo-yo).
  * When checksRed stands, the rework arm is CI-corroborated: the tick keeps
- * it and lets the CI path own the leg. A REQUEST_CHANGES/BLOCK winner
- * always strips pr_approved — red CI never legitimizes the approval.
+ * it and lets the CI path own the leg. Same for the record's OWN census
+ * (rework round 2): an APPROVE record reporting blocking > 0 is the
+ * evidence AC3's blocking-threads exception arms on — rework-unresolved-
+ * threads legitimately placed that arm BECAUSE of the census, so the arm
+ * is evidence-driven even on a green head (stripping it would cost a tick
+ * of dispatch delay plus a ⚖️ comment claiming "suggestions do not justify
+ * a rework arm" while the record says the findings were BLOCKING; the arm
+ * rule re-adds next tick — a self-healing yo-yo). A REQUEST_CHANGES/BLOCK
+ * winner always strips pr_approved — red CI never legitimizes the
+ * approval.
  */
 function reconcileDecision(records, headSha, state) {
     var effective = latestVerdictForHead(records, headSha);
     if (!effective) return null;
     var loser = resolveLoserLabel(effective.record.verdict);
     var st = state || {};
-    if (loser === LABEL_REWORK && st.checksRed) return null;
+    if (loser === LABEL_REWORK &&
+        (st.checksRed || (Number(effective.record.blocking || 0) || 0) > 0)) return null;
     var removeFromPr = loser === LABEL_REWORK ? !!st.prHasRework : !!st.prHasApproved;
     var removeFromIssue = loser === LABEL_REWORK ? !!st.issueHasRework : false;
     if (!removeFromPr && !removeFromIssue) return null;
