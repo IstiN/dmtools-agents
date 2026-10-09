@@ -329,7 +329,10 @@ function makeSmAgent(opts) {
                 }
             },
             './factoryState.js': loadModule('js/factoryState.js',
-                makeRequire({ './common/machineAuthor.js': machineAuthorModule }), {}),
+                makeRequire({
+                    './common/machineAuthor.js': machineAuthorModule,
+                    './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({}), {})
+                }), {}),
         }),
         smMocks
     );
@@ -7936,4 +7939,278 @@ suite('smAgent: statePublish tokens — local file first, branch fallback', func
         }), '📡 published line still present — the tick stayed green');
     });
 
+});
+
+// ── gh-806: rework in-flight latch — the armer consults before it arms ──────
+
+suite('smAgent: rework in-flight latch (gh-806 — one arm per (pr, head))', function () {
+
+    var HEAD = '23dacd10deadbeefcafe0123456789abcdef0123';
+    var HEAD7 = HEAD.substring(0, 7);
+    var SP = { channel: 'release', repo: 'a/b', asset: 'fa-state.json' };
+    var STATE_GET = 'gh api repos/a/b/contents/data/fa-state.json?ref=factory-data --jq .content | base64 -d';
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    function recentIso(msAgo) {
+        return new Date(Date.now() - (msAgo || 60000)).toISOString();
+    }
+
+    function armReworkRule() {
+        return {
+            source: 'github',
+            description: 'unresolved threads arm rework',
+            query: { type: 'pr', labels: ['ai_pr_reviewed'], threadsResolved: false, prMachineAuthor: true },
+            localAction: 'arm_rework', limit: 5, id: 'rework-unresolved-threads'
+        };
+    }
+
+    function latchItem(n, head) {
+        return {
+            key: 'pr-' + n, labels: ['ai_pr_reviewed'], issueNumber: null, prNumber: n,
+            pr: { number: n, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', headSha: head }
+        };
+    }
+
+    /** Serves a previous snapshot payload on the fa-state.json contents GET. */
+    function servingPrevSnapshot(payload) {
+        return function (cmdOpts) {
+            if (cmdOpts.command === STATE_GET) return { output: payload };
+            return undefined;
+        };
+    }
+
+    function latchFixture(map, opts) {
+        opts = opts || {};
+        var prev = { lanes: {} };
+        if (map) prev.reworkInFlight = map;
+        return Object.assign(config('a', 'b'), {
+            captureConsole: true,
+            github: {
+                items: [latchItem(1428, opts.head || HEAD)]
+            },
+            onCliExecute: servingPrevSnapshot(JSON.stringify(prev))
+        });
+    }
+
+    test('AC1: latched (pr, head) → ⏭️ logged, NO label, NO comment, nothing dispatched', function () {
+        var sm = makeSmAgent(latchFixture(
+            { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(60 * 1000) } }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [armReworkRule()] } });
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no agent:rework label while in flight');
+        assert.equal(sm.capturedPrComments.length, 0, 'no duplicate armed comment');
+        assert.equal(sm.capturedTriggers.length, 0, 'nothing dispatched');
+        assert.ok(sm.capturedLogs.some(function (l) {
+            return l.indexOf('rework already in flight for (pr-1428, ' + HEAD7 + ')') !== -1;
+        }), 'the AC1 ⏭️ line is logged with (pr, head7)');
+    });
+
+    test('unlatched → arms AND records the latch in the published snapshot', function () {
+        var sm = makeSmAgent(latchFixture(null));
+        var params = { jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                    rules: [armReworkRule()], statePublish: SP } };
+        sm.action(params);
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number + ':' + a.labels.join(','); }),
+            ['1428:agent:rework'], 'unlatched (pr, head) arms normally');
+        var put = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('-X PUT repos/a/b/contents/data/fa-state.json') !== -1;
+        })[0];
+        assert.ok(put, 'tick published the snapshot');
+        var m = put.command.match(/printf %s '(.*)' \| base64/);
+        var state = JSON.parse(m[1]);
+        assert.ok(state.reworkInFlight['pr-1428@' + HEAD],
+            'the arm latched (pr-1428@head) into fa-state.json');
+        assert.equal(state.reworkInFlight['pr-1428@' + HEAD].head, HEAD);
+    });
+
+    test('AC2: a NEW head re-arms normally — the latch is keyed per head', function () {
+        var newHead = 'f00dcafedeadbeefcafe0123456789abcdef0123';
+        var sm = makeSmAgent(latchFixture(
+            { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(60 * 1000) } },
+            { head: newHead }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [armReworkRule()] } });
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number; }),
+            [1428], 'new head arms — the old latch never blocks it');
+        assert.notOk(sm.capturedLogs.some(function (l) {
+            return l.indexOf('rework already in flight') !== -1;
+        }), 'no ⏭️ for a different key');
+    });
+
+    test('AC2: leg run CONCLUDED after the arm → latch cleared, re-arm proceeds', function () {
+        var sm = makeSmAgent(latchFixture(
+            { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(20 * 60 * 1000) } }));
+        // swap the head-runs probe to return a CONCLUDED leg run (after the arm)
+        var fixture = latchFixture(
+            { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(20 * 60 * 1000) } });
+        fixture.onCliExecute = function (cmdOpts) {
+            if (cmdOpts.command === STATE_GET) {
+                return { output: JSON.stringify({ lanes: {}, reworkInFlight:
+                    { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(20 * 60 * 1000) } } }) };
+            }
+            if (cmdOpts.command.indexOf('/actions/runs?head_sha=' + HEAD) !== -1) {
+                return { output: JSON.stringify({ workflow_runs: [{
+                    status: 'completed', conclusion: 'failure',
+                    head_sha: HEAD, path: '.github/workflows/ai-teammate.yml',
+                    updated_at: new Date(Date.now() - 60 * 1000).toISOString()
+                }] }) };
+            }
+            return undefined;
+        };
+        sm = makeSmAgent(fixture);
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [armReworkRule()] } });
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number; }),
+            [1428], 'terminated leg → latch cleared → re-armable (dead-letter recovery)');
+        assert.ok(sm.capturedLogs.some(function (l) {
+            return l.indexOf('rework latch cleared (terminated)') !== -1;
+        }), 'the clear is logged with its cause');
+    });
+
+    test('AC3: latch older than 45 min with no active run self-heals (re-arms)', function () {
+        var sm = makeSmAgent(latchFixture(
+            { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(50 * 60 * 1000) } }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [armReworkRule()] } });
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number; }),
+            [1428], 'stale latch never permanently blocks the armer');
+    });
+
+    test('an ACTIVE leg run keeps the latch past the stale window (still flying)', function () {
+        var fixture = latchFixture(
+            { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(50 * 60 * 1000) } });
+        fixture.onCliExecute = function (cmdOpts) {
+            if (cmdOpts.command === STATE_GET) {
+                return { output: JSON.stringify({ lanes: {}, reworkInFlight:
+                    { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(50 * 60 * 1000) } } }) };
+            }
+            if (cmdOpts.command.indexOf('/actions/runs?head_sha=' + HEAD) !== -1) {
+                return { output: JSON.stringify({ workflow_runs: [{
+                    status: 'in_progress', head_sha: HEAD,
+                    path: '.github/workflows/ai-teammate.yml'
+                }] }) };
+            }
+            return undefined;
+        };
+        var sm = makeSmAgent(fixture);
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [armReworkRule()] } });
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'leg really flying — no duplicate arm');
+        assert.ok(sm.capturedLogs.some(function (l) {
+            return l.indexOf('rework already in flight for (pr-1428, ' + HEAD7 + ')') !== -1;
+        }));
+    });
+
+    test('a concluded VALIDATION run on the head does NOT clear the latch (leg-scoped)', function () {
+        var fixture = latchFixture(
+            { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(20 * 60 * 1000) } });
+        fixture.onCliExecute = function (cmdOpts) {
+            if (cmdOpts.command === STATE_GET) {
+                return { output: JSON.stringify({ lanes: {}, reworkInFlight:
+                    { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(20 * 60 * 1000) } } }) };
+            }
+            if (cmdOpts.command.indexOf('/actions/runs?head_sha=' + HEAD) !== -1) {
+                return { output: JSON.stringify({ workflow_runs: [{
+                    status: 'completed', conclusion: 'failure',
+                    head_sha: HEAD, path: '.github/workflows/quality.yml',
+                    updated_at: new Date(Date.now() - 60 * 1000).toISOString()
+                }] }) };
+            }
+            return undefined;
+        };
+        var sm = makeSmAgent(fixture);
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [armReworkRule()] } });
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'only the LEG workflow (ai-teammate.yml) terminates a latch');
+    });
+
+    test('L2 arming storm: two identical arm rules in one tick → exactly one label', function () {
+        var sm = makeSmAgent(latchFixture(null));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [armReworkRule(), armReworkRule()] } });
+        assert.equal(sm.capturedPrLabelAdds.length, 1,
+            'the second decision hits the in-tick latch — one arm per (pr, head)');
+        assert.equal(sm.capturedPrComments.length, 1, 'one explanation, not two');
+        var skipLines = sm.capturedLogs.filter(function (l) {
+            return l.indexOf('rework already in flight for (pr-1428') !== -1;
+        });
+        assert.equal(skipLines.length, 1, 'exactly one ⏭️ suppression logged');
+    });
+
+    test('fail_validation: latched (pr, head) → report still posts, rework re-arm suppressed', function () {
+        var at = recentIso(60 * 1000);
+        var fixture = Object.assign(config('a', 'b'), {
+            captureConsole: true,
+            github: {
+                items: [{ key: 'pr-72', labels: ['pr_approved', 'ai_validating'], issueNumber: null,
+                          prNumber: 72, author: 'ai-teammate',
+                          pr: { number: 72, state: 'OPEN', headSha: HEAD } }],
+                pr: { number: 72, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #503 — boot cost' },
+                author: 'ai-teammate'
+            },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command === STATE_GET) {
+                    return { output: JSON.stringify({ lanes: {}, reworkInFlight:
+                        { ['pr-72@' + HEAD]: { head: HEAD, at: at } } }) };
+                }
+                return undefined;
+            }
+        });
+        var sm = makeSmAgent(fixture);
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [{
+            source: 'github', query: { type: 'pr', labels: ['ai_validating'], checks: 'red' },
+            localAction: 'fail_validation', limit: 1, id: 'fail-validation' }] } });
+        assert.equal(sm.capturedPrComments.length, 1, 'the red verdict is still reported');
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'NO agent:rework arm while the leg for this (pr, head) is in flight');
+        assert.ok(sm.capturedLogs.some(function (l) {
+            return l.indexOf('rework already in flight for (pr-72, ' + HEAD.substring(0, 7) + ')') !== -1;
+        }));
+    });
+
+    test('conflict_rework: latched (pr, head) → no arm, no marker comment, waits on the leg', function () {
+        var at = recentIso(60 * 1000);
+        var fixture = Object.assign(config('a', 'b'), {
+            captureConsole: true,
+            github: {
+                items: [{ key: 'pr-81', labels: [], issueNumber: null, prNumber: 81,
+                          author: 'ai-teammate', mergeState: 'DIRTY', branch: 'ai/gh-503',
+                          pr: { number: 81, state: 'OPEN', headSha: HEAD } }],
+                pr: { number: 81, labels: [], body: 'Fixes #503' }
+            },
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command === STATE_GET) {
+                    return { output: JSON.stringify({ lanes: {}, reworkInFlight:
+                        { ['pr-81@' + HEAD]: { head: HEAD, at: at } } }) };
+                }
+                return undefined;
+            }
+        });
+        var sm = makeSmAgent(fixture);
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [{
+            source: 'github', query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
+            localAction: 'conflict_rework', limit: 1, id: 'conflict-rework' }] } });
+        assert.equal(sm.capturedPrComments.length, 0,
+            'no conflict report while the leg owns the fix (gh-683: marker only after arming)');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no duplicate arm');
+        assert.ok(sm.capturedLogs.some(function (l) {
+            return l.indexOf('rework already in flight for (pr-81, ' + HEAD.substring(0, 7) + ')') !== -1;
+        }));
+    });
+
+    test('no statePublish configured → in-tick dedupe still works, nothing persists', function () {
+        var sm = makeSmAgent(latchFixture(null));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 rules: [armReworkRule(), armReworkRule()] } });
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'single-flight holds within the tick');
+        var puts = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('fa-state.json') !== -1;
+        });
+        assert.equal(puts.length, 0, 'no snapshot writes without statePublish');
+    });
 });
