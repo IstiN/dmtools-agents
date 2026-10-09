@@ -24,6 +24,7 @@
         "js/unit-tests/test_workingDir.js",
         "js/unit-tests/test_branchNaming.js",
         "js/unit-tests/test_githubHelpers.js",
+        "js/unit-tests/test_machineNotice.js",
         "js/unit-tests/test_trackers.js",
         "js/unit-tests/test_ticketKeyShapes.js",
         "js/unit-tests/test_gitOps.js",

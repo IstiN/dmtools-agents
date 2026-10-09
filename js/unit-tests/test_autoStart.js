@@ -27,7 +27,7 @@ function makeBuildEncodedConfigMock() {
 function loadAutoStartHelper(scmMocks, builderMock, extraMocks) {
     var scm = loadModule(
         'js/common/scm.js',
-        null,
+        makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') }),
         Object.assign({
             github_list_workflow_runs: function() { return JSON.stringify({ workflow_runs: [] }); },
             github_trigger_workflow: function() {}
