@@ -14,11 +14,22 @@
  *
  * The protocol: every review leg stamps ONE machine-parseable record on the
  * PR — a comment carrying the structured marker below. Everything else is
- * derived: newest record per head wins, a conflict WARNs, the loser label
- * comes off with a comment citing both verdict sources, and arming rework
- * requires the effective verdict to not be APPROVE (unless BLOCKING threads
- * remain). Free-form comment text is NEVER consulted — a comment that merely
- * says "REQUEST_CHANGES" without the marker does not exist for this module.
+ * derived: newest record per head wins, a conflict WARNs (de-duplicated per
+ * tick process), the loser label comes off with a comment citing both
+ * verdict sources, and arming rework requires the effective verdict to not
+ * be APPROVE (unless BLOCKING threads remain). Free-form comment text is
+ * NEVER consulted — a comment that merely says "REQUEST_CHANGES" without
+ * the marker does not exist for this module.
+ *
+ * One asymmetry (gh-807 review, BLOCKING thread): an APPROVE winner does
+ * NOT invalidate every agent:rework arm. The label has non-review sources
+ * that legitimately coexist with an APPROVE record on the SAME head —
+ * red-CI rework on a sticky-approved PR (fail_validation), the sticky
+ * dead-letter issue arm, conflict-rework on a DIRTY head, manual human
+ * arms. The caller passes checksRed (the headHasRealFailure probe): a real
+ * CI failure keeps the arm — the CI path owns the leg. Red CI never
+ * legitimizes pr_approved, so a REQUEST_CHANGES/BLOCK winner always strips
+ * it.
  *
  * Pure module — no dmtools globals; the tick actions and the query guards
  * feed it comment payloads and apply the decisions. Keep it GraalJS-clean

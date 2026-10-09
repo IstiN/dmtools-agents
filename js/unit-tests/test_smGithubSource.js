@@ -1345,6 +1345,47 @@ suite('sm github source', function () {
             'a verdict-guard rule fetches prStatus — the guard needs the head sha (gh-807 wiring)');
     });
 
+    test('latestVerdict on ISSUE-carrier items: the issue-rework reconcile shape matches the stale arm only', function () {
+        // gh-807 review (rule-query narrowing): review CHANGES_REQUESTED /
+        // red-CI / conflict-rework arms land on the LINKED ISSUE, which
+        // pr-type label queries cannot see — the issue-carrier reconcile
+        // rule matches an issue whose linked PR's CURRENT head carries an
+        // APPROVE record while the issue still holds agent:rework. The
+        // verdict guard must resolve the head through the issue
+        // enrichment's prStatus (headSha).
+        providerStub._verdictRecords = {
+            130: verdictFor(130, 'APPROVE'),
+            131: verdictFor(131, 'REQUEST_CHANGES'),
+            132: null // pre-gh-807 PR — no records, fail open
+        };
+        var srcMod = load({
+            github_search_issues: function (args) {
+                if (args.query.indexOf('agent:rework') !== -1) {
+                    return { items: [
+                        { number: 130, labels: [{ name: 'agent:rework' }] },
+                        { number: 131, labels: [{ name: 'agent:rework' }] },
+                        { number: 132, labels: [{ name: 'agent:rework' }] }
+                    ] };
+                }
+                return { items: [] };
+            }
+        }, {
+            130: { number: 130, state: 'OPEN' },
+            131: { number: 131, state: 'OPEN' },
+            132: { number: 132, state: 'OPEN' }
+        }, statusFor([130, 131, 132]));
+        var items = srcMod.query({
+            source: 'github',
+            query: { type: 'issue', labels: ['agent:rework'], prState: 'OPEN',
+                     latestVerdict: ['APPROVE'] }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        var keys = items.map(function (i) { return i.key; }).sort();
+        assert.deepEqual(keys, ['gh-130'],
+            'only the stale arm next to an APPROVE verdict matches — RC verdicts and record-less PRs never do');
+        assert.ok(items[0].prNumber === 130 && items[0].issueNumber === 130,
+            'the action gets both anchors: reconcile probes the PR and strips the issue');
+    });
+
     test('BLOCK verdict blocks the approval lane too', function () {
         providerStub._verdictRecords = { 91: verdictFor(91, 'BLOCK') };
         var srcMod = load({

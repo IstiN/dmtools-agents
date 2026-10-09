@@ -1206,15 +1206,22 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         if (rule.localAction === 'reconcile_verdicts') {
             // gh-807 (live fa PR #1428, 2026-10-09): contradictory verdicts
             // on one head left pr_approved + agent:rework coexisting and the
-            // tick never noticed. The reconcile-review-verdicts rule (this
-            // action) runs BEFORE the merge window every tick: the newest
-            // machine verdict record for the current head wins, the loser
-            // label comes off BOTH carriers (PR + linked issue) with one
-            // comment citing both verdict sources (AC2). Convergent: once
-            // the labels agree with the effective verdict the decision is
-            // null and the tick moves on. Never fights the human review
-            // state — only machine-owned labels reconcile, and PRs without
-            // records fail open.
+            // tick never noticed. The three conflict-shaped reconcile rules
+            // in sm_github.json (reconcile-rework-vs-approval /
+            // reconcile-issue-rework-vs-approval / reconcile-approval-vs-
+            // changes — narrowed from the original every-approved-PR query,
+            // gh-807 review) run BEFORE the merge window every tick: the
+            // newest machine verdict record for the current head wins, the
+            // loser label comes off BOTH carriers (PR + linked issue) with
+            // one comment citing both verdict sources (AC2). CI-driven arms
+            // survive an APPROVE winner: the action probes the head's real
+            // CI verdict (headHasRealFailure) and a red keeps agent:rework —
+            // red-CI rework on a sticky-approved PR, the sticky dead-letter
+            // issue arm and conflict-rework are not review losers. Convergent:
+            // once the labels agree with the effective verdict the decision
+            // is null and the tick moves on. Never fights the human review
+            // state — only machine-owned label carriers reconcile, and PRs
+            // without records fail open.
             try {
                 if (DRY) {
                     console.log('  🧪 [dry] ' + key + ' would reconcile review verdicts on PR #' + ticket.prNumber);

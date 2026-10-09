@@ -272,9 +272,10 @@ function matchesGuards(item, rule, provider, machineAuthor, owner) {
     // (merge-validated/validate-armed block while a REQUEST_CHANGES stands
     // — "blocks pr_approved-gated paths until re-review"); `latestVerdict`
     // matches only when it IS one of the listed verdicts (the
-    // reconcile-review-verdicts rule fires on exactly the contradictory
-    // heads). Both fail-open: no records (pre-gh-807 PRs), no head sha, or a
-    // provider without the probe → guard inert → legacy behavior.
+    // conflict-shaped reconcile-* rules fire on exactly the contradictory
+    // carrier+verdict shapes). Both fail-open: no records (pre-gh-807 PRs),
+    // no head sha, or a provider without the probe → guard inert → legacy
+    // behavior.
     if (q.notLatestVerdict || q.latestVerdict) {
         var lvRec = (provider && typeof provider.latestVerdictRecord === 'function')
             ? provider.latestVerdictRecord(item.prNumber,

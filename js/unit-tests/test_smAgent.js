@@ -931,33 +931,77 @@ suite('smAgent: sm_github.json rule hygiene', function () {
     });
 });
 
-suite('smAgent: sm_github.json reconcile-review-verdicts rule (gh-807 hygiene)', function () {
+suite('smAgent: sm_github.json reconcile rules (gh-807 hygiene)', function () {
 
-    test('reconcile-review-verdicts: gh-807 — rule exists, runs before the merge window, pr_approved lanes carry notLatestVerdict', function () {
+    test('conflict-shaped reconcile queries: exist, run before the merge window, never match the converged approval', function () {
         var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
         var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
         var byId = {};
         rules.forEach(function (r) { byId[r.id] = r; });
 
-        var rule = byId['reconcile-review-verdicts'];
-        assert.ok(rule, 'reconcile-review-verdicts exists');
-        assert.equal(rule.localAction, 'reconcile_verdicts', 'a localAction — no dispatch');
-        assert.equal(rule.source, 'github', 'github carrier');
-        assert.deepEqual(rule.query.labels, ['pr_approved', 'agent:rework'],
-            'either contradictory carrier matches (OR semantics — the action decides)');
-        assert.deepEqual(rule.query.latestVerdict, ['APPROVE', 'REQUEST_CHANGES', 'BLOCK'],
-            'only heads with a resolved verdict record reconcile');
-        assert.ok(rule.limit >= 5, 'waves reconcile in one tick (label writes only)');
+        // gh-807 review SUGGESTION: the original single rule
+        // (labels [pr_approved, agent:rework] + latestVerdict [APPROVE,
+        // REQUEST_CHANGES, BLOCK]) matched EVERY sticky-approved PR forever
+        // — each tick paid github_get_pr + github_get_pr_comments +
+        // github_get_issue per matched PR just to log "already agree".
+        // Three CONFLICT-SHAPED queries shrink the standing match set to
+        // ~zero; the localAction is unchanged (it decides from the records
+        // and is idempotent).
+        var prRework = byId['reconcile-rework-vs-approval'];
+        assert.ok(prRework, 'reconcile-rework-vs-approval exists (PR-carrier rework arm next to an approval — the #1428 shape)');
+        assert.equal(prRework.localAction, 'reconcile_verdicts', 'a localAction — no dispatch');
+        assert.equal(prRework.source, 'github', 'github carrier');
+        assert.equal(prRework.query.type, 'pr', 'PR carrier');
+        assert.deepEqual(prRework.query.labels, ['agent:rework'],
+            'matches ONLY the contradictory shape: a rework arm whose verdict is an approval');
+        assert.deepEqual(prRework.query.latestVerdict, ['APPROVE'],
+            'the effective verdict must be the approval');
 
-        // ORDER: after the rerun twins (#682 rerun-first invariant stands),
-        // before unarm-stale-validation — the merge window of the SAME tick
-        // must see the reconciled labels. #637 (merge-validated before
-        // sweep-stale-validating) is untouched — reconciliation sits before
-        // both.
-        var mine = rules.indexOf(rule);
-        assert.ok(mine > rules.indexOf(byId['rerun-cancelled-checks']), 'after rerun-cancelled-checks (#682)');
-        assert.ok(mine > rules.indexOf(byId['rerun-any-cancelled-checks']), 'after rerun-any-cancelled-checks');
-        assert.ok(mine < rules.indexOf(byId['unarm-stale-validation']), 'before the merge-window rules');
+        var issueRework = byId['reconcile-issue-rework-vs-approval'];
+        assert.ok(issueRework, 'reconcile-issue-rework-vs-approval exists (issue-carrier twin — AC2 both carriers)');
+        assert.equal(issueRework.localAction, 'reconcile_verdicts', 'a localAction — no dispatch');
+        assert.equal(issueRework.query.type, 'issue',
+            'the ISSUE carrier — review CHANGES_REQUESTED / red-CI / conflict-rework arms live on the linked issue');
+        assert.deepEqual(issueRework.query.labels, ['agent:rework']);
+        assert.deepEqual(issueRework.query.latestVerdict, ['APPROVE'],
+            'the stale arm next to an approval — the verdict guard reads the linked PR head');
+
+        var approval = byId['reconcile-approval-vs-changes'];
+        assert.ok(approval, 'reconcile-approval-vs-changes exists (stale approval next to changes-requested)');
+        assert.equal(approval.localAction, 'reconcile_verdicts', 'a localAction — no dispatch');
+        assert.equal(approval.query.type, 'pr', 'PR carrier');
+        assert.deepEqual(approval.query.labels, ['pr_approved'],
+            'matches ONLY the contradictory shape: a sticky approval whose verdict is changes-requested');
+        assert.deepEqual(approval.query.latestVerdict, ['REQUEST_CHANGES', 'BLOCK'],
+            'the effective verdict must block the approval');
+
+        // The point of the split: NO reconcile rule matches the CONVERGED
+        // shape (pr_approved whose verdict agrees) — that was the constant
+        // per-tick API cost being fixed.
+        rules.forEach(function (r) {
+            if (r.localAction !== 'reconcile_verdicts') return;
+            var labels = (r.query && r.query.labels) || [];
+            var lv = (r.query && r.query.latestVerdict) || [];
+            assert.notOk(labels.indexOf('pr_approved') !== -1 && lv.indexOf('APPROVE') !== -1,
+                r.id + ' must not match the converged approval shape (pr_approved + APPROVE verdict)');
+        });
+        assert.equal(byId['reconcile-review-verdicts'], undefined,
+            'the old every-approved-PR rule is gone');
+
+        // ORDER: all three after the rerun twins (#682 rerun-first invariant
+        // stands), before unarm-stale-validation — the merge window of the
+        // SAME tick must see the reconciled labels. #637 (merge-validated
+        // before sweep-stale-validating) is untouched — reconciliation sits
+        // before both. The issue-carrier rule also sits before
+        // rework-on-red-ci: a STALE issue arm (approval won) is stripped
+        // before the dispatch rule can fire it; a CI-driven arm survives
+        // (the checksRed exemption) and dispatches normally.
+        [prRework, issueRework, approval].forEach(function (r) {
+            var mine = rules.indexOf(r);
+            assert.ok(mine > rules.indexOf(byId['rerun-cancelled-checks']), r.id + ' after rerun-cancelled-checks (#682)');
+            assert.ok(mine > rules.indexOf(byId['rerun-any-cancelled-checks']), r.id + ' after rerun-any-cancelled-checks');
+            assert.ok(mine < rules.indexOf(byId['unarm-stale-validation']), r.id + ' before the merge-window rules');
+        });
 
         // The pr_approved lanes refuse a newest REQUEST_CHANGES/BLOCK on the
         // head — "blocks pr_approved-gated paths until re-review" (gh-807).
