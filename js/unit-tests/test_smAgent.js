@@ -28,6 +28,14 @@
  *   onMoveStatus   - fn(opts) called on jira_move_to_status
  *   workflowRuns   - { queued: [], in_progress: [] } active workflow runs by status
  */
+function smRealKeyModules() {
+    var shapes = loadModule('js/common/ticketKeyShapes.js', makeRequire({}), {});
+    return {
+        './validateInputJql.js': loadModule('js/common/validateInputJql.js', makeRequire({ './ticketKeyShapes.js': shapes }), {}),
+        './trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': shapes }), {})
+    };
+}
+
 function makeSmAgent(opts) {
     opts = opts || {};
 
@@ -180,7 +188,7 @@ function makeSmAgent(opts) {
 
     var buildEncodedConfigModule = loadModule(
         'js/common/buildEncodedConfig.js',
-        makeRequire({ '../configLoader.js': freshConfigLoader }),
+        makeRequire(Object.assign({ '../configLoader.js': freshConfigLoader }, smRealKeyModules())),
         { file_read: fileReadMock, encodeURIComponent: encodeURIComponent, JSON: JSON }
     );
 
