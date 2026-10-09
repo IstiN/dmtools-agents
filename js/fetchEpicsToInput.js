@@ -10,6 +10,11 @@
  * @param {Object} params - Parameters from DMTools
  * @param {string} params.inputFolderPath - Path to the input folder for this run
  */
+
+// Load-time require (gh-823): a deferred require would resolve against the
+// pack js/ root only — hoist every require to the top of the module.
+var trackersModule = require("./common/trackers.js");
+
 /**
  * Find a field value by partial key name (handles "Display Name (customfieldXXX)" keys).
  */
@@ -27,7 +32,6 @@ function action(params) {
         const folder = params.inputFolderPath;
         var ticketKey = folder ? folder.split('/').pop() : '';
         var project = ticketKey ? ticketKey.split('-')[0] : '';
-        var trackersModule = require('./common/trackers.js');
         var tracker = trackersModule.createTracker(null, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
         console.log('Fetching existing epics for project ' + project + '...');
 

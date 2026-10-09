@@ -3,6 +3,7 @@
  *
  * Mirrors the GraalJS testRunner API so the same test files can be executed
  * in environments where the dmtools JSRunner is not available.
+ * Provides: test(), suite(), assert, loadModule(), makeRequire(), trackersMock()
  */
 
 const fs = require('fs');
@@ -158,12 +159,21 @@ function makeRequire(moduleMap) {
     };
 }
 
+/**
+ * The throwing './trackers.js' fallback mock shared by suites that load
+ * contentOutput-backed modules (gh-824 rework) — must match testRunner.js.
+ */
+function trackersMock() {
+    return { createTracker: function () { throw new Error('contentOutput tracker fallback not expected in this test'); } };
+}
+
 // Expose globals used by test files and modules
 global.test = test;
 global.suite = suite;
 global.assert = assert;
 global.loadModule = loadModule;
 global.makeRequire = makeRequire;
+global.trackersMock = trackersMock;
 global.file_read = file_read;
 
 global.java = { lang: { System: { getenv: function() { return null; } } } };

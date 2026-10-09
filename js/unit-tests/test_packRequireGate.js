@@ -343,6 +343,70 @@ suite('require gate: load-time vs deferred (in-function) classification', functi
         var cls = gate().classifyRequires(source);
         assert.deepEqual(cls, [{ spec: './live.js', deferred: false }]);
     });
+
+    // ── CANARY tests for the documented parser limits (gh-824 rework) ──────
+    // The header documents that ES2015 method shorthand and getters read as
+    // plain blocks. The failure DIRECTION matters: a deferred require inside
+    // a shorthand/getter body in a js/common/* library classifies LOAD-TIME,
+    // so the gate checks the union of bases and PASSES when the file-relative
+    // target ships — a false pass for exactly the gh-823 runtime miss (the
+    // js-root-only base is never checked). The repo's GraalJS conventions
+    // (var + function style) keep real code out of this class today; these
+    // canaries pin the current limit-accepting classification so any parser
+    // or style drift flips a test instead of silently changing the gate's
+    // failure direction.
+
+    test('CANARY (documented limit): a require inside an ES2015 method shorthand classifies LOAD-TIME', function () {
+        var source = [
+            'var api = {',
+            '    loadVerdicts() {',
+            "        return require('./reviewVerdicts.js');",
+            '    },',
+            '};',
+        ].join('\n');
+        var cls = gate().classifyRequires(source);
+        assert.equal(cls.length, 1);
+        assert.equal(cls[0].spec, './reviewVerdicts.js');
+        assert.equal(cls[0].deferred, false,
+            'current limit: the shorthand body reads as a plain block — if this ' +
+            'flips to deferred, the gate got stricter (update the header note); ' +
+            'if the require stops being found, the parser desynced');
+    });
+
+    test('CANARY (documented limit): a getter body reads as a plain block too', function () {
+        var source = [
+            'var api = {',
+            '    get verdicts() {',
+            "        return require('./reviewVerdicts.js');",
+            '    },',
+            '};',
+        ].join('\n');
+        var cls = gate().classifyRequires(source);
+        assert.equal(cls.length, 1);
+        assert.equal(cls[0].deferred, false,
+            'current limit: the getter body reads as a plain block');
+    });
+
+    test('CANARY (documented limit): the shorthand false pass end-to-end — a pack the runtime would red stays green', function () {
+        // js/reviewVerdicts.js does NOT ship; a correctly-classified deferred
+        // require would fail the release (js-root-only base). The shorthand
+        // limit classifies it load-time, and the union model finds the
+        // file-relative target → green. That IS the documented false pass;
+        // the LOAD probe is the backstop that catches load-time misses.
+        var files = [
+            { path: 'js/common/shorthandLib.js', source: [
+                'var api = {',
+                '    loadVerdicts() {',
+                "        return require('./reviewVerdicts.js');",
+                '    },',
+                '};',
+            ].join('\n') },
+            { path: 'js/common/reviewVerdicts.js', source: 'var x = 1;' },
+        ];
+        assert.deepEqual(gate().unresolvedRequires(files), [],
+            'pinning the false pass: if this ever becomes unresolved, the ' +
+            'shorthand limit was fixed — celebrate and update the header');
+    });
 });
 
 suite('require gate: deferred requires resolve against the js/ root ONLY', function () {

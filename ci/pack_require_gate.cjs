@@ -59,7 +59,9 @@ var REQUIRE_RE = /\brequire\s*\(\s*(['"])((?:\.\.?\/)[^'"]*)\1\s*\)/g;
  * gh-812 union model could afford keeping them — every doc example in this
  * repo resolves — the deferred rule cannot). String contents ARE edges
  * (the githubSource.js worker sources ride in strings), classified at the
- * code position of the string.
+ * code position of the string. All three limits are pinned by the CANARY
+ * tests in js/unit-tests/test_packRequireGate.js (the shorthand/getter
+ * false-pass direction is asserted end-to-end there).
  */
 /**
  * Char-walk over [source] producing, per position: the enclosing

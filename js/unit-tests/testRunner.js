@@ -2,7 +2,7 @@
  * DMTools Agent Unit Test Runner
  *
  * Runs unit tests for agent JS scripts in GraalJS environment.
- * Provides: test(), suite(), assert, loadModule(), makeRequire()
+ * Provides: test(), suite(), assert, loadModule(), makeRequire(), trackersMock()
  *
  * Usage:
  *   dmtools run js/unit-tests/run_all.json
@@ -234,6 +234,17 @@ function makeRequire(moduleMap) {
 
         throw new Error('makeRequire: module not found: ' + id);
     };
+}
+
+/**
+ * The throwing './trackers.js' fallback mock shared by suites that load
+ * contentOutput-backed modules (gh-824 rework): contentOutput's tracker
+ * fallback must never fire in those tests, and this one place owns the
+ * contract — a change to the fallback shape turns
+ * test_unitTestMocks.js red instead of six suites drifting apart.
+ */
+function trackersMock() {
+    return { createTracker: function () { throw new Error('contentOutput tracker fallback not expected in this test'); } };
 }
 
 /**

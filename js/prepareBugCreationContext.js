@@ -8,12 +8,15 @@
  * Content: bug description (or summary if description is empty)
  */
 
+// Load-time require (gh-823): a deferred require would resolve against the
+// pack js/ root only — hoist every require to the top of the module.
+var trackersModule = require('./common/trackers.js');
 function sanitizeFilename(str) {
     return str.replace(/[\/\\:*?"<>|]/g, '-').replace(/\s+/g, ' ').substring(0, 100).trim();
 }
 
 function fetchHistoricalDoneBugs(ticketKey, tracker) {
-    tracker = tracker || require('./common/trackers.js').createTracker(null, {});
+    tracker = tracker || trackersModule.createTracker(null, {});
     try {
         // JQL text: provider-specific query (WIQL on ado)
         return tracker.searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug AND status in (Done) ORDER BY updated DESC', {
@@ -66,7 +69,7 @@ function action(params) {
         var ticketKey = inputFolder.split('/').pop();
 
         var customParams = actualParams.customParams || {};
-        var tracker = require('./common/trackers.js').createTracker(null, customParams);
+        var tracker = trackersModule.createTracker(null, customParams);
         var openBugsJql = customParams.openBugsJql
             || 'project = ' + ticketKey.split('-')[0] + ' AND issuetype in (Bug) AND status not in (Done)';
 

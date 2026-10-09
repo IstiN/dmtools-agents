@@ -11,7 +11,7 @@ function loadFetchConfluenceContext(mocks, projectConfig) {
         makeRequire({
             '../configLoader.js': configLoaderMock,
             // gh-823: contentOutput requires ./trackers.js at load time
-            './trackers.js': { createTracker: function () { throw new Error('contentOutput tracker fallback not expected in this test'); } }
+            './trackers.js': trackersMock()
         }),
         Object.assign({}, mocks || {})
     );

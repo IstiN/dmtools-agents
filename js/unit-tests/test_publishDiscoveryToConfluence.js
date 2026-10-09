@@ -44,7 +44,7 @@ function loadPublishDiscovery(mocks, discoveryConfig) {
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './common/feedbackLoop.js': (mocks && mocks.__feedbackLoop) || { resumeAgent: function() { return { attempted: false, reason: 'disabled' }; } },
             './common/contentOutput.js': loadModule('js/common/contentOutput.js',
-                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': { createTracker: function () { throw new Error('contentOutput tracker fallback not expected in this test'); } } }),
+                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock() }),
                 globals)
         }),
         globals

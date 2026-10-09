@@ -17,6 +17,9 @@
 
 // Tracker-agnostic ticket operations (jira / ado / github) — created lazily per action() run.
 var trackersModule = require('./common/trackers.js');
+// Load-time require (gh-823): a deferred require would resolve against the
+// pack js/ root only — hoist every require to the top of the module.
+var configLoader = require('./configLoader.js');
 var _trackerCtx = { config: null, customParams: {} };
 var _trackerInst = null;
 function initTracker(config, customParams) {
@@ -30,7 +33,6 @@ function getTracker() {
 
 function action(params) {
     try {
-        var configLoader = require('./configLoader.js');
         var jobParams = params.jobParams || {};
         var projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
         initTracker(projectConfig, jobParams.customParams || {});

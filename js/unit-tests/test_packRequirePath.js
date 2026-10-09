@@ -136,6 +136,107 @@ suite('pack-runtime require resolution: the gh-823 regression contract', functio
     });
 });
 
+
+// ── the repo-wide deferred pin (gh-824 rework, review thread 1) ─────────────
+
+// Deliberate deferred requires in packed code. Every entry needs a reason,
+// and the in-code comment at the site must tell the same story. Today the
+// list is exactly one entry long: the writeSolutionAndDiagrams.js →
+// './writeSolutionAndLabels.js' edge. Hoisting it would close a require
+// cycle at LOAD time (labels load-time-requires diagrams right back), and
+// the runtime's mid-init re-entrancy behavior is uncharacterized — the edge
+// is a documented cycle-breaker (see the comment at the require site), both
+// files are main scripts at the js/ root (so the deferred js/ root base IS
+// their own directory), and the release gates cover it (static deferred
+// gate + the pack LOAD probe).
+var ALLOWED_DEFERRED = {
+    'js/writeSolutionAndDiagrams.js': { './writeSolutionAndLabels.js': true },
+};
+
+var ROOT = null; // repo root, resolved lazily from file_list('.')
+
+/** Repo-relative 'js/**.js' paths (the packable tree, unit-tests excluded). */
+function packedJsFiles() {
+    if (!ROOT) {
+        var top = file_list('.');
+        if (typeof top === 'string') top = JSON.parse(top);
+        var entries = ((top && top.entries) || []).map(function (e) {
+            return String(e).replace(/\\/g, '/');
+        });
+        for (var i = 0; i < entries.length; i++) {
+            var cut = entries[i].lastIndexOf('/');
+            if (cut > 0) { ROOT = entries[i].slice(0, cut); break; }
+        }
+        if (!ROOT) ROOT = '.';
+    }
+    var acc = [];
+    var acc = [];
+    (function walk(dir) {
+        var out = file_list(ROOT + '/' + dir);
+        if (typeof out === 'string') out = JSON.parse(out);
+        ((out && out.entries) || []).forEach(function (e) {
+            var abs = String(e).replace(/\\/g, '/');
+            var name = abs.slice(abs.lastIndexOf('/') + 1);
+            if (name.charAt(0) === '.') return;
+            // file_list succeeds only on a directory — the probe tells
+            // files (null/error) from subdirectories (entries), since
+            // file_exists reports directories as existing too.
+            var sub = null;
+            try { sub = file_list(abs); } catch (e2) { sub = null; }
+            if (sub && typeof sub === 'string') sub = JSON.parse(sub);
+            var childEntries = (sub && sub.entries) || [];
+            if (childEntries.length > 0) {
+                walk(dir + '/' + name);
+            } else if (/\.js$/.test(name)) {
+                acc.push(abs.slice(ROOT.length + 1));
+            }
+        });
+    })('js');
+    return acc.filter(function (p) { return p.indexOf('js/unit-tests/') !== 0; });
+}
+
+suite('pack-runtime require resolution: repo-wide deferred pin (all packed js/ code)', function () {
+
+    test('every packed .js outside unit-tests carries zero deferred requires — except the pinned cycle-breaker', function () {
+        var files = packedJsFiles();
+        assert.ok(files.length > 130,
+            'the walk must see the real packable tree (saw ' + files.length + ' files)');
+        var offenders = [];
+        files.forEach(function (path) {
+            gate().classifyRequires(file_read({ path: path })).forEach(function (c) {
+                if (!c.deferred) return;
+                if (ALLOWED_DEFERRED[path] && ALLOWED_DEFERRED[path][c.spec]) return;
+                offenders.push(path + " → require('" + c.spec + "')");
+            });
+        });
+        assert.deepEqual(offenders, [],
+            'deferred requires resolve against the pack js/ root ONLY (gh-823) and ' +
+            'dmtools compile discovers strictly file-relative — hoist every require ' +
+            'to the top of the module (AGENTS.md). A new deliberate exception must be ' +
+            'pinned in ALLOWED_DEFERRED with its reason.');
+    });
+
+    test('the allowlist stays honest — every pinned exception still exists in the tree', function () {
+        // Pin rot: if the cycle is ever removed (e.g. the shared formatters
+        // move to a neutral common module), this test demands the allowlist
+        // entry be deleted instead of silently tolerating an empty pin.
+        var found = {};
+        Object.keys(ALLOWED_DEFERRED).forEach(function (path) {
+            gate().classifyRequires(file_read({ path: path })).forEach(function (c) {
+                if (c.deferred && ALLOWED_DEFERRED[path][c.spec]) {
+                    found[path + '|' + c.spec] = true;
+                }
+            });
+        });
+        Object.keys(ALLOWED_DEFERRED).forEach(function (path) {
+            Object.keys(ALLOWED_DEFERRED[path]).forEach(function (spec) {
+                assert.ok(found[path + '|' + spec],
+                    "stale allowlist entry: " + path + " no longer carries require('" +
+                    spec + "') — delete the pin");
+            });
+        });
+    });
+});
 // ── the verdict chain end-to-end over the real module graph ─────────────────
 
 function fileExists(path) {

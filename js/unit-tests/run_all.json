@@ -123,6 +123,7 @@
         "js/unit-tests/test_packRequirePath.js",
         "js/unit-tests/test_packLoadProbe.js",
         "js/unit-tests/test_packVersionGuard.js",
+        "js/unit-tests/test_unitTestMocks.js",
         "js/unit-tests/test_completionGuard.js",
         "js/unit-tests/test_networkGuard.js",
         "js/unit-tests/test_wave2d2Tracker.js",

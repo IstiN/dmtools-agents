@@ -32,6 +32,9 @@ var jiraHelpers = require('./common/jiraHelpers.js');
 var tokenUsageComment = require('./common/tokenUsageComment.js');
 var trackersModule = require('./common/trackers.js');
 var config = require('./config.js');
+// Load-time require (gh-823): a deferred require would resolve against the
+// pack js/ root only — hoist every require to the top of the module.
+var configLoader = require('./configLoader.js');
 
 function action(params) {
     var ticket = params.ticket || {};
@@ -52,7 +55,7 @@ function action(params) {
 
     var projectConfig = null;
     try {
-        projectConfig = require('./configLoader.js').loadProjectConfig(params.jobParams || params);
+        projectConfig = configLoader.loadProjectConfig(params.jobParams || params);
     } catch (e) { /* optional */ }
     var tracker = trackersModule.createTracker(projectConfig, (params.jobParams && params.jobParams.customParams) || params.customParams || {});
 
