@@ -319,6 +319,13 @@
       "prompt": 178340,
       "completion": 60192,
       "total": 238532
+    },
+    {
+      "leg": "review",
+      "at": "2026-10-09T16:17:02Z",
+      "prompt": 89793,
+      "completion": 26827,
+      "total": 116620
     }
   ]
 }
