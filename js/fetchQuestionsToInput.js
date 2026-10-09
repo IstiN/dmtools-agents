@@ -16,6 +16,9 @@
 
 var configLoader = require('./configLoader.js');
 var trackersModule = require('./common/trackers.js');
+// Load-time require (gh-823): a deferred require would resolve against the
+// pack js/ root only — hoist every require to the top of the module.
+var fetchParentContextToInput = require('./fetchParentContextToInput.js');
 
 function hasAnswerValue(fields, key) {
     return Object.prototype.hasOwnProperty.call(fields, key)
@@ -156,7 +159,6 @@ function action(params) {
 
     // Enrich input with parent story + [BA]/[SA]/[VD] context
     try {
-        var fetchParentContextToInput = require('./fetchParentContextToInput.js');
         fetchParentContextToInput.action(params);
     } catch (e) {
         console.warn('fetchParentContextToInput failed (non-fatal):', e);

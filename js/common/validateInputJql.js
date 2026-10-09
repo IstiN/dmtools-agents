@@ -16,6 +16,12 @@ var TICKET_KEY_RE = /^[A-Z][A-Z0-9_]*-\d+$/;
 // copy here would drift the next time a shape is added.
 var ticketKeyShapes = require('./ticketKeyShapes.js');
 
+// gh-823: load-time require — a deferred (in-function) require resolves
+// against the pack's js/ root only at runtime ("Failed to require module:
+// ./trackers.js"); load-time requires resolve file-relative and dmtools
+// compile discovers them for the pack closure.
+var trackersModule = require('./trackers.js');
+
 // Jira-speak alternation first (uppercase normalization applies), then the
 // GitHub shapes so gh-N keys keep their original case — uppercasing would
 // mint 'GH-12', a different key from the 'gh-12' the machine loop created.
@@ -96,7 +102,7 @@ function inputJqlForKey(key, provider) {
 function requireTicketExists(key, tracker) {
     var ticket;
     try {
-        if (!tracker) tracker = require('./trackers.js').createTracker(null, {});
+        if (!tracker) tracker = trackersModule.createTracker(null, {});
         ticket = tracker.getIssue(key);
     } catch (e) {
         throw new Error('Ticket not found: ' + key + ' — ' + (e.message || e));
@@ -120,7 +126,7 @@ function validateAndRequireTicket(params, tracker) {
     validateTicketKeyFormat(key);
     if (!tracker) {
         var cp = (jobParams && jobParams.customParams) || (params && params.customParams) || {};
-        tracker = require('./trackers.js').createTracker(null, cp);
+        tracker = trackersModule.createTracker(null, cp);
     }
     return requireTicketExists(key, tracker);
 }

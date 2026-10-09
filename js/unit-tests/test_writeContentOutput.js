@@ -374,6 +374,7 @@ suite('writeContentOutput', function() {
             './common/jiraHelpers.js': { assignForReview: function() { throw new Error('must not run'); } },
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './config.js': { STATUSES: { IN_REVIEW: 'In Review' } },
+            './configLoader.js': { loadProjectConfig: function() { return {}; } },
             './assignForSolutionArchitecture.js': {
                 action: function(p) { chainedParams = p; return { success: true }; }
             }

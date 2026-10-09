@@ -27,7 +27,8 @@ function loadFetchQuestionsToInput() {
                     './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
                 }),
                 {}
-            )
+            ),
+            './fetchParentContextToInput.js': { action: function() {} }
         }),
         {}
     );

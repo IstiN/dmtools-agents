@@ -18,6 +18,12 @@ var OUTPUTS_DIR = 'outputs';
 var USAGE_SUFFIX = '_usage.json';
 var MANIFEST_NAME = 'token_usage_files.json';
 
+// gh-823: load-time require — a deferred (in-function) require resolves
+// against the pack's js/ root only at runtime ("Failed to require module:
+// ./trackers.js"); load-time requires resolve file-relative and dmtools
+// compile discovers them for the pack closure.
+var trackersModule = require('./trackers.js');
+
 function readTextFile(filePath) {
     if (!filePath) {
         return null;
@@ -153,7 +159,7 @@ function postTokenUsageComments(ticketKey, options) {
 
         var comment = formatUsageComment(filePath, data, initiator);
         try {
-            if (!tracker) tracker = require('./trackers.js').createTracker(null, {});
+            if (!tracker) tracker = trackersModule.createTracker(null, {});
             tracker.postComment(ticketKey, comment);
             console.log('Posted token usage comment for ' + ticketKey + ' from ' + filePath);
             posted += 1;

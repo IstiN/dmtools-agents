@@ -22,7 +22,7 @@ function loadPrepareDiscoveryContext(mocks, discoveryConfig) {
         makeRequire({
             './configLoader.js': configLoaderMock,
             './common/contentOutput.js': loadModule('js/common/contentOutput.js',
-                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } } }),
+                makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': trackersMock() }),
                 globals)
         }),
         globals

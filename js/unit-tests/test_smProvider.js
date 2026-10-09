@@ -6,12 +6,19 @@
  */
 /* global loadModule, assert, test, suite, makeRequire */
 
+// gh-823: smProvider requires ./reviewVerdicts.js at LOAD TIME — every
+// loadModule of it must provide the module in its require map.
+var rvReal = function () {
+    if (!rvReal.mod) rvReal.mod = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+    return rvReal.mod;
+};
+
 suite('smProvider', function () {
 
     var MOD = 'js/common/smProvider.js';
 
     function loadProvider(provider, mocks) {
-        var mod = loadModule(MOD, makeRequire({}, mocks || {}), mocks || {});
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal() }, mocks || {}), mocks || {});
         return mod.createSmProvider({
             scm: { provider: provider },
             repository: { owner: 'mygroup', repo: 'my-repo' }
@@ -21,7 +28,7 @@ suite('smProvider', function () {
     // ── shared contract ──────────────────────────────────────────────────────
 
     test('unknown provider is rejected loudly', function () {
-        var mod = loadModule(MOD, makeRequire({}, {}), {});
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal() }, {}), {});
         var threw = false;
         try {
             mod.createSmProvider({ scm: { provider: 'bitbucket' },
@@ -31,7 +38,7 @@ suite('smProvider', function () {
     });
 
     test('missing repository is rejected loudly', function () {
-        var mod = loadModule(MOD, makeRequire({}, {}), {});
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal() }, {}), {});
         var threw = false;
         try { mod.createSmProvider({ scm: { provider: 'github' } }); }
         catch (e) { threw = true; }
@@ -588,7 +595,7 @@ suite('smProvider', function () {
 
     test('github: preseed openPrs/mergedPrs eliminates the github_list_prs fetch', function () {
         var listCalls = 0;
-        var mod = loadModule(MOD, makeRequire({}, {}), {
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal() }, {}), {
             github_list_prs: function () { listCalls++; return []; },
             github_list_branches: function () { return []; }
         });
@@ -607,7 +614,7 @@ suite('smProvider', function () {
 
     test('github: preseed branchHeads eliminates github_list_branches (deterministic base check)', function () {
         var branchCalls = 0;
-        var mod = loadModule(MOD, makeRequire({}, {}), {
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal() }, {}), {
             github_get_pr: function () {
                 return { state: 'open', mergeable: true, base: { ref: 'main', sha: 'basesha' } };
             },
@@ -625,7 +632,7 @@ suite('smProvider', function () {
 
     test('github: TTL hit across two provider instances (shared per-tick cache)', function () {
         var listCalls = 0;
-        var mod = loadModule(MOD, makeRequire({}, {}), {
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal() }, {}), {
             github_list_prs: function (a) {
                 listCalls++;
                 return a.state === 'open'
@@ -649,7 +656,7 @@ suite('smProvider', function () {
 
     test('github: snapshot(kinds) skips unneeded legs (merged list unused by the PR-rule batch)', function () {
         var listCalls = 0, branchCalls = 0;
-        var mod = loadModule(MOD, makeRequire({}, {}), {
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal() }, {}), {
             github_list_prs: function (args) {
                 listCalls++;
                 return args && args.state === 'merged'
@@ -669,7 +676,7 @@ suite('smProvider', function () {
 
     test('github: cache miss after TTL expiry re-fetches', function () {
         var listCalls = 0;
-        var mod = loadModule(MOD, makeRequire({}, {}), {
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal() }, {}), {
             github_list_prs: function () { listCalls++; return []; }
         });
         var p = mod.createSmProvider({ scm: { provider: 'github' },
@@ -684,7 +691,7 @@ suite('smProvider', function () {
 
     test('github: prStatus memo — same number fetched once per tick, per-number keys, TTL re-fetch', function () {
         var getCalls = 0, checkCalls = 0;
-        var mod = loadModule(MOD, makeRequire({}, {}), {
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal() }, {}), {
             github_get_pr: function () {
                 getCalls++;
                 return { state: 'open', mergeable: true, mergeable_state: 'clean',
@@ -712,7 +719,7 @@ suite('smProvider', function () {
     test('github: prStatus memo rides snapshot/preseed + memoPrStatus write-back (worker round-trip)', function () {
         var getCalls = 0;
         function makeProvider() {
-            var mod = loadModule(MOD, makeRequire({}, {}), {
+            var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal() }, {}), {
                 github_get_pr: function () {
                     getCalls++;
                     return { state: 'open', mergeable: true, mergeable_state: 'clean',
@@ -738,7 +745,7 @@ suite('smProvider', function () {
         // Next batch's worker: fresh module state, rehydrated from preseed
         // — the SAME status comes back with zero new fetches.
         var before = getCalls;
-        var mainMod = loadModule(MOD, makeRequire({}, {}), {
+        var mainMod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal() }, {}), {
             github_get_pr: function () { getCalls++; return { state: 'open' }; },
             github_get_commit_check_runs: function () { return { check_runs: [] }; },
             github_list_prs: function () { return []; },
@@ -769,7 +776,7 @@ suite('smProvider: ioCacheDrop (owner directive 2026-10-04 — red yields the sl
         // tick must see the freed mutex — the cached entry is dropped, the
         // next listOpenPrs() re-fetches instead of serving the stale arm.
         var listCalls = 0;
-        var mod = loadModule(MOD, makeRequire({}, {}), {
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal() }, {}), {
             github_list_prs: function () {
                 listCalls++;
                 return JSON.stringify([{ number: listCalls }]); // payload changes per fetch
@@ -796,7 +803,7 @@ suite('smProvider: ioCacheDrop (owner directive 2026-10-04 — red yields the sl
     });
 
     test('ioCacheDrop is a no-op for absent entries (never throws)', function () {
-        var mod = loadModule(MOD, makeRequire({}, {}), {});
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal() }, {}), {});
         mod._cache.entries = {};
         mod.ioCacheDrop('nobody', 'nowhere', 'openPrs', null); // must not throw
     });

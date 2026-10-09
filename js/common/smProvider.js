@@ -146,12 +146,21 @@ var BOOKKEEPING_CHECK_PREFIXES = ['kicker /', 'Wake-up probe', 'merge /'];
 // latestVerdict guards may evaluate per rule per tick, and each would
 // otherwise re-fetch the PR comment list (one github_get_pr_comments per
 // guard evaluation; the memo collapses that to one per PR per tick).
-function _verdictRecordsModule() {
-    if (!_verdictRecordsModule.mod) {
-        _verdictRecordsModule.mod = require('./reviewVerdicts.js');
-    }
-    return _verdictRecordsModule.mod;
-}
+//
+// gh-823: the verdicts module is required at LOAD TIME, never lazily. A
+// require executed after module init (any deferred/lazy call) resolves
+// against the MAIN script's directory — the pack's js/ root — EXCLUSIVELY:
+// the shipped lazy `require('./reviewVerdicts.js')` looked for
+// js/reviewVerdicts.js and red every tick whose conflict-shaped queries
+// screened an item ("state query failed: Failed to require module:
+// ./reviewVerdicts.js") while ticks without candidates stayed green.
+// Load-time requires resolve file-relative (js/common/reviewVerdicts.js —
+// the module ships in every pack that carries smProvider.js, and dmtools
+// compile discovers it here), so hoisting removes the deferred mode — the
+// require can no longer run against a base where the module is absent.
+// The ci require gate fails any release that reintroduces a deferred
+// require in this module, and the pack runtime LOAD self-test loads it.
+var reviewVerdicts = require('./reviewVerdicts.js');
 
 function githubProvider(cfg) {
     var owner = cfg.repository.owner;
@@ -528,7 +537,7 @@ function githubProvider(cfg) {
                 }));
                 var obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
                 var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
-                records = _verdictRecordsModule().parseVerdictRecords(list);
+                records = reviewVerdicts.parseVerdictRecords(list);
             } catch (e) {
                 console.warn('  ⚠️ verdict-record read failed (fail-open): ' + (e.message || e));
                 records = [];
@@ -543,7 +552,7 @@ function githubProvider(cfg) {
         // fail-open for pre-gh-807 PRs.
         latestVerdictRecord: function (prNumber, headSha) {
             if (!headSha) return null;
-            return _verdictRecordsModule().latestVerdictForHead(
+            return reviewVerdicts.latestVerdictForHead(
                 this.verdictRecords(prNumber), headSha);
         },
 
