@@ -376,9 +376,7 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
 
             let section = '## Review Threads (Inline Comments)\n\n';
 
-            // Bot authors whose inline review threads are informational (test results, CI status),
-            // not actionable code-review feedback that requires a code fix.
-            var BOT_AUTHORS = ['github-actions[bot]', 'dependabot[bot]', 'renovate[bot]', 'codecov[bot]'];
+            var noticeCount = 0;
 
             conversations.forEach(function(thread, idx) {
                 const rootComment = thread.rootComment || thread;
@@ -388,12 +386,21 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
                 const graphqlThreadId = rootCommentId ? (reviewThreadByCommentId[rootCommentId] || null) : null;
                 const isResolvedByGraphQL = rootCommentId ? (reviewThreadResolvedById[rootCommentId] === true) : false;
                 const isResolved = thread.resolved === true || thread.isResolved === true || isResolvedByGraphQL;
+                const body = (rootComment.body || '').trim();
+
+                // gh-808: the machine's own arming/status notices are NOT review
+                // feedback — drop them entirely (AC1: zero notice entries in
+                // pr_discussions_raw.json) so the rework agent never spends a
+                // reply on boilerplate. Marker-keyed (see ./machineNotice.js).
+                if (machineNotice.isMachineNoticeBody(body)) {
+                    noticeCount++;
+                    return;
+                }
 
                 // Detect bot-authored threads — treat as informational, not actionable
                 var threadAuthor = rootComment.user ? rootComment.user.login :
                                    (rootComment.author ? rootComment.author.login : '');
-                var isBot = BOT_AUTHORS.indexOf(threadAuthor) !== -1 ||
-                            (threadAuthor && threadAuthor.indexOf('[bot]') !== -1);
+                var isBot = machineNotice.isBotAuthor(threadAuthor);
 
                 rawThreads.push({
                     index: idx + 1,
@@ -403,7 +410,7 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
                     line: thread.line || thread.original_line || null,
                     resolved: isResolved,
                     bot: isBot,
-                    body: (rootComment.body || '').trim()
+                    body: body
                 });
 
                 if (isResolved || isBot) return;
@@ -420,7 +427,6 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
                 const author = rootComment.user ? rootComment.user.login :
                                (rootComment.author ? rootComment.author.login : 'unknown');
                 const date = rootComment.created_at ? rootComment.created_at.substring(0, 10) : '';
-                const body = (rootComment.body || '').trim();
 
                 if (body) {
                     section += '**' + author + '** (' + date + '):\n' + body + '\n\n';
