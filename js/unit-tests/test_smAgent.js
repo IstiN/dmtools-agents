@@ -7988,20 +7988,27 @@ suite('smAgent: rework in-flight latch (gh-806 — one arm per (pr, head))', fun
         opts = opts || {};
         var prev = { lanes: {} };
         if (map) prev.reworkInFlight = map;
+        var gh = Object.assign({ prList: '[]', workflowApiRuns: [] }, opts.github || {});
         return Object.assign(config('a', 'b'), {
             captureConsole: true,
-            github: {
-                items: [latchItem(1428, opts.head || HEAD)]
-            },
+            github: Object.assign(gh, {
+                items: gh.items || [latchItem(1428, opts.head || HEAD)]
+            }),
             onCliExecute: servingPrevSnapshot(JSON.stringify(prev))
         });
+    }
+
+    /** jobParams for an arm_rework tick — statePublish ON so the latch
+     *  actually loads the previous snapshot (the store IS fa-state.json). */
+    function latchParams(rules) {
+        return { jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                              rules: rules || [armReworkRule()], statePublish: SP } };
     }
 
     test('AC1: latched (pr, head) → ⏭️ logged, NO label, NO comment, nothing dispatched', function () {
         var sm = makeSmAgent(latchFixture(
             { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(60 * 1000) } }));
-        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
-                                 rules: [armReworkRule()] } });
+        sm.action(latchParams());
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'no agent:rework label while in flight');
         assert.equal(sm.capturedPrComments.length, 0, 'no duplicate armed comment');
         assert.equal(sm.capturedTriggers.length, 0, 'nothing dispatched');
@@ -8012,8 +8019,7 @@ suite('smAgent: rework in-flight latch (gh-806 — one arm per (pr, head))', fun
 
     test('unlatched → arms AND records the latch in the published snapshot', function () {
         var sm = makeSmAgent(latchFixture(null));
-        var params = { jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
-                                    rules: [armReworkRule()], statePublish: SP } };
+        var params = latchParams();
         sm.action(params);
         assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number + ':' + a.labels.join(','); }),
             ['1428:agent:rework'], 'unlatched (pr, head) arms normally');
@@ -8033,8 +8039,7 @@ suite('smAgent: rework in-flight latch (gh-806 — one arm per (pr, head))', fun
         var sm = makeSmAgent(latchFixture(
             { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(60 * 1000) } },
             { head: newHead }));
-        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
-                                 rules: [armReworkRule()] } });
+        sm.action(latchParams());
         assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number; }),
             [1428], 'new head arms — the old latch never blocks it');
         assert.notOk(sm.capturedLogs.some(function (l) {
@@ -8063,8 +8068,7 @@ suite('smAgent: rework in-flight latch (gh-806 — one arm per (pr, head))', fun
             return undefined;
         };
         sm = makeSmAgent(fixture);
-        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
-                                 rules: [armReworkRule()] } });
+        sm.action(latchParams());
         assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number; }),
             [1428], 'terminated leg → latch cleared → re-armable (dead-letter recovery)');
         assert.ok(sm.capturedLogs.some(function (l) {
@@ -8075,8 +8079,7 @@ suite('smAgent: rework in-flight latch (gh-806 — one arm per (pr, head))', fun
     test('AC3: latch older than 45 min with no active run self-heals (re-arms)', function () {
         var sm = makeSmAgent(latchFixture(
             { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(50 * 60 * 1000) } }));
-        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
-                                 rules: [armReworkRule()] } });
+        sm.action(latchParams());
         assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number; }),
             [1428], 'stale latch never permanently blocks the armer');
     });
@@ -8098,8 +8101,7 @@ suite('smAgent: rework in-flight latch (gh-806 — one arm per (pr, head))', fun
             return undefined;
         };
         var sm = makeSmAgent(fixture);
-        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
-                                 rules: [armReworkRule()] } });
+        sm.action(latchParams());
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'leg really flying — no duplicate arm');
         assert.ok(sm.capturedLogs.some(function (l) {
             return l.indexOf('rework already in flight for (pr-1428, ' + HEAD7 + ')') !== -1;
@@ -8124,8 +8126,7 @@ suite('smAgent: rework in-flight latch (gh-806 — one arm per (pr, head))', fun
             return undefined;
         };
         var sm = makeSmAgent(fixture);
-        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
-                                 rules: [armReworkRule()] } });
+        sm.action(latchParams());
         assert.equal(sm.capturedPrLabelAdds.length, 0,
             'only the LEG workflow (ai-teammate.yml) terminates a latch');
     });
@@ -8133,7 +8134,7 @@ suite('smAgent: rework in-flight latch (gh-806 — one arm per (pr, head))', fun
     test('L2 arming storm: two identical arm rules in one tick → exactly one label', function () {
         var sm = makeSmAgent(latchFixture(null));
         sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
-                                 rules: [armReworkRule(), armReworkRule()] } });
+                                 rules: [armReworkRule(), armReworkRule()], statePublish: SP } });
         assert.equal(sm.capturedPrLabelAdds.length, 1,
             'the second decision hits the in-tick latch — one arm per (pr, head)');
         assert.equal(sm.capturedPrComments.length, 1, 'one explanation, not two');
@@ -8163,7 +8164,8 @@ suite('smAgent: rework in-flight latch (gh-806 — one arm per (pr, head))', fun
             }
         });
         var sm = makeSmAgent(fixture);
-        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [{
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 statePublish: SP, rules: [{
             source: 'github', query: { type: 'pr', labels: ['ai_validating'], checks: 'red' },
             localAction: 'fail_validation', limit: 1, id: 'fail-validation' }] } });
         assert.equal(sm.capturedPrComments.length, 1, 'the red verdict is still reported');
@@ -8193,7 +8195,8 @@ suite('smAgent: rework in-flight latch (gh-806 — one arm per (pr, head))', fun
             }
         });
         var sm = makeSmAgent(fixture);
-        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate', rules: [{
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+                                 statePublish: SP, rules: [{
             source: 'github', query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
             localAction: 'conflict_rework', limit: 1, id: 'conflict-rework' }] } });
         assert.equal(sm.capturedPrComments.length, 0,
