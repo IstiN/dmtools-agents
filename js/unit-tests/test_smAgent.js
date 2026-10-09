@@ -8996,8 +8996,13 @@ suite('smAgent: statePublish tokens — local file first, branch fallback', func
     });
 
     test('gh-825: pricing file absent → quiet (no warn, no Σ$), exactly pre-gh-825', function() {
+        var fileMap = {};
+        // pin the pricing path to null — the mock forwards un-mapped paths
+        // to the REAL file_read, and this repo SHIPS the file (a repo-root
+        // read would silently flip this test once it lands)
+        fileMap[PRICING_PATH] = null;
         var run = publishTick({
-            fileMap: {},
+            fileMap: fileMap,
             captureConsole: true,
             github: { prList: PR31 },
             onCliExecute: branchServes(MODEL_TOKENS)
