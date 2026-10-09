@@ -59,6 +59,26 @@
           "id": "rerun-any-cancelled-checks"
         },
         {
+          "id": "reconcile-review-verdicts",
+          "description": "gh-807 VERDICT RECONCILIATION (live fa PR #1428, 2026-10-09 05:47:30Z + 05:47:40Z): two review legs concluded on the SAME head 97s apart with contradictory verdicts and both side effects stuck — pr_approved + agent:rework coexisting; the tick evaluated labels without ever reading the verdicts. Review legs now stamp a machine-parseable verdict record on the PR (js/common/reviewVerdicts.js marker comment: head sha + effective verdict + thread census; free-form comment text is never consulted — AC4). This rule runs EVERY tick before the merge window (right after the rerun twins — the #682 rerun-first and #637 merge-before-sweep invariants are untouched): the newest record for the CURRENT head wins and a conflict WARNs (AC1: 'verdict conflict on <head>: APPROVE vs REQUEST_CHANGES — newest wins'); the loser label comes off BOTH carriers (PR + linked issue) with one comment citing both verdict sources (AC2). Winner APPROVE → agent:rework is the loser (suggestions do not justify a rework arm — AC3's arming-side sticky rule); winner REQUEST_CHANGES/BLOCK → pr_approved is the loser (approval-gated paths blocked until re-review — merge-validated/validate-armed also carry notLatestVerdict as belt-and-suspenders for the same tick). Clean rollback: only machine-owned labels reconcile; ruleset approvals and human review state are untouched, and PRs without verdict records fail open (pre-gh-807 behavior). limit 10: pure label writes + one comment — waves reconcile in one tick.",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "labels": [
+              "pr_approved",
+              "agent:rework"
+            ],
+            "latestVerdict": [
+              "APPROVE",
+              "REQUEST_CHANGES",
+              "BLOCK"
+            ],
+            "draft": false
+          },
+          "localAction": "reconcile_verdicts",
+          "limit": 10
+        },
+        {
           "description": "Validated-but-stale: armed (ai_validating) + validation concluded but BASE MOVED (BEHIND only). BLOCKED must NOT unarm: since #483 BLOCKED is a real verdict, and on a freshly armed head BLOCKED simply means 'required checks pending' — unarming there races validate-armed in the SAME tick and deadlocks the PR forever (live: fa pr-762 armed at 08:25:37, unarmed 08:25:58 by the BLOCKED match, re-armed next tick, loop). silent-update-behind excludes ai_validating and merge-validated needs CLEAN, so without this unarm a genuinely moved base still deadlocks (live: fa pr-744) — BEHIND-only keeps that recovery and stops the self-inflicted one. gh-751 VERDICT-AWARE STRIP (live: fa #1295 — the arm was stripped FIVE times in one day with zero latches, [ai_validating]→[]→[ai_validating] yo-yo under a saturated CI queue): every main merge made the armed head BEHIND and this strip DISCARDED the head's ALREADY-CONCLUDED green verdict — it lost the race to the strip (merge-validated needs CLEAN; validated-green sits later and excludes pr_approved), silent-update refreshed, validate-fresh re-armed, the next merge re-struck: a full re-validation per main merge. The action now probes the head's dispatched validation runs before stripping: a GREEN run ANYWHERE on the head latches ai_validated instead of the bare unarm — not only the newest run: gh-748 showed two workflow_dispatch runs landing on ONE head seconds apart, and the latch consumer (validate-armed's skipIfValidatedHead → hasSuccessfulDispatchedRun) accepts any completed-green run on the head, so the strip consumes that same facet (complete_validation parity — sweep_stale_validation's success-branch shape; the latch excludes the PR from validate-fresh, and validate-armed latch-skips on the unchanged head so the merge window re-flows without new CI); only when NO green run exists on the head (red / absent / in-flight / cancelled-only) does the bare unarm stand (refresh + re-validate recovery).",
           "source": "github",
           "query": {
@@ -84,7 +104,11 @@
               "ai_validating"
             ],
             "checks": "green",
-            "mergeState": "CLEAN"
+            "mergeState": "CLEAN",
+            "notLatestVerdict": [
+              "REQUEST_CHANGES",
+              "BLOCK"
+            ]
           },
           "localAction": "merge_pr",
           "limit": 1,
@@ -177,6 +201,10 @@
             "mutex": "ai_validating",
             "mutexAmong": [
               "pr_approved"
+            ],
+            "notLatestVerdict": [
+              "REQUEST_CHANGES",
+              "BLOCK"
             ]
           },
           "localAction": "validate_pr",
@@ -208,7 +236,11 @@
             "mutexAmong": [
               "pr_approved"
             ],
-            "mutexExcludeSelf": true
+            "mutexExcludeSelf": true,
+            "notLatestVerdict": [
+              "REQUEST_CHANGES",
+              "BLOCK"
+            ]
           },
           "localAction": "validate_pr",
           "limit": 1,
@@ -236,7 +268,11 @@
             "mutexAmong": [
               "pr_approved"
             ],
-            "mutexExcludeSelf": true
+            "mutexExcludeSelf": true,
+            "notLatestVerdict": [
+              "REQUEST_CHANGES",
+              "BLOCK"
+            ]
           },
           "localAction": "validate_pr",
           "limit": 1,
@@ -536,7 +572,7 @@
           "workflowRef": "{branch}"
         },
         {
-          "description": "GitHub PR: UNRESOLVED review threads on a machine-authored reviewed PR -> arm agent:rework (dmtools-agents #683, live fa #1194/#1211/#1212 + dart #340, 2026-10-04: all green+reviewed+validated with open threads, heads silently refreshed so the verdicts went stale, and the 04:30 fa tick processed 0 — every re-review armer requires threadsResolved:true, its complement matched NOTHING; extended gh-710, live fa #1211 14:13 re-review: the verdict was APPROVE with 5 new threads — pr_approved + ai_validated + unresolved threads = mergeStateStatus BLOCKED (conversation gate), the old notLabels pr_approved excluded this rule, red-CI rework needs red checks (green), the review-verdict arm fires only on CHANGES_REQUESTED — merge blocked + no armed leg deadlocked the PR ~1h until a manual rework dispatch). Owner rule 2026-10-04: unresolved threads on a machine-authored PR arm agent:rework — the rework leg owns open threads by design (the note in review-stale-verdict-unchecked: threadsResolved 'excludes the mid-rework window (the rework leg owns open threads)'). threadsResolved:false regardless of verdict staleness or value: a FRESH verdict with unresolved threads equally needs rework, and an APPROVE verdict with unresolved threads deadlocks merge without it (staleVerdict or a pr_approved exclusion would only narrow the match back into the blind spot). ORDER/disjointness vs the re-review armers: review-threads-resolved and review-stale-verdict-unchecked require threadsResolved:true — this rule false; one PR can never arm both. agent:review in notLabels keeps a queued/running re-review unstacked, and review-stale-verdict (the one armer without a threads guard) now excludes agent:rework for the same reason. The in-flight guards (the gh-710 gate — unresolved threads > 0 AND no active rework/review/validation): agent:rework (already armed — convergent until the rework leg consumes the label), agent:review (queued/running re-review), ai_validating (merge window), validation_failed (parked). pr_approved is deliberately NOT excluded: the sticky approval is exactly why REWORK is the right leg — after the rework push, validate-armed re-validates the new head and merge proceeds without a re-review (rework re-validates, never re-reviews); review-threads-resolved keeps excluding pr_approved so no review stacks on top. prMachineAuthor fails closed (owner rule: auto-rework is machine-only, same as fail_validation/conflict-rework). localAction arm_rework labels the PR agent:rework + explains in a comment; rework-on-label dispatches the leg (issue-anchored, PR-anchored fallback #544) and consumes the label.",
+          "description": "GitHub PR: UNRESOLVED review threads on a machine-authored reviewed PR -> arm agent:rework (dmtools-agents #683, live fa #1194/#1211/#1212 + dart #340, 2026-10-04: all green+reviewed+validated with open threads, heads silently refreshed so the verdicts went stale, and the 04:30 fa tick processed 0 — every re-review armer requires threadsResolved:true, its complement matched NOTHING; extended gh-710, live fa #1211 14:13 re-review: the verdict was APPROVE with 5 new threads — pr_approved + ai_validated + unresolved threads = mergeStateStatus BLOCKED (conversation gate), the old notLabels pr_approved excluded this rule, red-CI rework needs red checks (green), the review-verdict arm fires only on CHANGES_REQUESTED — merge blocked + no armed leg deadlocked the PR ~1h until a manual rework dispatch). Owner rule 2026-10-04: unresolved threads on a machine-authored PR arm agent:rework — the rework leg owns open threads by design (the note in review-stale-verdict-unchecked: threadsResolved 'excludes the mid-rework window (the rework leg owns open threads)'). threadsResolved:false regardless of verdict staleness or value: a FRESH verdict with unresolved threads equally needs rework, and an APPROVE verdict with unresolved threads deadlocks merge without it (staleVerdict or a pr_approved exclusion would only narrow the match back into the blind spot). ORDER/disjointness vs the re-review armers: review-threads-resolved and review-stale-verdict-unchecked require threadsResolved:true — this rule false; one PR can never arm both. agent:review in notLabels keeps a queued/running re-review unstacked, and review-stale-verdict (the one armer without a threads guard) now excludes agent:rework for the same reason. The in-flight guards (the gh-710 gate — unresolved threads > 0 AND no active rework/review/validation): agent:rework (already armed — convergent until the rework leg consumes the label), agent:review (queued/running re-review), ai_validating (merge window), validation_failed (parked). pr_approved is deliberately NOT excluded: the sticky approval is exactly why REWORK is the right leg — after the rework push, validate-armed re-validates the new head and merge proceeds without a re-review (rework re-validates, never re-reviews); review-threads-resolved keeps excluding pr_approved so no review stacks on top. prMachineAuthor fails closed (owner rule: auto-rework is machine-only, same as fail_validation/conflict-rework). localAction arm_rework labels the PR agent:rework + explains in a comment; rework-on-label dispatches the leg (issue-anchored, PR-anchored fallback #544) and consumes the label. gh-807 ARMING-SIDE STICKY APPROVAL: before arming, the action reads the machine verdict records (js/common/reviewVerdicts.js) for the CURRENT head — an APPROVE verdict with zero BLOCKING findings withholds the arm (suggestions do not trigger rework; the approval is authoritative and the PR must not re-enter the rework loop next to its sticky pr_approved); APPROVE with blocking>0 or a REQUEST_CHANGES/BLOCK verdict arms as before. Fails open on PRs without records (pre-gh-807). The reconcile-review-verdicts rule (above) de-conflicts the labels in the same tick.",
           "source": "github",
           "query": {
             "type": "pr",

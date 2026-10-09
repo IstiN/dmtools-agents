@@ -265,6 +265,26 @@ function matchesGuards(item, rule, provider, machineAuthor, owner) {
         if (!(lv && lv.commitId && item.pr && item.pr.headSha &&
               lv.commitId !== item.pr.headSha)) return false;
     }
+    // gh-807 verdict reconciliation: the NEWEST machine verdict record
+    // (js/common/reviewVerdicts.js marker on a PR comment) for the CURRENT
+    // head gates the pr_approved lanes. `notLatestVerdict` excludes the item
+    // when the newest record for the head is one of the listed verdicts
+    // (merge-validated/validate-armed block while a REQUEST_CHANGES stands
+    // — "blocks pr_approved-gated paths until re-review"); `latestVerdict`
+    // matches only when it IS one of the listed verdicts (the
+    // reconcile-review-verdicts rule fires on exactly the contradictory
+    // heads). Both fail-open: no records (pre-gh-807 PRs), no head sha, or a
+    // provider without the probe → guard inert → legacy behavior.
+    if (q.notLatestVerdict || q.latestVerdict) {
+        var lvRec = (provider && typeof provider.latestVerdictRecord === 'function')
+            ? provider.latestVerdictRecord(item.prNumber,
+                item.pr && item.pr.headSha) : null;
+        var lvVerdict = lvRec && lvRec.record ? lvRec.record.verdict : null;
+        if (q.notLatestVerdict && lvVerdict &&
+            q.notLatestVerdict.indexOf(lvVerdict) !== -1) return false;
+        if (q.latestVerdict && (!lvVerdict ||
+            q.latestVerdict.indexOf(lvVerdict) === -1)) return false;
+    }
     // All review threads resolved (at least one exists): the rework leg
     // resolved the review's findings — a fresh verdict is owed.
     // gh-683: the explicit FALSE direction — unresolved threads exist —

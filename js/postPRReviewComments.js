@@ -721,6 +721,56 @@ function applyFormalGithubReview(scm, pullRequestId, isApproved, recommendation,
 }
 
 /**
+ * gh-807 verdict persistence: stamp the machine-parseable verdict record on
+ * the PR — a comment carrying the structured review-verdict marker (head sha
+ * + EFFECTIVE verdict + thread census). The SM tick reconciles contradictory
+ * review legs per head from these records; free-form comment text is never
+ * consulted (AC4). The verdict recorded is what this leg actually DID
+ * (isApproved reflects the approve-with-suggestions overrides), not the raw
+ * LLM token. Non-fatal: a lost record degrades to pre-gh-807 behavior — the
+ * tick fails open when a head has no records. A head sha is REQUIRED: a
+ * verdict without a head is exactly the pathology this fixes, so the post is
+ * skipped when the sha cannot be resolved.
+ */
+function postVerdictRecord(scm, repoInfo, prNumber, isApproved, recommendation, issueCounts) {
+    try {
+        var headSha = null;
+        try {
+            var prRaw = github_get_pr({
+                workspace: repoInfo.owner, repository: repoInfo.repo, pullRequestId: String(prNumber)
+            });
+            var prObj = typeof prRaw === 'string' ? JSON.parse(prRaw) : (prRaw || {});
+            headSha = prObj && prObj.head && prObj.head.sha;
+        } catch (headErr) {
+            console.warn('verdict record: head sha probe failed — record not posted:', headErr.message || headErr);
+            return;
+        }
+        if (!headSha) {
+            console.warn('verdict record: PR #' + prNumber + ' has no head sha — record not posted');
+            return;
+        }
+        var verdict = isApproved ? 'APPROVE' : (recommendation === 'BLOCK' ? 'BLOCK' : 'REQUEST_CHANGES');
+        var body = reviewVerdicts.buildVerdictComment({
+            head: headSha,
+            verdict: verdict,
+            blocking: issueCounts.blocking,
+            important: issueCounts.important,
+            suggestions: issueCounts.suggestions,
+            source: 'pr_review.json'
+        });
+        if (!body) {
+            console.warn('verdict record: unbuildable record (verdict ' + verdict + ') — not posted');
+            return;
+        }
+        scm.addComment(prNumber, body);
+        console.log('✅ Stamped machine verdict record on PR #' + prNumber + ' (' + verdict +
+                    ', head ' + String(headSha).substring(0, 7) + ')');
+    } catch (e) {
+        console.warn('verdict record post failed (non-fatal):', e.message || e);
+    }
+}
+
+/**
  * Post review results to the ticket (Jira/ADO/GitHub depending on the probed provider)
  * @param {Object} tracker - trackers.js provider instance
  * @param {string} ticketKey - Ticket key
@@ -962,6 +1012,11 @@ function action(params) {
             resolveApprovedThreads(scm, prNumber, reviewData.resolvedThreadIds);
 
             console.log('✅ Posted all review comments to GitHub PR');
+
+            // gh-807 verdict persistence: the machine-parseable record
+            // (head sha + effective verdict + census) the tick reconciles
+            // per head — see js/common/reviewVerdicts.js.
+            postVerdictRecord(scm, repoInfo, prNumber, isApproved, recommendation, issueCounts);
 
             // Step 5: Two-state outcome
             if (isApproved) {
@@ -1295,6 +1350,7 @@ if (typeof module !== 'undefined' && module.exports) {
         countReviewThreads,
         postInlineComment,
         postGeneralComment,
+        postVerdictRecord,
         resolveApprovedThreads,
         parseDiffLineInfo,
         isFileDeletedInDiff,
