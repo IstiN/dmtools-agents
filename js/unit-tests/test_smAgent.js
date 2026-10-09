@@ -1255,6 +1255,51 @@ suite('smAgent: localAction reconcile_verdicts (gh-807 verdict reconciliation)',
         assert.equal(sm.capturedPrComments.length, 0, 'no comment');
     });
 
+    // gh-807 rework-round-2 SUGGESTION replay: rework-unresolved-threads
+    // LEGITIMATELY arms the PR carrier when the APPROVE record's census
+    // reports blocking > 0 (AC3's blocking-threads exception) — on a GREEN
+    // head (checksRed false) that arm is evidence-driven, not a review
+    // loser. Reconcile must keep it: stripping cost a tick of dispatch
+    // delay plus a ⚖️ comment claiming "suggestions do not justify a
+    // rework arm" while the record itself says the findings were BLOCKING
+    // (the arm rule re-adds next tick — a self-healing yo-yo).
+    test('APPROVE record with blocking>0 census keeps the PR-carrier arm on a green head', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1435', labels: ['pr_approved', 'ai_pr_reviewed', 'agent:rework'],
+                      issueNumber: null, prNumber: 1435 }
+                ],
+                pr: { number: 1435, head: { sha: HEAD }, labels: ['pr_approved', 'ai_pr_reviewed', 'agent:rework'] },
+                prComments: [
+                    // The census the arm was granted ON: blocking = 2.
+                    { body: verdictMarker(HEAD, 'APPROVE', '2026-10-09T05:47:40.000Z', 2) }
+                ],
+                // GREEN rollup — the exemption must come from the record's
+                // census, not from the CI state (checksRed false here).
+                commitCheckRuns: {
+                    check_runs: [{ name: 'build', conclusion: 'success', status: 'completed' }]
+                }
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['agent:rework'],
+                     latestVerdict: ['APPROVE'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-rework-vs-approval'
+        }]));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'the blocking census is the evidence the arm was granted on — not a review loser');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'no ⚖️ comment — the record says the findings were BLOCKING, not suggestions');
+    });
+
     test('free-form verdict text in comments NEVER drives reconciliation (AC4)', function () {
         var sm = makeSmAgent({
             fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },

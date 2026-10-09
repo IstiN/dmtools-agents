@@ -3524,9 +3524,13 @@ function reworkArmGate(repoInfo, ticket) {
 // fail-open red): an APPROVE record does not invalidate CI-driven arms —
 // red-CI rework on a sticky-approved PR (fail_validation), the sticky
 // dead-letter issue arm, and conflict-rework on a DIRTY head all
-// legitimately coexist with the APPROVE record. A real red keeps the arm
-// (the CI path owns the leg); the probe runs only when a rework arm is
-// actually present, so the conflict-shaped queries keep the cost near zero.
+// (the CI path owns the leg) — and so does the winning APPROVE record's
+// OWN blocking census (rework round 2): blocking > 0 is exactly the
+// evidence AC3's blocking-threads exception arms on (rework-unresolved-
+// threads), so that arm is evidence-driven even on a green head. The
+// census rides the decision function (reviewVerdicts.reconcileDecision);
+// the probe runs only when a rework arm is actually present, so the
+// conflict-shaped queries keep the cost near zero.
 function reconcileReviewVerdicts(repoInfo, ticket) {
     var probe = prHeadAndLabels(repoInfo, ticket.prNumber);
     if (!probe) return false;
