@@ -380,6 +380,12 @@ function assertPackLoads(zipPath) {
     };
     walk(tmp, '');
     const files = probeFilesList(paths, PACK_LOAD_PROBE_JS);
+    // Teammate packs can be js-free (CLI-driven agents) — nothing to load,
+    // nothing to fail; the require gate still scanned the (empty) js set.
+    if (files.length === 0) {
+      console.log('  pack runtime load self-test: no packed .js — skipped');
+      return;
+    }
     writeFileSync(join(tmp, PACK_LOAD_PROBE_JS), renderProbeJs(files));
     writeFileSync(join(tmp, PACK_LOAD_PROBE_CONFIG), renderProbeConfig(PACK_LOAD_PROBE_JS));
     let output = '';

@@ -35,6 +35,7 @@ All `js/` runtime code executes in **dmtools GraalJS**, not Node.js.
 - No browser APIs: no `fetch`, `window`, `document`.
 - Use dmtools globals: `jira_*`, `github_*`, `ado_*`, `file_read`, `file_write`, `cli_execute_command`.
 - Local `require('./module.js')` works only for files within this repo.
+- **Requires resolve by execution time** (gh-823): a require that runs while a module initializes (top level, top-level `try`/`if`) resolves **file-relative**; a require that runs **after init** (any lazy/deferred call into an exported function) resolves against the **main script's directory — the pack's `js/` root — exclusively**, and a file-relative hit is never tried. `dmtools compile` discovers the pack closure strictly file-relative. Therefore: **hoist every require to the top of the module — never require lazily.** A lazy sibling-flat spec from `js/common/` looks for `js/x.js` and reds the tick ("Failed to require module"), and a pack-root-relative spec (`./common/…`) authored from a nested file fails the pack build. (Worker-source strings are the one exception — they execute on fresh engines and are authored js-root-relative: `require('./common/smProvider.js')`.)
 - Keep data structures JSON-safe.
 
 ## Running Tests
