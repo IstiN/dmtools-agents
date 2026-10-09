@@ -430,10 +430,19 @@ function writePRContext(inputFolder, prDetails, diff, markdown, rawThreads) {
 
     // pr_discussions_raw.json
     if (rawThreads) {
+        // gh-806 AC4: threads already RESOLVED are filtered before the agent
+        // sees them — a rework/review leg reading this file must not spend a
+        // duplicate reply pass on closed conversations.
+        var allThreads = (rawThreads.threads || []);
+        var openThreads = allThreads.filter(function(t) { return !!t && t.resolved !== true; });
+        if (openThreads.length !== allThreads.length) {
+            console.log('Filtered ' + (allThreads.length - openThreads.length) +
+                ' already-resolved thread(s) out of pr_discussions_raw.json (gh-806 AC4)');
+        }
         writeInputFile(
             inputFolder + '/pr_discussions_raw.json',
-            JSON.stringify(rawThreads, null, 2),
-            'pr_discussions_raw.json (' + rawThreads.threads.length + ' threads)'
+            JSON.stringify({ threads: openThreads }, null, 2),
+            'pr_discussions_raw.json (' + openThreads.length + ' threads)'
         );
     }
 

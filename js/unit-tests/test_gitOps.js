@@ -289,3 +289,64 @@ suite('gitOps.detectMergeConflicts — clean-merge log wording (gh-802 AC3a)', f
             'the warn carries the failure content, got: ' + JSON.stringify(fx.warns));
     });
 });
+
+// ---------------------------------------------------------------------------
+// writePRContext — gh-806 AC4: pr_discussions_raw.json entries already
+// RESOLVED are filtered before the agent sees them. A rework/review leg that
+// reads a stale file must not spend a duplicate reply pass on closed threads.
+// ---------------------------------------------------------------------------
+
+suite('gitOps.writePRContext — resolved threads filtered from pr_discussions_raw.json (gh-806 AC4)', function() {
+
+    function prDetailsFixture() {
+        return {
+            number: 806, html_url: 'https://github.com/o/r/pull/806', title: 't',
+            user: { login: 'u' }, head: { ref: 'pr-806' }, base: { ref: 'base' },
+            state: 'open'
+        };
+    }
+
+    function threadsFixture() {
+        return { threads: [
+            { index: 1, rootCommentId: 1, threadId: 'PRRT_open', resolved: false, body: 'fix this' },
+            { index: 2, rootCommentId: 2, threadId: 'PRRT_closed', resolved: true, body: 'already done' },
+            { index: 3, rootCommentId: 3, threadId: 'PRRT_open2', resolved: false, body: 'and this' }
+        ] };
+    }
+
+    test('resolved threads are dropped from the written file; open threads keep order and ids', function() {
+        var writes = {};
+        var gitOps = loadGitOps({ file_write: function(call) { writes[call.path] = call.content; } });
+
+        gitOps.writePRContext('input/PROJ-10', prDetailsFixture(), 'diff', null, threadsFixture());
+
+        var raw = JSON.parse(writes['input/PROJ-10/pr_discussions_raw.json']);
+        assert.equal(raw.threads.length, 2, 'only open threads survive');
+        assert.equal(raw.threads[0].threadId, 'PRRT_open');
+        assert.equal(raw.threads[1].threadId, 'PRRT_open2');
+        assert.ok(JSON.stringify(raw).indexOf('PRRT_closed') === -1, 'resolved entry must be gone');
+    });
+
+    test('a file of only resolved threads is written as an empty list (agent sees nothing actionable)', function() {
+        var writes = {};
+        var gitOps = loadGitOps({ file_write: function(call) { writes[call.path] = call.content; } });
+
+        gitOps.writePRContext('input/PROJ-10', prDetailsFixture(), 'diff', null,
+            { threads: [{ index: 1, rootCommentId: 9, threadId: 'PRRT_only', resolved: true, body: 'done' }] });
+
+        var raw = JSON.parse(writes['input/PROJ-10/pr_discussions_raw.json']);
+        assert.equal(raw.threads.length, 0, 'all-resolved file collapses to an empty thread list');
+    });
+
+    test('open-only input is written unchanged', function() {
+        var writes = {};
+        var gitOps = loadGitOps({ file_write: function(call) { writes[call.path] = call.content; } });
+
+        gitOps.writePRContext('input/PROJ-10', prDetailsFixture(), 'diff', null,
+            { threads: [{ index: 1, rootCommentId: 1, threadId: 'A', resolved: false, body: 'x' }] });
+
+        var raw = JSON.parse(writes['input/PROJ-10/pr_discussions_raw.json']);
+        assert.equal(raw.threads.length, 1);
+        assert.equal(raw.threads[0].threadId, 'A');
+    });
+});
