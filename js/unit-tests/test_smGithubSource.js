@@ -1277,6 +1277,106 @@ suite('sm github source', function () {
         assert.equal(r.localAction, 'validate_pr', 're-dispatches CI on the head');
     });
 
+    var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
+
+    function verdictFor(prNumber, verdict) {
+        return verdict ? { record: { head: HEAD, verdict: verdict, blocking: 0,
+            important: 0, suggestions: 0, at: '2026-10-09T05:47:40.000Z',
+            source: 'pr_review.json' }, conflict: null } : null;
+    }
+
+    function prList(numbers, labels) {
+        var ls = (labels || []).map(function (l) { return { name: l }; });
+        return numbers.map(function (n) {
+            return { number: n, labels: ls, head: { ref: 'feat/' + n }, draft: false };
+        });
+    }
+
+    function statusFor(numbers) {
+        var out = {};
+        numbers.forEach(function (n) {
+            out[n] = { number: n, state: 'OPEN', checks: 'green', mergeState: 'CLEAN',
+                       mergeable: true, headSha: HEAD };
+        });
+        return out;
+    }
+
+    test('notLatestVerdict: a newest REQUEST_CHANGES on the head blocks the pr_approved lane', function () {
+        // The #1428 shape: the approval was stamped, then a second leg
+        // rendered REQUEST_CHANGES on the SAME head — merge-validated and
+        // validate-armed must not act until re-review.
+        providerStub._verdictRecords = {
+            71: verdictFor(71, 'REQUEST_CHANGES'),
+            72: verdictFor(72, 'APPROVE'),
+            73: null // no records — pre-gh-807 PR
+        };
+        var srcMod = load({
+            github_list_prs: function () { return prList([71, 72, 73], ['pr_approved']); }
+        }, {}, statusFor([71, 72, 73]));
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['pr_approved'],
+                     notLatestVerdict: ['REQUEST_CHANGES', 'BLOCK'], draft: false }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        var keys = items.map(function (i) { return i.key; }).sort();
+        assert.deepEqual(keys, ['pr-72', 'pr-73'],
+            'APPROVE and record-less PRs flow; the changes-requested head is blocked');
+    });
+
+    test('latestVerdict: the reconcile rule matches exactly the heads with a recorded verdict', function () {
+        providerStub._verdictRecords = {
+            81: verdictFor(81, 'APPROVE'),
+            82: verdictFor(82, 'REQUEST_CHANGES'),
+            83: null
+        };
+        var srcMod = load({
+            github_list_prs: function () { return prList([81, 82, 83], ['pr_approved']); }
+        }, {}, statusFor([81, 82, 83]));
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['pr_approved', 'agent:rework'],
+                     latestVerdict: ['APPROVE', 'REQUEST_CHANGES', 'BLOCK'], draft: false }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        var keys = items.map(function (i) { return i.key; }).sort();
+        assert.deepEqual(keys, ['pr-81', 'pr-82'],
+            'the record-less PR never enters reconciliation (fail-open)');
+    });
+
+    test('BLOCK verdict blocks the approval lane too', function () {
+        providerStub._verdictRecords = { 91: verdictFor(91, 'BLOCK') };
+        var srcMod = load({
+            github_list_prs: function () { return prList([91], ['pr_approved']); }
+        }, {}, statusFor([91]));
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['pr_approved'],
+                     notLatestVerdict: ['REQUEST_CHANGES', 'BLOCK'], draft: false }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.length, 0, 'a BLOCK verdict on the head blocks merge');
+    });
+
+    test('guards are inert without the provider probe or a head sha (fail-open)', function () {
+        providerStub._verdictRecords = {};
+        var savedProbe = providerStub.latestVerdictRecord;
+        delete providerStub.latestVerdictRecord;
+        try {
+            var srcMod = load({
+                github_list_prs: function () { return prList([92, 93]); }
+            }, {}, {
+                92: { number: 92, state: 'OPEN', checks: 'green', mergeState: 'CLEAN',
+                      mergeable: true, headSha: HEAD },
+                93: { number: 93, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true }
+            });
+            var items = srcMod.query({
+                query: { type: 'pr', labels: ['pr_approved'],
+                         notLatestVerdict: ['REQUEST_CHANGES', 'BLOCK'],
+                         latestVerdict: ['APPROVE'], draft: false }
+            }, { repoInfo: { owner: 'a', repo: 'b' } });
+            var keys = items.map(function (i) { return i.key; }).sort();
+            assert.deepEqual(keys, [],
+                'no probe: notLatestVerdict passes everything (legacy behavior) but ' +
+                'latestVerdict can never confirm a verdict — the combined query matches nothing');
+        } finally {
+            providerStub.latestVerdictRecord = savedProbe; // restore for later tests
+        }
+    });
 });
 suite('sm github source — runAsync batching', function () {
 
@@ -1614,5 +1714,4 @@ suite('sm github source: validate-fresh-masked-green (gh-759 dead zone)', functi
         assert.equal(fresh.length, 0,
             'validate-fresh is blind to the masked-green head — this IS the gh-759 dead zone');
     });
-
 });

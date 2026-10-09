@@ -801,3 +801,90 @@ suite('smProvider: ioCacheDrop (owner directive 2026-10-04 — red yields the sl
         mod.ioCacheDrop('nobody', 'nowhere', 'openPrs', null); // must not throw
     });
 });
+
+suite('smProvider — gh-807 machine verdict records', function () {
+
+    var MOD = 'js/common/smProvider.js';
+    var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
+
+    function marker(verdict, at, head) {
+        return '<!-- dmtools:review-verdict ' + JSON.stringify({
+            head: head || HEAD, verdict: verdict, blocking: 0,
+            important: 0, suggestions: 0, at: at, source: 'pr_review.json'
+        }) + ' -->';
+    }
+
+    function loadWith(comments, calls) {
+        var rvMod = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+        var mod = loadModule(MOD,
+            makeRequire({ './reviewVerdicts.js': rvMod }, {}),
+            {
+                github_get_pr_comments: function () {
+                    calls.push(1);
+                    return JSON.stringify(comments);
+                }
+            });
+        return mod.createSmProvider({
+            scm: { provider: 'github' },
+            repository: { owner: 'mygroup', repo: 'my-repo' }
+        });
+    }
+
+    test('verdictRecords parses the marker comments; free-form text is invisible (AC4)', function () {
+        var calls = [];
+        var p = loadWith([
+            { body: 'please REQUEST_CHANGES, this is broken' },
+            { body: marker('APPROVE', '2026-10-09T05:47:30.000Z') }
+        ], calls);
+        var records = p.verdictRecords(5);
+        assert.equal(records.length, 1, 'only the marker comment is a record');
+        assert.equal(records[0].verdict, 'APPROVE');
+        assert.equal(calls.length, 1, 'one comment fetch');
+    });
+
+    test('verdictRecords memoizes per tick (kind prVerdicts) — guards may call per rule', function () {
+        var calls = [];
+        var p = loadWith([{ body: marker('APPROVE', '2026-10-09T05:47:30.000Z') }], calls);
+        p.verdictRecords(5);
+        p.verdictRecords(5);
+        p.latestVerdictRecord(5, HEAD);
+        assert.equal(calls.length, 1, 'three reads, one fetch');
+    });
+
+    test('latestVerdictRecord resolves per head; other heads\u2019 records stay out', function () {
+        var p = loadWith([
+            { body: marker('APPROVE', '2026-10-09T05:47:30.000Z') },
+            { body: marker('REQUEST_CHANGES', '2026-10-09T05:47:40.000Z', 'ffffffffeeeeeeeedddddddd77777777') }
+        ], []);
+        var effective = p.latestVerdictRecord(5, HEAD);
+        assert.equal(effective.record.verdict, 'APPROVE', 'the head\u2019s own record wins');
+        assert.notOk(effective.conflict);
+        assert.equal(p.latestVerdictRecord(5, '0'.repeat(40)), null, 'unknown head → null (fail-open)');
+        assert.equal(p.latestVerdictRecord(5, null), null, 'no head → null (fail-open)');
+    });
+
+    test('the #1428 replay through the provider: newest wins, conflict rides the result', function () {
+        var p = loadWith([
+            { body: marker('APPROVE', '2026-10-09T05:47:30.000Z') },
+            { body: marker('REQUEST_CHANGES', '2026-10-09T05:47:40.000Z') }
+        ], []);
+        var effective = p.latestVerdictRecord(1428, HEAD);
+        assert.equal(effective.record.verdict, 'REQUEST_CHANGES', 'the 97s-later leg wins');
+        assert.ok(effective.conflict, 'the contradiction surfaces to the guard/action layer');
+    });
+
+    test('probe failure fails open to [] — the guards go inert, never red', function () {
+        var rvMod = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+        var mod = loadModule(MOD,
+            makeRequire({ './reviewVerdicts.js': rvMod }, {}),
+            {
+                github_get_pr_comments: function () { throw new Error('api down'); }
+            });
+        var p = mod.createSmProvider({
+            scm: { provider: 'github' },
+            repository: { owner: 'mygroup', repo: 'my-repo' }
+        });
+        assert.deepEqual(p.verdictRecords(7), [], 'broken read → empty records');
+        assert.equal(p.latestVerdictRecord(7, HEAD), null, 'no head resolution → guard inert');
+    });
+});

@@ -57,7 +57,8 @@ function loadPostPRReviewComments(mocks) {
             './common/trackers.js': makeTrackersModule({}),
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
-            './common/commentMarkup.js': commentMarkupModule
+            './common/commentMarkup.js': commentMarkupModule,
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
         }),
         {
             file_read: (mocks && mocks.file_read) || function() { return null; }
