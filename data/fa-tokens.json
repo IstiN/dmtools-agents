@@ -158,6 +158,13 @@
       "prompt": 285263,
       "completion": 11637,
       "total": 296900
+    },
+    {
+      "leg": "review",
+      "at": "2026-10-09T08:54:08Z",
+      "prompt": 171805,
+      "completion": 3423,
+      "total": 175228
     }
   ],
   "issue-806": [
