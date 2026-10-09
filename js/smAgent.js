@@ -4493,8 +4493,11 @@ function consultReworkLatch(key, ticket, effectiveRepoInfo) {
             console.log('  🔓 ' + key + ' rework latch cleared (' + verdict.cause +
                 ') for (pr-' + prNumber + ', ' + head.substring(0, 7) + ')');
         }
+        console.log('  🐞[DBG] consult ' + key + ' pr=' + prNumber + ' head=' + head +
+            ' cause=' + verdict.cause + ' mapKeys=' + JSON.stringify(Object.keys(latchState.map)));
         return { latched: false, head: head };
     }
+    console.log('  🐞[DBG] consult ' + key + ' LATCHED pr=' + prNumber);
     console.log('  ⏭️  ' + key + ' rework already in flight for (pr-' + prNumber +
         ', ' + head.substring(0, 7) + ')');
     return { latched: true, head: head };
