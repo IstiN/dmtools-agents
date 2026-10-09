@@ -333,6 +333,13 @@
       "prompt": 95181,
       "completion": 25449,
       "total": 120630
+    },
+    {
+      "leg": "review",
+      "at": "2026-10-09T16:47:23Z",
+      "prompt": 99958,
+      "completion": 5060,
+      "total": 105018
     }
   ],
   "pr-822": [
