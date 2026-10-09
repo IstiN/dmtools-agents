@@ -113,7 +113,7 @@ suite('enhanceSDAPIDescriptionAndAssess: tracker layer', function() {
             jobParams: { customParams: { trackerProvider: 'ado' } }
         });
         assert.equal(r.success, true);
-        assert.deepEqual(calls[0], ['desc', { id: '42', description: 'New desc' }]);
+        assert.deepEqual(calls[0], ['desc', { id: '42', description: 'New desc', format: 'markdown' }]);
         assert.ok(calls.some(function(c) { return c[0] === 'assign'; }));
         assert.ok(calls.some(function(c) { return c[0] === 'move'; }));
     });
