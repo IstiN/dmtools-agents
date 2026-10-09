@@ -17,11 +17,19 @@ function makeFileMapReader(fileMap) {
     };
 }
 
+function realKeyModules() {
+    var shapes = loadModule('js/common/ticketKeyShapes.js', makeRequire({}), {});
+    return {
+        './validateInputJql.js': loadModule('js/common/validateInputJql.js', makeRequire({ './ticketKeyShapes.js': shapes }), {}),
+        './trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': shapes }), {})
+    };
+}
+
 function loadBuilder(fileMap) {
     var reader = makeFileMapReader(fileMap);
     return loadModule(
         'js/common/buildEncodedConfig.js',
-        makeRequire({ '../configLoader.js': configLoaderModule }),
+        makeRequire(Object.assign({ '../configLoader.js': configLoaderModule }, realKeyModules())),
         { file_read: reader, encodeURIComponent: encodeURIComponent, JSON: JSON }
     );
 }
@@ -528,6 +536,40 @@ suite('buildEncodedConfig: ticket key format validation', function() {
         var encoded = builder.buildEncodedConfig('PROJ-42', 'agents/story_questions.json', null);
         var decoded = JSON.parse(decodeURIComponent(encoded));
         assert.equal(decoded.params.inputJql, 'key = PROJ-42');
+    });
+
+    test('Jira keys keep the exact historical inputJql (backward compatibility)', function() {
+        var builder = loadBuilder({});
+        ['PROJ-1', 'AB_C-123'].forEach(function(k) {
+            assert.equal(decode(builder.buildEncodedConfig(k, 'agents/story_questions.json', null)).params.inputJql, 'key = ' + k);
+        });
+    });
+
+    test('GitHub key shapes are accepted and keep "key = KEY"', function() {
+        var builder = loadBuilder({});
+        ['gh-12', 'acme/widgets#12', '#12'].forEach(function(k) {
+            assert.equal(decode(builder.buildEncodedConfig(k, 'agents/story_questions.json', null)).params.inputJql, 'key = ' + k);
+        });
+    });
+
+    test('a bare numeric ADO work item id is accepted and gets a WIQL id filter on the ado tracker (agents#804)', function() {
+        var builder = loadBuilder({});
+        var cfg = { tracker: { provider: 'ado' } };
+        var decoded = decode(builder.buildEncodedConfig('1839749', 'agents/story_questions.json', cfg));
+        assert.equal(decoded.params.inputJql, 'SELECT [System.Id] FROM WorkItems WHERE [System.Id] = 1839749');
+    });
+
+    test('a bare number without a tracker config stays a "key = N" filter (GitHub issue number)', function() {
+        var builder = loadBuilder({});
+        assert.equal(decode(builder.buildEncodedConfig('12', 'agents/story_questions.json', null)).params.inputJql, 'key = 12');
+    });
+
+    test('injection-shaped keys are still rejected, also on the ado tracker', function() {
+        var builder = loadBuilder({});
+        var cfg = { tracker: { provider: 'ado' } };
+        ['1839749 OR 1=1', "1' OR '1'='1", '12; DROP', 'a b'].forEach(function(k) {
+            assert.throws(function() { builder.buildEncodedConfig(k, 'agents/story_questions.json', cfg); }, /Invalid ticket key/, k);
+        });
     });
 
 });

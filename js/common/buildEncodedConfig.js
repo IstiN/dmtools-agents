@@ -11,6 +11,8 @@
  */
 
 var configLoader = require('../configLoader.js');
+var validateInputJql = require('./validateInputJql.js');
+var trackers = require('./trackers.js');
 
 function extractAgentName(configFile) {
     if (!configFile) return '';
@@ -171,10 +173,14 @@ function resolveConfluenceTrackerOverride(agentParamsRoot, effectiveConfig, agen
  * @returns {string} URL-encoded JSON string for workflow_dispatch `encoded_config`.
  */
 function buildEncodedConfig(ticketKey, rule, effectiveConfig, isLocal) {
-    if (!ticketKey || !/^[A-Z][A-Z0-9_]*-\d+$/.test(ticketKey)) {
-        throw new Error('Invalid ticket key: "' + ticketKey + '". Expected format: PROJECT-123');
+    // One owner of the key rules (validateInputJql): Jira PROJECT-123, GitHub gh-N / owner/repo#N /
+    // #N / N and a bare numeric Azure DevOps work item id (#804). Injection-shaped keys still fail.
+    if (!validateInputJql.isValidTicketKey(ticketKey)) {
+        throw new Error('Invalid ticket key: "' + ticketKey +
+            '". Expected a Jira key (PROJECT-123), a GitHub issue key or an Azure DevOps work item id');
     }
-    var p = { inputJql: 'key = ' + ticketKey };
+    var provider = trackers.createTracker(effectiveConfig, {}).provider();
+    var p = { inputJql: validateInputJql.inputJqlForKey(ticketKey, provider) };
     var resolvedCf = resolveConfigFile(rule, effectiveConfig);
 
     // Derive project key to resolve project-specific agent JSON
