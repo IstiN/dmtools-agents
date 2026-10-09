@@ -14,7 +14,8 @@ var githubHelpersModule = loadModule(
             detectMergeConflicts: function() {},
             trimLargeTextForInput: function() {},
             writePRContext: function() {}
-        }
+        },
+        './machineNotice.js': loadModule('js/common/machineNotice.js')
     }),
     {}
 );
