@@ -345,3 +345,74 @@ suite('validateInputJql: ado tracker (wave2d3)', function() {
         assert.equal(String(t.key), '7');
     });
 });
+
+suite('validateInputJql: Azure DevOps ticket ids and WIQL (agents#804)', function() {
+    test('extracts numeric id from "[System.Id] = 1839749" (ADO WIQL format)', function() {
+        assert.equal(makeValidator().extractTicketKeyFromJql('[System.Id] = 1839749'), '1839749');
+    });
+    test('extracts numeric id from "[ System.Id ] = 1839749" (ADO WIQL with spaces)', function() {
+        assert.equal(makeValidator().extractTicketKeyFromJql('[ System.Id ] = 1839749'), '1839749');
+    });
+    test('extracts numeric id from "[System.Id] in (1839749)" (ADO WIQL with IN operator)', function() {
+        assert.equal(makeValidator().extractTicketKeyFromJql('[System.Id] in (1839749)'), '1839749');
+    });
+    test('extracts numeric id from a full SELECT statement', function() {
+        assert.equal(makeValidator().extractTicketKeyFromJql(
+            'SELECT [System.Id] FROM WorkItems WHERE [System.Id] = 1839749'), '1839749');
+    });
+    test('extracts numeric id from ADO WIQL case-insensitively', function() {
+        assert.equal(makeValidator().extractTicketKeyFromJql('[SYSTEM.ID] = 42'), '42');
+    });
+    test('a WIQL query without an id filter yields no key', function() {
+        var v = makeValidator();
+        assert.equal(v.extractTicketKeyFromJql("SELECT [System.Id] FROM WorkItems WHERE [System.State] = 'Active'"), null);
+        assert.equal(v.extractTicketKeyFromJql('[System.Id] = abc'), null);
+    });
+    test('backward compatibility: Jira and GitHub shapes extract exactly as before', function() {
+        var v = makeValidator();
+        assert.equal(v.extractTicketKeyFromJql('key = proj-12'), 'PROJ-12');
+        assert.equal(v.extractTicketKeyFromJql('key in (PROJ-7)'), 'PROJ-7');
+        assert.equal(v.extractTicketKeyFromJql('key = gh-12'), 'gh-12');
+        assert.equal(v.extractTicketKeyFromJql('key = acme/widgets#12'), 'acme/widgets#12');
+        assert.equal(v.extractTicketKeyFromJql(''), null);
+        assert.equal(v.extractTicketKeyFromJql(null), null);
+    });
+    test('validateTicketKeyFormat accepts a bare numeric ADO id and still rejects junk', function() {
+        var v = makeValidator();
+        v.validateTicketKeyFormat('1839749');
+        v.validateTicketKeyFormat('PROJ-1');
+        assert.throws(function() { v.validateTicketKeyFormat(null); }, /Invalid or missing ticket key/);
+        assert.throws(function() { v.validateTicketKeyFormat('1 OR 1=1'); }, /Invalid or missing ticket key/);
+        assert.throws(function() { v.validateTicketKeyFormat('abc'); }, /Azure DevOps work item id/);
+    });
+    test('isValidTicketKey is the single predicate (Jira, GitHub shapes, ADO id)', function() {
+        var v = makeValidator();
+        ['PROJ-1', 'gh-5', '#5', 'a/b#5', '1839749'].forEach(function(k) { assert.equal(v.isValidTicketKey(k), true, k); });
+        [null, '', 'nope', 'PROJ-1 OR x = y', '12 34'].forEach(function(k) { assert.equal(v.isValidTicketKey(k), false, String(k)); });
+    });
+    test('inputJqlForKey: ado gets a WIQL id filter, everything else keeps "key = KEY"', function() {
+        var v = makeValidator();
+        assert.equal(v.inputJqlForKey('1839749', 'ado'), 'SELECT [System.Id] FROM WorkItems WHERE [System.Id] = 1839749');
+        assert.equal(v.inputJqlForKey('PROJ-1', 'jira'), 'key = PROJ-1');
+        assert.equal(v.inputJqlForKey('gh-5', 'github'), 'key = gh-5');
+        assert.equal(v.inputJqlForKey('PROJ-1'), 'key = PROJ-1');
+    });
+    test('the generated ADO inputJql round-trips through the extractor', function() {
+        var v = makeValidator();
+        assert.equal(v.extractTicketKeyFromJql(v.inputJqlForKey('1839749', 'ado')), '1839749');
+    });
+    test('validateAndRequireTicket on ADO: the issue-report inputJql resolves the work item through ado_get_work_item', function() {
+        var adoCalls = [];
+        var mocks = { ado_get_work_item: function(a) { adoCalls.push(a); return { id: 1839749, fields: { 'System.Title': 't', 'System.State': 'Active' } }; } };
+        var trackers = loadModule('js/common/trackers.js', makeRequire({
+            '../config.js': configModule, './ticketKeyShapes.js': ticketKeyShapesModule }), mocks);
+        var v = loadModule('js/common/validateInputJql.js', makeRequire({
+            './ticketKeyShapes.js': ticketKeyShapesModule, './trackers.js': trackers }), mocks);
+        var t = v.validateAndRequireTicket({
+            inputJql: 'SELECT [System.Id] FROM WorkItems WHERE [System.Id] = 1839749',
+            customParams: { trackerProvider: 'ado' } });
+        assert.equal(String(t.key), '1839749');
+        assert.equal(String(adoCalls[0].id), '1839749');
+    });
+});
+
