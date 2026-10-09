@@ -8525,8 +8525,11 @@ suite('smAgent: statePublish tokens — local file first, branch fallback', func
             'the machine\'s validation dispatch (mycheck.yml) is the cite — ' +
             'not the fresher review (SM) leg');
         assert.ok(card.checks && card.checks.auxiliary &&
-            card.checks.auxiliary.runId === 37923501714,
-            'the review leg is preserved as auxiliary evidence');
+            card.checks.auxiliary.runId === 37923501714 &&
+            card.checks.auxiliary.verdict === 'success' &&
+            card.checks.auxiliary.conclusion === 'success',
+            'the review leg is preserved as auxiliary evidence — same ' +
+            'vocabulary as the cite (verdict, not a third name)');
         assert.ok(card.checks.sha === GH816_HEAD &&
             card.checks.conclusion === 'success' &&
             card.checks.name === 'PR o/r#1437',

@@ -46,6 +46,21 @@
  * from snapshot one. Snapshot history (the `<base>-history.json` index)
  * keeps the raw evidence for time travel either way.
  *
+ * ── Schema 2, checks records (gh-816 citation integrity) ────────────────────
+ * card.checks is one uniform record shape everywhere it appears — open card
+ * cite, merged_recent cite, checks.auxiliary side-run leg, carried record:
+ *
+ *   verdict       status, or the conclusion once terminal (ONE vocabulary —
+ *                 auxiliary and carried records never invent a third name)
+ *   at / url      run created_at / html_url
+ *   runId/name/sha/conclusion   audit identity (merged_recent persistence)
+ *   runStartedAt/updatedAt      gh-769 CI wall-time vs queue-wait split
+ *   auxiliary     the freshest SM side-run leg on the head — evidence, never
+ *                 the cite (same shape, no carried flag: it is live evidence)
+ *   carried       true ONLY on a carried record whose conclusion never
+ *                 landed — unverified, not live (never set on terminal
+ *                 records; nothing resolves a merged card in flight)
+ *
  * Pure functions here (no tool globals) — smAgent wires deps; tests inject
  * mocks. CommonJS module like every other js/ module.
  */
@@ -98,6 +113,14 @@ var ACTIVE_RUN_STATES = ['queued', 'in_progress', 'waiting', 'pending'];
 // most, never the discharge cite. A dispatch without a path (payload
 // shape drift) fails OPEN as real — a run that cannot be classified must
 // not silently lose citability.
+// RESIDUAL RISK (gh-816 rework thread 2): the runs list is repo-wide, so
+// `event !== 'workflow_dispatch'` means ANY repo workflow (labeler, docs,
+// lint, translation bots — not necessarily "validation"). Such a run can
+// only cite when nothing better exists (see the score-tier preference in
+// headVerdict: the ciWorkflow path match outranks every bare real run),
+// but a path-less dynamic-validation deployment still accepts this
+// breadth by design — a path allowlist cannot express arbitrary
+// per-PR validation workflows.
 var WORKFLOW_PATH_PREFIX = '.github/workflows/';
 
 function isValidationWorkflowPath(p, ciWorkflow) {
@@ -553,36 +576,44 @@ function buildFactoryState(input) {
             updatedAt: t.updatedAt
         };
     }
-    // Cite resolution (gh-816): the newest TERMINAL non-cancelled REAL run
-    // decides (cancelled is never a verdict — gh-191), else the newest
-    // active real run, else NO cite — a head carrying only SM side-run
-    // legs has no validation evidence to discharge. The freshest side-run
-    // leg, when any, rides along as checks.auxiliary — evidence, never
-    // the cite.
+    // Cite resolution (gh-816 + rework threads 2/4): the runs list is
+    // repo-wide, so REAL runs come in tiers — score 2: the machine's own
+    // validation workflow (ciWorkflow path match); score 1: every other
+    // real run (repo CI, dynamic PR-validation, unrelated push/pull_request
+    // workflows under the documented fail-open). The best AVAILABLE tier
+    // cites — the validation workflow outranks any bare real run however
+    // fresh, and an unrelated workflow only cites when nothing better
+    // exists. Within the winning tier the newest TERMINAL non-cancelled
+    // run decides (cancelled is never a verdict — gh-191), else the newest
+    // active run, else NO cite — a head carrying only SM side-run legs has
+    // no validation evidence to discharge. The freshest side-run leg, when
+    // any, rides along as checks.auxiliary (runCite-shaped — same
+    // vocabulary as the cite: verdict/conclusion/runId/name/sha) —
+    // evidence, never the cite.
+    function citeTier(r) {
+        return isValidationWorkflowPath(r.path, ciWorkflow) ? 2 : 1;
+    }
     function headVerdict(sha) {
         var mine = headRuns(sha);
         var real = mine.filter(isRealRun);
         var legs = mine.filter(function (r) { return !isRealRun(r); });
-        var cite = freshestRun(real.filter(function (r) {
-            return r.status === 'completed' && r.conclusion &&
-                   r.conclusion !== 'cancelled';
-        })) || freshestRun(real.filter(function (r) {
-            return ACTIVE_RUN_STATES.indexOf(r.status) !== -1;
-        }));
+        var cite = null;
+        [2, 1].forEach(function (tier) {
+            if (cite) return;
+            var pool = real.filter(function (r) {
+                return citeTier(r) === tier;
+            });
+            cite = freshestRun(pool.filter(function (r) {
+                return r.status === 'completed' && r.conclusion &&
+                       r.conclusion !== 'cancelled';
+            })) || freshestRun(pool.filter(function (r) {
+                return ACTIVE_RUN_STATES.indexOf(r.status) !== -1;
+            }));
+        });
         if (!cite) return null;
         var out = runCite(cite);
         var leg = freshestRun(legs);
-        if (leg) {
-            out.auxiliary = {
-                runId: leg.id == null ? null : leg.id,
-                name: leg.name || null,
-                sha: leg.head_sha || null,
-                state: leg.status === 'completed' ?
-                    (leg.conclusion || leg.status) : leg.status,
-                at: leg.created_at || null,
-                url: leg.html_url || null
-            };
-        }
+        if (leg) out.auxiliary = runCite(leg);
         return out;
     }
 
@@ -684,10 +715,19 @@ function buildFactoryState(input) {
         // record the card accumulated during its open life. The terminal
         // lane is the audit trail: dropping the record forced retrospectives
         // to re-derive run history to tell legit merges from false-green.
+        // Rework thread 3: a carried record whose conclusion never landed
+        // (the runs rotated out of the window while validation was still
+        // in flight) is carried MARKED — without the marker the merged
+        // card would read "validation in flight" for the whole 24h window,
+        // since nothing ever resolves it. Terminal records carry as-is
+        // (a resolved verdict), and the audit fields stay uniform across
+        // cite/auxiliary/carried records (all runCite-shaped, thread 4).
         var mergedChecks = (pr.head && pr.head.sha &&
-                headVerdict(pr.head.sha)) ||
-            (prevCard && prevCard.checks ?
-                Object.assign({}, prevCard.checks) : null);
+                headVerdict(pr.head.sha)) || null;
+        if (!mergedChecks && prevCard && prevCard.checks) {
+            mergedChecks = Object.assign({}, prevCard.checks);
+            if (mergedChecks.conclusion == null) mergedChecks.carried = true;
+        }
         var card = {
             pr: pr.number,
             title: pr.title,
