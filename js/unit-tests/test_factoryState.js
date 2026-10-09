@@ -1464,3 +1464,388 @@ suite('factoryState — merge-lane citation integrity (gh-816)', function () {
       'the record rides the merged card tick-over-tick — never dropped again');
   });
 });
+
+// ── gh-825 — model passthrough (normalizeTokens keeps `model`) ───────────────
+// awf 233263e emits "model":"<id>" in token rows (empty until fa#1460 ships
+// the ledger field). normalizeTokens previously dropped the field silently —
+// unknown keys were tolerated, never carried. The board's model column and
+// the pricing engine both read row.model, so the passthrough is explicit now.
+
+suite('factoryState — model passthrough in normalizeTokens (gh-825)', function () {
+  function norm(rows) {
+    var map = fsModule.normalizeTokens({ 'pr-31': rows });
+    return map['pr-31'];
+  }
+
+  test('a row\'s model string rides the normalized row', function () {
+    var rows = norm([{ leg: 'dev', at: 't', prompt: 1, completion: 2,
+      model: 'claude-sonnet-4-5' }]);
+    assert.equal(rows[0].model, 'claude-sonnet-4-5');
+  });
+
+  test('absent / null / empty model normalize to null (pre-fa#1460 reality)', function () {
+    var rows = norm([
+      { leg: 'a', at: 't', prompt: 1, completion: 1 },
+      { leg: 'b', at: 't', prompt: 1, completion: 1, model: null },
+      { leg: 'c', at: 't', prompt: 1, completion: 1, model: '' }
+    ]);
+    assert.equal(rows[0].model, null, 'absent → null');
+    assert.equal(rows[1].model, null, 'null → null');
+    assert.equal(rows[2].model, null, 'empty string (upstream "model":""") → null');
+  });
+
+  test('non-string models coerce to string (defensive — ledger drift)', function () {
+    var rows = norm([{ leg: 'a', at: 't', prompt: 1, completion: 1, model: 42 }]);
+    assert.equal(rows[0].model, '42');
+  });
+
+  test('array-form input keeps model too (the local-file shape)', function () {
+    var map = fsModule.normalizeTokens([
+      { pr: 34, leg: 'rework', at: 't', prompt: 1, completion: 2,
+        model: 'gpt-5-codex' }
+    ]);
+    assert.equal(map['pr-34'][0].model, 'gpt-5-codex');
+  });
+});
+
+// ── gh-825 — the hardcoded model pricing config ──────────────────────────────
+// ONE home: data/model-pricing.json at the repo root (hand-maintained, no
+// secrets, no live APIs). Rates are USD per MILLION tokens; "default" prices
+// models missing from the table (null = unknown models stay unpriced).
+
+suite('factoryState — parseModelPricing (gh-825 schema)', function () {
+  var TABLE = {
+    'claude-sonnet-4-5': { input: 3, output: 15, cacheRead: 0.3 },
+    'claude-haiku-4-5': { input: 1, output: 5 },
+    'gpt-5-codex': { input: '1.25', output: '10' },   // numeric strings ride
+    'default': null
+  };
+
+  test('a well-formed table parses to {rates, defaultRates, models}', function () {
+    var p = fsModule.parseModelPricing(TABLE);
+    assert.equal(p.models, 3);
+    assert.equal(p.rates['claude-sonnet-4-5'].input, 3);
+    assert.equal(p.rates['claude-sonnet-4-5'].cacheRead, 0.3);
+    assert.equal(p.rates['claude-haiku-4-5'].cacheRead, 0, 'cacheRead optional → 0');
+    assert.equal(p.rates['gpt-5-codex'].input, 1.25, 'numeric strings coerce');
+    assert.equal(p.defaultRates, null, '"default": null — unknowns stay unpriced');
+  });
+
+  test('garbage shapes → null (bad JSON already failed the parse; shape garbage here)', function () {
+    assert.equal(fsModule.parseModelPricing(null), null);
+    assert.equal(fsModule.parseModelPricing('x'), null);
+    assert.equal(fsModule.parseModelPricing(42), null);
+    assert.equal(fsModule.parseModelPricing([]), null, 'array payload → null');
+  });
+
+  test('a table with NO usable rate entries → null (malformed config in disguise)', function () {
+    assert.equal(fsModule.parseModelPricing({}), null,
+      'empty table can never move Σ$ — report it as unusable');
+    assert.equal(fsModule.parseModelPricing({ 'm': 'cheap' }), null,
+      'entry that is not an object is not a rate');
+    assert.equal(fsModule.parseModelPricing({ 'default': {} }), null,
+      'a default without usable rates is still nothing');
+  });
+
+  test('invalid entries are skipped, valid ones survive (one bad model must not blank the table)', function () {
+    var p = fsModule.parseModelPricing({
+      'good': { input: 3, output: 15 },
+      'no-output': { input: 3 },
+      'negative': { input: -1, output: 15 },
+      'nan': { input: 'abc', output: 15 },
+      'array-entry': [3, 15],
+      'null-entry': null
+    });
+    assert.equal(p.models, 1, 'only `good` survived');
+    assert.ok(p.rates.good && !p.rates['no-output'] && !p.rates.negative &&
+      !p.rates.nan && !p.rates['array-entry'] && !p.rates['null-entry']);
+  });
+
+  test('a bad cacheRead falls back to 0 (never poisons the whole entry)', function () {
+    var p = fsModule.parseModelPricing({
+      'm': { input: 3, output: 15, cacheRead: 'nope' }
+    });
+    assert.equal(p.models, 1);
+    assert.equal(p.rates.m.cacheRead, 0);
+  });
+
+  test('a configured default prices unknown models (prototype-safe model buckets)', function () {
+    var p = fsModule.parseModelPricing({
+      'default': { input: 2, output: 8 }
+    });
+    assert.equal(p.models, 0);
+    assert.deepEqual(p.defaultRates, { input: 2, output: 8, cacheRead: 0 });
+  });
+
+  test('__proto__ as a model id stays a plain bucket (rows are untrusted input)', function () {
+    var p = fsModule.parseModelPricing({
+      '__proto__': { input: 1, output: 2 }
+    });
+    assert.equal(p.models, 1, 'the model id became a data bucket');
+    assert.equal(p.rates['__proto__'].output, 2);
+  });
+});
+
+suite('factoryState — readModelPricing (absent is quiet, unusable warns)', function () {
+  test('parses a committed table through the reader', function () {
+    var res = fsModule.readModelPricing('data/model-pricing.json', function () {
+      return '{"claude-sonnet-4-5":{"input":3,"output":15,"cacheRead":0.3},"default":null}';
+    });
+    assert.ok(res && res.pricing, 'outcome object returned');
+    assert.equal(res.pricing.rates['claude-sonnet-4-5'].output, 15);
+  });
+
+  test('absent file (null / empty / reader throws) → null — a QUIET miss, no warn', function () {
+    assert.equal(fsModule.readModelPricing('x', function () { return null; }), null);
+    assert.equal(fsModule.readModelPricing('x', function () { return ''; }), null);
+    assert.equal(fsModule.readModelPricing('x', function () { return '   '; }), null);
+    assert.equal(fsModule.readModelPricing('x', function () {
+      throw new Error('ENOENT');
+    }), null, 'unreadable file = absent — pricing is optional');
+    assert.equal(fsModule.readModelPricing(null, function () { return '{}'; }), null);
+  });
+
+  test('present but bad JSON → {error} — the caller warns, the tick stays green', function () {
+    var res = fsModule.readModelPricing('x', function () { return '{oops'; });
+    assert.ok(res && res.error, 'error outcome returned (not a throw)');
+    assert.ok(String(res.error).length > 0, 'the reason is loggable');
+  });
+
+  test('present but shape-garbage → {error} too', function () {
+    assert.ok(fsModule.readModelPricing('x', function () { return '[]'; }).error);
+    assert.ok(fsModule.readModelPricing('x', function () { return '"str"'; }).error);
+    assert.ok(fsModule.readModelPricing('x', function () { return '{}'; }).error,
+      'an empty table is unusable — same warn path');
+  });
+});
+
+suite('factoryState — ratesFor + rowCost (the cost rule)', function () {
+  var PRICING = {
+    rates: (function () {
+      var r = Object.create(null);
+      r['claude-sonnet-4-5'] = { input: 3, output: 15, cacheRead: 0.3 };
+      return r;
+    })(),
+    defaultRates: null,
+    models: 1
+  };
+
+  test('ratesFor: known model → its rates', function () {
+    assert.equal(fsModule.ratesFor(PRICING, 'claude-sonnet-4-5').input, 3);
+  });
+
+  test('ratesFor: absent model → null (tokens only, per AC2)', function () {
+    assert.equal(fsModule.ratesFor(PRICING, null), null);
+    assert.equal(fsModule.ratesFor(PRICING, ''), null);
+    assert.equal(fsModule.ratesFor(null, 'claude-sonnet-4-5'), null);
+  });
+
+  test('ratesFor: unknown model with "default": null → null (cost omitted)', function () {
+    assert.equal(fsModule.ratesFor(PRICING, 'gpt-9'), null);
+  });
+
+  test('ratesFor: unknown model with a configured default → the default rates', function () {
+    var p = { rates: Object.create(null), defaultRates: { input: 2, output: 8, cacheRead: 0 } };
+    assert.equal(fsModule.ratesFor(p, 'gpt-9').output, 8);
+  });
+
+  test('rowCost: cost = input/1e6*in + output/1e6*out + cacheRead/1e6*cache', function () {
+    var rates = { input: 3, output: 15, cacheRead: 0.3 };
+    var cost = fsModule.rowCost(
+      { prompt: 1000000, completion: 1000000, cacheRead: 1000000 }, rates);
+    assert.equal(cost, 3 + 15 + 0.3);
+  });
+
+  test('rowCost: cache_read snake_case falls back (producer-drift tolerance)', function () {
+    var rates = { input: 3, output: 15, cacheRead: 0.3 };
+    assert.equal(fsModule.rowCost({ prompt: 0, completion: 0, cache_read: 1000000 }, rates), 0.3);
+  });
+
+  test('rowCost: absent token counts price as 0 (row still costed on what it reports)', function () {
+    var rates = { input: 3, output: 15, cacheRead: 0 };
+    assert.equal(fsModule.rowCost({ prompt: 1000000 }, rates), 3,
+      'completion/cache absent → only the prompt term');
+  });
+
+  test('rowCost: rounds to 1e-6 USD — float noise never reaches the board', function () {
+    var rates = { input: 0.3, output: 0.7, cacheRead: 0 };
+    var cost = fsModule.rowCost({ prompt: 48210, completion: 12980 }, rates);
+    assert.equal(cost, Math.round((0.3 / 1e6 * 48210 + 0.7 / 1e6 * 12980) * 1e6) / 1e6);
+    assert.ok(Math.abs(cost - (0.3 / 1e6 * 48210 + 0.7 / 1e6 * 12980)) < 1e-9);
+  });
+
+  test('rowCost: missing inputs → null (never a fake 0)', function () {
+    assert.equal(fsModule.rowCost(null, { input: 1, output: 1 }), null);
+    assert.equal(fsModule.rowCost({ prompt: 1 }, null), null);
+  });
+});
+
+// ── gh-825 — pricing wired through buildFactoryState ─────────────────────────
+// Rows gain model always and cost when priced; the snapshot gains the
+// board header's global Σ$ rollup (state.costs) over the WHOLE tokens
+// ledger — merged cards leave the board after 24h, their spend must
+// still count, so the window is applied to row `at`, not to lanes.
+
+suite('factoryState — priceTokens through buildFactoryState (gh-825)', function () {
+  var NOW = '2026-10-03T13:10:00Z';
+  var NOW_MS = Date.parse(NOW);
+  var SONNET = { input: 3, output: 15, cacheRead: 0.3 };
+
+  function pricing(over) {
+    var rates = Object.create(null);
+    rates['claude-sonnet-4-5'] = over || SONNET;
+    return { rates: rates, defaultRates: null, models: 1 };
+  }
+  function pr(n) {
+    return { number: n, title: 't' + n, labels: [],
+      head: { ref: 'b' + n, sha: 'sha' + n }, user: { login: 'bot' },
+      created_at: '2026-10-03T06:00:00Z' };
+  }
+  function cardFor(st, n) {
+    return st.lanes.pr_created.filter(function (c) { return c.pr === n; })[0];
+  }
+
+  test('rows of a known-model card carry model + $cost; the card Σ$ is the rows\' sum', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      prs: [pr(31)], runs: [], pricing: pricing(),
+      tokens: { 'pr-31': [
+        { leg: 'dev', at: '2026-10-03T07:00:00Z', prompt: 1000000,
+          completion: 1000000, total: 2000000, model: 'claude-sonnet-4-5' },
+        { leg: 'review', at: '2026-10-03T09:00:00Z', prompt: 500000,
+          completion: 0, total: 500000, model: 'claude-sonnet-4-5' }
+      ] }
+    });
+    var rows = cardFor(st, 31).tokens;
+    assert.equal(rows[0].cost, 3 + 15, 'in/1e6*in + out/1e6*out per row');
+    assert.equal(rows[1].cost, 1.5);
+    assert.equal(st.costs.usd14d, 19.5, 'global Σ$ = both rows (board header)');
+    assert.equal(st.costs.pricedLegs, 2);
+    assert.equal(st.costs.windowDays, 14);
+  });
+
+  test('unknown model → model kept, cost omitted, tokens shown (AC2)', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      prs: [pr(31)], runs: [], pricing: pricing(),
+      tokens: { 'pr-31': [
+        { leg: 'dev', at: '2026-10-03T07:00:00Z', prompt: 1000,
+          completion: 500, total: 1500, model: 'mystery-model' }
+      ] }
+    });
+    var row = cardFor(st, 31).tokens[0];
+    assert.equal(row.model, 'mystery-model', 'the model still renders');
+    assert.notOk('cost' in row, 'no $ for an unknown model');
+    assert.notOk('costs' in st, 'nothing priced → no Σ$ rollup at all');
+  });
+
+  test('absent model (pre-fa#1460 rows) → tokens only (AC2/L2 replay)', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      prs: [pr(31)], runs: [], pricing: pricing(),
+      tokens: { 'pr-31': [
+        { leg: 'dev', at: '2026-10-03T07:00:00Z', prompt: 1000,
+          completion: 500, total: 1500 }
+      ] }
+    });
+    assert.equal(cardFor(st, 31).tokens[0].model, null);
+    assert.notOk('cost' in cardFor(st, 31).tokens[0]);
+    assert.notOk('costs' in st);
+  });
+
+  test('multi-key ledger: Σ$ spans every card, the 14d window drops stale rows', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      prs: [pr(31)], runs: [], pricing: pricing(),
+      tokens: {
+        'pr-31': [
+          { leg: 'dev', at: '2026-10-03T07:00:00Z', prompt: 1000000,
+            completion: 0, total: 1000000, model: 'claude-sonnet-4-5' },
+          { leg: 'old', at: '2026-09-19T07:00:00Z', prompt: 1000000,
+            completion: 0, total: 1000000, model: 'claude-sonnet-4-5' }   // >14d
+        ],
+        'pr-32': [
+          { leg: 'dev', at: '2026-09-19T07:00:01Z', prompt: 1000000,
+            completion: 0, total: 1000000, model: 'claude-sonnet-4-5' }   // just inside
+        ]
+      }
+    });
+    // 14d window: 2026-09-19T07:00:01Z is inside (13d23h59m59s old),
+    // 2026-09-19T07:00:00Z is one second past it — excluded.
+    assert.equal(st.costs.usd14d, 6, 'two in-window rows (3+3), the 14d-old one dropped');
+    assert.equal(st.costs.pricedLegs, 2);
+    assert.notOk('cost' in cardFor(st, 31).tokens[1], 'stale row keeps model, drops cost? NO — cost stays per-row, only Σ$ windows');
+    assert.equal(cardFor(st, 31).tokens[1].cost, 3,
+      'per-row $ is the row\'s price regardless of the header window');
+  });
+
+  test('undated rows still price per-row but stay out of the Σ$ window (honest unknown)', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      prs: [pr(31)], runs: [], pricing: pricing(),
+      tokens: { 'pr-31': [
+        { leg: 'dev', at: null, prompt: 1000000, completion: 0,
+          total: 1000000, model: 'claude-sonnet-4-5' }
+      ] }
+    });
+    assert.equal(cardFor(st, 31).tokens[0].cost, 3);
+    assert.equal(st.costs.usd14d, 0);
+    assert.equal(st.costs.pricedLegs, 0);
+  });
+
+  test('no pricing input → rows unchanged, no costs key (additive schema)', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      prs: [pr(31)], runs: [],
+      tokens: { 'pr-31': [
+        { leg: 'dev', at: '2026-10-03T07:00:00Z', prompt: 1000,
+          completion: 500, total: 1500, model: 'claude-sonnet-4-5' }
+      ] }
+    });
+    assert.notOk('cost' in cardFor(st, 31).tokens[0]);
+    assert.notOk('costs' in st, 'pricing off/bad → the header rollup is absent');
+  });
+
+  test('issue-keyed rows price too (backlog twins share the ledger)', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW, prs: [], runs: [],
+      machineAuthor: 'ai-teammate',
+      issues: [{ number: 33, title: 'i33', labels: [], user: { login: 'ba' },
+        html_url: 'http://issues/33', assignees: [{ login: 'ai-teammate' }] }],
+      pricing: pricing(),
+      tokens: { 'issue-33': [{ leg: 'dev', at: '2026-10-03T07:00:00Z',
+        prompt: 1000000, completion: 0, total: 1000000,
+        model: 'claude-sonnet-4-5' }] }
+    });
+    assert.equal(st.backlog.in_dev[0].tokens[0].cost, 3);
+    assert.equal(st.costs.usd14d, 3);
+  });
+
+  test('a default rate prices unknown models (catch-all table)', function () {
+    var p = { rates: Object.create(null),
+      defaultRates: { input: 2, output: 8, cacheRead: 0 }, models: 0 };
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      prs: [pr(31)], runs: [], pricing: p,
+      tokens: { 'pr-31': [{ leg: 'dev', at: '2026-10-03T07:00:00Z',
+        prompt: 1000000, completion: 0, total: 1000000, model: 'gpt-9' }] }
+    });
+    assert.equal(cardFor(st, 31).tokens[0].cost, 2);
+    assert.equal(st.costs.usd14d, 2);
+  });
+
+  test('Σ$ rounds to cents in the rollup (row costs keep 1e-6 precision)', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      prs: [pr(31)], runs: [], pricing: pricing(),
+      tokens: { 'pr-31': [
+        { leg: 'a', at: '2026-10-03T07:00:00Z', prompt: 48210, completion: 0,
+          total: 48210, model: 'claude-sonnet-4-5' },
+        { leg: 'b', at: '2026-10-03T08:00:00Z', prompt: 12980, completion: 0,
+          total: 12980, model: 'claude-sonnet-4-5' }
+      ] }
+    });
+    assert.equal(st.costs.usd14d, 0.18,
+      '(48210+12980)/1e6*3 = 0.18357 → 0.18');
+  });
+});
