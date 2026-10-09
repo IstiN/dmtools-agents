@@ -296,18 +296,6 @@ suite('gitOps.detectMergeConflicts — clean-merge log wording (gh-802 AC3a)', f
 // reads a stale file must not spend a duplicate reply pass on closed threads.
 // ---------------------------------------------------------------------------
 
-function loadGitOpsForContext(mocks) {
-    return loadModule('js/common/gitOps.js', makeRequire(Object.assign({
-        '../config.js': configModule,
-        'config': configModule,
-        './gitStaging.js': gitStagingModuleForGitOps,
-        './pullRequest.js': {
-            buildTargetedOriginFetchCommand: function() { return null; },
-            buildOriginFetchCommand: function() { return null; }
-        }
-    }, mocks)));
-}
-
 suite('gitOps.writePRContext — resolved threads filtered from pr_discussions_raw.json (gh-806 AC4)', function() {
 
     function prDetailsFixture() {
@@ -328,7 +316,7 @@ suite('gitOps.writePRContext — resolved threads filtered from pr_discussions_r
 
     test('resolved threads are dropped from the written file; open threads keep order and ids', function() {
         var writes = {};
-        var gitOps = loadGitOpsForContext({ file_write: function(call) { writes[call.path] = call.content; } });
+        var gitOps = loadGitOps({ file_write: function(call) { writes[call.path] = call.content; } });
 
         gitOps.writePRContext('input/PROJ-10', prDetailsFixture(), 'diff', null, threadsFixture());
 
@@ -341,7 +329,7 @@ suite('gitOps.writePRContext — resolved threads filtered from pr_discussions_r
 
     test('a file of only resolved threads is written as an empty list (agent sees nothing actionable)', function() {
         var writes = {};
-        var gitOps = loadGitOpsForContext({ file_write: function(call) { writes[call.path] = call.content; } });
+        var gitOps = loadGitOps({ file_write: function(call) { writes[call.path] = call.content; } });
 
         gitOps.writePRContext('input/PROJ-10', prDetailsFixture(), 'diff', null,
             { threads: [{ index: 1, rootCommentId: 9, threadId: 'PRRT_only', resolved: true, body: 'done' }] });
@@ -352,7 +340,7 @@ suite('gitOps.writePRContext — resolved threads filtered from pr_discussions_r
 
     test('open-only input is written unchanged', function() {
         var writes = {};
-        var gitOps = loadGitOpsForContext({ file_write: function(call) { writes[call.path] = call.content; } });
+        var gitOps = loadGitOps({ file_write: function(call) { writes[call.path] = call.content; } });
 
         gitOps.writePRContext('input/PROJ-10', prDetailsFixture(), 'diff', null,
             { threads: [{ index: 1, rootCommentId: 1, threadId: 'A', resolved: false, body: 'x' }] });
