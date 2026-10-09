@@ -206,19 +206,21 @@ let SHIPPED_CATALOG = null;
 const SHIPPED_ZIP_MANIFESTS = {};
 
 function shippedCatalog() {
-  if (SHIPPED_CATALOG || !PREV_TAG || DRY_RUN) return SHIPPED_CATALOG;
-  SHIPPED_DIR = mkdtempSync(join(tmpdir(), 'prev-release-'));
-  try {
-    execSync(
-      `gh release download ${JSON.stringify(PREV_TAG)} --pattern 'catalog.json' --dir ${JSON.stringify(SHIPPED_DIR)} --clobber`,
-      { stdio: ['ignore', 'ignore', 'ignore'] },
-    );
-    SHIPPED_CATALOG = JSON.parse(readFileSync(join(SHIPPED_DIR, 'catalog.json'), 'utf8'));
-  } catch (e) {
-    console.warn(`::warning::previous release ${PREV_TAG} unavailable (${String(e.message).split('\n')[0]}) — base versions fall back to the versions.json ledger`);
-    rmSync(SHIPPED_DIR, { recursive: true, force: true });
-    SHIPPED_DIR = null;
-    SHIPPED_CATALOG = {};
+  if (SHIPPED_CATALOG === null) {
+    if (!PREV_TAG || DRY_RUN) return {}; // no previous release to read — ledger fallback
+    SHIPPED_DIR = mkdtempSync(join(tmpdir(), 'prev-release-'));
+    try {
+      execSync(
+        `gh release download ${JSON.stringify(PREV_TAG)} --pattern 'catalog.json' --dir ${JSON.stringify(SHIPPED_DIR)} --clobber`,
+        { stdio: ['ignore', 'ignore', 'ignore'] },
+      );
+      SHIPPED_CATALOG = JSON.parse(readFileSync(join(SHIPPED_DIR, 'catalog.json'), 'utf8'));
+    } catch (e) {
+      console.warn(`::warning::previous release ${PREV_TAG} unavailable (${String(e.message).split('\n')[0]}) — base versions fall back to the versions.json ledger`);
+      rmSync(SHIPPED_DIR, { recursive: true, force: true });
+      SHIPPED_DIR = null;
+      SHIPPED_CATALOG = {};
+    }
   }
   return SHIPPED_CATALOG;
 }
