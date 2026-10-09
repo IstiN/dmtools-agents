@@ -12,9 +12,22 @@
  *
  * Usage:
  *   node ci/release_packs.mjs [--agents=all|name1,name2] [--bump=patch|minor|major]
- *       [--base-ref <git-ref>] [--out dist] [--dry-run]
+ *       [--base-ref <git-ref>] [--prev-release-tag <tag>] [--allow-unverified-base]
+ *       [--out dist] [--dry-run]
  *
  * Exit 0 with an empty affected set means "nothing to release" (not an error).
+ *
+ * gh-812 release integrity (live incident 2026-10-09): the builder derives
+ * every version from the PREVIOUS RELEASE's shipped catalog (append-only,
+ * cannot be rewritten by a failed ledger push) rather than versions.json on
+ * main (--prev-release-tag; a failed shipped-state read FAILS the release
+ * unless --allow-unverified-base opts into the ledger fallback), re-version
+ * an unbumped agent whose
+ * rebuilt payload differs from what its unchanged version already shipped
+ * (never republish changed content under a shipped version), and gate every
+ * built zip through the require sanity check (assertZipRequires) BEFORE the
+ * ledger commit and the publish — a pack whose code requires a file the zip
+ * does not carry must fail the release, not the fa runners.
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -39,13 +52,30 @@ import {
   agentNamesFromFiles, isAgentConfigFile, toAgentName,
 } from './pack_release_guard.cjs';
 
+// gh-812: version uniqueness (shipped-version-first resolution, payload
+// fingerprints) + the require sanity gate — both pure CommonJS twins kept
+// unit-testable in the dmtools runner (same split as pack_release_guard.cjs).
+import {
+  bump, resolveBaseVersion, resolveCandidateVersion, resolveShipVersion,
+  fingerprintsDiffer,
+} from './pack_version_guard.cjs';
+import { unresolvedRequires } from './pack_require_gate.cjs';
+
 const ROOT = process.cwd();
 const VERSIONS_FILE = join(ROOT, 'versions.json');
 const OUT_DIR = arg('--out') || 'dist';
 const BUMP = arg('--bump') || 'patch';
 const AGENTS_INPUT = arg('--agents') || '';
 const BASE_REF = arg('--base-ref') || '';
+const PREV_TAG = arg('--prev-release-tag') || '';
 const DRY_RUN = hasFlag('--dry-run');
+// gh-812 rework (review thread 2): a failed shipped-state read defaults to
+// FAILING the release — silently degrading to the stale versions.json
+// ledger (the incident's root cause) or skipping the payload-drift check
+// re-opens the exact two-packs-one-version collision this pipeline exists
+// to prevent. --allow-unverified-base opts into the degraded mode as a
+// deliberate human decision instead of a log line.
+const ALLOW_UNVERIFIED_BASE = hasFlag('--allow-unverified-base');
 
 /** Directory prefixes whose change affects every agent (shared runtime code). */
 const SHARED_PREFIXES = ['js/', 'instructions/', 'prompts/', 'scripts/'];
@@ -172,12 +202,150 @@ function computeAffectedSet() {
   return [...affected].sort();
 }
 
-/** Semver bump. */
-function bump(version, kind) {
-  const [maj, min, pat] = version.split('.').map((n) => parseInt(n, 10) || 0);
-  if (kind === 'major') return `${maj + 1}.0.0`;
-  if (kind === 'minor') return `${maj}.${min + 1}.0`;
-  return `${maj}.${min}.${pat + 1}`;
+/**
+ * Shipped state of the PREVIOUS release (gh-812 V1): catalog.json gives the
+ * version each agent actually shipped (append-only release history — cannot
+ * be rewritten by a failed ledger push, unlike versions.json on main), and
+ * same-version pack zips give the payload to compare rebuilt unbumped agents
+ * against (V3). Strict by default (gh-812 rework, review thread 2): a failed
+ * read FAILS the release — the fallback paths silently reverted to the
+ * stale-ledger base / skipped the drift check, which re-opens AC2 with only
+ * a warning. --allow-unverified-base opts into the degraded mode; the
+ * degraded read stays visible at ::warning:: level.
+ */
+let SHIPPED_DIR = null;
+let SHIPPED_CATALOG = null;
+const SHIPPED_ZIP_MANIFESTS = {};
+
+/** gh invocation suffix: the repo slug when Actions provides it, else gh
+ *  falls back to the local git remote (a release checkout has one). */
+function ghRepoArg() {
+  const repo = process.env.GITHUB_REPOSITORY || '';
+  return repo ? ` --repo ${JSON.stringify(repo)}` : '';
+}
+
+function shippedCatalog() {
+  if (SHIPPED_CATALOG === null) {
+    if (!PREV_TAG || DRY_RUN) return {}; // no previous release to read — ledger fallback
+    SHIPPED_DIR = mkdtempSync(join(tmpdir(), 'prev-release-'));
+    try {
+      execSync(
+        `gh release download ${JSON.stringify(PREV_TAG)} --pattern 'catalog.json' --dir ${JSON.stringify(SHIPPED_DIR)} --clobber${ghRepoArg()}`,
+        { stdio: ['ignore', 'ignore', 'ignore'] },
+      );
+      SHIPPED_CATALOG = JSON.parse(readFileSync(join(SHIPPED_DIR, 'catalog.json'), 'utf8'));
+      // gh-812 rework (review thread 6): ONE batched download of every zip
+      // on the previous release replaces ~68 serial per-agent `gh release
+      // download` round-trips inside the build loop — minutes of gh time
+      // per release, and each call was another chance for the transient
+      // failure the drift check depends on. shippedZipManifest() below
+      // just reads the local copy. Release assets for one tag are bounded,
+      // and stale-version zips are simply ignored (each agent has exactly
+      // one version per release snapshot).
+      execSync(
+        `gh release download ${JSON.stringify(PREV_TAG)} --pattern '*.zip' --dir ${JSON.stringify(SHIPPED_DIR)} --clobber${ghRepoArg()}`,
+        { stdio: ['ignore', 'ignore', 'ignore'] },
+      );
+    } catch (e) {
+      const reason = String(e.message).split('\n')[0];
+      rmSync(SHIPPED_DIR, { recursive: true, force: true });
+      SHIPPED_DIR = null;
+      SHIPPED_CATALOG = {};
+      if (!ALLOW_UNVERIFIED_BASE) {
+        console.error(`::error::previous release ${PREV_TAG} unavailable (${reason}) — failing the release: without the shipped catalog the version-uniqueness base degrades to the versions.json ledger that caused gh-812 (pass --allow-unverified-base to accept the degraded base)`);
+        throw new Error(
+          `shipped catalog of ${PREV_TAG} could not be read (${reason}); ` +
+          'refusing to release on an unverifiable base (gh-812: never re-ship changed content under a shipped version) — ' +
+          'pass --allow-unverified-base to release with ledger-based versions',
+        );
+      }
+      console.warn(`::warning::previous release ${PREV_TAG} unavailable (${reason}) — --allow-unverified-base set: base versions fall back to the versions.json ledger`);
+    }
+  }
+  return SHIPPED_CATALOG;
+}
+
+/** manifest.json text of the zip the previous release shipped for
+ *  <agent>-<version>, read from the batched download at shippedCatalog()
+ *  time (no per-agent gh round-trip — gh-812 rework, review thread 6);
+ *  null ONLY in the explicit --allow-unverified-base degraded mode or when
+ *  there is no previous release to compare against. */
+function shippedZipManifest(agent, version) {
+  const key = `${agent}@${version}`;
+  if (Object.prototype.hasOwnProperty.call(SHIPPED_ZIP_MANIFESTS, key)) {
+    return SHIPPED_ZIP_MANIFESTS[key];
+  }
+  if (!PREV_TAG || DRY_RUN || !SHIPPED_DIR) return null;
+  try {
+    SHIPPED_ZIP_MANIFESTS[key] = execSync(
+      `unzip -p ${JSON.stringify(join(SHIPPED_DIR, `${agent}-${version}.zip`))} manifest.json`,
+      { encoding: 'utf8' },
+    );
+  } catch (e) {
+    const reason = String(e.message).split('\n')[0];
+    if (!ALLOW_UNVERIFIED_BASE) {
+      // gh-812 rework (review thread 2): a failed read used to return null,
+      // and fingerprintsDiffer(null, …) === false shipped the rebuilt pack
+      // at the version that already shipped — the drift check silently
+      // disabled, per agent and quiet. Fail the release instead.
+      console.error(`::error::shipped ${key}.zip missing/unreadable from ${PREV_TAG} (${reason}) — failing the release: the payload-drift check cannot run, so changed content could ship under the already-shipped version (pass --allow-unverified-base to skip the comparison)`);
+      throw new Error(
+        `shipped ${key}.zip could not be read from ${PREV_TAG} (${reason}); ` +
+        'the payload-drift check cannot run — refusing to republish under a shipped version (gh-812) — ' +
+        'pass --allow-unverified-base to skip the comparison',
+      );
+    }
+    console.warn(`::warning::could not read shipped ${key}.zip for the payload comparison (${reason}) — --allow-unverified-base set: shipping at the candidate version`);
+    SHIPPED_ZIP_MANIFESTS[key] = null;
+  }
+  return SHIPPED_ZIP_MANIFESTS[key];
+}
+
+/** manifest.json text from a freshly built zip (validatePack already does
+ *  this read — kept separate so the gate ordering stays explicit). */
+function zipManifestText(zipPath) {
+  return execSync(`unzip -p ${JSON.stringify(zipPath)} manifest.json`, { encoding: 'utf8' });
+}
+
+/**
+ * gh-812 AC1/AC3 release self-test: every literal relative require in every
+ * .js inside [zipPath] must resolve to a file IN the zip — else throw, so
+ * the build step exits non-zero before the ledger commit and the publish.
+ * validatePack() cannot catch this class: it re-hashes manifest entries
+ * against themselves, never checks payload self-consistency.
+ */
+function assertZipRequires(zipPath) {
+  const tmp = mkdtempSync(join(tmpdir(), 'pack-require-gate-'));
+  try {
+    execSync(`unzip -q -o ${JSON.stringify(zipPath)} -d ${JSON.stringify(tmp)}`);
+    const paths = new Set();
+    const sources = [];
+    const walk = (dir, rel) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const relPath = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) walk(join(dir, e.name), relPath);
+        else {
+          paths.add(relPath);
+          if (relPath.endsWith('.js')) {
+            sources.push({ path: relPath, source: readFileSync(join(dir, e.name), 'utf8') });
+          }
+        }
+      }
+    };
+    walk(tmp, '');
+    const unresolved = unresolvedRequires(sources, paths);
+    if (unresolved.length > 0) {
+      const lines = unresolved
+        .map((u) => `  ${u.from}: require('${u.spec}') -> none of [${u.bases.join(', ')}] is in the zip`)
+        .join('\n');
+      throw new Error(
+        `require sanity gate FAILED for ${basename(zipPath)}: ` +
+        `${unresolved.length} packed require(s) resolve to files absent from the zip (gh-812):\n${lines}`,
+      );
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -264,6 +432,54 @@ function validatePack(zipPath) {
   return files.length;
 }
 
+/**
+ * Builds ONE agent pack release-ready: compile → launch-surface augment →
+ * gh-812 payload-drift re-version (an unchanged version must never re-ship
+ * changed content) → require sanity gate → manifest validation. The guarded
+ * chain stays literal and in order (build → augment → validate — see
+ * test_packLaunchContract); [next] is the version to build at and is
+ * advanced when the drift check forces a re-version. Returns the shipped
+ * { zipPath, version }.
+ */
+function buildPackRelease(agent, next, isAffected, shippedVersion) {
+  // ALWAYS build every agent zip — a factory-setup-only release is a
+  // RELEASE too and must stay a self-contained snapshot. Skipping the
+  // build on an empty affected set shipped a catalog that advertised
+  // packs the release never carried, and the registry resolver 404'd
+  // on `@latest` (live: fa SM tick 2026-10-03T08:49, sm_github-0.1.18
+  // in catalog, zip absent from agents-rel-20261003-084425).
+  const zip = buildPack(agent, next);
+  augmentLaunchSurface(agent, zip);
+  // gh-812 V3: a rebuilt-but-unbumped agent whose payload differs from the
+  // zip its version already shipped is the exact collision class that put
+  // two different sm_github-0.1.36.zip files into 075526 and 091304 —
+  // re-version one patch up instead of republishing under the same name.
+  if (!isAffected && shippedVersion === next &&
+      fingerprintsDiffer(shippedZipManifest(agent, shippedVersion), zipManifestText(zip))) {
+    next = resolveShipVersion(next, true);
+    console.log(`  payload differs from shipped ${shippedVersion} — re-versioning to ${next} (gh-812: never republish changed content under a shipped version)`);
+    // gh-812 rework (review thread 1, BLOCKING): the first build materialized
+    // the drifted payload AS <agent>-<shippedVersion>.zip (+ .sha256) in
+    // dist/ — the version this check just proved already shipped DIFFERENT
+    // content. The publish step uploads dist/*.zip wholesale, so both stale
+    // artifacts must be gone BEFORE the rebuild at the final version, or the
+    // release republishes the exact two-packs-one-version collision gh-812
+    // forbids (version-keyed consumer caches would refresh from its assets).
+    rmSync(zip, { force: true });
+    rmSync(`${zip}.sha256`, { force: true });
+    const rezipped = buildPack(agent, next);
+    augmentLaunchSurface(agent, rezipped);
+    assertZipRequires(rezipped); // gh-812 AC1/AC3 — throws before ledger commit + publish
+    const recount = validatePack(rezipped);
+    console.log(`validated ${basename(rezipped)} (${recount} files)`);
+    return { zipPath: rezipped, version: next };
+  }
+  assertZipRequires(zip); // gh-812 AC1/AC3 — throws before ledger commit + publish
+  const count = validatePack(zip);
+  console.log(`validated ${basename(zip)} (${count} files)`);
+  return { zipPath: zip, version: next };
+}
+
 function main() {
   const versions = readVersions();
   const affected = computeAffectedSet();
@@ -291,28 +507,31 @@ function main() {
   // because the 19:07 release bumped only sm_github).
   const agents = allAgents();
   const catalog = {};
+  const ledgerBefore = { ...versions };
   for (const agent of agents) {
-    const current = versions[agent] || '0.1.0';
-    const next = affected.includes(agent) ? bump(current, BUMP) : current;
-    console.log(`\n=== ${agent}: ${current}${next !== current ? ` -> ${next}` : ' (unchanged)'} ===`);
+    const ledgerVersion = versions[agent] || '0.1.0';
+    const shippedVersion = shippedCatalog()[agent] || null;
+    const isAffected = affected.includes(agent);
+    // gh-812 V1/V2: the base is what the previous release SHIPPED for this
+    // agent (append-only, cannot be rewritten by a failed ledger push); the
+    // versions.json ledger is only the fallback. Bumping from a stale ledger
+    // re-shipped a live version with new content — the gh-812 collision.
+    let next = resolveCandidateVersion(resolveBaseVersion(ledgerVersion, shippedVersion), BUMP, isAffected);
+    console.log(`\n=== ${agent}: ledger ${ledgerVersion}, shipped ${shippedVersion || '<none>'}${next !== ledgerVersion ? ` -> ${next}` : ' (unchanged)'} ===`);
     if (!DRY_RUN) {
-      // ALWAYS build every agent zip — a factory-setup-only release is a
-      // RELEASE too and must stay a self-contained snapshot. Skipping the
-      // build on an empty affected set shipped a catalog that advertised
-      // packs the release never carried, and the registry resolver 404'd
-      // on `@latest` (live: fa SM tick 2026-10-03T08:49, sm_github-0.1.18
-      // in catalog, zip absent from agents-rel-20261003-084425).
-      const zip = buildPack(agent, next);
-      augmentLaunchSurface(agent, zip);
-      const count = validatePack(zip);
-      console.log(`validated ${basename(zip)} (${count} files)`);
+      const built = buildPackRelease(agent, next, isAffected, shippedVersion);
+      next = built.version;
       versions[agent] = next;
     }
-    catalog[agent] = versions[agent];
+    catalog[agent] = next;
   }
 
   if (!DRY_RUN) {
-    if (affected.length > 0) {
+    // Write the ledger whenever any final version diverges from what it
+    // said — affected bumps, gh-812 forced re-versionings, and the
+    // reconciliation of a ledger that lagged the shipped catalog.
+    const ledgerChanged = agents.some((a) => versions[a] !== (ledgerBefore[a] || '0.1.0'));
+    if (ledgerChanged) {
       writeFileSync(VERSIONS_FILE, JSON.stringify(versions, null, 2) + '\n');
     }
     // The factory-setup asset rides EVERY release (self-contained snapshot,

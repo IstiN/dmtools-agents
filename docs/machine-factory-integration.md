@@ -301,6 +301,48 @@ launch configs (`descriptionPath`, `cliCommands`, JS actions, prompts)
 already resolves INSIDE the zip — the compiler embeds the referenced
 files and the runtime resolver rewrites the paths to the pack root.
 
+### Pack release integrity (gh-812) and the rollback contract
+
+Two releases with differing pack content must never share a version
+string. Live 2026-10-09 (gh-812): the version ledger (`versions.json`)
+push back to main is best-effort and never landed, so consecutive
+releases recomputed the same bump and shipped two different
+`sm_github-0.1.36.zip` files (075526 vs 091304); version-keyed consumer
+caches ran mixed content and every fa machine-sm tick went red for
+~25 min. The pipeline now guarantees:
+
+- **Shipped-version-first base** — `ci/release_packs.mjs` reads each
+  agent's base version from the PREVIOUS release's `catalog.json`
+  (append-only release history; `--prev-release-tag`). A failed
+  shipped-state read FAILS the release — a gh outage is transient (the
+  next push retries) while a silently degraded base re-opens the
+  collision; `--allow-unverified-base` opts into the versions.json ledger
+  fallback as a deliberate operator decision. A failed ledger push can no
+  longer make a release reuse a version that is already out there.
+- **Payload-drift re-versioning** — a rebuilt-but-unbumped agent whose
+  payload differs from the zip its version already shipped is re-versioned
+  one patch up (manifest `files` fingerprints — path + sha256 + mode;
+  metadata like `sourceCommit` never counts as a content change), and the
+  first-built zip at the already-shipped version is deleted from `dist/`
+  before the rebuild so the release ships exactly one zip per agent per
+  version. Byte-identical rebuilds keep their version — no churn.
+- **Require sanity gate** — every built zip is unpacked and every literal
+  relative `require` in every packed `.js` must resolve to a file inside
+  the zip (file-relative OR js/-root-relative base — dmtools resolves
+  both). Unresolved requires fail the release (exit != 0) before the
+  ledger commit and the publish. This is defense-in-depth on top of
+  `dmtools compile`'s own require-closure check of the repo sources: the
+  gate verifies the produced ARTIFACT, whatever CLI version built it.
+
+Rollback contract: registry consumers pin a release-tag base URL instead
+of `latest` — exactly the live mitigation used during the incident. Set
+the registry/base vars (`DMTOOLS_PACK_REGISTRY`,
+`AGENTS_VERSION`) to the known-good tag, e.g.
+`DMTOOLS_PACK_REGISTRY=https://github.com/<owner>/<repo>/releases/download/agents-rel-YYYYMMDD-HHMMSS`,
+and the packs resolve from that release's assets + catalog regardless of
+what newer releases publish. Cut a fresh release (never re-tag) to move
+forward: content changes always produce a new version string.
+
 ### Patching rules — `smRuleOverrides`
 
 Rules carry stable ids (`rework-on-red-ci`, `review-after-dev`,

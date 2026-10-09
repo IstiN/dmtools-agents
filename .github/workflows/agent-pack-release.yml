@@ -119,11 +119,38 @@ jobs:
           AGENTS: ${{ inputs.agents || '' }}
           BUMP: ${{ inputs.bump || 'patch' }}
           DRY: ${{ inputs.dry_run || false }}
+          # gh-812: the builder reads the previous release's shipped catalog
+          # and same-version pack zips (version uniqueness + payload compare).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # gh-812 rework (review thread 3): untrusted tag names reach the
+          # script ONLY through env indirection — never template-expanded
+          # into the run: block. Actions interpolates ${{ }} BEFORE bash
+          # parses the script, so a crafted agents-rel-* tag name (any user
+          # with push access can create one; the newest by creatordate wins)
+          # could break out of the quoting and run arbitrary code in this
+          # contents:write job.
+          BASE_REF: ${{ steps.base.outputs.ref }}
+          PREV_RELEASE_TAG: ${{ steps.base.outputs.ref }}
         run: |
           set -euo pipefail
+          # gh-812 rework: release-base tags are machine-generated
+          # (agents-rel-YYYYMMDD-HHMMSS); anything else in the newest
+          # agents-rel-* tag is rejected before it reaches the builder.
+          # Empty is allowed — the first release has no base tag.
+          for tag in "${BASE_REF}" "${PREV_RELEASE_TAG}"; do
+            if [ -n "${tag}" ] && ! [[ "${tag}" =~ ^agents-rel-[0-9]{8}-[0-9]{6}$ ]]; then
+              echo "::error::unexpected agents-rel tag format: ${tag}" >&2
+              exit 1
+            fi
+          done
           args=(--out dist)
           [ -n "${AGENTS}" ] && args+=(--agents="${AGENTS}")
-          [ -n "${{ steps.base.outputs.ref }}" ] && args+=(--base-ref="${{ steps.base.outputs.ref }}")
+          [ -n "${BASE_REF}" ] && args+=(--base-ref="${BASE_REF}")
+          # gh-812: base versions come from what the last release SHIPPED —
+          # versions.json on main is a best-effort ledger that can (and did)
+          # lag reality by whole releases, re-shipping a live version with
+          # new content.
+          [ -n "${PREV_RELEASE_TAG}" ] && args+=(--prev-release-tag="${PREV_RELEASE_TAG}")
           [ "${DRY}" = "true" ] && args+=(--dry-run)
           [ "${BUMP}" != "patch" ] && args+=(--bump="${BUMP}")
           node ci/release_packs.mjs "${args[@]}"
