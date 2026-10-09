@@ -931,8 +931,50 @@ suite('smAgent: sm_github.json rule hygiene', function () {
     });
 });
 
-suite('smAgent: localAction reconcile_verdicts (gh-807 verdict reconciliation)', function () {
+suite('smAgent: sm_github.json reconcile-review-verdicts rule (gh-807 hygiene)', function () {
 
+    test('reconcile-review-verdicts: gh-807 — rule exists, runs before the merge window, pr_approved lanes carry notLatestVerdict', function () {
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+
+        var rule = byId['reconcile-review-verdicts'];
+        assert.ok(rule, 'reconcile-review-verdicts exists');
+        assert.equal(rule.localAction, 'reconcile_verdicts', 'a localAction — no dispatch');
+        assert.equal(rule.source, 'github', 'github carrier');
+        assert.deepEqual(rule.query.labels, ['pr_approved', 'agent:rework'],
+            'either contradictory carrier matches (OR semantics — the action decides)');
+        assert.deepEqual(rule.query.latestVerdict, ['APPROVE', 'REQUEST_CHANGES', 'BLOCK'],
+            'only heads with a resolved verdict record reconcile');
+        assert.ok(rule.limit >= 5, 'waves reconcile in one tick (label writes only)');
+
+        // ORDER: after the rerun twins (#682 rerun-first invariant stands),
+        // before unarm-stale-validation — the merge window of the SAME tick
+        // must see the reconciled labels. #637 (merge-validated before
+        // sweep-stale-validating) is untouched — reconciliation sits before
+        // both.
+        var mine = rules.indexOf(rule);
+        assert.ok(mine > rules.indexOf(byId['rerun-cancelled-checks']), 'after rerun-cancelled-checks (#682)');
+        assert.ok(mine > rules.indexOf(byId['rerun-any-cancelled-checks']), 'after rerun-any-cancelled-checks');
+        assert.ok(mine < rules.indexOf(byId['unarm-stale-validation']), 'before the merge-window rules');
+
+        // The pr_approved lanes refuse a newest REQUEST_CHANGES/BLOCK on the
+        // head — "blocks pr_approved-gated paths until re-review" (gh-807).
+        ['merge-validated', 'validate-armed', 'revalidate-armed', 'revalidate-armed-green'].forEach(function (id) {
+            var r = byId[id];
+            assert.ok(r, id + ' exists');
+            assert.deepEqual(r.query.notLatestVerdict, ['REQUEST_CHANGES', 'BLOCK'],
+                id + ' blocks on a newest changes-requested verdict');
+        });
+        // The fail path stays verdict-neutral: red CI arms rework regardless
+        // of which review verdict is newest.
+        assert.equal(byId['fail-validation'].query.notLatestVerdict, undefined,
+            'fail-validation is not approval-gated — red CI rework must not be blocked');
+    });
+});
+
+suite('smAgent: localAction reconcile_verdicts (gh-807 verdict reconciliation)', function () {
     var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
 
     function verdictMarker(head, verdict, at, blocking) {

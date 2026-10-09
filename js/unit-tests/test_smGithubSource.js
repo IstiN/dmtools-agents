@@ -14,10 +14,13 @@ suite('sm github source', function () {
         prStatus: function (n) { return providerStub._status[n] || null; },
         lastReview: function (n) { return providerStub._reviews[n] || null; },
         reviewThreads: function (n) { return providerStub._threads[n] || null; },
-        // gh-807 verdict records: {headSha: {record, conflict}|null} — the
-        // query guards (latestVerdict / notLatestVerdict) read through this.
+        // gh-807 verdict records: keyed by PR number, but the contract is
+        // per (pr, head) — a missing head sha resolves to null exactly like
+        // the real provider (pins the needsStatus wiring: a rule carrying a
+        // verdict guard must fetch prStatus, or the guard never resolves a
+        // head and can never match).
         latestVerdictRecord: function (n, headSha) {
-            if (!providerStub._verdictRecords) return null;
+            if (!headSha || !providerStub._verdictRecords) return null;
             return providerStub._verdictRecords[n] || null;
         },
         _prs: {},
@@ -1338,6 +1341,8 @@ suite('sm github source', function () {
         var keys = items.map(function (i) { return i.key; }).sort();
         assert.deepEqual(keys, ['pr-81', 'pr-82'],
             'the record-less PR never enters reconciliation (fail-open)');
+        assert.ok(items.every(function (i) { return i.pr && i.pr.headSha === HEAD; }),
+            'a verdict-guard rule fetches prStatus — the guard needs the head sha (gh-807 wiring)');
     });
 
     test('BLOCK verdict blocks the approval lane too', function () {
