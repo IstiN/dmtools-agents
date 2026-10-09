@@ -27,14 +27,22 @@ var KEY_EXTRACTION_RE = new RegExp(
     'i'
 );
 
+// ADO WIQL id filter: `[System.Id] = N` / `[System.Id] in (N)` (spaces inside the brackets and
+// any letter case are allowed — WIQL field names are case-insensitive).
+var WIQL_ID_RE = /\[\s*System\.Id\s*\]\s*(?:=|in\s*\()\s*(\d+)/i;
+
 /**
  * Extract the ticket key from an inputJql string.
- * Handles "key = KEY", "key in (KEY)" and the GitHub key shapes.
+ * Handles "key = KEY", "key in (KEY)", the GitHub key shapes and ADO WIQL id filters.
  * @param {string} jql
  * @returns {string|null}
  */
 function extractTicketKeyFromJql(jql) {
     if (!jql || typeof jql !== 'string') return null;
+    // Azure DevOps WIQL: `[System.Id] = 1839749`, `[ System.Id ] in (1839749)`, or a full
+    // `SELECT ... WHERE [System.Id] = N` — the key is the bare numeric work item id (#804).
+    var wiql = jql.match(WIQL_ID_RE);
+    if (wiql) return wiql[1];
     var m = jql.match(KEY_EXTRACTION_RE);
     if (!m || !m[1]) return null;
     // The Jira branch is case-insensitive, so it can also match a gh-N key —
@@ -49,10 +57,34 @@ function extractTicketKeyFromJql(jql) {
  * @param {string|null} key
  */
 function validateTicketKeyFormat(key) {
-    if (!key || (!TICKET_KEY_RE.test(key) && !ticketKeyShapes.isGitHubKeyShape(key))) {
+    if (!isValidTicketKey(key)) {
         throw new Error('Invalid or missing ticket key: "' + key +
-            '". Expected a Jira key (PROJECT-123) or a GitHub issue key (gh-123, owner/repo#123, #123, 123)');
+            '". Expected a Jira key (PROJECT-123), a GitHub issue key (gh-123, owner/repo#123, #123, 123) ' +
+            'or an Azure DevOps work item id (123)');
     }
+}
+
+/**
+ * True when key is a Jira key, a GitHub issue key shape or a bare numeric ADO work item id.
+ * The single owner of "what is a ticket key" — buildEncodedConfig uses it too (#804).
+ * @param {string|null} key
+ * @returns {boolean}
+ */
+function isValidTicketKey(key) {
+    return !!key && (TICKET_KEY_RE.test(key) || ticketKeyShapes.isGitHubKeyShape(key));
+}
+
+/**
+ * The inputJql that selects exactly one ticket: Jira/GitHub `key = KEY`, ADO a WIQL id filter.
+ * @param {string} key  A validated ticket key
+ * @param {string} [provider] 'jira' | 'ado' | 'github' (anything else behaves like jira)
+ * @returns {string}
+ */
+function inputJqlForKey(key, provider) {
+    if (String(provider || '').toLowerCase() === 'ado') {
+        return 'SELECT [System.Id] FROM WorkItems WHERE [System.Id] = ' + key;
+    }
+    return 'key = ' + key;
 }
 
 /**
@@ -97,6 +129,8 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         extractTicketKeyFromJql: extractTicketKeyFromJql,
         validateTicketKeyFormat: validateTicketKeyFormat,
+        isValidTicketKey: isValidTicketKey,
+        inputJqlForKey: inputJqlForKey,
         requireTicketExists: requireTicketExists,
         validateAndRequireTicket: validateAndRequireTicket
     };
