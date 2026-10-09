@@ -8318,9 +8318,15 @@ suite('smAgent: statePublish tokens — local file first, branch fallback', func
         if (!opts.github.prList) opts.github.prList = '[]';
         if (!opts.github.workflowApiRuns) opts.github.workflowApiRuns = [];
         var sm = makeSmAgent(opts);
-        sm.action({ jobParams: {
+        var jp = {
             owner: 'o', repo: 'r', rules: [makeRule('project = T')], statePublish: SP
-        } });
+        };
+        if (opts.jobParamsPatch) {
+            Object.keys(opts.jobParamsPatch).forEach(function (k) {
+                jp[k] = opts.jobParamsPatch[k];
+            });
+        }
+        sm.action({ jobParams: jp });
         var putCmd = null;
         sm.capturedCliCommands.forEach(function (c) {
             if (c.command.indexOf('-X PUT repos/o/r/contents/data/fa-state.json ') !== -1) {
@@ -8472,6 +8478,53 @@ suite('smAgent: statePublish tokens — local file first, branch fallback', func
         assert.ok(run.sm.capturedLogs.some(function (l) {
             return l.indexOf('📡 factory state published') !== -1;
         }), '📡 published line still present — the tick stayed green');
+    });
+
+    // ── gh-816: the lane writer cites REAL validation runs, never SM legs ──
+    // End-to-end through the tick: a fresher "review (SM)" leg dispatch on
+    // the PR head must not steal the cite from the machine's own validation
+    // workflow — and the wiring must forward jobParams.ciWorkflow into the
+    // snapshot builder (a non-default name proves the knob is wired).
+
+    var GH816_HEAD = '0096ba5c9212a7bb6df03471dbe54d7ab32ff4b2';
+    var GH816_PR = JSON.stringify([{
+        number: 1437, title: 'feat: t', labels: [],
+        head: { ref: 'ai/1437', sha: GH816_HEAD }, user: { login: 'me' },
+        created_at: '2026-10-09T10:00:00Z'
+    }]);
+    var GH816_RUNS = [
+        { id: 37923501714, name: 'review (SM)', event: 'workflow_dispatch',
+          path: '.github/workflows/ai-teammate.yml', head_sha: GH816_HEAD,
+          status: 'completed', conclusion: 'success',
+          created_at: '2026-10-09T11:20:00Z', updated_at: '2026-10-09T11:24:00Z',
+          html_url: 'http://run/review' },
+        { id: 37921773706, name: 'PR o/r#1437', event: 'workflow_dispatch',
+          path: '.github/workflows/mycheck.yml', head_sha: GH816_HEAD,
+          status: 'completed', conclusion: 'success',
+          created_at: '2026-10-09T11:05:00Z', updated_at: '2026-10-09T11:12:19Z',
+          html_url: 'http://run/dyn' }
+    ];
+
+    test('gh-816: published lane cite is the validation dispatch, the review leg rides auxiliary', function() {
+        var run = publishTick({
+            fileMap: {},
+            github: { prList: GH816_PR, workflowApiRuns: GH816_RUNS },
+            jobParamsPatch: { ciWorkflow: 'mycheck.yml' }
+        });
+        var card = run.state.lanes.pr_created.filter(function (c) {
+            return c.pr === 1437;
+        })[0];
+        assert.ok(card, 'pr-1437 card published');
+        assert.equal(card.checks && card.checks.runId, 37921773706,
+            'the machine\'s validation dispatch (mycheck.yml) is the cite — ' +
+            'not the fresher review (SM) leg');
+        assert.ok(card.checks && card.checks.auxiliary &&
+            card.checks.auxiliary.runId === 37923501714,
+            'the review leg is preserved as auxiliary evidence');
+        assert.ok(card.checks.sha === GH816_HEAD &&
+            card.checks.conclusion === 'success' &&
+            card.checks.name === 'PR o/r#1437',
+            'the cite carries the audit fields (run id + name + sha + conclusion)');
     });
 
 });
