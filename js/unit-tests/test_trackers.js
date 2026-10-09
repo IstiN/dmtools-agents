@@ -302,7 +302,7 @@ suite('trackers.js ado provider', function () {
         var t = trackers.createTracker({ tracker: { provider: 'ado' } });
         t.postComment('4242', 'hello');
         var comments = t.getComments('4242');
-        assert.deepEqual(adoAdd.calls[0], { id: '4242', comment: 'hello' });
+        assert.deepEqual(adoAdd.calls[0], { id: '4242', comment: 'hello', format: 'markdown' });
         assert.deepEqual(adoList.calls[0], { id: '4242' });
         assert.equal(comments[0].body, 'n1');
         assert.equal(comments[0].author, 'A');
@@ -331,7 +331,8 @@ suite('trackers.js ado provider', function () {
             project: 'Proj',
             workItemType: 'Bug',
             title: 'It breaks',
-            description: 'details'
+            description: 'details',
+            format: 'markdown'
         });
         assert.equal(key, '4300');
     });
@@ -885,7 +886,7 @@ suite('trackers.js extended operations — ado provider', function () {
     test('updateDescription -> ado_update_description', function () {
         var ud = recorder('ado_update_description', '{}');
         loadTrackers({ ado_update_description: ud }).createTracker(ado()).updateDescription('5', 'd');
-        assert.deepEqual(ud.calls[0], { id: '5', description: 'd' });
+        assert.deepEqual(ud.calls[0], { id: '5', description: 'd', format: 'markdown' });
     });
 
     test('updateField on description/labels reuses the existing ado tools', function () {
@@ -893,7 +894,7 @@ suite('trackers.js extended operations — ado provider', function () {
         var t = loadTrackers({ ado_update_description: ud, ado_update_tags: ut }).createTracker(ado());
         t.updateField('5', 'Description', 'body');
         t.updateField('5', 'labels', ['a', 'b']);
-        assert.deepEqual(ud.calls[0], { id: '5', description: 'body' });
+        assert.deepEqual(ud.calls[0], { id: '5', description: 'body', format: 'markdown' });
         assert.deepEqual(ut.calls[0], { id: '5', tags: 'a; b' });
     });
 
@@ -908,7 +909,7 @@ suite('trackers.js extended operations — ado provider', function () {
         t.updateField('5', 'summary', 'New');
         t.updateField('5', 'Custom.Solution', 'x');
         assert.deepEqual(uf.calls[0], { id: '5', field: 'System.Title', value: 'New' });
-        assert.deepEqual(uf.calls[1], { id: '5', field: 'Custom.Solution', value: 'x' });
+        assert.deepEqual(uf.calls[1], { id: '5', field: 'Custom.Solution', value: 'x', format: 'markdown' });
     });
 
     test('updateField on a runtime without ado_update_field names the missing tool', function () {
@@ -977,6 +978,40 @@ suite('trackers.js extended operations — ado provider', function () {
         assert.equal(loadTrackers({ ado_get_field_code: fc }).createTracker(ado()).fieldCode('P', 'Solution Design'), 'Custom.SolutionDesign');
         assert.deepEqual(fc.calls[0], { project: 'P', fieldName: 'Solution Design' });
         assert.equal(loadTrackers(NO_ADO_NEW_TOOLS).createTracker(ado()).fieldCode('P', 'Solution Design'), null);
+    });
+
+    test('ado text format (agents#805): markdown by default for comments, descriptions, create and long-text fields', function () {
+        var pc = recorder('ado_add_work_item_comment', '{}'), ud = recorder('ado_update_description', '{}');
+        var uf = recorder('ado_update_field', '{}'), cr = recorder('ado_create_work_item', '{"id":9}');
+        var t = loadTrackers({ ado_add_work_item_comment: pc, ado_update_description: ud, ado_update_field: uf, ado_create_work_item: cr }).createTracker(ado());
+        t.postComment('5', '**c**'); t.updateDescription('5', '# d'); t.updateField('5', 'Custom.Solution', 'x'); t.createTicket('P', 'Task', 'T', '# d');
+        [pc, ud, uf, cr].forEach(function (r) { assert.equal(r.calls[0].format, 'markdown'); });
+    });
+
+    test('ado text format: short fields never get a format (title, priority, state)', function () {
+        var uf = recorder('ado_update_field', '{}');
+        var t = loadTrackers({ ado_update_field: uf }).createTracker(ado());
+        t.updateField('5', 'summary', 'New'); t.updateField('5', 'Microsoft.VSTS.Common.Priority', 2); t.updateField('5', 'state', 'Done');
+        uf.calls.forEach(function (c) { assert.equal(c.format, undefined, JSON.stringify(c)); });
+    });
+
+    test('ado text format: adoTextFormat=html (customParams or config) keeps the exact previous args (backward compatibility)', function () {
+        var pc = recorder('ado_add_work_item_comment', '{}'), ud = recorder('ado_update_description', '{}');
+        var m = { ado_add_work_item_comment: pc, ado_update_description: ud };
+        var viaParams = loadTrackers(m).createTracker(ado(), { adoTextFormat: 'html' });
+        viaParams.postComment('5', 'c'); viaParams.updateDescription('5', 'd');
+        var viaConfig = loadTrackers(m).createTracker({ tracker: { provider: 'ado', adoTextFormat: 'HTML' } });
+        viaConfig.postComment('6', 'c');
+        assert.deepEqual(pc.calls[0], { id: '5', comment: 'c' });
+        assert.deepEqual(ud.calls[0], { id: '5', description: 'd' });
+        assert.deepEqual(pc.calls[1], { id: '6', comment: 'c' });
+    });
+
+    test('jira and github writes are untouched by the ado text format', function () {
+        var jc = recorder('jira_post_comment', '{}');
+        loadTrackers({ jira_post_comment: jc }).createTracker({}, { trackerProvider: 'jira' }).postComment('P-1', 'c');
+        assert.equal(jc.calls[0].format, undefined);
+        assert.equal(JSON.stringify(jc.calls[0]).indexOf('format'), -1);
     });
 
     test('normalizeTicket exposes issueType and parentKey from System.* fields', function () {

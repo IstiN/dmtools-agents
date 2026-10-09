@@ -152,6 +152,14 @@ function createTracker(config, customParams) {
     var providerName = VALID.indexOf(String(raw).toLowerCase()) !== -1
         ? String(raw).toLowerCase()
         : 'jira';
+    // Text format sent to Azure DevOps for descriptions, long-text fields and comments (agents#805).
+    // ADO instructions (ado_markup_transform.md) make the model write Markdown, and ADO renders it
+    // only when the write says so — otherwise the raw Markdown shows up in the UI. Default
+    // 'markdown'; set customParams.adoTextFormat / config.tracker.adoTextFormat = 'html' to keep the
+    // previous HTML-only writes.
+    var adoFormatRaw = (customParams && customParams.adoTextFormat) ||
+        (config && config.tracker && config.tracker.adoTextFormat) || 'markdown';
+    var adoMarkdown = String(adoFormatRaw).toLowerCase() === 'markdown';
     var owner = (config && config.repository && config.repository.owner) || '';
     var repo  = (config && config.repository && config.repository.repo)  || '';
     var aiLabel = (config && config.labels && config.labels.aiGenerated)
@@ -322,8 +330,15 @@ function createTracker(config, customParams) {
         return _ticketPage(ado_search_by_wiql({ wiql: query }), 'value');
     }
 
+    // Adds format:'markdown' only when enabled: the html default sends the exact previous args, so a
+    // runtime without the 'format' parameter (older dmtools) keeps working unchanged.
+    function withAdoFormat(args) {
+        if (adoMarkdown) args.format = 'markdown';
+        return args;
+    }
+
     function adoPostComment(key, comment) {
-        return ado_add_work_item_comment({ id: String(key), comment: comment });
+        return ado_add_work_item_comment(withAdoFormat({ id: String(key), comment: comment }));
     }
 
     function adoGetComments(key) {
@@ -347,12 +362,12 @@ function createTracker(config, customParams) {
     }
 
     function adoCreateTicket(project, type, title, description) {
-        var raw = ado_create_work_item({
+        var raw = ado_create_work_item(withAdoFormat({
             project: project,
             workItemType: type,
             title: title,
             description: description
-        });
+        }));
         // ADO work items identify by numeric id, not by key.
         var parsed = _parseJson(raw);
         if (parsed && typeof parsed === 'object') {
@@ -391,19 +406,29 @@ function createTracker(config, customParams) {
     var ADO_FIELD_ALIASES = { summary: 'System.Title', title: 'System.Title', description: 'System.Description',
         priority: 'Microsoft.VSTS.Common.Priority', labels: 'System.Tags', tags: 'System.Tags' };
 
+    var ADO_SHORT_FIELDS = {
+        summary: true, title: true, state: true, assignedto: true, priority: true, storypoints: true, effort: true,
+        'system.title': true, 'system.state': true, 'system.assignedto': true, 'system.tags': true,
+        'system.areapath': true, 'system.iterationpath': true, 'microsoft.vsts.common.priority': true,
+        'microsoft.vsts.scheduling.storypoints': true, 'microsoft.vsts.scheduling.effort': true
+    };
+
     function adoUpdateField(key, field, value) {
         var f = String(field);
         var lower = f.toLowerCase();
-        if (lower === 'description') return ado_update_description({ id: String(key), description: String(value) });
+        if (lower === 'description') return ado_update_description(withAdoFormat({ id: String(key), description: String(value) }));
         if (lower === 'labels' || lower === 'tags') {
             return ado_update_tags({ id: String(key), tags: Array.isArray(value) ? value.join('; ') : String(value) });
         }
         if (typeof ado_update_field !== 'function') throw adoMissingTool('ado_update_field', 'updating field "' + f + '"');
-        return ado_update_field({ id: String(key), field: ADO_FIELD_ALIASES[lower] || f, value: value });
+        var args = { id: String(key), field: ADO_FIELD_ALIASES[lower] || f, value: value };
+        // Only large text fields take a format; short fields (title, state, priority, ...) never do.
+        if (!ADO_SHORT_FIELDS[lower] && !ADO_SHORT_FIELDS[String(args.field).toLowerCase()]) withAdoFormat(args);
+        return ado_update_field(args);
     }
 
     function adoUpdateDescription(key, description) {
-        return ado_update_description({ id: String(key), description: description });
+        return ado_update_description(withAdoFormat({ id: String(key), description: description }));
     }
 
     var ADO_PRIORITY = { blocker: 1, highest: 1, critical: 1, high: 2, major: 2, medium: 3, normal: 3, low: 4, minor: 4, lowest: 4, trivial: 4 };
@@ -455,7 +480,7 @@ function createTracker(config, customParams) {
         Object.keys(f).forEach(function (k) {
             if (k !== 'workItemType' && k !== 'System.WorkItemType' && k !== 'title' && k !== 'System.Title') rest[k] = f[k];
         });
-        var raw = ado_create_work_item({ project: project, workItemType: type, title: title, fieldsJson: JSON.stringify(rest) });
+        var raw = ado_create_work_item(withAdoFormat({ project: project, workItemType: type, title: title, fieldsJson: JSON.stringify(rest) }));
         var parsed = _parseJson(raw);
         if (parsed && typeof parsed === 'object') {
             if (typeof parsed.key === 'string') return parsed.key;
