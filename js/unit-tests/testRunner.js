@@ -299,7 +299,9 @@ function action(params) {
     // Pre-load base modules once — test files use these as globals
     try {
         configModule = loadModule('js/config.js');
-        var scmModule = loadModule('js/common/scm.js');
+        var machineNoticeModule = loadModule('js/common/machineNotice.js');
+        var scmModule = loadModule('js/common/scm.js',
+            makeRequire({ './machineNotice.js': machineNoticeModule }));
         configLoaderModule = loadModule(
             'js/configLoader.js',
             makeRequire({
