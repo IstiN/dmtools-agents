@@ -23,7 +23,7 @@ suite('writeSolutionAndDiagrams — module export', function() {
                 './common/autoStart.js': {},
                 './common/outputFiles.js': outputFiles,
                 './common/tokenUsageComment.js': tokenUsageComment,
-                './common/contentOutput.js': loadModule('js/common/contentOutput.js', makeRequire({ '../configLoader.js': configLoaderModule }), {})
+                './common/contentOutput.js': loadModule('js/common/contentOutput.js', makeRequire({ '../configLoader.js': configLoaderModule, './trackers.js': { createTracker: function () { throw new Error('contentOutput tracker fallback not expected in this test'); } } }), {})
             }),
             {}
         );
@@ -84,7 +84,7 @@ suite('writeSolutionAndDiagrams — diagram handling for Confluence targets', fu
                 './common/outputFiles.js': outputFilesMock,
                 './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
                 './common/contentOutput.js': loadModule('js/common/contentOutput.js',
-                    makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } } }),
+                    makeRequire({ '../configLoader.js': { loadProjectConfig: function() { return {}; } }, './trackers.js': { createTracker: function () { throw new Error('contentOutput tracker fallback not expected in this test'); } } }),
                     globals),
                 './writeSolutionAndLabels.js': loadModule('js/writeSolutionAndLabels.js',
                     makeRequire({
@@ -267,7 +267,7 @@ suite('writeSolutionAndDiagrams — required outputs', function() {
                 './common/autoStart.js': {},
                 './common/outputFiles.js': outputFiles,
                 './common/tokenUsageComment.js': tokenUsageComment,
-                './common/contentOutput.js': loadModule('js/common/contentOutput.js', makeRequire({ '../configLoader.js': configLoaderModule }), {})
+                './common/contentOutput.js': loadModule('js/common/contentOutput.js', makeRequire({ '../configLoader.js': configLoaderModule, './trackers.js': { createTracker: function () { throw new Error('contentOutput tracker fallback not expected in this test'); } } }), {})
             }),
             {
                 file_read: function(opts) {

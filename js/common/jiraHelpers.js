@@ -5,6 +5,13 @@
 
 const { STATUSES, LABELS } = require('../config.js');
 
+// gh-823: required at LOAD TIME — a deferred (in-function) require resolves
+// against the pack's js/ root only at runtime, so the lazy
+// `require('./trackers.js')` fallbacks could never fire in a pack ("Failed
+// to require module: ./trackers.js"). Load-time requires resolve
+// file-relative and dmtools compile discovers them for the pack closure.
+const trackersModule = require('./trackers.js');
+
 /**
  * Assign ticket to initiator and move to "In Review" status with AI-generated label
  * This is the common post-processing logic used by multiple agents
@@ -17,7 +24,7 @@ const { STATUSES, LABELS } = require('../config.js');
 function assignForReview(ticketKey, initiatorId, wipLabel, targetStatus, tracker) {
     const statusName = targetStatus || STATUSES.IN_REVIEW;
     try {
-        const t = tracker || require('./common/trackers.js').createTracker(null, {});
+        const t = tracker || trackersModule.createTracker(null, {});
         return t.assignForReview(ticketKey, initiatorId, wipLabel, statusName);
     } catch (error) {
         console.error("❌ Error in assignForReview:", error);
@@ -65,7 +72,7 @@ function setTicketPriority(ticketKey, priority, tracker) {
     }
     
     try {
-        const t = tracker || require('./common/trackers.js').createTracker(null, {});
+        const t = tracker || trackersModule.createTracker(null, {});
         t.setPriority(ticketKey, priority);
         console.log('Set priority ' + priority + ' on ticket ' + ticketKey);
         return true;

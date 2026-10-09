@@ -31,6 +31,12 @@
 var configLoader = null;
 try { configLoader = require('../configLoader.js'); } catch (e) { /* unit tests inject their own */ }
 
+// gh-823: load-time require — a deferred (in-function) require resolves
+// against the pack's js/ root only at runtime ("Failed to require module:
+// ./trackers.js"); load-time requires resolve file-relative and dmtools
+// compile discovers them for the pack closure.
+var trackersModule = require('./trackers.js');
+
 var DEFAULT_REPLIES_FILE = 'outputs/confluence_replies.json';
 var COMMENTS_BASE_NAME = 'confluence_output_comments';
 
@@ -58,10 +64,14 @@ function resolveConfig(params, defaults) {
 
     var fromProject = {};
     try {
-        // gh-823: deferred (in-function) require — pack-root-relative so the
-        // pack runtime's js/ root base lands on js/configLoader.js ('../'
-        // climbs out of js/ and can never resolve inside a pack).
-        var loader = configLoader || require('./configLoader.js');
+        // gh-823: the loader holder is resolved at LOAD TIME (the top-level
+        // try above) — no deferred fallback require here. A require executed
+        // after module init resolves against the pack's js/ root only, so
+        // the old `configLoader || require('../configLoader.js')` fallback
+        // could only ever look at <packRoot>/configLoader.js, outside js/ —
+        // the exact gh-823 miss shape. When the load-time require failed
+        // (unit tests inject their own), best-effort stays fail-open.
+        var loader = configLoader;
         var projectConfig = loader.loadProjectConfig((params && params.jobParams) || params || {});
         fromProject = (projectConfig && projectConfig.contentOutput) || {};
     } catch (e) {
@@ -102,7 +112,7 @@ function isJiraFieldTarget(cfg) {
  */
 function writeToTrackerField(ticketKey, field, content, operationType, tracker) {
     var valueToWrite = content;
-    if (!tracker) tracker = require('./common/trackers.js').createTracker(null, {});
+    if (!tracker) tracker = trackersModule.createTracker(null, {});
     if (operationType === 'append') {
         var existing = '';
         try {

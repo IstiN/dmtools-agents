@@ -30,9 +30,10 @@
  */
 function smRealKeyModules() {
     var shapes = loadModule('js/common/ticketKeyShapes.js', makeRequire({}), {});
+    var trackers = loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': shapes }), {});
     return {
-        './validateInputJql.js': loadModule('js/common/validateInputJql.js', makeRequire({ './ticketKeyShapes.js': shapes }), {}),
-        './trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': shapes }), {})
+        './validateInputJql.js': loadModule('js/common/validateInputJql.js', makeRequire({ './ticketKeyShapes.js': shapes, './trackers.js': trackers }), {}),
+        './trackers.js': trackers
     };
 }
 
