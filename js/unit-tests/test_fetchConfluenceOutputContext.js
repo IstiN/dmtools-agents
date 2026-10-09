@@ -8,7 +8,11 @@ function loadFetchConfluenceContext(mocks, projectConfig) {
     };
     var contentOutputLib = loadModule(
         'js/common/contentOutput.js',
-        makeRequire({ '../configLoader.js': configLoaderMock }),
+        makeRequire({
+            '../configLoader.js': configLoaderMock,
+            // gh-823: contentOutput requires ./trackers.js at load time
+            './trackers.js': { createTracker: function () { throw new Error('contentOutput tracker fallback not expected in this test'); } }
+        }),
         Object.assign({}, mocks || {})
     );
     return loadModule(

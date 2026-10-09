@@ -321,6 +321,28 @@ suite('require gate: load-time vs deferred (in-function) classification', functi
         var cls = gate().classifyRequires(source);
         assert.deepEqual(cls, [{ spec: './dep.js', deferred: true }]);
     });
+
+    test('a require inside a comment is NOT an edge (doc examples never execute)', function () {
+        // gh-823 review: the live contentOutput.js carries a JSDoc example
+        // naming the old fallback require INSIDE the function body — under
+        // the deferred rule a comment match would false-positive the gate.
+        var source = [
+            'function resolveConfig(configLoader) {',
+            "    // the old `configLoader || require('../configLoader.js')` fallback",
+            '    return configLoader;',
+            '}',
+        ].join('\n');
+        assert.deepEqual(gate().classifyRequires(source), []);
+    });
+
+    test('a block-commented require is not an edge either; the code below still is', function () {
+        var source = [
+            '/* var gone = require(\'./commented.js\'); */',
+            "var live = require('./live.js');",
+        ].join('\n');
+        var cls = gate().classifyRequires(source);
+        assert.deepEqual(cls, [{ spec: './live.js', deferred: false }]);
+    });
 });
 
 suite('require gate: deferred requires resolve against the js/ root ONLY', function () {

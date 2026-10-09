@@ -51,12 +51,30 @@ var REQUIRE_RE = /\brequire\s*\(\s*(['"])((?:\.\.?\/)[^'"]*)\1\s*\)/g;
  *
  * Known limits (same class as the gh-812 header note): ES2015 method
  * shorthand (`foo() {}`) reads as a plain block — the repo's packed code is
- * `function`-style (GraalJS conventions), and a regex literal containing
- * `function` could misalign the pending-function flag (none in packed code).
+ * `function`-style (GraalJS conventions); a regex literal is told apart from
+ * division by the standard previous-token heuristic and a pathological
+ * regex could still desync the walk. Comment contents are NOT edges: a
+ * require-shaped doc example never executes, and under the deferred rule a
+ * JSDoc example inside a function body would false-positive the gate (the
+ * gh-812 union model could afford keeping them — every doc example in this
+ * repo resolves — the deferred rule cannot). String contents ARE edges
+ * (the githubSource.js worker sources ride in strings), classified at the
+ * code position of the string.
  */
-function functionDepths(source) {
+/**
+ * Char-walk over [source] producing, per position: the enclosing
+ * function-body depth and whether the position sits inside a COMMENT
+ * (comment/string/regex contents never affect depth; string contents are
+ * kept — the githubSource.js worker sources ride in strings — while comment
+ * contents are marked so require-shaped DOC EXAMPLES never classify as real
+ * edges: a require in a comment does not execute, and under the deferred
+ * rule a JSDoc example inside a function body would otherwise false-positive
+ * the release gate).
+ */
+function scanSource(source) {
     var n = source.length;
     var depths = new Array(n);
+    var commented = new Array(n);
     var stack = [];
     var pendingFunction = 0;
     var fnCount = 0;
@@ -72,32 +90,32 @@ function functionDepths(source) {
     while (i < n) {
         var c = source.charAt(i);
         if (c === '\n') inLine = false;
-        if (inLine) { depths[i] = fnCount; i++; prev = c; continue; }
+        if (inLine) { depths[i] = fnCount; commented[i] = true; i++; prev = c; continue; }
         if (inBlock) {
             if (c === '/' && prev === '*') inBlock = false;
-            depths[i] = fnCount;
+            depths[i] = fnCount; commented[i] = true;
             i++; prev = c; continue;
         }
         if (inStr !== null) {
-            if (c === '\\') { depths[i] = fnCount; depths[i + 1] = fnCount; i += 2; prev = ''; continue; }
+            if (c === '\\') { depths[i] = fnCount; commented[i] = false; depths[i + 1] = fnCount; commented[i + 1] = false; commented[i] = false; commented[i + 1] = false; i += 2; prev = ''; continue; }
             if (c === inStr) {
                 inStr = null;
-                depths[i] = fnCount;
+                depths[i] = fnCount; commented[i] = false;
                 i++; prevSig = c; prevWord = ''; continue;
             }
-            depths[i] = fnCount;
+            depths[i] = fnCount; commented[i] = false;
             i++; prev = c; continue;
         }
         if (inRegex) {
-            if (c === '\\') { depths[i] = fnCount; depths[i + 1] = fnCount; i += 2; prev = ''; continue; }
+            if (c === '\\') { depths[i] = fnCount; commented[i] = false; depths[i + 1] = fnCount; commented[i + 1] = false; commented[i] = false; commented[i + 1] = false; i += 2; prev = ''; continue; }
             if (c === '[') inRegexClass = true;
             else if (c === ']') inRegexClass = false;
             else if (c === '/' && !inRegexClass) inRegex = false;
-            depths[i] = fnCount;
+            depths[i] = fnCount; commented[i] = false;
             i++; prev = c; continue;
         }
-        if (c === '/' && source.charAt(i + 1) === '/') { inLine = true; depths[i] = fnCount; i++; prev = c; continue; }
-        if (c === '/' && source.charAt(i + 1) === '*') { inBlock = true; depths[i] = fnCount; i++; prev = c; continue; }
+        if (c === '/' && source.charAt(i + 1) === '/') { inLine = true; depths[i] = fnCount; commented[i] = true; i++; prev = c; continue; }
+        if (c === '/' && source.charAt(i + 1) === '*') { inBlock = true; depths[i] = fnCount; commented[i] = true; i++; prev = c; continue; }
         // A `/` starts a REGEX literal in expression position (after an
         // opener/operator/keyword) and is DIVISION after a value — the
         // standard heuristic. `replace(/"/g, ...)` (a quote inside a regex)
@@ -105,46 +123,46 @@ function functionDepths(source) {
         if (c === '/' && regexAllowed(prevSig, prevWord)) {
             inRegex = true;
             inRegexClass = false;
-            depths[i] = fnCount;
+            depths[i] = fnCount; commented[i] = false;
             i++; prev = c; continue;
         }
-        if (c === '"' || c === "'") { inStr = c; depths[i] = fnCount; i++; prev = c; continue; }
+        if (c === '"' || c === "'") { inStr = c; depths[i] = fnCount; commented[i] = false; i++; prev = c; continue; }
         if (c === '{') {
             var isFn = pendingFunction > 0;
             stack.push(isFn);
             if (isFn) fnCount++;
             pendingFunction = 0;
-            depths[i] = fnCount;
+            depths[i] = fnCount; commented[i] = false;
             i++; prevSig = c; prevWord = ''; continue;
         }
         if (c === '}') {
             if (stack.pop() && fnCount > 0) fnCount--;
-            depths[i] = fnCount;
+            depths[i] = fnCount; commented[i] = false;
             i++; prevSig = c; prevWord = ''; continue;
         }
         if (c === '=' && source.charAt(i + 1) === '>') {
             pendingFunction++;
-            depths[i] = fnCount; depths[i + 1] = fnCount;
+            depths[i] = fnCount; commented[i] = false; depths[i + 1] = fnCount; commented[i + 1] = false; commented[i] = false; commented[i + 1] = false;
             i += 2; prevSig = ''; prevWord = ''; continue;
         }
         if (c === 'f' && isWordAt(source, i, 'function')) {
             pendingFunction++;
-            depths[i] = fnCount;
+            depths[i] = fnCount; commented[i] = false;
             i += 8; prevSig = ''; prevWord = 'function'; continue;
         }
         if (isWordChar(c) && !isWordChar(prevSig !== '' ? prevSig : '')) {
             var w = readWord(source, i);
-            depths[i] = fnCount;
+            depths[i] = fnCount; commented[i] = false;
             prevWord = w;
             prevSig = c;
             i += w.length;
             continue;
         }
         if (!isSpace(c)) { prevSig = c; prevWord = ''; }
-        depths[i] = fnCount;
+        depths[i] = fnCount; commented[i] = false;
         i++; prev = c;
     }
-    return depths;
+    return { depths: depths, commented: commented };
 }
 
 function isWordChar(c) {
@@ -191,12 +209,14 @@ function isWordAt(source, pos, word) {
  * function body (js-root-only base at runtime).
  */
 function classifyRequires(source) {
-    var depths = functionDepths(String(source));
+    var scan = scanSource(String(source));
     var out = [];
     var re = new RegExp(REQUIRE_RE.source, 'g');
     var m = re.exec(source);
     while (m !== null) {
-        out.push({ spec: m[2], deferred: depths[m.index] > 0 });
+        if (!scan.commented[m.index]) {
+            out.push({ spec: m[2], deferred: scan.depths[m.index] > 0 });
+        }
         m = re.exec(source);
     }
     return out;

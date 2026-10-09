@@ -180,34 +180,36 @@ function loadReal(path) {
     return mod.exports;
 }
 
-function loadProvider(comments) {
-    var mod = loadReal('js/common/smProvider.js');
-    // Inject the forge tool the guards read through (the loader has already
-    // wired every module-level dependency at load time).
-    var provider = mod.createSmProvider({
-        scm: { provider: 'github' },
-        repository: { owner: 'mygroup', repo: 'my-repo' },
-        preseed: null
-    });
-    return { provider: provider, mod: mod, comments: comments };
-}
-
 suite('pack-runtime require resolution: the verdict chain end-to-end', function () {
 
     test('latestVerdictRecord parses the real marker protocol over the real graph', function () {
         // Full load of smProvider.js + reviewVerdicts.js from the tree with
         // init-time semantics, then the exact call the query guards make
         // (githubSource.js matchesGuards → provider.latestVerdictRecord).
-        var comments = [
-            { body: 'free-form chatter about REQUEST_CHANGES' },
-            { body: marker('APPROVE', '2026-10-09T16:20:00.000Z') }
-        ];
-        var ctx = loadProvider(comments);
-        var original = file_read;
-        // verdictRecords reads github_get_pr_comments — shadow it in the
-        // module's scope is not possible post-load; drive the parser path
-        // through the exported surface instead.
-        var records = ctx.mod ? null : null;
-        assert.ok(true);
+        var g = (typeof globalThis !== 'undefined') ? globalThis : this;
+        var saved = g.github_get_pr_comments;
+        var calls = 0;
+        g.github_get_pr_comments = function () {
+            calls += 1;
+            return JSON.stringify([
+                { body: 'free-form chatter about REQUEST_CHANGES' },
+                { body: marker('APPROVE', '2026-10-09T16:20:00.000Z') }
+            ]);
+        };
+        try {
+            var mod = loadReal('js/common/smProvider.js');
+            var provider = mod.createSmProvider({
+                scm: { provider: 'github' },
+                repository: { owner: 'mygroup', repo: 'my-repo' }
+            });
+            var effective = provider.latestVerdictRecord(5, HEAD);
+            assert.ok(effective, 'the verdict record resolves through the real graph');
+            assert.equal(effective.record.verdict, 'APPROVE');
+            assert.equal(provider.verdictRecords(5).length, 1,
+                'only the marker comment is a record (free-form text invisible)');
+            assert.equal(calls, 1, 'one comment fetch — the ioCache memo holds');
+        } finally {
+            g.github_get_pr_comments = saved;
+        }
     });
 });

@@ -119,6 +119,8 @@
         "js/unit-tests/test_packLaunchContract.js",
         "js/unit-tests/test_releasePacks.js",
         "js/unit-tests/test_packRequireGate.js",
+        "js/unit-tests/test_packRequirePath.js",
+        "js/unit-tests/test_packLoadProbe.js",
         "js/unit-tests/test_packVersionGuard.js",
         "js/unit-tests/test_completionGuard.js",
         "js/unit-tests/test_networkGuard.js",
