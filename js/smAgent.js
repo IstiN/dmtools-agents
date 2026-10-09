@@ -1234,7 +1234,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     processedKeys.push(key);
                     continue;
                 }
-                if (reconcileReviewVerdicts(effectiveRepoInfo, ticket)) {
+                if (reconcileReviewVerdicts(effectiveRepoInfo, ticket,
+                        verdictAuthorLogins(effectiveConfig))) {
                     processedKeys.push(key);
                 } else {
                     console.log('  ⏭️  ' + key + ' verdict records and labels already agree — nothing to reconcile');
@@ -1276,17 +1277,26 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 }
                 // gh-807 arming-side sticky approval (AC3): the effective
                 // verdict for the CURRENT head must not be APPROVE — unless
-                // BLOCKING threads remain in the record's census. Same rule
-                // the rework side enforces (prHasApproved, owner rule
+                // the record's own census reports open threads the machine
+                // owns (BLOCKING, or — gh-807 round 3, the conversation-gate
+                // replay — SUGGESTION threads, whose withhold would strand
+                // approve-with-suggestions PRs green + approved + mergeState
+                // BLOCKED on require-conversation-resolution repos: the
+                // rework leg owns open threads, merge-validated needs CLEAN,
+                // and no re-review arms next to the sticky approval). Same
+                // rule the rework side enforces (prHasApproved, owner rule
                 // 2026-09-21) finally bound onto the ARMING side: an APPROVE
-                // verdict with only suggestion-tier threads keeps the
-                // approval and does NOT arm rework (that was the #1428
-                // coexistence). Fail-open: no records / broken read → arm
-                // as before (pre-gh-807 PRs).
-                var armGate = reworkArmGate(effectiveRepoInfo, ticket);
+                // verdict with a ZERO census keeps the approval and does NOT
+                // arm rework (that was the #1428 coexistence). Fail-open: no
+                // records / broken read → arm as before (pre-gh-807 PRs).
+                // Records are machine-author filtered (forge hardening, round
+                // 3) — a forged APPROVE from another identity never withholds
+                // the arm.
+                var armGate = reworkArmGate(effectiveRepoInfo, ticket,
+                    verdictAuthorLogins(effectiveConfig));
                 if (!armGate.arm) {
                     console.log('  ⏭️  ' + key + ' rework arm withheld — APPROVE verdict on head ' +
-                        armGate.headShort + ' is authoritative (gh-807: suggestions do not trigger rework)');
+                        armGate.headShort + ' is authoritative (gh-807: zero census findings — nothing owns the threads)');
                     processedKeys.push(key);
                     continue;
                 }
@@ -3461,7 +3471,12 @@ function prHeadAndLabels(repoInfo, prNumber) {
 
 // Reads every machine verdict record on the PR (oldest first). Fails open to
 // [] — same github_get_pr_comments payload shape as failMarkerState above.
-function readVerdictRecords(repoInfo, prNumber) {
+// gh-807 review round 3 (forge hardening): records are trusted only from
+// the machine identities in authorLogins (resolved from the machineAuthor
+// knob by the callers); an empty allowlist trusts nothing — the guards go
+// inert (pre-gh-807 behavior), the machineAuthor doctrine for unconfigured
+// deployments.
+function readVerdictRecords(repoInfo, prNumber, authorLogins) {
     try {
         var raw = github_get_pr_comments({
             workspace: repoInfo.owner, repository: repoInfo.repo,
@@ -3469,11 +3484,21 @@ function readVerdictRecords(repoInfo, prNumber) {
         });
         var obj = (typeof raw === 'string') ? JSON.parse(raw) : (raw || []);
         var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
-        return reviewVerdictsModule.parseVerdictRecords(list);
+        return reviewVerdictsModule.parseVerdictRecords(list, {
+            authorLogins: authorLogins || []
+        });
     } catch (e) {
         console.warn('  ⚠️ verdict probe: comment read failed (fail-open): ' + (e.message || e));
         return [];
     }
+}
+
+// The machine-identity allowlist for verdict-record reads (gh-807 round 3):
+// the machineAuthor knob (jobParams override > per-repo config) split into
+// logins. Empty when unconfigured → readVerdictRecords trusts nothing.
+function verdictAuthorLogins(effectiveConfig) {
+    return machineAuthorModule.machineAuthorLogins(
+        machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, effectiveConfig));
 }
 
 // gh-601 shape: the sync github_get_issue tool does NOT throw on 404 — it
@@ -3496,18 +3521,21 @@ function linkedIssueLabels(repoInfo, issueNumber) {
 }
 
 // AC3 — the arming-side sticky-approval gate for arm_rework: the effective
-// verdict for the CURRENT head must not be APPROVE, unless BLOCKING threads
-// remain (the record's census — suggestions never arm rework). Mirrors the
-// rework side's prHasApproved rule (approved once → never re-review) with
-// the blocking-thread exception from the gh-807 capability surface. Fails
-// open (arm: true) on missing records/head — pre-gh-807 PRs arm as before.
-function reworkArmGate(repoInfo, ticket) {
+// verdict for the CURRENT head must not be APPROVE, unless the record's own
+// census reports open threads the machine owns — BLOCKING threads, or
+// (gh-807 round 3, the conversation-gate replay) SUGGESTION threads, whose
+// withhold would strand approve-with-suggestions PRs green + approved +
+// mergeState BLOCKED on require-conversation-resolution repos. Mirrors the
+// rework side's prHasApproved rule (approved once → never re-review).
+// Fails open (arm: true) on missing records/head — pre-gh-807 PRs arm as
+// before.
+function reworkArmGate(repoInfo, ticket, authorLogins) {
     var out = { arm: true, reason: 'no-verdict-records', headShort: null, effective: null };
     var probe = prHeadAndLabels(repoInfo, ticket.prNumber);
     if (!probe) return out;
     out.headShort = String(probe.headSha).substring(0, 7);
     var decision = reviewVerdictsModule.armReworkDecision(
-        readVerdictRecords(repoInfo, ticket.prNumber), probe.headSha);
+        readVerdictRecords(repoInfo, ticket.prNumber, authorLogins), probe.headSha);
     decision.headShort = out.headShort;
     return decision;
 }
@@ -3531,10 +3559,10 @@ function reworkArmGate(repoInfo, ticket) {
 // census rides the decision function (reviewVerdicts.reconcileDecision);
 // the probe runs only when a rework arm is actually present, so the
 // conflict-shaped queries keep the cost near zero.
-function reconcileReviewVerdicts(repoInfo, ticket) {
+function reconcileReviewVerdicts(repoInfo, ticket, authorLogins) {
     var probe = prHeadAndLabels(repoInfo, ticket.prNumber);
     if (!probe) return false;
-    var records = readVerdictRecords(repoInfo, ticket.prNumber);
+    var records = readVerdictRecords(repoInfo, ticket.prNumber, authorLogins);
     var issueLabels = linkedIssueLabels(repoInfo, ticket.issueNumber);
     var prHasRework = probe.labels.indexOf(reviewVerdictsModule.LABEL_REWORK) !== -1;
     var issueHasRework = !!(issueLabels &&

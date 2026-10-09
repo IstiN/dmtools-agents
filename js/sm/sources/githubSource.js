@@ -338,14 +338,20 @@ function matchesGuards(item, rule, provider, machineAuthor, owner) {
 function query(rule, ctx) {
     var q = rule.query || {};
     var repoInfo = ctx.repoInfo || {};
+    var machineAuthor = machineAuthorModule.resolveMachineAuthor(ctx, ctx && ctx.config);
     var provider = ctx.provider || smProviderModule.createSmProvider({
         scm: { provider: 'github' },
-        repository: repoInfo
+        repository: repoInfo,
+        // gh-807 round 3 (forge hardening): verdict records are trusted
+        // only from machine identities. An unconfigured machineAuthor knob
+        // yields an empty allowlist, which makes the verdict guards inert
+        // (pre-gh-807 behavior) — the machineAuthor doctrine: guards keyed
+        // on it fail closed.
+        machineAuthorLogins: machineAuthorModule.machineAuthorLogins(machineAuthor)
     });
     var branchPrefix = rule.branchPrefix || 'ai/gh-';
     var limit = rule.limit || 50;
 
-    var machineAuthor = machineAuthorModule.resolveMachineAuthor(ctx, ctx && ctx.config);
     var owner = repoInfo.owner || '';
     // Priority-tier label names (owner directive 2026-10-08): pre-validated
     // by smAgent from .dmtools/config.js smPriorityLabels; degrade to the

@@ -411,7 +411,7 @@ suite('reviewVerdicts — arming-side sticky approval (gh-807 AC3)', function ()
     test('newest leg decides the gate on a conflicting head', function () {
         var older = { head: HEAD, verdict: 'REQUEST_CHANGES', blocking: 1, important: 0, suggestions: 0,
                       at: '2026-10-09T05:47:30.000Z', source: 'pr_review.json' };
-        var newer = { head: HEAD, verdict: 'APPROVE', blocking: 0, important: 0, suggestions: 3,
+        var newer = { head: HEAD, verdict: 'APPROVE', blocking: 0, important: 0, suggestions: 0,
                       at: '2026-10-09T05:47:40.000Z', source: 'pr_review.json' };
         assert.equal(rv.armReworkDecision([older, newer], HEAD).arm, false,
             'APPROVE arrived second → the arm is withheld despite the older REQUEST_CHANGES');

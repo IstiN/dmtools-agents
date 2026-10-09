@@ -516,7 +516,13 @@ function githubProvider(cfg) {
         // verdictRecords: every machine-parseable record on the PR, oldest
         // first, memoized per tick (kind prVerdicts) — the verdict guards
         // may evaluate per rule and must not re-fetch the comment list.
-        // Probe failure fails OPEN (empty list → guards inert → legacy
+        // gh-807 review round 3 (forge hardening): only records authored by
+        // a machine identity are trusted — cfg.machineAuthorLogins (the
+        // resolved machineAuthor allowlist githubSource.query passes in) is
+        // handed to parseVerdictRecords, and an EMPTY or absent allowlist
+        // trusts nothing (the guards go inert → pre-gh-807 behavior), the
+        // machineAuthor doctrine for unconfigured deployments. Probe
+        // failure still fails OPEN (empty list → guards inert → legacy
         // behavior): a broken comment read must never strand a PR.
         verdictRecords: function (prNumber) {
             var memo = ioCacheGet(owner, repo, 'prVerdicts', prNumber);
@@ -528,7 +534,9 @@ function githubProvider(cfg) {
                 }));
                 var obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
                 var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
-                records = _verdictRecordsModule().parseVerdictRecords(list);
+                records = _verdictRecordsModule().parseVerdictRecords(list, {
+                    authorLogins: cfg.machineAuthorLogins || []
+                });
             } catch (e) {
                 console.warn('  ⚠️ verdict-record read failed (fail-open): ' + (e.message || e));
                 records = [];

@@ -1063,7 +1063,7 @@ suite('smAgent: localAction reconcile_verdicts (gh-807 verdict reconciliation)',
             localAction: 'reconcile_verdicts',
             limit: 10,
             id: 'reconcile-review-verdicts'
-        }], MACHINE)));
+        }], MACHINE));
 
         assert.equal(sm.capturedPrLabelRemoves.length, 1, 'exactly one label removal');
         assert.equal(sm.capturedPrLabelRemoves[0].number, 1428, 'the loser label comes off the PR');
@@ -1110,7 +1110,7 @@ suite('smAgent: localAction reconcile_verdicts (gh-807 verdict reconciliation)',
             localAction: 'reconcile_verdicts',
             limit: 10,
             id: 'reconcile-review-verdicts'
-        }], MACHINE)));
+        }], MACHINE));
 
         assert.equal(sm.capturedPrLabelRemoves.length, 2, 'PR and linked issue both lose the loser label');
         var targets = {};
@@ -1144,7 +1144,7 @@ suite('smAgent: localAction reconcile_verdicts (gh-807 verdict reconciliation)',
             localAction: 'reconcile_verdicts',
             limit: 10,
             id: 'reconcile-review-verdicts'
-        }], MACHINE)));
+        }], MACHINE));
 
         assert.equal(sm.capturedPrLabelRemoves.length, 0, 'approval stands, no rework label → nothing to do');
         assert.equal(sm.capturedPrComments.length, 0, 'no comment when nothing was removed');
@@ -1170,7 +1170,7 @@ suite('smAgent: localAction reconcile_verdicts (gh-807 verdict reconciliation)',
             localAction: 'reconcile_verdicts',
             limit: 10,
             id: 'reconcile-review-verdicts'
-        }], MACHINE)));
+        }], MACHINE));
 
         assert.equal(sm.capturedPrLabelRemoves.length, 0, 'no records → no reconciliation (legacy behavior)');
         assert.equal(sm.capturedPrComments.length, 0, 'no comment');
@@ -1218,7 +1218,7 @@ suite('smAgent: localAction reconcile_verdicts (gh-807 verdict reconciliation)',
             localAction: 'reconcile_verdicts',
             limit: 10,
             id: 'reconcile-rework-vs-approval'
-        }], MACHINE)));
+        }], MACHINE));
 
         assert.equal(sm.capturedPrLabelRemoves.length, 0,
             'the CI-driven arm is NOT the review loser — it survives on the issue');
@@ -1256,7 +1256,7 @@ suite('smAgent: localAction reconcile_verdicts (gh-807 verdict reconciliation)',
             localAction: 'reconcile_verdicts',
             limit: 10,
             id: 'reconcile-rework-vs-approval'
-        }], MACHINE)));
+        }], MACHINE));
 
         assert.equal(sm.capturedPrLabelRemoves.length, 0,
             'unreadable CI → fail open to the CI-driven shape — the arm survives');
@@ -1300,7 +1300,7 @@ suite('smAgent: localAction reconcile_verdicts (gh-807 verdict reconciliation)',
             localAction: 'reconcile_verdicts',
             limit: 10,
             id: 'reconcile-rework-vs-approval'
-        }], MACHINE)));
+        }], MACHINE));
 
         assert.equal(sm.capturedPrLabelRemoves.length, 0,
             'the blocking census is the evidence the arm was granted on — not a review loser');
@@ -1371,7 +1371,7 @@ suite('smAgent: localAction reconcile_verdicts (gh-807 verdict reconciliation)',
             localAction: 'reconcile_verdicts',
             limit: 10,
             id: 'reconcile-review-verdicts'
-        }], MACHINE)));
+        }], MACHINE));
 
         assert.equal(sm.capturedPrLabelRemoves.length, 0,
             'text-only comments carry no records — pr_approved stands');

@@ -17,9 +17,15 @@
  * derived: newest record per head wins, a conflict WARNs (de-duplicated per
  * tick process), the loser label comes off with a comment citing both
  * verdict sources, and arming rework requires the effective verdict to not
- * be APPROVE (unless BLOCKING threads remain). Free-form comment text is
- * NEVER consulted — a comment that merely says "REQUEST_CHANGES" without
- * the marker does not exist for this module.
+ * be APPROVE — unless the record's own census reports open threads the
+ * machine owns (blocking > 0, or suggestions > 0: the gh-683 conversation
+ * gate would otherwise strand approve-with-suggestions PRs). Free-form
+ * comment text is NEVER consulted — a comment that merely says
+ * "REQUEST_CHANGES" without the marker does not exist for this module.
+ * Records are trusted only from machine identities: the readers pass a
+ * machineAuthor allowlist to parseVerdictRecords (gh-807 review round 3 —
+ * a marker posted by any other identity is invisible, so a forged newer
+ * record cannot steer arms, reconcile strips or query guards).
  *
  * One asymmetry (gh-807 review, BLOCKING thread): an APPROVE winner does
  * NOT invalidate every agent:rework arm. The label has non-review sources
@@ -113,12 +119,39 @@ function extractVerdictRecord(body) {
  * Parses all verdict records from a comments payload —
  * comments: [{body}] (author/created_at accepted but not required; ordering
  * rides the embedded `at`, falling back to payload order which is stable).
+ * opts.authorLogins — OPTIONAL machine-identity allowlist (gh-807 review
+ * round 3, forge hardening): when a non-empty array is passed, only marker
+ * comments authored by one of those logins are trusted (case-insensitive;
+ * `user.login`, falling back to `author.login`/`author.name`). A marker
+ * posted by ANY other identity is invisible — the marker format is public
+ * (this repo), so an unauthenticated APPROVE could otherwise withhold
+ * rework arms, unblock pr_approved-gated lanes or strip legitimate arms.
+ * The READERS always pass an allowlist (an empty one trusts nothing — the
+ * machineAuthor doctrine: no configured identity, no trusted machine
+ * input); omitting opts keeps the pure parser shape-agnostic for tests.
  * Returns records oldest-first, each with its payload index as the tiebreak.
  */
-function parseVerdictRecords(comments) {
+function commentAuthorLogin(item) {
+    if (!item) return null;
+    var u = item.user || item.author;
+    if (!u) return null;
+    var login = u.login || u.name;
+    return login ? String(login).toLowerCase() : null;
+}
+
+function parseVerdictRecords(comments, opts) {
     var list = Array.isArray(comments) ? comments : [];
+    var allow = (opts && Array.isArray(opts.authorLogins)) ? opts.authorLogins : null;
     var records = [];
     for (var i = 0; i < list.length; i++) {
+        if (allow) {
+            var who = commentAuthorLogin(list[i]);
+            var trusted = false;
+            for (var a = 0; a < allow.length; a++) {
+                if (who && who === String(allow[a] || '').toLowerCase()) { trusted = true; break; }
+            }
+            if (!trusted) continue;
+        }
         var rec = extractVerdictRecord(list[i] && list[i].body);
         if (!rec) continue;
         rec.order = i;
@@ -249,13 +282,14 @@ function buildReconciliationComment(effective, loserLabel, headSha) {
  *     fail-open red keeps the arm, killing the strip/re-add yo-yo).
  * When checksRed stands, the rework arm is CI-corroborated: the tick keeps
  * it and lets the CI path own the leg. Same for the record's OWN census
- * (rework round 2): an APPROVE record reporting blocking > 0 is the
- * evidence AC3's blocking-threads exception arms on — rework-unresolved-
- * threads legitimately placed that arm BECAUSE of the census, so the arm
- * is evidence-driven even on a green head (stripping it would cost a tick
- * of dispatch delay plus a ⚖️ comment claiming "suggestions do not justify
- * a rework arm" while the record says the findings were BLOCKING; the arm
- * rule re-adds next tick — a self-healing yo-yo). A REQUEST_CHANGES/BLOCK
+ * (rework round 2, extended round 3): an APPROVE record reporting
+ * blocking > 0 — or, since round 3, suggestions > 0 — is the evidence
+ * AC3's census exceptions arm on — rework-unresolved-threads legitimately
+ * placed that arm BECAUSE of the census, so the arm is evidence-driven
+ * even on a green head (stripping it would cost a tick of dispatch delay
+ * plus a ⚖️ comment claiming "suggestions do not justify a rework arm"
+ * while the record itself says the threads are open; the arm rule re-adds
+ * next tick — a self-healing yo-yo). A REQUEST_CHANGES/BLOCK
  * winner always strips pr_approved — red CI never legitimizes the
  * approval.
  */
@@ -265,7 +299,9 @@ function reconcileDecision(records, headSha, state) {
     var loser = resolveLoserLabel(effective.record.verdict);
     var st = state || {};
     if (loser === LABEL_REWORK &&
-        (st.checksRed || (Number(effective.record.blocking || 0) || 0) > 0)) return null;
+        (st.checksRed ||
+         (Number(effective.record.blocking || 0) || 0) > 0 ||
+         (Number(effective.record.suggestions || 0) || 0) > 0)) return null;
     var removeFromPr = loser === LABEL_REWORK ? !!st.prHasRework : !!st.prHasApproved;
     var removeFromIssue = loser === LABEL_REWORK ? !!st.issueHasRework : false;
     if (!removeFromPr && !removeFromIssue) return null;
@@ -281,11 +317,18 @@ function reconcileDecision(records, headSha, state) {
 /**
  * Arming-side sticky-approval gate (pure — AC3): may the tick arm
  * agent:rework on this head? Mirrors the rework side's rule (approved once →
- * never re-reviewed) plus the blocking-thread exception from the capability
- * surface: arming requires effective verdict != APPROVE, OR unresolved
- * BLOCKING threads (the record's census). Fail-OPEN when the head has no
- * verdict records (pre-gh-807 PRs keep today's behavior; reconciliation must
- * not strand them). Returns { arm, reason, effective }.
+ * never re-reviewed) plus the record-census exceptions from the capability
+ * surface: arming requires effective verdict != APPROVE, OR the census
+ * reports open threads the machine owns — blocking > 0, or (gh-807 rework
+ * round 3, the conversation-gate replay) suggestions > 0. The suggestion
+ * extension: on repos with "require conversation resolution" (the gh-683
+ * gate) an approve-with-suggestions leg strands the PR green + approved +
+ * mergeState BLOCKED when the arm withholds — the rework leg owns open
+ * threads by design, merge-validated needs CLEAN, and every re-review
+ * armer excludes pr_approved (sticky approval = no re-review): no leg
+ * could ever resolve the threads. Fail-OPEN when the head has no verdict
+ * records (pre-gh-807 PRs keep today's behavior; reconciliation must not
+ * strand them). Returns { arm, reason, effective }.
  */
 function armReworkDecision(records, headSha) {
     var effective = latestVerdictForHead(records, headSha);
@@ -297,6 +340,10 @@ function armReworkDecision(records, headSha) {
         var blocking = Number(rec.blocking || 0) || 0;
         if (blocking > 0) {
             return { arm: true, reason: 'blocking-threads', effective: effective };
+        }
+        var suggestions = Number(rec.suggestions || 0) || 0;
+        if (suggestions > 0) {
+            return { arm: true, reason: 'suggestion-threads', effective: effective };
         }
         return { arm: false, reason: 'approve-verdict', effective: effective };
     }
