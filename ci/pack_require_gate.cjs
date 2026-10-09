@@ -62,9 +62,20 @@ function resolveRequire(fromPath, spec) {
 }
 
 /**
+ * Membership test across both container shapes the gate accepts: a plain
+ * object map (path → true) or a Set. A live red-team run caught the naive
+ * `paths[target]` read silently failing on a Set — every require read as
+ * unresolved.
+ */
+function pathSetHas(paths, key) {
+    if (paths && typeof paths.has === 'function') return paths.has(key);
+    return !!(paths && paths[key]);
+}
+
+/**
  * Requires in [files] ({path, source}) that resolve to no path in
- * [knownPaths] (defaults to the files' own paths). Returns
- * [{from, spec, target}] — empty means the pack is self-consistent.
+ * [knownPaths] (defaults to the files' own paths; plain object map or Set).
+ * Returns [{from, spec, target}] — empty means the pack is self-consistent.
  */
 function unresolvedRequires(files, knownPaths) {
     var paths = knownPaths;
@@ -78,7 +89,7 @@ function unresolvedRequires(files, knownPaths) {
         var specs = requireSpecs(files[i].source || '');
         for (var s = 0; s < specs.length; s++) {
             var target = resolveRequire(files[i].path, specs[s]);
-            if (!paths[target] && !paths[target + '.js']) {
+            if (!pathSetHas(paths, target) && !pathSetHas(paths, target + '.js')) {
                 unresolved.push({ from: files[i].path, spec: specs[s], target: target });
             }
         }

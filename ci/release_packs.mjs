@@ -380,6 +380,45 @@ function validatePack(zipPath) {
   return files.length;
 }
 
+/**
+ * Builds ONE agent pack release-ready: compile → launch-surface augment →
+ * gh-812 payload-drift re-version (an unchanged version must never re-ship
+ * changed content) → require sanity gate → manifest validation. The guarded
+ * chain stays literal and in order (build → augment → validate — see
+ * test_packLaunchContract); [next] is the version to build at and is
+ * advanced when the drift check forces a re-version. Returns the shipped
+ * { zipPath, version }.
+ */
+function buildPackRelease(agent, next, isAffected, shippedVersion) {
+  // ALWAYS build every agent zip — a factory-setup-only release is a
+  // RELEASE too and must stay a self-contained snapshot. Skipping the
+  // build on an empty affected set shipped a catalog that advertised
+  // packs the release never carried, and the registry resolver 404'd
+  // on `@latest` (live: fa SM tick 2026-10-03T08:49, sm_github-0.1.18
+  // in catalog, zip absent from agents-rel-20261003-084425).
+  const zip = buildPack(agent, next);
+  augmentLaunchSurface(agent, zip);
+  // gh-812 V3: a rebuilt-but-unbumped agent whose payload differs from the
+  // zip its version already shipped is the exact collision class that put
+  // two different sm_github-0.1.36.zip files into 075526 and 091304 —
+  // re-version one patch up instead of republishing under the same name.
+  if (!isAffected && shippedVersion === next &&
+      fingerprintsDiffer(shippedZipManifest(agent, shippedVersion), zipManifestText(zip))) {
+    next = resolveShipVersion(next, true);
+    console.log(`  payload differs from shipped ${shippedVersion} — re-versioning to ${next} (gh-812: never republish changed content under a shipped version)`);
+    const rezipped = buildPack(agent, next);
+    augmentLaunchSurface(agent, rezipped);
+    assertZipRequires(rezipped); // gh-812 AC1/AC3 — throws before ledger commit + publish
+    const recount = validatePack(rezipped);
+    console.log(`validated ${basename(rezipped)} (${recount} files)`);
+    return { zipPath: rezipped, version: next };
+  }
+  assertZipRequires(zip); // gh-812 AC1/AC3 — throws before ledger commit + publish
+  const count = validatePack(zip);
+  console.log(`validated ${basename(zip)} (${count} files)`);
+  return { zipPath: zip, version: next };
+}
+
 function main() {
   const versions = readVersions();
   const affected = computeAffectedSet();
@@ -419,29 +458,8 @@ function main() {
     let next = resolveCandidateVersion(resolveBaseVersion(ledgerVersion, shippedVersion), BUMP, isAffected);
     console.log(`\n=== ${agent}: ledger ${ledgerVersion}, shipped ${shippedVersion || '<none>'}${next !== ledgerVersion ? ` -> ${next}` : ' (unchanged)'} ===`);
     if (!DRY_RUN) {
-      // ALWAYS build every agent zip — a factory-setup-only release is a
-      // RELEASE too and must stay a self-contained snapshot. Skipping the
-      // build on an empty affected set shipped a catalog that advertised
-      // packs the release never carried, and the registry resolver 404'd
-      // on `@latest` (live: fa SM tick 2026-10-03T08:49, sm_github-0.1.18
-      // in catalog, zip absent from agents-rel-20261003-084425).
-      let zip = buildPack(agent, next);
-      augmentLaunchSurface(agent, zip);
-      // gh-812 V3: an unchanged version must never re-ship changed content.
-      // A rebuilt-but-unbumped agent whose payload differs from the zip its
-      // version already shipped is the exact collision class that broke the
-      // 2026-10-09 fa ticks — re-version one patch up instead.
-      if (!isAffected && shippedVersion === next) {
-        if (fingerprintsDiffer(shippedZipManifest(agent, shippedVersion), zipManifestText(zip))) {
-          next = resolveShipVersion(next, true);
-          console.log(`  payload differs from shipped ${shippedVersion} — re-versioning to ${next} (gh-812: never republish changed content under a shipped version)`);
-          zip = buildPack(agent, next);
-          augmentLaunchSurface(agent, zip);
-        }
-      }
-      assertZipRequires(zip); // gh-812 AC1/AC3 — throws before ledger commit + publish
-      const count = validatePack(zip);
-      console.log(`validated ${basename(zip)} (${count} files)`);
+      const built = buildPackRelease(agent, next, isAffected, shippedVersion);
+      next = built.version;
       versions[agent] = next;
     }
     catalog[agent] = next;

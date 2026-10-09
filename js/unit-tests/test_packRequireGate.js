@@ -161,4 +161,31 @@ suite('require gate: the self-test verdict', function () {
         assert.equal(unresolved[0].spec, './common/missing.js');
         assert.equal(unresolved[0].target, 'js/common/missing.js');
     });
+
+    test('a Set-shaped knownPaths works — the builder passes zip walks as Sets', function () {
+        // Live red-team regression (gh-812 verification): the builder's zip
+        // walk collects paths into a Set; a naive `paths[target]` read on a
+        // Set is always undefined and flagged EVERY require unresolved.
+        var files = [
+            { path: 'js/smAgent.js', source: "var m = require('./configLoader.js');" },
+            { path: 'js/common/smProvider.js', source: "var m = require('./reviewVerdicts.js');" },
+            { path: 'js/configLoader.js', source: 'var x = 1;' },
+            { path: 'js/common/reviewVerdicts.js', source: 'var y = 2;' },
+        ];
+        var complete = new Set();
+        complete.add('js/smAgent.js');
+        complete.add('js/configLoader.js');
+        complete.add('js/common/smProvider.js');
+        complete.add('js/common/reviewVerdicts.js');
+        assert.deepEqual(gate().unresolvedRequires(files, complete), [],
+            'Set membership must resolve exactly like object-map membership');
+        var missingFile = new Set();
+        missingFile.add('js/smAgent.js');
+        missingFile.add('js/configLoader.js');
+        missingFile.add('js/common/smProvider.js');
+        var unresolved = gate().unresolvedRequires(files, missingFile);
+        assert.equal(unresolved.length, 1,
+            'a Set that lacks the require target must still report it');
+        assert.equal(unresolved[0].target, 'js/common/reviewVerdicts.js');
+    });
 });
