@@ -814,7 +814,15 @@ suite('smProvider — gh-807 machine verdict records', function () {
         }) + ' -->';
     }
 
-    function loadWith(comments, calls) {
+    // gh-807 round 3: records are trusted only from machine identities —
+    // the provider takes an author allowlist and ignores every marker
+    // comment posted by anyone else (forge hardening). Machine-authored
+    // comment fixture:
+    function machineComment(verdict, at, head, login) {
+        return { user: { login: login || 'ai-teammate' }, body: marker(verdict, at, head) };
+    }
+
+    function loadWith(comments, calls, machineAuthorLogins) {
         var rvMod = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
         var mod = loadModule(MOD,
             makeRequire({ './reviewVerdicts.js': rvMod }, {}),
@@ -826,7 +834,8 @@ suite('smProvider — gh-807 machine verdict records', function () {
             });
         return mod.createSmProvider({
             scm: { provider: 'github' },
-            repository: { owner: 'mygroup', repo: 'my-repo' }
+            repository: { owner: 'mygroup', repo: 'my-repo' },
+            machineAuthorLogins: machineAuthorLogins
         });
     }
 
@@ -834,17 +843,37 @@ suite('smProvider — gh-807 machine verdict records', function () {
         var calls = [];
         var p = loadWith([
             { body: 'please REQUEST_CHANGES, this is broken' },
-            { body: marker('APPROVE', '2026-10-09T05:47:30.000Z') }
-        ], calls);
+            machineComment('APPROVE', '2026-10-09T05:47:30.000Z')
+        ], calls, ['ai-teammate']);
         var records = p.verdictRecords(5);
         assert.equal(records.length, 1, 'only the marker comment is a record');
         assert.equal(records[0].verdict, 'APPROVE');
         assert.equal(calls.length, 1, 'one comment fetch');
     });
 
+    test('verdictRecords trusts ONLY machine-authored records (forge hardening, gh-807 round 3)', function () {
+        // The marker format is public — anyone with comment access can post
+        // one. A forged newer APPROVE must not steer arms/reconcile/guards,
+        // so the provider filters on the machine-author allowlist before
+        // parsing. Unconfigured machineAuthor (no/empty allowlist) trusts
+        // nothing — the guards go inert (pre-gh-807 behavior), matching the
+        // machineAuthor doctrine (every guard keyed on it fails closed).
+        var forged = loadWith([
+            { user: { login: 'somebody-else' }, body: marker('APPROVE', '2026-10-09T06:00:00.000Z') },
+            machineComment('REQUEST_CHANGES', '2026-10-09T05:47:40.000Z')
+        ], [], ['ai-teammate', 'github-actions[bot]']);
+        var records = forged.verdictRecords(5);
+        assert.equal(records.length, 1, 'the forged non-machine record is ignored');
+        assert.equal(records[0].verdict, 'REQUEST_CHANGES', 'the real leg\u2019s record is the one trusted');
+
+        var unconfigured = loadWith([machineComment('APPROVE', '2026-10-09T06:00:00.000Z')], [], undefined);
+        assert.deepEqual(unconfigured.verdictRecords(5), [],
+            'no machineAuthorLogins → no trusted records (fail-closed auth = fail-open behavior)');
+    });
+
     test('verdictRecords memoizes per tick (kind prVerdicts) — guards may call per rule', function () {
         var calls = [];
-        var p = loadWith([{ body: marker('APPROVE', '2026-10-09T05:47:30.000Z') }], calls);
+        var p = loadWith([machineComment('APPROVE', '2026-10-09T05:47:30.000Z')], calls, ['ai-teammate']);
         p.verdictRecords(5);
         p.verdictRecords(5);
         p.latestVerdictRecord(5, HEAD);
@@ -853,9 +882,9 @@ suite('smProvider — gh-807 machine verdict records', function () {
 
     test('latestVerdictRecord resolves per head; other heads\u2019 records stay out', function () {
         var p = loadWith([
-            { body: marker('APPROVE', '2026-10-09T05:47:30.000Z') },
-            { body: marker('REQUEST_CHANGES', '2026-10-09T05:47:40.000Z', 'ffffffffeeeeeeeedddddddd77777777') }
-        ], []);
+            machineComment('APPROVE', '2026-10-09T05:47:30.000Z'),
+            machineComment('REQUEST_CHANGES', '2026-10-09T05:47:40.000Z', 'ffffffffeeeeeeeedddddddd77777777')
+        ], [], ['ai-teammate']);
         var effective = p.latestVerdictRecord(5, HEAD);
         assert.equal(effective.record.verdict, 'APPROVE', 'the head\u2019s own record wins');
         assert.notOk(effective.conflict);
@@ -865,9 +894,9 @@ suite('smProvider — gh-807 machine verdict records', function () {
 
     test('the #1428 replay through the provider: newest wins, conflict rides the result', function () {
         var p = loadWith([
-            { body: marker('APPROVE', '2026-10-09T05:47:30.000Z') },
-            { body: marker('REQUEST_CHANGES', '2026-10-09T05:47:40.000Z') }
-        ], []);
+            machineComment('APPROVE', '2026-10-09T05:47:30.000Z'),
+            machineComment('REQUEST_CHANGES', '2026-10-09T05:47:40.000Z')
+        ], [], ['ai-teammate']);
         var effective = p.latestVerdictRecord(1428, HEAD);
         assert.equal(effective.record.verdict, 'REQUEST_CHANGES', 'the 97s-later leg wins');
         assert.ok(effective.conflict, 'the contradiction surfaces to the guard/action layer');

@@ -366,15 +366,28 @@ suite('reviewVerdicts — arming-side sticky approval (gh-807 AC3)', function ()
                  at: '2026-10-09T05:47:40.000Z', source: 'pr_review.json' };
     }
 
-    test('APPROVE with zero BLOCKING findings withholds the arm — suggestions never trigger rework', function () {
+    test('APPROVE with zero census findings withholds the arm (the approval is authoritative)', function () {
         var decision = rv.armReworkDecision([rec('APPROVE', 0)], HEAD);
         assert.equal(decision.arm, false);
         assert.equal(decision.reason, 'approve-verdict');
-        // the gh-710 live shape: APPROVE with 5 new suggestion-tier threads
+    });
+
+    test('APPROVE with zero BLOCKING but suggestion threads arms (conversation-gate replay, gh-683)', function () {
+        // gh-807 round-3 IMPORTANT (PRRT_kwDORYAuYs6qtjZO): on repos with
+        // "require conversation resolution" (the gh-683 gate) an
+        // approve-with-suggestions leg posts N suggestion threads and
+        // stamps APPROVE {blocking: 0, suggestions: N}. Withholding the
+        // arm strands the PR green + approved + mergeState BLOCKED: the
+        // rework leg owns open threads by design, merge-validated needs
+        // CLEAN, and no re-review can arm next to the sticky approval.
+        // The census the record itself reports is the arm evidence — one
+        // column past the blocking-threads exception.
         var suggestionsOnly = rv.armReworkDecision(
             [{ head: HEAD, verdict: 'APPROVE', blocking: 0, important: 0, suggestions: 5,
                at: '2026-10-09T05:47:40.000Z', source: 'pr_review.json' }], HEAD);
-        assert.equal(suggestionsOnly.arm, false, '5 suggestions + important 0 → still no arm');
+        assert.equal(suggestionsOnly.arm, true,
+            '5 open suggestion threads block the conversation gate — the machine must own resolving them');
+        assert.equal(suggestionsOnly.reason, 'suggestion-threads');
     });
 
     test('APPROVE with BLOCKING threads still arms (the blocking-thread exception)', function () {
