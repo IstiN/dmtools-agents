@@ -1035,7 +1035,14 @@ suite('smAgent: localAction reconcile_verdicts (gh-807 verdict reconciliation)',
                     { body: verdictMarker(HEAD, 'REQUEST_CHANGES', '2026-10-09T05:47:30.000Z') },
                     { body: verdictMarker(HEAD, 'APPROVE', '2026-10-09T05:47:40.000Z') }
                 ],
-                issues: { 807: JSON.stringify({ number: 807, labels: [{ name: 'agent:rework' }] }) }
+                issues: { 807: JSON.stringify({ number: 807, labels: [{ name: 'agent:rework' }] }) },
+                // The #1428 head is GREEN (both review legs ran on green CI)
+                // — a green rollup is what lets the arm be review-driven and
+                // strippable. (A red rollup would keep it: CI-driven arms
+                // are not the review loser.)
+                commitCheckRuns: {
+                    check_runs: [{ name: 'build', conclusion: 'success', status: 'completed' }]
+                }
             }
         });
 
@@ -1110,6 +1117,93 @@ suite('smAgent: localAction reconcile_verdicts (gh-807 verdict reconciliation)',
         }]));
 
         assert.equal(sm.capturedPrLabelRemoves.length, 0, 'no records → no reconciliation (legacy behavior)');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment');
+    });
+
+    // gh-807 review BLOCKING thread replay: fail_validation re-arms
+    // agent:rework on the LINKED ISSUE when validation goes red on a
+    // sticky-approved PR ("pr_approved is STICKY — validation red
+    // post-approval re-arms rework only"). The head carries the APPROVE
+    // record the review leg just stamped. The reconcile action must NOT
+    // strip that arm: it is CI-driven, not review-driven — and killing it
+    // destroys the dead-letter recovery (a failed/never-started leg is
+    // never re-fired, fail-validation cannot re-arm, the PR strands red +
+    // approved with no leg — the gh-683/gh-710 deadlock class).
+    test('red-CI rework arm on a sticky-approved head survives reconcile (fail_validation replay)', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1433', labels: ['pr_approved', 'ai_pr_reviewed', 'ai_validated'],
+                      issueNumber: 807, prNumber: 1433 }
+                ],
+                pr: { number: 1433, head: { sha: HEAD }, labels: ['pr_approved', 'ai_pr_reviewed', 'ai_validated'] },
+                prComments: [
+                    { body: verdictMarker(HEAD, 'APPROVE', '2026-10-09T05:47:30.000Z') }
+                ],
+                // fail_validation armed the ISSUE carrier (its arm shape).
+                issues: { 807: JSON.stringify({ number: 807, labels: [{ name: 'agent:rework' }] }) },
+                // The head's CI verdict is REAL red: a non-bookkeeping
+                // context's latest run concluded failure.
+                commitCheckRuns: {
+                    check_runs: [
+                        { name: 'build', conclusion: 'failure', status: 'completed' },
+                        { name: 'kicker / sm-liveness', conclusion: 'cancelled', status: 'completed' }
+                    ]
+                }
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['agent:rework'],
+                     latestVerdict: ['APPROVE'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-rework-vs-approval'
+        }]));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'the CI-driven arm is NOT the review loser — it survives on the issue');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'no ⚖️ comment — "suggestions do not justify a rework arm" would be factually wrong for a red-CI arm');
+    });
+
+    // A DIRTY (conflicted) head carries no CI at all: conflict-rework arms
+    // the linked issue every tick and the head's check-run rollup is EMPTY.
+    // headHasRealFailure fails OPEN to red on an empty rollup, so the arm
+    // survives — no strip/re-add yo-yo with one ⚖️ comment per tick (the
+    // gh-751 yo-yo class).
+    test('empty CI rollup keeps the arm too (fail-open — DIRTY conflict-rework arms survive)', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1434', labels: ['pr_approved', 'ai_pr_reviewed'],
+                      issueNumber: 808, prNumber: 1434 }
+                ],
+                pr: { number: 1434, head: { sha: HEAD }, labels: ['pr_approved', 'ai_pr_reviewed'] },
+                prComments: [
+                    { body: verdictMarker(HEAD, 'APPROVE', '2026-10-09T05:47:30.000Z') }
+                ],
+                issues: { 808: JSON.stringify({ number: 808, labels: [{ name: 'agent:rework' }] }) }
+                // no commitCheckRuns mock → empty rollup → fail-open red
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['agent:rework'],
+                     latestVerdict: ['APPROVE'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-rework-vs-approval'
+        }]));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'unreadable CI → fail open to the CI-driven shape — the arm survives');
         assert.equal(sm.capturedPrComments.length, 0, 'no comment');
     });
 

@@ -130,6 +130,48 @@ suite('reviewVerdicts — newest wins per head (gh-807 AC1)', function () {
             '⚠️ verdict conflict on ' + HEAD + ': APPROVE vs REQUEST_CHANGES — newest wins');
     });
 
+    // gh-807 review SUGGESTION thread: the conflict WARN must not re-log on
+    // EVERY guard evaluation for the head's lifetime — the tick's rules call
+    // the guards 5-6 times per PR per tick (reconcile rule + the
+    // notLatestVerdict lanes + the arm gate), and records never expire, so
+    // the identical line would repeat 5-6× per tick until the head moves or
+    // merges. De-duplicate per module (per tick process) keyed by head +
+    // verdict pair: the FIRST evaluation of a pair WARNs (AC1 stays
+    // observable in every tick), the rest stay silent consumers of
+    // effective.conflict.
+    test('the AC1 WARN de-duplicates per head+verdict-pair (one line per tick, not one per guard call)', function () {
+        var logs = [];
+        var fakeConsole = { log: function () {}, warn: function () { logs.push(Array.prototype.map.call(arguments, String).join(' ')); }, error: function () {} };
+        var rvC = loadModule('js/common/reviewVerdicts.js', makeRequire({}), { console: fakeConsole });
+        var records = rvC.parseVerdictRecords([
+            marker(HEAD, 'APPROVE', '2026-10-09T05:47:30.000Z'),
+            marker(HEAD, 'REQUEST_CHANGES', '2026-10-09T05:47:40.000Z')
+        ]);
+        var OTHER = 'ffffffffeeeeeeeeddddddddcccccccc77777777';
+        var otherRecords = rvC.parseVerdictRecords([
+            marker(OTHER, 'BLOCK', '2026-10-09T05:47:30.000Z'),
+            marker(OTHER, 'APPROVE', '2026-10-09T05:47:40.000Z')
+        ]);
+        // The tick's per-rule-per-tick hammering: reconcile rule + 4
+        // notLatestVerdict lanes + the arm gate — six evaluations of the
+        // SAME conflict.
+        for (var i = 0; i < 6; i++) {
+            var effective = rvC.latestVerdictForHead(records, HEAD);
+            assert.ok(effective.conflict, 'the conflict fact is returned on EVERY call (silent consumers keep working)');
+        }
+        assert.equal(logs.length, 1, 'exactly ONE WARN for the repeated pair');
+        assert.equal(logs[0],
+            '⚠️ verdict conflict on ' + HEAD + ': APPROVE vs REQUEST_CHANGES — newest wins');
+        // A different head/pair conflict is a NEW fact and WARNs on its own.
+        rvC.latestVerdictForHead(otherRecords, OTHER);
+        assert.equal(logs.length, 2, 'a distinct head+pair WARNs');
+        assert.equal(logs[1],
+            '⚠️ verdict conflict on ' + OTHER + ': BLOCK vs APPROVE — newest wins');
+        // And the first pair stays de-duplicated after the new one.
+        rvC.latestVerdictForHead(records, HEAD);
+        assert.equal(logs.length, 2, 'the first pair stays silenced');
+    });
+
     test('same verdict twice on one head is NOT a conflict (idempotent re-legs)', function () {
         var records = rv.parseVerdictRecords([
             marker(HEAD, 'APPROVE', '2026-10-09T05:47:30.000Z'),
@@ -219,6 +261,47 @@ suite('reviewVerdicts — label reconciliation (gh-807 AC2)', function () {
             'loser label nowhere present → nothing to do');
         assert.equal(rv.reconcileDecision([], HEAD, { prHasApproved: true }), null,
             'no records → fail open, no reconciliation');
+    });
+
+    // gh-807 review BLOCKING thread: an APPROVE verdict record does NOT
+    // invalidate every agent:rework arm. agent:rework has non-review
+    // sources that legitimately coexist with an APPROVE record on the SAME
+    // head — red-CI rework on a sticky-approved PR (fail_validation), the
+    // dead-letter sticky issue arm, conflict-rework on a DIRTY head, and
+    // manual human arms. The caller passes checksRed (the
+    // headHasRealFailure probe): a real CI failure keeps the arm.
+    test('APPROVE winner + red CI → rework arm survives on BOTH carriers (checksRed exemption)', function () {
+        var records = [rec('APPROVE', '2026-10-09T05:47:40.000Z')];
+        var decision = rv.reconcileDecision(records, HEAD, {
+            prHasApproved: true, prHasRework: true, issueHasRework: true,
+            checksRed: true
+        });
+        assert.equal(decision, null,
+            'red CI re-arms rework on the approved PR (fail_validation) — the tick must not strip it');
+    });
+
+    test('REQUEST_CHANGES winner strips pr_approved even with red CI (the exemption is loser-specific)', function () {
+        var conflicting = [rec('APPROVE', '2026-10-09T05:47:30.000Z'), rec('REQUEST_CHANGES', '2026-10-09T05:47:40.000Z')];
+        var decision = rv.reconcileDecision(conflicting, HEAD, {
+            prHasApproved: true, prHasRework: false, issueHasRework: false,
+            checksRed: true
+        });
+        assert.ok(decision, 'a reconciliation is due');
+        assert.equal(decision.loserLabel, 'pr_approved',
+            'red CI never legitimizes the approval — the stale pr_approved still comes off');
+        assert.equal(decision.removeFromPr, true);
+    });
+
+    test('APPROVE winner + green CI still strips the arm (the #1428 pathology is a GREEN head)', function () {
+        var records = [rec('REQUEST_CHANGES', '2026-10-09T05:47:30.000Z'), rec('APPROVE', '2026-10-09T05:47:40.000Z')];
+        var decision = rv.reconcileDecision(records, HEAD, {
+            prHasApproved: true, prHasRework: true, issueHasRework: true,
+            checksRed: false
+        });
+        assert.ok(decision, 'green head — the rework arm is review-driven and stale');
+        assert.equal(decision.loserLabel, 'agent:rework');
+        assert.equal(decision.removeFromPr, true);
+        assert.equal(decision.removeFromIssue, true);
     });
 });
 

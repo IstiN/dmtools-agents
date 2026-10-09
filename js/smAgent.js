@@ -3462,19 +3462,34 @@ function reworkArmGate(repoInfo, ticket) {
 // label (winner APPROVE → agent:rework; winner REQUEST_CHANGES/BLOCK →
 // pr_approved) from BOTH carriers (the PR and its linked issue) and posts
 // ONE comment citing both verdict sources. Ruleset approvals / human review
-// state are untouched — only the machine-owned labels reconcile. Returns
-// true when a removal happened (item processed), false when the state is
-// already consistent (nothing to do).
+// state are untouched — only the machine-owned label CARRIERS (pr_approved
+// / agent:rework) reconcile. Returns true when a removal happened (item
+// processed), false when the state is already consistent (nothing to do).
+// gh-807 review fix (BLOCKING thread): before stripping agent:rework the
+// action probes the head's CI verdict (headHasRealFailure, gh-755 —
+// fail-open red): an APPROVE record does not invalidate CI-driven arms —
+// red-CI rework on a sticky-approved PR (fail_validation), the sticky
+// dead-letter issue arm, and conflict-rework on a DIRTY head all
+// legitimately coexist with the APPROVE record. A real red keeps the arm
+// (the CI path owns the leg); the probe runs only when a rework arm is
+// actually present, so the conflict-shaped queries keep the cost near zero.
 function reconcileReviewVerdicts(repoInfo, ticket) {
     var probe = prHeadAndLabels(repoInfo, ticket.prNumber);
     if (!probe) return false;
     var records = readVerdictRecords(repoInfo, ticket.prNumber);
     var issueLabels = linkedIssueLabels(repoInfo, ticket.issueNumber);
+    var prHasRework = probe.labels.indexOf(reviewVerdictsModule.LABEL_REWORK) !== -1;
+    var issueHasRework = !!(issueLabels &&
+        issueLabels.indexOf(reviewVerdictsModule.LABEL_REWORK) !== -1);
+    var checksRed = false;
+    if (records.length && (prHasRework || issueHasRework)) {
+        checksRed = headHasRealFailure(repoInfo, probe.headSha);
+    }
     var decision = reviewVerdictsModule.reconcileDecision(records, probe.headSha, {
         prHasApproved: probe.labels.indexOf(reviewVerdictsModule.LABEL_APPROVED) !== -1,
-        prHasRework: probe.labels.indexOf(reviewVerdictsModule.LABEL_REWORK) !== -1,
-        issueHasRework: !!(issueLabels &&
-            issueLabels.indexOf(reviewVerdictsModule.LABEL_REWORK) !== -1)
+        prHasRework: prHasRework,
+        issueHasRework: issueHasRework,
+        checksRed: checksRed
     });
     if (!decision) return false;
     var removed = false;

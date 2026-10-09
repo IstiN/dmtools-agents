@@ -130,9 +130,28 @@ function parseVerdictRecords(comments) {
  * Returns null when the head has no records. When the head carries records
  * with DIFFERENT verdicts, the newest wins and the conflict is logged:
  *   ⚠️ verdict conflict on <head>: APPROVE vs REQUEST_CHANGES — newest wins
- * (logged once per call — tick rules may call repeatedly; the conflict is
- * transient: reconciliation removes its loser label in the same pass).
+ * The WARN is de-duplicated per module instance (per tick process) keyed by
+ * head + verdict pair: the tick's rules call the guards 5-6 times per PR
+ * per tick (the reconcile rule, the notLatestVerdict lanes, the arm gate)
+ * and records never expire, so an undeduped line would repeat identically
+ * until the head moves or merges. The first evaluation of a pair WARNs (the
+ * conflict stays observable in every tick); later calls stay SILENT
+ * consumers of effective.conflict.
  */
+var warnedConflicts = {};
+var WARNED_CONFLICTS_CAP = 256;
+
+function warnConflictOnce(key, message) {
+    if (warnedConflicts[key]) return;
+    // Bound the de-dup memory: a tick that somehow walks 256+ distinct
+    // conflicting heads resets the set (worst case a repeat WARN — never a
+    // missed one for a pair seen recently).
+    var keys = Object.keys(warnedConflicts);
+    if (keys.length >= WARNED_CONFLICTS_CAP) warnedConflicts = {};
+    warnedConflicts[key] = true;
+    console.warn(message);
+}
+
 function latestVerdictForHead(records, headSha) {
     if (!headSha) return null;
     var head = String(headSha);
@@ -154,7 +173,8 @@ function latestVerdictForHead(records, headSha) {
         var prev = forHead[forHead.length - 2];
         if (prev.verdict !== newest.verdict) {
             conflict = { older: prev, newer: newest };
-            console.warn('⚠️ verdict conflict on ' + head + ': ' +
+            warnConflictOnce(head + '|' + prev.verdict + '>' + newest.verdict,
+                '⚠️ verdict conflict on ' + head + ': ' +
                 prev.verdict + ' vs ' + newest.verdict + ' — newest wins');
         }
     }
@@ -199,16 +219,33 @@ function buildReconciliationComment(effective, loserLabel, headSha) {
 
 /**
  * Reconciliation decision for one head (pure — AC2). state:
- * { prHasApproved, prHasRework, issueHasRework } — the coexisting machine
- * labels on both carriers. Returns null when there is nothing to reconcile
- * (no records for the head, or the loser label is nowhere present);
- * otherwise { loserLabel, removeFromPr, removeFromIssue, effective, comment }.
+ * { prHasApproved, prHasRework, issueHasRework, checksRed } — the
+ * coexisting machine labels on both carriers plus the head's CI verdict
+ * (the caller's headHasRealFailure probe, fail-open true). Returns null
+ * when there is nothing to reconcile (no records for the head, or the
+ * loser label is nowhere present); otherwise
+ * { loserLabel, removeFromPr, removeFromIssue, effective, comment }.
+ *
+ * gh-807 review fix (BLOCKING thread): an APPROVE winner does NOT
+ * invalidate every agent:rework arm — the label has non-review sources
+ * that legitimately coexist with an APPROVE record on the SAME head:
+ *   - red-CI rework on a sticky-approved PR (fail_validation re-arms the
+ *     linked issue; "pr_approved is STICKY — validation red post-approval
+ *     re-arms rework only");
+ *   - the sticky issue arm itself (the dead-letter recovery: a
+ *     failed/never-started leg must be re-fireable);
+ *   - conflict-rework arms (a DIRTY head carries no CI — the probe's
+ *     fail-open red keeps the arm, killing the strip/re-add yo-yo).
+ * When checksRed stands, the rework arm is CI-corroborated: the tick keeps
+ * it and lets the CI path own the leg. A REQUEST_CHANGES/BLOCK winner
+ * always strips pr_approved — red CI never legitimizes the approval.
  */
 function reconcileDecision(records, headSha, state) {
     var effective = latestVerdictForHead(records, headSha);
     if (!effective) return null;
     var loser = resolveLoserLabel(effective.record.verdict);
     var st = state || {};
+    if (loser === LABEL_REWORK && st.checksRed) return null;
     var removeFromPr = loser === LABEL_REWORK ? !!st.prHasRework : !!st.prHasApproved;
     var removeFromIssue = loser === LABEL_REWORK ? !!st.issueHasRework : false;
     if (!removeFromPr && !removeFromIssue) return null;
