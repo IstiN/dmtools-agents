@@ -313,6 +313,7 @@ function makeSmAgent(opts) {
             './common/scm.js': mockScmModule,
             './common/buildEncodedConfig.js': buildEncodedConfigModule,
             './common/machineAuthor.js': machineAuthorModule,
+            './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({}), {}),
             './common/smProvider.js': {
                 createSmProvider: function () {
                     return {
