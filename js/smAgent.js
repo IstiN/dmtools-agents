@@ -97,6 +97,7 @@ var configLoader = require('./configLoader.js');
 var smSource = require('./sm/sourceResolver.js');
 var scmModule = require('./common/scm.js');
 var factoryStateModule = require('./factoryState.js');
+var reworkLatchModule = require('./common/reworkLatch.js');
 var buildEncodedConfigModule = require('./common/buildEncodedConfig.js');
 var machineAuthorModule = require('./common/machineAuthor.js');
 var smProviderModule = require('./common/smProvider.js');
@@ -106,6 +107,11 @@ var reviewVerdictsModule = require('./common/reviewVerdicts.js');
 
 // Project config loaded once in action() — used as global default for rules without configPath
 var projectConfig = null;
+// gh-806: the rework in-flight latch, one map per tick — lazily loaded from
+// the previous factory-state snapshot, armed by this tick's rework arming
+// paths, ridden into the published snapshot. Null until the first latch
+// touch; reset at the top of action().
+var tickReworkLatch = null;
 // Priority-tier label names (owner directive 2026-10-08), resolved once in
 // action() from config.smPriorityLabels — passed down to the source query
 // path (githubSource queryPrs' tier-aware FIFO sort).
@@ -1258,6 +1264,10 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // resolves the threads (review-threads-resolved then arms a
             // fresh review) or the label persists and this rule stays
             // quiet (notLabels agent:rework) — never both legs at once.
+            // gh-806 AC1: one arm per (pr, head) — consult the in-flight
+            // latch before labeling; a leg already flying owns the threads,
+            // and re-arming it stacked 9 arms / 8 dead legs on fa #1428.
+            if (consultReworkLatch(key, ticket, effectiveRepoInfo).latched) continue;
             try {
                 if (DRY) {
                     console.log('  🧪 [dry] ' + key + ' would arm agent:rework (unresolved review threads on PR #' + ticket.prNumber + ')');
@@ -1301,6 +1311,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         're-review is armed (review-threads-resolved).'
                 });
                 console.log('  ✅ ' + key + ' agent:rework armed (unresolved review threads on PR #' + ticket.prNumber + ')');
+                armReworkLatch(ticket);
                 processedKeys.push(key);
             } catch (e) {
                 console.error('  ❌ arm_rework failed for ' + key + ': ' + (e.message || e));
@@ -2352,6 +2363,17 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 var cMachineAuthor = machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, effectiveConfig);
                 var cIsMachinePr = machineAuthorModule.isMachineAuthored(
                     ticket, cMachineAuthor, effectiveRepoInfo.owner);
+                // gh-806 AC1: while a rework leg for this (pr, head) is in
+                // flight, arm NOTHING and post no marker — the gh-683
+                // invariant (marker only after arming) makes "report while
+                // latched" a marker-without-arm corpse. The in-flight leg
+                // owns the conflict fix; after it terminates (or the latch
+                // goes stale) the next tick reports+arms normally.
+                if (cIsMachinePr &&
+                    consultReworkLatch(key, ticket, effectiveRepoInfo).latched) {
+                    processedKeys.push(key);
+                    continue;
+                }
                 var cLinked = null;
                 if (cIsMachinePr) {
                     try {
@@ -2413,6 +2435,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                             workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
                             number: cLinked, labels: ['agent:rework']
                         });
+                        armReworkLatch(ticket);
                         console.log('  🔁 ' + key + ' conflict marker present but issue #' + cLinked +
                             ' has no agent:rework — re-armed (gh-683 self-heal)');
                     }
@@ -2478,6 +2501,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     console.log('  ⏳ ' + key + ' conflict rework arming deferred (workflow cap / active run) — marker NOT posted, retrying next tick (gh-683)');
                     continue;
                 }
+                // gh-806: the PR-anchored dispatch landed — record the latch
+                // so later ticks see the leg as in flight for this (pr, head).
+                armReworkLatch(ticket);
                 if (!DRY) github_create_comment({
                     workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
                     number: ticket.prNumber, body: cReport
@@ -2706,6 +2732,13 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // 'ai-teammate') as guests forever (live fa PR #1249).
                 var isMachinePr = machineAuthorModule.isMachineAuthored(
                     ticket, machineAuthor, effectiveRepoInfo.owner);
+                // gh-806 AC1: consult the rework in-flight latch before ANY
+                // rework arm — a leg already flying for this (pr, head) owns
+                // the fix; re-arming stacked 9 arms / 8 dead legs (fa #1428).
+                // Guests never reach an arm branch — no consult for them.
+                var reworkLatched = isMachinePr
+                    ? consultReworkLatch(key, ticket, effectiveRepoInfo).latched
+                    : false;
                 var linked = null;
                 if (isMachinePr) {
                     try {
@@ -2845,27 +2878,37 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                             (eEscalate.message || eEscalate));
                     }
                 } else if (isMachinePr && linked) {
-                    github_add_labels({
-                        workspace: effectiveRepoInfo.owner,
-                        repository: effectiveRepoInfo.repo,
-                        number: linked,
-                        labels: ['agent:rework']
-                    });
+                    if (reworkLatched) {
+                        console.log('  ⏭️  ' + key + ' rework re-arm suppressed — leg already in flight for this head (AC1)');
+                    } else {
+                        github_add_labels({
+                            workspace: effectiveRepoInfo.owner,
+                            repository: effectiveRepoInfo.repo,
+                            number: linked,
+                            labels: ['agent:rework']
+                        });
+                        armReworkLatch(ticket);
+                    }
                 } else if (isMachinePr) {
                     // Machine PR with NO OPEN linked issue: PR-anchored arm
                     // (#544 fallback shape) — the machine fixes its own code,
                     // that loop is ours. Never lands on a linked issue from
                     // here: the issue path above is the only linked carrier.
-                    try {
-                        github_add_labels({
-                            workspace: effectiveRepoInfo.owner,
-                            repository: effectiveRepoInfo.repo,
-                            number: ticket.prNumber,
-                            labels: ['agent:rework']
-                        });
-                    } catch (eUnlinkedArm) {
-                        console.warn('  ⚠️  unlinked machine rework arm failed: ' +
-                            (eUnlinkedArm.message || eUnlinkedArm));
+                    if (reworkLatched) {
+                        console.log('  ⏭️  ' + key + ' PR-anchored rework arm suppressed — leg already in flight for this head (AC1)');
+                    } else {
+                        try {
+                            github_add_labels({
+                                workspace: effectiveRepoInfo.owner,
+                                repository: effectiveRepoInfo.repo,
+                                number: ticket.prNumber,
+                                labels: ['agent:rework']
+                            });
+                            armReworkLatch(ticket);
+                        } catch (eUnlinkedArm) {
+                            console.warn('  ⚠️  unlinked machine rework arm failed: ' +
+                                (eUnlinkedArm.message || eUnlinkedArm));
+                        }
                     }
                 } else {
                     // GUEST PRs get the validation_failed PARK LABEL — and
@@ -3065,7 +3108,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     checkNames: validationCheckNames() || [],
                     prev: spPrev,
                     dryRun: DRY,
-                    processed: processedKeys
+                    processed: processedKeys,
+                    // gh-806: this tick's rework latch rides the snapshot —
+                    // the next tick's armer consults what this tick armed.
+                    reworkInFlight: tickReworkLatch ? tickReworkLatch.map : {},
+                    legWorkflow: reworkLatchModule.DEFAULT_LEG_WORKFLOW
                 });
                 var spUrl = factoryStateModule.publishFactoryState(
                     spState, spCfg, function (args) {
@@ -4581,9 +4628,117 @@ function syncValidationChecks(repoInfo, stampFn) {
     console.log('  ℹ️  validation-sync: ' + JSON.stringify(syncDebug));
 }
 
+// ─── gh-806: the rework in-flight latch (tick side) ──────────────────────────
+// Live fa PR #1428 (2026-10-09 04:01–05:04Z): one push, 9 arming decisions,
+// 8 silently dead legs — the armer had no single-flight keyed (pr, head).
+// The latch lives in ONE map per tick, lazily loaded from the previous
+// factory-state snapshot (fa-state.json on the factory-data branch — the
+// same store that persists tick.processed). Every rework arming path
+// consults it BEFORE labeling/dispatching; every real arm records into it;
+// the publish block rides the map into the next snapshot. Deployments
+// without statePublish degrade to an in-memory map: the in-tick single-
+// flight still holds, cross-tick behavior is exactly as before.
+
+function reworkLatchStateCfg() {
+    var raw = (RUN_JOB_PARAMS || {}).statePublish;
+    if (typeof raw === 'string') {
+        try { raw = JSON.parse(raw); } catch (eLatchCfg) { raw = null; }
+    }
+    return ((raw || {}).channel) === 'release' ? raw : null;
+}
+
+function tickReworkLatchState(effectiveRepoInfo) {
+    if (tickReworkLatch) return tickReworkLatch;
+    var state = { map: {} };
+    var cfg = reworkLatchStateCfg();
+    var repoInfo = null;
+    if (cfg) {
+        if (cfg.repo) {
+            var parts = String(cfg.repo).split('/');
+            repoInfo = { owner: parts[0], repo: parts[1] };
+        } else {
+            repoInfo = effectiveRepoInfo || null;
+        }
+    }
+    if (cfg && repoInfo && repoInfo.owner && repoInfo.repo) {
+        try {
+            var prev = factoryStateModule.fetchPreviousState(
+                repoInfo.owner + '/' + repoInfo.repo, cfg,
+                function (a) { return cli_execute_command(a); });
+            if (prev && prev.reworkInFlight) {
+                state.map = reworkLatchModule.normalizeMap(prev.reworkInFlight);
+            }
+        } catch (eLatchPrev) {
+            // Any miss (first tick, 404, rate limit) → empty map: the armer
+            // keeps today's behavior and the snapshot re-seeds the latch.
+        }
+    }
+    tickReworkLatch = state;
+    return tickReworkLatch;
+}
+
+function reworkLatchHeadOf(ticket) {
+    return (ticket && ticket.pr && ticket.pr.headSha) ||
+        (ticket && ticket.headSha) || null;
+}
+
+/**
+ * The AC1 gate — is a rework leg already in flight for (ticket.prNumber,
+ * head)? Returns { latched, head }; the caller must arm/dispatch NOTHING
+ * when latched. The canonical suppression line
+ * `⏭️ <key> rework already in flight for (pr-N, head7)` is logged HERE,
+ * exactly once per suppressed decision.
+ * Side effects on a PRESENT latch: one head-runs probe decides its fate —
+ * an ACTIVE leg run keeps it alive past the stale window (the leg really
+ * is flying), a CONCLUDED leg run at/after the arm clears it (AC2), no run
+ * + older than 45 min self-heals (AC3). A null probe (failed gh call)
+ * degrades to age-only — fail-safe toward suppressing one extra arm,
+ * never toward stacking legs. The clear is logged with its cause.
+ */
+function consultReworkLatch(key, ticket, effectiveRepoInfo) {
+    var prNumber = ticket && ticket.prNumber;
+    var head = reworkLatchHeadOf(ticket);
+    if (!prNumber || !head) return { latched: false, head: head };
+    var latchState = tickReworkLatchState(effectiveRepoInfo);
+    var verdict = reworkLatchModule.isActive(latchState.map, prNumber, head, {});
+    if (verdict.entry) {
+        var runs = headWorkflowRunsSafe(effectiveRepoInfo, head);
+        verdict = reworkLatchModule.isActive(latchState.map, prNumber, head, {
+            runs: runs,
+            workflowFile: reworkLatchModule.DEFAULT_LEG_WORKFLOW
+        });
+    }
+    if (!verdict.active) {
+        if (verdict.entry) {
+            reworkLatchModule.clear(latchState.map, prNumber, head);
+            console.log('  🔓 ' + key + ' rework latch cleared (' + verdict.cause +
+                ') for (pr-' + prNumber + ', ' + head.substring(0, 7) + ')');
+        }
+        return { latched: false, head: head };
+    }
+    console.log('  ⏭️  ' + key + ' rework already in flight for (pr-' + prNumber +
+        ', ' + head.substring(0, 7) + ')');
+    return { latched: true, head: head };
+}
+
+/**
+ * Record an arming decision (gh-806): from now on, one leg for (pr, head).
+ * DRY never arms (the dry tick publishes nothing — arming a map that never
+ * persists would silently swallow the NEXT real tick's first arm).
+ */
+function armReworkLatch(ticket) {
+    if (DRY) return;
+    var prNumber = ticket && ticket.prNumber;
+    var head = reworkLatchHeadOf(ticket);
+    if (!prNumber || !head) return;
+    var latchState = tickReworkLatchState(null);
+    reworkLatchModule.arm(latchState.map, prNumber, head, null, 'sm');
+}
+
 function action(params) {
     var p     = params.jobParams || params;
     RUN_JOB_PARAMS = p;    DRY = p.dryRun === true;
+    tickReworkLatch = null;
     if (DRY) console.log('🧪 DRY RUN — no side effects will be performed');
     var rules = p.rules;
 

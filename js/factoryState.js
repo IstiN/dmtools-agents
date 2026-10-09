@@ -103,6 +103,9 @@ var LANE_ORDER = ['development', 'pr_created', 'pr_validation', 'review',
 // comma-separated list — assignment bucketing treats ANY entry as the
 // machine (same semantics as the author guards in common/machineAuthor.js).
 var machineAuthorModule = require('./common/machineAuthor.js');
+// gh-806: the rework in-flight latch rides the snapshot (state.reworkInFlight,
+// factory-data branch) so the NEXT tick's armer consults what THIS tick armed.
+var reworkLatchModule = require('./common/reworkLatch.js');
 
 // Schema 1 lane order (board back-compat; old snapshots on the data branch).
 var LANE_ORDER_V1 = ['validating', 'approved_queue', 'review', 'fresh'];
@@ -636,6 +639,30 @@ function buildFactoryState(input) {
         card.queuePos = i + 1;
     });
 
+    // gh-806: the rework in-flight latch persists next to tick.processed —
+    // the previous snapshot's map is the carry source, this tick's live map
+    // (arms + clears that already happened mid-tick) merges over it, then
+    // stale (AC3: >45 min, no matching active run) and terminated (AC2: the
+    // leg's ai-teammate run concluded at/after the arm) entries are pruned so
+    // the snapshot never wedges the armer on a dead leg. A leg run still
+    // ACTIVE survives even past the stale window — a queued run on a jammed
+    // runner must not invite a duplicate. Additive; schema stays 2.
+    var latchCarry = {};
+    var prevLatch = input.prev && input.prev.reworkInFlight;
+    if (prevLatch && typeof prevLatch === 'object') {
+        Object.keys(prevLatch).forEach(function (k) { latchCarry[k] = prevLatch[k]; });
+    }
+    var liveLatch = input.reworkInFlight;
+    if (liveLatch && typeof liveLatch === 'object') {
+        Object.keys(liveLatch).forEach(function (k) { latchCarry[k] = liveLatch[k]; });
+    }
+    var reworkInFlight = reworkLatchModule.pruneStale(
+        reworkLatchModule.normalizeMap(latchCarry), {
+            now: nowMs,
+            runs: runs,
+            workflowFile: input.legWorkflow
+        }).map;
+
     return {
         schema: 2,
         factory: input.factory || (input.repoInfo && input.repoInfo.repo) || 'unknown',
@@ -646,6 +673,7 @@ function buildFactoryState(input) {
             processed: input.processed || []
         },
         checks: checkNames,
+        reworkInFlight: reworkInFlight,
         lanes: lanes,
         counts: LANE_ORDER.reduce(function (m, l) {
             m[l] = (lanes[l] || []).length; return m;
