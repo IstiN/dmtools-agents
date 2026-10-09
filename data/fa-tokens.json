@@ -106,5 +106,14 @@
       "completion": 25800,
       "total": 116451
     }
+  ],
+  "issue-808": [
+    {
+      "leg": "dev",
+      "at": "2026-10-09T06:52:21Z",
+      "prompt": 135184,
+      "completion": 46115,
+      "total": 181299
+    }
   ]
 }
