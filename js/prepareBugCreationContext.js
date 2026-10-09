@@ -11,6 +11,7 @@
 // Load-time require (gh-823): a deferred require would resolve against the
 // pack js/ root only — hoist every require to the top of the module.
 var trackersModule = require('./common/trackers.js');
+
 function sanitizeFilename(str) {
     return str.replace(/[\/\\:*?"<>|]/g, '-').replace(/\s+/g, ' ').substring(0, 100).trim();
 }

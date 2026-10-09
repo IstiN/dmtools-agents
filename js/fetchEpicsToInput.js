@@ -13,7 +13,7 @@
 
 // Load-time require (gh-823): a deferred require would resolve against the
 // pack js/ root only — hoist every require to the top of the module.
-var trackersModule = require("./common/trackers.js");
+var trackersModule = require('./common/trackers.js');
 
 /**
  * Find a field value by partial key name (handles "Display Name (customfieldXXX)" keys).
