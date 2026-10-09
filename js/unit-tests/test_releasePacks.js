@@ -327,10 +327,110 @@ suite('gh-812 release integrity wiring', function () {
             'the previous-release downloads are gh calls — the build step needs GH_TOKEN');
     });
 
-    test('shipped-state reads degrade with a warning, never crash the build', function () {
-        assert.ok(builder.indexOf('::warning::') !== -1 &&
-            /shipped/i.test(builder),
-            'a gh outage must fall back to the ledger (today\'s behavior), ' +
-            'not fail releases on infrastructure the gate cannot control');
+    test('gh-812 rework: a failed shipped-catalog read FAILS the release (no silent ledger fallback)', function () {
+        var fnStart = builder.indexOf('function shippedCatalog()');
+        assert.ok(fnStart !== -1, 'shippedCatalog must exist');
+        var body = builder.slice(fnStart, builder.indexOf('function shippedZipManifest(', fnStart));
+        assert.ok(body.indexOf('throw new Error') !== -1,
+            'the shipped catalog IS the version-uniqueness base — a failed read ' +
+            'must fail the release, not silently fall back to the versions.json ' +
+            'ledger that caused gh-812 (review thread 2: a gh outage is transient, ' +
+            'a silently degraded release is the failure mode this pipeline prevents)');
+        assert.ok(body.indexOf('::error::') !== -1,
+            'the degradation must surface at ::error:: level, not a log line');
+    });
+
+    test('gh-812 rework: the ledger fallback is an explicit --allow-unverified-base decision', function () {
+        assert.ok(builder.indexOf("hasFlag('--allow-unverified-base')") !== -1,
+            'the fallback needs an explicit operator flag — a deviation from the ' +
+            'version-uniqueness guarantee must be a human decision, not a log line');
+        var fnStart = builder.indexOf('function shippedCatalog()');
+        var body = builder.slice(fnStart, builder.indexOf('function shippedZipManifest(', fnStart));
+        assert.ok(body.indexOf('::warning::') !== -1,
+            'with the flag the degraded release stays visible as a warning');
+    });
+
+    test('gh-812 rework: a failed shipped-zip read FAILS the release instead of skipping the drift check', function () {
+        var fnStart = builder.indexOf('function shippedZipManifest(');
+        assert.ok(fnStart !== -1, 'shippedZipManifest must exist');
+        var body = builder.slice(fnStart, builder.indexOf('function zipManifestText(', fnStart));
+        assert.ok(body.indexOf('throw new Error') !== -1,
+            'a missing shipped zip silently disabled the payload-drift check ' +
+            '(fingerprintsDiffer(null, …) === false → shipped at the candidate ' +
+            'version) — it must fail the release instead (review thread 2)');
+        assert.ok(body.indexOf('::error::') !== -1, 'error-level, not a quiet warning');
+        assert.ok(body.indexOf('gh release download') === -1,
+            'no per-agent gh round-trip — the zips are already on disk from the ' +
+            'batched download (review thread 6), which also collapses the ' +
+            'transient-failure surface this test guards');
+    });
+
+    test('gh-812 rework: shipped zips are fetched in ONE batched download, not ~68 per agent', function () {
+        var fnStart = builder.indexOf('function shippedCatalog()');
+        var body = builder.slice(fnStart, builder.indexOf('function shippedZipManifest(', fnStart));
+        assert.ok(body.indexOf("--pattern '*.zip'") !== -1,
+            'one `gh release download --pattern *.zip` per release replaces the ' +
+            'serial per-agent downloads (review thread 6)');
+        var downloads = builder.split('gh release download').length - 1;
+        assert.equal(downloads, 2,
+            'exactly two gh downloads remain: catalog.json + the batched zips');
+    });
+
+    test('gh-812 rework: the workflow keeps the strict default (no --allow-unverified-base)', function () {
+        assert.ok(wf.indexOf('allow-unverified-base') === -1,
+            'the release must fail on unreadable shipped state by default — ' +
+            'the flag is for deliberate manual overrides only');
+    });
+
+    test('gh-812 rework: the drift re-version deletes the stale zip + .sha256 BEFORE rebuilding (one zip per agent in dist/)', function () {
+        var branchStart = builder.indexOf('next = resolveShipVersion(next, true)');
+        assert.ok(branchStart !== -1, 'the payload-drift re-version branch must exist');
+        var branchEnd = builder.indexOf('assertZipRequires(zip);', branchStart);
+        assert.ok(branchEnd !== -1, 'the non-drift path must follow the branch');
+        var branch = builder.slice(branchStart, branchEnd);
+        var delZip = branch.indexOf('rmSync(zip, { force: true });');
+        var delSidecar = branch.indexOf('rmSync(`${zip}.sha256`, { force: true });');
+        var rebuild = branch.indexOf('const rezipped = buildPack(agent, next)');
+        assert.ok(delZip !== -1,
+            'the drifted <agent>-<shippedVersion>.zip must be deleted from dist/ — ' +
+            'the publish step uploads dist/*.zip wholesale, so a stale artifact ' +
+            'republishes the exact two-packs-one-version collision gh-812 forbids');
+        assert.ok(delSidecar !== -1, 'the stale .sha256 sidecar must be deleted too');
+        assert.ok(rebuild !== -1, 'the re-version path must rebuild at the final version');
+        assert.ok(delZip < rebuild && delSidecar < rebuild,
+            'both stale artifacts must be removed BEFORE the rebuild so dist/ ' +
+            'never holds two zips for one agent at publish time');
+        assert.ok(branch.indexOf('zipPath: rezipped') !== -1,
+            'the branch must ship the REBUILT zip, never the stale first build');
+    });
+
+    test('gh-812 rework: the untrusted tag name reaches the script only via env indirection', function () {
+        var buildStep = wf.indexOf('node ci/release_packs.mjs');
+        assert.ok(buildStep !== -1, 'the build step must exist');
+        var runStart = wf.lastIndexOf('run: |', buildStep);
+        var envStart = wf.lastIndexOf('env:', runStart);
+        assert.ok(envStart !== -1 && envStart < runStart, 'the build step declares an env block');
+        var envBlock = wf.slice(envStart, runStart);
+        var script = wf.slice(runStart, buildStep);
+        assert.ok(script.indexOf('${{') === -1,
+            'no ${{ }} template expansion inside the run: block — Actions ' +
+            'interpolates BEFORE bash parses, so a crafted agents-rel-* tag ' +
+            'name could break out of the quoting in a contents:write job ' +
+            '(review thread 3)');
+        assert.ok(envBlock.indexOf('PREV_RELEASE_TAG: ${{ steps.base.outputs.ref }}') !== -1,
+            'the prev-release tag reaches the script through env, not interpolation');
+        assert.ok(envBlock.indexOf('BASE_REF: ${{ steps.base.outputs.ref }}') !== -1,
+            'the base ref is routed through env too — same pre-existing flaw');
+    });
+
+    test('gh-812 rework: the tag format is validated before the builder runs', function () {
+        var buildStep = wf.indexOf('node ci/release_packs.mjs');
+        var runStart = wf.lastIndexOf('run: |', buildStep);
+        var script = wf.slice(runStart, buildStep);
+        assert.ok(script.indexOf('^agents-rel-[0-9]{8}-[0-9]{6}$') !== -1,
+            'release-base tags are machine-generated (agents-rel-YYYYMMDD-HHMMSS) — ' +
+            'anything else in the newest agents-rel-* tag must be rejected');
+        assert.ok(script.indexOf('::error::unexpected agents-rel tag format') !== -1,
+            'the rejection must be visible in the run summary');
     });
 });

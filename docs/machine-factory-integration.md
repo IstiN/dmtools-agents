@@ -313,15 +313,19 @@ caches ran mixed content and every fa machine-sm tick went red for
 
 - **Shipped-version-first base** — `ci/release_packs.mjs` reads each
   agent's base version from the PREVIOUS release's `catalog.json`
-  (append-only release history; `--prev-release-tag`), falling back to
-  `versions.json` only when the release/`gh` is unavailable. A failed
-  ledger push can no longer make a release reuse a version that is
-  already out there.
+  (append-only release history; `--prev-release-tag`). A failed
+  shipped-state read FAILS the release — a gh outage is transient (the
+  next push retries) while a silently degraded base re-opens the
+  collision; `--allow-unverified-base` opts into the versions.json ledger
+  fallback as a deliberate operator decision. A failed ledger push can no
+  longer make a release reuse a version that is already out there.
 - **Payload-drift re-versioning** — a rebuilt-but-unbumped agent whose
   payload differs from the zip its version already shipped is re-versioned
-  one patch up (manifest `files` fingerprints; metadata like
-  `sourceCommit` never counts as a content change). Byte-identical
-  rebuilds keep their version — no churn.
+  one patch up (manifest `files` fingerprints — path + sha256 + mode;
+  metadata like `sourceCommit` never counts as a content change), and the
+  first-built zip at the already-shipped version is deleted from `dist/`
+  before the rebuild so the release ships exactly one zip per agent per
+  version. Byte-identical rebuilds keep their version — no churn.
 - **Require sanity gate** — every built zip is unpacked and every literal
   relative `require` in every packed `.js` must resolve to a file inside
   the zip (file-relative OR js/-root-relative base — dmtools resolves

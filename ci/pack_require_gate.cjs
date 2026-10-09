@@ -53,7 +53,7 @@ function requireSpecs(source) {
  */
 function resolveRequire(fromPath, spec) {
     var parts = fromPath.split('/');
-    parts.pop(); // the requiring file's directory
+    parts.pop(); // drop the file name — resolve against its directory
     return normalizePath(parts.concat(spec.split('/')));
 }
 

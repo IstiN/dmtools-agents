@@ -108,6 +108,60 @@ suite('version guard: payload fingerprint', function () {
     });
 });
 
+// ── V4 (gh-812 rework, review thread 5): mode is part of the fingerprint ─────
+
+suite('version guard: payload fingerprint covers manifest mode', function () {
+
+    test('a MODE-only difference changes the fingerprint (same bytes, different mode)', function () {
+        // The launch-surface augment folds mode into the manifest (0755 for
+        // verdict.sh) and zip entries CARRY the unix mode: a contract change
+        // that flips an entry's mode with identical bytes produces different
+        // zip bytes that must never be republished under the shipped
+        // version — the mode is part of the payload.
+        var modeFlipped = JSON.stringify({
+            agent: 'sm_github',
+            version: '0.1.36',
+            sourceCommit: 'aaa',
+            files: [
+                { path: 'js/smAgent.js', sha256: 'hash-a', mode: '0644' },
+                { path: 'js/common/smProvider.js', sha256: 'hash-b', mode: '0755' },
+            ],
+        });
+        assert.ok(guard().payloadFingerprint(PREV_MANIFEST) !== guard().payloadFingerprint(modeFlipped),
+            'a mode flip with identical bytes is a content change');
+    });
+
+    test('fingerprintsDiffer sees a mode-only difference', function () {
+        var modeFlipped = JSON.stringify({
+            agent: 'sm_github',
+            version: '0.1.36',
+            sourceCommit: 'aaa',
+            files: [
+                { path: 'js/smAgent.js', sha256: 'hash-a', mode: '0644' },
+                { path: 'js/common/smProvider.js', sha256: 'hash-b', mode: '0755' },
+            ],
+        });
+        assert.equal(guard().fingerprintsDiffer(PREV_MANIFEST, modeFlipped), true,
+            'the drift check must re-version a mode-only payload change instead of ' +
+            'republishing different zip bytes under the already-shipped version');
+    });
+
+    test('identical payloads including modes still fingerprint identically (no churn)', function () {
+        assert.equal(guard().payloadFingerprint(PREV_MANIFEST),
+            guard().payloadFingerprint(SAME_PAYLOAD_MANIFEST));
+    });
+
+    test('manifest entries without a mode still fingerprint (mode defaults to empty)', function () {
+        // Older/non-teammate manifests carry no mode field — fingerprinting
+        // must not crash and must treat absent mode as ''.
+        var modeless = JSON.stringify({
+            files: [{ path: 'js/smAgent.js', sha256: 'hash-a' }],
+        });
+        assert.ok(guard().payloadFingerprint(modeless));
+        assert.equal(guard().fingerprintsDiffer(modeless, modeless), false);
+    });
+});
+
 // ── V1/V2: base version resolution ───────────────────────────────────────────
 
 suite('version guard: base version resolution (V1/V2)', function () {

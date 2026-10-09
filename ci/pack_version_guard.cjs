@@ -22,9 +22,9 @@
  *      version that is already out there.
  *   V3 a rebuilt-but-unbumped agent whose payload differs from what its
  *      unchanged version already shipped gets an extra patch bump.
- *   V4 the payload fingerprint covers file paths + sha256 only — manifest
+ *   V4 the payload fingerprint covers file paths + sha256 + mode — manifest
  *      metadata (version, sourceCommit) changes on every rebuild and must
- *      not force a bump by itself.
+ *      not force a bump by itself; mode IS payload (zip entries carry it).
  *
  * Pure classification — no fs, no network: the caller (ci/release_packs.mjs)
  * downloads the previous release's catalog.json + same-version pack zips and
@@ -70,10 +70,13 @@ function resolveShipVersion(candidateVersion, differsFromShipped) {
 
 /**
  * V4: stable fingerprint of a pack's PAYLOAD from its manifest.json text —
- * sorted path:sha256 pairs. Manifest metadata (agent, version, sourceCommit)
- * is deliberately excluded: it changes on every rebuild and every commit and
- * must never read as a content change. Unparseable/absent input → null
- * (the caller treats null as "cannot compare").
+ * sorted path:sha256:mode triplets. Manifest metadata (agent, version,
+ * sourceCommit) is deliberately excluded: it changes on every rebuild and
+ * every commit and must never read as a content change. mode IS included
+ * (gh-812 rework, review thread 5): zip entries carry the unix mode, so a
+ * mode-only flip with identical bytes produces different zip bytes — the
+ * same collision class. Unparseable/absent input → null (the caller treats
+ * null as "cannot compare").
  */
 function payloadFingerprint(manifestJson) {
     if (!manifestJson) return null;
@@ -86,7 +89,7 @@ function payloadFingerprint(manifestJson) {
     var files = manifest.files || [];
     var entries = [];
     for (var i = 0; i < files.length; i++) {
-        entries.push(files[i].path + ':' + files[i].sha256);
+        entries.push(files[i].path + ':' + files[i].sha256 + ':' + (files[i].mode || ''));
     }
     entries.sort();
     return entries.join('\n');
