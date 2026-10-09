@@ -314,6 +314,7 @@ function makeSmAgent(opts) {
             './common/buildEncodedConfig.js': buildEncodedConfigModule,
             './common/machineAuthor.js': machineAuthorModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+            './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({}), {}),
             './common/smProvider.js': {
                 createSmProvider: function () {
                     return {
@@ -330,7 +331,10 @@ function makeSmAgent(opts) {
                 }
             },
             './factoryState.js': loadModule('js/factoryState.js',
-                makeRequire({ './common/machineAuthor.js': machineAuthorModule }), {}),
+                makeRequire({
+                    './common/machineAuthor.js': machineAuthorModule,
+                    './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({}), {})
+                }), {}),
         }),
         smMocks
     );
