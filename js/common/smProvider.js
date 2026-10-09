@@ -38,6 +38,10 @@
  *   - gitlab activeMachineRuns cannot map a pipeline to an issue number
  *     (pipelines do not expose trigger variables) — any running API-sourced
  *     pipeline counts as "machine busy" (conservative: fewer parallel legs).
+ *   - gitlab exposes no machine verdict records (gh-807: no MR-note reader
+ *     in the tool catalog yet) — latestVerdictRecord is absent, so the
+ *     latestVerdict/notLatestVerdict query guards never match/fail-open and
+ *     the reconciliation stays GitHub-machine-loop behavior for now.
  */
 'use strict';
 
@@ -137,6 +141,17 @@ function asList(parsed) {
 // two verdict readers can never drift apart.
 var BOOKKEEPING_CHECK_PREFIXES = ['kicker /', 'Wake-up probe', 'merge /'];
 
+// gh-807: machine verdict records (js/common/reviewVerdicts.js) ride the
+// same ioCache as the other PR facts — the notLatestVerdict /
+// latestVerdict guards may evaluate per rule per tick, and each would
+// otherwise re-fetch the PR comment list (one github_get_pr_comments per
+// guard evaluation; the memo collapses that to one per PR per tick).
+function _verdictRecordsModule() {
+    if (!_verdictRecordsModule.mod) {
+        _verdictRecordsModule.mod = require('./reviewVerdicts.js');
+    }
+    return _verdictRecordsModule.mod;
+}
 
 function githubProvider(cfg) {
     var owner = cfg.repository.owner;
@@ -495,6 +510,41 @@ function githubProvider(cfg) {
                 commitId: r.commit_id || r.commitId || null,
                 author: (r.user && r.user.login) || null
             };
+        },
+
+        // ── gh-807 machine verdict records (js/common/reviewVerdicts.js) ──
+        // verdictRecords: every machine-parseable record on the PR, oldest
+        // first, memoized per tick (kind prVerdicts) — the verdict guards
+        // may evaluate per rule and must not re-fetch the comment list.
+        // Probe failure fails OPEN (empty list → guards inert → legacy
+        // behavior): a broken comment read must never strand a PR.
+        verdictRecords: function (prNumber) {
+            var memo = ioCacheGet(owner, repo, 'prVerdicts', prNumber);
+            if (memo) return memo;
+            var records = [];
+            try {
+                var raw = parseMcp(github_get_pr_comments({
+                    workspace: owner, repository: repo, pullRequestId: String(prNumber)
+                }));
+                var obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
+                var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+                records = _verdictRecordsModule().parseVerdictRecords(list);
+            } catch (e) {
+                console.warn('  ⚠️ verdict-record read failed (fail-open): ' + (e.message || e));
+                records = [];
+            }
+            ioCachePut(owner, repo, 'prVerdicts', prNumber, records);
+            return records;
+        },
+
+        // Newest verdict record for one head (+ conflict detection with the
+        // AC1 WARN inside reviewVerdicts.latestVerdictForHead), or null when
+        // the head has none — the null is what makes the query guards
+        // fail-open for pre-gh-807 PRs.
+        latestVerdictRecord: function (prNumber, headSha) {
+            if (!headSha) return null;
+            return _verdictRecordsModule().latestVerdictForHead(
+                this.verdictRecords(prNumber), headSha);
         },
 
         reviewThreads: function (prNumber) {

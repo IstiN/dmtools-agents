@@ -102,6 +102,8 @@ var buildEncodedConfigModule = require('./common/buildEncodedConfig.js');
 var machineAuthorModule = require('./common/machineAuthor.js');
 var smProviderModule = require('./common/smProvider.js');
 var trackersModule = require('./common/trackers.js');
+// gh-807: machine review-verdict records + their reconciliation logic.
+var reviewVerdictsModule = require('./common/reviewVerdicts.js');
 
 // Project config loaded once in action() — used as global default for rules without configPath
 var projectConfig = null;
@@ -1207,6 +1209,42 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             continue;
         }
 
+        if (rule.localAction === 'reconcile_verdicts') {
+            // gh-807 (live fa PR #1428, 2026-10-09): contradictory verdicts
+            // on one head left pr_approved + agent:rework coexisting and the
+            // tick never noticed. The three conflict-shaped reconcile rules
+            // in sm_github.json (reconcile-rework-vs-approval /
+            // reconcile-issue-rework-vs-approval / reconcile-approval-vs-
+            // changes — narrowed from the original every-approved-PR query,
+            // gh-807 review) run BEFORE the merge window every tick: the
+            // newest machine verdict record for the current head wins, the
+            // loser label comes off BOTH carriers (PR + linked issue) with
+            // one comment citing both verdict sources (AC2). CI-driven arms
+            // survive an APPROVE winner: the action probes the head's real
+            // CI verdict (headHasRealFailure) and a red keeps agent:rework —
+            // red-CI rework on a sticky-approved PR, the sticky dead-letter
+            // issue arm and conflict-rework are not review losers. Convergent:
+            // once the labels agree with the effective verdict the decision
+            // is null and the tick moves on. Never fights the human review
+            // state — only machine-owned label carriers reconcile, and PRs
+            // without records fail open.
+            try {
+                if (DRY) {
+                    console.log('  🧪 [dry] ' + key + ' would reconcile review verdicts on PR #' + ticket.prNumber);
+                    processedKeys.push(key);
+                    continue;
+                }
+                if (reconcileReviewVerdicts(effectiveRepoInfo, ticket)) {
+                    processedKeys.push(key);
+                } else {
+                    console.log('  ⏭️  ' + key + ' verdict records and labels already agree — nothing to reconcile');
+                }
+            } catch (e) {
+                console.error('  ❌ reconcile_verdicts failed for ' + key + ': ' + (e.message || e));
+            }
+            continue;
+        }
+
         if (rule.localAction === 'arm_rework') {
             // dmtools-agents #683 (live fa #1194/#1211/#1212 + dart #340,
             // 2026-10-04): machine-authored reviewed PRs with UNRESOLVED
@@ -1235,6 +1273,26 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     console.log('  🧪 [dry] ' + key + ' would arm agent:rework (unresolved review threads on PR #' + ticket.prNumber + ')');
                     processedKeys.push(key);
                     continue;
+                }
+                // gh-807 arming-side sticky approval (AC3): the effective
+                // verdict for the CURRENT head must not be APPROVE — unless
+                // BLOCKING threads remain in the record's census. Same rule
+                // the rework side enforces (prHasApproved, owner rule
+                // 2026-09-21) finally bound onto the ARMING side: an APPROVE
+                // verdict with only suggestion-tier threads keeps the
+                // approval and does NOT arm rework (that was the #1428
+                // coexistence). Fail-open: no records / broken read → arm
+                // as before (pre-gh-807 PRs).
+                var armGate = reworkArmGate(effectiveRepoInfo, ticket);
+                if (!armGate.arm) {
+                    console.log('  ⏭️  ' + key + ' rework arm withheld — APPROVE verdict on head ' +
+                        armGate.headShort + ' is authoritative (gh-807: suggestions do not trigger rework)');
+                    processedKeys.push(key);
+                    continue;
+                }
+                if (armGate.effective && armGate.effective.record) {
+                    console.log('  ℹ️  ' + key + ' rework arm allowed — ' + armGate.reason +
+                        ' on head ' + armGate.headShort);
                 }
                 github_add_labels({
                     workspace: effectiveRepoInfo.owner,
@@ -3366,6 +3424,173 @@ function failMarkerState(repoInfo, prNumber) {
         console.warn('  ⚠️  fail-marker state read failed: ' + (eMarks.message || eMarks));
     }
     return out;
+}
+
+// ── gh-807 verdict reconciliation helpers ───────────────────────────────────
+//
+// Live fa PR #1428 (2026-10-09): two review legs concluded on the SAME head
+// 97s apart with contradictory verdicts (APPROVE 05:47:30Z, REQUEST_CHANGES
+// 05:47:40Z) and both side effects stuck — pr_approved + agent:rework
+// coexisting. The review legs now stamp machine-parseable verdict records
+// (js/common/reviewVerdicts.js marker comments); these helpers are the tick
+// side: reconcile the labels (AC2) and bind the arming side to the same
+// sticky-approval rule the rework side enforces (AC3). Everything fails
+// OPEN: a PR without records (pre-gh-807) or a broken read keeps today's
+// behavior — reconciliation must never strand a leg.
+
+// Fetches the PR's head sha + current labels in one github_get_pr call
+// (labels ride the REST body, same as the query path's prStatus). Returns
+// { headSha, labels } or null when the probe fails — callers fail open.
+function prHeadAndLabels(repoInfo, prNumber) {
+    try {
+        var raw = github_get_pr({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            pullRequestId: String(prNumber)
+        });
+        var pr = (typeof raw === 'string') ? JSON.parse(raw) : (raw || {});
+        if (!pr || pr.message || !pr.head || !pr.head.sha) return null;
+        return {
+            headSha: pr.head.sha,
+            labels: (pr.labels || []).map(function(l) { return (l && l.name) || l; })
+        };
+    } catch (e) {
+        console.warn('  ⚠️ verdict probe: PR read failed (fail-open): ' + (e.message || e));
+        return null;
+    }
+}
+
+// Reads every machine verdict record on the PR (oldest first). Fails open to
+// [] — same github_get_pr_comments payload shape as failMarkerState above.
+function readVerdictRecords(repoInfo, prNumber) {
+    try {
+        var raw = github_get_pr_comments({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            pullRequestId: String(prNumber)
+        });
+        var obj = (typeof raw === 'string') ? JSON.parse(raw) : (raw || []);
+        var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+        return reviewVerdictsModule.parseVerdictRecords(list);
+    } catch (e) {
+        console.warn('  ⚠️ verdict probe: comment read failed (fail-open): ' + (e.message || e));
+        return [];
+    }
+}
+
+// gh-601 shape: the sync github_get_issue tool does NOT throw on 404 — it
+// returns the REST error body, which carries `message` and no labels.
+function linkedIssueLabels(repoInfo, issueNumber) {
+    if (!issueNumber || typeof github_get_issue !== 'function') return null;
+    try {
+        var res = github_get_issue({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            issueNumber: issueNumber
+        });
+        var obj = (typeof res === 'string') ? JSON.parse(res) : res;
+        if (!obj || typeof obj !== 'object' || obj.message) return null;
+        return (obj.labels || []).map(function(l) {
+            return (l && (l.name || l)) || l;
+        });
+    } catch (e) {
+        return null;
+    }
+}
+
+// AC3 — the arming-side sticky-approval gate for arm_rework: the effective
+// verdict for the CURRENT head must not be APPROVE, unless BLOCKING threads
+// remain (the record's census — suggestions never arm rework). Mirrors the
+// rework side's prHasApproved rule (approved once → never re-review) with
+// the blocking-thread exception from the gh-807 capability surface. Fails
+// open (arm: true) on missing records/head — pre-gh-807 PRs arm as before.
+function reworkArmGate(repoInfo, ticket) {
+    var out = { arm: true, reason: 'no-verdict-records', headShort: null, effective: null };
+    var probe = prHeadAndLabels(repoInfo, ticket.prNumber);
+    if (!probe) return out;
+    out.headShort = String(probe.headSha).substring(0, 7);
+    var decision = reviewVerdictsModule.armReworkDecision(
+        readVerdictRecords(repoInfo, ticket.prNumber), probe.headSha);
+    decision.headShort = out.headShort;
+    return decision;
+}
+
+// AC2 — label reconciliation for one contradictory head: removes the loser
+// label (winner APPROVE → agent:rework; winner REQUEST_CHANGES/BLOCK →
+// pr_approved) from BOTH carriers (the PR and its linked issue) and posts
+// ONE comment citing both verdict sources. Ruleset approvals / human review
+// state are untouched — only the machine-owned label CARRIERS (pr_approved
+// / agent:rework) reconcile. Returns true when a removal happened (item
+// processed), false when the state is already consistent (nothing to do).
+// gh-807 review fix (BLOCKING thread): before stripping agent:rework the
+// action probes the head's CI verdict (headHasRealFailure, gh-755 —
+// fail-open red): an APPROVE record does not invalidate CI-driven arms —
+// red-CI rework on a sticky-approved PR (fail_validation), the sticky
+// dead-letter issue arm, and conflict-rework on a DIRTY head all
+// (the CI path owns the leg) — and so does the winning APPROVE record's
+// OWN blocking census (rework round 2): blocking > 0 is exactly the
+// evidence AC3's blocking-threads exception arms on (rework-unresolved-
+// threads), so that arm is evidence-driven even on a green head. The
+// census rides the decision function (reviewVerdicts.reconcileDecision);
+// the probe runs only when a rework arm is actually present, so the
+// conflict-shaped queries keep the cost near zero.
+function reconcileReviewVerdicts(repoInfo, ticket) {
+    var probe = prHeadAndLabels(repoInfo, ticket.prNumber);
+    if (!probe) return false;
+    var records = readVerdictRecords(repoInfo, ticket.prNumber);
+    var issueLabels = linkedIssueLabels(repoInfo, ticket.issueNumber);
+    var prHasRework = probe.labels.indexOf(reviewVerdictsModule.LABEL_REWORK) !== -1;
+    var issueHasRework = !!(issueLabels &&
+        issueLabels.indexOf(reviewVerdictsModule.LABEL_REWORK) !== -1);
+    var checksRed = false;
+    if (records.length && (prHasRework || issueHasRework)) {
+        checksRed = headHasRealFailure(repoInfo, probe.headSha);
+    }
+    var decision = reviewVerdictsModule.reconcileDecision(records, probe.headSha, {
+        prHasApproved: probe.labels.indexOf(reviewVerdictsModule.LABEL_APPROVED) !== -1,
+        prHasRework: prHasRework,
+        issueHasRework: issueHasRework,
+        checksRed: checksRed
+    });
+    if (!decision) return false;
+    var removed = false;
+    if (decision.removeFromPr) {
+        try {
+            github_remove_label({
+                workspace: repoInfo.owner, repository: repoInfo.repo,
+                number: ticket.prNumber, label: decision.loserLabel
+            });
+            removed = true;
+            console.log('  ⚖️  removed ' + decision.loserLabel + ' from PR #' + ticket.prNumber +
+                ' (head ' + String(probe.headSha).substring(0, 7) + ')');
+        } catch (ePr) {
+            console.warn('  ⚠️ failed to remove ' + decision.loserLabel + ' from PR #' +
+                ticket.prNumber + ': ' + (ePr.message || ePr));
+        }
+    }
+    if (decision.removeFromIssue) {
+        try {
+            github_remove_label({
+                workspace: repoInfo.owner, repository: repoInfo.repo,
+                number: ticket.issueNumber, label: decision.loserLabel
+            });
+            removed = true;
+            console.log('  ⚖️  removed ' + decision.loserLabel + ' from linked issue #' + ticket.issueNumber);
+        } catch (eIss) {
+            console.warn('  ⚠️ failed to remove ' + decision.loserLabel + ' from issue #' +
+                ticket.issueNumber + ': ' + (eIss.message || eIss));
+        }
+    }
+    if (removed) {
+        try {
+            github_create_comment({
+                workspace: repoInfo.owner, repository: repoInfo.repo,
+                number: ticket.prNumber, body: decision.comment
+            });
+        } catch (eC) {
+            console.warn('  ⚠️ reconciliation comment failed (labels already reconciled): ' + (eC.message || eC));
+        }
+        console.log('  ✅ ' + ticket.key + ' verdict reconciled — newest wins: ' +
+            decision.effective.record.verdict + (decision.effective.conflict ? ' (conflict logged)' : ''));
+    }
+    return removed;
 }
 
 // ── Red-head history (owner directive 2026-10-04: red yields the slot) ─────

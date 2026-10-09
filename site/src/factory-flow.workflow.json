@@ -340,7 +340,7 @@
       "title": "Gate guards \u2014 Levels 3\u20134 (full blocking conditions)",
       "items": [
         "validate-fresh: checks none|pending \u00b7 \u00acai_validating \u00acpr_approved \u00acai_validated \u00acBEHIND \u00b7 validate-armed: pr_approved + mutex ai_validating free (FIFO oldest) \u00b7 \u00acBEHIND",
-        "merge-validated: green + CLEAN \u00b7 fail-validation: red (CANCELLED = no verdict) \u00b7 conflict-rework: DIRTY \u00b7 close-on-merge: ai_developed + issue OPEN \u00b7 stalls: factory-stalls.html"
+        "reconcile-* verdict rules: newest verdict record per head wins (gh-807) \u00b7 merge-validated: green + CLEAN (notLatestVerdict blocks a newest REQUEST_CHANGES) \u00b7 fail-validation: red (CANCELLED = no verdict) \u00b7 conflict-rework: DIRTY \u00b7 close-on-merge: ai_developed + issue OPEN \u00b7 stalls: factory-stalls.html"
       ]
     },
     {

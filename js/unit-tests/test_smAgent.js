@@ -313,6 +313,7 @@ function makeSmAgent(opts) {
             './common/scm.js': mockScmModule,
             './common/buildEncodedConfig.js': buildEncodedConfigModule,
             './common/machineAuthor.js': machineAuthorModule,
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
             './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({}), {}),
             './common/smProvider.js': {
                 createSmProvider: function () {
@@ -913,6 +914,531 @@ suite('smAgent: sm_github.json rule hygiene', function () {
         var rtr = byId['review-threads-resolved'];
         assert.ok((rtr.query.notLabels || []).indexOf('pr_approved') !== -1,
             'review-threads-resolved keeps excluding pr_approved (sticky approval)');
+    });
+
+    test('gh-807 note on gh-710: the QUERY still lets pr_approved match — the ACTION decides from the verdict records', function () {
+        // gh-807 supersedes the "verdict being APPROVE is irrelevant"
+        // wording of gh-710 at the ACTION level: the query still matches
+        // (the blocking-thread exception needs the census, which only the
+        // action can read), but an APPROVE record with zero BLOCKING
+        // findings withholds the arm (see the localAction suite below).
+        // This test pins the layering so nobody "fixes" it back.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+        var rule = byId['rework-unresolved-threads'];
+        assert.equal((rule.query.notLabels || []).indexOf('pr_approved'), -1,
+            'query unchanged — pr_approved still matches (the census lives in the records)');
+        assert.ok((rule.description || '').indexOf('gh-807 ARMING-SIDE STICKY APPROVAL') !== -1,
+            'the rule documents the arming-side gate');
+    });
+});
+
+suite('smAgent: sm_github.json reconcile rules (gh-807 hygiene)', function () {
+
+    test('conflict-shaped reconcile queries: exist, run before the merge window, never match the converged approval', function () {
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var byId = {};
+        rules.forEach(function (r) { byId[r.id] = r; });
+
+        // gh-807 review SUGGESTION: the original single rule
+        // (labels [pr_approved, agent:rework] + latestVerdict [APPROVE,
+        // REQUEST_CHANGES, BLOCK]) matched EVERY sticky-approved PR forever
+        // — each tick paid github_get_pr + github_get_pr_comments +
+        // github_get_issue per matched PR just to log "already agree".
+        // Three CONFLICT-SHAPED queries shrink the standing match set to
+        // ~zero; the localAction is unchanged (it decides from the records
+        // and is idempotent).
+        var prRework = byId['reconcile-rework-vs-approval'];
+        assert.ok(prRework, 'reconcile-rework-vs-approval exists (PR-carrier rework arm next to an approval — the #1428 shape)');
+        assert.equal(prRework.localAction, 'reconcile_verdicts', 'a localAction — no dispatch');
+        assert.equal(prRework.source, 'github', 'github carrier');
+        assert.equal(prRework.query.type, 'pr', 'PR carrier');
+        assert.deepEqual(prRework.query.labels, ['agent:rework'],
+            'matches ONLY the contradictory shape: a rework arm whose verdict is an approval');
+        assert.deepEqual(prRework.query.latestVerdict, ['APPROVE'],
+            'the effective verdict must be the approval');
+
+        var issueRework = byId['reconcile-issue-rework-vs-approval'];
+        assert.ok(issueRework, 'reconcile-issue-rework-vs-approval exists (issue-carrier twin — AC2 both carriers)');
+        assert.equal(issueRework.localAction, 'reconcile_verdicts', 'a localAction — no dispatch');
+        assert.equal(issueRework.query.type, 'issue',
+            'the ISSUE carrier — review CHANGES_REQUESTED / red-CI / conflict-rework arms live on the linked issue');
+        assert.deepEqual(issueRework.query.labels, ['agent:rework']);
+        assert.deepEqual(issueRework.query.latestVerdict, ['APPROVE'],
+            'the stale arm next to an approval — the verdict guard reads the linked PR head');
+
+        var approval = byId['reconcile-approval-vs-changes'];
+        assert.ok(approval, 'reconcile-approval-vs-changes exists (stale approval next to changes-requested)');
+        assert.equal(approval.localAction, 'reconcile_verdicts', 'a localAction — no dispatch');
+        assert.equal(approval.query.type, 'pr', 'PR carrier');
+        assert.deepEqual(approval.query.labels, ['pr_approved'],
+            'matches ONLY the contradictory shape: a sticky approval whose verdict is changes-requested');
+        assert.deepEqual(approval.query.latestVerdict, ['REQUEST_CHANGES', 'BLOCK'],
+            'the effective verdict must block the approval');
+
+        // The point of the split: NO reconcile rule matches the CONVERGED
+        // shape (pr_approved whose verdict agrees) — that was the constant
+        // per-tick API cost being fixed.
+        rules.forEach(function (r) {
+            if (r.localAction !== 'reconcile_verdicts') return;
+            var labels = (r.query && r.query.labels) || [];
+            var lv = (r.query && r.query.latestVerdict) || [];
+            assert.notOk(labels.indexOf('pr_approved') !== -1 && lv.indexOf('APPROVE') !== -1,
+                r.id + ' must not match the converged approval shape (pr_approved + APPROVE verdict)');
+        });
+        assert.equal(byId['reconcile-review-verdicts'], undefined,
+            'the old every-approved-PR rule is gone');
+
+        // ORDER: all three after the rerun twins (#682 rerun-first invariant
+        // stands), before unarm-stale-validation — the merge window of the
+        // SAME tick must see the reconciled labels. #637 (merge-validated
+        // before sweep-stale-validating) is untouched — reconciliation sits
+        // before both. The issue-carrier rule also sits before
+        // rework-on-red-ci: a STALE issue arm (approval won) is stripped
+        // before the dispatch rule can fire it; a CI-driven arm survives
+        // (the checksRed exemption) and dispatches normally.
+        [prRework, issueRework, approval].forEach(function (r) {
+            var mine = rules.indexOf(r);
+            assert.ok(mine > rules.indexOf(byId['rerun-cancelled-checks']), r.id + ' after rerun-cancelled-checks (#682)');
+            assert.ok(mine > rules.indexOf(byId['rerun-any-cancelled-checks']), r.id + ' after rerun-any-cancelled-checks');
+            assert.ok(mine < rules.indexOf(byId['unarm-stale-validation']), r.id + ' before the merge-window rules');
+        });
+
+        // The pr_approved lanes refuse a newest REQUEST_CHANGES/BLOCK on the
+        // head — "blocks pr_approved-gated paths until re-review" (gh-807).
+        ['merge-validated', 'validate-armed', 'revalidate-armed', 'revalidate-armed-green'].forEach(function (id) {
+            var r = byId[id];
+            assert.ok(r, id + ' exists');
+            assert.deepEqual(r.query.notLatestVerdict, ['REQUEST_CHANGES', 'BLOCK'],
+                id + ' blocks on a newest changes-requested verdict');
+        });
+        // The fail path stays verdict-neutral: red CI arms rework regardless
+        // of which review verdict is newest.
+        assert.equal(byId['fail-validation'].query.notLatestVerdict, undefined,
+            'fail-validation is not approval-gated — red CI rework must not be blocked');
+    });
+});
+
+suite('smAgent: localAction reconcile_verdicts (gh-807 verdict reconciliation)', function () {
+    var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
+
+    function verdictMarker(head, verdict, at, blocking) {
+        return '<!-- dmtools:review-verdict ' + JSON.stringify({
+            head: head, verdict: verdict, blocking: blocking || 0,
+            important: 0, suggestions: 0, at: at, source: 'pr_review.json'
+        }) + ' -->';
+    }
+
+    test('#1428 replay: contradictory verdicts one head → loser pr_approved comes off with a both-sources comment', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1428', labels: ['pr_approved', 'ai_pr_reviewed'], issueNumber: null, prNumber: 1428 }
+                ],
+                pr: { number: 1428, head: { sha: HEAD }, labels: ['pr_approved', 'ai_pr_reviewed'] },
+                prComments: [
+                    { body: verdictMarker(HEAD, 'APPROVE', '2026-10-09T05:47:30.000Z') },
+                    { body: verdictMarker(HEAD, 'REQUEST_CHANGES', '2026-10-09T05:47:40.000Z') }
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'agent:rework'],
+                     latestVerdict: ['APPROVE', 'REQUEST_CHANGES', 'BLOCK'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-review-verdicts'
+        }]));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 1, 'exactly one label removal');
+        assert.equal(sm.capturedPrLabelRemoves[0].number, 1428, 'the loser label comes off the PR');
+        assert.equal(sm.capturedPrLabelRemoves[0].label, 'pr_approved',
+            'newest (REQUEST_CHANGES) wins — pr_approved is the loser');
+        assert.equal(sm.capturedPrComments.length, 1, 'exactly one reconciliation comment');
+        assert.contains(sm.capturedPrComments[0].body, 'APPROVE at 2026-10-09T05:47:30.000Z',
+            'the comment cites BOTH verdict sources');
+        assert.contains(sm.capturedPrComments[0].body, 'REQUEST_CHANGES at 2026-10-09T05:47:40.000Z');
+        assert.contains(sm.capturedPrComments[0].body, 'Newest wins: **REQUEST_CHANGES**');
+        assert.equal(sm.capturedTriggers.length, 0, 'reconciliation never dispatches');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'reconciliation never arms');
+    });
+
+    test('APPROVE winner → agent:rework comes off BOTH carriers', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1429', labels: ['pr_approved', 'agent:rework', 'ai_pr_reviewed'],
+                      issueNumber: 807, prNumber: 1429 }
+                ],
+                pr: { number: 1429, head: { sha: HEAD }, labels: ['pr_approved', 'agent:rework', 'ai_pr_reviewed'] },
+                prComments: [
+                    { body: verdictMarker(HEAD, 'REQUEST_CHANGES', '2026-10-09T05:47:30.000Z') },
+                    { body: verdictMarker(HEAD, 'APPROVE', '2026-10-09T05:47:40.000Z') }
+                ],
+                issues: { 807: JSON.stringify({ number: 807, labels: [{ name: 'agent:rework' }] }) },
+                // The #1428 head is GREEN (both review legs ran on green CI)
+                // — a green rollup is what lets the arm be review-driven and
+                // strippable. (A red rollup would keep it: CI-driven arms
+                // are not the review loser.)
+                commitCheckRuns: {
+                    check_runs: [{ name: 'build', conclusion: 'success', status: 'completed' }]
+                }
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'agent:rework'],
+                     latestVerdict: ['APPROVE', 'REQUEST_CHANGES', 'BLOCK'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-review-verdicts'
+        }]));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 2, 'PR and linked issue both lose the loser label');
+        var targets = {};
+        sm.capturedPrLabelRemoves.forEach(function (r) { targets[r.number] = r.label; });
+        assert.equal(targets[1429], 'agent:rework', 'off the PR');
+        assert.equal(targets[807], 'agent:rework', 'off the linked issue');
+        assert.equal(sm.capturedPrComments.length, 1, 'ONE comment for the whole reconciliation');
+        assert.contains(sm.capturedPrComments[0].body, 'Newest wins: **APPROVE**');
+        assert.contains(sm.capturedPrComments[0].body, 'suggestions do not justify a rework arm');
+    });
+
+    test('already-consistent state → no label churn, no comment (converged)', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1430', labels: ['pr_approved', 'ai_pr_reviewed'], issueNumber: null, prNumber: 1430 }
+                ],
+                pr: { number: 1430, head: { sha: HEAD }, labels: ['pr_approved', 'ai_pr_reviewed'] },
+                prComments: [
+                    { body: verdictMarker(HEAD, 'APPROVE', '2026-10-09T05:47:30.000Z') }
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'agent:rework'],
+                     latestVerdict: ['APPROVE', 'REQUEST_CHANGES', 'BLOCK'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-review-verdicts'
+        }]));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'approval stands, no rework label → nothing to do');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment when nothing was removed');
+    });
+
+    test('no verdict records (pre-gh-807 PR) → fail open, labels untouched', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1431', labels: ['pr_approved', 'agent:rework'], issueNumber: null, prNumber: 1431 }
+                ],
+                pr: { number: 1431, head: { sha: HEAD }, labels: ['pr_approved', 'agent:rework'] },
+                prComments: []
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'agent:rework'],
+                     latestVerdict: ['APPROVE', 'REQUEST_CHANGES', 'BLOCK'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-review-verdicts'
+        }]));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'no records → no reconciliation (legacy behavior)');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment');
+    });
+
+    // gh-807 review BLOCKING thread replay: fail_validation re-arms
+    // agent:rework on the LINKED ISSUE when validation goes red on a
+    // sticky-approved PR ("pr_approved is STICKY — validation red
+    // post-approval re-arms rework only"). The head carries the APPROVE
+    // record the review leg just stamped. The reconcile action must NOT
+    // strip that arm: it is CI-driven, not review-driven — and killing it
+    // destroys the dead-letter recovery (a failed/never-started leg is
+    // never re-fired, fail-validation cannot re-arm, the PR strands red +
+    // approved with no leg — the gh-683/gh-710 deadlock class).
+    test('red-CI rework arm on a sticky-approved head survives reconcile (fail_validation replay)', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1433', labels: ['pr_approved', 'ai_pr_reviewed', 'ai_validated'],
+                      issueNumber: 807, prNumber: 1433 }
+                ],
+                pr: { number: 1433, head: { sha: HEAD }, labels: ['pr_approved', 'ai_pr_reviewed', 'ai_validated'] },
+                prComments: [
+                    { body: verdictMarker(HEAD, 'APPROVE', '2026-10-09T05:47:30.000Z') }
+                ],
+                // fail_validation armed the ISSUE carrier (its arm shape).
+                issues: { 807: JSON.stringify({ number: 807, labels: [{ name: 'agent:rework' }] }) },
+                // The head's CI verdict is REAL red: a non-bookkeeping
+                // context's latest run concluded failure.
+                commitCheckRuns: {
+                    check_runs: [
+                        { name: 'build', conclusion: 'failure', status: 'completed' },
+                        { name: 'kicker / sm-liveness', conclusion: 'cancelled', status: 'completed' }
+                    ]
+                }
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['agent:rework'],
+                     latestVerdict: ['APPROVE'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-rework-vs-approval'
+        }]));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'the CI-driven arm is NOT the review loser — it survives on the issue');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'no ⚖️ comment — "suggestions do not justify a rework arm" would be factually wrong for a red-CI arm');
+    });
+
+    // A DIRTY (conflicted) head carries no CI at all: conflict-rework arms
+    // the linked issue every tick and the head's check-run rollup is EMPTY.
+    // headHasRealFailure fails OPEN to red on an empty rollup, so the arm
+    // survives — no strip/re-add yo-yo with one ⚖️ comment per tick (the
+    // gh-751 yo-yo class).
+    test('empty CI rollup keeps the arm too (fail-open — DIRTY conflict-rework arms survive)', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1434', labels: ['pr_approved', 'ai_pr_reviewed'],
+                      issueNumber: 808, prNumber: 1434 }
+                ],
+                pr: { number: 1434, head: { sha: HEAD }, labels: ['pr_approved', 'ai_pr_reviewed'] },
+                prComments: [
+                    { body: verdictMarker(HEAD, 'APPROVE', '2026-10-09T05:47:30.000Z') }
+                ],
+                issues: { 808: JSON.stringify({ number: 808, labels: [{ name: 'agent:rework' }] }) }
+                // no commitCheckRuns mock → empty rollup → fail-open red
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['agent:rework'],
+                     latestVerdict: ['APPROVE'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-rework-vs-approval'
+        }]));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'unreadable CI → fail open to the CI-driven shape — the arm survives');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comment');
+    });
+
+    // gh-807 rework-round-2 SUGGESTION replay: rework-unresolved-threads
+    // LEGITIMATELY arms the PR carrier when the APPROVE record's census
+    // reports blocking > 0 (AC3's blocking-threads exception) — on a GREEN
+    // head (checksRed false) that arm is evidence-driven, not a review
+    // loser. Reconcile must keep it: stripping cost a tick of dispatch
+    // delay plus a ⚖️ comment claiming "suggestions do not justify a
+    // rework arm" while the record itself says the findings were BLOCKING
+    // (the arm rule re-adds next tick — a self-healing yo-yo).
+    test('APPROVE record with blocking>0 census keeps the PR-carrier arm on a green head', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1435', labels: ['pr_approved', 'ai_pr_reviewed', 'agent:rework'],
+                      issueNumber: null, prNumber: 1435 }
+                ],
+                pr: { number: 1435, head: { sha: HEAD }, labels: ['pr_approved', 'ai_pr_reviewed', 'agent:rework'] },
+                prComments: [
+                    // The census the arm was granted ON: blocking = 2.
+                    { body: verdictMarker(HEAD, 'APPROVE', '2026-10-09T05:47:40.000Z', 2) }
+                ],
+                // GREEN rollup — the exemption must come from the record's
+                // census, not from the CI state (checksRed false here).
+                commitCheckRuns: {
+                    check_runs: [{ name: 'build', conclusion: 'success', status: 'completed' }]
+                }
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['agent:rework'],
+                     latestVerdict: ['APPROVE'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-rework-vs-approval'
+        }]));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'the blocking census is the evidence the arm was granted on — not a review loser');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'no ⚖️ comment — the record says the findings were BLOCKING, not suggestions');
+    });
+
+    test('free-form verdict text in comments NEVER drives reconciliation (AC4)', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1432', labels: ['pr_approved', 'ai_pr_reviewed'], issueNumber: null, prNumber: 1432 }
+                ],
+                pr: { number: 1432, head: { sha: HEAD }, labels: ['pr_approved', 'ai_pr_reviewed'] },
+                prComments: [
+                    { body: 'Human: REQUEST_CHANGES! Block the merge!' },
+                    { body: 'AI review returned REQUEST_CHANGES. See PR comments for details.' }
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [{
+            description: 'reconcile review verdicts',
+            source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'agent:rework'],
+                     latestVerdict: ['APPROVE', 'REQUEST_CHANGES', 'BLOCK'], draft: false },
+            localAction: 'reconcile_verdicts',
+            limit: 10,
+            id: 'reconcile-review-verdicts'
+        }]));
+
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'text-only comments carry no records — pr_approved stands');
+        assert.equal(sm.capturedPrComments.length, 0, 'no reconciliation comment');
+    });
+});
+
+suite('smAgent: arm_rework arming-side sticky approval (gh-807 AC3)', function () {
+
+    var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
+
+    function armRule() {
+        return {
+            description: 'unresolved review threads on a machine-authored reviewed PR -> arm agent:rework',
+            source: 'github',
+            query: {
+                type: 'pr',
+                labels: ['ai_pr_reviewed'],
+                notLabels: ['agent:rework', 'agent:review', 'ai_validating', 'validation_failed'],
+                prMachineAuthor: true,
+                threadsResolved: false,
+                draft: false
+            },
+            localAction: 'arm_rework',
+            limit: 5,
+            id: 'rework-unresolved-threads'
+        };
+    }
+
+    function verdictMarker(verdict, blocking) {
+        return '<!-- dmtools:review-verdict ' + JSON.stringify({
+            head: HEAD, verdict: verdict, blocking: blocking || 0,
+            important: 0, suggestions: 0, at: '2026-10-09T05:47:40.000Z', source: 'pr_review.json'
+        }) + ' -->';
+    }
+
+    test('APPROVE verdict with zero BLOCKING findings withholds the arm', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1428', labels: ['ai_pr_reviewed'], issueNumber: null, prNumber: 1428 }
+                ],
+                pr: { number: 1428, head: { sha: HEAD }, labels: ['pr_approved', 'ai_pr_reviewed'] },
+                prComments: [
+                    { body: verdictMarker('APPROVE', 0) }
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [armRule()]));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'no agent:rework arm — the APPROVE verdict is authoritative (suggestions never arm rework)');
+        assert.equal(sm.capturedPrComments.length, 0, 'no arming comment either');
+        assert.equal(sm.capturedTriggers.length, 0, 'no dispatch');
+    });
+
+    test('APPROVE verdict with BLOCKING findings still arms (the blocking-thread exception)', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1428', labels: ['ai_pr_reviewed'], issueNumber: null, prNumber: 1428 }
+                ],
+                pr: { number: 1428, head: { sha: HEAD }, labels: ['ai_pr_reviewed'] },
+                prComments: [
+                    { body: verdictMarker('APPROVE', 2) }
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [armRule()]));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'blocking threads qualify the arm');
+        assert.equal(sm.capturedPrLabelAdds[0].labels.join(','), 'agent:rework');
+    });
+
+    test('REQUEST_CHANGES verdict arms as before', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1428', labels: ['ai_pr_reviewed'], issueNumber: null, prNumber: 1428 }
+                ],
+                pr: { number: 1428, head: { sha: HEAD }, labels: ['ai_pr_reviewed'] },
+                prComments: [
+                    { body: verdictMarker('REQUEST_CHANGES', 1) }
+                ]
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [armRule()]));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'changes-requested → rework arms');
+        assert.equal(sm.capturedPrLabelAdds[0].labels.join(','), 'agent:rework');
+        assert.equal(sm.capturedPrComments.length, 1, 'the explanatory comment still posts');
+    });
+
+    test('no verdict records (pre-gh-807 PR) → arms as before (fail-open)', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-dart" } };' },
+            github: {
+                items: [
+                    { key: 'pr-1428', labels: ['ai_pr_reviewed'], issueNumber: null, prNumber: 1428 }
+                ],
+                pr: { number: 1428, head: { sha: HEAD }, labels: ['ai_pr_reviewed'] },
+                prComments: []
+            }
+        });
+
+        sm.action(baseParams('epam', 'dmtools-dart', [armRule()]));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'legacy PRs keep today\u2019s behavior');
+        assert.equal(sm.capturedPrLabelAdds[0].labels.join(','), 'agent:rework');
     });
 });
 
@@ -7940,281 +8466,4 @@ suite('smAgent: statePublish tokens — local file first, branch fallback', func
         }), '📡 published line still present — the tick stayed green');
     });
 
-});
-
-// ── gh-806: rework in-flight latch — the armer consults before it arms ──────
-
-suite('smAgent: rework in-flight latch (gh-806 — one arm per (pr, head))', function () {
-
-    var HEAD = '23dacd10deadbeefcafe0123456789abcdef0123';
-    var HEAD7 = HEAD.substring(0, 7);
-    var SP = { channel: 'release', repo: 'a/b', asset: 'fa-state.json' };
-    var STATE_GET = 'gh api repos/a/b/contents/data/fa-state.json?ref=factory-data --jq .content | base64 -d';
-
-    function config(owner, repo) {
-        return { fileMap: { '../.dmtools/config.js':
-            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
-    }
-
-    function recentIso(msAgo) {
-        return new Date(Date.now() - (msAgo || 60000)).toISOString();
-    }
-
-    function armReworkRule() {
-        return {
-            source: 'github',
-            description: 'unresolved threads arm rework',
-            query: { type: 'pr', labels: ['ai_pr_reviewed'], threadsResolved: false, prMachineAuthor: true },
-            localAction: 'arm_rework', limit: 5, id: 'rework-unresolved-threads'
-        };
-    }
-
-    function latchItem(n, head) {
-        return {
-            key: 'pr-' + n, labels: ['ai_pr_reviewed'], issueNumber: null, prNumber: n,
-            pr: { number: n, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', headSha: head }
-        };
-    }
-
-    /** Serves a previous snapshot payload on the fa-state.json contents GET. */
-    function servingPrevSnapshot(payload) {
-        return function (cmdOpts) {
-            if (cmdOpts.command === STATE_GET) return { output: payload };
-            return undefined;
-        };
-    }
-
-    function latchFixture(map, opts) {
-        opts = opts || {};
-        var prev = { lanes: {} };
-        if (map) prev.reworkInFlight = map;
-        var gh = Object.assign({ prList: '[]', workflowApiRuns: [] }, opts.github || {});
-        return Object.assign(config('a', 'b'), {
-            captureConsole: true,
-            github: Object.assign(gh, {
-                items: gh.items || [latchItem(1428, opts.head || HEAD)]
-            }),
-            onCliExecute: servingPrevSnapshot(JSON.stringify(prev))
-        });
-    }
-
-    /** jobParams for an arm_rework tick — statePublish ON so the latch
-     *  actually loads the previous snapshot (the store IS fa-state.json). */
-    function latchParams(rules) {
-        return { jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
-                              rules: rules || [armReworkRule()], statePublish: SP } };
-    }
-
-    test('AC1: latched (pr, head) → ⏭️ logged, NO label, NO comment, nothing dispatched', function () {
-        var sm = makeSmAgent(latchFixture(
-            { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(60 * 1000) } }));
-        sm.action(latchParams());
-        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no agent:rework label while in flight');
-        assert.equal(sm.capturedPrComments.length, 0, 'no duplicate armed comment');
-        assert.equal(sm.capturedTriggers.length, 0, 'nothing dispatched');
-        assert.ok(sm.capturedLogs.some(function (l) {
-            return l.indexOf('rework already in flight for (pr-1428, ' + HEAD7 + ')') !== -1;
-        }), 'the AC1 ⏭️ line is logged with (pr, head7)');
-    });
-
-    test('unlatched → arms AND records the latch in the published snapshot', function () {
-        var sm = makeSmAgent(latchFixture(null));
-        var params = latchParams();
-        sm.action(params);
-        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number + ':' + a.labels.join(','); }),
-            ['1428:agent:rework'], 'unlatched (pr, head) arms normally');
-        var put = sm.capturedCliCommands.filter(function (c) {
-            return c.command.indexOf('-X PUT repos/a/b/contents/data/fa-state.json') !== -1;
-        })[0];
-        assert.ok(put, 'tick published the snapshot');
-        var m = put.command.match(/printf %s '(.*)' \| base64/);
-        var state = JSON.parse(m[1]);
-        assert.ok(state.reworkInFlight['pr-1428@' + HEAD],
-            'the arm latched (pr-1428@head) into fa-state.json');
-        assert.equal(state.reworkInFlight['pr-1428@' + HEAD].head, HEAD);
-    });
-
-    test('AC2: a NEW head re-arms normally — the latch is keyed per head', function () {
-        var newHead = 'f00dcafedeadbeefcafe0123456789abcdef0123';
-        var sm = makeSmAgent(latchFixture(
-            { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(60 * 1000) } },
-            { head: newHead }));
-        sm.action(latchParams());
-        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number; }),
-            [1428], 'new head arms — the old latch never blocks it');
-        assert.notOk(sm.capturedLogs.some(function (l) {
-            return l.indexOf('rework already in flight') !== -1;
-        }), 'no ⏭️ for a different key');
-    });
-
-    test('AC2: leg run CONCLUDED after the arm → latch cleared, re-arm proceeds', function () {
-        var sm = makeSmAgent(latchFixture(
-            { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(20 * 60 * 1000) } }));
-        // swap the head-runs probe to return a CONCLUDED leg run (after the arm)
-        var fixture = latchFixture(
-            { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(20 * 60 * 1000) } });
-        fixture.onCliExecute = function (cmdOpts) {
-            if (cmdOpts.command === STATE_GET) {
-                return { output: JSON.stringify({ lanes: {}, reworkInFlight:
-                    { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(20 * 60 * 1000) } } }) };
-            }
-            if (cmdOpts.command.indexOf('/actions/runs?head_sha=' + HEAD) !== -1) {
-                return { output: JSON.stringify({ workflow_runs: [{
-                    status: 'completed', conclusion: 'failure',
-                    head_sha: HEAD, path: '.github/workflows/ai-teammate.yml',
-                    updated_at: new Date(Date.now() - 60 * 1000).toISOString()
-                }] }) };
-            }
-            return undefined;
-        };
-        sm = makeSmAgent(fixture);
-        sm.action(latchParams());
-        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number; }),
-            [1428], 'terminated leg → latch cleared → re-armable (dead-letter recovery)');
-        assert.ok(sm.capturedLogs.some(function (l) {
-            return l.indexOf('rework latch cleared (terminated)') !== -1;
-        }), 'the clear is logged with its cause');
-    });
-
-    test('AC3: latch older than 45 min with no active run self-heals (re-arms)', function () {
-        var sm = makeSmAgent(latchFixture(
-            { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(50 * 60 * 1000) } }));
-        sm.action(latchParams());
-        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.number; }),
-            [1428], 'stale latch never permanently blocks the armer');
-    });
-
-    test('an ACTIVE leg run keeps the latch past the stale window (still flying)', function () {
-        var fixture = latchFixture(
-            { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(50 * 60 * 1000) } });
-        fixture.onCliExecute = function (cmdOpts) {
-            if (cmdOpts.command === STATE_GET) {
-                return { output: JSON.stringify({ lanes: {}, reworkInFlight:
-                    { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(50 * 60 * 1000) } } }) };
-            }
-            if (cmdOpts.command.indexOf('/actions/runs?head_sha=' + HEAD) !== -1) {
-                return { output: JSON.stringify({ workflow_runs: [{
-                    status: 'in_progress', head_sha: HEAD,
-                    path: '.github/workflows/ai-teammate.yml'
-                }] }) };
-            }
-            return undefined;
-        };
-        var sm = makeSmAgent(fixture);
-        sm.action(latchParams());
-        assert.equal(sm.capturedPrLabelAdds.length, 0, 'leg really flying — no duplicate arm');
-        assert.ok(sm.capturedLogs.some(function (l) {
-            return l.indexOf('rework already in flight for (pr-1428, ' + HEAD7 + ')') !== -1;
-        }));
-    });
-
-    test('a concluded VALIDATION run on the head does NOT clear the latch (leg-scoped)', function () {
-        var fixture = latchFixture(
-            { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(20 * 60 * 1000) } });
-        fixture.onCliExecute = function (cmdOpts) {
-            if (cmdOpts.command === STATE_GET) {
-                return { output: JSON.stringify({ lanes: {}, reworkInFlight:
-                    { ['pr-1428@' + HEAD]: { head: HEAD, at: recentIso(20 * 60 * 1000) } } }) };
-            }
-            if (cmdOpts.command.indexOf('/actions/runs?head_sha=' + HEAD) !== -1) {
-                return { output: JSON.stringify({ workflow_runs: [{
-                    status: 'completed', conclusion: 'failure',
-                    head_sha: HEAD, path: '.github/workflows/quality.yml',
-                    updated_at: new Date(Date.now() - 60 * 1000).toISOString()
-                }] }) };
-            }
-            return undefined;
-        };
-        var sm = makeSmAgent(fixture);
-        sm.action(latchParams());
-        assert.equal(sm.capturedPrLabelAdds.length, 0,
-            'only the LEG workflow (ai-teammate.yml) terminates a latch');
-    });
-
-    test('L2 arming storm: two identical arm rules in one tick → exactly one label', function () {
-        var sm = makeSmAgent(latchFixture(null));
-        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
-                                 rules: [armReworkRule(), armReworkRule()], statePublish: SP } });
-        assert.equal(sm.capturedPrLabelAdds.length, 1,
-            'the second decision hits the in-tick latch — one arm per (pr, head)');
-        assert.equal(sm.capturedPrComments.length, 1, 'one explanation, not two');
-        var skipLines = sm.capturedLogs.filter(function (l) {
-            return l.indexOf('rework already in flight for (pr-1428') !== -1;
-        });
-        assert.equal(skipLines.length, 1, 'exactly one ⏭️ suppression logged');
-    });
-
-    test('fail_validation: latched (pr, head) → report still posts, rework re-arm suppressed', function () {
-        var at = recentIso(60 * 1000);
-        var fixture = Object.assign(config('a', 'b'), {
-            captureConsole: true,
-            github: {
-                items: [{ key: 'pr-72', labels: ['pr_approved', 'ai_validating'], issueNumber: null,
-                          prNumber: 72, author: 'ai-teammate',
-                          pr: { number: 72, state: 'OPEN', headSha: HEAD } }],
-                pr: { number: 72, labels: ['pr_approved', 'ai_validating'], body: 'Fixes #503 — boot cost' },
-                author: 'ai-teammate'
-            },
-            onCliExecute: function (cmdOpts) {
-                if (cmdOpts.command === STATE_GET) {
-                    return { output: JSON.stringify({ lanes: {}, reworkInFlight:
-                        { ['pr-72@' + HEAD]: { head: HEAD, at: at } } }) };
-                }
-                return undefined;
-            }
-        });
-        var sm = makeSmAgent(fixture);
-        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
-                                 statePublish: SP, rules: [{
-            source: 'github', query: { type: 'pr', labels: ['ai_validating'], checks: 'red' },
-            localAction: 'fail_validation', limit: 1, id: 'fail-validation' }] } });
-        assert.equal(sm.capturedPrComments.length, 1, 'the red verdict is still reported');
-        assert.equal(sm.capturedPrLabelAdds.length, 0,
-            'NO agent:rework arm while the leg for this (pr, head) is in flight');
-        assert.ok(sm.capturedLogs.some(function (l) {
-            return l.indexOf('rework already in flight for (pr-72, ' + HEAD.substring(0, 7) + ')') !== -1;
-        }));
-    });
-
-    test('conflict_rework: latched (pr, head) → no arm, no marker comment, waits on the leg', function () {
-        var at = recentIso(60 * 1000);
-        var fixture = Object.assign(config('a', 'b'), {
-            captureConsole: true,
-            github: {
-                items: [{ key: 'pr-81', labels: [], issueNumber: null, prNumber: 81,
-                          author: 'ai-teammate', mergeState: 'DIRTY', branch: 'ai/gh-503',
-                          pr: { number: 81, state: 'OPEN', headSha: HEAD } }],
-                pr: { number: 81, labels: [], body: 'Fixes #503' }
-            },
-            onCliExecute: function (cmdOpts) {
-                if (cmdOpts.command === STATE_GET) {
-                    return { output: JSON.stringify({ lanes: {}, reworkInFlight:
-                        { ['pr-81@' + HEAD]: { head: HEAD, at: at } } }) };
-                }
-                return undefined;
-            }
-        });
-        var sm = makeSmAgent(fixture);
-        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
-                                 statePublish: SP, rules: [{
-            source: 'github', query: { type: 'pr', mergeState: ['DIRTY'], draft: false },
-            localAction: 'conflict_rework', limit: 1, id: 'conflict-rework' }] } });
-        assert.equal(sm.capturedPrComments.length, 0,
-            'no conflict report while the leg owns the fix (gh-683: marker only after arming)');
-        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no duplicate arm');
-        assert.ok(sm.capturedLogs.some(function (l) {
-            return l.indexOf('rework already in flight for (pr-81, ' + HEAD.substring(0, 7) + ')') !== -1;
-        }));
-    });
-
-    test('no statePublish configured → in-tick dedupe still works, nothing persists', function () {
-        var sm = makeSmAgent(latchFixture(null));
-        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
-                                 rules: [armReworkRule(), armReworkRule()] } });
-        assert.equal(sm.capturedPrLabelAdds.length, 1, 'single-flight holds within the tick');
-        var puts = sm.capturedCliCommands.filter(function (c) {
-            return c.command.indexOf('fa-state.json') !== -1;
-        });
-        assert.equal(puts.length, 0, 'no snapshot writes without statePublish');
-    });
 });
