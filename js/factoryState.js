@@ -498,6 +498,7 @@ function rowCost(row, rates) {
 function priceTokens(tmap, pricing, nowMs) {
     if (!pricing) return null;
     var summary = { usd14d: 0, pricedLegs: 0, windowDays: COST_WINDOW_DAYS };
+    var any = false;   // at least one row priced → pricing is live AND matching
     Object.keys(tmap || {}).forEach(function (k) {
         (tmap[k] || []).forEach(function (row) {
             if (!row || row.model == null) return;
@@ -506,6 +507,7 @@ function priceTokens(tmap, pricing, nowMs) {
             var cost = rowCost(row, rates);
             if (cost == null) return;
             row.cost = cost;
+            any = true;
             var t = row.at ? Date.parse(row.at) : NaN;
             if (!isNaN(t) && nowMs - t < COST_WINDOW_MS) {
                 summary.usd14d += cost;
@@ -513,6 +515,7 @@ function priceTokens(tmap, pricing, nowMs) {
             }
         });
     });
+    if (!any) return null;   // nothing priced (e.g. pre-fa#1460: models empty)
     summary.usd14d = Math.round(summary.usd14d * 100) / 100;
     return summary;
 }
@@ -1203,6 +1206,11 @@ module.exports = {
     fetchTokensFromBranch: fetchTokensFromBranch,
     tokensMapOf: tokensMapOf,
     tokensLegCount: tokensLegCount,
+    parseModelPricing: parseModelPricing,
+    readModelPricing: readModelPricing,
+    ratesFor: ratesFor,
+    rowCost: rowCost,
+    priceTokens: priceTokens,
     contentsOf: contentsOf,
     LANE_ORDER: LANE_ORDER,
     LANE_ORDER_V1: LANE_ORDER_V1,
@@ -1215,6 +1223,9 @@ module.exports = {
     DEFAULT_MACHINE_AUTHOR: DEFAULT_MACHINE_AUTHOR,
     HISTORY_CAP: HISTORY_CAP,
     DEFAULT_TOKENS_FILE: DEFAULT_TOKENS_FILE,
+    DEFAULT_PRICING_FILE: DEFAULT_PRICING_FILE,
+    COST_WINDOW_DAYS: COST_WINDOW_DAYS,
+    COST_WINDOW_MS: COST_WINDOW_MS,
     BACKLOG_CAP: BACKLOG_CAP,
     DEFAULT_TAG: DEFAULT_TAG
 };

@@ -67,3 +67,42 @@ suite('factoryBoardApp — drawer value-stream row (review thread 6)', function 
       'and drawerFlowHtml consume the same rail (provably consistent)');
   });
 });
+
+// ── gh-825 — model + $cost surfaces ──────────────────────────────────────────
+// The drawer's token table gains model + $ columns (card Σ$ on the total
+// row), the token chip gains the card Σ$, the flow strip chip gains the
+// board Σ$, and the header gains the tick-published global Σ$ pill. Model
+// ids come from report input — every interpolation escapes like leg names.
+
+suite('factoryBoardApp — drawer token table model + $ columns (gh-825)', function () {
+  test('model ids interpolate through esc() — snapshot data is untrusted', function () {
+    assert.contains(APP_SRC, "esc(t.model)",
+      'the drawer token table escapes the model id, exactly like t.leg');
+    assert.notContains(APP_SRC, "+ t.model +",
+      'a raw t.model interpolation is an XSS sink (model comes from the ' +
+      'tokens ledger — the ?fixture= threat model declares card data ' +
+      'untrusted)');
+  });
+
+  test('per-row and total $ cells render through fmtUsd (numeric — but one formatting path)', function () {
+    assert.contains(APP_SRC, 'function fmtUsd(',
+      'one USD formatter: < $0.01 keeps 4 decimals (a leg is often a ' +
+      'fraction of a cent), 2 decimals above');
+    assert.contains(APP_SRC, 'esc(fmtUsd(t.cost))',
+      'the per-row $ cell uses it');
+  });
+});
+
+suite('factoryBoardApp — header global Σ$ pill (gh-825)', function () {
+  test('the cost pill degrades to a stub when a cache-stale index.html lacks #cost-pill', function () {
+    assert.contains(APP_SRC,
+      "document.getElementById('cost-pill') ||",
+      'cache-drift guard (review thread 3 pattern): a stale index.html ' +
+      'without the pill must not throw on first paint');
+  });
+
+  test('an absent state.costs hides the pill (tokens-only factories stay clean)', function () {
+    assert.contains(APP_SRC, 'costPill.hidden = true',
+      'no costs in the snapshot → no pill, never a lying $0.00');
+  });
+});

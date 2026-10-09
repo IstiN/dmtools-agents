@@ -225,6 +225,15 @@
     return String(n);
   }
 
+  // USD for the gh-825 pricing surfaces: a leg is often a fraction of a
+  // cent, so sub-cent values keep 4 decimals ($0.0032) while everything
+  // above renders as cents ($12.34). Numeric only — never a NaN.
+  function fmtUsd(n) {
+    if (n == null || isNaN(n)) return '';
+    if (n > 0 && n < 0.01) return '$' + n.toFixed(4);
+    return '$' + n.toFixed(2);
+  }
+
   // ── v4 value-stream chips (gh-769) ──────────────────────────────────────────
   // Σ token spend on the card itself — a factory that reports tokens is
   // visible WITHOUT opening the drawer (the empty TOKEN SPEND drawer used
@@ -235,8 +244,11 @@
     var legs = Object.keys(t.legs).map(function (k) {
       return k + ' ' + fmtK(t.legs[k].total);
     }).join(', ');
+    // gh-825: the card's Σ$ rides the chip when the tick priced any row —
+    // unknown/absent models keep the chip tokens-only (AC2)
+    var usd = t.cost != null ? ' · ' + esc(fmtUsd(t.cost)) : '';
     return '<span class="tok" title="token spend — ' + esc(legs) +
-      '">Σ ' + esc(fmtK(t.total)) + ' tok</span>';
+      '">Σ ' + esc(fmtK(t.total)) + ' tok' + usd + '</span>';
   }
 
   // CI wall-time vs queue wait (gh-769 #6): "CI 12m · wait 35m" reads as

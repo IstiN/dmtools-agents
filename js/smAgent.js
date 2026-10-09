@@ -3283,6 +3283,23 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         function (a) { return cli_execute_command(a); });
                     if (spTokens) spTokensSrc = 'branch';
                 }
+                // gh-825: the hardcoded model pricing table (ONE home:
+                // data/model-pricing.json in the tick's checkout;
+                // statePublish.pricingFile repoints it). Absent file = a
+                // quiet miss (pricing not deployed here); a PRESENT-but-
+                // unusable file warns and the snapshot publishes tokens-
+                // only — pricing is decorative, never fatal (AC1).
+                var spPricing = null;
+                var spPricingRead = factoryStateModule.readModelPricing(
+                    (spCfg && spCfg.pricingFile) ||
+                        factoryStateModule.DEFAULT_PRICING_FILE,
+                    function (p) { return file_read({ path: p }); });
+                if (spPricingRead && spPricingRead.error) {
+                    console.warn('  ⚠️  model pricing ignored (' +
+                        spPricingRead.error + ') — cards render tokens only');
+                } else if (spPricingRead) {
+                    spPricing = spPricingRead.pricing;
+                }
                 var spPrev = factoryStateModule.fetchPreviousState(
                     spFull, spCfg, function (a) {
                         return cli_execute_command(a);
@@ -3295,6 +3312,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     machineAuthor: machineAuthorModule.resolveMachineAuthor(
                         RUN_JOB_PARAMS, effectiveConfig),
                     tokens: spTokens,
+                    pricing: spPricing,
                     runs: spRunList,
                     checkNames: validationCheckNames() || [],
                     // gh-816: the lane writer must know which workflow is
@@ -3335,6 +3353,15 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 console.log('  🪙 tokens: ' +
                     factoryStateModule.tokensLegCount(spTokens) +
                     ' legs (' + spTokensSrc + ')');
+                // 💲 provenance (gh-825): pricing state in one grep-able line,
+                // ALWAYS logged — sibling of the 🪙 line. Off (no table, or
+                // nothing priced) is a state, not an error; the malformed-
+                // table case warned above.
+                console.log('  💲 pricing: ' + (spState.costs
+                    ? (spPricing.models + ' models · Σ$' +
+                       spState.costs.usd14d + ' (' +
+                       spState.costs.windowDays + 'd)')
+                    : 'off — tokens only'));
                 try {
                     var hUrl = factoryStateModule.updateHistory(
                         spState, spCfg, function (a) {

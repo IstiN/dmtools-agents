@@ -1578,9 +1578,12 @@ suite('factoryState — parseModelPricing (gh-825 schema)', function () {
   });
 
   test('__proto__ as a model id stays a plain bucket (rows are untrusted input)', function () {
-    var p = fsModule.parseModelPricing({
-      '__proto__': { input: 1, output: 2 }
-    });
+    // JSON.parse — the REALISTIC untrusted path (a hand-edited or upstream
+    // file) — creates '__proto__' as an OWN data key (an object literal
+    // would set a prototype instead, which is why the table validates
+    // through parseModelPricing, never on raw literals)
+    var p = fsModule.parseModelPricing(
+      JSON.parse('{"__proto__": {"input": 1, "output": 2}}'));
     assert.equal(p.models, 1, 'the model id became a data bucket');
     assert.equal(p.rates['__proto__'].output, 2);
   });
@@ -1765,18 +1768,18 @@ suite('factoryState — priceTokens through buildFactoryState (gh-825)', functio
             completion: 0, total: 1000000, model: 'claude-sonnet-4-5' }   // >14d
         ],
         'pr-32': [
-          { leg: 'dev', at: '2026-09-19T07:00:01Z', prompt: 1000000,
+          { leg: 'dev', at: '2026-09-19T13:10:01Z', prompt: 1000000,
             completion: 0, total: 1000000, model: 'claude-sonnet-4-5' }   // just inside
         ]
       }
     });
-    // 14d window: 2026-09-19T07:00:01Z is inside (13d23h59m59s old),
-    // 2026-09-19T07:00:00Z is one second past it — excluded.
+    // 14d window: now − 14d = 2026-09-19T13:10:00Z, so 13:10:01Z is inside
+    // (13d23h59m59s old) and 07:00:00Z is 6h past the cut — excluded.
     assert.equal(st.costs.usd14d, 6, 'two in-window rows (3+3), the 14d-old one dropped');
     assert.equal(st.costs.pricedLegs, 2);
-    assert.notOk('cost' in cardFor(st, 31).tokens[1], 'stale row keeps model, drops cost? NO — cost stays per-row, only Σ$ windows');
     assert.equal(cardFor(st, 31).tokens[1].cost, 3,
-      'per-row $ is the row\'s price regardless of the header window');
+      'per-row $ is the row\'s price regardless of the header window — ' +
+      'only the Σ$ rollup applies the 14d cut');
   });
 
   test('undated rows still price per-row but stay out of the Σ$ window (honest unknown)', function () {

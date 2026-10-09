@@ -66,6 +66,51 @@ suite('factoryFlow — tokenTotals', function () {
   });
 });
 
+// ── gh-825 — $cost rolls up from the snapshot's priced rows ──────────────────
+// The tick prices each row (cost = in/1e6*in + out/1e6*out + cache/1e6*cache
+// by the hardcoded table); the board only SUMS. Rows without a cost (unknown
+// or absent model) keep counting tokens and never invent a price.
+
+suite('factoryFlow — tokenTotals $cost (gh-825)', function () {
+  test('cost sums across rows and buckets per leg; per-leg cost rides the bucket', function () {
+    var t = flow.tokenTotals({ tokens: [
+      { leg: 'dev', prompt: 100, completion: 10, total: 110, cost: 0.5 },
+      { leg: 'review', prompt: 50, completion: 5, total: 55, cost: 0.25 },
+      { leg: 'dev', prompt: 30, completion: 5, total: 35, cost: 0.25 }
+    ] });
+    assert.equal(t.cost, 1, '0.5 + 0.25 + 0.25 — float-exact here');
+    assert.equal(t.legs.dev.cost, 0.75);
+    assert.equal(t.legs.review.cost, 0.25);
+  });
+
+  test('rows without cost never invent a price — cost stays null while tokens sum', function () {
+    var t = flow.tokenTotals({ tokens: [
+      { leg: 'dev', prompt: 100, completion: 10, total: 110 },
+      { leg: 'review', prompt: 50, completion: 5, total: 55, cost: 0.25 }
+    ] });
+    assert.equal(t.total, 165, 'tokens still count');
+    assert.equal(t.cost, 0.25, 'only the priced row contributes');
+    assert.equal(t.legs.dev.cost, null, 'unpriced leg has no $');
+  });
+
+  test('all-unpriced card → cost null (the chip renders tokens only, AC2)', function () {
+    var t = flow.tokenTotals({ tokens: [
+      { leg: 'dev', prompt: 100, completion: 10, total: 110, cost: null },
+      { leg: 'review', prompt: 50, completion: 5, total: 55 }
+    ] });
+    assert.equal(t.cost, null);
+  });
+
+  test('garbage cost values are ignored, never NaN-poison the sum', function () {
+    var t = flow.tokenTotals({ tokens: [
+      { leg: 'dev', prompt: 10, completion: 0, total: 10, cost: 'nope' },
+      { leg: 'dev', prompt: 10, completion: 0, total: 10, cost: NaN }
+    ] });
+    assert.equal(t.cost, null);
+    assert.equal(t.total, 20);
+  });
+});
+
 suite('factoryFlow — legs bucket is prototype-safe (review thread 2)', function () {
   test('__proto__ / constructor legs stay own data buckets — totals never corrupt', function () {
     var t = flow.tokenTotals({ tokens: [
@@ -431,6 +476,27 @@ suite('factoryFlow — flowSummary (board-level value stream)', function () {
     assert.equal(s.tokens.total, 110 + 35 + 45);
     assert.equal(s.tokens.legs.story_development.total, 110 + 45);
     assert.equal(s.tokens.legs.pr_rework.total, 35);
+  });
+
+  test('Σ$ rolls up across cards and legs; unpriced cards never invent a price (gh-825)', function () {
+    var priced = [
+      { tokens: [{ leg: 'dev', prompt: 10, completion: 0, total: 10, cost: 0.5 }] },
+      { tokens: [{ leg: 'dev', prompt: 10, completion: 0, total: 10, cost: 0.25 },
+                 { leg: 'review', prompt: 10, completion: 0, total: 10, cost: 0.125 }] },
+      { tokens: [{ leg: 'dev', prompt: 10, completion: 0, total: 10 }] }   // unpriced
+    ];
+    var s = flow.flowSummary(priced, NOW);
+    assert.equal(s.tokens.cost, 0.875);
+    assert.equal(s.tokens.legs.dev.cost, 0.75, 'priced legs only');
+    assert.equal(s.tokens.legs.review.cost, 0.125);
+  });
+
+  test('no priced row anywhere → flowSummary.tokens.cost stays null', function () {
+    var s = flow.flowSummary([
+      { tokens: [{ leg: 'dev', prompt: 10, completion: 0, total: 10 }] }
+    ], NOW);
+    assert.equal(s.tokens.total, 10);
+    assert.equal(s.tokens.cost, null);
   });
 
   test('lead time: merged cards measure prCreated→mergedAt, open cards →now', function () {
