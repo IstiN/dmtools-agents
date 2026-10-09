@@ -1,7 +1,8 @@
 /**
  * Factory state — snapshot builder + branch publisher (owner 2026-09-23;
  * schema 2 lifecycle-timestamps owner 2026-10-01; v3 history + backlog +
- * optional tokens owner 2026-10-03 — all additive, schema stays 2).
+ * optional tokens owner 2026-10-03; gh-825 model + $cost pricing owner
+ * 2026-10-10 — all additive, schema stays 2).
  *
  * The SM tick already computes the entire machine state every pass (labels,
  * armed PR, verdicts, queue). This module renders that state as JSON and
