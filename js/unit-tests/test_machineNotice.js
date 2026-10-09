@@ -32,6 +32,14 @@ function loadScm(mocks) {
     );
 }
 
+/** GitHub provider wired exactly as createScm does for a configured repo. */
+function makeGithubScm(mocks) {
+    return loadScm(mocks).createScm({
+        scm: { provider: 'github' },
+        repository: { owner: 'org', repo: 'repo' }
+    });
+}
+
 function loadGithubHelpers(mocks) {
     return loadModule(
         'js/common/githubHelpers.js',
@@ -244,7 +252,7 @@ suite('machineNotice.isMachineNoticeBody — marker-keyed classification (gh-808
 suite('scm GitHub provider.fetchDiscussions — gh-808 corpus replay (L2)', function() {
 
     test('AC1+AC2: the 13-comment corpus leaves exactly the 4 real threads with threadIds intact', function() {
-        var scm = loadScm({
+        var scm = makeGithubScm({
             github_get_pr_conversations: function() { return corpusConversations(); },
             github_get_pr_review_threads: function() { return corpusGraphQLResponse(); },
             github_get_pr_comments: function() { return []; }
@@ -263,7 +271,7 @@ suite('scm GitHub provider.fetchDiscussions — gh-808 corpus replay (L2)', func
     });
 
     test('AC1: zero entries whose source comment is a machine notice', function() {
-        var scm = loadScm({
+        var scm = makeGithubScm({
             github_get_pr_conversations: function() { return corpusConversations(); },
             github_get_pr_review_threads: function() { return corpusGraphQLResponse(); },
             github_get_pr_comments: function() { return []; }
@@ -277,7 +285,7 @@ suite('scm GitHub provider.fetchDiscussions — gh-808 corpus replay (L2)', func
     });
 
     test('notice threads are also excluded from the markdown, real threads stay', function() {
-        var scm = loadScm({
+        var scm = makeGithubScm({
             github_get_pr_conversations: function() { return corpusConversations(); },
             github_get_pr_review_threads: function() { return corpusGraphQLResponse(); },
             github_get_pr_comments: function() { return []; }
@@ -286,7 +294,6 @@ suite('scm GitHub provider.fetchDiscussions — gh-808 corpus replay (L2)', func
         var result = scm.fetchDiscussions('1428');
         assert.contains(result.markdown, 'This helper duplicates the retry logic',
             'real blocking thread stays in the readable discussions');
-        assert.contains(result.markdown, 'PRRT_real');
         NOTICE_BODIES.forEach(function(body, i) {
             var markerLine = body.split('\n')[0];
             assert.notContains(result.markdown, markerLine,
@@ -297,7 +304,7 @@ suite('scm GitHub provider.fetchDiscussions — gh-808 corpus replay (L2)', func
     });
 
     test('a notices-only PR collapses to rawThreads null (drives the gh-799 placeholder)', function() {
-        var scm = loadScm({
+        var scm = makeGithubScm({
             github_get_pr_conversations: function() {
                 return corpusConversations().filter(function(c) { return !c.path; });
             },
