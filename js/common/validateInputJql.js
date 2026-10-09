@@ -96,7 +96,7 @@ function inputJqlForKey(key, provider) {
 function requireTicketExists(key, tracker) {
     var ticket;
     try {
-        if (!tracker) tracker = require('./trackers.js').createTracker(null, {});
+        if (!tracker) tracker = require('./common/trackers.js').createTracker(null, {});
         ticket = tracker.getIssue(key);
     } catch (e) {
         throw new Error('Ticket not found: ' + key + ' — ' + (e.message || e));
@@ -120,7 +120,7 @@ function validateAndRequireTicket(params, tracker) {
     validateTicketKeyFormat(key);
     if (!tracker) {
         var cp = (jobParams && jobParams.customParams) || (params && params.customParams) || {};
-        tracker = require('./trackers.js').createTracker(null, cp);
+        tracker = require('./common/trackers.js').createTracker(null, cp);
     }
     return requireTicketExists(key, tracker);
 }

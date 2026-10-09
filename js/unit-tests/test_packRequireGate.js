@@ -223,3 +223,185 @@ suite('require gate: the self-test verdict', function () {
         assert.equal(unresolved[0].target, 'js/common/reviewVerdicts.js');
     });
 });
+
+// ── deferred (in-function) requires resolve against the js/ root ONLY ───────
+//
+// gh-823 (live 2026-10-09 16:0x–16:2xZ, four consecutive red fa ticks): the
+// union model above passed the 124928/143148 releases even though the lazy
+// require in js/common/smProvider.js could never run — a require executed
+// AFTER module init (any call into an exported function) resolves against
+// the pack's js/ root EXCLUSIVELY; the runtime never tries the file-relative
+// base (verified against the dmtools runtime with a scratch probe pack).
+// The gate must classify requires the way the runtime executes them:
+// load-time → union of bases; deferred → js-root only.
+
+suite('require gate: load-time vs deferred (in-function) classification', function () {
+
+    test('a top-level require is load-time', function () {
+        var cls = gate().classifyRequires("var x = require('./common/a.js');");
+        assert.deepEqual(cls, [{ spec: './common/a.js', deferred: false }]);
+    });
+
+    test('a require inside a function body is deferred (the smProvider.js:151 shape)', function () {
+        var source = [
+            'function _m() {',
+            '    if (!_m.mod) {',
+            "        _m.mod = require('./reviewVerdicts.js');",
+            '    }',
+            '    return _m.mod;',
+            '}',
+        ].join('\n');
+        var cls = gate().classifyRequires(source);
+        assert.deepEqual(cls, [{ spec: './reviewVerdicts.js', deferred: true }]);
+    });
+
+    test('a require inside a top-level try block is load-time (contentOutput.js:31 shape)', function () {
+        // try {} braces must not read as a function body — this require
+        // executes during module init and resolves file-relative.
+        var source = [
+            'var configLoader = null;',
+            "try { configLoader = require('../configLoader.js'); } catch (e) { /* tests */ }",
+        ].join('\n');
+        var cls = gate().classifyRequires(source);
+        assert.deepEqual(cls, [{ spec: '../configLoader.js', deferred: false }]);
+    });
+
+    test('a require inside a top-level object literal is load-time', function () {
+        var source = "var mods = { a: require('./a.js'), b: require('./b.js') };";
+        var cls = gate().classifyRequires(source);
+        assert.deepEqual(cls, [
+            { spec: './a.js', deferred: false },
+            { spec: './b.js', deferred: false },
+        ]);
+    });
+
+    test('nested functions stay deferred; a function AFTER a closed one does not leak', function () {
+        var source = [
+            'function outer() {',
+            '    function inner() {',
+            "        return require('./inner-dep.js');",
+            '    }',
+            '    return inner;',
+            '}',
+            "var top = require('./top-dep.js');",
+        ].join('\n');
+        var cls = gate().classifyRequires(source);
+        assert.deepEqual(cls, [
+            { spec: './inner-dep.js', deferred: true },
+            { spec: './top-dep.js', deferred: false },
+        ]);
+    });
+
+    test('braces inside comments and strings do not distort the classification', function () {
+        var source = [
+            '/** docs { with braces */',
+            'function f() {',
+            "    var s = 'string } with brace';",
+            "    var w = eval('(function() { return require(\\'./lazy.js\\'); })');",
+            '    return s;',
+            '}',
+        ].join('\n');
+        var cls = gate().classifyRequires(source);
+        assert.deepEqual(cls, [{ spec: './lazy.js', deferred: true }]);
+    });
+
+    test('arrow-function bodies count as deferred when the runtime style uses them', function () {
+        var source = "var f = (x) => { return require('./dep.js'); };";
+        var cls = gate().classifyRequires(source);
+        assert.deepEqual(cls, [{ spec: './dep.js', deferred: true }]);
+    });
+});
+
+suite('require gate: deferred requires resolve against the js/ root ONLY', function () {
+
+    test('RED TEAM — the gh-823 flat require fails the release (js/reviewVerdicts.js absent)', function () {
+        // Reintroducing the shipped smProvider.js lazy require locally must
+        // turn the self-test red: the deferred base is the pack js/ root,
+        // and js/reviewVerdicts.js is NOT in the zip (the module lives at
+        // js/common/reviewVerdicts.js). The union model passed exactly this
+        // pack — gh-812's gate cannot catch this class alone.
+        var files = [
+            { path: 'js/common/smProvider.js', source: [
+                'function _verdictRecordsModule() {',
+                '    if (!_verdictRecordsModule.mod) {',
+                "        _verdictRecordsModule.mod = require('./reviewVerdicts.js');",
+                '    }',
+                '    return _verdictRecordsModule.mod;',
+                '}',
+            ].join('\n') },
+            { path: 'js/common/reviewVerdicts.js', source: 'var x = 1;' },
+        ];
+        var unresolved = gate().unresolvedRequires(files);
+        assert.equal(unresolved.length, 1,
+            'AC2: a wrong-path deferred require must fail the release');
+        assert.equal(unresolved[0].from, 'js/common/smProvider.js');
+        assert.equal(unresolved[0].spec, './reviewVerdicts.js');
+        assert.ok(unresolved[0].deferred, 'the entry must be marked deferred');
+        assert.deepEqual(unresolved[0].bases, ['js/reviewVerdicts.js'],
+            'only the js/ root base applies to a deferred require');
+    });
+
+    test('the gh-823 FIX shape resolves — pack-root-relative deferred require', function () {
+        var files = [
+            { path: 'js/common/smProvider.js', source: [
+                'function _verdictRecordsModule() {',
+                "    _verdictRecordsModule.mod = require('./common/reviewVerdicts.js');",
+                '    return _verdictRecordsModule.mod;',
+                '}',
+            ].join('\n') },
+            { path: 'js/common/reviewVerdicts.js', source: 'var x = 1;' },
+        ];
+        assert.deepEqual(gate().unresolvedRequires(files), []);
+    });
+
+    test('a deferred pack-root-relative require works from ANY packed directory', function () {
+        // The whole point of the convention: js-root base does not care
+        // where the requiring file lives.
+        var files = [
+            { path: 'js/sm/sources/githubSource.js', source: [
+                'function workerShim() {',
+                "    return require('./common/smProvider.js');",
+                '}',
+            ].join('\n') },
+            { path: 'js/common/smProvider.js', source: 'var x = 1;' },
+        ];
+        assert.deepEqual(gate().unresolvedRequires(files), []);
+    });
+
+    test('a deferred ../ climb resolves via the js/ root when it stays inside js/', function () {
+        // js-root + '../x.js' would leave js/ — unresolvable in a pack; the
+        // gate must flag it (contentOutput.js:61 shipped this shape).
+        var files = [
+            { path: 'js/common/contentOutput.js', source: [
+                'function resolveConfig() {',
+                "    var loader = configLoader || require('../configLoader.js');",
+                '    return loader;',
+                '}',
+            ].join('\n') },
+            { path: 'js/configLoader.js', source: 'var x = 1;' },
+        ];
+        var unresolved = gate().unresolvedRequires(files);
+        assert.equal(unresolved.length, 1,
+            "a deferred '../' climb leaves the js/ root — must fail the release");
+    });
+
+    test('load-time requires keep the union model (no false positives on the existing tree)', function () {
+        // js/common sibling-flat top-level requires are legitimate today
+        // (they resolve file-relative at init) — the deferred rule must not
+        // retroactively flag them.
+        var files = [
+            { path: 'js/common/commentMarkup.js', source: "var t = require('./ticketKeyShapes.js');" },
+            { path: 'js/common/ticketKeyShapes.js', source: 'var x = 1;' },
+        ];
+        assert.deepEqual(gate().unresolvedRequires(files), []);
+    });
+
+    test('load-time requires still fail when NEITHER base is in the zip (gh-812 unchanged)', function () {
+        var files = [
+            { path: 'js/smAgent.js', source: "var m = require('./common/missing.js');" },
+        ];
+        var unresolved = gate().unresolvedRequires(files);
+        assert.equal(unresolved.length, 1);
+        assert.notOk(unresolved[0].deferred, 'top-level entries stay load-time');
+    });
+});

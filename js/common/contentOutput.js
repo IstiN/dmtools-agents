@@ -58,7 +58,10 @@ function resolveConfig(params, defaults) {
 
     var fromProject = {};
     try {
-        var loader = configLoader || require('../configLoader.js');
+        // gh-823: deferred (in-function) require — pack-root-relative so the
+        // pack runtime's js/ root base lands on js/configLoader.js ('../'
+        // climbs out of js/ and can never resolve inside a pack).
+        var loader = configLoader || require('./configLoader.js');
         var projectConfig = loader.loadProjectConfig((params && params.jobParams) || params || {});
         fromProject = (projectConfig && projectConfig.contentOutput) || {};
     } catch (e) {
@@ -99,7 +102,7 @@ function isJiraFieldTarget(cfg) {
  */
 function writeToTrackerField(ticketKey, field, content, operationType, tracker) {
     var valueToWrite = content;
-    if (!tracker) tracker = require('./trackers.js').createTracker(null, {});
+    if (!tracker) tracker = require('./common/trackers.js').createTracker(null, {});
     if (operationType === 'append') {
         var existing = '';
         try {

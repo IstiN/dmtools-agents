@@ -153,7 +153,7 @@ function postTokenUsageComments(ticketKey, options) {
 
         var comment = formatUsageComment(filePath, data, initiator);
         try {
-            if (!tracker) tracker = require('./trackers.js').createTracker(null, {});
+            if (!tracker) tracker = require('./common/trackers.js').createTracker(null, {});
             tracker.postComment(ticketKey, comment);
             console.log('Posted token usage comment for ' + ticketKey + ' from ' + filePath);
             posted += 1;

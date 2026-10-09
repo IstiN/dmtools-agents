@@ -148,7 +148,15 @@ var BOOKKEEPING_CHECK_PREFIXES = ['kicker /', 'Wake-up probe', 'merge /'];
 // guard evaluation; the memo collapses that to one per PR per tick).
 function _verdictRecordsModule() {
     if (!_verdictRecordsModule.mod) {
-        _verdictRecordsModule.mod = require('./reviewVerdicts.js');
+        // gh-823: DEFERRED (in-function) requires resolve against the MAIN
+        // script's directory — the pack's js/ root — exclusively; a lazy
+        // sibling-flat './reviewVerdicts.js' looked for js/reviewVerdicts.js
+        // and red every tick whose conflict-shaped queries screened an item
+        // ("state query failed: Failed to require module:
+        // ./reviewVerdicts.js"). Author deferred requires pack-root-relative
+        // (the same convention as smAgent.js and the smAsync worker
+        // sources); js/common/reviewVerdicts.js lands on the js/ root base.
+        _verdictRecordsModule.mod = require('./common/reviewVerdicts.js');
     }
     return _verdictRecordsModule.mod;
 }

@@ -17,7 +17,7 @@ const { STATUSES, LABELS } = require('../config.js');
 function assignForReview(ticketKey, initiatorId, wipLabel, targetStatus, tracker) {
     const statusName = targetStatus || STATUSES.IN_REVIEW;
     try {
-        const t = tracker || require('./trackers.js').createTracker(null, {});
+        const t = tracker || require('./common/trackers.js').createTracker(null, {});
         return t.assignForReview(ticketKey, initiatorId, wipLabel, statusName);
     } catch (error) {
         console.error("❌ Error in assignForReview:", error);
@@ -65,7 +65,7 @@ function setTicketPriority(ticketKey, priority, tracker) {
     }
     
     try {
-        const t = tracker || require('./trackers.js').createTracker(null, {});
+        const t = tracker || require('./common/trackers.js').createTracker(null, {});
         t.setPriority(ticketKey, priority);
         console.log('Set priority ' + priority + ' on ticket ' + ticketKey);
         return true;
