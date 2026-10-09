@@ -19,6 +19,7 @@ var outputFiles = require('./common/outputFiles.js');
 const tokenUsageComment = require('./common/tokenUsageComment.js');
 var gh = require('./common/githubHelpers.js');
 const commentMarkup = require('./common/commentMarkup.js');
+var reviewVerdicts = require('./common/reviewVerdicts.js');
 
 var RESUME_MARKER = 'outputs/.pr-review-missing-output-resume-attempted';
 
