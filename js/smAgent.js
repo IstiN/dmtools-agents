@@ -2726,7 +2726,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                     ' automatic re-dispatches on head `' + sHead +
                                     '` died cancelled or never started; the ai_validating arm kept holding' +
                                     ' the merge window with no live run behind it — gh-821). No further' +
-                                    ' automatic re-dispatches: a new push (new head SHA) restarts validation.'
+                                    ' automatic re-dispatches: a new push (new head SHA) restarts validation.' +
+                                    (sProbe && sProbe.green
+                                        ? ' An older GREEN dispatched run exists on this head (gh-751/latch-skip ' +
+                                          'semantics) — worth a manual look before re-dispatching or pushing.'
+                                        : '')
                             });
                         } catch (eZsay) {
                             console.warn('  ⚠️  zombie park comment failed: ' + (eZsay.message || eZsay));
@@ -2774,7 +2778,33 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     }
                 } catch (eZun) { /* absent arm is fine */ }
                 dropOpenPrsCache(effectiveRepoInfo);
-                dispatchCiWorkflow(ticket.branch);
+                // Guarded like every other localAction (validate_pr wraps the
+                // IDENTICAL call in its whole-body try/catch; headWorkflowRunsSafe
+                // exists because cli_execute_command throws): a throwing dispatch
+                // (transient gh/API failure) must not propagate out of the tickets
+                // loop / processRule's rules.forEach — that kills the WHOLE SM
+                // tick (every remaining rule and PR skipped for the cadence —
+                // the merge-window starvation gh-821 exists to eliminate) and
+                // strands the PR half-transitioned (arm stripped, marker never
+                // posted, the crash-loop bound blind to the lost dispatch).
+                // Contain it: warn, RE-ACQUIRE the arm (the PR keeps its
+                // serialization slot; the next tick retries as a zombie — no
+                // re-entry through the validate-armed arm race), move on.
+                try {
+                    dispatchCiWorkflow(ticket.branch);
+                } catch (eZci) {
+                    console.warn('  ⚠️  zombie re-dispatch failed for ' + key + ': ' +
+                                 (eZci.message || eZci) + ' — re-arming, retry next tick');
+                    try {
+                        if (!DRY) {
+                            github_add_labels({
+                                workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                                number: ticket.prNumber, labels: ['ai_validating']
+                            });
+                        }
+                    } catch (eZre2) { /* validate-armed re-arms next tick anyway */ }
+                    continue;
+                }
                 if (sHead) {
                     stampValidationChecksForModule(effectiveRepoInfo, sHead, 'in_progress', null, null);
                 }
@@ -3982,8 +4012,7 @@ function hasActiveDispatchedRun(repoInfo, ciWorkflow, headSha) {
         var list = (runs && runs.workflow_runs) || [];
         var now = Date.now();
         return list.some(function (r) {
-            if (r.status === 'queued' || r.status === 'in_progress' ||
-                r.status === 'waiting' || r.status === 'pending') return true;
+            if (validationLivenessModule.ACTIVE_RUN_STATES.indexOf(r.status) !== -1) return true;
             if (r.status === 'completed') {
                 // Grace from the run's CONCLUSION (updated_at), not its
                 // creation: the check-run visibility race only lasts ~15
@@ -4059,10 +4088,11 @@ function hasActiveHeadRun(runs) {
     // dispatch re-runs them) — rerunning cancelled runs under it would
     // only stack. Takes the pre-fetched head rollup (the action fetches
     // once and shares it with the target mapping — #695 review); a null
-    // (failed probe) reads as no active run — fail OPEN.
+    // (failed probe) reads as no active run — fail OPEN. The ACTIVE
+    // vocabulary comes from js/common/validationLiveness.js (gh-821 round-2
+    // review: one constant, not parallel inline lists that drift).
     return (runs || []).some(function (r) {
-        return r.status === 'queued' || r.status === 'in_progress' ||
-            r.status === 'waiting' || r.status === 'pending';
+        return validationLivenessModule.ACTIVE_RUN_STATES.indexOf(r.status) !== -1;
     });
 }
 

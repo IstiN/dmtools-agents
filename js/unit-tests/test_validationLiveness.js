@@ -178,3 +178,21 @@ suite('validationLiveness knobs', function () {
         assert.equal(live.zombieWindowMsOf({ zombieRedispatchMinMs: -5 }), HOUR_MS, 'garbage → default');
     });
 });
+
+suite('validationLiveness ACTIVE_RUN_STATES (gh-821 round-2 review)', function () {
+    // The exported constant is the SINGLE SOURCE OF TRUTH for the "a run is
+    // materially in flight" vocabulary: smAgent's hasActiveDispatchedRun and
+    // hasActiveHeadRun consume it (gh-821 round-2 review — an unused exported
+    // parity constant invited drift exactly where parity is the point). This
+    // pin freezes the contract: GitHub's four non-concluded run states.
+    test('the vocabulary is exactly GitHub\'s four in-flight run states', function () {
+        assert.deepEqual(live.ACTIVE_RUN_STATES, ['queued', 'in_progress', 'waiting', 'pending']);
+    });
+
+    test('no concluded state leaks into the active vocabulary', function () {
+        assert.equal(live.ACTIVE_RUN_STATES.indexOf('completed'), -1,
+            'completed is a conclusion carrier, never "in flight"');
+        assert.equal(live.ACTIVE_RUN_STATES.indexOf('cancelled'), -1);
+        assert.equal(live.ACTIVE_RUN_STATES.indexOf('success'), -1);
+    });
+});

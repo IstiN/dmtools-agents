@@ -3182,6 +3182,194 @@ suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', f
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'no label churn behind a live run');
         assert.equal(sm.capturedPrComments.length, 0, 'no marker behind a live run');
     });
+
+    test('gh-821: a THROWING zombie re-dispatch must NOT kill the SM tick — arm re-acquired, next PR still processed', function () {
+        // Review BLOCKING (round 1): the re-dispatch dispatch sat OUTSIDE
+        // any try/catch — a transient `gh workflow run` failure (gh/API
+        // blip) propagated out of the tickets loop and processRule's
+        // rules.forEach, killing the WHOLE SM tick: every remaining rule
+        // and PR skipped for that cadence — the merge-window starvation
+        // gh-821 exists to eliminate, reintroduced on the degraded path
+        // where throws are most likely. validate_pr wraps the identical
+        // call (whole-body try/catch); the zombie path must contain its
+        // failure the same way: warn, re-acquire the arm (the PR keeps
+        // its serialization slot; the next tick retries as a zombie), and
+        // let the loop move on.
+        var HEAD1 = 'b111000000000000000000000000000000000011';
+        var HEAD2 = 'b222000000000000000000000000000000000022';
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            captureConsole: true,
+            github: {
+                items: [
+                    prItem(1111, { labels: ['pr_approved', 'ai_validating'],
+                        headSha: HEAD1, branch: 'ai/gh-1111' }),
+                    prItem(2222, { labels: ['pr_approved', 'ai_validating'],
+                        headSha: HEAD2, branch: 'ai/gh-2222' })
+                ]
+            },
+            onCliExecute: function (cmd) {
+                if (cmd.command.indexOf('gh workflow run') === 0) {
+                    if (cmd.command.indexOf('--ref ai/gh-1111') !== -1) {
+                        throw new Error('gh: transient API error (simulated dispatch failure)');
+                    }
+                    return '';
+                }
+                if (cmd.command.indexOf('actions/workflows/') !== -1 &&
+                    cmd.command.indexOf('/runs?') !== -1) {
+                    var m = /head_sha=([^&"]+)/.exec(cmd.command);
+                    if (m && m[1] === HEAD1) {
+                        return JSON.stringify({ workflow_runs: [oldRun('cancelled', HEAD1)] });
+                    }
+                    if (m && m[1] === HEAD2) {
+                        return JSON.stringify({ workflow_runs: [oldRun('cancelled', HEAD2)] });
+                    }
+                    return JSON.stringify({ workflow_runs: [] });
+                }
+                return '';
+            }
+        }));
+        var threw = null;
+        try {
+            sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+        } catch (e) {
+            threw = e;
+        }
+
+        assert.equal(threw, null,
+            'a throwing dispatch is contained in the zombie path — the SM tick survives');
+        assert.ok(sm.capturedCliCommands.some(function (c) {
+            return c.command.indexOf('gh workflow run') === 0 &&
+                c.command.indexOf('--ref ai/gh-2222') !== -1;
+        }), 'the NEXT PR still got its zombie re-dispatch — the loop continued past the failure');
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.number === 1111 && a.labels.indexOf('ai_validating') !== -1;
+        }), 'the failed PR re-acquires the arm — it keeps its serialization slot for the retry');
+        assert.ok(!sm.capturedPrComments.some(function (c) {
+            return c.body.indexOf(HEAD1) !== -1;
+        }), 'no marker for the lost dispatch — the crash-loop counter must not count a run that never started');
+        assert.ok(sm.capturedPrComments.some(function (c) {
+            return c.body.indexOf(HEAD2) !== -1;
+        }), 'the healthy zombie still posts its marker');
+        assert.ok(sm.capturedLogs.some(function (l) {
+            return l.indexOf('zombie re-dispatch failed for pr-1111') !== -1;
+        }), 'the failure is logged, not silent');
+    });
+
+    test('gh-821: gh-748 belt — a zombie-classified head with a fresh run keeps the arm and dispatches nothing', function () {
+        // Review round 1 (coverage): the belt check is the promised
+        // "composes with gh-748" guarantee — a zombie read that raced a
+        // fresh CI order (kicker/dispatch window) must NOT re-dispatch a
+        // duplicate on top of it. Old cancelled dispatched run (> 15-min
+        // visibility grace ⇒ zombie) + a FRESH run on the head via the
+        // non-event-filtered rollup probe ⇒ arm stays, no dispatch.
+        var HEAD = 'b333000000000000000000000000000000000033';
+        var freshIso = new Date(Date.now() - 10 * 1000).toISOString();
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            captureConsole: true,
+            github: {
+                items: [prItem(333, { labels: ['pr_approved', 'ai_validating'],
+                    headSha: HEAD, branch: 'ai/gh-333' })]
+            },
+            onCliExecute: function (cmd) {
+                if (cmd.command.indexOf('actions/workflows/') !== -1 &&
+                    cmd.command.indexOf('/runs?') !== -1) {
+                    var m = /head_sha=([^&"]+)/.exec(cmd.command);
+                    if (m && m[1] === HEAD) {
+                        return JSON.stringify({ workflow_runs: [oldRun('cancelled', HEAD)] });
+                    }
+                    return JSON.stringify({ workflow_runs: [] });
+                }
+                if (cmd.command.indexOf('/actions/runs?head_sha=') !== -1) {
+                    // Head rollup (any workflow, any event): CI was JUST
+                    // ordered — one run active now, one completed inside
+                    // the dispatch-race grace (both belt arms).
+                    return JSON.stringify({ workflow_runs: [
+                        { status: 'in_progress', head_sha: HEAD,
+                          created_at: freshIso, updated_at: freshIso },
+                        { status: 'completed', conclusion: 'success', head_sha: HEAD,
+                          created_at: freshIso, updated_at: freshIso }
+                    ] });
+                }
+                return '';
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands),
+            'the fresh order owns the CI — no duplicate zombie re-dispatch');
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'the arm stays');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no label churn behind a fresh order');
+        assert.equal(sm.capturedPrComments.length, 0, 'no marker — nothing was re-dispatched');
+        assert.ok(sm.capturedLogs.some(function (l) {
+            return l.indexOf('raced a fresh CI order') !== -1;
+        }), 'the belt logs the race, not a silent skip');
+    });
+
+    test('gh-821: an armed zombie PR with NO head branch keeps the arm and dispatches nothing', function () {
+        // Review round 1 (coverage): the !ticket.branch bail-out — a
+        // re-dispatch has nothing to dispatch against; the arm must stay
+        // and the tick move on (retry next tick), never a blind dispatch.
+        var HEAD = 'b444000000000000000000000000000000000044';
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            captureConsole: true,
+            github: {
+                items: [prItem(4441, { labels: ['ai_validating'], headSha: HEAD })]
+            },
+            onCliExecute: runsCli({ run: oldRun('cancelled', HEAD) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands),
+            'no branch — no dispatch (dispatchCiWorkflow would fire a ref-less run)');
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'the arm stays — retry next tick');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no re-arm churn');
+        assert.equal(sm.capturedPrComments.length, 0, 'no marker — nothing happened');
+    });
+
+    test('gh-821: the crash-loop park surfaces an older GREEN dispatched run on the head (sProbe.green)', function () {
+        // Review round 1 (suggestion): a cancel storm can park a head that
+        // still carries an older concluded-green dispatched run — the exact
+        // facet gh-751 strip / validate-armed latch-skip treat as a
+        // consumable verdict. The park comment must tell the human the
+        // head may already be merge-eligible before they re-dispatch or push.
+        var HEAD = 'b555000000000000000000000000000000000055';
+        var cancelledAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(); // newest → zombie
+        var greenAt = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();     // older → the green facet
+        var mk = function (n, minsAgo) {
+            var t = new Date(Date.now() - minsAgo * 60 * 1000).toISOString();
+            return { body: '🔄 zombie re-dispatch ' + HEAD + ' — zombie ' + n + '/3 at ' + t };
+        };
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(5551, { labels: ['pr_approved', 'ai_validating'],
+                    headSha: HEAD, branch: 'ai/gh-5551' })],
+                prComments: [mk(1, 130), mk(2, 70), mk(3, 10)]
+            },
+            onCliExecute: function (cmd) {
+                if (cmd.command.indexOf('actions/workflows/') !== -1 &&
+                    cmd.command.indexOf('/runs?') !== -1) {
+                    var m = /head_sha=([^&"]+)/.exec(cmd.command);
+                    if (m && m[1] === HEAD) {
+                        return JSON.stringify({ workflow_runs: [
+                            { status: 'completed', conclusion: 'cancelled', head_sha: HEAD,
+                              created_at: cancelledAt, updated_at: cancelledAt },
+                            { status: 'completed', conclusion: 'success', head_sha: HEAD,
+                              created_at: greenAt, updated_at: greenAt }
+                        ] });
+                    }
+                    return JSON.stringify({ workflow_runs: [] });
+                }
+                return '';
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+
+        assert.ok(sm.capturedPrComments.length === 1 &&
+            sm.capturedPrComments[0].body.indexOf('crash-loop') !== -1,
+            'the crash-loop park fired (cancelled-newest classifies zombie; cap 3 reached)');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('An older GREEN dispatched run exists') !== -1,
+            'the park comment points the human at the possibly-merge-eligible head');
+    });
 });
 
 suite('smAgent: red-head park + dry-run dispatch + conclusion grace (fa wave stall 2026-09-27)', function () {

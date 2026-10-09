@@ -41,8 +41,12 @@
 
 'use strict';
 
-// Run states that mean "a run is materially in flight" — the same
-// vocabulary hasActiveDispatchedRun / hasActiveHeadRun match in smAgent.
+// Run states that mean "a run is materially in flight" — THE single source
+// of truth for that vocabulary (gh-821 round-2 review): smAgent's
+// hasActiveDispatchedRun and hasActiveHeadRun consume this constant instead
+// of keeping parallel inline lists that drift. The PROBE_WORKER_SOURCE copy
+// in smAgent keeps its own literal list by necessity (the worker source is
+// serialized via fn.toString() and cannot close over module scope).
 var ACTIVE_RUN_STATES = ['queued', 'in_progress', 'waiting', 'pending'];
 
 // ── Liveness classification ────────────────────────────────────────────────
@@ -68,8 +72,10 @@ var ACTIVE_RUN_STATES = ['queued', 'in_progress', 'waiting', 'pending'];
  *   'zombie-no-run'    — no dispatched run on the head at all (lost
  *                        dispatch, silent gh CLI failure): same dead-hold.
  *
- * Unknown/degraded shapes fail SAFE toward 'running' (arm stays — a missed
- * recovery retries next tick; a wrongful re-dispatch burns CI).
+ * Missing probe / odd per-facet shapes fail SAFE toward 'running' (arm
+ * stays). A fully-failed probe (every facet at its catch default) reads
+ * 'zombie-no-run' — the deliberate gh-821 bias documented in the header:
+ * worst case one bounded duplicate CI run, never a wedge.
  */
 function classify(probe) {
     var newest = (probe && probe.newest) || null;
