@@ -205,13 +205,20 @@ let SHIPPED_DIR = null;
 let SHIPPED_CATALOG = null;
 const SHIPPED_ZIP_MANIFESTS = {};
 
+/** gh invocation suffix: the repo slug when Actions provides it, else gh
+ *  falls back to the local git remote (a release checkout has one). */
+function ghRepoArg() {
+  const repo = process.env.GITHUB_REPOSITORY || '';
+  return repo ? ` --repo ${JSON.stringify(repo)}` : '';
+}
+
 function shippedCatalog() {
   if (SHIPPED_CATALOG === null) {
     if (!PREV_TAG || DRY_RUN) return {}; // no previous release to read — ledger fallback
     SHIPPED_DIR = mkdtempSync(join(tmpdir(), 'prev-release-'));
     try {
       execSync(
-        `gh release download ${JSON.stringify(PREV_TAG)} --pattern 'catalog.json' --dir ${JSON.stringify(SHIPPED_DIR)} --clobber`,
+        `gh release download ${JSON.stringify(PREV_TAG)} --pattern 'catalog.json' --dir ${JSON.stringify(SHIPPED_DIR)} --clobber${ghRepoArg()}`,
         { stdio: ['ignore', 'ignore', 'ignore'] },
       );
       SHIPPED_CATALOG = JSON.parse(readFileSync(join(SHIPPED_DIR, 'catalog.json'), 'utf8'));
@@ -236,7 +243,7 @@ function shippedZipManifest(agent, version) {
   if (!PREV_TAG || DRY_RUN || !SHIPPED_DIR) return null;
   try {
     execSync(
-      `gh release download ${JSON.stringify(PREV_TAG)} --pattern ${JSON.stringify(`${agent}-${version}.zip`)} --dir ${JSON.stringify(SHIPPED_DIR)} --clobber`,
+      `gh release download ${JSON.stringify(PREV_TAG)} --pattern ${JSON.stringify(`${agent}-${version}.zip`)} --dir ${JSON.stringify(SHIPPED_DIR)} --clobber${ghRepoArg()}`,
       { stdio: ['ignore', 'ignore', 'ignore'] },
     );
     const manifestJson = execSync(
@@ -286,7 +293,7 @@ function assertZipRequires(zipPath) {
     const unresolved = unresolvedRequires(sources, paths);
     if (unresolved.length > 0) {
       const lines = unresolved
-        .map((u) => `  ${u.from}: require('${u.spec}') -> missing ${u.target}`)
+        .map((u) => `  ${u.from}: require('${u.spec}') -> none of [${u.bases.join(', ')}] is in the zip`)
         .join('\n');
       throw new Error(
         `require sanity gate FAILED for ${basename(zipPath)}: ` +

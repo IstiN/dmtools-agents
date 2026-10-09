@@ -106,6 +106,19 @@ suite('require gate: relative resolution against the zip layout', function () {
             gate().resolveRequire('js/smAgent.js', '././common//reviewVerdicts.js'),
             'js/common/reviewVerdicts.js');
     });
+
+    test('union resolution: the js/ module root is a second base (worker-source shape)', function () {
+        // githubSource.js embeds worker sources authored as if from js/:
+        // require('./common/smProvider.js') from js/sm/sources/ resolves via
+        // the js/ ROOT, not the requiring file's directory.
+        var bases = gate().resolveRequireCandidates('js/sm/sources/githubSource.js', './common/smProvider.js');
+        assert.deepEqual(bases, ['js/sm/sources/common/smProvider.js', 'js/common/smProvider.js']);
+    });
+
+    test('a ../ spec has only the file-relative base (climbing out of js/ is meaningless in a pack)', function () {
+        var bases = gate().resolveRequireCandidates('js/common/smProvider.js', '../configLoader.js');
+        assert.deepEqual(bases, ['js/configLoader.js']);
+    });
 });
 
 suite('require gate: the self-test verdict', function () {
@@ -149,6 +162,27 @@ suite('require gate: the self-test verdict', function () {
             { path: 'js/common/smProvider.js', source: 'var y = 2;' },
         ];
         assert.deepEqual(gate().unresolvedRequires(files), []);
+    });
+
+    test('a worker-source require resolves via the js/ module root base', function () {
+        // Real githubSource.js shape: the worker string only makes sense
+        // root-relative — the gate must accept it when js/common/smProvider.js
+        // is in the zip (a pure file-relative gate would false-positive it).
+        var files = [
+            { path: 'js/sm/sources/githubSource.js', source: "var W = ['function(args) {', \"    var mod = require('./common/smProvider.js');\", '}'].join('\\n');" },
+            { path: 'js/common/smProvider.js', source: 'var x = 1;' },
+        ];
+        assert.deepEqual(gate().unresolvedRequires(files), []);
+    });
+
+    test('a worker-source require FAILS when the root-relative target is absent too', function () {
+        var files = [
+            { path: 'js/sm/sources/githubSource.js', source: "var W = ['function(args) {', \"    var mod = require('./common/absent.js');\", '}'].join('\\n');" },
+        ];
+        var unresolved = gate().unresolvedRequires(files);
+        assert.equal(unresolved.length, 1);
+        assert.deepEqual(unresolved[0].bases,
+            ['js/sm/sources/common/absent.js', 'js/common/absent.js']);
     });
 
     test('each unresolved entry names the requiring file and the missing target', function () {
