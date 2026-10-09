@@ -60,6 +60,11 @@ import {
   fingerprintsDiffer,
 } from './pack_version_guard.cjs';
 import { unresolvedRequires } from './pack_require_gate.cjs';
+// gh-823: the pack runtime LOAD self-test generator — after every build the
+// zip is extracted and a generated probe requires EVERY packed .js in the
+// real dmtools runtime (parse errors and load-time require misses fail the
+// release; the deferred-require class stays with pack_require_gate.cjs).
+import { probeFilesList, renderProbeJs, renderProbeConfig } from './pack_load_probe.cjs';
 
 const ROOT = process.cwd();
 const VERSIONS_FILE = join(ROOT, 'versions.json');
@@ -336,13 +341,71 @@ function assertZipRequires(zipPath) {
     const unresolved = unresolvedRequires(sources, paths);
     if (unresolved.length > 0) {
       const lines = unresolved
-        .map((u) => `  ${u.from}: require('${u.spec}') -> none of [${u.bases.join(', ')}] is in the zip`)
+        .map((u) => `  ${u.deferred ? 'deferred' : 'load-time'}  ${u.from}: require('${u.spec}') -> none of [${u.bases.join(', ')}] is in the zip`)
         .join('\n');
       throw new Error(
         `require sanity gate FAILED for ${basename(zipPath)}: ` +
-        `${unresolved.length} packed require(s) resolve to files absent from the zip (gh-812):\n${lines}`,
+        `${unresolved.length} packed require(s) resolve to files absent from the zip (gh-812; ` +
+        `deferred = in-function require, resolves against the pack js/ root ONLY — gh-823):\n${lines}`,
       );
     }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+const PACK_LOAD_PROBE_JS = '__pack_load_probe.js';
+const PACK_LOAD_PROBE_CONFIG = '__pack_load_probe.json';
+
+/**
+ * gh-823 release self-test: LOAD every packed .js in the REAL dmtools
+ * runtime. The static gate (assertZipRequires) proves zip self-consistency;
+ * this proves the payload actually loads the way the fa ticks will run it —
+ * a parse error or a load-time require miss fails the release here, not on
+ * the runners. Extracts the zip, drops a generated probe (see
+ * ci/pack_load_probe.cjs), runs `dmtools run` inside the extracted tree,
+ * and throws on a non-zero exit or a failed probe action.
+ */
+function assertPackLoads(zipPath) {
+  const tmp = mkdtempSync(join(tmpdir(), 'pack-load-probe-'));
+  try {
+    execSync(`unzip -q -o ${JSON.stringify(zipPath)} -d ${JSON.stringify(tmp)}`);
+    const paths = new Set();
+    const walk = (dir, rel) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const relPath = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) walk(join(dir, e.name), relPath);
+        else paths.add(relPath);
+      }
+    };
+    walk(tmp, '');
+    const files = probeFilesList(paths, PACK_LOAD_PROBE_JS);
+    writeFileSync(join(tmp, PACK_LOAD_PROBE_JS), renderProbeJs(files));
+    writeFileSync(join(tmp, PACK_LOAD_PROBE_CONFIG), renderProbeConfig(PACK_LOAD_PROBE_JS));
+    let output = '';
+    try {
+      output = execSync(
+        `dmtools run ${JSON.stringify(PACK_LOAD_PROBE_CONFIG)}`,
+        { cwd: tmp, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+    } catch (err) {
+      const tail = String(err.stdout || output || '').split('\n').slice(-25).join('\n');
+      throw new Error(
+        `pack runtime LOAD self-test FAILED for ${basename(zipPath)} (gh-823): ` +
+        `the packed payload did not load in the dmtools runtime:\n${tail}`,
+      );
+    }
+    // The probe's action throws on any failed require (and on an empty file
+    // list); a zero exit should imply a clean summary — verify the summary
+    // line anyway so a swallowed action error can never pass silently.
+    const summary = output.split('\n').find((l) => l.indexOf('[pack-load-probe]') !== -1) || '';
+    if (summary.indexOf(' 0 failed') === -1) {
+      throw new Error(
+        `pack runtime LOAD self-test FAILED for ${basename(zipPath)} (gh-823): ` +
+        (summary || output.slice(-400)),
+      );
+    }
+    console.log(`  pack runtime load self-test: ${summary.trim()}`);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -470,11 +533,13 @@ function buildPackRelease(agent, next, isAffected, shippedVersion) {
     const rezipped = buildPack(agent, next);
     augmentLaunchSurface(agent, rezipped);
     assertZipRequires(rezipped); // gh-812 AC1/AC3 — throws before ledger commit + publish
+    assertPackLoads(rezipped); // gh-823 AC2 — the payload must LOAD in the pack runtime
     const recount = validatePack(rezipped);
     console.log(`validated ${basename(rezipped)} (${recount} files)`);
     return { zipPath: rezipped, version: next };
   }
   assertZipRequires(zip); // gh-812 AC1/AC3 — throws before ledger commit + publish
+  assertPackLoads(zip); // gh-823 AC2 — the payload must LOAD in the pack runtime
   const count = validatePack(zip);
   console.log(`validated ${basename(zip)} (${count} files)`);
   return { zipPath: zip, version: next };

@@ -68,6 +68,7 @@ function functionDepths(source) {
     var inRegexClass = false;
     var prevSig = ''; // last significant char outside comments/strings/regex
     var prevWord = ''; // last whole word outside comments/strings/regex
+    var prev = ''; // block-comment end detection (`*/`)
     while (i < n) {
         var c = source.charAt(i);
         if (c === '\n') inLine = false;
