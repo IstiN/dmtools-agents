@@ -311,5 +311,14 @@
       "completion": 3580,
       "total": 113275
     }
+  ],
+  "issue-821": [
+    {
+      "leg": "dev",
+      "at": "2026-10-09T16:01:01Z",
+      "prompt": 178340,
+      "completion": 60192,
+      "total": 238532
+    }
   ]
 }
