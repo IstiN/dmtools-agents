@@ -262,3 +262,73 @@ suite('version ledger hygiene', function () {
         }
     });
 });
+
+// ── gh-812: version uniqueness + require sanity gate wiring ──────────────────
+
+suite('gh-812 release integrity wiring', function () {
+
+    var builder = file_read({ path: 'ci/release_packs.mjs' });
+    var wf = file_read({ path: '.github/workflows/agent-pack-release.yml' });
+
+    test('the builder imports the require sanity gate module', function () {
+        assert.ok(builder.indexOf('pack_require_gate.cjs') !== -1,
+            'ci/release_packs.mjs must import ci/pack_require_gate.cjs — the ' +
+            'release self-test asserting every packed require resolves inside ' +
+            'the zip (gh-812 AC1/AC3)');
+    });
+
+    test('the builder imports the version guard module', function () {
+        assert.ok(builder.indexOf('pack_version_guard.cjs') !== -1,
+            'ci/release_packs.mjs must import ci/pack_version_guard.cjs — two ' +
+            'releases with differing pack content must never share a version ' +
+            'string (gh-812 AC2)');
+    });
+
+    test('the gate runs on every built zip, after the launch augment', function () {
+        var augment = builder.indexOf('function augmentLaunchSurface(');
+        var gateCall = builder.indexOf('assertZipRequires(');
+        assert.ok(gateCall !== -1, 'the builder must run the require gate');
+        assert.ok(gateCall > augment,
+            'the gate must see the FINAL payload — launch extras (verdict.sh ' +
+            'is shell, but future contract files may not be) are folded in by ' +
+            'the augment, so gating before it tests a zip that never ships');
+    });
+
+    test('unresolved requires FAIL the release (throw → non-zero step)', function () {
+        var gateCall = builder.indexOf('assertZipRequires(');
+        assert.ok(/assertZipRequires\([\s\S]*?\{\s*throw\s/.test(builder) ||
+            builder.indexOf('function assertZipRequires(') !== -1,
+            'the gate must throw on unresolved requires so the build step exits ' +
+            'non-zero BEFORE the ledger commit and the gh release create');
+        var publish = wf.indexOf('gh release create');
+        var buildStep = wf.indexOf('node ci/release_packs.mjs');
+        assert.ok(buildStep !== -1 && buildStep < publish,
+            'the gate lives in the build step — it must run before the publish step');
+    });
+
+    test('the workflow hands the previous release tag to the builder', function () {
+        assert.ok(wf.indexOf('--prev-release-tag') !== -1,
+            'the builder needs the last agents-rel-* tag to read the SHIPPED ' +
+            'catalog and same-version zips — versions.json on main is a ' +
+            'best-effort ledger that never landed (gh-812 root cause)');
+        var base = wf.indexOf('steps.base.outputs.ref');
+        var prev = wf.indexOf('--prev-release-tag');
+        assert.ok(base !== -1 && prev !== -1,
+            'the base-ref step output feeds the prev-release-tag argument');
+    });
+
+    test('the build step can call gh (token in env) for the shipped-state reads', function () {
+        var buildStep = wf.indexOf('node ci/release_packs.mjs');
+        var head = wf.slice(0, buildStep);
+        var envBlock = head.lastIndexOf('env:');
+        assert.ok(envBlock !== -1 && head.slice(envBlock, buildStep).indexOf('GH_TOKEN') !== -1,
+            'the previous-release downloads are gh calls — the build step needs GH_TOKEN');
+    });
+
+    test('shipped-state reads degrade with a warning, never crash the build', function () {
+        assert.ok(builder.indexOf('::warning::') !== -1 &&
+            /shipped/i.test(builder),
+            'a gh outage must fall back to the ledger (today\'s behavior), ' +
+            'not fail releases on infrastructure the gate cannot control');
+    });
+});
