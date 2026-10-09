@@ -8318,8 +8318,14 @@ suite('smAgent: statePublish tokens — local file first, branch fallback', func
         if (!opts.github.prList) opts.github.prList = '[]';
         if (!opts.github.workflowApiRuns) opts.github.workflowApiRuns = [];
         var sm = makeSmAgent(opts);
+        var rule = makeRule('project = T');
+        if (opts.rulePatch) {
+            Object.keys(opts.rulePatch).forEach(function (k) {
+                rule[k] = opts.rulePatch[k];
+            });
+        }
         var jp = {
-            owner: 'o', repo: 'r', rules: [makeRule('project = T')], statePublish: SP
+            owner: 'o', repo: 'r', rules: [rule], statePublish: SP
         };
         if (opts.jobParamsPatch) {
             Object.keys(opts.jobParamsPatch).forEach(function (k) {
@@ -8525,6 +8531,52 @@ suite('smAgent: statePublish tokens — local file first, branch fallback', func
             card.checks.conclusion === 'success' &&
             card.checks.name === 'PR o/r#1437',
             'the cite carries the audit fields (run id + name + sha + conclusion)');
+    });
+
+    // ── gh-816 rework (thread 1, BLOCKING): rule.ciWorkflow precedence ────
+    // ciWorkflow has a documented per-rule override with HIGHER precedence
+    // (dispatchCiWorkflow + five sibling sites resolve it as
+    // rule.ciWorkflow || jobParams.ciWorkflow || 'quality.yml'). The
+    // state-publish wiring must honor the same chain — otherwise the
+    // multi-repo factory-sm deployments (a ci-workflow input per rule) get
+    // their own validation dispatches misclassified as SM side-run legs:
+    // no cite at all, a dead pr_validation lane, no merged checks record.
+    var GH816_RULE_RUNS = [
+        { id: 379900001, name: 'validate (rule)', event: 'workflow_dispatch',
+          path: '.github/workflows/rulecheck.yml', head_sha: GH816_HEAD,
+          status: 'completed', conclusion: 'success',
+          created_at: '2026-10-09T11:05:00Z', updated_at: '2026-10-09T11:12:19Z',
+          html_url: 'http://run/rule' },
+        { id: 379900003, name: 'review (SM)', event: 'workflow_dispatch',
+          path: '.github/workflows/ai-teammate.yml', head_sha: GH816_HEAD,
+          status: 'completed', conclusion: 'success',
+          created_at: '2026-10-09T11:20:00Z', updated_at: '2026-10-09T11:24:00Z',
+          html_url: 'http://run/review-rule' }
+    ];
+
+    test('gh-816: rule-level ciWorkflow override reaches the snapshot builder (rule.ciWorkflow > jobParams.ciWorkflow)', function() {
+        var run = publishTick({
+            fileMap: {},
+            github: { prList: GH816_PR, workflowApiRuns: GH816_RULE_RUNS },
+            rulePatch: { ciWorkflow: 'rulecheck.yml' },
+            jobParamsPatch: { ciWorkflow: 'wrong.yml' }
+        });
+        var card = run.state.lanes.pr_created.filter(function (c) {
+            return c.pr === 1437;
+        })[0];
+        assert.ok(card, 'pr-1437 card published');
+        assert.equal(card.checks && card.checks.runId, 379900001,
+            'the RULE\'s validation dispatch (rulecheck.yml) is the cite — ' +
+            'rule.ciWorkflow outranks the jobParams knob (same chain as ' +
+            'dispatchCiWorkflow): if the jobParams knob won, EVERY dispatch ' +
+            'here would be a leg and the card would carry no cite at all');
+        assert.ok(card.checks && card.checks.auxiliary &&
+            card.checks.auxiliary.runId === 379900003,
+            'the review leg is preserved as auxiliary evidence');
+        assert.ok(card.checks.sha === GH816_HEAD &&
+            card.checks.conclusion === 'success' &&
+            card.checks.name === 'validate (rule)',
+            'the cite carries the audit fields');
     });
 
 });

@@ -1248,9 +1248,13 @@ suite('factoryState — merge-lane citation integrity (gh-816)', function () {
     var st = build({ prs: [openPr()] });
     var card = st.lanes.pr_created[0];
     assert.ok(card.checks, 'a real green run exists → a discharge cite exists');
-    assert.equal(card.checks.runId, 37925202998,
-      'the freshest REAL run (full CI, push) is the cite — not the review leg');
-    assert.equal(card.checks.name, 'CI');
+    // rework thread 2: among real runs the machine's own validation
+    // workflow (quality.yml path match) outranks every other real run —
+    // score, not recency, picks between two honest evidences.
+    assert.equal(card.checks.runId, 37921773706,
+      'the validation-workflow dispatch (quality.yml) is the cite — ' +
+      'score 2 outranks the plain-real CI push run');
+    assert.equal(card.checks.name, 'PR acme/factory#1437');
     assert.equal(card.checks.verdict, 'success');
     assert.notEqual(card.checks.runId, 37923501714,
       'the review (SM) side-run must never be the discharge cite');
