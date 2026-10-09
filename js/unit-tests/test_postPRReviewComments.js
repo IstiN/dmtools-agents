@@ -369,7 +369,8 @@ suite('postPRReviewComments', function() {
                     './common/githubHelpers.js': githubHelpersStub,
                     './common/trackers.js': makeTrackersModule(mergedMocks),
                     './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
-                    './common/commentMarkup.js': commentMarkupModule
+                    './common/commentMarkup.js': commentMarkupModule,
+                    './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
                 }),
                 mergedMocks
             );
@@ -622,7 +623,8 @@ suite('postPRReviewComments', function() {
                     './common/githubHelpers.js': githubHelpersStub,
                     './common/trackers.js': makeTrackersModule(formalMocks),
                     './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
-                    './common/commentMarkup.js': commentMarkupModule
+                    './common/commentMarkup.js': commentMarkupModule,
+                    './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
                 }),
                 formalMocks
             );
@@ -930,7 +932,8 @@ suite('postPRReviewComments', function() {
                     }),
                     './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
                 ,
-            './common/commentMarkup.js': commentMarkupModule
+            './common/commentMarkup.js': commentMarkupModule,
+            './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
         }),
                 {
                     file_read: function(args) {
@@ -1008,3 +1011,109 @@ suite('postPRReviewComments', function() {
     });
 });
 
+
+suite('postPRReviewComments — gh-807 verdict persistence (postVerdictRecord)', function() {
+
+    var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
+
+    function makeMod(opts) {
+        opts = opts || {};
+        var addedComments = [];
+        var getPrCalls = 0;
+        var mod = loadPostPRReviewComments();
+        // postVerdictRecord talks to the github_get_pr bridge global and the
+        // scm provider — stub both per test.
+        mod.__testHarness = {
+            github_get_pr: function(args) {
+                getPrCalls++;
+                if (opts.prError) throw new Error(opts.prError);
+                return JSON.stringify(opts.pr || { number: 7, head: { sha: HEAD } });
+            },
+            scm: {
+                addComment: function(prNumber, body) {
+                    if (opts.commentError) throw new Error(opts.commentError);
+                    addedComments.push({ prNumber: prNumber, body: body });
+                }
+            },
+            addedComments: addedComments,
+            getPrCalls: function() { return getPrCalls; }
+        };
+        return mod;
+    }
+
+    // The production function closes over the bridge globals, so drive it
+    // through a small indirection: rebind the globals it reads.
+    function withGlobals(mod, fn) {
+        var g = typeof github_get_pr === 'function' ? github_get_pr : null;
+        github_get_pr = mod.__testHarness.github_get_pr;
+        try { fn(); } finally {
+            if (g) github_get_pr = g; else github_get_pr = undefined;
+        }
+    }
+
+    test('APPROVE leg stamps the machine record (head sha + census) on the PR', function() {
+        var mod = makeMod({});
+        withGlobals(mod, function() {
+            mod.postVerdictRecord(mod.__testHarness.scm,
+                { owner: 'epam', repo: 'dmtools-dart' }, 1428, true, 'APPROVE',
+                { blocking: 0, important: 1, suggestions: 2 });
+        });
+        assert.equal(mod.__testHarness.addedComments.length, 1, 'one record comment');
+        var body = mod.__testHarness.addedComments[0].body;
+        assert.contains(body, '"head":"' + HEAD + '"', 'the record pins the head sha');
+        assert.contains(body, '"verdict":"APPROVE"');
+        assert.contains(body, '"blocking":0');
+        assert.contains(body, '"important":1');
+        assert.contains(body, '"suggestions":2');
+        assert.contains(body, '"source":"pr_review.json"');
+        assert.contains(body, '"at":"', 'the record carries its timestamp');
+    });
+
+    test('an overridden APPROVE (isApproved=false) records REQUEST_CHANGES — what the leg DID', function() {
+        var mod = makeMod({});
+        withGlobals(mod, function() {
+            mod.postVerdictRecord(mod.__testHarness.scm,
+                { owner: 'epam', repo: 'dmtools-dart' }, 1428, false, 'APPROVE',
+                { blocking: 0, important: 0, suggestions: 3 });
+        });
+        assert.contains(mod.__testHarness.addedComments[0].body, '"verdict":"REQUEST_CHANGES"',
+            'the leg did not approve (open issues) — the record says REQUEST_CHANGES');
+    });
+
+    test('BLOCK records BLOCK; REQUEST_CHANGES records REQUEST_CHANGES', function() {
+        var mod = makeMod({});
+        withGlobals(mod, function() {
+            mod.postVerdictRecord(mod.__testHarness.scm,
+                { owner: 'epam', repo: 'dmtools-dart' }, 1, false, 'BLOCK', {});
+            mod.postVerdictRecord(mod.__testHarness.scm,
+                { owner: 'epam', repo: 'dmtools-dart' }, 1, false, 'REQUEST_CHANGES', {});
+        });
+        assert.equal(mod.__testHarness.addedComments.length, 2);
+        assert.contains(mod.__testHarness.addedComments[0].body, '"verdict":"BLOCK"');
+        assert.contains(mod.__testHarness.addedComments[1].body, '"verdict":"REQUEST_CHANGES"');
+    });
+
+    test('a head-less PR (probe failure / no sha) posts NO record — never a head-less verdict', function() {
+        var mod = makeMod({ pr: { number: 7 } });
+        withGlobals(mod, function() {
+            mod.postVerdictRecord(mod.__testHarness.scm,
+                { owner: 'epam', repo: 'dmtools-dart' }, 7, true, 'APPROVE', {});
+        });
+        assert.equal(mod.__testHarness.addedComments.length, 0, 'no head → no record');
+        var mod2 = makeMod({ prError: 'api down' });
+        withGlobals(mod2, function() {
+            mod2.postVerdictRecord(mod2.__testHarness.scm,
+                { owner: 'epam', repo: 'dmtools-dart' }, 7, true, 'APPROVE', {});
+        });
+        assert.equal(mod2.__testHarness.addedComments.length, 0, 'broken probe → no record, non-fatal');
+    });
+
+    test('a lost comment write is non-fatal (the leg completes without the record)', function() {
+        var mod = makeMod({ commentError: 'comment rejected' });
+        withGlobals(mod, function() {
+            mod.postVerdictRecord(mod.__testHarness.scm,
+                { owner: 'epam', repo: 'dmtools-dart' }, 7, true, 'APPROVE', {});
+        });
+        assert.equal(mod.__testHarness.addedComments.length, 0, 'nothing recorded — and nothing thrown');
+    });
+});

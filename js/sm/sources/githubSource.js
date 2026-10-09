@@ -628,8 +628,12 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
     // shipped to every worker via args.preseed; single-PR lists keep
     // today's sequential path with NO snapshot fetch (avoids the extra
     // github_list_branches call for the common single-PR rule).
+    // gh-807: the verdict guards read item.pr.headSha — they need the
+    // status fetch too, or item.pr stays null and the guard can never
+    // resolve a head.
     var needsStatus = q.checks || q.mergeState || q.notMergeState ||
-        q.mergeable !== undefined || q.prChecks;
+        q.mergeable !== undefined || q.prChecks ||
+        q.latestVerdict || q.notLatestVerdict;
     if (needsStatus) {
         if (items.length > 1) {
             // PR-rule batch: only the open-PR list + branch heads are
