@@ -153,8 +153,6 @@ function _verdictRecordsModule() {
     return _verdictRecordsModule.mod;
 }
 
-
-
 function githubProvider(cfg) {
     var owner = cfg.repository.owner;
     var repo = cfg.repository.repo;
