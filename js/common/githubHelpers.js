@@ -10,10 +10,15 @@
  *   pr_diff.txt           — git diff context, truncated when large
  *   pr_discussions.md     — human-readable review threads + comments
  *   pr_discussions_raw.json — structured threads with IDs for reply/resolve
+ *
+ * gh-808: the machine's own arming/status notices are dropped from both
+ * discussion files (marker-keyed classification — see ./machineNotice.js), so
+ * the rework input carries only genuine review threads.
  */
 
 const prHelper = require('./pullRequest.js');
 const gitOps = require('./gitOps.js');
+const machineNotice = require('./machineNotice.js');
 
 function cleanCommandOutput(output) {
     if (!output) return '';
@@ -376,9 +381,7 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
 
             let section = '## Review Threads (Inline Comments)\n\n';
 
-            // Bot authors whose inline review threads are informational (test results, CI status),
-            // not actionable code-review feedback that requires a code fix.
-            var BOT_AUTHORS = ['github-actions[bot]', 'dependabot[bot]', 'renovate[bot]', 'codecov[bot]'];
+            var noticeCount = 0;
 
             conversations.forEach(function(thread, idx) {
                 const rootComment = thread.rootComment || thread;
@@ -388,12 +391,21 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
                 const graphqlThreadId = rootCommentId ? (reviewThreadByCommentId[rootCommentId] || null) : null;
                 const isResolvedByGraphQL = rootCommentId ? (reviewThreadResolvedById[rootCommentId] === true) : false;
                 const isResolved = thread.resolved === true || thread.isResolved === true || isResolvedByGraphQL;
+                const body = (rootComment.body || '').trim();
+
+                // gh-808: the machine's own arming/status notices are NOT review
+                // feedback — drop them entirely (AC1: zero notice entries in
+                // pr_discussions_raw.json) so the rework agent never spends a
+                // reply on boilerplate. Marker-keyed (see ./machineNotice.js).
+                if (machineNotice.isMachineNoticeBody(body)) {
+                    noticeCount++;
+                    return;
+                }
 
                 // Detect bot-authored threads — treat as informational, not actionable
                 var threadAuthor = rootComment.user ? rootComment.user.login :
                                    (rootComment.author ? rootComment.author.login : '');
-                var isBot = BOT_AUTHORS.indexOf(threadAuthor) !== -1 ||
-                            (threadAuthor && threadAuthor.indexOf('[bot]') !== -1);
+                var isBot = machineNotice.isBotAuthor(threadAuthor);
 
                 rawThreads.push({
                     index: idx + 1,
@@ -403,7 +415,7 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
                     line: thread.line || thread.original_line || null,
                     resolved: isResolved,
                     bot: isBot,
-                    body: (rootComment.body || '').trim()
+                    body: body
                 });
 
                 if (isResolved || isBot) return;
@@ -420,7 +432,6 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
                 const author = rootComment.user ? rootComment.user.login :
                                (rootComment.author ? rootComment.author.login : 'unknown');
                 const date = rootComment.created_at ? rootComment.created_at.substring(0, 10) : '';
-                const body = (rootComment.body || '').trim();
 
                 if (body) {
                     section += '**' + author + '** (' + date + '):\n' + body + '\n\n';
@@ -439,17 +450,18 @@ function fetchDiscussionsAndRawData(scmOrWorkspace, repositoryOrPrId, pullReques
 
             const resolvedCount = rawThreads.filter(function(t) { return t.resolved; }).length;
             const botCount = rawThreads.filter(function(t) { return !t.resolved && t.bot; }).length;
-            const openCount = conversations.length - resolvedCount - botCount;
+            const openCount = conversations.length - resolvedCount - botCount - noticeCount;
 
-            if (resolvedCount > 0 || botCount > 0) {
+            if (resolvedCount > 0 || botCount > 0 || noticeCount > 0) {
                 var infoLines = [];
                 if (resolvedCount > 0) infoLines.push(resolvedCount + ' resolved thread(s) excluded');
                 if (botCount > 0) infoLines.push(botCount + ' bot-generated thread(s) excluded (informational only)');
+                if (noticeCount > 0) infoLines.push(noticeCount + ' machine notice(s) excluded (arming/status boilerplate — never reply targets)');
                 section = '> ℹ️ **' + infoLines.join('; ') + '.**\n\n' + section;
             }
 
             sections.push(section);
-            console.log('Discussions: ' + conversations.length + ' threads (' + openCount + ' open, ' + resolvedCount + ' resolved, ' + botCount + ' bot),',
+            console.log('Discussions: ' + conversations.length + ' threads (' + openCount + ' open, ' + resolvedCount + ' resolved, ' + botCount + ' bot, ' + noticeCount + ' machine notices),',
                 rawThreads.filter(function(t) { return t.rootCommentId; }).length + ' reply IDs,',
                 rawThreads.filter(function(t) { return t.threadId; }).length + ' resolve IDs');
         }

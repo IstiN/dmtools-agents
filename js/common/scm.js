@@ -14,6 +14,11 @@
  *   { "customParams": { "scmProvider": "gitlab", "targetRepository": { "owner": "MyOrg", "repo": "my-repo" } } }
  */
 
+// gh-808: marker-keyed classification of the machine's own arming/status
+// notices — the GitHub provider drops them from the collected discussions so
+// the rework input carries only genuine review threads.
+var machineNotice = require('./machineNotice.js');
+
 function _parseJson(raw) {
     if (typeof raw === 'string') {
         try { return JSON.parse(raw); } catch (e) { return raw; }
@@ -401,6 +406,7 @@ function _createGithubProvider(workspace, repository) {
                     }
 
                     var section = '## Review Threads (Inline Comments)\n\n';
+                    var noticeCount = 0;
                     conversations.forEach(function(thread, idx) {
                         var rootComment = thread.rootComment || thread;
                         var replies = Array.isArray(thread.replies) ? thread.replies : [];
@@ -408,6 +414,20 @@ function _createGithubProvider(workspace, repository) {
                         var graphqlThreadId = rootCommentId ? (reviewThreadByCommentId[rootCommentId] || null) : null;
                         var isResolvedByGraphQL = rootCommentId ? (reviewThreadResolvedById[rootCommentId] === true) : false;
                         var isResolved = thread.resolved === true || thread.isResolved === true || isResolvedByGraphQL;
+                        var body = (rootComment.body || '').trim();
+
+                        // gh-808: the machine's own arming/status notices are NOT review
+                        // feedback — drop them entirely (AC1: zero notice entries in
+                        // pr_discussions_raw.json) so the rework agent never spends a
+                        // reply on boilerplate. Marker-keyed (see ./machineNotice.js).
+                        if (machineNotice.isMachineNoticeBody(body)) {
+                            noticeCount++;
+                            return;
+                        }
+
+                        var threadAuthor = rootComment.user ? rootComment.user.login :
+                                           (rootComment.author ? rootComment.author.login : '');
+                        var isBot = machineNotice.isBotAuthor(threadAuthor);
 
                         rawThreads.push({
                             index: idx + 1,
@@ -416,10 +436,11 @@ function _createGithubProvider(workspace, repository) {
                             path: thread.path || null,
                             line: thread.line || thread.original_line || null,
                             resolved: isResolved,
-                            body: (rootComment.body || '').trim()
+                            bot: isBot,
+                            body: body
                         });
 
-                        if (isResolved) return;
+                        if (isResolved || isBot) return;
 
                         section += '### Thread ' + (idx + 1);
                         if (thread.path) {
@@ -433,7 +454,6 @@ function _createGithubProvider(workspace, repository) {
                         var author = rootComment.user ? rootComment.user.login :
                                      (rootComment.author ? rootComment.author.login : 'unknown');
                         var date = rootComment.created_at ? rootComment.created_at.substring(0, 10) : '';
-                        var body = (rootComment.body || '').trim();
                         if (body) {
                             section += '**' + author + '** (' + date + '):\n' + body + '\n\n';
                         } else {
@@ -448,12 +468,17 @@ function _createGithubProvider(workspace, repository) {
                     });
 
                     var resolvedCount = rawThreads.filter(function(t) { return t.resolved; }).length;
-                    var openCount = conversations.length - resolvedCount;
-                    if (resolvedCount > 0) {
-                        section = '> ℹ️ **' + resolvedCount + ' thread(s) already resolved and excluded from this review.**\n\n' + section;
+                    var botCount = rawThreads.filter(function(t) { return !t.resolved && t.bot; }).length;
+                    var openCount = conversations.length - resolvedCount - botCount - noticeCount;
+                    var infoLines = [];
+                    if (resolvedCount > 0) infoLines.push(resolvedCount + ' resolved thread(s) excluded');
+                    if (botCount > 0) infoLines.push(botCount + ' bot-generated thread(s) excluded (informational only)');
+                    if (noticeCount > 0) infoLines.push(noticeCount + ' machine notice(s) excluded (arming/status boilerplate — never reply targets)');
+                    if (infoLines.length > 0) {
+                        section = '> ℹ️ **' + infoLines.join('; ') + '.**\n\n' + section;
                     }
                     sections.push(section);
-                    console.log('Discussions: ' + conversations.length + ' threads (' + openCount + ' open, ' + resolvedCount + ' resolved),',
+                    console.log('Discussions: ' + conversations.length + ' threads (' + openCount + ' open, ' + resolvedCount + ' resolved, ' + botCount + ' bot, ' + noticeCount + ' machine notices),',
                         rawThreads.filter(function(t) { return t.rootCommentId; }).length + ' reply IDs,',
                         rawThreads.filter(function(t) { return t.threadId; }).length + ' resolve IDs');
                 }

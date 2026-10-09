@@ -35,7 +35,8 @@ function loadPostTestReviewComments(mocks, moduleMocks) {
             '../config.js': configModule,
             './pullRequest.js': {},
             './scm.js': { createScm: function() { return {}; } },
-            './gitOps.js': {}
+            './gitOps.js': {},
+            './machineNotice.js': loadModule('js/common/machineNotice.js')
         }),
         allMocks
     );

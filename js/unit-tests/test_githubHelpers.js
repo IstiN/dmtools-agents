@@ -11,6 +11,7 @@
 // ── Loader helper ─────────────────────────────────────────────────────────────
 
 function loadGithubHelpers(mocks) {
+    var machineNoticeModule = loadModule('js/common/machineNotice.js');
     return loadModule(
         'js/common/githubHelpers.js',
         makeRequire({
@@ -21,7 +22,8 @@ function loadGithubHelpers(mocks) {
                     return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
                 }
             },
-            './gitOps.js': gitOpsStub
+            './gitOps.js': gitOpsStub,
+            './machineNotice.js': machineNoticeModule
         }),
         mocks || {}
     );
@@ -41,7 +43,7 @@ var gitOpsStub = {
 function loadScm(mocks) {
     return loadModule(
         'js/common/scm.js',
-        null,
+        makeRequire({ './machineNotice.js': loadModule('js/common/machineNotice.js') }),
         mocks || {}
     );
 }
