@@ -9,8 +9,12 @@
 var assert = globalThis.assert;
 
 var machineAuthorModule = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+var reworkLatchModule = loadModule('js/common/reworkLatch.js', makeRequire({}), {});
 var fsModule = loadModule('js/factoryState.js',
-    makeRequire({ './common/machineAuthor.js': machineAuthorModule }), {});
+    makeRequire({
+        './common/machineAuthor.js': machineAuthorModule,
+        './common/reworkLatch.js': reworkLatchModule
+    }), {});
 
 // ── laneOf ───────────────────────────────────────────────────────────────────
 
@@ -1071,4 +1075,106 @@ suite('factoryState — history (board time travel)', function () {
               'newest snapshot first');
   });
 
+});
+
+// ── gh-806: reworkInFlight — the rework in-flight latch rides the snapshot ──
+
+suite('factoryState — reworkInFlight (gh-806 latch persistence)', function () {
+  var HEAD = '23dacd10deadbeefcafe0123456789abcdef0123';
+  var T0 = '2026-10-09T04:01:00.000Z';
+  var T0_MS = Date.parse(T0);
+  var LEG_WF = '.github/workflows/ai-teammate.yml';
+
+  function baseInput(extra) {
+    var input = {
+      repoInfo: { owner: 'acme', repo: 'factory' },
+      prs: [], mergedPrs: [], issues: [], runs: [],
+      now: T0
+    };
+    if (extra) {
+      Object.keys(extra).forEach(function (k) { input[k] = extra[k]; });
+    }
+    return input;
+  }
+
+  test('snapshot carries reworkInFlight (stable shape, empty by default)', function () {
+    var state = fsModule.buildFactoryState(baseInput({}));
+    assert.deepEqual(state.reworkInFlight, {});
+  });
+
+  test('prev snapshot latch is carried forward', function () {
+    var prev = { lanes: {}, reworkInFlight: { ['pr-1428@' + HEAD]: { head: HEAD, at: T0 } } };
+    var state = fsModule.buildFactoryState(baseInput({ prev: prev }));
+    assert.ok(state.reworkInFlight['pr-1428@' + HEAD], 'latch survives the tick');
+    assert.equal(state.reworkInFlight['pr-1428@' + HEAD].head, HEAD);
+  });
+
+  test('this tick\u2019s live map merges over the prev snapshot (arm mid-tick persists)', function () {
+    var HEAD2 = 'bbbbbbbbdeadbeefcafe0123456789abcdef0123';
+    var prev = { lanes: {}, reworkInFlight: { ['pr-1428@' + HEAD]: { head: HEAD, at: T0 } } };
+    var state = fsModule.buildFactoryState(baseInput({
+      prev: prev,
+      reworkInFlight: { ['pr-1429@' + HEAD2]: { head: HEAD2, at: T0 } }
+    }));
+    assert.ok(state.reworkInFlight['pr-1428@' + HEAD], 'prev entry kept');
+    assert.ok(state.reworkInFlight['pr-1429@' + HEAD2], 'live entry merged');
+  });
+
+  test('stale latch (older than 45 min, no active run) is pruned (AC3)', function () {
+    var prev = { lanes: {}, reworkInFlight: { ['pr-1428@' + HEAD]: { head: HEAD, at: T0 } } };
+    var state = fsModule.buildFactoryState(baseInput({
+      prev: prev,
+      now: '2026-10-09T05:00:00.000Z'
+    }));
+    assert.deepEqual(state.reworkInFlight, {}, 'stale latch self-heals');
+  });
+
+  test('latch past the stale window with an ACTIVE leg run survives', function () {
+    var prev = { lanes: {}, reworkInFlight: { ['pr-1428@' + HEAD]: { head: HEAD, at: T0 } } };
+    var state = fsModule.buildFactoryState(baseInput({
+      prev: prev,
+      now: '2026-10-09T05:00:00.000Z',
+      runs: [{ status: 'in_progress', head_sha: HEAD, path: LEG_WF }]
+    }));
+    assert.ok(state.reworkInFlight['pr-1428@' + HEAD],
+      'a really-flying leg must not invite a duplicate');
+  });
+
+  test('latch whose leg run CONCLUDED after the arm is pruned (AC2)', function () {
+    var prev = { lanes: {}, reworkInFlight: { ['pr-1428@' + HEAD]: { head: HEAD, at: T0 } } };
+    var state = fsModule.buildFactoryState(baseInput({
+      prev: prev,
+      runs: [{
+        status: 'completed', conclusion: 'failure',
+        head_sha: HEAD, path: LEG_WF,
+        updated_at: '2026-10-09T04:20:00.000Z'
+      }]
+    }));
+    assert.deepEqual(state.reworkInFlight, {}, 'terminated leg clears the latch');
+  });
+
+  test('a concluded run that PREDATES the arm does not clear the latch', function () {
+    var prev = { lanes: {}, reworkInFlight: { ['pr-1428@' + HEAD]: { head: HEAD, at: T0 } } };
+    var state = fsModule.buildFactoryState(baseInput({
+      prev: prev,
+      runs: [{
+        status: 'completed', conclusion: 'success',
+        head_sha: HEAD, path: LEG_WF,
+        updated_at: '2026-10-09T03:00:00.000Z'
+      }]
+    }));
+    assert.ok(state.reworkInFlight['pr-1428@' + HEAD], 'old run is not this leg');
+  });
+
+  test('garbage latch entries from snapshot drift are dropped (never wedge the armer)', function () {
+    var prev = {
+      lanes: {},
+      reworkInFlight: {
+        'bogus': { head: HEAD, at: T0 },
+        ['pr-1428@' + HEAD]: { head: HEAD }
+      }
+    };
+    var state = fsModule.buildFactoryState(baseInput({ prev: prev }));
+    assert.deepEqual(state.reworkInFlight, {});
+  });
 });
