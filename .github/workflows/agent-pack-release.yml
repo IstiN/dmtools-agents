@@ -119,11 +119,19 @@ jobs:
           AGENTS: ${{ inputs.agents || '' }}
           BUMP: ${{ inputs.bump || 'patch' }}
           DRY: ${{ inputs.dry_run || false }}
+          # gh-812: the builder reads the previous release's shipped catalog
+          # and same-version pack zips (version uniqueness + payload compare).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           args=(--out dist)
           [ -n "${AGENTS}" ] && args+=(--agents="${AGENTS}")
           [ -n "${{ steps.base.outputs.ref }}" ] && args+=(--base-ref="${{ steps.base.outputs.ref }}")
+          # gh-812: base versions come from what the last release SHIPPED —
+          # versions.json on main is a best-effort ledger that can (and did)
+          # lag reality by whole releases, re-shipping a live version with
+          # new content.
+          [ -n "${{ steps.base.outputs.ref }}" ] && args+=(--prev-release-tag="${{ steps.base.outputs.ref }}")
           [ "${DRY}" = "true" ] && args+=(--dry-run)
           [ "${BUMP}" != "patch" ] && args+=(--bump="${BUMP}")
           node ci/release_packs.mjs "${args[@]}"

@@ -285,19 +285,21 @@ suite('gh-812 release integrity wiring', function () {
     });
 
     test('the gate runs on every built zip, after the launch augment', function () {
-        var augment = builder.indexOf('function augmentLaunchSurface(');
-        var gateCall = builder.indexOf('assertZipRequires(');
+        var augmentCall = builder.indexOf('augmentLaunchSurface(agent, zip)');
+        var gateCall = builder.indexOf('assertZipRequires(zip)');
         assert.ok(gateCall !== -1, 'the builder must run the require gate');
-        assert.ok(gateCall > augment,
+        assert.ok(augmentCall !== -1, 'the builder must augment the launch surface');
+        assert.ok(gateCall > augmentCall,
             'the gate must see the FINAL payload — launch extras (verdict.sh ' +
             'is shell, but future contract files may not be) are folded in by ' +
             'the augment, so gating before it tests a zip that never ships');
     });
 
     test('unresolved requires FAIL the release (throw → non-zero step)', function () {
-        var gateCall = builder.indexOf('assertZipRequires(');
-        assert.ok(/assertZipRequires\([\s\S]*?\{\s*throw\s/.test(builder) ||
-            builder.indexOf('function assertZipRequires(') !== -1,
+        var defStart = builder.indexOf('function assertZipRequires(');
+        assert.ok(defStart !== -1, 'the builder must define the require gate');
+        var body = builder.slice(defStart, defStart + 2600);
+        assert.ok(body.indexOf('throw new Error') !== -1,
             'the gate must throw on unresolved requires so the build step exits ' +
             'non-zero BEFORE the ledger commit and the gh release create');
         var publish = wf.indexOf('gh release create');

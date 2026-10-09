@@ -33,11 +33,13 @@ var REQUIRE_RE = /\brequire\s*\(\s*(['"])((?:\.\.?\/)[^'"]*)\1\s*\)/g;
  */
 function requireSpecs(source) {
     var specs = [];
-    var m = REQUIRE_RE.exec(source);
+    // Fresh stateful copy per call: a shared /g regex carries lastIndex
+    // across calls (and resetting it mid-loop would rematch forever).
+    var re = new RegExp(REQUIRE_RE.source, 'g');
+    var m = re.exec(source);
     while (m !== null) {
         specs.push(m[2]);
-        REQUIRE_RE.lastIndex = 0; // regex objects are stateful across calls
-        m = REQUIRE_RE.exec(source);
+        m = re.exec(source);
     }
     return specs;
 }
