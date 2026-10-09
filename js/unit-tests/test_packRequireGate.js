@@ -139,6 +139,9 @@ suite('require gate: the self-test verdict', function () {
         // What the fa runners executed at 09:36Z: post-gh-807 smProvider.js
         // (lazy require of ./reviewVerdicts.js) over an installed 0.1.36 tree
         // from 075526 — 16 js files, js/common/reviewVerdicts.js absent.
+        // gh-823: the lazy require is DEFERRED — the runtime resolves it
+        // against the pack js/ root only (js/reviewVerdicts.js), so the miss
+        // is reported on the root base, never the file-relative one.
         var files = [
             { path: 'js/smAgent.js', source: "var m = require('./common/reviewVerdicts.js');" },
             { path: 'js/common/smProvider.js', source: [
@@ -153,7 +156,12 @@ suite('require gate: the self-test verdict', function () {
         assert.equal(unresolved.length, 2,
             'the gate must fail the release for this pack (gh-812 AC3: exit != 0)');
         var targets = unresolved.map(function (u) { return u.target; }).sort();
-        assert.deepEqual(targets, ['js/common/reviewVerdicts.js', 'js/common/reviewVerdicts.js'].sort());
+        assert.deepEqual(targets, ['js/common/reviewVerdicts.js', 'js/reviewVerdicts.js'].sort(),
+            'load-time misses on the file-relative base, deferred misses on the js/ root');
+        var deferredEntries = unresolved.filter(function (u) { return u.deferred; });
+        assert.equal(deferredEntries.length, 1, 'the lazy require is classified deferred');
+        assert.equal(deferredEntries[0].target, 'js/reviewVerdicts.js',
+            'deferred requires miss on the js/ root base (gh-823)');
     });
 
     test('the 075526 shape (no require, no file) passes — nothing to resolve', function () {
@@ -293,12 +301,15 @@ suite('require gate: load-time vs deferred (in-function) classification', functi
     });
 
     test('braces inside comments and strings do not distort the classification', function () {
+        // The double-quoted worker-source shape: require literals ride
+        // STRING contents (collected, classified at the string's code
+        // position) while the braces inside those strings never touch the
+        // function-body stack — and comment braces neither.
         var source = [
             '/** docs { with braces */',
-            'function f() {',
+            'function buildWorker() {',
             "    var s = 'string } with brace';",
-            "    var w = eval('(function() { return require(\\'./lazy.js\\'); })');",
-            '    return s;',
+            '    return "(function() { return require(\'./lazy.js\'); })";',
             '}',
         ].join('\n');
         var cls = gate().classifyRequires(source);
@@ -368,7 +379,7 @@ suite('require gate: deferred requires resolve against the js/ root ONLY', funct
         assert.deepEqual(gate().unresolvedRequires(files), []);
     });
 
-    test('a deferred ../ climb resolves via the js/ root when it stays inside js/', function () {
+    test('a deferred ../ climb that leaves js/ resolves via the pack root — flag unless that root file ships', function () {
         // js-root + '../x.js' would leave js/ — unresolvable in a pack; the
         // gate must flag it (contentOutput.js:61 shipped this shape).
         var files = [
