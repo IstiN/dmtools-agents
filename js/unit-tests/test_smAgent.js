@@ -323,6 +323,7 @@ function makeSmAgent(opts) {
             './common/machineAuthor.js': machineAuthorModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
             './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({}), {}),
+            './common/validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
             './common/smProvider.js': {
                 createSmProvider: function () {
                     return {
@@ -2999,25 +3000,187 @@ suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', f
         assert.equal(sm.capturedPrLabelAdds.length, 0);
     });
 
-    test('sweep_stale_validation: cancelled conclusion or no run → arm stays (no verdict to sweep)', function () {
+    test('sweep_stale_validation: FRESH cancellation (< 15-min visibility grace) → arm stays, no dispatch', function () {
+        // gh-821: a fresh cancel sits in the hasActiveDispatchedRun grace —
+        // the gh-755 / rerun-cancelled-checks remedies own the first minutes.
+        // The zombie rule must not re-dispatch under them.
+        var t = new Date(Date.now() - 5 * 60 * 1000).toISOString();
         var sm = makeSmAgent(Object.assign(config('a', 'b'), {
             github: {
                 items: [prItem(87, { labels: ['ai_validating'], headSha: 'sha555' })],
             },
-                onCliExecute: runsCli({ run: oldRun('cancelled', 'sha555') })
+                onCliExecute: runsCli({ run: { status: 'completed', conclusion: 'cancelled',
+                    head_sha: 'sha555', created_at: t, updated_at: t } })
         }));
         sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
-        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'CANCELLED is never a verdict — nothing to sweep');
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'a fresh cancel is inside the race window — arm stays');
+        assert.ok(!dispatched(sm.capturedCliCommands),
+            'no re-dispatch while the rerun-cancelled-checks remedy owns the window');
+        assert.equal(sm.capturedPrComments.length, 0, 'no marker, no park — nothing happened');
+    });
 
-        var sm2 = makeSmAgent(Object.assign(config('a', 'b'), {
+    // ── gh-821: zombie liveness (live fa #1443, 2026-10-09 13:36–15:00Z —
+    // the dispatched run concluded CANCELLED in the gh-748 kicker/dispatch
+    // race, the sweep kept the arm, four validated PRs deferred on the
+    // ai_validating mutex, merge window idle ~2h until a manual dispatch) ───
+    // Liveness rule: an arm with NO live run behind it is a zombie — the
+    // sweep re-dispatches the same tick (bounded 1/head/hour, marker-comment
+    // bookkeeping) and re-acquires the arm, so the serial mutex is held only
+    // while a LIVE run exists. Three zombies in a row on one head park.
+
+    test('gh-821 AC1 (#1443 replay): stale cancelled-only head → same-tick zombie re-dispatch, arm re-acquired', function () {
+        var HEAD = 'a144300000000000000000000000000000000001';
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            captureConsole: true,
             github: {
-                items: [prItem(88, { labels: ['ai_validating'], headSha: 'sha666' })]
+                items: [prItem(1443, { labels: ['pr_approved', 'ai_validating'],
+                    headSha: HEAD, branch: 'ai/gh-1443' })]
             },
-            onCliExecute: function () { return JSON.stringify({ workflow_runs: [] }); }
+            onCliExecute: runsCli({ run: oldRun('cancelled', HEAD) })
         }));
-        sm2.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
-        assert.equal(sm2.capturedPrLabelRemoves.length, 0,
-            'no dispatched run on the head (dispatch lost) — revalidate-armed owns that recovery');
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands),
+            'the zombie validation is re-dispatched the SAME tick (recovery at tick 1, not 2h)');
+        assert.ok(sm.capturedLogs.some(function (l) {
+            return l.indexOf('🔄 re-dispatching zombie validation for pr-1443') !== -1;
+        }), 'the zombie line is logged');
+        assert.deepEqual(sm.capturedPrLabelRemoves.map(function (r) { return r.number + ':' + r.label; }),
+            ['1443:ai_validating'], 'the dead arm is released first (slot yield for the window)');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
+            ['ai_validating'], 'the re-dispatch RE-ACQUIRES the arm — a live run now backs the mutex');
+        assert.equal(sm.capturedPrComments.length, 1, 'one marker comment carries the re-dispatch bookkeeping');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('🔄 zombie re-dispatch ' + HEAD) !== -1,
+            'the marker names the head (crash-loop cap + rate bound read it back)');
+        assert.ok(sm.capturedIoCacheDrops.some(function (d) { return d.kind === 'openPrs'; }),
+            'slot yield: the label churn is visible to later rules in the same tick');
+    });
+
+    test('gh-821: no dispatched run at all (lost dispatch) → zombie re-dispatch', function () {
+        var HEAD = 'a888000000000000000000000000000000000088';
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(88, { labels: ['ai_validating'], headSha: HEAD, branch: 'ai/gh-88' })]
+            },
+            onCliExecute: function (cmd) {
+                if (cmd.command.indexOf('actions/workflows/') !== -1 && cmd.command.indexOf('/runs?') !== -1) {
+                    return JSON.stringify({ workflow_runs: [] });
+                }
+                return '';
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands),
+            'a lost dispatch is a zombie — the sweep re-drives it, dev-lane arms included');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
+            ['ai_validating'], 'the arm re-acquires with a live run behind it');
+        assert.equal(sm.capturedPrComments.length, 1, 'marker comment posted');
+    });
+
+    test('gh-821 AC2: 3 zombie re-dispatches in a row on the head → validation_failed park, no dispatch', function () {
+        var HEAD = 'a999000000000000000000000000000000000099';
+        var mk = function (n, minsAgo) {
+            var t = new Date(Date.now() - minsAgo * 60 * 1000).toISOString();
+            return { body: '🔄 zombie re-dispatch ' + HEAD + ' — zombie ' + n + '/3 at ' + t };
+        };
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(999, { labels: ['pr_approved', 'ai_validating'],
+                    headSha: HEAD, branch: 'ai/gh-999' })],
+                prComments: [mk(1, 130), mk(2, 70), mk(3, 10)]
+            },
+            onCliExecute: runsCli({ run: oldRun('cancelled', HEAD) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands),
+            'the crash-loop guard fires BEFORE a 4th re-dispatch — no silent loop');
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
+            return r.number === 999 && r.label === 'ai_validating';
+        }), 'the arm is released — the merge-window slot is freed (fail-closed)');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
+            ['validation_failed'], 'parked — no re-arm, no ai_validated latch');
+        assert.equal(sm.capturedPrComments.length, 1, 'the explanatory park comment posts');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('crash-loop') !== -1,
+            'the comment explains the park');
+    });
+
+    test('gh-821: re-dispatch bounded to 1/head/hour — a recent marker holds the arm without churn', function () {
+        var HEAD = 'a777000000000000000000000000000000000077';
+        var t = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(777, { labels: ['pr_approved', 'ai_validating'],
+                    headSha: HEAD, branch: 'ai/gh-777' })],
+                prComments: [{ body: '🔄 zombie re-dispatch ' + HEAD + ' — zombie 1/3 at ' + t }]
+            },
+            onCliExecute: runsCli({ run: oldRun('cancelled', HEAD) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands),
+            'the last re-dispatch went out 20 min ago — the hourly bound holds CI');
+        assert.equal(sm.capturedPrLabelRemoves.length, 0,
+            'the arm stays — the PR keeps its serialization slot until the next window');
+        assert.equal(sm.capturedPrComments.length, 0, 'no new marker inside the bound window');
+    });
+
+    test('gh-821: the hourly bound EXPIRES — the next zombie tick fires re-dispatch #2 (marker 2 recorded)', function () {
+        var HEAD = 'a555000000000000000000000000000000000055';
+        var t = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(555, { labels: ['pr_approved', 'ai_validating'],
+                    headSha: HEAD, branch: 'ai/gh-555' })],
+                prComments: [{ body: '🔄 zombie re-dispatch ' + HEAD + ' — zombie 1/3 at ' + t }]
+            },
+            onCliExecute: runsCli({ run: oldRun('cancelled', HEAD) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands),
+            'the re-dispatch window (1h) has passed — CI goes out again');
+        assert.equal(sm.capturedPrComments.length, 1, 'exactly one NEW marker');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('— zombie 2/3 at ') !== -1,
+            'the marker counter advances 1 → 2 (the crash-loop cap counts in a row)');
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
+            ['ai_validating'], 'the arm re-acquires — the serial mutex backs a live run again');
+    });
+
+    test('gh-821: DRY tick — the zombie path takes NO side effects (no dispatch, no label churn)', function () {
+        var HEAD = 'a444000000000000000000000000000000000044';
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(444, { labels: ['pr_approved', 'ai_validating'],
+                    headSha: HEAD, branch: 'ai/gh-444' })]
+            },
+            onCliExecute: runsCli({ run: oldRun('cancelled', HEAD) })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', dryRun: true, rules: [RULES.sweep] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands), 'DRY means NO side effects — no dispatch');
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'the dead arm is not stripped in DRY');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no re-arm, no park in DRY');
+        assert.equal(sm.capturedPrComments.length, 0, 'no marker comment in DRY');
+    });
+
+    test('gh-821 AC3: a live (in-flight) run keeps the arm exactly as today — no dispatch, no churn', function () {
+        var HEAD = 'a666000000000000000000000000000000000066';
+        var now = new Date().toISOString();
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(666, { labels: ['pr_approved', 'ai_validating'], headSha: HEAD })]
+            },
+            onCliExecute: runsCli({ run: { status: 'in_progress', head_sha: HEAD, created_at: now } })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [RULES.sweep] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands), 'a live run is never re-dispatched');
+        assert.equal(sm.capturedPrLabelRemoves.length, 0, 'the arm stays — healthy flow untouched');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no label churn behind a live run');
+        assert.equal(sm.capturedPrComments.length, 0, 'no marker behind a live run');
     });
 });
 

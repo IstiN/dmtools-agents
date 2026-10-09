@@ -98,6 +98,10 @@ var smSource = require('./sm/sourceResolver.js');
 var scmModule = require('./common/scm.js');
 var factoryStateModule = require('./factoryState.js');
 var reworkLatchModule = require('./common/reworkLatch.js');
+// gh-821: the arm-must-mean-a-live-run state machine — liveness
+// classification of the head's dispatched-run probe + the zombie
+// re-dispatch marker math (crash-loop cap, 1/head/hour bound).
+var validationLivenessModule = require('./common/validationLiveness.js');
 var buildEncodedConfigModule = require('./common/buildEncodedConfig.js');
 var machineAuthorModule = require('./common/machineAuthor.js');
 var smProviderModule = require('./common/smProvider.js');
@@ -2637,6 +2641,14 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // re-flows; validate-armed latch-skips on the unchanged head).
             // Failure side: fall through to the standard fail path below
             // (report + machine-only rework re-arm — fail_validation parity).
+            // gh-821 ZOMBIE side: a cancelled-only head or a head with no
+            // dispatched run at all is neither verdict nor live — it is a
+            // zombie arm dead-holding the merge-window mutex. Liveness
+            // classification (js/common/validationLiveness.js) routes it to
+            // a bounded same-tick re-dispatch (1 per head per hour, marker
+            // comment bookkeeping; the re-dispatch re-acquires the arm so
+            // the serial mutex is held only while a LIVE run exists) and a
+            // 3-in-a-row crash-loop guard parks validation_failed.
             var sHead = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
             var sCiWf = rule.ciWorkflow ||
                 ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml';
@@ -2649,6 +2661,155 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 sRun.conclusion && sRun.conclusion !== 'cancelled') {
                 var sDone = Date.parse(sRun.updated_at || sRun.created_at || '');
                 sOld = !isNaN(sDone) && (Date.now() - sDone) > sStaleMin * 60 * 1000;
+            }
+            // ── gh-821 zombie liveness ──────────────────────────────────────
+            // CANCELLED is never a VERDICT (gh-755) — but a cancelled-only or
+            // no-run head behind an ai_validating arm is a ZOMBIE: the arm
+            // holds the serial merge-window mutex with NO live run behind it
+            // (live fa pr-1443, 2026-10-09: cancelled dispatch, sweep kept
+            // the arm, four validated PRs deferred on the mutex, window idle
+            // ~2h until a manual `gh workflow run ci.yml`). classify() reads
+            // 'running' while probe.active holds — in-flight, or concluded
+            // inside the 15-min check-visibility grace — so the gh-748 race
+            // window and the rerun-cancelled-checks remedy keep owning the
+            // first minutes; only a cancellation (or a lost dispatch) that is
+            // genuinely dead reaches this branch.
+            var sState = validationLivenessModule.classify(sProbe);
+            if (sState === 'zombie-cancelled' || sState === 'zombie-no-run') {
+                // gh-748 belt: ANY run on the head (any workflow, any event)
+                // active now or completed within the dispatch-race grace
+                // means CI was JUST ordered — the zombie read raced a fresh
+                // order; keep the arm and let that run land.
+                var zGraceMs = dispatchRaceGraceMs(RUN_JOB_PARAMS);
+                if (zGraceMs > 0 &&
+                    hasRecentHeadRun(headWorkflowRunsSafe(effectiveRepoInfo, sHead), zGraceMs)) {
+                    console.log('  ⏭️  ' + key + ' sweep: zombie read raced a fresh CI order' +
+                                ' on the head (gh-748) — arm stays');
+                    continue;
+                }
+                // Durable per-head zombie bookkeeping (marker comments — the
+                // red-head carrier): re-dispatches already fired on THIS head
+                // + when the last one went out. One comment fetch.
+                var zMarks = failMarkerState(effectiveRepoInfo, ticket.prNumber)
+                    .zombies[sHead] || { count: 0, lastAtMs: null };
+                var zCap = validationLivenessModule.zombieCapOf(RUN_JOB_PARAMS);
+                if (zMarks.count >= zCap) {
+                    // Crash-loop guard (gh-821 AC2): 3 zombie re-dispatches in
+                    // a row on this head — every re-dispatch died the same
+                    // death (kicker/dispatch race family). Park fail-closed:
+                    // release the mutex slot, label validation_failed, explain
+                    // in a comment. A NEW push moves the head (fresh SHA ⇒
+                    // fresh count) and validation restarts (#633 RESET /
+                    // gh-750 self-clear parity) — no silent loop.
+                    try {
+                        if (!DRY) {
+                            github_remove_label({
+                                workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                                number: ticket.prNumber, label: 'ai_validating'
+                            });
+                        }
+                    } catch (eZarm) { /* absent arm is fine */ }
+                    if (!DRY) {
+                        try {
+                            github_add_labels({
+                                workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                                number: ticket.prNumber, labels: ['validation_failed']
+                            });
+                        } catch (eZpark) {
+                            console.warn('  ⚠️  zombie park label failed: ' + (eZpark.message || eZpark));
+                        }
+                        try {
+                            github_create_comment({
+                                workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                                number: ticket.prNumber,
+                                body: '🅿️ Validation parked — zombie crash-loop (' + zMarks.count + '/' + zCap +
+                                    ' automatic re-dispatches on head `' + sHead +
+                                    '` died cancelled or never started; the ai_validating arm kept holding' +
+                                    ' the merge window with no live run behind it — gh-821). No further' +
+                                    ' automatic re-dispatches: a new push (new head SHA) restarts validation.'
+                            });
+                        } catch (eZsay) {
+                            console.warn('  ⚠️  zombie park comment failed: ' + (eZsay.message || eZsay));
+                        }
+                    }
+                    // Same-tick slot yield: the released mutex must be visible
+                    // to the arm rule's re-scan in THIS tick (owner 2026-10-04).
+                    dropOpenPrsCache(effectiveRepoInfo);
+                    console.log('  🅿️  ' + key + ' zombie crash-loop (' + zMarks.count + '/' + zCap +
+                                ' re-dispatches dead on head ' + String(sHead).slice(0, 7) +
+                                ') — validation_failed park, merge-window slot released');
+                    processedKeys.push(key);
+                    continue;
+                }
+                var zWindowMs = validationLivenessModule.zombieWindowMsOf(RUN_JOB_PARAMS);
+                if (zWindowMs > 0 && zMarks.lastAtMs !== null &&
+                    (Date.now() - zMarks.lastAtMs) < zWindowMs) {
+                    // Rate bound (gh-821): 1 auto re-dispatch per head per hour.
+                    // The arm stays — the PR keeps its serialization slot until
+                    // the next re-dispatch window (the alternative, unarming
+                    // mid-window, would let validate-armed re-dispatch around
+                    // the bound and churn CI).
+                    var zWaitMin = Math.ceil((zWindowMs - (Date.now() - zMarks.lastAtMs)) / 60000);
+                    console.log('  ⏭️  ' + key + ' zombie re-dispatch bounded (1/head/hour) — last went out ' +
+                                Math.round((Date.now() - zMarks.lastAtMs) / 60000) +
+                                ' min ago, next window in ~' + zWaitMin + ' min');
+                    continue;
+                }
+                if (!ticket.branch) {
+                    console.warn('  ⚠️  ' + key + ' zombie validation needs a re-dispatch but the ticket' +
+                                ' carries no head branch — arm stays, retry next tick');
+                    continue;
+                }
+                // Re-dispatch (gh-821 zombie rule): release the slot for the
+                // window, order CI on the dead head, and re-acquire the arm —
+                // the re-dispatch is a LIVE run, so the serial mutex is held
+                // legitimately again (no parallel validations — the slot never
+                // leaves this PR once the run is flying).
+                try {
+                    if (!DRY) {
+                        github_remove_label({
+                            workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                            number: ticket.prNumber, label: 'ai_validating'
+                        });
+                    }
+                } catch (eZun) { /* absent arm is fine */ }
+                dropOpenPrsCache(effectiveRepoInfo);
+                dispatchCiWorkflow(ticket.branch);
+                if (sHead) {
+                    stampValidationChecksForModule(effectiveRepoInfo, sHead, 'in_progress', null, null);
+                }
+                if (!DRY) {
+                    try {
+                        github_add_labels({
+                            workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                            number: ticket.prNumber, labels: ['ai_validating']
+                        });
+                    } catch (eZre) {
+                        console.warn('  ⚠️  zombie re-arm failed: ' + (eZre.message || eZre));
+                    }
+                    try {
+                        github_create_comment({
+                            workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
+                            number: ticket.prNumber,
+                            body: validationLivenessModule.zombieMarkerLine(zMarks.count + 1, sHead, zCap,
+                                new Date().toISOString()) + '\n\n' +
+                                (sState === 'zombie-cancelled'
+                                    ? 'The dispatched validation run on this head concluded `cancelled` — no live run existed behind the ai_validating arm (gh-821).'
+                                    : 'This head carried no dispatched validation run at all — the dispatch was lost (gh-821).') +
+                                ' CI was re-dispatched automatically (bounded: 1 per head per hour; ' +
+                                zCap + ' in a row on the same head park the PR validation_failed).'
+                        });
+                    } catch (eZmark) {
+                        console.warn('  ⚠️  zombie marker comment failed: ' + (eZmark.message || eZmark));
+                    }
+                }
+                dropOpenPrsCache(effectiveRepoInfo);
+                console.log('  🔄 re-dispatching zombie validation for ' + key +
+                            ' (head ' + String(sHead).slice(0, 7) + ', ' +
+                            (sState === 'zombie-cancelled' ? 'cancelled dispatch' : 'no run') +
+                            ', zombie ' + (zMarks.count + 1) + '/' + zCap + ')');
+                processedKeys.push(key);
+                continue;
             }
             if (!sOld) {
                 console.log('  ⏭️  ' + key + ' sweep: no concluded-and-stale validation run' +
@@ -3410,7 +3571,8 @@ function failedRunLinksLine(repoInfo, ciWorkflow, headSha) {
 // must not strand a red head that these caps exist to un-stall — the
 // next red re-reads and re-evaluates.
 function failMarkerState(repoInfo, prNumber) {
-    var out = { redHeads: {}, emptyLaps: {} };
+    var out = { redHeads: {}, emptyLaps: {}, zombies: {} };
+    var bodies = [];
     try {
         var raw = github_get_pr_comments({
             workspace: repoInfo.owner, repository: repoInfo.repo,
@@ -3420,6 +3582,7 @@ function failMarkerState(repoInfo, prNumber) {
         var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
         list.forEach(function (c) {
             var body = String((c && c.body) || '');
+            bodies.push(body);
             var m;
             RED_HEAD_MARKER_RE.lastIndex = 0;
             while ((m = RED_HEAD_MARKER_RE.exec(body)) !== null) {
@@ -3434,6 +3597,16 @@ function failMarkerState(repoInfo, prNumber) {
         });
     } catch (eMarks) {
         console.warn('  ⚠️  fail-marker state read failed: ' + (eMarks.message || eMarks));
+    }
+    // gh-821 zombie re-dispatch bookkeeping (js/common/validationLiveness.js):
+    // parsed from the SAME single comment fetch — per-head re-dispatch counts
+    // (crash-loop cap) and the newest marker's timestamp (1/head/hour bound).
+    // A read failure above leaves {} — the zombie branch then treats the head
+    // as never-re-dispatched (one bounded extra dispatch worst case).
+    try {
+        out.zombies = validationLivenessModule.zombieMarks(bodies);
+    } catch (eZomb) {
+        console.warn('  ⚠️  zombie-marker parse failed: ' + (eZomb.message || eZomb));
     }
     return out;
 }
