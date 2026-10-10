@@ -8526,6 +8526,12 @@ suite('smAgent: validate-fresh-masked-green (gh-759 post-dev dead zone)', functi
     // a dispatched CI run: none → dispatch + arm; a completed green run →
     // skipIfGreenCi stops the loop (the blocker is another workflow's
     // required check).
+    //
+    // gh-829 extends it to CLEAN heads via a mergeStateLatch: a fresh
+    // machine PR green + CLEAN + ZERO labels rotted forever (live PR #826)
+    // because merge-validated owns CLEAN but needs pr_approved — which a
+    // zero-label PR can never reach unvalidated. CLEAN now matches only
+    // when the linked issue carries the ai_developed latch (fail closed).
 
     var MASKED_GREEN_RULE = {
         source: 'github',
@@ -8533,7 +8539,8 @@ suite('smAgent: validate-fresh-masked-green (gh-759 post-dev dead zone)', functi
             type: 'pr',
             checks: 'green',
             notLabels: ['ai_validating', 'pr_approved', 'ai_validated', 'chore:pin', 'validation_failed'],
-            notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'],
+            notMergeState: ['BEHIND', 'DIRTY'],
+            mergeStateLatch: { CLEAN: ['ai_developed'] },
             draft: false
         },
         localAction: 'validate_pr',
@@ -8557,8 +8564,11 @@ suite('smAgent: validate-fresh-masked-green (gh-759 post-dev dead zone)', functi
             'a completed green CI run on the head must stop the re-dispatch loop');
         assert.equal(rule.limit, 1, 'validate-fresh pacing — one masked head per tick');
         assert.equal(rule.query.checks, 'green', 'the masked-green rollup is the trigger');
-        assert.deepEqual(rule.query.notMergeState, ['BEHIND', 'DIRTY', 'CLEAN'],
-            'BLOCKED-only: BEHIND refreshes first, DIRTY is conflict-rework, CLEAN+green is merge-validated');
+        assert.deepEqual(rule.query.notMergeState, ['BEHIND', 'DIRTY'],
+            'BEHIND refreshes first, DIRTY is conflict-rework — CLEAN is gated by the latch, not excluded');
+        assert.deepEqual(rule.query.mergeStateLatch, { CLEAN: ['ai_developed'] },
+            'gh-829: green + CLEAN + zero labels arms ONLY when the linked issue carries the ' +
+            'ai_developed dev-done latch — guests/unlinked heads stay unarmed (fail closed)');
         ['ai_validating', 'pr_approved', 'ai_validated', 'chore:pin', 'validation_failed'].forEach(function (l) {
             assert.ok((rule.query.notLabels || []).indexOf(l) !== -1, 'excludes ' + l);
         });
