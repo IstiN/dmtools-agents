@@ -16,6 +16,7 @@
         "js/unit-tests/test_factoryState.js",
         "js/unit-tests/test_reworkLatch.js",
         "js/unit-tests/test_validationLiveness.js",
+        "js/unit-tests/test_redConvergence.js",
         "js/unit-tests/test_factoryBoardSteps.js",
         "js/unit-tests/test_factoryFlow.js",
         "js/unit-tests/test_factoryBoardApp.js",
