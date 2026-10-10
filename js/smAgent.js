@@ -1790,6 +1790,55 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // PR is still BEHIND and refreshes on the first tick after
                 // the leg finishes.
                 var legWorkflowUb = rule.workflowFile || 'ai-teammate.yml';
+                // gh-846: the refresh just moved the head — every dispatched
+                // validation run on a superseded head is dead weight on the
+                // (scarce, mac) runner queue. Cancel in the SAME tick as the
+                // refresh (AC1), after the push, against the FRESH head —
+                // the ticket-cached sha is the pre-refresh one. One
+                // bookkeeping comment records the cancelled-as-stale heads
+                // (gh-755 parity: CANCELLED is never a verdict — nothing on
+                // the old head trips fail-validation / zombie re-dispatch /
+                // red-head counting; those all key on the current head).
+                var cancelStaleAfterRefreshUb = function () {
+                    var newHeadUb = freshHeadSha(effectiveRepoInfo, ticket.prNumber);
+                    if (!newHeadUb) return; // fail closed — retried next refresh
+                    var staleCancelledUb = cancelStaleDispatchedRuns(
+                        effectiveRepoInfo,
+                        rule.ciWorkflow ||
+                            ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
+                        ticket.branch, newHeadUb);
+                    if (!staleCancelledUb.length) return;
+                    if (!DRY) {
+                        try {
+                            var seenUb = {};
+                            var linesUb = [];
+                            staleCancelledUb.forEach(function (r) {
+                                var sha = String((r && r.head_sha) || '');
+                                if (sha && !seenUb[sha]) {
+                                    seenUb[sha] = true;
+                                    linesUb.push(validationLivenessModule
+                                        .staleCancelMarkerLine(sha, new Date().toISOString()));
+                                }
+                            });
+                            github_create_comment({
+                                workspace: effectiveRepoInfo.owner,
+                                repository: effectiveRepoInfo.repo,
+                                number: ticket.prNumber,
+                                body: linesUb.join('\n') + '\n\n' +
+                                    'Cancelled ' + staleCancelledUb.length + ' validation run(s) ' +
+                                    'dispatched on a superseded head of this PR — the silent refresh ' +
+                                    'moved the base and their results would be discarded anyway ' +
+                                    '(gh-846). `cancelled` is not a verdict (gh-755): no ' +
+                                    'fail-validation, no zombie re-dispatch, no red-head count is ' +
+                                    'recorded for these heads — validation re-dispatches only on the ' +
+                                    'current head.'
+                            });
+                        } catch (eStaleMark) {
+                            console.warn('  ⚠️  stale-cancel marker comment failed: ' +
+                                         (eStaleMark.message || eStaleMark));
+                        }
+                    }
+                };
                 if (uHead) {
                     var headRunsUb = headWorkflowRunsSafe(effectiveRepoInfo, uHead);
                     if (headRunsUb !== null &&
@@ -1805,6 +1854,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     } else {
                         silentUpdateBranch(ticket.branch);
                         console.log('  ✅ ' + key + ' branch silently updated (no CI)');
+                        cancelStaleAfterRefreshUb();
                     }
                 } else {
                     // No resolvable head sha: no probe possible — the
@@ -1819,6 +1869,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // instead so a flaky API never freezes freshness.
                     silentUpdateBranch(ticket.branch);
                     console.log('  ✅ ' + key + ' branch silently updated (no CI)');
+                    cancelStaleAfterRefreshUb();
                 }
                 processedKeys.push(key);
             } catch (e) {
