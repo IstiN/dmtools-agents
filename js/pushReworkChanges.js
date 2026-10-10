@@ -1212,6 +1212,36 @@ function headMovedSinceLastReview(scm, pr) {
     return true;
 }
 
+/**
+ * agents#827: the rework pass produced no production change while review threads are open. Posts the
+ * agent's response.md as the explanation, moves the ticket to Blocked and leaves threads/labels alone.
+ */
+function handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary, openCount, actualParams) {
+    var reason = String(fixSummary || '').trim();
+    var message = 'Rework is **blocked**: no code changes were made while ' + openCount +
+        ' review thread(s) are still open. Threads were NOT resolved and the review labels were left as they are.' +
+        (reason && reason !== '_(No fix summary generated)_' ? '\n\n' + reason : '');
+    console.error('❌ Rework blocked (no code changes, ' + openCount + ' open thread(s))');
+    try {
+        scm.addComment(pr.number, '⚠️ ' + message);
+    } catch (e) {
+        console.warn('Failed to post blocked rework comment on PR #' + pr.number + ':', e.message || e);
+    }
+    var blocked = (statuses && statuses.BLOCKED) || 'Blocked';
+    try {
+        tracker.moveToStatus(ticketKey, blocked);
+        console.log('✅ Moved', ticketKey, 'to', blocked);
+    } catch (e) {
+        console.warn('Failed to move ' + ticketKey + ' to ' + blocked + ':', e.message || e);
+    }
+    var wip = actualParams && actualParams.metadata && actualParams.metadata.contextId
+        ? actualParams.metadata.contextId + '_wip' : null;
+    if (wip) {
+        try { tracker.removeLabel(ticketKey, wip); } catch (e) { /* non-fatal */ }
+    }
+    return { success: false, blocked: true, error: 'Rework blocked: no code changes while ' + openCount + ' review thread(s) are open' };
+}
+
 function action(params) {
     try {
         const actualParams = params.ticket ? params : (params.jobParams || params);
@@ -1383,26 +1413,13 @@ function action(params) {
                 ' fix-summary comment were NOT posted; the rework cycle was NOT closed — failing loudly instead of' +
                 ' silently skipping (silent skip re-arms empty rework laps forever, live fa #1212 2026-10-04).');
         }
-        // agents#827: a pass that changed no production file while review threads are open must NOT
-        // look like a fix — no thread resolution, no status move, no label cleanup, no fresh review.
+        // agents#827: rework only reworks. A pass that changed no production file while review threads
+        // are open is BLOCKED, not done: no thread resolution, no fresh review, no label cleanup — the
+        // ticket moves to the Blocked status and response.md (the agent's own explanation) is posted.
         var realCodeChanges = hasRealCodeChanges(ticketKey, config);
         var openInputThreads = readInputRawThreads(ticketKey, { workingDir: config.workingDir || null }).filter(isOpenThread);
         if (realCodeChanges === false && openInputThreads.length > 0) {
-            var noFixMessage = 'Rework produced no code changes while ' + openInputThreads.length +
-                ' review thread(s) are still open. Threads were NOT resolved, the ticket was NOT moved and the' +
-                ' review labels were left as they are — implement the requested fixes instead of deferring them.';
-            console.error('❌ ' + noFixMessage);
-            try {
-                scm.addComment(pr.number, '⚠️ ' + noFixMessage);
-            } catch (e) {
-                console.warn('Failed to post no-fix rework comment on PR #' + pr.number + ':', e.message || e);
-            }
-            var noFixWip = actualParams.metadata && actualParams.metadata.contextId
-                ? actualParams.metadata.contextId + '_wip' : null;
-            if (noFixWip) {
-                try { tracker.removeLabel(ticketKey, noFixWip); } catch (e) { /* non-fatal */ }
-            }
-            return { success: false, error: noFixMessage };
+            return handleReworkBlocked(scm, tracker, pr, ticketKey, statuses, fixSummary, openInputThreads.length, actualParams);
         }
         let prCommentPosted = false;
 

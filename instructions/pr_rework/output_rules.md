@@ -39,10 +39,12 @@ Rules for review replies:
 - Do **not** put the reply body inline in the JSON; use the `reply` field only as a file path reference.
 - ⚠️ **Common mistake**: `pr_discussions_raw.json` uses the field names `rootCommentId` and `body`. When writing `review_replies.json`, you MUST rename these to `inReplyToId` and `reply` respectively — do NOT copy the input field names as-is into the output JSON, or the reply will silently post as an untargeted top-level comment instead of a threaded reply.
 
-### No deferral (agents#827)
+### Blocked (agents#827)
 
-Every open review thread requires a **code fix in this pass**. Do not end the run by asking which
-follow-up to implement, and do not write `outputs/questions.json` as a substitute for the requested
-changes. `questions.json` is only for a genuine blocker you cannot resolve from the repository; the
-fixes you CAN make must still be made and committed. A pass with open threads and no code change is
-treated as a failed rework: threads are not resolved and the ticket is not advanced.
+Rework only reworks: it fixes the open review threads in code and never asks questions (questions
+belong to the refinement agents). Every open thread needs a code fix in this pass. If you hit a problem
+you genuinely cannot get past, change no thread state and write the reason in `outputs/response.md`
+(start the file with `BLOCKED:` followed by what blocks you and what is needed). A pass with open
+threads and no code change is treated as blocked: threads are not resolved and the ticket moves to
+the Blocked status.
+
