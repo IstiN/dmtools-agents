@@ -9723,3 +9723,220 @@ suite('smAgent: red-verdict convergence park (gh-832)', function () {
         }), 'every later cycle stays parked — no cycle 3+ arm');
     });
 });
+
+suite('smAgent: fail-closed agent:rework consumption (gh-840)', function () {
+
+    var CONSUME_PREFIX = '<!-- dmtools:rework-consume ';
+    var RESTORE_PREFIX = '<!-- dmtools:rework-restore ';
+    var SUFFIX = ' -->';
+    var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
+
+    function pr826(labels) {
+        return { key: 'pr-826', labels: labels || ['ai_pr_reviewed'], issueNumber: 825,
+            prNumber: 826, draft: false, author: 'ai-teammate',
+            pr: { number: 826, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED',
+                  mergeable: false, headSha: HEAD } };
+    }
+
+    function consumeComment(path, at) {
+        return { body: CONSUME_PREFIX + JSON.stringify({ path: path, head: HEAD, at: at }) + SUFFIX,
+                 user: { login: 'ai-teammate' } };
+    }
+
+    function threadNode(author, resolved) {
+        return { id: 'thread-1', isResolved: !!resolved,
+                 comments: { nodes: [{ databaseId: 1, author: { login: author }, body: '🚨 BLOCKING: normTokenRow drops cacheRead' }] } };
+    }
+
+    function threadsPayload(author, resolved) {
+        return { data: { repository: { pullRequest: { reviewThreads: { nodes: [threadNode(author, resolved)] } } } } };
+    }
+
+    function sweepRule(staleMinutes) {
+        return {
+            description: 'gh-840 consumed-without-work sweep',
+            source: 'github',
+            query: { type: 'pr', notLabels: ['agent:rework'], threadsResolved: false, prMachineAuthor: true },
+            localAction: 'restore_rework_arm',
+            staleMinutes: staleMinutes || 30,
+            limit: 5,
+            id: 'rework-arm-restore'
+        };
+    }
+
+    function makeSweepSm(opts) {
+        // 4 unresolved machine threads — the #826 census (4/6 open).
+        var threads = { data: { repository: { pullRequest: { reviewThreads: {
+            nodes: [threadNode('ai-teammate', false), threadNode('ai-teammate', false),
+                    threadNode('ai-teammate', false), threadNode('ai-teammate', false)] } } } } };
+        var base = {
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-agents" } };' },
+            github: {
+                items: [pr826()],
+                pr: { number: 826, head: { sha: HEAD }, labels: [{ name: 'ai_pr_reviewed' }], body: 'Fixes #825' },
+                prComments: opts.prComments || [],
+                workflowApiRuns: opts.workflowApiRuns || []
+            },
+            extraMocks: { github_get_pr_review_threads: function () { return JSON.stringify(threads); } }
+        };
+        return makeSmAgent(base);
+    }
+
+    test('AC1 — the #826 replay: consumed label, unchanged head, machine threads open, quiet past staleMinutes → arm restored with marker', function () {
+        // 2026-10-10 ~10:00Z consumption; tick runs at ~14:00Z (4h hang).
+        var sm = makeSweepSm({ prComments: [consumeComment('cross-anchor', '2026-10-10T10:00:00.000Z')] });
+        sm.action(baseParams('epam', 'dmtools-agents', [sweepRule(30)], { machineAuthor: 'ai-teammate' }));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'exactly one arm restore');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 826, 'the label lands on the PR');
+        assert.equal(sm.capturedPrLabelAdds[0].labels.join(','), 'agent:rework');
+        assert.equal(sm.capturedTriggers.length, 0, 'the sweep arms the label only — rework-on-label owns the dispatch');
+        var restore = sm.capturedPrComments.filter(function (c) {
+            return c.body.indexOf(RESTORE_PREFIX) !== -1;
+        });
+        assert.equal(restore.length, 1, 'exactly one restore bookkeeping marker');
+        assert.contains(restore[0].body, 'rework arm restored');
+        assert.contains(restore[0].body, 'previous consumption left threads unresolved');
+    });
+
+    test('AC1 bound — inside the grace window the sweep stays quiet (bounded re-arm, ≤6 ticks)', function () {
+        var sm = makeSweepSm({ prComments: [consumeComment('dispatch', new Date(Date.now() - 5 * 60000).toISOString())] });
+        sm.action(baseParams('epam', 'dmtools-agents', [sweepRule(30)], { machineAuthor: 'ai-teammate' }));
+        assert.equal(sm.capturedPrLabelAdds.length, 0, '5 min old consumption < 30 min stale — no restore');
+    });
+
+    test('AC2 — head advanced past the consumption (a real push/close) → no restore', function () {
+        var ADVANCED = 'ffffeeeeddddeeeeffff00001111222233334444';
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-agents" } };' },
+            github: {
+                items: [{ key: 'pr-826', labels: ['ai_pr_reviewed'], issueNumber: 825, prNumber: 826,
+                    draft: false, author: 'ai-teammate',
+                    pr: { number: 826, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true,
+                          headSha: ADVANCED } }],
+                pr: { number: 826, head: { sha: ADVANCED }, labels: [{ name: 'ai_pr_reviewed' }], body: 'Fixes #825' },
+                prComments: [consumeComment('dispatch', '2026-10-10T10:00:00.000Z')],
+                workflowApiRuns: []
+            },
+            extraMocks: { github_get_pr_review_threads: function () {
+                return JSON.stringify(threadsPayload('ai-teammate', false));
+            } }
+        });
+        sm.action(baseParams('epam', 'dmtools-agents', [sweepRule(30)], { machineAuthor: 'ai-teammate' }));
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'the push is the close marker — the sweep stays quiet');
+    });
+
+    test('AC2 — gh-807 verdict gate preserved: APPROVE head with clean census is NOT re-armed by the sweep', function () {
+        var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+        var verdictBody = rv.buildVerdictComment({
+            head: HEAD, verdict: 'APPROVE', blocking: 0, important: 0, suggestions: 0,
+            at: '2026-10-10T08:55:00.000Z', source: 'pr_review.json'
+        });
+        var sm = makeSweepSm({ prComments: [
+            { body: verdictBody, user: { login: 'ai-teammate' } },
+            consumeComment('dispatch', '2026-10-10T10:00:00.000Z')
+        ] });
+        sm.action(baseParams('epam', 'dmtools-agents', [sweepRule(30)], { machineAuthor: 'ai-teammate' }));
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'the sticky-approval semantics stand — verdict semantics are a non-goal');
+    });
+
+    test('AC3 — no consumption evidence (human-thread-only PR, never consumed) → untouched', function () {
+        var sm = makeSweepSm({ prComments: [{ body: 'these threads need a human look', user: { login: 'someone' } }] });
+        sm.action(baseParams('epam', 'dmtools-agents', [sweepRule(30)], { machineAuthor: 'ai-teammate' }));
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no consume/restore marker → no restore');
+        assert.equal(sm.capturedPrComments.length, 0, 'no comments either');
+    });
+
+    test('AC3 — only machine-authored unresolved threads count: unresolved HUMAN threads + a consumption → no restore', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-agents" } };' },
+            github: {
+                items: [pr826()],
+                pr: { number: 826, head: { sha: HEAD }, labels: [{ name: 'ai_pr_reviewed' }], body: 'Fixes #825' },
+                prComments: [consumeComment('dispatch', '2026-10-10T10:00:00.000Z')],
+                workflowApiRuns: []
+            },
+            extraMocks: { github_get_pr_review_threads: function () {
+                return JSON.stringify(threadsPayload('human-reviewer', false));
+            } }
+        });
+        sm.action(baseParams('epam', 'dmtools-agents', [sweepRule(30)], { machineAuthor: 'ai-teammate' }));
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'gh-744: human threads alone never re-arm rework');
+    });
+
+    test('no rework in flight — an active leg run on the head suppresses the sweep', function () {
+        // headWorkflowRuns probes via `gh api actions/runs?head_sha=…`
+        // (cli_execute_command, not the bridge list tool).
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-agents" } };' },
+            github: {
+                items: [pr826()],
+                pr: { number: 826, head: { sha: HEAD }, labels: [{ name: 'ai_pr_reviewed' }], body: 'Fixes #825' },
+                prComments: [consumeComment('dispatch', '2026-10-10T10:00:00.000Z')]
+            },
+            extraMocks: { github_get_pr_review_threads: function () {
+                return JSON.stringify(threadsPayload('ai-teammate', false));
+            } },
+            onCliExecute: function (cmdOpts) {
+                if (String(cmdOpts.command).indexOf('actions/runs?head_sha=') !== -1) {
+                    return JSON.stringify({ workflow_runs: [
+                        { status: 'in_progress', path: '.github/workflows/ai-teammate.yml',
+                          head_sha: HEAD, conclusion: null }
+                    ] });
+                }
+                return '';
+            }
+        });
+        sm.action(baseParams('epam', 'dmtools-agents', [sweepRule(30)], { machineAuthor: 'ai-teammate' }));
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'a flying leg owns the threads');
+    });
+
+    test('audit log — rework-on-label consumption stamps a gh-840 marker comment with its path', function () {
+        // The rework-on-label dispatch path: label on the PR, dispatch
+        // accepted, consumeLabels fires → label removed AND audited.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-agents" } };' },
+            github: {
+                items: [pr826(['agent:rework'])],
+                pr: { number: 826, head: { sha: HEAD }, labels: [{ name: 'agent:rework' }], body: 'Fixes #825' },
+                workflowApiRuns: []
+            }
+        });
+        sm.action(baseParams('epam', 'dmtools-agents', [{
+            description: 'manual rework request',
+            source: 'github',
+            query: { type: 'pr', labels: ['agent:rework'] },
+            workflowFile: 'ai-teammate.yml',
+            inputs: { issue: '', leg: 'rework', reason: 'sm: agent:rework label on the PR (manual rework request)', pr: '{prNumber}' },
+            consumeLabels: ['agent:rework'],
+            limit: 1,
+            id: 'rework-on-label'
+        }], { machineAuthor: 'ai-teammate' }));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'the rework leg dispatches');
+        assert.equal(sm.capturedPrLabelRemoves.length, 1, 'the label is consumed on dispatch');
+        assert.equal(sm.capturedPrLabelRemoves[0].label, 'agent:rework');
+        var audits = sm.capturedPrComments.filter(function (c) {
+            return c.body.indexOf(CONSUME_PREFIX) !== -1;
+        });
+        assert.equal(audits.length, 1, 'exactly one consumption-audit marker');
+        assert.contains(audits[0].body, '"path":"dispatch"');
+        assert.contains(audits[0].body, '"head":"' + HEAD + '"');
+        assert.contains(audits[0].body, 'gh-840');
+    });
+
+    test('deployed rule — sm_github.json carries the gh-840 sweep wired to restore_rework_arm', function () {
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules) || [];
+        var rule = rules.filter(function (r) { return r.id === 'rework-arm-restore'; })[0];
+        assert.ok(rule, 'rework-arm-restore exists');
+        assert.equal(rule.localAction, 'restore_rework_arm');
+        assert.equal(rule.source, 'github');
+        assert.equal(rule.query.type, 'pr');
+        assert.ok((rule.query.notLabels || []).indexOf('agent:rework') !== -1, 'only fires when the arm is absent');
+        assert.equal(rule.query.threadsResolved, false, 'only when threads are unresolved');
+        assert.equal(rule.query.prMachineAuthor, true, 'machine PRs only (AC3)');
+        assert.ok(rule.staleMinutes >= 1, 'the ≤6-tick bound is configurable');
+    });
+});
