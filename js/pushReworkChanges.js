@@ -675,7 +675,7 @@ function buildReworkCompletionComment(m, ctx) {
     if (wording === 'open-threads') {
         comment = m.h(3, '⚠️ Rework Completed — ' + liveOpen.length + ' review thread(s) remain open') + '\n';
         if (ctx.prUrl) comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
-        if (ctx.branchName) comment += m.bold('Branch') + ': ' + m.code(ctx.branchName) + '\n';
+        if (ctx.branchName) comment += m.bold('Branch') + ': ' + m.inline(ctx.branchName) + '\n';
         comment += '\n' + m.bold('Rework pushed; ' + liveOpen.length +
             ' review thread(s) remain open — the SM will re-arm a threads-rework.') + '\n';
         comment += buildOpenThreadAccountingBlock(m, liveOpen, ctx.inputThreads || [], unaddressed);
@@ -690,7 +690,7 @@ function buildReworkCompletionComment(m, ctx) {
         comment = m.h(3, ctx.codeChangesCommitted ? '✅ Rework Completed' : '✅ Rework Analysis Completed') + '\n';
         if (ctx.prUrl) comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
         if (ctx.codeChangesCommitted) {
-            comment += m.bold('Branch') + ': ' + m.code(ctx.branchName) + '\n';
+            comment += m.bold('Branch') + ': ' + m.inline(ctx.branchName) + '\n';
             comment += '\nRework changes were pushed.\n';
         } else {
             comment += '\nThe rework analysis completed without code changes.\n';
@@ -701,7 +701,7 @@ function buildReworkCompletionComment(m, ctx) {
         // Clean path — the historical wording, byte-identical (AC4).
         if (ctx.codeChangesCommitted) {
             comment = m.h(3, '✅ Rework Completed') + '\n\n';
-            comment += m.bold('Branch') + ': ' + m.code(ctx.branchName) + '\n';
+            comment += m.bold('Branch') + ': ' + m.inline(ctx.branchName) + '\n';
             if (ctx.prUrl) {
                 comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
             }

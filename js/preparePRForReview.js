@@ -146,7 +146,7 @@ function action(params) {
                 var m = commentMarkup.forTicket(ticketKey);
             var jiraComment = m.h(3, '🔍 Automated PR Review Started') + '\n\n' +
                 m.bold('Pull Request') + ': ' + m.link('PR #' + prDetails.number, prDetails.html_url) + '\n' +
-                m.bold('Branch') + ': ' + m.code(branchName || 'unknown') + '\n' +
+                m.bold('Branch') + ': ' + m.inline(branchName || 'unknown') + '\n' +
                 m.bold('Files Changed') + ': ' + (prDetails.changed_files || 0) + '\n\n';
 
             if (failedChecks.length > 0) {

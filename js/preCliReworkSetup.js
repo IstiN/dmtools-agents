@@ -88,7 +88,7 @@ function buildReworkStartedComment(flavor, ctx) {
     var m = flavor;
     var comment = m.h(3, '🔧 Automated Rework Started') + '\n\n' +
         m.bold('Pull Request') + ': ' + m.link('PR #' + ctx.prNumber, ctx.prUrl) + '\n' +
-        m.bold('Branch') + ': ' + m.code(ctx.branchName) + '\n\n';
+        m.bold('Branch') + ': ' + m.inline(ctx.branchName) + '\n\n';
 
     var conflicts = ctx.conflictFiles || [];
     if (conflicts.length > 0) {

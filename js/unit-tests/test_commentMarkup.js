@@ -101,3 +101,22 @@ suite('commentMarkup', function () {
         assert.equal(isolated.flavorForTicket('acme/w#12'), 'jira');
     });
 });
+
+suite('commentMarkup: branch names render inline on every flavor (agents#820)', function() {
+    test('markdown inline() is a single-line backtick span (no fenced block, no newlines)', function() {
+        var shapes = loadModule('js/common/ticketKeyShapes.js');
+        var cm = loadModule('js/common/commentMarkup.js', makeRequire({ './ticketKeyShapes.js': shapes }));
+        var m = cm.forFlavor('markdown');
+        assert.equal(m.inline('feature/2023979-rate-limit'), '`feature/2023979-rate-limit`');
+        assert.equal(m.inline('x').indexOf('\n'), -1);
+    });
+    test('the rework/PR comments put the branch inline, never in a fenced block', function() {
+        var fs = ['js/preCliReworkSetup.js', 'js/pushReworkChanges.js', 'js/postTestReworkResults.js',
+                  'js/developTicketAndCreatePR.js', 'js/preparePRForReview.js'];
+        fs.forEach(function(f) {
+            var src = file_read({ path: f });
+            assert.equal(/m\.code\((ctx\.)?branchName/.test(src), false, f + ' renders the branch as a fenced block');
+        });
+    });
+});
+

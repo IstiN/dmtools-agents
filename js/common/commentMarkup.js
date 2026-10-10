@@ -14,7 +14,7 @@
  *   var commentMarkup = require('./common/commentMarkup.js');
  *   var m = commentMarkup.forTicket(ticketKey, customParams);
  *   var comment = m.h(3, 'Development Completed') + '\n\n' +
- *       m.bold('Branch:') + ' ' + m.code(branchName) + '\n';
+ *       m.bold('Branch:') + ' ' + m.inline(branchName) + '\n';
  *
  * The Jira flavor output is byte-identical to the historical templates,
  * so Jira-facing behavior is unchanged.
