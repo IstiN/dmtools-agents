@@ -235,8 +235,12 @@ function executeAction(provider, action, issue, cfg) {
 
 // gh-828 — the post-APPROVE in-tick thread-resolution leg (the missing
 // owner from the withheld-arm branch, live fa #1457–#1470). Gate on the
-// head's effective machine verdict record via the reviewVerdicts pure
-// selector, then per selected thread post the ack reply and resolve.
+// head's effective machine verdict record — parsed with the machine-author
+// allowlist (gh-828 review round 2: the marker format is public, so a
+// forged APPROVE from any comment-capable identity must stay invisible) —
+// via the reviewVerdicts pure selector, then per selected thread RESOLVE
+// FIRST and post the ack reply only on success (review round 3: a failed
+// resolve must not leave an ack behind for the next tick to duplicate).
 // Idempotent (already-resolved threads are filtered by selection) and
 // bounded (maxResolveThreads per tick, default 20). Fail-closed
 // everywhere: no head sha, no machine logins configured, missing provider
