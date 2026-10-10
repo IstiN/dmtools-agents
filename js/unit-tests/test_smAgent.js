@@ -9266,9 +9266,9 @@ suite('smAgent: red-verdict convergence park (gh-832)', function () {
                 '2026-10-10T0' + (cycle - 1) + ':38:00Z'));
             sm.action({ jobParams: failParams });
             applyCaptured();
+            world.cycleLogs.push(cycle + ':' + world.labels.join('+'));
             sm.action({ jobParams: validateParams });
             applyCaptured();
-            world.cycleLogs.push(cycle + ':' + world.labels.join('+'));
         }
 
         var parks = world.comments.filter(function (c) {
@@ -9282,8 +9282,10 @@ suite('smAgent: red-verdict convergence park (gh-832)', function () {
         assert.ok(world.labels.indexOf('validation_failed') !== -1 &&
                   world.labels.indexOf('ai_validating') === -1,
             'the replay ends parked and unarmed');
-        assert.equal(world.cycleLogs[1].indexOf('validation_failed'), -1,
-            'cycle 2 starts un-parked (the park lands DURING cycle 2, on the 2nd red)');
+        assert.equal(world.cycleLogs[0].indexOf('validation_failed'), -1,
+            'cycle 1 (red #1): no park — a single red is not a loop');
+        assert.ok(world.cycleLogs[1].indexOf('validation_failed') !== -1,
+            'cycle 2 (red #2): the park lands on the SECOND consecutive red (AC3)');
         assert.ok(world.cycleLogs.slice(2).every(function (l) {
             return l.indexOf('validation_failed') !== -1;
         }), 'every later cycle stays parked — no cycle 3+ arm');
