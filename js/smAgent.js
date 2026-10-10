@@ -3752,25 +3752,43 @@ function applyRuleOverrides(rules, overrides) {
 // old runs can never stamp a verdict on the current head — cancel them
 // instead of burning the hosted queue). Scoped by head_branch === the
 // PR's branch, so a concurrent validation of a DIFFERENT PR is untouchable.
+// gh-846: BOTH dispatch channels are swept — workflow_dispatch AND
+// push-triggered runs of the CI workflow on this branch. The
+// head_branch === branch filter keeps the merge winner's own post-merge
+// MAIN CI out of scope (its push runs carry head_branch === 'main').
+// Returns the cancelled runs ([]) for the caller's marker bookkeeping.
+// gh-748 twin-guard parity: only ACTIVE runs are selected, so a run we
+// already cancelled reads completed/cancelled and can never be re-selected
+// — cancel-only-once is structural, the reason is logged per cancel.
 function cancelStaleDispatchedRuns(repoInfo, ciWorkflow, branch, currentSha) {
-    if (!branch || !currentSha) return 0;
+    if (!branch || !currentSha) return [];
+    if (DRY) {
+        // Live bug doctrine (fa 2026-09-27): DRY means NO side effects —
+        // a dry tick must not cancel live queued runs.
+        console.log('  🧪 [dry] stale-cancel skipped (' + ciWorkflow + ' @ ' +
+                    branch + ', head ' + String(currentSha).slice(0, 7) + ')');
+        return [];
+    }
     try {
-        var res = cli_execute_command({
-            command: 'gh api "repos/' + repoInfo.owner + '/' +
-                     repoInfo.repo +
-                     '/actions/workflows/' + ciWorkflow +
-                     '/runs?event=workflow_dispatch&per_page=50"'
+        var list = [];
+        ['workflow_dispatch', 'push'].forEach(function (ev) {
+            var res = cli_execute_command({
+                command: 'gh api "repos/' + repoInfo.owner + '/' +
+                         repoInfo.repo +
+                         '/actions/workflows/' + ciWorkflow +
+                         '/runs?event=' + ev + '&per_page=50"'
+            });
+            var runs = mcpParse((res || {}).output ||
+                                (res || {}).stdout || res);
+            list = list.concat((runs && runs.workflow_runs) || []);
         });
-        var runs = mcpParse((res || {}).output ||
-                            (res || {}).stdout || res);
-        var list = (runs && runs.workflow_runs) || [];
         var stale = list.filter(function (r) {
             return r && r.head_branch === branch &&
                    r.head_sha !== currentSha &&
                    (r.status === 'queued' || r.status === 'in_progress' ||
                     r.status === 'waiting' || r.status === 'pending');
         });
-        var cancelled = 0;
+        var cancelled = [];
         stale.forEach(function (r) {
             try {
                 cli_execute_command({
@@ -3778,7 +3796,7 @@ function cancelStaleDispatchedRuns(repoInfo, ciWorkflow, branch, currentSha) {
                         repoInfo.owner + '/' + repoInfo.repo +
                         '/actions/runs/' + r.id + '/cancel || true'
                 });
-                cancelled++;
+                cancelled.push(r);
                 console.log('  🛑 cancelled stale validation run ' + r.id +
                             ' on superseded head ' +
                             String(r.head_sha).slice(0, 7) + ' (' +
@@ -3793,7 +3811,7 @@ function cancelStaleDispatchedRuns(repoInfo, ciWorkflow, branch, currentSha) {
         // Fail OPEN: a stale-cancel probe error must not wedge the arm —
         // worst case is the wasted runs we are trying to prevent.
         console.warn('  ⚠️  stale-cancel probe failed: ' + (e.message || e));
-        return 0;
+        return [];
     }
 }
 
@@ -5207,6 +5225,32 @@ function resolveHeadSha(repoInfo, ticket) {
     } catch (eRhs) {
         console.warn('  ⚠️  head sha resolve failed for ' +
             (ticket.key || ('pr-' + ticket.prNumber)) + ': ' + (eRhs.message || eRhs));
+        return null;
+    }
+}
+
+// gh-846: FRESH PR head read for the post-refresh stale-cancel. Deliberately
+// bypasses the ticket's cached headSha: the silent refresh just moved the
+// head, so any cached sha is the PRE-refresh one — cancelling against it
+// would select runs on the CURRENT head (AC4: never touch those). One
+// github_get_pr per refreshed PR. Fail CLOSED (null): without the true new
+// head the stale selection cannot run safely — the dead-head runs wait one
+// tick; a wrongful cancel is the worse failure.
+function freshHeadSha(repoInfo, prNumber) {
+    try {
+        var pr = mcpParse(github_get_pr({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            pullRequestId: prNumber
+        }));
+        var sha = (pr && pr.head && pr.head.sha) || null;
+        if (!sha) {
+            console.warn('  ⚠️  post-refresh head read for pr-' + prNumber +
+                         ' returned no head sha — stale-cancel skipped this tick');
+        }
+        return sha;
+    } catch (eFresh) {
+        console.warn('  ⚠️  post-refresh head read failed for pr-' + prNumber +
+                     ': ' + (eFresh.message || eFresh) + ' — stale-cancel skipped this tick');
         return null;
     }
 }

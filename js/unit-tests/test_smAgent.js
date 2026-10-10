@@ -1784,6 +1784,172 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
             'merge-style refresh unchanged');
     });
 
+    // ── gh-846: the silent-update/refresh path cancels stale-head CI ──
+    // Live fa #1457 (2026-10-10 18:07–18:39Z): CI dispatched 18:07 on head
+    // 1ed928; main merged and the tick refreshed the branch to 0d65608 —
+    // but the 18:07 run stayed QUEUED 50+ min on the dead head, ahead of
+    // useful work in the mac runner queue. Stale cancels only happened on
+    // the validate_pr arm path, never on the refresh path itself.
+
+    function cancelCommands(sm) {
+        return sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('/actions/runs/') !== -1 &&
+                   c.command.indexOf('/cancel') !== -1;
+        });
+    }
+
+    // gh-846 timeline replay: pre-refresh head OLD, refresh moves to NEW,
+    // a workflow_dispatch validation run is QUEUED on OLD.
+    var GH846_OLD = '1ed9281ed9281ed9281ed9281ed9281ed9281ed9';
+    var GH846_NEW = '0d656080d656080d656080d656080d656080d65';
+
+    function gh846Sm(opts) {
+        return makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            github: {
+                items: [prItem(1457, { branch: 'ai/gh-846', headSha: GH846_OLD })],
+                pr: { number: 1457, head: { sha: GH846_NEW } }
+            }
+        }, opts || {}));
+    }
+
+    function gh846Action(sm) {
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            silentToken: 'SILENT-TOKEN', sourceToken: 'PAT-TOKEN',
+            ciWorkflow: 'quality.yml', rules: [RULES.update] } });
+    }
+
+    test('gh-846: refresh cancels the QUEUED workflow_dispatch run on the superseded head (AC1 same-tick)', function () {
+        var sm = gh846Sm({
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=' + GH846_OLD) !== -1) {
+                    return { workflow_runs: [] }; // no leg on the head
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [
+                        { id: 7101, event: 'workflow_dispatch', head_branch: 'ai/gh-846',
+                          head_sha: GH846_OLD, status: 'queued' }
+                    ] };
+                }
+                if (c.indexOf('runs?event=push') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return '';
+            }
+        });
+        gh846Action(sm);
+
+        assert.equal(updateCommands(sm).length, 1, 'the refresh itself ran');
+        var cancels = cancelCommands(sm);
+        assert.equal(cancels.length, 1, 'exactly the dead-head run is cancelled — same tick as the refresh');
+        assert.ok(cancels[0].command.indexOf('/actions/runs/7101/cancel') !== -1,
+            'the 18:07-style queued run on the old head');
+        assert.equal(sm.capturedPrComments.length, 1, 'one bookkeeping comment');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('stale-cancel ' + GH846_OLD) !== -1,
+            'the marker records the cancelled-as-stale head (gh-755 parity: no verdict)');
+    });
+
+    test('gh-846: push-triggered validation runs are cancelled too; main-branch and current-head runs are untouchable', function () {
+        var sm = gh846Sm({
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=' + GH846_OLD) !== -1) {
+                    return { workflow_runs: [] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                if (c.indexOf('runs?event=push') !== -1) {
+                    return { workflow_runs: [
+                        { id: 7201, event: 'push', head_branch: 'ai/gh-846',
+                          head_sha: GH846_OLD, status: 'in_progress' },
+                        { id: 7202, event: 'push', head_branch: 'main',
+                          head_sha: 'cafef00d', status: 'in_progress' },
+                        { id: 7203, event: 'push', head_branch: 'ai/gh-846',
+                          head_sha: GH846_NEW, status: 'queued' }
+                    ] };
+                }
+                return '';
+            }
+        });
+        gh846Action(sm);
+
+        var cancels = cancelCommands(sm);
+        assert.equal(cancels.length, 1, 'exactly one cancel');
+        assert.ok(cancels[0].command.indexOf('/actions/runs/7201/cancel') !== -1,
+            'the stale push-triggered run on the PR branch');
+        assert.ok(cancels[0].command.indexOf('7202') === -1 &&
+                  cancels[0].command.indexOf('7203') === -1,
+            'the merge winner\'s main CI and the current head\'s run are never touched');
+    });
+
+    test('gh-846: an in-flight leg defers the refresh — no refresh, no cancel', function () {
+        var sm = gh846Sm({
+            onCliExecute: function (cmdOpts) {
+                if (cmdOpts.command.indexOf('runs?head_sha=' + GH846_OLD) !== -1) {
+                    return { workflow_runs: [legRun('in_progress')] };
+                }
+                return '';
+            }
+        });
+        gh846Action(sm);
+
+        assert.equal(updateCommands(sm).length, 0, 'refresh deferred (gh-798)');
+        assert.equal(cancelCommands(sm).length, 0, 'head did not move — nothing to cancel');
+        assert.equal(sm.capturedPrComments.length, 0, 'no bookkeeping churn');
+    });
+
+    test('gh-846: post-refresh head unreadable — cancel skipped (fail closed, never touch unproven heads)', function () {
+        var sm = gh846Sm({
+            github: {
+                items: [prItem(1457, { branch: 'ai/gh-846', headSha: GH846_OLD })],
+                pr: { number: 1457 } // no head.sha — the fresh read yields nothing
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=' + GH846_OLD) !== -1) {
+                    return { workflow_runs: [] };
+                }
+                if (c.indexOf('runs?event=') !== -1) {
+                    return { workflow_runs: [
+                        { id: 7301, event: 'workflow_dispatch', head_branch: 'ai/gh-846',
+                          head_sha: GH846_OLD, status: 'queued' }
+                    ] };
+                }
+                return '';
+            }
+        });
+        gh846Action(sm);
+
+        assert.equal(updateCommands(sm).length, 1, 'the refresh ran');
+        assert.equal(cancelCommands(sm).length, 0,
+            'without the true NEW head the selection cannot run — a stale-sha selection could hit current-head runs (AC4)');
+    });
+
+    test('gh-846: DRY tick cancels nothing and posts no marker', function () {
+        var sm = gh846Sm({
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=' + GH846_OLD) !== -1) {
+                    return { workflow_runs: [] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [
+                        { id: 7401, event: 'workflow_dispatch', head_branch: 'ai/gh-846',
+                          head_sha: GH846_OLD, status: 'queued' }
+                    ] };
+                }
+                return '';
+            }
+        });
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart', dryRun: true,
+            silentToken: 'SILENT-TOKEN', sourceToken: 'PAT-TOKEN',
+            ciWorkflow: 'quality.yml', rules: [RULES.update] } });
+
+        assert.equal(cancelCommands(sm).length, 0, 'DRY means NO side effects');
+        assert.equal(sm.capturedPrComments.length, 0, 'no marker in DRY');
+    });
+
     test('validate_pr: dispatches the CI workflow on the head + ai_validating label on the PR', function () {
         // Dispatch-only CI: no push ever fires CI — the SM is the only
         // trigger. The PAT update-branch dance is retired.
