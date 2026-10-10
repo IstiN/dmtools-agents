@@ -326,6 +326,7 @@ function makeSmAgent(opts) {
             './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({}), {}),
             './common/reworkConsumption.js': loadModule('js/common/reworkConsumption.js', makeRequire({}), {}),
             './common/validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
+            './common/checkRunZombies.js': loadModule('js/common/checkRunZombies.js', makeRequire({}), {}),
             './common/redConvergence.js': loadModule('js/common/redConvergence.js', makeRequire({}), {}),
             './common/smProvider.js': {
                 createSmProvider: function () {
@@ -1927,6 +1928,173 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
             return c.command.indexOf('workflow run ci.yml') !== -1; });
         assert.equal(dispatch.length, 1, 'cancelled is not a cover — CI re-dispatched');
         assert.equal(sm.capturedPrLabelAdds.length, 1, 'arm re-applied (idempotent)');
+    });
+
+    test('validate_pr: gh-842 — zombie check-run ghosts VOID the skipIfGreenCi green cover (re-dispatch fires)', function () {
+        // Live fa #1457 replay: the armed head carries ghost in_progress
+        // check runs from a cancelled-while-queued run (later deleted — the
+        // 404/absent shape) PLUS green terminal entries from the older run
+        // 38057801418. The rollup reads green, so revalidate-armed-green
+        // matches — and pre-fix the skipIfGreenCi guard kept skipping
+        // ("blocker is not this CI") while branch protection waited on the
+        // LATEST check-run per context: the ghosts. The green cover must be
+        // VOID: a re-dispatch fires (AC1) and the fresh stamps override the
+        // ghosts on the gate.
+        var CUR = '7d00a1b27d00a1b27d00a1b27d00a1b27d00a1b2';
+        var greenRule = { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                     notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'], checks: ['green'], draft: false },
+            localAction: 'validate_pr', limit: 1, id: 'revalidate-armed-green',
+            skipIfGreenCi: true };
+        var GHOST_RUN = '38099999999';
+        var checkRuns = { check_runs: [
+            { name: 'Quality gate', status: 'in_progress', conclusion: null,
+              started_at: '2026-10-10T14:30:00Z',
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/' + GHOST_RUN },
+            { name: 'Binaries smoke gate', status: 'in_progress', conclusion: null,
+              started_at: '2026-10-10T14:30:00Z',
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/' + GHOST_RUN },
+            { name: 'JS engine integration (quickjs-ng)', status: 'in_progress', conclusion: null,
+              started_at: '2026-10-10T14:30:00Z',
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/' + GHOST_RUN },
+            { name: 'Quality gate', status: 'completed', conclusion: 'success',
+              started_at: '2026-10-10T13:40:00Z',
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38057801418' }
+        ] };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(1457, { branch: 'ai/gh-842', headSha: CUR,
+                                            labels: ['pr_approved', 'ai_validating'] })],
+                      commitCheckRuns: checkRuns },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    // The head's run list carries ONLY the old green run —
+                    // the ghost run was deleted (absent ⇒ 404-equivalent).
+                    return { workflow_runs: [
+                        { id: 38057801418, event: 'workflow_dispatch', head_branch: 'ai/gh-842',
+                          head_sha: CUR, status: 'completed', conclusion: 'success',
+                          created_at: '2026-10-10T13:58:00Z' }
+                    ] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [greenRule] } });
+
+        var dispatch = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; });
+        assert.equal(dispatch.length, 1, 'AC1: the green cover is VOID — CI re-dispatched on the ghost-held head');
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'arm re-applied (idempotent)');
+    });
+
+    test('validate_pr: gh-842 — zombie ghosts VOID the latch-skip (dispatch, not arm-only)', function () {
+        // The unarmed twin of the #1457 shape: pr_approved + ai_validated,
+        // green dispatched run, green rollup — but zombie check-runs hold
+        // the gate BLOCKED. Pre-fix the latch-skip armed WITHOUT a dispatch:
+        // merge-validated needs CLEAN, the ghosts keep BLOCKED forever, no
+        // run is ever ordered. The skip must be VOID: dispatch instead.
+        var CUR = '842face842face842face842face842face842f';
+        var latchRule = { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved'],
+                     notLabels: ['ai_validating', 'validation_failed'],
+                     notMergeState: ['BEHIND', 'DIRTY'], draft: false },
+            localAction: 'validate_pr', limit: 1, id: 'validate-armed',
+            skipIfValidatedHead: true };
+        var checkRuns = { check_runs: [
+            { name: 'Quality gate', status: 'in_progress', conclusion: null,
+              started_at: '2026-10-10T14:30:00Z',
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38099999999' }
+        ] };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(84, { branch: 'ai/gh-84', headSha: CUR,
+                                          labels: ['pr_approved', 'ai_validated'] })],
+                      commitCheckRuns: checkRuns,
+                      prStatus: { checkConclusion: 'green', mergeState: 'BLOCKED',
+                                  labels: ['pr_approved', 'ai_validated'] } },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    return { workflow_runs: [
+                        { id: 38057801418, event: 'workflow_dispatch', head_branch: 'ai/gh-84',
+                          head_sha: CUR, status: 'completed', conclusion: 'success',
+                          created_at: '2026-10-10T13:58:00Z' }
+                    ] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [latchRule] } });
+
+        var dispatch = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; });
+        assert.equal(dispatch.length, 1, 'AC1: latch-skip VOID — a real dispatch fires, no arm-only deadlock');
+    });
+
+    test('validate_pr: gh-842 AC2 — a genuinely LIVE run behind the pending check keeps the green-cover skip', function () {
+        // The pending check-run's backing run is IN FLIGHT (a kicker push
+        // run — invisible to the dispatched-CI probe): NOT a zombie. The
+        // green-cover skip must stand — re-dispatching would stack a second
+        // CI run under a live one.
+        var CUR = 'ac2aliveac2aliveac2aliveac2aliveac2alive';
+        var greenRule = { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                     notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'], checks: ['green'], draft: false },
+            localAction: 'validate_pr', limit: 1, id: 'revalidate-armed-green',
+            skipIfGreenCi: true };
+        var LIVE_RUN = '38111111111';
+        var checkRuns = { check_runs: [
+            { name: 'Quality gate', status: 'in_progress', conclusion: null,
+              started_at: '2026-10-10T14:55:00Z',
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/' + LIVE_RUN }
+        ] };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(86, { branch: 'ai/gh-86', headSha: CUR,
+                                          labels: ['pr_approved', 'ai_validating'] })],
+                      commitCheckRuns: checkRuns },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('workflows/ci.yml/runs?head_sha=') !== -1) {
+                    // The dispatched-CI probe sees only the old green run.
+                    return { workflow_runs: [
+                        { id: 38057801418, event: 'workflow_dispatch', head_branch: 'ai/gh-86',
+                          head_sha: CUR, status: 'completed', conclusion: 'success',
+                          created_at: '2026-10-10T13:58:00Z' }
+                    ] };
+                }
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    // The WHOLE-head rollup also carries the LIVE kicker run
+                    // behind the pending check-run.
+                    return { workflow_runs: [
+                        { id: 38057801418, event: 'workflow_dispatch', head_branch: 'ai/gh-86',
+                          head_sha: CUR, status: 'completed', conclusion: 'success',
+                          created_at: '2026-10-10T13:58:00Z' },
+                        { id: LIVE_RUN, event: 'push', path: '.github/workflows/kicker.yml',
+                          head_branch: 'ai/gh-86', head_sha: CUR,
+                          status: 'in_progress', conclusion: null,
+                          created_at: '2026-10-10T14:55:00Z' }
+                    ] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [greenRule] } });
+
+        var dispatch = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; });
+        assert.equal(dispatch.length, 0, 'AC2: live run behind the pending check — green-cover skip stands, no double-dispatch');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no arm churn');
     });
 
     test('config order: unarm precedes silent-update (same-tick actualization)', function () {
