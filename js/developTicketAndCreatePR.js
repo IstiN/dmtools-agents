@@ -466,7 +466,7 @@ function postPRCommentToJira(ticketKey, prUrl, branchName) {
     try {
         const m = commentMarkup.forTicket(ticketKey);
         let comment = m.h(3, m.bold('Development Completed')) + '\n\n';
-        comment += m.bold('Branch:') + ' ' + m.code(branchName) + '\n';
+        comment += m.bold('Branch:') + ' ' + m.inline(branchName) + '\n';
 
         if (prUrl) {
             comment += m.bold('Pull Request:') + ' ' + prUrl + '\n';

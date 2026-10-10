@@ -48,7 +48,7 @@ function buildTestReworkResultComment(flavor, ctx) {
     var statusEmoji = ctx.passed ? '✅' : '❌';
     var comment = m.h(3, '🔧 Test Rework Completed') + '\n\n' +
         m.bold('Re-run result') + ': ' + statusEmoji + ' ' + m.bold(String(ctx.testStatus).toUpperCase()) + '\n' +
-        m.bold('Branch') + ': ' + m.code(ctx.branchName) + '\n';
+        m.bold('Branch') + ': ' + m.inline(ctx.branchName) + '\n';
     if (ctx.prUrl) {
         comment += m.bold('Pull Request') + ': ' + ctx.prUrl + '\n';
     }
