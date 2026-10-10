@@ -5447,11 +5447,26 @@ function action(params) {
                 patched.query = {};
                 Object.keys(q).forEach(function (k) { patched.query[k] = q[k]; });
                 patched.query.mutexMax = validationMutexMax;
+                // Fill every free slot in ONE tick: with the limit-1 arm
+                // the second validation dispatches 10 min behind the first
+                // and always concludes after the first merge — its run is
+                // wasted (BEHIND) and the cadence gain evaporates (L2
+                // replay, test_mergeCadence). Raising the arm limit to the
+                // cap makes the parallel arms conclude together, and the
+                // mergeBot's one-run-batch (it merges EVERY green + CLEAN
+                // approved head per run) lands them in a single window —
+                // that batching is what delivers the cadence. Only the
+                // global arming form (validate-armed) widens; the
+                // exclude-self recovery twins keep their own limits.
+                if (!q.mutexExcludeSelf && typeof rule.limit === 'number') {
+                    patched.limit = Math.max(rule.limit, validationMutexMax);
+                }
                 return patched;
             });
             console.log('  🚈 gh-837 parallel validations: concurrency ' + validationMutexMax +
                 ' (knob ' + validationConcurrencyCfg.max + ', approved queue at/above watermark ' +
-                validationConcurrencyCfg.watermark + ') — merge-window mutex relaxed');
+                validationConcurrencyCfg.watermark + ') — merge-window mutex relaxed, arm limit ' +
+                validationMutexMax);
         } else {
             console.log('  🚈 gh-837 parallel validations: knob ' + validationConcurrencyCfg.max +
                 ' but approved queue below watermark ' + validationConcurrencyCfg.watermark +

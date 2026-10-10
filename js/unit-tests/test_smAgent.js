@@ -8347,6 +8347,34 @@ suite('smAgent: gh-837 parallel validations knob (merge cadence)', function () {
         assert.equal(result.validationCost.capMinutesPerTick, 70, 'hard ceiling: cap x estimate');
     });
 
+    test('knob 2 + deep queue: BOTH free slots fill in ONE tick (arm limit rises with the cap)', function () {
+        // gh-837 cadence math: a limit-1 arm staggers the parallel
+        // validations by a tick, the second concludes after the first
+        // merge and its run is wasted (BEHIND) — simultaneous arms are
+        // what lets the mergeBot batch the merges into one window.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [
+                    prItem(2, { branch: 'ai/gh-2', headSha: 'sha2', author: 'ai-teammate' }),
+                    prItem(3, { branch: 'ai/gh-3', headSha: 'sha3', author: 'ai-teammate' })
+                ],
+                prList: deepQueue(),
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            validationConcurrency: 2, rules: [RULES.validate] } });
+
+        var armed = sm.capturedPrLabelAdds.filter(function (a) {
+            return a.labels.indexOf('ai_validating') !== -1;
+        });
+        assert.deepEqual(armed.map(function (a) { return a.number; }).sort(), [2, 3],
+            'both free slots armed in one tick — no 10-min stagger');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0;
+        }).length, 2, 'two validations dispatched');
+    });
+
     test('knob resolution: repo-var string form, clamp, config override priority', function () {
         var sm = makeSmAgent(config('a', 'b'));
 
