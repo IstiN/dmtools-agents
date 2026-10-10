@@ -624,6 +624,17 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
     // nothing and the old all-defer form deadlocked the queue ~40 min).
     // Arming stays serialized: only the global (non-exclude-self) form
     // adds the label, and it defers on ANY holder within mutexAmong.
+    // gh-837 (merge cadence): q.mutexMax (default 1) — how many arms the
+    // mutex admits CONCURRENTLY. The SM engine patches this onto the
+    // ai_validating/pr_approved merge-window rules when the
+    // validationConcurrency knob (repo var, default 1 = today's behavior)
+    // is raised AND the approved queue depth is at/above the watermark —
+    // N=2-3 parallel validations drain the approved FIFO at ~1 merge per
+    // validation cycle instead of one. The candidate/holder accounting is
+    // unchanged: mutexAmong still scopes WHO counts as a holder, 'blocked'
+    // holders are invisible, and mutexExcludeSelf still lets a self-holding
+    // recovery candidate drain a leaked stack — only the defer threshold
+    // moves from '>=1 other holder' to '>= mutexMax other holders'.
     if (q.mutex) {
         var among = q.mutexAmong;
         var holdsMutex = function (it) {
@@ -631,6 +642,9 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
             if (!among) return true;
             return among.some(function (l) { return it.labels.indexOf(l) !== -1; });
         };
+        var mutexMax = (typeof q.mutexMax === 'number' && isFinite(q.mutexMax))
+            ? Math.max(1, Math.floor(q.mutexMax)) : 1;
+        var holders = items.filter(holdsMutex);
         if (q.mutexExcludeSelf) {
             items = items.filter(function (candidate) {
                 // #577 (fa 2026-09-30, live #1068+#1088): a candidate that
@@ -646,22 +660,27 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
                 // candidates always self-hold (their query carries the arm
                 // label), so a leaked stack drains oldest-first instead of
                 // deadlocking. New arms still cannot leak: only the global
-                // (non-exclude-self) form arms, and it still defers on ANY
-                // holder within mutexAmong.
+                // (non-exclude-self) form arms, and it still defers once the
+                // slot count reaches mutexMax holders within mutexAmong.
                 var selfHolds = holdsMutex(candidate);
-                var blocked = !selfHolds && items.some(function (it) {
-                    return it.prNumber !== candidate.prNumber && holdsMutex(it);
-                });
+                var otherHolders = 0;
+                for (var hi = 0; hi < holders.length; hi++) {
+                    if (holders[hi] !== candidate && holders[hi].prNumber !== candidate.prNumber) {
+                        otherHolders++;
+                    }
+                }
+                var blocked = !selfHolds && otherHolders >= mutexMax;
                 if (blocked) {
-                    console.log('   🔒 mutex "' + q.mutex + '" held by another PR — candidate pr-' +
-                        candidate.prNumber + ' defers (serial FIFO, exclude-self)');
+                    console.log('   🔒 mutex "' + q.mutex + '" slots ' + otherHolders + '/' + mutexMax +
+                        ' taken — candidate pr-' + candidate.prNumber +
+                        ' defers (' + (mutexMax > 1 ? 'parallel window' : 'serial FIFO') + ', exclude-self)');
                 }
                 return !blocked;
             });
         } else {
-            var held = items.some(holdsMutex);
-            if (held) {
-                console.log('   🔒 mutex "' + q.mutex + '" held by another PR — rule defers (serial FIFO)');
+            if (holders.length >= mutexMax) {
+                console.log('   🔒 mutex "' + q.mutex + '" slots ' + holders.length + '/' + mutexMax +
+                    ' taken — rule defers (' + (mutexMax > 1 ? 'parallel window' : 'serial FIFO') + ')');
                 return [];
             }
         }

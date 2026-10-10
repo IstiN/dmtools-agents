@@ -3458,6 +3458,137 @@ function resolveWorkflowCap(jsonCap, projectCfg) {
     return normalizePositiveInt(jsonCap);
 }
 
+// gh-837 (merge cadence) — parallel-validation knob. The strictly serial
+// refresh+validate cycle caps the merge window at ~1 merge / 45-60 min
+// (BEHIND refresh ~10-15 min + full validation CI ~30-40 min per merge,
+// single-flight ai_validating mutex); the owner expectation is 1 merge /
+// 30 min (floor 1/hour). This knob relaxes the ai_validating mutex to
+// admit up to N CONCURRENT approved-arm validations:
+//   validationConcurrency                (jobParams; repo-var analog — the
+//     .dmtools/config.js smValidationConcurrency override wins, same
+//     priority style as resolveWorkflowCap) — target parallelism, 1..5,
+//     DEFAULT 1 = today's strictly serial behavior.
+//   validationConcurrencyQueueWatermark  (jobParams /
+//     smValidationConcurrencyQueueWatermark) — the effective concurrency
+//     rises from 1 to the knob value only when the approved queue depth
+//     is AT/ABOVE this watermark (runner-budget protection: a deep queue
+//     is what justifies the extra CI runs; a shallow queue keeps the
+//     serial economy). DEFAULT 3 (the AC4 live-observation threshold).
+//   validationMinutesEstimate            (jobParams) — wall-minutes of one
+//     full validation CI leg, used only for the per-tick runner-cost
+//     report (AC2). DEFAULT 35 (live Quality-gate + platform legs band).
+// Garbage values are ignored with a one-line warn (knob style above).
+function resolveValidationConcurrency(jobParams, projectCfg) {
+    var out = { max: 1, watermark: 3, minutesEstimate: 35 };
+    function pick(jsonVal, cfgVal, name) {
+        // Repo variables arrive as strings — accept the '5' form too.
+        if (typeof jsonVal === 'string') jsonVal = parseInt(jsonVal, 10);
+        if (typeof cfgVal === 'string') cfgVal = parseInt(cfgVal, 10);
+        var n = normalizePositiveInt(cfgVal);
+        if (n) return n;
+        if (typeof cfgVal !== 'undefined' && cfgVal !== null) {
+            console.warn('  ⚠️  config.' + name + ' ignored — not a positive number: ' +
+                JSON.stringify(cfgVal));
+        }
+        n = normalizePositiveInt(jsonVal);
+        if (n) return n;
+        if (typeof jsonVal !== 'undefined' && jsonVal !== null) {
+            console.warn('  ⚠️  jobParams.' + name + ' ignored — not a positive number: ' +
+                JSON.stringify(jsonVal));
+        }
+        return null;
+    }
+    var max = pick(jobParams && jobParams.validationConcurrency,
+        projectCfg && projectCfg.smValidationConcurrency, 'smValidationConcurrency');
+    if (max) {
+        if (max > 5) {
+            console.warn('  ⚠️  validationConcurrency ' + max + ' clamped to 5 (runner budget)');
+            max = 5;
+        }
+        out.max = max;
+    }
+    var watermark = pick(jobParams && jobParams.validationConcurrencyQueueWatermark,
+        projectCfg && projectCfg.smValidationConcurrencyQueueWatermark,
+        'smValidationConcurrencyQueueWatermark');
+    if (watermark) out.watermark = watermark;
+    var minutes = pick(jobParams && jobParams.validationMinutesEstimate,
+        projectCfg && projectCfg.smValidationMinutesEstimate, 'smValidationMinutesEstimate');
+    if (minutes) out.minutesEstimate = minutes;
+    return out;
+}
+
+// Approved-queue depth for the gh-837 watermark: open non-draft,
+// non-blocked PRs carrying pr_approved. Reads the per-tick cached open-PR
+// list (same ioCache the rule queries use — no extra API call). FAIL
+// CLOSED to 0 (serial mode) when the provider cannot list PRs — a knob
+// misread must never widen the merge window.
+function approvedQueueDepth(repoInfo) {
+    try {
+        var provider = smProviderModule.createSmProvider({
+            scm: { provider: 'github' },
+            repository: repoInfo
+        });
+        if (!provider || typeof provider.listOpenPrs !== 'function') return 0;
+        var list = provider.listOpenPrs() || [];
+        return list.filter(function (p) {
+            if (!p || p.draft) return false;
+            var labels = (p.labels || []).map(function (l) { return (l && l.name) || l; });
+            return labels.indexOf('blocked') === -1 && labels.indexOf('pr_approved') !== -1;
+        }).length;
+    } catch (eDepth) {
+        console.warn('  ⚠️  approved-queue depth probe failed: ' + (eDepth.message || eDepth));
+        return 0;
+    }
+}
+
+// Effective concurrency for THIS tick: the knob value at/above the
+// watermark, 1 below it (and 1 whenever the knob itself is 1 — the
+// default — which keeps every existing deployment bit-identical).
+function effectiveValidationConcurrency(cfg, approvedDepth) {
+    if (!cfg || cfg.max <= 1) return 1;
+    return approvedDepth >= cfg.watermark ? cfg.max : 1;
+}
+
+// gh-837 AC2 — per-tick runner-cost report (the tokens analog:
+// validation-minutes). The burn is bounded BY CONSTRUCTION: at most
+// `mutexMax` merge-window arms can hold a dispatched validation at any
+// moment, so the per-tick cost ceiling is mutexMax × minutesEstimate.
+// Reads the same cached open-PR list as approvedQueueDepth; a probe
+// failure downgrades the line, never fails the tick.
+function reportValidationCost(repoInfo, cfg, mutexMax) {
+    try {
+        var provider = smProviderModule.createSmProvider({
+            scm: { provider: 'github' },
+            repository: repoInfo
+        });
+        var list = (provider && typeof provider.listOpenPrs === 'function')
+            ? (provider.listOpenPrs() || []) : [];
+        var slotsInUse = list.filter(function (p) {
+            if (!p || p.draft) return false;
+            var labels = (p.labels || []).map(function (l) { return (l && l.name) || l; });
+            return labels.indexOf('blocked') === -1 &&
+                labels.indexOf('ai_validating') !== -1 &&
+                labels.indexOf('pr_approved') !== -1;
+        }).length;
+        var depth = list.filter(function (p) {
+            if (!p || p.draft) return false;
+            var labels = (p.labels || []).map(function (l) { return (l && l.name) || l; });
+            return labels.indexOf('blocked') === -1 && labels.indexOf('pr_approved') !== -1;
+        }).length;
+        var burn = slotsInUse * ((cfg && cfg.minutesEstimate) || 35);
+        console.log('📊 gh-837 validation cost — merge-window slots ' + slotsInUse + '/' +
+            mutexMax + ' in use, approved queue ' + depth + ' (watermark ' +
+            ((cfg && cfg.watermark) || 3) + ') — ≈ ' + burn +
+            ' validation-min per tick, hard-capped at ' +
+            (mutexMax * ((cfg && cfg.minutesEstimate) || 35)) + ' by the concurrency knob');
+        return { slotsInUse: slotsInUse, mutexMax: mutexMax, approvedQueueDepth: depth,
+            validationMinutesPerTick: burn, capMinutesPerTick: mutexMax * ((cfg && cfg.minutesEstimate) || 35) };
+    } catch (eCost) {
+        console.warn('  ⚠️  validation cost report failed: ' + (eCost.message || eCost));
+        return null;
+    }
+}
+
 // Priority-tier label NAMES (owner directive 2026-10-08): FIFO within a
 // tier, blocker preempts, low sinks — see sources/githubSource.js. The
 // names are configurable per project via .dmtools/config.js
@@ -4097,7 +4228,9 @@ function dropOpenPrsCache(repoInfo) {
 // the hole this closes. Returns the holder's PR number, or 0/false when
 // the arm may proceed (including on probe error — fail OPEN: the
 // query-level mutex still guards the common case, a probe outage must not
-// freeze the merge window).
+// freeze the merge window). gh-837: honors query.mutexMax — the cap may
+// admit N concurrent arms (patched per tick), the re-check counts OTHER
+// holders against that same cap.
 function validationMutexHeldByAnother(repoInfo, rule, ticket) {
     var q = (rule && rule.query) || {};
     if (!q.mutex) return 0; // rule opted out of the mutex — not ours to add
@@ -4117,7 +4250,8 @@ function validationMutexHeldByAnother(repoInfo, rule, ticket) {
         // Review #703 🚨: the pre-fix re-check blocked a self-holding
         // candidate on ANY other holder — the contract inverted.
         var selfHolds = false;
-        var otherHolder = 0;
+        var otherHolders = 0;
+        var firstOtherHolder = 0;
         for (var i = 0; i < arr.length; i++) {
             var p = arr[i];
             var num = (p && (p.number || p.prNumber)) || 0;
@@ -4128,10 +4262,17 @@ function validationMutexHeldByAnother(repoInfo, rule, ticket) {
             if (labels.indexOf('blocked') !== -1) continue; // frozen holder — githubSource parity
             if (among && !among.some(function (l) { return labels.indexOf(l) !== -1; })) continue;
             if (num === ticket.prNumber) { selfHolds = true; continue; } // self never blocks self
-            if (!otherHolder) otherHolder = num;
+            otherHolders++;
+            if (!firstOtherHolder) firstOtherHolder = num;
         }
         if (q.mutexExcludeSelf && selfHolds) return 0; // self-holder drains the stack
-        return otherHolder;
+        // gh-837: query.mutexMax (patched per tick from the
+        // validationConcurrency knob + queue watermark) admits up to N
+        // concurrent arms — refuse only when the OTHER-holder count is at
+        // the cap. Absent mutexMax = 1 = the original strict serial check.
+        var mutexMax = (typeof q.mutexMax === 'number' && isFinite(q.mutexMax))
+            ? Math.max(1, Math.floor(q.mutexMax)) : 1;
+        return otherHolders >= mutexMax ? firstOtherHolder : 0;
     } catch (eMutex) {
         console.warn('  ⚠️  action-time mutex probe failed: ' + (eMutex.message || eMutex));
     }
@@ -5270,6 +5411,44 @@ function action(params) {
         console.log('  Workflow cap per run: ' + workflowBudget.initial);
     }
 
+    // gh-837 — parallel-validation knob: resolve the concurrency cap and,
+    // when it exceeds 1 AND the approved queue is at/above the watermark,
+    // patch query.mutexMax onto every merge-window mutex rule
+    // (mutex ai_validating scoped by mutexAmong [pr_approved] — validate-
+    // armed + the revalidate recovery twins). githubSource defers new arms
+    // only once OTHER holders reach the cap, and the validate_pr action-
+    // time re-check counts against the same number — so at most N approved
+    // validations run concurrently and the per-tick runner cost is hard-
+    // capped (AC2). Knob default 1 / below-watermark = no patch = today's
+    // strictly serial behavior, bit-identical for every existing setup.
+    var validationConcurrencyCfg = resolveValidationConcurrency(p, projectConfig);
+    var validationMutexMax = effectiveValidationConcurrency(
+        validationConcurrencyCfg, approvedQueueDepth(globalRepoInfo));
+    if (validationConcurrencyCfg.max > 1) {
+        if (validationMutexMax > 1) {
+            rules = rules.map(function (rule) {
+                var q = rule && rule.query;
+                if (!q || q.mutex !== 'ai_validating' ||
+                    !Array.isArray(q.mutexAmong) || q.mutexAmong.indexOf('pr_approved') === -1) {
+                    return rule;
+                }
+                var patched = {};
+                Object.keys(rule).forEach(function (k) { patched[k] = rule[k]; });
+                patched.query = {};
+                Object.keys(q).forEach(function (k) { patched.query[k] = q[k]; });
+                patched.query.mutexMax = validationMutexMax;
+                return patched;
+            });
+            console.log('  🚈 gh-837 parallel validations: concurrency ' + validationMutexMax +
+                ' (knob ' + validationConcurrencyCfg.max + ', approved queue at/above watermark ' +
+                validationConcurrencyCfg.watermark + ') — merge-window mutex relaxed');
+        } else {
+            console.log('  🚈 gh-837 parallel validations: knob ' + validationConcurrencyCfg.max +
+                ' but approved queue below watermark ' + validationConcurrencyCfg.watermark +
+                ' — serial mode this tick');
+        }
+    }
+
     // NOTE: JQL interpolation is now done per-rule inside processRule using each rule's
     // effective config. Rules with configPath get their own {jiraProject}/{parentTicket} resolved.
 
@@ -5282,6 +5461,10 @@ function action(params) {
         allSkippedKeys   = allSkippedKeys.concat(result.skippedKeys);
     });
 
+    // gh-837 AC2 — runner-cost report (validation-minutes) — after every
+    // rule so the arm counts reflect this tick's mutations.
+    var validationCost = reportValidationCost(globalRepoInfo, validationConcurrencyCfg, validationMutexMax);
+
     console.log('\n══ SM Agent complete — processed: ' + allProcessedKeys.length + ' ' +
         (allProcessedKeys.length ? '[' + allProcessedKeys.join(', ') + ']' : '') +
         ', skipped: ' + allSkippedKeys.length +
@@ -5292,7 +5475,8 @@ function action(params) {
         processed: allProcessedKeys.length,
         skipped: allSkippedKeys.length,
         processedKeys: allProcessedKeys,
-        skippedKeys: allSkippedKeys
+        skippedKeys: allSkippedKeys,
+        validationCost: validationCost
     };
 }
 
@@ -5302,5 +5486,8 @@ if (typeof module !== 'undefined' && module.exports) {
         failedRunLinksLine: failedRunLinksLine,
         hasRecentHeadRun: hasRecentHeadRun,
         hasActiveLegRun: hasActiveLegRun,
-        dispatchRaceGraceMs: dispatchRaceGraceMs };
+        dispatchRaceGraceMs: dispatchRaceGraceMs,
+        resolveValidationConcurrency: resolveValidationConcurrency,
+        effectiveValidationConcurrency: effectiveValidationConcurrency,
+        reportValidationCost: reportValidationCost };
 }
