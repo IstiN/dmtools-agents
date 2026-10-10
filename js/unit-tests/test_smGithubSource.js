@@ -611,6 +611,139 @@ suite('sm github source', function () {
             'un-armed + not validation_failed — parked guests (owner 2026-09-27, fa#923) stay out of the arm queue');
     });
 
+    // ── gh-837: mutexMax — parallel validations in the merge window ──
+    test('pr rules: mutexMax (gh-837) — global form admits a second arm below the cap', function () {
+        // The merge-cadence knob relaxes the single-flight ai_validating
+        // mutex: with mutexMax 2, validate-armed still matches while
+        // EXACTLY ONE approved arm is in flight; at two holders it defers.
+        function mk(holderLabels) {
+            return function () {
+                var prs = [
+                    { number: 40, labels: [{ name: 'pr_approved' }], head: { ref: 'ai/gh-40' }, draft: false },
+                    { number: 41, labels: [{ name: 'pr_approved' }], head: { ref: 'ai/gh-41' }, draft: false }
+                ];
+                holderLabels.forEach(function (labels, i) {
+                    prs.push({ number: 50 + i, labels: labels, head: { ref: 'ai/gh-' + (50 + i) }, draft: false });
+                });
+                return prs;
+            };
+        }
+        var q = { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'],
+                  mutex: 'ai_validating', mutexAmong: ['pr_approved'], mutexMax: 2 };
+        var armed = [{ name: 'ai_validating' }, { name: 'pr_approved' }];
+
+        var one = load({ github_list_prs: mk([armed]) }, {}, {});
+        var items = one.query({ query: q }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.deepEqual(items.map(function (i) { return i.key; }), ['pr-40', 'pr-41'],
+            'one holder < cap 2 — the rule does NOT defer; FIFO order kept (limit:1 arms pr-40)');
+
+        var two = load({ github_list_prs: mk([armed, armed]) }, {}, {});
+        items = two.query({ query: q }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.length, 0, 'two holders = cap 2 — no third arm leaks');
+
+        // mutexMax 1 (or absent) = today's strictly serial behavior.
+        var serial = load({ github_list_prs: mk([armed]) }, {}, {});
+        items = serial.query({
+            query: { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'],
+                     mutex: 'ai_validating', mutexAmong: ['pr_approved'] }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.length, 0, 'no mutexMax — a single holder still serializes everything');
+    });
+
+    test('pr rules: mutexMax (gh-837) — dev-lane arms never count toward the cap', function () {
+        // mutexAmong parity under relaxation: only pr_approved holders
+        // occupy merge-window slots; a dev-lane arm (ai_validating without
+        // pr_approved) neither fills a slot nor blocks anything.
+        var src = load({
+            github_list_prs: function () {
+                return [
+                    { number: 40, labels: [{ name: 'pr_approved' }], head: { ref: 'ai/gh-40' }, draft: false },
+                    { number: 60, labels: [{ name: 'ai_validating' }], head: { ref: 'ai/gh-60' }, draft: false },
+                    { number: 61, labels: [{ name: 'pr_approved' }, { name: 'ai_validating' }],
+                      head: { ref: 'ai/gh-61' }, draft: false }
+                ];
+            }
+        }, {}, {});
+        var items = src.query({
+            query: { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'],
+                     mutex: 'ai_validating', mutexAmong: ['pr_approved'], mutexMax: 2 }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.length, 1, 'dev arm ignored, one approved holder < cap 2 — pr-40 arms');
+        assert.equal(items[0].key, 'pr-40');
+    });
+
+    test('pr rules: mutexMax (gh-837) — exclude-self: self-holders still drain, non-holders defer at the cap', function () {
+        // Recovery-rule parity (#577) under relaxation: a self-holding
+        // revalidate candidate NEVER blocks itself (the leaked stack drains
+        // oldest-first regardless of the cap), while a non-holder defers
+        // only once OTHER approved arms reach mutexMax.
+        var selfArm = [{ name: 'pr_approved' }, { name: 'ai_validating' }];
+        var src = load({
+            github_list_prs: function () {
+                return [
+                    { number: 70, labels: selfArm, head: { ref: 'ai/gh-70' }, draft: false },
+                    { number: 71, labels: selfArm, head: { ref: 'ai/gh-71' }, draft: false },
+                    { number: 72, labels: [{ name: 'pr_approved' }], head: { ref: 'ai/gh-72' }, draft: false }
+                ];
+            }
+        }, {}, {
+            70: { number: 70, state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true },
+            71: { number: 71, state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true },
+            72: { number: 72, state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true }
+        });
+        var q = { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: ['none'],
+                  notMergeState: ['BEHIND', 'DIRTY'], draft: false,
+                  mutex: 'ai_validating', mutexAmong: ['pr_approved'],
+                  mutexExcludeSelf: true, mutexMax: 2 };
+        // Both self-holders drain (2 items), and the unarmed pr-72 sees 2
+        // OTHER holders = cap → defers. No cross-contamination.
+        var items = src.query({ query: q }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.deepEqual(items.map(function (i) { return i.key; }), ['pr-70', 'pr-71'],
+            'self-holders drain oldest-first; the non-holder is refused a third arm');
+
+        // Below the cap the stack still drains; and even ABOVE the cap a
+        // pure self-holder stack keeps draining — the cap binds NEW arms
+        // (validate-armed's global form), never the recovery rules' drain
+        // (#577: self-holders never block themselves). A stack wider than
+        // the cap can only be pre-existing residue (leaked while the knob
+        // was off / manual arms) — it drains oldest-first, it cannot grow.
+        var srcThree = load({
+            github_list_prs: function () {
+                return [70, 71, 72].map(function (n) {
+                    return { number: n, labels: selfArm, head: { ref: 'ai/gh-' + n }, draft: false };
+                });
+            }
+        }, {}, {
+            70: { number: 70, state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true },
+            71: { number: 71, state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true },
+            72: { number: 72, state: 'OPEN', checks: 'none', mergeState: 'BLOCKED', mergeable: true }
+        });
+        items = srcThree.query({ query: q }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.deepEqual(items.map(function (i) { return i.key; }), ['pr-70', 'pr-71', 'pr-72'],
+            'a wider-than-cap leaked stack still drains oldest-first — the cap never wedges recovery');
+    });
+
+    test('pr rules: mutexMax (gh-837) — a blocked holder is invisible under the cap', function () {
+        // gh-766/fa #939 freeze semantics preserved: a 'blocked' holder was
+        // filtered before the mutex scan, so it neither fills a slot nor
+        // defers candidates — even with mutexMax > 1.
+        var src = load({
+            github_list_prs: function () {
+                return [
+                    { number: 80, labels: [{ name: 'blocked' }, { name: 'pr_approved' }, { name: 'ai_validating' }],
+                      head: { ref: 'ai/gh-80' }, draft: false },
+                    { number: 81, labels: [{ name: 'pr_approved' }], head: { ref: 'ai/gh-81' }, draft: false }
+                ];
+            }
+        }, {}, {});
+        var items = src.query({
+            query: { type: 'pr', labels: ['pr_approved'], notLabels: ['ai_validating'],
+                     mutex: 'ai_validating', mutexAmong: ['pr_approved'], mutexMax: 3 }
+        }, { repoInfo: { owner: 'a', repo: 'b' } });
+        assert.equal(items.length, 1, 'frozen holder invisible — pr-81 arms despite cap 3');
+        assert.equal(items[0].key, 'pr-81');
+    });
+
     test('pr rules: branchPrefix and draft filters', function () {
         var srcMod = load({
             github_list_prs: function () {

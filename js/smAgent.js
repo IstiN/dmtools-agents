@@ -50,6 +50,16 @@
  *   CI child may still be invisible to the event-filtered duplicate guard (Actions
  *   API registration lag; live fa ai/gh-1292: two CI runs 4s apart). 0 disables the
  *   widened probe (legacy single-probe guard).
+ *   jobParams.validationConcurrency (default 1, gh-837) — parallel-validation knob:
+ *     the ai_validating/pr_approved merge-window mutex admits up to N CONCURRENT
+ *     approved-arm validations (repo-var analog; .dmtools/config.js
+ *     smValidationConcurrency overrides, clamped to 5). The effective concurrency
+ *     rises from 1 to the knob only when the approved queue depth is at/above
+ *     jobParams.validationConcurrencyQueueWatermark (default 3) — below it the
+ *     window stays strictly serial (runner-budget protection; knob 1 = unchanged
+ *     legacy behavior). jobParams.validationMinutesEstimate (default 35) feeds the
+ *     per-tick validation-minutes runner-cost report (AC2, hard-capped at
+ *     concurrency x estimate).
  *
  * Rule fields:
  *   jql            (required) — JQL to find tickets (supports {jiraProject}, {parentTicket})
