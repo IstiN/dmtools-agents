@@ -1398,6 +1398,33 @@ suite('sm github source', function () {
         assert.equal(items.length, 0, 'a BLOCK verdict on the head blocks merge');
     });
 
+    test('verdict guards pass the machine-author allowlist to the provider (gh-828 review round 2)', function () {
+        // The marker format is public — the query guards must pin the
+        // gh-728 machine logins onto the record read so a forged marker
+        // from any comment-capable identity is invisible.
+        var seenOpts = null;
+        var saved = providerStub.latestVerdictRecord;
+        providerStub.latestVerdictRecord = function (n, headSha, opts) {
+            seenOpts = opts;
+            return saved.call(providerStub, n, headSha);
+        };
+        try {
+            providerStub._verdictRecords = { 96: verdictFor(96, 'APPROVE') };
+            var srcMod = load({
+                github_list_prs: function () { return prList([96], ['pr_approved']); }
+            }, {}, statusFor([96]));
+            srcMod.query({
+                query: { type: 'pr', labels: ['pr_approved'],
+                         notLatestVerdict: ['REQUEST_CHANGES', 'BLOCK'], draft: false }
+            }, { repoInfo: { owner: 'a', repo: 'b' }, machineAuthor: 'ai-teammate' });
+            assert.ok(seenOpts && Array.isArray(seenOpts.authorLogins),
+                'latestVerdictRecord receives the authorLogins option');
+            assert.deepEqual(seenOpts.authorLogins, ['ai-teammate']);
+        } finally {
+            providerStub.latestVerdictRecord = saved;
+        }
+    });
+
     test('guards are inert without the provider probe or a head sha (fail-open)', function () {
         providerStub._verdictRecords = {};
         var savedProbe = providerStub.latestVerdictRecord;
