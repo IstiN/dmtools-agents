@@ -312,4 +312,126 @@ suite('machineSm resolveSuggestionThreads (gh-828)', function () {
         assert.equal(out.resolved, 1);
         assert.equal(p.calls.resolves.length, 1);
     });
+
+    test('a resolve failure leaves no ack behind (resolve-first idempotency, gh-828 review round 3)', function () {
+        // The ack must be posted only AFTER a successful resolve: with
+        // reply-first, a persistent resolve failure re-selects the thread
+        // next tick and spams one duplicate ack per tick, unbounded.
+        var p = providerWith([sug(1), sug(2)]);
+        p.resolveThread = function (pr, thread) {
+            if (thread.threadId === 'RT_1') throw new Error('graphql down');
+            this.calls.resolves.push({ pr: pr, threadId: thread.threadId });
+        };
+        var out = agent.resolveSuggestionThreads(p, 1457, HEAD,
+            { machineLogins: ['ai-teammate'] });
+        assert.equal(out.resolved, 1);
+        assert.equal(p.calls.replies.length, 1, 'only the RESOLVED thread gets an ack');
+        assert.equal(p.calls.replies[0].threadId, 'RT_2');
+        assert.equal(p.calls.resolves.length, 1);
+    });
+
+    test('the verdict gate passes the machine-author allowlist to verdictRecords (gh-828 review round 2)', function () {
+        // The marker format is public — a forged APPROVE from any
+        // comment-capable identity must not unlock auto-resolution. The leg
+        // threads cfg.machineLogins through as the parse allowlist.
+        var p = providerWith([sug(1)]);
+        var seenOpts = null;
+        var orig = p.verdictRecords;
+        p.verdictRecords = function (pr, opts) { seenOpts = opts; return orig.call(p, pr); };
+        agent.resolveSuggestionThreads(p, 1457, HEAD,
+            { machineLogins: ['ai-teammate', 'github-actions[bot]'] });
+        assert.ok(seenOpts && Array.isArray(seenOpts.authorLogins),
+            'verdictRecords receives the authorLogins option');
+        assert.deepEqual(seenOpts.authorLogins, ['ai-teammate', 'github-actions[bot]']);
+    });
+});
+
+suite('machineSm cfg knobs — gh-828 review round 4 (override priority)', function () {
+
+    var rvReal = function () {
+        if (!rvReal.mod) rvReal.mod = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+        return rvReal.mod;
+    };
+    var maReal = function () {
+        if (!maReal.mod) maReal.mod = loadModule('js/common/machineAuthor.js', makeRequire({}), {});
+        return maReal.mod;
+    };
+
+    var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
+    var RECORD = { head: HEAD, verdict: 'APPROVE', blocking: 0, important: 1, suggestions: 7,
+                   at: '2026-10-10T05:47:30.000Z', source: 'pr_review.json' };
+
+    function loadAgent(projectConfig) {
+        // The provider is created inside action() — the mock closes over a
+        // holder each test fills with its recording provider.
+        var holder = { provider: null };
+        var agent = loadModule('js/machineSmAgent.js', makeRequire({
+            './configLoader.js': { loadProjectConfig: function () { return projectConfig; } },
+            './common/smProvider.js': { createSmProvider: function () { return holder.provider; } },
+            './common/reviewVerdicts.js': rvReal(),
+            './common/machineAuthor.js': maReal()
+        }), {
+            cli_execute_command: function () { return '{}'; }
+        });
+        return { agent: agent, holder: holder };
+    }
+
+    function providerRecording(resolved) {
+        var threads = [];
+        for (var i = 1; i <= 7; i++) {
+            threads.push({ threadId: 'RT_' + i, rootCommentId: 100 + i, resolved: false,
+                           author: 'ai-teammate', body: '💡 SUGGESTION: polish ' + i });
+        }
+        return {
+            activeMachineRuns: function () { return []; },
+            listMachineIssues: function () {
+                return [{ number: 828, title: 'gh-828', labels: ['ai_developed', 'ai_pr_reviewed', 'pr_approved'],
+                           assignees: [] }];
+            },
+            findPr: function () { return { number: 828, state: 'OPEN' }; },
+            prStatus: function () {
+                return { number: 828, state: 'OPEN', checkConclusion: 'green',
+                         mergeState: 'BLOCKED', mergeable: false, headSha: HEAD };
+            },
+            verdictRecords: function () { return [RECORD]; },
+            reviewThreadList: function () { return threads; },
+            replyToThread: function () {},
+            resolveThread: function (pr, thread) { resolved.push(thread.threadId); }
+        };
+    }
+
+    function run(agent, jobParams) {
+        var params = { jobParams: jobParams };
+        params.jobParams.repo = 'o/r';
+        return agent.action(params);
+    }
+
+    test('maxResolveThreads honors the .dmtools/config.js machineSm override BEFORE jobParams', function () {
+        // Every other machineSm knob resolves override before p — this one
+        // silently ignored a project-config cap and always read jobParams.
+        var resolved = [];
+        var loaded = loadAgent({ machineSm: { maxResolveThreads: 5 } });
+        loaded.holder.provider = providerRecording(resolved);
+        var out = run(loaded.agent, { machineAuthor: 'ai-teammate', maxResolveThreads: 9 });
+        assert.equal(out.failures, 0);
+        assert.equal(resolved.length, 5, 'the override cap (5) wins over jobParams (9)');
+    });
+
+    test('maxResolveThreads falls back to jobParams when no override is set', function () {
+        var resolved = [];
+        var loaded = loadAgent({});
+        loaded.holder.provider = providerRecording(resolved);
+        var out = run(loaded.agent, { machineAuthor: 'ai-teammate', maxResolveThreads: 3 });
+        assert.equal(out.failures, 0);
+        assert.equal(resolved.length, 3, 'the jobParams cap applies without an override');
+    });
+
+    test('maxResolveThreads defaults to the module cap when neither override nor jobParams set it', function () {
+        var resolved = [];
+        var loaded = loadAgent({});
+        loaded.holder.provider = providerRecording(resolved);
+        var out = run(loaded.agent, { machineAuthor: 'ai-teammate' });
+        assert.equal(out.failures, 0);
+        assert.equal(resolved.length, 7, 'all 7 eligible threads resolve under the default cap of 20');
+    });
 });

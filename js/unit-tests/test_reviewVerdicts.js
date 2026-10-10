@@ -451,6 +451,22 @@ suite('reviewVerdicts — post-APPROVE thread resolution (gh-828)', function () 
         assert.equal(rv.threadSeverity(null), 'none');
     });
 
+    test('threadSeverity: "non-blocking" prose never classifies as blocking (gh-828 review round 1)', function () {
+        // \b holds across a hyphen, so a naive /\bBLOCKING\b/ matches the
+        // tail of "non-blocking" / "unblocking" — a machine suggestion whose
+        // own prose says "this is non-blocking" would be classified
+        // blocking, skipped by the resolution leg AND kept by the withheld
+        // rework arm (gh-807) — a per-thread recurrence of the stall.
+        assert.equal(rv.threadSeverity('💡 SUGGESTION: this is non-blocking, but rename'), 'suggestion');
+        assert.equal(rv.threadSeverity('⚠️ IMPORTANT: this is non-blocking, but consider renaming'), 'important');
+        assert.equal(rv.threadSeverity('this is non-blocking, but consider renaming'), 'none');
+        assert.equal(rv.threadSeverity('unblocking the queue now'), 'none');
+        // regression pins: the word form still matches at a real boundary
+        assert.equal(rv.threadSeverity('some text mentioning BLOCKING hard'), 'blocking');
+        assert.equal(rv.threadSeverity('🚨 **BLOCKING** — null deref'), 'blocking');
+        assert.equal(rv.threadSeverity('BLOCKING: data loss'), 'blocking');
+    });
+
     // ── the selection gate (AC1) ────────────────────────────────────────────
 
     test('AC1: APPROVE + blocking=0 head selects all unresolved machine suggestion threads', function () {
