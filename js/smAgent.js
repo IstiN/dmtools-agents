@@ -4081,8 +4081,16 @@ function reworkArmGate(repoInfo, ticket, machineLogins) {
 // legs), no push, 4/6 threads open, no close marker. The consumeLabels
 // paths below stamp an audit marker so every consumption is attributable,
 // and the restore_rework_arm sweep re-arms a consumption that left machine
-// threads unresolved on an unchanged head (js/common/reworkConsumption.js
-// is the pure side — markers + the shouldRestoreArm decision).
+// threads unresolved (js/common/reworkConsumption.js is the pure side —
+// markers + the shouldRestoreArm decision).
+//
+// gh-840 rework review (BLOCKING): PR-carrier query items usually carry
+// pr: null — githubSource queryPrs populates item.pr only under
+// needsStatus (checks/mergeState/prChecks/verdict query keys), and neither
+// rework-on-label nor the rework-arm-restore query carries any. Both paths
+// below therefore probe the head fresh through prHeadAndLabels (the same
+// fresh-probe pattern reworkArmGate already uses) whenever the query item
+// has none.
 
 // One fetch of the PR's raw comment list (same payload shape as
 // readVerdictRecords / failMarkerState). Returns [] on any read failure —
@@ -4093,7 +4101,7 @@ function prCommentList(repoInfo, prNumber) {
     try {
         var raw = github_get_pr_comments({
             workspace: repoInfo.owner, repository: repoInfo.repo,
-            pullRequestId: prNumber
+            pullRequestId: String(prNumber)
         });
         var obj = (typeof raw === 'string') ? JSON.parse(raw) : (raw || []);
         return Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
@@ -4109,6 +4117,11 @@ function prCommentList(repoInfo, prNumber) {
 // tick sweep can later tell a bogus consumption from a successful close.
 // Non-agent:rework labels and non-github sources are untouched; every
 // failure is a logged warn — the audit must never break the consumption.
+// When the query item carries no head (pr: null — the live PR-carrier
+// shape) the head is probed fresh; a consumption that STILL cannot be
+// attributed is logged LOUD (never a silent skip) — an unattributed
+// consumption leaves the sweep without evidence forever, which is exactly
+// the hang this machinery exists to kill.
 function auditReworkConsumption(repoInfo, ticket, label, path) {
     if (label !== reviewVerdictsModule.LABEL_REWORK) return;
     if (!ticket || !ticket.prNumber) {
@@ -4117,8 +4130,17 @@ function auditReworkConsumption(repoInfo, ticket, label, path) {
         return;
     }
     var head = ((ticket.pr && ticket.pr.headSha) || ticket.headSha) || null;
+    if (!head) {
+        var probe = prHeadAndLabels(repoInfo, ticket.prNumber);
+        if (probe) head = probe.headSha;
+    }
     var body = reworkConsumptionModule.buildConsumeAuditComment(path, head);
-    if (!body) return;
+    if (!body) {
+        console.warn('  ⚠️ gh-840: agent:rework consumed on PR #' + ticket.prNumber +
+            ' (path: ' + path + ') but the head could not be attributed ' +
+            '(item.pr null, fresh probe failed) — no audit marker posted; the sweep has no evidence');
+        return;
+    }
     if (DRY) { console.log('  [dry] 🏷️ gh-840 consumption audit (' + path + ') on PR #' + ticket.prNumber); return; }
     try {
         github_create_comment({

@@ -25,12 +25,16 @@
  *   Sweep      — shouldRestoreArm(): a PR with unresolved MACHINE review
  *                threads, no agent:rework label, no rework in flight,
  *                evidence of a prior consumption (consume/restore marker),
- *                the head NOT advanced past the consumed head (a real push
- *                is the close marker), quiet longer than staleMs (default
- *                30 min ≈ 6 ticks at a ~5-min cron) → restore the arm.
- *                Fail-closed everywhere: no evidence, no restore (AC3 —
- *                human-thread-only PRs are untouched); no clock, no
- *                restore.
+ *                quiet longer than staleMs (default 30 min ≈ 6 ticks at a
+ *                ~5-min cron) → restore the arm. Fail-closed everywhere:
+ *                no evidence, no restore (AC3 — human-thread-only PRs are
+ *                untouched); no clock, no restore. The close proof is
+ *                thread OWNERSHIP, not head position (gh-840 rework
+ *                review, IMPORTANT): a head move with the same open
+ *                machine threads is a silentUpdateBranch refresh, not a
+ *                close — a healthy close resolves the machine threads
+ *                ('no-unresolved-threads'); a bare head advance must never
+ *                suppress the sweep.
  *
  * Pure module — no dmtools globals; smAgent feeds it comment payloads and
  * applies the decisions. GraalJS-clean (var + plain functions, JSON-safe
@@ -173,17 +177,14 @@ function parseRestoreMarkers(comments, opts) {
  * The sweep decision (pure — gh-840 AC1–AC3). state:
  *   unresolvedMachineThreads        — unresolved threads authored by the
  *                                     machine (the caller's census; >0 is
- *                                     the "threads to own" proof);
+ *                                     the "threads to own" proof and the
+ *                                     ONLY close-proof inverse — a healthy
+ *                                     close resolves the machine threads);
  *   hasReworkLabel                  — agent:rework present on the PR;
  *   reworkInFlight                  — gh-806 latch OR an active leg run on
  *                                     the head;
  *   consumedAtMs / restoredAtMs     — newest marker timestamps (null when
  *                                     no evidence exists);
- *   headAdvancedPastConsumption     — the live head differs from the newest
- *                                     consume marker's head (a push/refresh
- *                                     happened after the consumption — the
- *                                     leg-close marker: comment + head
- *                                     advanced);
  *   nowMs, staleMs                  — the clock and the quiet bound.
  * Returns { restore, reason }:
  *   'restore'                  — re-arm agent:rework + restore comment;
@@ -192,9 +193,15 @@ function parseRestoreMarkers(comments, opts) {
  *   'rework-in-flight'         — a leg owns the threads;
  *   'no-consumption-evidence'  — never consumed (AC3 — human-thread-only
  *                                PRs untouched);
- *   'head-advanced'            — a push followed the consumption (AC2);
  *   'within-grace'             — quiet window not elapsed (bounded re-arm);
  *   'bad-clock'                — missing/unparsable clock → fail closed.
+ *
+ * IMPORTANT (gh-840 rework review): there is deliberately NO head-position
+ * gate. silentUpdateBranch's silent refresh merges advance the head without
+ * a leg and without resolving threads; an advanced head carrying the same
+ * open machine threads is refresh evidence, not close evidence. Head
+ * position is still consulted by the caller for the gh-806 latch, the
+ * in-flight leg gate and the marker bookkeeping — never as a close proof.
  */
 function shouldRestoreArm(state) {
     var s = state || {};
@@ -202,9 +209,6 @@ function shouldRestoreArm(state) {
     if (s.reworkInFlight) return { restore: false, reason: 'rework-in-flight' };
     if (!(Number(s.unresolvedMachineThreads) > 0)) {
         return { restore: false, reason: 'no-unresolved-threads' };
-    }
-    if (s.headAdvancedPastConsumption) {
-        return { restore: false, reason: 'head-advanced' };
     }
     var consumed = (typeof s.consumedAtMs === 'number' && !isNaN(s.consumedAtMs))
         ? s.consumedAtMs : null;

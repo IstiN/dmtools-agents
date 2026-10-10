@@ -14,9 +14,12 @@
  *   - the restore marker (sweep bookkeeping, gh-821-style durability);
  *   - shouldRestoreArm — the pure sweep decision:
  *       AC1  consumed-without-work, quiet past the stale window → restore;
- *       AC2  a real close (head advanced past the consumed head / nothing
- *            left to own) → no restore;
+ *       AC2  a real close (nothing left to own — all machine threads
+ *            resolved) → no restore;
  *       AC3  no consumption evidence (human-thread-only PRs) → no restore;
+ *       a head move with the same open machine threads is a refresh,
+ *       not a close → restore (silentUpdateBranch pushes merge commits
+ *       without a leg — gh-840 rework review, IMPORTANT);
  *       grace window, label present, rework in flight → no restore.
  *
  * Uses: test(), suite(), assert — pure module, no dmtools globals.
@@ -100,7 +103,6 @@ suite('reworkConsumption — shouldRestoreArm (gh-840 sweep decision)', function
             reworkInFlight: false,
             consumedAtMs: CONSUMED_AT,
             restoredAtMs: null,
-            headAdvancedPastConsumption: false, // no push since the consumption
             nowMs: NOW,
             staleMs: STALE_MS
         };
@@ -130,10 +132,19 @@ suite('reworkConsumption — shouldRestoreArm (gh-840 sweep decision)', function
         assert.equal(d.reason, 'within-grace');
     });
 
-    test('AC2 — head advanced past the consumption (a real push/close) → no restore', function () {
-        var d = rc.shouldRestoreArm(base({ headAdvancedPastConsumption: true }));
-        assert.notOk(d.restore, 'the rework/refresh pushed — a new head owns the state');
-        assert.equal(d.reason, 'head-advanced');
+    test('IMPORTANT — a head move with the same open machine threads is a refresh, not a close → restore', function () {
+        // gh-840 rework review round 2: silentUpdateBranch's silent refresh
+        // merges advance the head WITHOUT a leg and WITHOUT resolving
+        // threads. The old 'head-advanced' skip treated any head move as
+        // the AC2 close proof — one post-consumption refresh suppressed
+        // the sweep forever (the #826 hang, one step removed). The close
+        // proof is thread ownership, not head position: a healthy close
+        // resolves the machine threads ('no-unresolved-threads' above);
+        // with machine threads still open on ANY head the work is not done
+        // and the sweep restores.
+        var d = rc.shouldRestoreArm(base());
+        assert.ok(d.restore, 'open machine threads on the advanced head → work remains');
+        assert.equal(d.reason, 'restore');
     });
 
     test('AC2 — nothing left to own (all machine threads resolved) → no restore', function () {

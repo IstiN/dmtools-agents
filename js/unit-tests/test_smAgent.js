@@ -9805,7 +9805,15 @@ suite('smAgent: fail-closed agent:rework consumption (gh-840)', function () {
         assert.equal(sm.capturedPrLabelAdds.length, 0, '5 min old consumption < 30 min stale — no restore');
     });
 
-    test('AC2 — head advanced past the consumption (a real push/close) → no restore', function () {
+    test('IMPORTANT — a silent branch refresh after a bogus consumption (head advanced, no leg run, machine threads open) → arm restored', function () {
+        // gh-840 rework review round 2: silentUpdateBranch pushes a merge
+        // commit to the PR head WITHOUT resolving review threads and
+        // without any rework leg. Timeline: bogus consumption at H1 →
+        // refresh merges main → H2, threads untouched → every sweep used
+        // to read 'head-advanced' and skip — the exact consumed-without-
+        // work hang, invisible to the recovery path. An advanced head
+        // carrying the SAME open machine threads is refresh evidence, not
+        // close evidence → the sweep restores.
         var ADVANCED = 'ffffeeeeddddeeeeffff00001111222233334444';
         var sm = makeSmAgent({
             fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-agents" } };' },
@@ -9823,7 +9831,8 @@ suite('smAgent: fail-closed agent:rework consumption (gh-840)', function () {
             } }
         });
         sm.action(baseParams('epam', 'dmtools-agents', [sweepRule(30)], { machineAuthor: 'ai-teammate' }));
-        assert.equal(sm.capturedPrLabelAdds.length, 0, 'the push is the close marker — the sweep stays quiet');
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'the refresh advanced the head but the threads are still open — restore');
+        assert.equal(sm.capturedPrLabelAdds[0].labels.join(','), 'agent:rework');
     });
 
     test('AC2 — gh-807 verdict gate preserved: APPROVE head with clean census is NOT re-armed by the sweep', function () {
@@ -9924,6 +9933,134 @@ suite('smAgent: fail-closed agent:rework consumption (gh-840)', function () {
         assert.contains(audits[0].body, '"path":"dispatch"');
         assert.contains(audits[0].body, '"head":"' + HEAD + '"');
         assert.contains(audits[0].body, 'gh-840');
+    });
+
+    test('BLOCKING — audit path with the LIVE item shape (pr: null): the head is probed via prHeadAndLabels and stamped on the marker', function () {
+        // githubSource queryPrs populates item.pr only under needsStatus —
+        // the rework-on-label query carries no status keys, so live items
+        // arrive with pr: null. Without a probe fallback no marker is ever
+        // posted (buildConsumeAuditComment(null head) → no body) and the
+        // whole gh-840 mechanism is inert. The probe is the same
+        // prHeadAndLabels pattern reworkArmGate already uses.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-agents" } };' },
+            github: {
+                items: [{ key: 'pr-826', labels: ['agent:rework'], issueNumber: 825, prNumber: 826,
+                    draft: false, author: 'ai-teammate', pr: null }],
+                pr: { number: 826, head: { sha: HEAD }, labels: [{ name: 'agent:rework' }], body: 'Fixes #825' },
+                workflowApiRuns: []
+            }
+        });
+        sm.action(baseParams('epam', 'dmtools-agents', [{
+            description: 'manual rework request',
+            source: 'github',
+            query: { type: 'pr', labels: ['agent:rework'] },
+            workflowFile: 'ai-teammate.yml',
+            inputs: { issue: '', leg: 'rework', reason: 'sm: agent:rework label on the PR (manual rework request)', pr: '{prNumber}' },
+            consumeLabels: ['agent:rework'],
+            limit: 1,
+            id: 'rework-on-label'
+        }], { machineAuthor: 'ai-teammate' }));
+
+        assert.equal(sm.capturedTriggers.length, 1, 'the rework leg dispatches');
+        assert.equal(sm.capturedPrLabelRemoves.length, 1, 'the label is consumed on dispatch');
+        var audits = sm.capturedPrComments.filter(function (c) {
+            return c.body.indexOf(CONSUME_PREFIX) !== -1;
+        });
+        assert.equal(audits.length, 1, 'exactly one consumption-audit marker despite pr: null');
+        assert.contains(audits[0].body, '"head":"' + HEAD + '"', 'the PROBED head rides the marker');
+        assert.contains(audits[0].body, '"path":"dispatch"');
+    });
+
+    test('BLOCKING — audit path fails LOUD when the head cannot be attributed (pr: null, probe failed)', function () {
+        // Fail loud, not a silent `return;`: an unattributed agent:rework
+        // consumption leaves the sweep with no evidence forever — the bug
+        // class gh-840 exists to kill. The warn names the PR.
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-agents" } };' },
+            github: {
+                items: [{ key: 'pr-826', labels: ['agent:rework'], issueNumber: 825, prNumber: 826,
+                    draft: false, author: 'ai-teammate', pr: null }],
+                pr: { message: 'Not Found' }, // the head probe 404s
+                workflowApiRuns: []
+            },
+            captureConsole: true
+        });
+        sm.action(baseParams('epam', 'dmtools-agents', [{
+            description: 'manual rework request',
+            source: 'github',
+            query: { type: 'pr', labels: ['agent:rework'] },
+            workflowFile: 'ai-teammate.yml',
+            inputs: { issue: '', leg: 'rework', reason: 'sm: agent:rework label on the PR (manual rework request)', pr: '{prNumber}' },
+            consumeLabels: ['agent:rework'],
+            limit: 1,
+            id: 'rework-on-label'
+        }], { machineAuthor: 'ai-teammate' }));
+
+        var audits = sm.capturedPrComments.filter(function (c) {
+            return c.body.indexOf(CONSUME_PREFIX) !== -1;
+        });
+        assert.equal(audits.length, 0, 'no marker without an attributable head');
+        assert.ok(sm.capturedLogs.some(function (l) {
+            return l.indexOf('gh-840') !== -1 && l.indexOf('could not be attributed') !== -1;
+        }), 'a loud warning names the unattributed consumption');
+    });
+
+    test('BLOCKING — sweep with the LIVE item shape (pr: null): the head is probed and the arm is restored on it', function () {
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-agents" } };' },
+            github: {
+                items: [{ key: 'pr-826', labels: ['ai_pr_reviewed'], issueNumber: 825, prNumber: 826,
+                    draft: false, author: 'ai-teammate', pr: null }],
+                pr: { number: 826, head: { sha: HEAD }, labels: [{ name: 'ai_pr_reviewed' }], body: 'Fixes #825' },
+                prComments: [consumeComment('cross-anchor', '2026-10-10T10:00:00.000Z')],
+                workflowApiRuns: []
+            },
+            extraMocks: { github_get_pr_review_threads: function () {
+                return JSON.stringify(threadsPayload('ai-teammate', false));
+            } }
+        });
+        sm.action(baseParams('epam', 'dmtools-agents', [sweepRule(30)], { machineAuthor: 'ai-teammate' }));
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'the arm is restored despite pr: null');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 826);
+        assert.equal(sm.capturedPrLabelAdds[0].labels.join(','), 'agent:rework');
+        var restore = sm.capturedPrComments.filter(function (c) {
+            return c.body.indexOf(RESTORE_PREFIX) !== -1;
+        });
+        assert.equal(restore.length, 1, 'exactly one restore bookkeeping marker');
+        assert.contains(restore[0].body, '"head":"' + HEAD + '"',
+            'the restore marker records the PROBED head (not "unknown")');
+    });
+
+    test('BLOCKING — sweep with the LIVE item shape (pr: null): an active leg run on the PROBED head suppresses the restore', function () {
+        // The in-flight gate must be LIVE on the probed head — otherwise a
+        // restore stacks a second rework leg on a flying one (the very
+        // dispatch the gh-806 latch exists to prevent).
+        var sm = makeSmAgent({
+            fileMap: { '../.dmtools/config.js': 'module.exports = { repository: { owner: "epam", repo: "dmtools-agents" } };' },
+            github: {
+                items: [{ key: 'pr-826', labels: ['ai_pr_reviewed'], issueNumber: 825, prNumber: 826,
+                    draft: false, author: 'ai-teammate', pr: null }],
+                pr: { number: 826, head: { sha: HEAD }, labels: [{ name: 'ai_pr_reviewed' }], body: 'Fixes #825' },
+                prComments: [consumeComment('dispatch', '2026-10-10T10:00:00.000Z')]
+            },
+            extraMocks: { github_get_pr_review_threads: function () {
+                return JSON.stringify(threadsPayload('ai-teammate', false));
+            } },
+            onCliExecute: function (cmdOpts) {
+                if (String(cmdOpts.command).indexOf('actions/runs?head_sha=') !== -1) {
+                    return JSON.stringify({ workflow_runs: [
+                        { status: 'in_progress', path: '.github/workflows/ai-teammate.yml',
+                          head_sha: HEAD, conclusion: null }
+                    ] });
+                }
+                return '';
+            }
+        });
+        sm.action(baseParams('epam', 'dmtools-agents', [sweepRule(30)], { machineAuthor: 'ai-teammate' }));
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'the in-flight gate is LIVE on the probed head — a flying leg owns the threads');
     });
 
     test('deployed rule — sm_github.json carries the gh-840 sweep wired to restore_rework_arm', function () {
