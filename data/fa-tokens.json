@@ -509,5 +509,15 @@
       "total": 69202,
       "model": ""
     }
+  ],
+  "pr-834": [
+    {
+      "leg": "review",
+      "at": "2026-10-10T09:38:49Z",
+      "prompt": 34403,
+      "completion": 9866,
+      "total": 44269,
+      "model": ""
+    }
   ]
 }
