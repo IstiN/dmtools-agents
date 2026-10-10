@@ -48,6 +48,14 @@
  *    time (flow.js phaseRail);
  *  - rework + token analytics: per-card rework ×N · time, Σ token chip on
  *    cards, and a board-level value-stream strip (flow.js flowSummary).
+ *
+ * gh-825 (model + $cost): the tick prices each token row against the
+ * hardcoded data/model-pricing.json table (rates USD/Mtok; unknown/absent
+ * model ⇒ cost omitted, tokens still shown). The board only sums: per-leg
+ * rows render model + $ (drawer token table), cards gain Σ$ on the token
+ * chip and the drawer total row, the flow-strip chip gains the board Σ$,
+ * and the header gains the tick-published global Σ$ pill (st.costs — all
+ * cards, 14d window; hidden when the snapshot carries no costs).
  */
 (function () {
   'use strict';
@@ -225,6 +233,15 @@
     return String(n);
   }
 
+  // USD for the gh-825 pricing surfaces: a leg is often a fraction of a
+  // cent, so sub-cent values keep 4 decimals ($0.0032) while everything
+  // above renders as cents ($12.34). Numeric only — never a NaN.
+  function fmtUsd(n) {
+    if (n == null || isNaN(n)) return '';
+    if (n > 0 && n < 0.01) return '$' + n.toFixed(4);
+    return '$' + n.toFixed(2);
+  }
+
   // ── v4 value-stream chips (gh-769) ──────────────────────────────────────────
   // Σ token spend on the card itself — a factory that reports tokens is
   // visible WITHOUT opening the drawer (the empty TOKEN SPEND drawer used
@@ -235,8 +252,11 @@
     var legs = Object.keys(t.legs).map(function (k) {
       return k + ' ' + fmtK(t.legs[k].total);
     }).join(', ');
+    // gh-825: the card's Σ$ rides the chip when the tick priced any row —
+    // unknown/absent models keep the chip tokens-only (AC2)
+    var usd = t.cost != null ? ' · ' + esc(fmtUsd(t.cost)) : '';
     return '<span class="tok" title="token spend — ' + esc(legs) +
-      '">Σ ' + esc(fmtK(t.total)) + ' tok</span>';
+      '">Σ ' + esc(fmtK(t.total)) + ' tok' + usd + '</span>';
   }
 
   // CI wall-time vs queue wait (gh-769 #6): "CI 12m · wait 35m" reads as
@@ -501,7 +521,9 @@
         esc(Object.keys(s.tokens.legs).map(function (k) {
           return k + ' ' + fmtK(s.tokens.legs[k].total);
         }).join(', ')) +
-        '"><b>&Sigma; ' + esc(fmtK(s.tokens.total)) + ' tok</b> · ' +
+        '"><b>&Sigma; ' + esc(fmtK(s.tokens.total)) + ' tok' +
+        (s.tokens.cost != null ? ' · ' + esc(fmtUsd(s.tokens.cost)) : '') +
+        '</b> · ' +
         Object.keys(s.tokens.legs).length + ' legs</span>');
     }
     if (s.lead && s.lead.avgMs != null) {
@@ -613,7 +635,9 @@
       var legs = Object.keys(t.legs).map(function (k) {
         return esc(k) + ' ' + esc(fmtK(t.legs[k].total));
       }).join(', ');
-      rows.push(['tokens', '<b>&Sigma; ' + esc(fmtK(t.total)) + '</b> — ' + legs]);
+      rows.push(['tokens', '<b>&Sigma; ' + esc(fmtK(t.total)) + '</b>' +
+        (t.cost != null ? ' · <b>' + esc(fmtUsd(t.cost)) + '</b>' : '') +
+        ' — ' + legs]);
     }
     if (!rows.length) return '';
     var body = rows.map(function (r) {
@@ -629,25 +653,34 @@
     if (!rows.length) {
       body = '<p class="drawer-empty">tokens — not reported by this factory</p>';
     } else {
-      var tot = { prompt: 0, completion: 0, total: 0 };
+      var tot = { prompt: 0, completion: 0, total: 0, cost: null };
       var trs = rows.map(function (t) {
         tot.prompt += t.prompt || 0;
         tot.completion += t.completion || 0;
         tot.total += t.total || 0;
+        if (t.cost != null) tot.cost = (tot.cost || 0) + t.cost;
+        // gh-825: model + $ per leg — unknown/absent model renders '—' and
+        // no $ (tokens only, AC2); model ids are report input → esc()
         return '<tr><td>' + esc(t.leg || '—') + '</td>' +
+          '<td>' + (t.model ? esc(t.model) : '—') + '</td>' +
           '<td>' + (t.at ? esc(ago(t.at)) : '—') + '</td>' +
           '<td class="num">' + (t.prompt || 0).toLocaleString() + '</td>' +
           '<td class="num">' + (t.completion || 0).toLocaleString() + '</td>' +
-          '<td class="num"><b>' + (t.total || 0).toLocaleString() + '</b></td></tr>';
+          '<td class="num"><b>' + (t.total || 0).toLocaleString() + '</b></td>' +
+          '<td class="num">' + (t.cost != null ? esc(fmtUsd(t.cost)) : '—') +
+          '</td></tr>';
       }).join('');
       body = '<table class="tok-table"><thead><tr>' +
-        '<th>leg</th><th>when</th><th class="num">prompt</th>' +
+        '<th>leg</th><th>model</th><th>when</th><th class="num">prompt</th>' +
         '<th class="num">completion</th><th class="num">total</th>' +
+        '<th class="num">$</th>' +
         '</tr></thead><tbody>' + trs +
-        '<tr class="tok-total"><td>total</td><td></td>' +
+        '<tr class="tok-total"><td>total</td><td></td><td></td>' +
         '<td class="num">' + tot.prompt.toLocaleString() + '</td>' +
         '<td class="num">' + tot.completion.toLocaleString() + '</td>' +
-        '<td class="num"><b>' + tot.total.toLocaleString() + '</b></td></tr>' +
+        '<td class="num"><b>' + tot.total.toLocaleString() + '</b></td>' +
+        '<td class="num"><b>' + (tot.cost != null ? esc(fmtUsd(tot.cost)) : '—') +
+        '</b></td></tr>' +
         '</tbody></table>';
     }
     return '<section class="drawer-sec"><h3>Token spend</h3>' + body +
@@ -752,6 +785,25 @@
       pill.textContent = 'issues: ' + backlogSummary;
     } else {
       pill.hidden = true;
+    }
+    // gh-825: the header's global Σ$ — the tick prices the WHOLE tokens
+    // ledger (closed cards leave the board after 24h; their spend must
+    // still count) and publishes the 14d rollup in st.costs. No pricing
+    // (off/bad/nothing priced) → hidden pill, never a lying $0.00. The
+    // cache-drift stub mirrors flowEl: a stale index.html without the
+    // pill must degrade, not throw on first paint.
+    var costPill = document.getElementById('cost-pill') || { hidden: true };
+    if (st.costs && st.costs.usd14d != null) {
+      costPill.hidden = false;
+      // fmtUsd already carries the $ — 'Σ' + '$1.02' reads as the ticket's Σ$
+      costPill.textContent = 'Σ' + fmtUsd(st.costs.usd14d) +
+        ' · ' + (st.costs.windowDays || 14) + 'd';
+      costPill.title = 'model spend across all cards, ' +
+        (st.costs.windowDays || 14) + '-day window' +
+        (st.costs.pricedLegs != null
+          ? ' — ' + st.costs.pricedLegs + ' priced legs' : '');
+    } else {
+      costPill.hidden = true;
     }
     document.getElementById('repo-pill').textContent = st.repo || '';
     document.getElementById('schema-pill').textContent =

@@ -168,14 +168,18 @@
             "at": "2026-10-03T09:40:00Z",
             "prompt": 48210,
             "completion": 12980,
-            "total": 61190
+            "total": 61190,
+            "model": "claude-sonnet-4-5",
+            "cost": 0.33933
           },
           {
             "leg": "pr_review",
             "at": "2026-10-03T10:38:00Z",
             "prompt": 22140,
             "completion": 4310,
-            "total": 26450
+            "total": 26450,
+            "model": "claude-sonnet-4-5",
+            "cost": 0.13107
           }
         ]
       },
@@ -269,21 +273,25 @@
             "at": "2026-10-03T08:55:00Z",
             "prompt": 61050,
             "completion": 18320,
-            "total": 79370
+            "total": 79370,
+            "model": "claude-sonnet-4-5",
+            "cost": 0.45795
           },
           {
             "leg": "pr_review",
             "at": "2026-10-03T09:48:00Z",
             "prompt": 18930,
             "completion": 2760,
-            "total": 21690
+            "total": 21690,
+            "model": null
           },
           {
             "leg": "pr_rework",
             "at": "2026-10-03T11:20:00Z",
             "prompt": 12040,
             "completion": 1980,
-            "total": 14020
+            "total": 14020,
+            "model": "mystery-model"
           }
         ]
       }
@@ -331,7 +339,9 @@
             "at": "2026-10-02T14:20:00Z",
             "prompt": 39100,
             "completion": 9840,
-            "total": 48940
+            "total": 48940,
+            "model": "claude-haiku-4-5",
+            "cost": 0.0883
           }
         ]
       }
@@ -487,5 +497,10 @@
     "queued": 1,
     "blocked": 1,
     "inbox": 2
+  },
+  "costs": {
+    "usd14d": 1.02,
+    "pricedLegs": 4,
+    "windowDays": 14
   }
 }

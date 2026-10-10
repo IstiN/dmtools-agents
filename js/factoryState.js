@@ -1,7 +1,8 @@
 /**
  * Factory state — snapshot builder + branch publisher (owner 2026-09-23;
  * schema 2 lifecycle-timestamps owner 2026-10-01; v3 history + backlog +
- * optional tokens owner 2026-10-03 — all additive, schema stays 2).
+ * optional tokens owner 2026-10-03; gh-825 model + $cost pricing owner
+ * 2026-10-10 — all additive, schema stays 2).
  *
  * The SM tick already computes the entire machine state every pass (labels,
  * armed PR, verdicts, queue). This module renders that state as JSON and
@@ -281,7 +282,19 @@ function normTokenRow(r) {
         at: r.at == null ? null : String(r.at),
         prompt: prompt,
         completion: completion,
-        total: +r.total || (prompt + completion)
+        total: +r.total || (prompt + completion),
+        // gh-825: explicit passthrough (unknown fields were tolerated but
+        // dropped before) — the board's model column and the pricing engine
+        // read this. Upstream emits "model":"" until fa#1460 ships the
+        // ledger field; empty normalizes to null exactly like absent.
+        model: (r.model == null || r.model === '') ? null : String(r.model),
+        // gh-825 rework (review thread 1, BLOCKING): the cache count must
+        // ride the fresh row too — rowCost's cache term priced as 0 whenever
+        // normalizeTokens dropped it. Producer-drift tolerance mirrors
+        // rowCost: camelCase wins, snake_case falls back. Absent → null
+        // (honest unknown); a REPORTED zero stays 0 (none ≠ not reported).
+        cacheRead: (r.cacheRead == null ? r.cache_read : r.cacheRead) == null
+            ? null : +r.cacheRead || +r.cache_read || 0
     };
 }
 
@@ -363,6 +376,164 @@ function tokensLegCount(map) {
         if (Array.isArray(map[k])) n += map[k].length;
     });
     return n;
+}
+
+// ── gh-825 — model pricing (hardcoded, hand-maintained) ──────────────────────
+// ONE home: data/model-pricing.json at the repo root (the
+// statePublish.pricingFile knob repoints it for packed/multi-repo ticks).
+// Rates are USD per MILLION tokens — list prices, committed, no live APIs,
+// no secrets:
+//
+//   { "claude-sonnet-4-5": { "input": 3, "output": 15, "cacheRead": 0.3 },
+//     ..., "default": null }
+//
+// `default` prices models missing from the table (null = unknown models
+// stay unpriced). Cost rule, per token row:
+//   cost = input/1e6*prompt + output/1e6*completion + cacheRead/1e6*cacheRead
+// Unknown/absent model ⇒ the row carries NO cost — tokens still render
+// (AC2). ANY malformed config ⇒ the tick warns (readModelPricing's {error}
+// outcome) and publishes without $ — pricing is decorative exactly like
+// the tokens it prices, never fatal (AC1).
+
+var DEFAULT_PRICING_FILE = 'data/model-pricing.json';   // the ONE home
+var COST_WINDOW_DAYS = 14;                              // global Σ$ window
+var COST_WINDOW_MS = COST_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
+/**
+ * One pricing entry → {input, output, cacheRead} (USD/Mtok), or null when
+ * the entry can't price anything (missing/negative input|output). cacheRead
+ * is optional (defaults 0); a bad cacheRead falls back to 0 instead of
+ * poisoning the whole entry. Numeric strings coerce — hand-edited files.
+ */
+function parsePricingEntry(e) {
+    if (!e || typeof e !== 'object' || Array.isArray(e)) return null;
+    var input = +e.input;
+    var output = +e.output;
+    if (!isFinite(input) || !isFinite(output) || input < 0 || output < 0) {
+        return null;
+    }
+    var cacheRead = e.cacheRead == null ? 0 : +e.cacheRead;
+    if (!isFinite(cacheRead) || cacheRead < 0) cacheRead = 0;
+    return { input: input, output: output, cacheRead: cacheRead };
+}
+
+/**
+ * Validate a parsed pricing payload into {rates, defaultRates, models}.
+ * Top-level garbage → null; INVALID ENTRIES are skipped, valid ones survive
+ * (one hand-edit typo must not blank the table). A payload with NO usable
+ * rate anywhere is malformed-in-disguise → null (the caller warns instead
+ * of publishing a Σ$ that can never move). `rates` is prototype-less: model
+ * ids come from report input, so a '__proto__' id must stay a plain bucket
+ * (the flow.js legs-map lesson).
+ */
+function parseModelPricing(parsed) {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return null;
+    }
+    var rates = Object.create(null);
+    var n = 0;
+    Object.keys(parsed).forEach(function (k) {
+        if (k === 'default') return;
+        var e = parsePricingEntry(parsed[k]);
+        if (e) { rates[k] = e; n += 1; }
+    });
+    var defaultRates = parsePricingEntry(parsed['default']);
+    if (!n && !defaultRates) return null;
+    return { rates: rates, defaultRates: defaultRates, models: n };
+}
+
+/**
+ * Load the pricing table off disk. Outcomes:
+ *   { pricing }        the file parsed into a usable table
+ *   { error: reason }  the file EXISTS but is unusable (bad JSON, bad
+ *                      shape) — the caller warns; the board renders
+ *                      tokens-only, the tick never fails over pricing
+ *   null               file absent (or no reader) — a QUIET miss: pricing
+ *                      not deployed here, equally fine (AC1)
+ */
+function readModelPricing(path, readFn) {
+    if (!path || typeof readFn !== 'function') return null;
+    var raw;
+    try { raw = readFn(path); } catch (e) { return null; }
+    if (raw == null || String(raw).trim() === '') return null;
+    try {
+        var pricing = parseModelPricing(JSON.parse(String(raw)));
+        return pricing ? { pricing: pricing }
+                       : { error: 'no usable model rates' };
+    } catch (e2) {
+        return { error: (e2 && e2.message) || String(e2) };
+    }
+}
+
+/**
+ * Rates for one row's model: explicit table hit first, then the configured
+ * default (unknown models), else null. An ABSENT model is unpriced by
+ * definition — nothing was reported, there is nothing to match (AC2).
+ */
+function ratesFor(pricing, model) {
+    if (!pricing || model == null || model === '') return null;
+    var r = pricing.rates ? pricing.rates[String(model)] : null;
+    return r || pricing.defaultRates || null;
+}
+
+/**
+ * The cost rule: cost = input/1e6*in + output/1e6*out + cacheRead/1e6*cache.
+ * The row's cache count reads `cacheRead` with a `cache_read` fallback
+ * (producer-drift tolerance) and prices as 0 when absent. Rounded to 1e-6
+ * USD — float noise never reaches the board. null when either side is
+ * missing (never a fake 0).
+ */
+function rowCost(row, rates) {
+    if (!row || !rates) return null;
+    var cost = rates.input / 1e6 * (+row.prompt || 0) +
+        rates.output / 1e6 * (+row.completion || 0) +
+        (rates.cacheRead || 0) / 1e6 *
+            (+row.cacheRead || +row.cache_read || 0);
+    return Math.round(cost * 1e6) / 1e6;
+}
+
+/**
+ * Price a whole tokens ledger in place: each row gains `cost` when its
+ * model matches the table (the cost stays on the row even outside the Σ$
+ * window — the per-leg $ is the row's price, always). Returns the board
+ * header's rollup {usd14d, pricedLegs, windowDays} — Σ$ across ALL keys
+ * (closed cards leave the board after 24h; their spend must still count,
+ * so the window applies to row `at`, not to lanes), or null when pricing
+ * is off/absent — or when nothing priced lands inside the window / the
+ * in-window Σ$ rounds to $0.00 (gh-825 rework, review thread 2: never a
+ * lying Σ$0.00 pill) → the snapshot carries no `costs` key (additive
+ * schema).
+ * Rows with no parsable `at` price per-row but stay out of the window —
+ * an undated row must not silently inflate or vanish from the header.
+ */
+function priceTokens(tmap, pricing, nowMs) {
+    if (!pricing) return null;
+    var summary = { usd14d: 0, pricedLegs: 0, windowDays: COST_WINDOW_DAYS };
+    var any = false;   // at least one row priced → pricing is live AND matching
+    Object.keys(tmap || {}).forEach(function (k) {
+        (tmap[k] || []).forEach(function (row) {
+            if (!row || row.model == null) return;
+            var rates = ratesFor(pricing, row.model);
+            if (!rates) return;
+            var cost = rowCost(row, rates);
+            if (cost == null) return;
+            row.cost = cost;
+            any = true;
+            var t = row.at ? Date.parse(row.at) : NaN;
+            if (!isNaN(t) && nowMs - t < COST_WINDOW_MS) {
+                summary.usd14d += cost;
+                summary.pricedLegs += 1;
+            }
+        });
+    });
+    if (!any) return null;   // nothing priced (e.g. pre-fa#1460: models empty)
+    summary.usd14d = Math.round(summary.usd14d * 100) / 100;
+    // gh-825 rework (review thread 2): a rollup that rounds to $0.00 — or
+    // priced nothing inside the window (undated/stale rows, sub-cent spend)
+    // — would render the header pill as a lying Σ$0.00, indistinguishable
+    // from "pricing off". Suppress the rollup; the per-row $ stays data.
+    if (!(summary.usd14d > 0)) return null;
+    return summary;
 }
 
 /**
@@ -526,6 +697,11 @@ function buildFactoryState(input) {
     // never a hardcoded login (DEFAULT_MACHINE_AUTHOR is back-compat only)
     var machineAuthor = input.machineAuthor || null;
     var tmap = normalizeTokens(input.tokens);
+    // gh-825: price the ledger in place BEFORE the cards attach — rows are
+    // shared by reference, so every card.tokens row leaves the builder
+    // carrying `model` (always) and `cost` (when priced). `costs` is the
+    // board header's global Σ$ rollup; absent when pricing is off/bad.
+    var costs = priceTokens(tmap, input.pricing, nowMs);
     var issueHistory = {};   // issue-N → shared history (lane + backlog twin)
 
     // Per-head run verdicts (gh-816 citation integrity): classify the
@@ -784,7 +960,7 @@ function buildFactoryState(input) {
             workflowFile: input.legWorkflow
         }).map;
 
-    return {
+    var state = {
         schema: 2,
         factory: input.factory || (input.repoInfo && input.repoInfo.repo) || 'unknown',
         repo: input.repoInfo ? (input.repoInfo.owner + '/' + input.repoInfo.repo) : null,
@@ -804,6 +980,10 @@ function buildFactoryState(input) {
             m[b] = (backlog[b] || []).length; return m;
         }, {})
     };
+    // gh-825 — the board header's global Σ$ (all cards, 14d window). Absent
+    // key when pricing is off/absent/malformed: the board renders tokens-only.
+    if (costs) state.costs = costs;
+    return state;
 }
 
 // ── Publisher ────────────────────────────────────────────────────────────────
@@ -1042,6 +1222,11 @@ module.exports = {
     fetchTokensFromBranch: fetchTokensFromBranch,
     tokensMapOf: tokensMapOf,
     tokensLegCount: tokensLegCount,
+    parseModelPricing: parseModelPricing,
+    readModelPricing: readModelPricing,
+    ratesFor: ratesFor,
+    rowCost: rowCost,
+    priceTokens: priceTokens,
     contentsOf: contentsOf,
     LANE_ORDER: LANE_ORDER,
     LANE_ORDER_V1: LANE_ORDER_V1,
@@ -1054,6 +1239,9 @@ module.exports = {
     DEFAULT_MACHINE_AUTHOR: DEFAULT_MACHINE_AUTHOR,
     HISTORY_CAP: HISTORY_CAP,
     DEFAULT_TOKENS_FILE: DEFAULT_TOKENS_FILE,
+    DEFAULT_PRICING_FILE: DEFAULT_PRICING_FILE,
+    COST_WINDOW_DAYS: COST_WINDOW_DAYS,
+    COST_WINDOW_MS: COST_WINDOW_MS,
     BACKLOG_CAP: BACKLOG_CAP,
     DEFAULT_TAG: DEFAULT_TAG
 };

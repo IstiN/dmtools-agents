@@ -54,9 +54,13 @@
   }
 
   // ── token totals (gh-769 #3: token spend visible beyond the drawer) ────────
-  // {prompt, completion, total, legs: {leg: {prompt, completion, total}}}
-  // or null when the card carries no token rows — tokens stay OPTIONAL,
-  // factories that don't report them render without the chip.
+  // {prompt, completion, total, cost, legs: {leg: {prompt, completion,
+  // total, cost}}} or null when the card carries no token rows — tokens
+  // stay OPTIONAL, factories that don't report them render without the chip.
+  // cost (gh-825): the Σ$ the TICK priced per row (hardcoded table × the
+  // row's model); the board only sums — a row without a cost (unknown or
+  // absent model) keeps counting tokens and never invents a price, so the
+  // Σ$ stays null until at least one priced row exists.
   function tokenTotals(card) {
     var rows = card && card.tokens;
     if (!rows || !rows.length) return null;
@@ -64,15 +68,19 @@
     // '__proto__'/'constructor' key must stay a plain bucket — a plain {}
     // would set the prototype (leg vanishes from Object.keys) or resolve
     // to the inherited Object function (NaN totals) (review thread 2)
-    var out = { prompt: 0, completion: 0, total: 0, legs: Object.create(null) };
+    var out = { prompt: 0, completion: 0, total: 0, cost: null,
+                legs: Object.create(null) };
     rows.forEach(function (r) {
       if (!r) return;
       var p = +r.prompt || 0, c = +r.completion || 0, t = +r.total || (p + c);
+      var cost = (r.cost == null || r.cost === '' || isNaN(+r.cost)) ? null : +r.cost;
       out.prompt += p; out.completion += c; out.total += t;
+      if (cost != null) out.cost = (out.cost || 0) + cost;
       var leg = r.leg || '—';
       var b = out.legs[leg];
-      if (!b) { b = out.legs[leg] = { prompt: 0, completion: 0, total: 0 }; }
+      if (!b) { b = out.legs[leg] = { prompt: 0, completion: 0, total: 0, cost: null }; }
       b.prompt += p; b.completion += c; b.total += t;
+      if (cost != null) b.cost = (b.cost || 0) + cost;
     });
     return out;
   }
@@ -252,18 +260,22 @@
       if (tt) {
         if (!out.tokens) {
           // same prototype-less legs map as tokenTotals (review thread 2)
-          out.tokens = { prompt: 0, completion: 0, total: 0,
+          out.tokens = { prompt: 0, completion: 0, total: 0, cost: null,
                          legs: Object.create(null) };
         }
         out.tokens.prompt += tt.prompt;
         out.tokens.completion += tt.completion;
         out.tokens.total += tt.total;
+        if (tt.cost != null) out.tokens.cost = (out.tokens.cost || 0) + tt.cost;
         Object.keys(tt.legs).forEach(function (leg) {
           var b = out.tokens.legs[leg];
-          if (!b) { b = out.tokens.legs[leg] = { prompt: 0, completion: 0, total: 0 }; }
+          if (!b) { b = out.tokens.legs[leg] = { prompt: 0, completion: 0, total: 0, cost: null }; }
           b.prompt += tt.legs[leg].prompt;
           b.completion += tt.legs[leg].completion;
           b.total += tt.legs[leg].total;
+          if (tt.legs[leg].cost != null) {
+            b.cost = (b.cost || 0) + tt.legs[leg].cost;
+          }
         });
       }
       var start = card.prCreated ? parseMs(card.prCreated) : null;

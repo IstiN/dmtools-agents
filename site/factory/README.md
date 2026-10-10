@@ -154,7 +154,8 @@ their development-lane twin, so the drawer tells the same story from both.
 
 ```json
 "tokens": [ { "leg": "story_development", "at": "...", "prompt": 48210,
-              "completion": 12980, "total": 61190 } ]
+              "completion": 12980, "total": 61190,
+              "model": "claude-sonnet-4-5", "cost": 0.33933 } ]
 ```
 
 Keyed `pr-N` / `issue-N` in the builder's `tokens` input. Factories whose
@@ -166,6 +167,63 @@ Factories that don't report tokens yet publish token-less cards and the
 drawer renders `tokens — not reported by this factory`. The schema never
 requires the key.
 
+## gh-825 — model + $cost (additive, schema stays 2)
+
+Each token row may carry `model` (explicit passthrough of the upstream
+ledger field — awf 233263e emits it, empty until fa#1460 ships the field)
+and `cost` — the row's price, computed by the TICK against a hardcoded
+pricing table. The board never prices, it only sums.
+
+### The pricing config (ONE home: `data/model-pricing.json`)
+
+Committed at the repo root, hand-maintained, no secrets, no live price
+APIs. The `statePublish.pricingFile` knob repoints the tick at another
+path (packed / multi-repo deployments). Schema:
+
+```json
+{
+  "<model-id>": { "input": <USD/Mtok>, "output": <USD/Mtok>,
+                   "cacheRead": <USD/Mtok> },
+  "default": null
+}
+```
+
+- rates are USD per **million** tokens (list prices — update by hand when
+  vendors reprice; `cacheRead` is optional and defaults to 0);
+- `"default"` prices models missing from the table; `null` (or a missing
+  key) keeps unknown models unpriced;
+- the cost rule, per row:
+  `cost = input/1e6*prompt + output/1e6*completion + cacheRead/1e6*cacheRead`;
+- **tolerance (AC1)**: an absent file is a quiet miss; a present-but-
+  malformed file makes the tick log
+  `⚠️ model pricing ignored (…) — cards render tokens only` and publish
+  without `$` — pricing is decorative, the tick never fails over it. One
+  invalid rate entry is skipped, valid entries survive;
+- **unknown/absent model (AC2)**: the row keeps its `model` and renders
+  tokens only — no invented price, per row or in any Σ$.
+
+### What the tick publishes
+
+- per-row: `model` (always) + `cost` (when priced);
+- `state.costs` — the board header's global rollup:
+  `{ "usd14d": <Σ$ across ALL ledger keys within the 14-day window>,
+     "pricedLegs": <rows counted>, "windowDays": 14 }`. The window applies
+  to row `at` over the WHOLE tokens ledger (closed cards leave the board
+  after 24h — their spend must still count). Absent when pricing is off,
+  malformed, or nothing priced (pre-fa#1460 factories never render a lying
+  `$0.00`). The tick log names the state on one grep-able line:
+  `💲 pricing: 3 models · Σ$12.34 (14d)` (or `off — tokens only`).
+
+### Board surfaces
+
+- **Token chip** (cards): `Σ 87.6k tok · $0.92` — the Σ$ rides only when a
+  row is priced.
+- **Drawer token table**: `leg · model · when · prompt · completion ·
+  total · $` per row, with the card's Σ$ on the total row; unknown/absent
+  models render `—` and no `$`.
+- **Value-stream strip**: the Σ-token chip gains the board Σ$.
+- **Header pill**: `Σ$ 12.34 · 14d` (hidden when `state.costs` is absent).
+
 ### Board surfaces
 
 - **Lane summaries** — `N total · M done · K in-flight · Q queued` (+
@@ -176,9 +234,9 @@ requires the key.
 - **Details drawer** — click any PR/issue card: header (number, title,
   head sha, current state, labels, `open on github ↗` in a new tab), the
   state history newest-first with per-state timings (`2h13m` style) and
-  proportional duration bars, then the token table (leg · when · prompt ·
-  completion · total) with a per-card total. `esc`, the backdrop or ✕
-  closes it; `?drawer=pr-817@validating` deep-links it.
+  proportional duration bars, then the token table (leg · model · when ·
+  prompt · completion · total · $) with a per-card total. `esc`, the
+  backdrop or ✕ closes it; `?drawer=pr-817@validating` deep-links it.
 - **Backlog section** — the four buckets render as columns under the PR
   pipeline; blocked is red-bordered. Same card interactions as the lanes.
 

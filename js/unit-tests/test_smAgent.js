@@ -9003,6 +9003,103 @@ suite('smAgent: statePublish tokens — local file first, branch fallback', func
             'the cite carries the audit fields');
     });
 
+    // ── gh-825: model pricing — the hardcoded table prices the ledger ─────
+    // data/model-pricing.json in the tick's checkout (statePublish.pricingFile
+    // repoints it). Absent file = quiet; PRESENT-but-unusable warns and the
+    // snapshot publishes tokens-only; a loaded table prices rows by their
+    // upstream model field and publishes the board header's global Σ$ rollup.
+
+    var PRICING_TABLE = JSON.stringify({
+        'claude-sonnet-4-5': { input: 3, output: 15, cacheRead: 0.3 },
+        'default': null
+    });
+    var MODEL_TOKENS = JSON.stringify({
+        'pr-31': [{ leg: 'dev', at: '2026-10-08T10:00:00Z',
+            prompt: 1000000, completion: 1000000, total: 2000000,
+            model: 'claude-sonnet-4-5' }],
+        'issue-7': [{ leg: 'review', at: '2026-10-08T11:00:00Z',
+            prompt: 1, completion: 2, total: 3, model: 'mystery-model' }]
+    });
+    var PRICING_PATH = 'data/model-pricing.json';
+
+    test('gh-825: pricing table loads → rows carry $cost, snapshot gains the Σ$ rollup, 💲 line logged', function() {
+        var fileMap = {};
+        fileMap[PRICING_PATH] = PRICING_TABLE;
+        var run = publishTick({
+            fileMap: fileMap,
+            captureConsole: true,
+            github: { prList: PR31 },
+            onCliExecute: branchServes(MODEL_TOKENS)
+        });
+        var card = run.state.lanes.pr_created.filter(function (c) { return c.pr === 31; })[0];
+        assert.equal(card.tokens[0].cost, 18, '1M in + 1M out @ 3/15 $/Mtok');
+        assert.equal(card.tokens[0].model, 'claude-sonnet-4-5');
+        assert.ok(run.state.costs, 'the board header rollup published');
+        assert.equal(run.state.costs.usd14d, 18, 'known-model rows sum; the unknown model adds nothing');
+        assert.equal(run.state.costs.windowDays, 14);
+        assert.ok(run.sm.capturedLogs.some(function (l) {
+            return l.indexOf('💲 pricing: 1 models · Σ$18 (14d)') !== -1;
+        }), '💲 provenance line next to 🪙 — pricing state is grep-able');
+    });
+
+    test('gh-825: pricing file present but malformed → ⚠️ warn, tokens-only snapshot, tick stays green', function() {
+        var fileMap = {};
+        fileMap[PRICING_PATH] = '{oops — not json';
+        var run = publishTick({
+            fileMap: fileMap,
+            captureConsole: true,
+            github: { prList: PR31 },
+            onCliExecute: branchServes(MODEL_TOKENS)
+        });
+        var card = run.state.lanes.pr_created.filter(function (c) { return c.pr === 31; })[0];
+        assert.ok(card.tokens && card.tokens[0].model === 'claude-sonnet-4-5',
+            'the model still rides the row');
+        assert.notOk('cost' in card.tokens[0], 'no $ without a usable table');
+        assert.ok(!run.state.costs, 'no Σ$ rollup — the board renders tokens-only (AC1)');
+        assert.ok(run.sm.capturedLogs.some(function (l) {
+            return l.indexOf('model pricing ignored') !== -1;
+        }), 'the warn names the pricing config (AC1: tick warns)');
+        assert.ok(run.sm.capturedLogs.some(function (l) {
+            return l.indexOf('📡 factory state published') !== -1;
+        }), '📡 published — the tick never fails over pricing');
+    });
+
+    test('gh-825: pricing file absent → quiet (no warn, no Σ$), exactly pre-gh-825', function() {
+        var fileMap = {};
+        // pin the pricing path to null — the mock forwards un-mapped paths
+        // to the REAL file_read, and this repo SHIPS the file (a repo-root
+        // read would silently flip this test once it lands)
+        fileMap[PRICING_PATH] = null;
+        var run = publishTick({
+            fileMap: fileMap,
+            captureConsole: true,
+            github: { prList: PR31 },
+            onCliExecute: branchServes(MODEL_TOKENS)
+        });
+        assert.ok(!run.state.costs, 'no rollup without pricing');
+        assert.ok(!run.sm.capturedLogs.some(function (l) {
+            return l.indexOf('model pricing ignored') !== -1;
+        }), 'absent ≠ broken — a deployment without the file is not warned at');
+        assert.ok(run.sm.capturedLogs.some(function (l) {
+            return l.indexOf('💲 pricing: off') !== -1;
+        }), '💲 line still names the off state');
+    });
+
+    test('gh-825: statePublish.pricingFile repoints the table (packed/multi-repo ticks)', function() {
+        var fileMap = {};
+        fileMap['configs/pricing.json'] = PRICING_TABLE;
+        var run = publishTick({
+            fileMap: fileMap,
+            github: { prList: PR31 },
+            onCliExecute: branchServes(MODEL_TOKENS),
+            jobParamsPatch: { statePublish: {
+                channel: 'release', repo: 'o/r', asset: 'fa-state.json',
+                pricingFile: 'configs/pricing.json' } }
+        });
+        assert.ok(run.state.costs && run.state.costs.usd14d === 18,
+            'the override path priced the ledger');
+    });
+
 });
 
 // ─── gh-832: red-verdict convergence park ────────────────────────────────────
