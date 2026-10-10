@@ -108,6 +108,7 @@ var smProviderModule = require('./common/smProvider.js');
 var trackersModule = require('./common/trackers.js');
 // gh-807: machine review-verdict records + their reconciliation logic.
 var reviewVerdictsModule = require('./common/reviewVerdicts.js');
+var redConvergenceModule = require('./common/redConvergence.js');
 
 // Project config loaded once in action() — used as global default for rules without configPath
 var projectConfig = null;
@@ -2968,8 +2969,14 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // Graceful '' on any miss (no head SHA, empty run list,
                 // tool error): the report posts without the link and
                 // NOTHING else in this action changes.
-                var failedRunsLine = failedRunLinksLine(effectiveRepoInfo,
-                    rule.ciWorkflow || ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
+                // ONE github_list_workflow_runs fetch feeds BOTH the
+                // failed-run link line (below) and the gh-832
+                // consecutive-red streak — the list is the durable per-head
+                // verdict record; no markers, no second fetch.
+                var failCiWf = rule.ciWorkflow ||
+                    ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml';
+                var failRunList = dispatchedValidationRuns(effectiveRepoInfo, failCiWf);
+                var failedRunsLine = failedRunLinksFromList(failRunList,
                     (ticket.pr && ticket.pr.headSha) || ticket.headSha);
                 // ── COMPOSITION #703 (review #703 blocker): the caps live on
                 // THIS red, in one report — the red-head marker bounds the
@@ -2997,6 +3004,36 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 var failHead = (ticket.pr && ticket.pr.headSha) || ticket.headSha;
                 var priorReds = failHead ? (failMarks.redHeads[failHead] || 0) : 0;
                 var redLine = redHeadMarkerLine(priorReds, failHead, redCap);
+                // gh-832 CONVERGENCE (live fa #1453, 2026-10-10: 12
+                // dispatch→red→unarm→rearm cycles on an unchanged approved
+                // head — no park, no comment, window idle 3.5h): the
+                // consecutive-red streak is DERIVED from the head's own
+                // dispatched run list (fetched above — the durable per-head
+                // verdict record; a green run breaks the streak, a head move
+                // resets it by construction, cancelled runs are never
+                // verdicts). At jobParams.redHeadParkCap (default 2) the PR
+                // PARKS validation_failed — validate-armed's query excludes
+                // the label, so NO third dispatch — and the report names
+                // the failing job(s). Machine PRs keep the rework arm
+                // (routing unchanged) and exit the park through the
+                // gh-750/#633 reset probes on the next head; guests were
+                // already parked at red 1 (gh-757). redHeadParkCap=false
+                // disables the park (the marker audit trail and the 3-red
+                // arm-side skip above are untouched).
+                var parkCap = redConvergenceModule.parkCapOf(RUN_JOB_PARAMS);
+                var redStreak = redConvergenceModule.streakFromRuns(failRunList, failHead);
+                var convergencePark = redConvergenceModule.shouldPark(redStreak, parkCap);
+                var failingJobs = convergencePark
+                    ? failingCheckNames(effectiveRepoInfo, failHead) : [];
+                var parkLine = convergencePark
+                    ? ('🅿️ CONVERGENCE PARK (gh-832) — ' + redStreak +
+                       ' consecutive red validation verdicts on the unchanged head `' + failHead +
+                       '` — parking validation_failed; the merge window yields until a NEW head' +
+                       ' lands (a rework push or a human push re-enters validation through the' +
+                       ' standard park-reset probes).')
+                    : null;
+                var failingJobsLine = failingJobs.length
+                    ? ('Failing job(s): ' + failingJobs.join(', ')) : null;
                 // Empty rework-lap state (owner finding 2026-10-04, live
                 // fa#1211: a 'successful' rework lap that pushed nothing):
                 // a red on the SAME head as the previous red means the lap
@@ -3035,13 +3072,38 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                        'head-change reset.'))
                     + (failedRunsLine ? '\n' + failedRunsLine : '')
                     + (redLine ? '\n' + redLine : '')
-                    + (emptyLapLine ? '\n' + emptyLapLine : '');
+                    + (emptyLapLine ? '\n' + emptyLapLine : '')
+                    + (parkLine ? '\n' + parkLine : '')
+                    + (failingJobsLine ? '\n' + failingJobsLine : '');
                 github_create_comment({
                     workspace: effectiveRepoInfo.owner,
                     repository: effectiveRepoInfo.repo,
                     number: ticket.prNumber,
                     body: report
                 });
+                if (convergencePark) {
+                    // The park label — the loud terminal state the live
+                    // window never got: the PR leaves validate-armed's FIFO
+                    // (the query excludes validation_failed) and no CI is
+                    // dispatched for it at all (the validate_pr sticky-park
+                    // backstop) until a new head clears the park.
+                    try {
+                        github_add_labels({
+                            workspace: effectiveRepoInfo.owner,
+                            repository: effectiveRepoInfo.repo,
+                            number: ticket.prNumber,
+                            labels: ['validation_failed']
+                        });
+                    } catch (eConvPark) {
+                        console.warn('  ⚠️  convergence park label failed: ' +
+                            (eConvPark.message || eConvPark));
+                    }
+                    console.log('  🅿️ ' + key + ' convergence park (gh-832) — ' + redStreak +
+                                ' consecutive reds on head ' + String(failHead).slice(0, 7) +
+                                ' — validation_failed; failing: ' +
+                                (failingJobs.length ? failingJobs.join(', ')
+                                                    : '(check-run rollup unavailable)'));
+                }
                 if (isMachinePr && reworkEmptyCapped) {
                     // Withheld for MACHINE PRs regardless of linkage (the
                     // cap bounds the machine rework loop — linked-issue arm
@@ -3551,6 +3613,28 @@ var PROBE_WORKER_SOURCE = [
 ].join('\n');
 
 /**
+ * ONE github_list_workflow_runs fetch for the fail path (gh-832): the
+ * same list feeds the failed-run link line AND the consecutive-red
+ * streak (the run history IS the durable per-head verdict record — no
+ * marker comments, no second fetch). null on any tool error — both
+ * consumers degrade gracefully ('' link line, 0 streak → never a park
+ * on a degraded read; the red-head marker skip still bounds the arm).
+ */
+function dispatchedValidationRuns(repoInfo, ciWorkflow) {
+    if (!repoInfo || !ciWorkflow) return null;
+    try {
+        var runs = mcpParse(github_list_workflow_runs({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            workflowId: ciWorkflow, perPage: 50
+        })) || {};
+        return runs.workflow_runs || runs.workflowRuns || [];
+    } catch (e) {
+        console.warn('  ⚠️  dispatched-run list fetch failed: ' + (e.message || e));
+        return null;
+    }
+}
+
+/**
  * The 'Failed run: <url>' report line for fail_validation (owner
  * 2026-10-01): the newest 1-3 TERMINAL RED (failure/timed_out) dispatched
  * runs of `ciWorkflow` on THIS exact head — the same list source and shape
@@ -3561,14 +3645,9 @@ var PROBE_WORKER_SOURCE = [
  * contract: missing head SHA, empty list, or any tool error → '' — the
  * report posts without the link and never dies.
  */
-function failedRunLinksLine(repoInfo, ciWorkflow, headSha) {
-    if (!repoInfo || !ciWorkflow || !headSha) return '';
+function failedRunLinksFromList(list, headSha) {
+    if (!headSha || !Array.isArray(list)) return '';
     try {
-        var runs = mcpParse(github_list_workflow_runs({
-            workspace: repoInfo.owner, repository: repoInfo.repo,
-            workflowId: ciWorkflow, perPage: 50
-        })) || {};
-        var list = runs.workflow_runs || runs.workflowRuns || [];
         var red = list.filter(function (r) {
             return r && r.event === 'workflow_dispatch' &&
                 r.head_sha === headSha &&
@@ -3587,6 +3666,34 @@ function failedRunLinksLine(repoInfo, ciWorkflow, headSha) {
     } catch (e) {
         console.warn('  ⚠️  failed-run link lookup failed: ' + (e.message || e));
         return '';
+    }
+}
+
+function failedRunLinksLine(repoInfo, ciWorkflow, headSha) {
+    return failedRunLinksFromList(dispatchedValidationRuns(repoInfo, ciWorkflow), headSha);
+}
+
+/**
+ * gh-832: the FAILING JOB names for the convergence-park report — the
+ * latest-per-context check-run rollup (the same probe family as
+ * headHasRealFailure, #628 bookkeeping + #695 latest-wins semantics),
+ * non-bookkeeping contexts whose latest run concluded FAILURE/TIMED_OUT.
+ * [] on any probe problem — the park comment still names the run link.
+ */
+function failingCheckNames(repoInfo, headSha) {
+    if (!repoInfo || !headSha) return [];
+    try {
+        var rollup = headCheckRunsSafe(repoInfo, headSha);
+        if (!rollup || !rollup.length) return [];
+        var latest = latestCheckRunConclusions(rollup);
+        return Object.keys(latest).filter(function (name) {
+            if (isBookkeepingCheckName(name)) return false;
+            var concl = latest[name].concl;
+            return concl === 'FAILURE' || concl === 'TIMED_OUT';
+        }).sort();
+    } catch (e) {
+        console.warn('  ⚠️  failing-check scan failed: ' + (e.message || e));
+        return [];
     }
 }
 
