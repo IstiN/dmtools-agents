@@ -419,3 +419,134 @@ suite('reviewVerdicts — arming-side sticky approval (gh-807 AC3)', function ()
             'REQUEST_CHANGES arrived second → the arm fires');
     });
 });
+
+suite('reviewVerdicts — post-APPROVE thread resolution (gh-828)', function () {
+    var rv = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+
+    var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
+    var MACHINE = ['ai-teammate', 'github-actions[bot]'];
+
+    function approveRecord() {
+        return { head: HEAD, verdict: 'APPROVE', blocking: 0, important: 1, suggestions: 3,
+                 at: '2026-10-10T05:47:30.000Z', source: 'pr_review.json' };
+    }
+    function thread(over) {
+        var t = { threadId: 'RT_1', rootCommentId: 101, resolved: false,
+                  author: 'ai-teammate', body: '💡 SUGGESTION: rename for clarity' };
+        for (var k in over) t[k] = over[k];
+        return t;
+    }
+
+    // ── L1: per-thread blocking classification (the marker convention) ──────
+
+    test('threadSeverity maps the machine marker convention', function () {
+        assert.equal(rv.threadSeverity('🚨 BLOCKING: broken behavior'), 'blocking');
+        assert.equal(rv.threadSeverity('🚨 **BLOCKING** — null deref'), 'blocking');
+        assert.equal(rv.threadSeverity('some text mentioning BLOCKING hard'), 'blocking');
+        assert.equal(rv.threadSeverity('{"path":"a.js","severity":"BLOCKING"}'), 'blocking');
+        assert.equal(rv.threadSeverity('⚠️ IMPORTANT: maintainability debt'), 'important');
+        assert.equal(rv.threadSeverity('💡 SUGGESTION: import order'), 'suggestion');
+        assert.equal(rv.threadSeverity('plain prose with no marker'), 'none');
+        assert.equal(rv.threadSeverity(''), 'none');
+        assert.equal(rv.threadSeverity(null), 'none');
+    });
+
+    // ── the selection gate (AC1) ────────────────────────────────────────────
+
+    test('AC1: APPROVE + blocking=0 head selects all unresolved machine suggestion threads', function () {
+        var threads = [thread({}), thread({ threadId: 'RT_2', rootCommentId: 102 }),
+                       thread({ threadId: 'RT_3', rootCommentId: 103, body: '⚠️ IMPORTANT: extract helper' }),
+                       thread({ threadId: 'RT_4', rootCommentId: 104, body: 'no marker at all' })];
+        var sel = rv.selectResolvableThreads([approveRecord()], HEAD, threads,
+            { machineLogins: MACHINE });
+        assert.equal(sel.gate, 'approve');
+        assert.equal(sel.resolvable.length, 4, 'all 4 non-blocking machine threads resolve in one tick');
+        assert.equal(sel.skipped.human, 0);
+    });
+
+    test('AC1: already-resolved threads are skipped (idempotency)', function () {
+        var sel = rv.selectResolvableThreads([approveRecord()], HEAD,
+            [thread({}), thread({ threadId: 'RT_2', resolved: true })],
+            { machineLogins: MACHINE });
+        assert.equal(sel.resolvable.length, 1);
+        assert.equal(sel.skipped.resolved, 1);
+    });
+
+    // ── AC2: blocking threads keep the rework arm ───────────────────────────
+
+    test('AC2: a thread whose findings include blocking is NOT resolved', function () {
+        var sel = rv.selectResolvableThreads([approveRecord()], HEAD,
+            [thread({}), thread({ threadId: 'RT_2', body: '🚨 BLOCKING: data loss' })],
+            { machineLogins: MACHINE });
+        assert.equal(sel.resolvable.length, 1);
+        assert.equal(sel.skipped.blocking, 1, 'the blocking-marked thread keeps the rework arm');
+    });
+
+    test('gate stays shut when the record census reports blocking > 0', function () {
+        var rec = approveRecord();
+        rec.blocking = 1;
+        var sel = rv.selectResolvableThreads([rec], HEAD, [thread({})], { machineLogins: MACHINE });
+        assert.equal(sel.gate, 'blocking-census');
+        assert.equal(sel.resolvable.length, 0, 'no thread resolves while the census says blocking');
+    });
+
+    // ── AC3: human-authored threads never auto-resolve (gh-744 philosophy) ──
+
+    test('AC3: human threads are never selected — they keep BLOCKED and surface to humans', function () {
+        var sel = rv.selectResolvableThreads([approveRecord()], HEAD,
+            [thread({}), thread({ threadId: 'RT_2', author: 'some-human' }),
+             thread({ threadId: 'RT_3', author: '' })],
+            { machineLogins: MACHINE });
+        assert.equal(sel.resolvable.length, 1);
+        assert.equal(sel.skipped.human, 2, 'missing author fails closed as human');
+    });
+
+    // ── gate fail-closed ────────────────────────────────────────────────────
+
+    test('no verdict record for the head → nothing resolves (fail closed)', function () {
+        var sel = rv.selectResolvableThreads([], HEAD, [thread({})], { machineLogins: MACHINE });
+        assert.equal(sel.gate, 'no-verdict-record');
+        assert.equal(sel.resolvable.length, 0);
+    });
+
+    test('non-APPROVE effective verdict → nothing resolves', function () {
+        var rec = approveRecord();
+        rec.verdict = 'REQUEST_CHANGES';
+        var sel = rv.selectResolvableThreads([rec], HEAD, [thread({})], { machineLogins: MACHINE });
+        assert.equal(sel.gate, 'not-approve');
+        assert.equal(sel.resolvable.length, 0);
+    });
+
+    test('no machine logins configured → every thread fails closed as human', function () {
+        var sel = rv.selectResolvableThreads([approveRecord()], HEAD, [thread({})],
+            { machineLogins: [] });
+        assert.equal(sel.resolvable.length, 0);
+        assert.equal(sel.skipped.human, 1);
+    });
+
+    // ── bounded + ack reply ─────────────────────────────────────────────────
+
+    test('bounded: at most maxThreads resolve per tick', function () {
+        var threads = [];
+        for (var i = 0; i < 25; i++) threads.push(thread({ threadId: 'RT_' + i, rootCommentId: 200 + i }));
+        var sel = rv.selectResolvableThreads([approveRecord()], HEAD, threads,
+            { machineLogins: MACHINE, maxThreads: 20 });
+        assert.equal(sel.resolvable.length, 20);
+        var dflt = rv.selectResolvableThreads([approveRecord()], HEAD, threads,
+            { machineLogins: MACHINE });
+        assert.equal(dflt.resolvable.length, 20, 'default bound is 20 threads/tick');
+    });
+
+    test('threads without a resolve id are skipped (never silently dropped)', function () {
+        var sel = rv.selectResolvableThreads([approveRecord()], HEAD,
+            [thread({ threadId: null })], { machineLogins: MACHINE });
+        assert.equal(sel.resolvable.length, 0);
+        assert.ok(sel.skipped.noThreadId >= 1);
+    });
+
+    test('buildThreadAckReply carries the ticket wording', function () {
+        var ack = rv.buildThreadAckReply();
+        assert.contains(ack, 'non-blocking suggestion');
+        assert.contains(ack, 'resolved per APPROVE verdict');
+    });
+});

@@ -161,10 +161,21 @@ suite('machineSm decision core', function () {
         assert.equal(acts[0].type, 'merge');
     });
 
-    test('approved + BLOCKED + not mergeable skips', function () {
+    test('approved + BLOCKED resolves suggestion threads in-tick (gh-828)', function () {
+        // The unresolved-thread conversation gate: the rework arm is
+        // withheld on APPROVE+blocking=0 (gh-807), so the machine must
+        // resolve its own non-blocking threads or the PR strands BLOCKED.
         var acts = agent.decideActions(
             st(['ai_developed', 'ai_pr_reviewed', 'pr_approved'],
                greenPr('BLOCKED', false)), {});
+        assert.equal(acts.length, 1);
+        assert.equal(acts[0].type, 'resolveSuggestionThreads');
+    });
+
+    test('approved + UNKNOWN merge state still skips', function () {
+        var acts = agent.decideActions(
+            st(['ai_developed', 'ai_pr_reviewed', 'pr_approved'],
+               greenPr('UNKNOWN', false)), {});
         assert.equal(acts[0].type, 'skip');
     });
 
