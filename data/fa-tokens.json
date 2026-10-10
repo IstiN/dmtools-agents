@@ -464,6 +464,14 @@
       "completion": 7537,
       "total": 40019,
       "model": ""
+    },
+    {
+      "leg": "review",
+      "at": "2026-10-10T08:58:42Z",
+      "prompt": 74673,
+      "completion": 7357,
+      "total": 82030,
+      "model": ""
     }
   ],
   "issue-832": [
