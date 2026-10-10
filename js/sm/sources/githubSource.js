@@ -203,7 +203,7 @@ function priorityTier(item, pl, repoInfo) {
 // `owner` (repoInfo.owner) rides through for the release-bump form of the
 // machine-authorship gate (#1104): chore/release-v* | chore(release): from
 // the repo owner counts as machine — see common/machineAuthor.js.
-function matchesGuards(item, rule, provider, machineAuthor, owner) {
+function matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo) {
     var q = rule.query || {};
     var labels = item.labels || [];
     if (q.notLabels && q.notLabels.some(function (l) { return labels.indexOf(l) !== -1; })) {
@@ -243,6 +243,35 @@ function matchesGuards(item, rule, provider, machineAuthor, owner) {
     // that can never merge).
     var nmsWant = Array.isArray(q.notMergeState) ? q.notMergeState : (q.notMergeState ? [q.notMergeState] : null);
     if (nmsWant && (!item.pr || nmsWant.indexOf(item.pr.mergeState) !== -1)) return false;
+    // gh-829 mergeState latch: a listed merge state matches ONLY when the
+    // PR's linked issue carries the latch label(s). The gh-759
+    // masked-green rule excluded CLEAN ('merge-validated owns CLEAN') —
+    // but merge-validated needs pr_approved, which a ZERO-label PR can
+    // never reach without first being validated: a fresh machine PR whose
+    // head is CLEAN + green with zero labels rotted for hours (live #826,
+    // issue latch ai_developed present, no ai_validating, no review). The
+    // latch narrows the exclusion instead of dropping it: green + CLEAN +
+    // zero lifecycle labels + the issue's ai_developed latch (the dev
+    // leg's done-marker — machine-work gating, guests stay unarmed) arms
+    // validation exactly like the BLOCKED branch; WITHOUT the latch the
+    // old exclusion effectively stands (merge-validated owns CLEAN).
+    // States not listed in the latch are inert — BEHIND/DIRTY stay
+    // excluded via notMergeState. Fails CLOSED: no linked issue, fetch
+    // failure, or a missing label excludes the state, never matches it.
+    // The per-tick TTL cache (cachedIssueLabels) keeps the per-rule
+    // re-query cheap.
+    if (q.mergeStateLatch) {
+        var latchState = item.pr ? item.pr.mergeState : null;
+        var latchWant = latchState ? q.mergeStateLatch[latchState] : null;
+        if (latchWant) {
+            var latchIssue = (item.issueNumber && repoInfo)
+                ? cachedIssueLabels(repoInfo, item.issueNumber) : null;
+            if (!latchIssue) return false;
+            for (var li = 0; li < latchWant.length; li++) {
+                if (latchIssue.indexOf(latchWant[li]) === -1) return false;
+            }
+        }
+    }
     // Stale review verdict (PR #690): CHANGES_REQUESTED pinned to an older
     // commit while fixes landed on a newer green head — a re-review is
     // owed. Lazily resolved via provider.lastReview; without a provider
@@ -458,7 +487,7 @@ function queryIssues(rule, provider, repoInfo, branchPrefix, limit, machineAutho
         });
     }
 
-    var matched = enriched.filter(function (item) { return matchesGuards(item, rule, provider, machineAuthor, owner); });
+    var matched = enriched.filter(function (item) { return matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo); });
 
     // FIFO: oldest issue first — github_search_issues returns newest-first,
     // which starves the oldest ticket under limit:1 rules (the oldest
@@ -684,7 +713,7 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
         if (q2.notMachine &&
             machineAuthorModule.isMachineAuthored(item, machineAuthor, owner)) return false;
         if (q2.authors && q2.authors.indexOf(item.author) === -1) return false;
-        return matchesGuards(item, rule, provider, machineAuthor, owner);
+        return matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo);
     });
 
     // FIFO: oldest PR first. github_list_prs returns newest-first (API
