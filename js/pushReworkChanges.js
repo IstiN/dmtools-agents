@@ -210,6 +210,34 @@ function stripCiSkipTokens(message) {
         .trim();
 }
 
+/**
+ * agents#827: did this rework pass change any PRODUCTION file relative to the PR head the pass started
+ * from? The setup records that head in input/<KEY>/rework_base_head.txt. A plain "head moved" check is
+ * fooled by the timer's `WIP auto-save` commits (they move the branch even when they only carry
+ * outputs/ housekeeping), so this compares file content, not commits — and still counts a WIP commit
+ * that holds a real fix. Returns true/false, or null when it cannot be determined (old setup, git
+ * error): callers fail open on null.
+ */
+function hasRealCodeChanges(ticketKey, config) {
+    var base = null;
+    try {
+        base = String(file_read({ path: 'input/' + ticketKey + '/rework_base_head.txt' }) || '').trim();
+    } catch (e) { return null; }
+    if (!/^[0-9a-f]{7,40}$/i.test(base)) return null;
+    var workingDir = config && config.workingDir || null;
+    var opts = workingDir ? { workingDirectory: workingDir } : {};
+    try {
+        var out = cleanCommandOutput(cli_execute_command(Object.assign({}, opts, {
+            command: 'git diff --name-only ' + base + ' HEAD -- . ' +
+                "':!outputs' ':!input' ':!.dmtools' ':!.dmtools-logs' ':!.dmtools-session-output.log'"
+        })) || '');
+        return out.trim().length > 0;
+    } catch (e) {
+        console.warn('hasRealCodeChanges probe failed (fail-open):', e.message || e);
+        return null;
+    }
+}
+
 function commitAndPush(ticketKey, config, customParams) {
     var workingDir = config.workingDir || null;
     var cmdOpts = workingDir ? { workingDirectory: workingDir } : {};
@@ -1355,6 +1383,27 @@ function action(params) {
                 ' fix-summary comment were NOT posted; the rework cycle was NOT closed — failing loudly instead of' +
                 ' silently skipping (silent skip re-arms empty rework laps forever, live fa #1212 2026-10-04).');
         }
+        // agents#827: a pass that changed no production file while review threads are open must NOT
+        // look like a fix — no thread resolution, no status move, no label cleanup, no fresh review.
+        var realCodeChanges = hasRealCodeChanges(ticketKey, config);
+        var openInputThreads = readInputRawThreads(ticketKey, { workingDir: config.workingDir || null }).filter(isOpenThread);
+        if (realCodeChanges === false && openInputThreads.length > 0) {
+            var noFixMessage = 'Rework produced no code changes while ' + openInputThreads.length +
+                ' review thread(s) are still open. Threads were NOT resolved, the ticket was NOT moved and the' +
+                ' review labels were left as they are — implement the requested fixes instead of deferring them.';
+            console.error('❌ ' + noFixMessage);
+            try {
+                scm.addComment(pr.number, '⚠️ ' + noFixMessage);
+            } catch (e) {
+                console.warn('Failed to post no-fix rework comment on PR #' + pr.number + ':', e.message || e);
+            }
+            var noFixWip = actualParams.metadata && actualParams.metadata.contextId
+                ? actualParams.metadata.contextId + '_wip' : null;
+            if (noFixWip) {
+                try { tracker.removeLabel(ticketKey, noFixWip); } catch (e) { /* non-fatal */ }
+            }
+            return { success: false, error: noFixMessage };
+        }
         let prCommentPosted = false;
 
         // Reply to each review thread and resolve it. responseText feeds the
@@ -1583,5 +1632,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment };
+    module.exports = { action, hasRealCodeChanges, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment };
 }

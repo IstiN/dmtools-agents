@@ -487,6 +487,14 @@ function action(params) {
         // Step 6: Write all context files
         gitOps.writePRContext(inputFolder, prDetails, diff, discussionData.markdown, discussionData.rawThreads);
 
+        // agents#827: remember the head this pass starts from, so pushReworkChanges can tell a real fix
+        // from a pass that only left housekeeping (outputs/, WIP auto-saves) behind.
+        try {
+            if (headSha) file_write({ path: inputFolder + '/rework_base_head.txt', content: String(headSha) });
+        } catch (e) {
+            console.warn('Could not write rework_base_head.txt (no-fix guard stays off):', e.message || e);
+        }
+
         // gh-799: pinned input contract — whatever armed this leg, the input
         // folder now ALWAYS carries the complete open-item picture (threads
         // with ids, CI failures, review verdict). Non-fatal: a placeholder

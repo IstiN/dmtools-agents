@@ -38,3 +38,11 @@ Rules for review replies:
 - ⚠️ **Copy `threadId` verbatim, character-for-character, from `pr_discussions_raw.json`.** Its format depends on which SCM the PR lives on (a GitHub GraphQL node ID, a GitLab discussion hash, an ADO thread number, etc.) and is opaque — never invent, prefix, reformat, or pattern-match it against an example. The value above is a placeholder showing *where* the field goes, not what it should look like.
 - Do **not** put the reply body inline in the JSON; use the `reply` field only as a file path reference.
 - ⚠️ **Common mistake**: `pr_discussions_raw.json` uses the field names `rootCommentId` and `body`. When writing `review_replies.json`, you MUST rename these to `inReplyToId` and `reply` respectively — do NOT copy the input field names as-is into the output JSON, or the reply will silently post as an untargeted top-level comment instead of a threaded reply.
+
+### No deferral (agents#827)
+
+Every open review thread requires a **code fix in this pass**. Do not end the run by asking which
+follow-up to implement, and do not write `outputs/questions.json` as a substitute for the requested
+changes. `questions.json` is only for a genuine blocker you cannot resolve from the repository; the
+fixes you CAN make must still be made and committed. A pass with open threads and no code change is
+treated as a failed rework: threads are not resolved and the ticket is not advanced.
