@@ -32,18 +32,48 @@ suite('gitStaging', function() {
             'shared list must contain every runtime artifact (incl. .dmtools/fa-sessions)');
     });
 
-    test('buildUntrackCommand names ONLY tracked artifacts — git ls-files scoped (gh-683)', function() {
-        var cmd = gitStaging.buildUntrackCommand();
-        assert.ok(cmd.indexOf('git ls-files -- ') === 0,
-            'must enumerate candidates through git ls-files so untracked paths are never named to git rm');
+    test('untrack commands contain no shell metacharacters the Java validator rejects (epam/dm.ai#679)', function() {
+        var list = gitStaging.buildTrackedArtifactsCommand();
+        var rm = gitStaging.buildUntrackPathsCommand(['.dmtools/fa-trace.log']);
+        [list, rm].forEach(function(cmd) {
+            ['|', ';', '&&', '||', '`', '$(', '${', '>', '<', '\n'].forEach(function(bad) {
+                assert.equal(cmd.indexOf(bad), -1, JSON.stringify(cmd) + ' contains ' + JSON.stringify(bad));
+            });
+        });
+        assert.ok(list.indexOf('git ls-files -- ') === 0, 'candidates are enumerated through git ls-files (gh-683)');
         for (var i = 0; i < ALL_ARTIFACTS.length; i++) {
-            assert.contains(cmd, ' ' + ALL_ARTIFACTS[i],
-                'untrack candidate list must cover ' + ALL_ARTIFACTS[i]);
+            assert.contains(list, ' ' + ALL_ARTIFACTS[i], 'untrack candidate list must cover ' + ALL_ARTIFACTS[i]);
         }
-        assert.contains(cmd, 'git rm -r --cached --ignore-unmatch -- "$p"',
-            'the rm stays --cached (plain git rm refuses locally-appended logs) and --ignore-unmatch');
-        assert.contains(cmd, 'while IFS= read -r p',
-            'a while-read pipeline: an empty ls-files result is a true exit-0 no-op (nothing tracked — the normal case)');
+        assert.contains(rm, 'git rm -r --cached --ignore-unmatch -- "\.dmtools/fa-trace.log"'.replace('\\.', '.'),
+            'the rm stays --cached and --ignore-unmatch, paths quoted');
+    });
+
+    test('untrackRuntimeArtifacts: nothing tracked = ONE command, no git rm (gh-683 no-op)', function() {
+        var seen = [];
+        var removed = gitStaging.untrackRuntimeArtifacts(function(c) { seen.push(c); return ''; });
+        assert.deepEqual(removed, []);
+        assert.equal(seen.length, 1);
+        assert.ok(seen[0].indexOf('git ls-files -- ') === 0);
+    });
+
+    test('untrackRuntimeArtifacts: only TRACKED artifacts are handed to git rm; foreign paths are ignored', function() {
+        var seen = [];
+        var removed = gitStaging.untrackRuntimeArtifacts(function(c) {
+            seen.push(c);
+            return c.indexOf('git ls-files') === 0
+                ? '.dmtools/credential-helper.log\n.dmtools/fa-sessions/a/b.json\nsrc/not-an-artifact.txt\n'
+                : '';
+        });
+        assert.deepEqual(removed, ['.dmtools/credential-helper.log', '.dmtools/fa-sessions/a/b.json']);
+        assert.equal(seen.length, 2);
+        assert.contains(seen[1], '"' + '.dmtools/credential-helper.log' + '"');
+        assert.equal(seen[1].indexOf('not-an-artifact'), -1, 'a path outside the artifact list is never removed');
+    });
+
+    test('untrackRuntimeArtifacts: a failing listing propagates (callers keep their try/catch)', function() {
+        assert.throws(function() {
+            gitStaging.untrackRuntimeArtifacts(function() { throw new Error('git failed'); });
+        }, /git failed/);
     });
 
     test('buildStagingPathspecs excludes every artifact, file and directory-content', function() {

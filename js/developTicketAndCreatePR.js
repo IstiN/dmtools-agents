@@ -217,9 +217,7 @@ function performGitOperations(branchName, commitMessage, baseBranch, config, cus
             // .dmtools/ directory — untrack them on already-poisoned
             // branches; the staging pathspec below keeps them out going
             // forward. Shared canonical list: js/common/gitStaging.js.
-            runCmd({
-                command: gitStaging.buildUntrackCommand()
-            });
+            gitStaging.untrackRuntimeArtifacts(function (command) { return runCmd({ command: command }); });
         } catch (cleanupErr) {
             console.warn('Could not remove tracked Copilot session cache before staging:', cleanupErr);
         }

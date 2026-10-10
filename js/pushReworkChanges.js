@@ -300,7 +300,7 @@ function commitAndPush(ticketKey, config, customParams) {
         // helper's serving trace onto ai/gh-628); the staging pathspec
         // below keeps them out going forward. Shared canonical list:
         // js/common/gitStaging.js.
-        cmd(gitStaging.buildUntrackCommand());
+        gitStaging.untrackRuntimeArtifacts(cmd);
     } catch (cleanupErr) {
         console.warn('Could not remove tracked Copilot session cache before staging:', cleanupErr);
     }
