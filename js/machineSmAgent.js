@@ -257,7 +257,7 @@ function resolveSuggestionThreads(provider, prNumber, headSha, cfg) {
             ': no head sha or no machine logins configured — nothing resolves (fail closed)');
         return none;
     }
-    var records = provider.verdictRecords(prNumber);
+    var records = provider.verdictRecords(prNumber, { authorLogins: logins });
     var threads = provider.reviewThreadList(prNumber);
     var sel = reviewVerdictsModule.selectResolvableThreads(records, headSha, threads, {
         machineLogins: logins,
@@ -277,16 +277,25 @@ function resolveSuggestionThreads(provider, prNumber, headSha, cfg) {
     var ack = reviewVerdictsModule.buildThreadAckReply();
     var resolved = 0;
     sel.resolvable.forEach(function (t) {
-        try {
-            provider.replyToThread(prNumber, t, ack);
-        } catch (eReply) {
-            console.warn('  ⚠️ ack reply failed on a thread of PR #' + prNumber + ': ' + (eReply.message || eReply));
-        }
+        // gh-828 review round 3: resolve FIRST, ack only on success. With
+        // reply-first, a persistent resolve failure (transient GraphQL
+        // error, token drift) leaves the thread unresolved; the next tick
+        // re-selects it and posts another ack — one duplicate per tick,
+        // unbounded. A resolved thread missing its ack is a cosmetic loss
+        // the code already tolerates (replyToThread may fail after a
+        // successful resolve); an unresolved thread carrying fresh acks
+        // is spam.
         try {
             provider.resolveThread(prNumber, t);
             resolved++;
         } catch (eResolve) {
             console.warn('  ⚠️ resolveThread failed on PR #' + prNumber + ': ' + (eResolve.message || eResolve));
+            return;
+        }
+        try {
+            provider.replyToThread(prNumber, t, ack);
+        } catch (eReply) {
+            console.warn('  ⚠️ ack reply failed on a resolved thread of PR #' + prNumber + ': ' + (eReply.message || eReply));
         }
     });
     console.log('  ✅ resolveSuggestionThreads on PR #' + prNumber + ': resolved ' + resolved +
@@ -322,8 +331,13 @@ function action(params) {
     // nothing (human threads would otherwise be closed by the machine).
     cfg.machineLogins = machineAuthorModule.machineAuthorLogins(
         machineAuthorModule.resolveMachineAuthor(p, projectConfig));
-    cfg.maxResolveThreads = (typeof p.maxResolveThreads === 'number' && p.maxResolveThreads > 0)
-        ? Math.floor(p.maxResolveThreads) : reviewVerdictsModule.DEFAULT_RESOLVE_THREADS_CAP;
+    // gh-828 review round 4: same override-before-p priority as every other
+    // machineSm knob — a project-config cap silently ignored would leave an
+    // operator tuning the wrong bound.
+    cfg.maxResolveThreads = (typeof override.maxResolveThreads === 'number' && override.maxResolveThreads > 0)
+        ? Math.floor(override.maxResolveThreads)
+        : (typeof p.maxResolveThreads === 'number' && p.maxResolveThreads > 0)
+            ? Math.floor(p.maxResolveThreads) : reviewVerdictsModule.DEFAULT_RESOLVE_THREADS_CAP;
     var repoCfg = (projectConfig.repository && projectConfig.repository.owner &&
         projectConfig.repository.repo && projectConfig.repository) ||
         (p.repository || (p.repo ? { owner: String(p.repo).split('/')[0], repo: String(p.repo).split('/')[1] } : null));

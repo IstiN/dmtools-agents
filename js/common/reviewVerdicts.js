@@ -377,7 +377,14 @@ function armReworkDecision(records, headSha) {
 // 🚨 = U+1F6A8, ⚠ = U+26A0, 💡 = U+1F4A1 (emoji written as escapes to keep
 // the source ASCII-safe for the GraalJS pack toolchain).
 
-var SEVERITY_BLOCKING_RE = /(\uD83D\uDEA8)|(\bBLOCKING\b)/i;
+// gh-828 review round 1: the word form requires a boundary that is NOT a
+// hyphen or word char — a naive /\bBLOCKING\b/ holds across a hyphen and
+// matches the tail of "non-blocking"/"unblocking" in a reviewer's own
+// suggestion prose, misclassifying the thread 'blocking'. On an
+// APPROVE+blocking=0 head that thread is owned by nobody (the rework arm
+// is withheld, the resolution leg skips it) and the conversation gate
+// strands the PR — a per-thread recurrence of the stall this block fixes.
+var SEVERITY_BLOCKING_RE = /(\uD83D\uDEA8)|((?:^|[^\w-])BLOCKING\b)/i;
 var SEVERITY_IMPORTANT_RE = /(\u26A0)|(\bIMPORTANT\b)/i;
 var SEVERITY_SUGGESTION_RE = /(\uD83D\uDCA1)|(\bSUGGESTION\b)/i;
 

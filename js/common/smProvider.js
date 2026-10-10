@@ -523,37 +523,47 @@ function githubProvider(cfg) {
 
         // ── gh-807 machine verdict records (js/common/reviewVerdicts.js) ──
         // verdictRecords: every machine-parseable record on the PR, oldest
-        // first, memoized per tick (kind prVerdicts) — the verdict guards
-        // may evaluate per rule and must not re-fetch the comment list.
-        // Probe failure fails OPEN (empty list → guards inert → legacy
-        // behavior): a broken comment read must never strand a PR.
-        verdictRecords: function (prNumber) {
-            var memo = ioCacheGet(owner, repo, 'prVerdicts', prNumber);
-            if (memo) return memo;
-            var records = [];
-            try {
-                var raw = parseMcp(github_get_pr_comments({
-                    workspace: owner, repository: repo, pullRequestId: String(prNumber)
-                }));
-                var obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
-                var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
-                records = reviewVerdicts.parseVerdictRecords(list);
-            } catch (e) {
-                console.warn('  ⚠️ verdict-record read failed (fail-open): ' + (e.message || e));
-                records = [];
+        // first. The COMMENT FETCH is memoized per tick (kind prVerdicts) —
+        // the verdict guards may evaluate per rule and must not re-fetch —
+        // while the parse runs per call: opts.authorLogins (gh-828 review
+        // round 2, forge hardening) is the gh-728 machine-identity
+        // allowlist, and each caller may pin a different one (the marker
+        // format is public, so an unauthenticated APPROVE/REQUEST_CHANGES
+        // must be invisible to machine-trusting readers). Probe failure
+        // fails OPEN (empty list → guards inert → legacy behavior): a
+        // broken comment read must never strand a PR.
+        verdictRecords: function (prNumber, opts) {
+            var allow = (opts && Array.isArray(opts.authorLogins)) ? opts.authorLogins : null;
+            var memoId = String(prNumber);
+            var memo = ioCacheGet(owner, repo, 'prVerdicts', memoId);
+            var list = memo;
+            if (!memo) {
+                list = [];
+                try {
+                    var raw = parseMcp(github_get_pr_comments({
+                        workspace: owner, repository: repo, pullRequestId: String(prNumber)
+                    }));
+                    var obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
+                    list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+                } catch (e) {
+                    console.warn('  ⚠️ verdict-record read failed (fail-open): ' + (e.message || e));
+                    list = [];
+                }
+                ioCachePut(owner, repo, 'prVerdicts', memoId, list);
             }
-            ioCachePut(owner, repo, 'prVerdicts', prNumber, records);
-            return records;
+            return reviewVerdicts.parseVerdictRecords(list,
+                allow ? { authorLogins: allow } : undefined);
         },
 
         // Newest verdict record for one head (+ conflict detection with the
         // AC1 WARN inside reviewVerdicts.latestVerdictForHead), or null when
         // the head has none — the null is what makes the query guards
-        // fail-open for pre-gh-807 PRs.
-        latestVerdictRecord: function (prNumber, headSha) {
+        // fail-open for pre-gh-807 PRs. opts.authorLogins rides through to
+        // verdictRecords (the query guards pin the gh-728 machine logins).
+        latestVerdictRecord: function (prNumber, headSha, opts) {
             if (!headSha) return null;
             return reviewVerdicts.latestVerdictForHead(
-                this.verdictRecords(prNumber), headSha);
+                this.verdictRecords(prNumber, opts), headSha);
         },
 
         reviewThreads: function (prNumber) {
