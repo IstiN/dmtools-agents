@@ -3999,7 +3999,7 @@ function waitForRunMaterialized(repoInfo, runId, timeoutMs, pollMs) {
 // details_url/html_url backs the run's id (checkRunZombies.runIdOf —
 // the established run-link parser). Concluding rides the Checks API
 // PATCH, which requires the GitHub App token — the tick PAT gets 403
-(verified live) — so the GH_TOKEN swap mirrors
+// (verified live) — so the GH_TOKEN swap mirrors
 // stampValidationChecksForModule (jobParams.silentToken in, sourceToken
 // restored). A degrade read ([] on the established null-on-error
 // contract) simply skips the belt — the gh-842/843 cure-side sweep
