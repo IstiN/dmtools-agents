@@ -112,6 +112,10 @@ var reworkLatchModule = require('./common/reworkLatch.js');
 // classification of the head's dispatched-run probe + the zombie
 // re-dispatch marker math (crash-loop cap, 1/head/hour bound).
 var validationLivenessModule = require('./common/validationLiveness.js');
+// gh-842: the gate-ghost classifier — pending check-runs whose backing
+// run is gone/cancelled/stale (check-RUN zombies); the run-level gh-821
+// twin cannot see them while a green run still exists on the head.
+var checkRunZombiesModule = require('./common/checkRunZombies.js');
 var buildEncodedConfigModule = require('./common/buildEncodedConfig.js');
 var machineAuthorModule = require('./common/machineAuthor.js');
 var smProviderModule = require('./common/smProvider.js');
@@ -1924,11 +1928,37 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // (the unmet required check is not this workflow's) — skip
                 // instead of looping CI every tick. Rules without the flag
                 // are unaffected.
+                // gh-842 VOID: the green cover is NOT a cover while the
+                // head carries check-run ZOMBIES — pending check runs whose
+                // backing run is gone/cancelled/stale. Branch protection
+                // takes the LATEST check-run per (context, head), so the
+                // ghosts hold the gate BLOCKED and the green run's terminal
+                // entries are shadowed (live fa #1457: ~2h BLOCKED on ghost
+                // in_progress checks from a cancelled-queued run, head
+                // otherwise green — the tick never re-dispatched because
+                // THIS guard kept skipping). The zombie contexts count as
+                // ABSENT (gh-921 semantics): fall through to the normal
+                // guarded dispatch — the fresh stamps become the latest per
+                // context and override the ghosts. AC2 holds inside the
+                // classifier (a live run is never a zombie); a probe
+                // degradation keeps the legacy skip (retry next tick).
                 if (rule.skipIfGreenCi && vProbe && vProbe.green) {
-                    console.log('  ⏭️  ' + key +
-                                ' head already carries a green dispatched CI run' +
-                                ' — blocker is not this CI; skip re-dispatch');
-                    continue;
+                    var gGreenZombies = vHead0
+                        ? headCheckRunZombies(effectiveRepoInfo, vHead0) : null;
+                    if (gGreenZombies && gGreenZombies.zombies.length) {
+                        console.log('  🧟 ' + key + ' green cover VOID — ' +
+                                    gGreenZombies.zombies.length + ' zombie check-run(s) hold the' +
+                                    ' gate (gh-842: ' +
+                                    gGreenZombies.zombies.map(function (z) {
+                                        return String(z.name || '?') + ' (' + z.reason + ')';
+                                    }).join(', ') + ') — re-dispatching to override the ghosts');
+                        // fall through to the dispatch guards below
+                    } else {
+                        console.log('  ⏭️  ' + key +
+                                    ' head already carries a green dispatched CI run' +
+                                    ' — blocker is not this CI; skip re-dispatch');
+                        continue;
+                    }
                 }
                 // Latch-skip (owner 2026-09-27 — rule flag skipIfValidatedHead,
                 // set on validate-armed): the PR carries the ai_validated
@@ -1959,31 +1989,43 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // invisible, mutexExcludeSelf honored — a self-holding
                 // recovery candidate drains the stack, #577); fails OPEN
                 // on probe error — the query-level mutex still guards the
-                // common case. The probe sits just ABOVE each arm site
-                // (review #703 💡): candidates parked/skipped by the cheap
-                // guards below never pay the uncached read.
                 if (rule.skipIfValidatedHead && vProbe &&
                     (ticket.labels || []).indexOf('ai_validated') !== -1 &&
                     vProbe.green &&
                     validationRollupGreen(effectiveRepoInfo, ticket.prNumber)) {
-                    var latchMutexHolder = validationMutexHeldByAnother(
-                        effectiveRepoInfo, rule, ticket);
-                    if (latchMutexHolder) {
-                        console.log('  🔒 ' + key + ' arm refused — pr-' + latchMutexHolder +
-                                    ' already holds ai_validating (action-time re-check;' +
-                                    ' the query-time mutex scanned a stale list)');
-                        continue; // NOT processedKeys — the slot stays with the holder
+                    // gh-842 VOID: arming WITHOUT a dispatch while zombie
+                    // check-runs hold the gate is the #1457 deadlock in
+                    // another shape — merge-validated needs CLEAN, the
+                    // ghosts keep mergeState BLOCKED forever, and no run is
+                    // ever ordered to override them. Dispatch instead (same
+                    // fall-through as the green-cover void above).
+                    var latchZombies = vHead0
+                        ? headCheckRunZombies(effectiveRepoInfo, vHead0) : null;
+                    if (latchZombies && latchZombies.zombies.length) {
+                        console.log('  🧟 ' + key + ' latch-skip VOID — ' +
+                                    latchZombies.zombies.length + ' zombie check-run(s) hold the' +
+                                    ' gate (gh-842) — dispatching instead of arm-only');
+                        // fall through to the dispatch guards below
+                    } else {
+                        var latchMutexHolder = validationMutexHeldByAnother(
+                            effectiveRepoInfo, rule, ticket);
+                        if (latchMutexHolder) {
+                            console.log('  🔒 ' + key + ' arm refused — pr-' + latchMutexHolder +
+                                        ' already holds ai_validating (action-time re-check;' +
+                                        ' the query-time mutex scanned a stale list)');
+                            continue; // NOT processedKeys — the slot stays with the holder
+                        }
+                        github_add_labels({
+                            workspace: effectiveRepoInfo.owner,
+                            repository: effectiveRepoInfo.repo,
+                            number: ticket.prNumber,
+                            labels: ['ai_validating']
+                        });
+                        console.log('  ⏭️  ' + key + ' latch-skip: head unchanged since the green' +
+                                    ' validation — arm only, merge window proceeds on the existing green');
+                        processedKeys.push(key);
+                        continue;
                     }
-                    github_add_labels({
-                        workspace: effectiveRepoInfo.owner,
-                        repository: effectiveRepoInfo.repo,
-                        number: ticket.prNumber,
-                        labels: ['ai_validating']
-                    });
-                    console.log('  ⏭️  ' + key + ' latch-skip: head unchanged since the green' +
-                                ' validation — arm only, merge window proceeds on the existing green');
-                    processedKeys.push(key);
-                    continue;
                 }
                 // Red-current-head defer (owner 2026-09-27, live: fa wave
                 // stall — the oldest APPROVED PR was a guest whose head
@@ -4650,6 +4692,65 @@ function headWorkflowRunsSafe(repoInfo, headSha) {
         console.warn('  ⚠️  head-run probe failed: ' + (e.message || e));
         return null;
     }
+}
+
+// ─── Check-run zombie probe (gh-842) ────────────────────────────────────────
+//
+// Live fa #1457 (2026-10-10): a dispatched CI run cancelled while queued
+// (gh-748 twin-guard family) left its `in_progress` check runs on the head
+// forever; branch protection takes the LATEST check-run per (context, head),
+// so the ghosts held mergeStateStatus=BLOCKED ~2h even though the head ALSO
+// carried green terminal entries from the earlier run 38057801418. The tick
+// read its rollup green and the green-cover guard (skipIfGreenCi) concluded
+// "the blocker is not this CI" — no re-dispatch ever fired. The gh-821
+// run-level zombie sweep missed it: the newest EXISTING dispatched run was
+// the old green one. This probe closes that gap at the CHECK-RUN level.
+//
+// Two reads, both in the established fail-open probe family:
+//   - the head's check runs (bridge tool — the same REST list
+//     computePrStatus falls back to);
+//   - the head's run rollup (headWorkflowRunsSafe) as the resolver source:
+//     a check-run's backing run is looked up BY ID (parsed from its
+//     details_url); ABSENT from the head's list is the 404-equivalent
+//     (deleted runs simply do not appear).
+// Probe failure on EITHER side ⇒ null (caller keeps the legacy behavior —
+// the green-cover skip stands; a degraded read must not turn into a
+// re-dispatch churn, and the next tick retries with a healthy API).
+
+function headCheckRunsSafe(repoInfo, headSha) {
+    try {
+        var res = github_get_commit_check_runs({
+            workspace: repoInfo.owner,
+            repository: repoInfo.repo,
+            commitSha: headSha
+        });
+        var parsed = mcpParse(res);
+        return (parsed && parsed.check_runs) || [];
+    } catch (e) {
+        console.warn('  ⚠️  head check-run probe failed: ' + (e.message || e));
+        return null;
+    }
+}
+
+function headCheckRunZombies(repoInfo, headSha) {
+    // → null (probe degraded — caller keeps legacy behavior) | the
+    // classify() result {zombies, live, settled, unresolvable}.
+    var checkRuns = headCheckRunsSafe(repoInfo, headSha);
+    if (checkRuns === null) return null;
+    if (!checkRuns.length) return { zombies: [], live: 0, settled: 0, unresolvable: 0 };
+    var runs = headWorkflowRunsSafe(repoInfo, headSha);
+    if (runs === null) return null;
+    var byId = {};
+    runs.forEach(function (r) {
+        if (r && r.id !== undefined && r.id !== null) byId[String(r.id)] = r;
+    });
+    return checkRunZombiesModule.classify(checkRuns, function (runId) {
+        var hit = byId[String(runId)];
+        return hit === undefined ? null : hit;
+    }, Date.now(), {
+        staleNoRunnerMinutes: (RUN_JOB_PARAMS || {}).checkRunZombieStaleMinutes,
+        runConcludedGraceMinutes: (RUN_JOB_PARAMS || {}).checkRunZombieGraceMinutes
+    });
 }
 
 
