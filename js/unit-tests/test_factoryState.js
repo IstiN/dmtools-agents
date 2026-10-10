@@ -1508,6 +1508,87 @@ suite('factoryState — model passthrough in normalizeTokens (gh-825)', function
   });
 });
 
+// ── gh-825 rework (review thread 1, BLOCKING) — cacheRead passthrough ────────
+// normTokenRow builds a FRESH row object; the model passthrough rode it but
+// the cache count did not — so priceTokens always saw cacheRead === undefined
+// and the cache term of the cost rule priced as 0 in the tick path (the
+// rowCost unit tests passed raw rows, bypassing normalizeTokens). The cache
+// count now normalizes alongside model.
+
+suite('factoryState — cacheRead passthrough in normalizeTokens (gh-825 rework)', function () {
+  function norm(rows) {
+    var map = fsModule.normalizeTokens({ 'pr-31': rows });
+    return map['pr-31'];
+  }
+
+  test('camelCase cacheRead rides the normalized row', function () {
+    var rows = norm([{ leg: 'dev', at: 't', prompt: 1, completion: 2,
+      cacheRead: 500000 }]);
+    assert.equal(rows[0].cacheRead, 500000);
+  });
+
+  test('snake_case cache_read rides as producer-drift tolerance', function () {
+    var rows = norm([{ leg: 'dev', at: 't', prompt: 1, completion: 2,
+      cache_read: 700000 }]);
+    assert.equal(rows[0].cacheRead, 700000, 'normalized to the camelCase key');
+  });
+
+  test('camelCase wins when both spellings ride one row', function () {
+    var rows = norm([{ leg: 'dev', at: 't', prompt: 1, completion: 2,
+      cacheRead: 500000, cache_read: 700000 }]);
+    assert.equal(rows[0].cacheRead, 500000);
+  });
+
+  test('absent → null (honest unknown); a REPORTED zero stays 0', function () {
+    var rows = norm([
+      { leg: 'a', at: 't', prompt: 1, completion: 1 },
+      { leg: 'b', at: 't', prompt: 1, completion: 1, cacheRead: 0 }
+    ]);
+    assert.equal(rows[0].cacheRead, null, 'absent → null');
+    assert.equal(rows[1].cacheRead, 0, 'reported none ≠ not reported');
+  });
+
+  test('REVIEWER REPRO — the cost rule\'s cache term through the tick path: 1M cache reads @ $0.3/Mtok prices $0.30', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: '2026-10-03T13:10:00Z',
+      prs: [{ number: 31, title: 't', labels: [],
+        head: { ref: 'b', sha: 's' }, user: { login: 'bot' },
+        created_at: '2026-10-03T06:00:00Z' }], runs: [],
+      pricing: { rates: (function () {
+          var r = Object.create(null);
+          r['claude-sonnet-4-5'] = { input: 3, output: 15, cacheRead: 0.3 };
+          return r;
+        })(), defaultRates: null, models: 1 },
+      tokens: { 'pr-31': [{ leg: 'dev', at: '2026-10-03T07:00:00Z',
+        prompt: 1000000, completion: 1000000, cacheRead: 1000000,
+        total: 3000000, model: 'claude-sonnet-4-5' }] }
+    });
+    var row = st.lanes.pr_created[0].tokens[0];
+    assert.equal(row.cacheRead, 1000000, 'the cache count survived normalization');
+    assert.equal(row.cost, 3 + 15 + 0.3,
+      'in + out + cache — the term that priced as 0 before the fix');
+  });
+
+  test('snake_case cache_read prices through buildFactoryState too', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: '2026-10-03T13:10:00Z',
+      prs: [{ number: 31, title: 't', labels: [],
+        head: { ref: 'b', sha: 's' }, user: { login: 'bot' },
+        created_at: '2026-10-03T06:00:00Z' }], runs: [],
+      pricing: { rates: (function () {
+          var r = Object.create(null);
+          r['m'] = { input: 0, output: 0, cacheRead: 0.5 };
+          return r;
+        })(), defaultRates: null, models: 1 },
+      tokens: { 'pr-31': [{ leg: 'dev', at: '2026-10-03T07:00:00Z',
+        prompt: 0, completion: 0, cache_read: 2000000, total: 0,
+        model: 'm' }] }
+    });
+    assert.equal(st.lanes.pr_created[0].tokens[0].cost, 1,
+      '2M cache reads @ $0.5/Mtok');
+  });
+});
+
 // ── gh-825 — the hardcoded model pricing config ──────────────────────────────
 // ONE home: data/model-pricing.json at the repo root (hand-maintained, no
 // secrets, no live APIs). Rates are USD per MILLION tokens; "default" prices
@@ -1782,7 +1863,7 @@ suite('factoryState — priceTokens through buildFactoryState (gh-825)', functio
       'only the Σ$ rollup applies the 14d cut');
   });
 
-  test('undated rows still price per-row but stay out of the Σ$ window (honest unknown)', function () {
+  test('undated rows still price per-row but the rollup stays unpublished (lying-$0.00 guard)', function () {
     var st = fsModule.buildFactoryState({
       repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
       prs: [pr(31)], runs: [], pricing: pricing(),
@@ -1791,9 +1872,41 @@ suite('factoryState — priceTokens through buildFactoryState (gh-825)', functio
           total: 1000000, model: 'claude-sonnet-4-5' }
       ] }
     });
+    assert.equal(cardFor(st, 31).tokens[0].cost, 3,
+      'the row\'s $ is always data');
+    assert.notOk('costs' in st,
+      'gh-825 rework (review thread 2): nothing priced IN the window → ' +
+      'no rollup — the pill never renders a lying Σ$0.00');
+  });
+
+  test('gh-825 rework: priced rows OUTSIDE the window price per-row but publish no rollup', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      prs: [pr(31)], runs: [], pricing: pricing(),
+      tokens: { 'pr-31': [
+        { leg: 'old', at: '2026-09-01T07:00:00Z', prompt: 1000000,
+          completion: 0, total: 1000000, model: 'claude-sonnet-4-5' }
+      ] }
+    });
     assert.equal(cardFor(st, 31).tokens[0].cost, 3);
-    assert.equal(st.costs.usd14d, 0);
-    assert.equal(st.costs.pricedLegs, 0);
+    assert.notOk('costs' in st, 'priced-but-stale ledger → no lying $0.00');
+  });
+
+  test('gh-825 rework: a sub-cent in-window Σ$ stays unpublished (0.0049 → no rollup)', function () {
+    var st = fsModule.buildFactoryState({
+      repoInfo: { owner: 'o', repo: 'r' }, now: NOW,
+      prs: [pr(31)], runs: [], pricing: pricing(),
+      tokens: { 'pr-31': [
+        { leg: 'a', at: '2026-10-03T07:00:00Z', prompt: 1000,
+          completion: 0, total: 1000, model: 'claude-sonnet-4-5' },
+        { leg: 'b', at: '2026-10-03T08:00:00Z', prompt: 634,
+          completion: 0, total: 634, model: 'claude-sonnet-4-5' }
+      ] }
+    });
+    // (1000+634)/1e6*3 = 0.004902 → rounds to $0.00
+    assert.ok(cardFor(st, 31).tokens[0].cost > 0, 'rows are priced');
+    assert.notOk('costs' in st,
+      'the rollup would round to $0.00 — suppressed, per review thread 2');
   });
 
   test('no pricing input → rows unchanged, no costs key (additive schema)', function () {
