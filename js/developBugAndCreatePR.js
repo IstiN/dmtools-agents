@@ -239,7 +239,7 @@ function action(params) {
                 // .dmtools/credential-helper.log onto ai/gh-628); the
                 // staging pathspec below keeps them out going forward.
                 // Shared canonical list: js/common/gitStaging.js.
-                cli_execute_command({ command: gitStaging.buildUntrackCommand() });
+                gitStaging.untrackRuntimeArtifacts(function (command) { return cli_execute_command({ command: command }); });
             } catch (cleanupErr) {
                 console.warn('Could not remove tracked Copilot session cache before checking status:', cleanupErr);
             }
