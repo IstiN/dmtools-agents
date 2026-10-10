@@ -313,11 +313,17 @@ function matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo) {
     // conflict-shaped reconcile-* rules fire on exactly the contradictory
     // carrier+verdict shapes). Both fail-open: no records (pre-gh-807 PRs),
     // no head sha, or a provider without the probe → guard inert → legacy
-    // behavior.
+    // behavior. The record read pins the gh-728 machine-author allowlist
+    // (gh-828 review round 2, forge hardening): the marker format is
+    // public, so only machine-authored markers count — a forged
+    // APPROVE/REQUEST_CHANGES from any comment-capable identity is
+    // invisible, and with no machineAuthor configured the guards degrade
+    // to exactly this inert fail-open shape.
     if (q.notLatestVerdict || q.latestVerdict) {
         var lvRec = (provider && typeof provider.latestVerdictRecord === 'function')
             ? provider.latestVerdictRecord(item.prNumber,
-                item.pr && item.pr.headSha) : null;
+                item.pr && item.pr.headSha,
+                { authorLogins: machineAuthorModule.machineAuthorLogins(machineAuthor) }) : null;
         var lvVerdict = lvRec && lvRec.record ? lvRec.record.verdict : null;
         if (q.notLatestVerdict && lvVerdict &&
             q.notLatestVerdict.indexOf(lvVerdict) !== -1) return false;

@@ -1238,7 +1238,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     processedKeys.push(key);
                     continue;
                 }
-                if (reconcileReviewVerdicts(effectiveRepoInfo, ticket)) {
+                if (reconcileReviewVerdicts(effectiveRepoInfo, ticket,
+                        verdictMachineLogins(effectiveConfig))) {
                     processedKeys.push(key);
                 } else {
                     console.log('  ⏭️  ' + key + ' verdict records and labels already agree — nothing to reconcile');
@@ -1287,7 +1288,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // approval and does NOT arm rework (that was the #1428
                 // coexistence). Fail-open: no records / broken read → arm
                 // as before (pre-gh-807 PRs).
-                var armGate = reworkArmGate(effectiveRepoInfo, ticket);
+                var armGate = reworkArmGate(effectiveRepoInfo, ticket,
+                    verdictMachineLogins(effectiveConfig));
                 if (!armGate.arm) {
                     console.log('  ⏭️  ' + key + ' rework arm withheld — APPROVE verdict on head ' +
                         armGate.headShort + ' is authoritative (gh-807: suggestions do not trigger rework)');
@@ -3701,9 +3703,25 @@ function prHeadAndLabels(repoInfo, prNumber) {
     }
 }
 
+// The gh-728 machine-author allowlist for verdict-record parsing (gh-828
+// review round 2): resolved through the same knob chain as every other
+// machine-keyed guard (jobParams.machineAuthor → config.machineAuthor).
+// Unconfigured → [] — the machineAuthor doctrine: no configured identity,
+// no trusted machine input; the verdict guards then degrade to their
+// no-records fail-open behavior.
+function verdictMachineLogins(effectiveConfig) {
+    return machineAuthorModule.machineAuthorLogins(
+        machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, effectiveConfig));
+}
+
 // Reads every machine verdict record on the PR (oldest first). Fails open to
 // [] — same github_get_pr_comments payload shape as failMarkerState above.
-function readVerdictRecords(repoInfo, prNumber) {
+// machineLogins (gh-828 review round 2, forge hardening): the gh-728
+// machine-identity allowlist — the marker format is public (this repo), so
+// only markers authored by a configured machine login are trusted; an
+// empty list trusts nothing (the machineAuthor doctrine) and degrades the
+// guards to their no-records fail-open behavior.
+function readVerdictRecords(repoInfo, prNumber, machineLogins) {
     try {
         var raw = github_get_pr_comments({
             workspace: repoInfo.owner, repository: repoInfo.repo,
@@ -3711,7 +3729,8 @@ function readVerdictRecords(repoInfo, prNumber) {
         });
         var obj = (typeof raw === 'string') ? JSON.parse(raw) : (raw || []);
         var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
-        return reviewVerdictsModule.parseVerdictRecords(list);
+        return reviewVerdictsModule.parseVerdictRecords(list,
+            { authorLogins: Array.isArray(machineLogins) ? machineLogins : [] });
     } catch (e) {
         console.warn('  ⚠️ verdict probe: comment read failed (fail-open): ' + (e.message || e));
         return [];
@@ -3743,13 +3762,16 @@ function linkedIssueLabels(repoInfo, issueNumber) {
 // rework side's prHasApproved rule (approved once → never re-review) with
 // the blocking-thread exception from the gh-807 capability surface. Fails
 // open (arm: true) on missing records/head — pre-gh-807 PRs arm as before.
-function reworkArmGate(repoInfo, ticket) {
+// machineLogins (gh-828 review round 2): the gh-728 machine-author
+// allowlist the verdict records are parsed with — forged markers must not
+// arm or withhold arms.
+function reworkArmGate(repoInfo, ticket, machineLogins) {
     var out = { arm: true, reason: 'no-verdict-records', headShort: null, effective: null };
     var probe = prHeadAndLabels(repoInfo, ticket.prNumber);
     if (!probe) return out;
     out.headShort = String(probe.headSha).substring(0, 7);
     var decision = reviewVerdictsModule.armReworkDecision(
-        readVerdictRecords(repoInfo, ticket.prNumber), probe.headSha);
+        readVerdictRecords(repoInfo, ticket.prNumber, machineLogins), probe.headSha);
     decision.headShort = out.headShort;
     return decision;
 }
@@ -3773,10 +3795,13 @@ function reworkArmGate(repoInfo, ticket) {
 // census rides the decision function (reviewVerdicts.reconcileDecision);
 // the probe runs only when a rework arm is actually present, so the
 // conflict-shaped queries keep the cost near zero.
-function reconcileReviewVerdicts(repoInfo, ticket) {
+// machineLogins (gh-828 review round 2): the gh-728 machine-author
+// allowlist the verdict records are parsed with — a forged marker must not
+// strip labels or post reconciliation comments.
+function reconcileReviewVerdicts(repoInfo, ticket, machineLogins) {
     var probe = prHeadAndLabels(repoInfo, ticket.prNumber);
     if (!probe) return false;
-    var records = readVerdictRecords(repoInfo, ticket.prNumber);
+    var records = readVerdictRecords(repoInfo, ticket.prNumber, machineLogins);
     var issueLabels = linkedIssueLabels(repoInfo, ticket.issueNumber);
     var prHasRework = probe.labels.indexOf(reviewVerdictsModule.LABEL_REWORK) !== -1;
     var issueHasRework = !!(issueLabels &&

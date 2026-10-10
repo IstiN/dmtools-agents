@@ -523,37 +523,47 @@ function githubProvider(cfg) {
 
         // ── gh-807 machine verdict records (js/common/reviewVerdicts.js) ──
         // verdictRecords: every machine-parseable record on the PR, oldest
-        // first, memoized per tick (kind prVerdicts) — the verdict guards
-        // may evaluate per rule and must not re-fetch the comment list.
-        // Probe failure fails OPEN (empty list → guards inert → legacy
-        // behavior): a broken comment read must never strand a PR.
-        verdictRecords: function (prNumber) {
-            var memo = ioCacheGet(owner, repo, 'prVerdicts', prNumber);
-            if (memo) return memo;
-            var records = [];
-            try {
-                var raw = parseMcp(github_get_pr_comments({
-                    workspace: owner, repository: repo, pullRequestId: String(prNumber)
-                }));
-                var obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
-                var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
-                records = reviewVerdicts.parseVerdictRecords(list);
-            } catch (e) {
-                console.warn('  ⚠️ verdict-record read failed (fail-open): ' + (e.message || e));
-                records = [];
+        // first. The COMMENT FETCH is memoized per tick (kind prVerdicts) —
+        // the verdict guards may evaluate per rule and must not re-fetch —
+        // while the parse runs per call: opts.authorLogins (gh-828 review
+        // round 2, forge hardening) is the gh-728 machine-identity
+        // allowlist, and each caller may pin a different one (the marker
+        // format is public, so an unauthenticated APPROVE/REQUEST_CHANGES
+        // must be invisible to machine-trusting readers). Probe failure
+        // fails OPEN (empty list → guards inert → legacy behavior): a
+        // broken comment read must never strand a PR.
+        verdictRecords: function (prNumber, opts) {
+            var allow = (opts && Array.isArray(opts.authorLogins)) ? opts.authorLogins : null;
+            var memoId = String(prNumber);
+            var memo = ioCacheGet(owner, repo, 'prVerdicts', memoId);
+            var list = memo;
+            if (!memo) {
+                list = [];
+                try {
+                    var raw = parseMcp(github_get_pr_comments({
+                        workspace: owner, repository: repo, pullRequestId: String(prNumber)
+                    }));
+                    var obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
+                    list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+                } catch (e) {
+                    console.warn('  ⚠️ verdict-record read failed (fail-open): ' + (e.message || e));
+                    list = [];
+                }
+                ioCachePut(owner, repo, 'prVerdicts', memoId, list);
             }
-            ioCachePut(owner, repo, 'prVerdicts', prNumber, records);
-            return records;
+            return reviewVerdicts.parseVerdictRecords(list,
+                allow ? { authorLogins: allow } : undefined);
         },
 
         // Newest verdict record for one head (+ conflict detection with the
         // AC1 WARN inside reviewVerdicts.latestVerdictForHead), or null when
         // the head has none — the null is what makes the query guards
-        // fail-open for pre-gh-807 PRs.
-        latestVerdictRecord: function (prNumber, headSha) {
+        // fail-open for pre-gh-807 PRs. opts.authorLogins rides through to
+        // verdictRecords (the query guards pin the gh-728 machine logins).
+        latestVerdictRecord: function (prNumber, headSha, opts) {
             if (!headSha) return null;
             return reviewVerdicts.latestVerdictForHead(
-                this.verdictRecords(prNumber), headSha);
+                this.verdictRecords(prNumber, opts), headSha);
         },
 
         reviewThreads: function (prNumber) {
@@ -572,6 +582,71 @@ function githubProvider(cfg) {
             nodes.forEach(function (t) { if (t && t.isResolved) resolved++; });
             return { total: nodes.length, resolved: resolved,
                      unresolved: nodes.length - resolved };
+        },
+
+        // ── gh-828 post-APPROVE thread resolution primitives ──
+        // reviewThreadList: the DETAILED thread list (vs the counts above) —
+        // each node mapped to its GraphQL resolve id, the root REST comment
+        // id (the reply anchor), the root author and body (the machine-auth
+        // and severity classification inputs) and the resolved flag. Fail
+        // OPEN to []: a broken threads read means "nothing eligible", never
+        // a throw — the resolve leg then no-ops for this PR this tick.
+        reviewThreadList: function (prNumber) {
+            try {
+                var res = parseMcp(github_get_pr_review_threads({
+                    workspace: owner, repository: repo, pullRequestId: String(prNumber)
+                }));
+                var nodes = (res && res.data && res.data.repository &&
+                             res.data.repository.pullRequest &&
+                             res.data.repository.pullRequest.reviewThreads &&
+                             res.data.repository.pullRequest.reviewThreads.nodes) || [];
+                var out = [];
+                nodes.forEach(function (t) {
+                    if (!t) return;
+                    var first = (t.comments && t.comments.nodes &&
+                                 t.comments.nodes[0]) || {};
+                    out.push({
+                        threadId: t.id || null,
+                        rootCommentId: first.databaseId || null,
+                        resolved: t.isResolved === true,
+                        author: (first.author && (first.author.login || first.author.name)) || '',
+                        body: first.body || '',
+                        path: t.path || null,
+                        line: (t.line === 0 || t.line) ? t.line : null
+                    });
+                });
+                return out;
+            } catch (e) {
+                console.warn('  ⚠️ review-thread list failed (fail-open): ' + (e.message || e));
+                return [];
+            }
+        },
+
+        // The ack reply rides the REST reply endpoint anchored on the root
+        // comment id; a thread-shaped item without one degrades to a PR-level
+        // comment so the ack is never lost silently.
+        replyToThread: function (prNumber, thread, text) {
+            if (thread && thread.rootCommentId) {
+                return github_reply_to_pr_thread({
+                    workspace: owner, repository: repo,
+                    pullRequestId: String(prNumber),
+                    inReplyToId: String(thread.rootCommentId), text: String(text || '')
+                });
+            }
+            return github_add_pr_comment({
+                workspace: owner, repository: repo,
+                pullRequestId: String(prNumber), text: String(text || '')
+            });
+        },
+
+        resolveThread: function (prNumber, thread) {
+            if (thread && thread.threadId) {
+                return github_resolve_pr_thread({
+                    workspace: owner, repository: repo,
+                    pullRequestId: String(prNumber), threadId: String(thread.threadId)
+                });
+            }
+            console.warn('smProvider(github): no threadId to resolve on PR #' + prNumber);
         },
 
         activeMachineRuns: function (workflowFile) {
