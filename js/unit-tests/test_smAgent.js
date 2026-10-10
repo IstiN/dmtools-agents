@@ -8347,6 +8347,77 @@ suite('smAgent: gh-837 parallel validations knob (merge cadence)', function () {
         assert.equal(result.validationCost.capMinutesPerTick, 70, 'hard ceiling: cap x estimate');
     });
 
+    test('cost line stays silent at the serial default — knob 1, idle window (review thread)', function () {
+        // The knob ships at 1 (every production deployment): the 📊 line
+        // must not fire on every tick when the parallel window is off and
+        // nothing holds a validation slot. The validationCost field on the
+        // action result stays unconditional for downstream consumers.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            captureConsole: true,
+            github: {
+                items: [],
+                // Approved PRs waiting, but nobody holds ai_validating.
+                prList: [prRest(2, ['pr_approved']), prRest(3, ['pr_approved'])],
+                prComments: []
+            }
+        }));
+        var result = sm.action({ jobParams: { owner: 'a', repo: 'b',
+            machineAuthor: 'ai-teammate', rules: [RULES.validate] } });
+
+        assert.ok(!sm.capturedLogs.some(function (l) { return l.indexOf('validation cost') !== -1; }),
+            'no 📊 cost line at knob 1 with zero slots in use');
+        assert.ok(result && result.validationCost, 'the report field still rides the action result');
+        assert.equal(result.validationCost.mutexMax, 1, 'serial cap recorded');
+    });
+
+    test('cost line still fires at knob 1 while a serial validation is in flight', function () {
+        // Gate is mutexMax > 1 || slotsInUse > 0: a serial deployment with
+        // an active validation keeps the runner-cost visibility.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            captureConsole: true,
+            github: {
+                items: [],
+                prList: [prRest(1, ['pr_approved', 'ai_validating']),
+                    prRest(2, ['pr_approved'])],
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+            machineAuthor: 'ai-teammate', rules: [RULES.validate] } });
+
+        var line = sm.capturedLogs.filter(function (l) { return l.indexOf('validation cost') !== -1; });
+        assert.equal(line.length, 1, 'in-flight serial validation keeps the cost line');
+        assert.ok(line[0].indexOf('1/1 in use') !== -1, 'one slot in use of serial cap 1');
+    });
+
+    test('blocked/draft PRs excluded identically from slots and queue depth (shared filter)', function () {
+        // The label-filter lives in ONE helper now (review thread): a
+        // blocked approved PR and a draft PR count in neither slotsInUse
+        // nor the approved-queue depth printed on the cost line.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            captureConsole: true,
+            github: {
+                items: [prItem(2, { branch: 'ai/gh-2', headSha: 'sha2', author: 'ai-teammate' })],
+                prList: deepQueue().concat([
+                    prRest(5, ['pr_approved', 'blocked']),
+                    { number: 6, draft: true, labels: [{ name: 'pr_approved' }],
+                        head: { sha: 'sha6' } },
+                    prRest(7, ['blocked'])
+                ]),
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            validationConcurrency: 2, validationMinutesEstimate: 35, rules: [RULES.validate] } });
+
+        var line = sm.capturedLogs.filter(function (l) { return l.indexOf('validation cost') !== -1; });
+        assert.equal(line.length, 1);
+        assert.ok(line[0].indexOf('1/2 in use') !== -1,
+            'blocked/draft PRs never counted as validation slots');
+        assert.ok(line[0].indexOf('approved queue 4') !== -1,
+            'blocked/draft PRs excluded from the queue depth — only the 4 real approved count');
+    });
+
     test('knob 2 + deep queue: BOTH free slots fill in ONE tick (arm limit rises with the cap)', function () {
         // gh-837 cadence math: a limit-1 arm staggers the parallel
         // validations by a tick, the second concludes after the first

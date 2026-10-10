@@ -3527,6 +3527,18 @@ function resolveValidationConcurrency(jobParams, projectCfg) {
     return out;
 }
 
+// The shared approved-queue filter (review thread): open non-draft,
+// non-blocked PRs carrying pr_approved. One helper keeps the cost line's
+// slots/depth counts and the watermark probe from drifting apart on the
+// blocked/draft semantics.
+function approvedPrs(list) {
+    return list.filter(function (p) {
+        if (!p || p.draft) return false;
+        var labels = (p.labels || []).map(function (l) { return (l && l.name) || l; });
+        return labels.indexOf('blocked') === -1 && labels.indexOf('pr_approved') !== -1;
+    });
+}
+
 // Approved-queue depth for the gh-837 watermark: open non-draft,
 // non-blocked PRs carrying pr_approved. Reads the per-tick cached open-PR
 // list (same ioCache the rule queries use — no extra API call). FAIL
@@ -3539,12 +3551,7 @@ function approvedQueueDepth(repoInfo) {
             repository: repoInfo
         });
         if (!provider || typeof provider.listOpenPrs !== 'function') return 0;
-        var list = provider.listOpenPrs() || [];
-        return list.filter(function (p) {
-            if (!p || p.draft) return false;
-            var labels = (p.labels || []).map(function (l) { return (l && l.name) || l; });
-            return labels.indexOf('blocked') === -1 && labels.indexOf('pr_approved') !== -1;
-        }).length;
+        return approvedPrs(provider.listOpenPrs() || []).length;
     } catch (eDepth) {
         console.warn('  ⚠️  approved-queue depth probe failed: ' + (eDepth.message || eDepth));
         return 0;
@@ -3573,24 +3580,25 @@ function reportValidationCost(repoInfo, cfg, mutexMax) {
         });
         var list = (provider && typeof provider.listOpenPrs === 'function')
             ? (provider.listOpenPrs() || []) : [];
-        var slotsInUse = list.filter(function (p) {
-            if (!p || p.draft) return false;
+        var approved = approvedPrs(list);
+        var slotsInUse = approved.filter(function (p) {
             var labels = (p.labels || []).map(function (l) { return (l && l.name) || l; });
-            return labels.indexOf('blocked') === -1 &&
-                labels.indexOf('ai_validating') !== -1 &&
-                labels.indexOf('pr_approved') !== -1;
+            return labels.indexOf('ai_validating') !== -1;
         }).length;
-        var depth = list.filter(function (p) {
-            if (!p || p.draft) return false;
-            var labels = (p.labels || []).map(function (l) { return (l && l.name) || l; });
-            return labels.indexOf('blocked') === -1 && labels.indexOf('pr_approved') !== -1;
-        }).length;
+        var depth = approved.length;
         var burn = slotsInUse * ((cfg && cfg.minutesEstimate) || 35);
-        console.log('📊 gh-837 validation cost — merge-window slots ' + slotsInUse + '/' +
-            mutexMax + ' in use, approved queue ' + depth + ' (watermark ' +
-            ((cfg && cfg.watermark) || 3) + ') — ≈ ' + burn +
-            ' validation-min per tick, hard-capped at ' +
-            (mutexMax * ((cfg && cfg.minutesEstimate) || 35)) + ' by the concurrency knob');
+        // The knob ships at 1 (bit-identical serial behavior): a per-tick
+        // report only matters when the parallel window is active or a
+        // validation is actually in flight — stay quiet otherwise, same
+        // philosophy as the arming patch's cfg.max === 1 silence. The
+        // validationCost field on the action result stays unconditional.
+        if (mutexMax > 1 || slotsInUse > 0) {
+            console.log('📊 gh-837 validation cost — merge-window slots ' + slotsInUse + '/' +
+                mutexMax + ' in use, approved queue ' + depth + ' (watermark ' +
+                ((cfg && cfg.watermark) || 3) + ') — ≈ ' + burn +
+                ' validation-min per tick, hard-capped at ' +
+                (mutexMax * ((cfg && cfg.minutesEstimate) || 35)) + ' by the concurrency knob');
+        }
         return { slotsInUse: slotsInUse, mutexMax: mutexMax, approvedQueueDepth: depth,
             validationMinutesPerTick: burn, capMinutesPerTick: mutexMax * ((cfg && cfg.minutesEstimate) || 35) };
     } catch (eCost) {
