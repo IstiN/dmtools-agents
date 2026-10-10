@@ -261,8 +261,17 @@ function matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo) {
     // The per-tick TTL cache (cachedIssueLabels) keeps the per-rule
     // re-query cheap.
     if (q.mergeStateLatch) {
-        var latchState = item.pr ? item.pr.mergeState : null;
+        // Fail closed standalone: an item with NO merge-state observation
+        // (pr-less issue carrier, pr carrier whose status never resolved)
+        // must not sail through a latch over a listed state — an unknown
+        // merge state is not CLEAN.
+        if (!item.pr) return false;
+        var latchState = item.pr.mergeState;
         var latchWant = latchState ? q.mergeStateLatch[latchState] : null;
+        // Normalize string | string[] exactly like notMergeState /
+        // mergeState / checks above — a bare string iterated as an array
+        // would index CHARACTERS and silently disable the arm.
+        if (typeof latchWant === 'string') latchWant = [latchWant];
         if (latchWant) {
             var latchIssue = (item.issueNumber && repoInfo)
                 ? cachedIssueLabels(repoInfo, item.issueNumber) : null;

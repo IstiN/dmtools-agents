@@ -1926,12 +1926,116 @@ suite('sm github source: validate-fresh-masked-green CLEAN arm (gh-829)', functi
             'CLEAN excluded, no latch guard → pr-826 invisible to every arming rule — the exact live dead zone');
     });
 
+    test('string-form latch value arms exactly like the array form (config normalization)', function () {
+        // gh-829 review: latchWant was iterated as an array, but unlike
+        // notMergeState/mergeState/checks a string-form config value was
+        // never normalized — latchWant[li] indexed CHARACTERS and every
+        // lookup missed, silently disabling the CLEAN arm (zero signal).
+        // The established string | string[] normalization must hold here
+        // too, or a future config edit resurrects the #826 dead zone.
+        var srcMod = load({
+            github_list_prs: function () { return [pr(826)]; }
+        }, {}, {
+            826: { number: 826, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true }
+        }, { 825: ['ai_developed'] });
+
+        var items = srcMod.query({
+            source: 'github',
+            query: {
+                type: 'pr',
+                checks: 'green',
+                notLabels: ['ai_validating', 'pr_approved', 'ai_validated', 'chore:pin', 'validation_failed'],
+                notMergeState: ['BEHIND', 'DIRTY'],
+                mergeStateLatch: { CLEAN: 'ai_developed' },   // STRING form, not an array
+                draft: false
+            },
+            localAction: 'validate_pr',
+            skipIfGreenCi: true,
+            limit: 5,
+            id: 'validate-fresh-masked-green'
+        }, { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
+
+        assert.deepEqual(items.map(function (i) { return i.key; }), ['pr-826'],
+            'the string form normalizes to a one-element array — the CLEAN arm fires exactly as the array form');
+    });
+
+    test('latch guard fails closed on pr-less items — issue carrier without a linked PR', function () {
+        // gh-829 review: with item.pr absent, latchState is null →
+        // latchWant is null → the guard body was skipped and the item
+        // PASSED the latch check, contradicting the documented 'fails
+        // CLOSED' contract. An item whose merge state is UNKNOWN must not
+        // match a latch over CLEAN. Issue gh-100 has a linked CLEAN PR +
+        // the latch label; gh-101 carries the label but NO linked PR.
+        var srcMod = load({
+            github_search_issues: function () {
+                return [
+                    { number: 100, labels: [{ name: 'ai_developed' }] },
+                    { number: 101, labels: [{ name: 'ai_developed' }] }
+                ];
+            }
+        }, {
+            100: { number: 200, state: 'OPEN' }   // findPr(100) → open pr-200
+        }, {
+            200: { number: 200, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true }
+        }, { 100: ['ai_developed'], 101: ['ai_developed'] });
+
+        var items = srcMod.query({
+            source: 'github',
+            query: {
+                type: 'issue',
+                labels: ['ai_developed'],
+                mergeStateLatch: { CLEAN: ['ai_developed'] }
+            },
+            localAction: 'validate_pr',
+            limit: 10,
+            id: 'latch-fail-closed-prless'
+        }, { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
+
+        assert.deepEqual(items.map(function (i) { return i.key; }), ['gh-100'],
+            'the pr-less issue is EXCLUDED — an unknown merge state never satisfies a latch over CLEAN');
+    });
+
+    test('latch guard fails closed on pr-less items — pr carrier whose status never resolved', function () {
+        // Same contract on the pr-carrier path: a latch-only query has no
+        // checks/mergeState/notMergeState guard, so queryPrs never fetches
+        // prStatus and item.pr stays null — the item must not sail through
+        // the latch. The linked issue carries the latch label; the pr-less
+        // head still stays unarmed.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [pr(950)];   // 'Closes #949', issue 949 latched
+            }
+        }, {}, {}, { 949: ['ai_developed'] });
+
+        var items = srcMod.query({
+            source: 'github',
+            query: {
+                type: 'pr',
+                mergeStateLatch: { CLEAN: ['ai_developed'] },
+                draft: false
+            },
+            localAction: 'validate_pr',
+            limit: 5,
+            id: 'latch-fail-closed-prcarrier'
+        }, { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
+
+        assert.equal(items.length, 0,
+            'a pr-less head is excluded even with the latch label on its issue — fail closed');
+    });
+
     test('BLOCKED branch needs no latch and no issue fetch (guest-friendly, gh-759 contract)', function () {
-        // Only the BLOCKED PRs on the list; github_get_issue absent entirely
-        // — the BLOCKED branch must match without ever consulting the issue.
+        // Only the BLOCKED PRs on the list. gh-829 review: load() always
+        // injects a label-less RETURNING stub, which would happily answer
+        // a regression that consults the issue on the BLOCKED path — so
+        // override it with a THROWING stub and pin the no-fetch half of
+        // the gh-757 contract for real (load()'s tools merge lets a caller
+        // override the default stub).
         var srcMod = load({
             github_list_prs: function () {
                 return [pr(900, [], 'BLOCKED', 'vendor-guest'), pr(901, [], 'BLOCKED')];
+            },
+            github_get_issue: function () {
+                throw new Error('latch must not fetch the issue on the BLOCKED path');
             }
         }, {}, {
             900: { number: 900, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', mergeable: false },
