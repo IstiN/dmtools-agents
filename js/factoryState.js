@@ -287,7 +287,14 @@ function normTokenRow(r) {
         // dropped before) — the board's model column and the pricing engine
         // read this. Upstream emits "model":"" until fa#1460 ships the
         // ledger field; empty normalizes to null exactly like absent.
-        model: (r.model == null || r.model === '') ? null : String(r.model)
+        model: (r.model == null || r.model === '') ? null : String(r.model),
+        // gh-825 rework (review thread 1, BLOCKING): the cache count must
+        // ride the fresh row too — rowCost's cache term priced as 0 whenever
+        // normalizeTokens dropped it. Producer-drift tolerance mirrors
+        // rowCost: camelCase wins, snake_case falls back. Absent → null
+        // (honest unknown); a REPORTED zero stays 0 (none ≠ not reported).
+        cacheRead: (r.cacheRead == null ? r.cache_read : r.cacheRead) == null
+            ? null : +r.cacheRead || +r.cache_read || 0
     };
 }
 
@@ -492,7 +499,10 @@ function rowCost(row, rates) {
  * header's rollup {usd14d, pricedLegs, windowDays} — Σ$ across ALL keys
  * (closed cards leave the board after 24h; their spend must still count,
  * so the window applies to row `at`, not to lanes), or null when pricing
- * is off/absent → the snapshot carries no `costs` key (additive schema).
+ * is off/absent — or when nothing priced lands inside the window / the
+ * in-window Σ$ rounds to $0.00 (gh-825 rework, review thread 2: never a
+ * lying Σ$0.00 pill) → the snapshot carries no `costs` key (additive
+ * schema).
  * Rows with no parsable `at` price per-row but stay out of the window —
  * an undated row must not silently inflate or vanish from the header.
  */
@@ -518,6 +528,11 @@ function priceTokens(tmap, pricing, nowMs) {
     });
     if (!any) return null;   // nothing priced (e.g. pre-fa#1460: models empty)
     summary.usd14d = Math.round(summary.usd14d * 100) / 100;
+    // gh-825 rework (review thread 2): a rollup that rounds to $0.00 — or
+    // priced nothing inside the window (undated/stale rows, sub-cent spend)
+    // — would render the header pill as a lying Σ$0.00, indistinguishable
+    // from "pricing off". Suppress the rollup; the per-row $ stays data.
+    if (!(summary.usd14d > 0)) return null;
     return summary;
 }
 
