@@ -1635,10 +1635,13 @@ suite('sm github source — runAsync batching', function () {
 
 });
 
-suite('sm github source: validate-fresh-masked-green (gh-759 dead zone)', function () {
-
-    // Same harness as the main suite above — local copy (load is scoped
-    // to that suite's closure).
+// Shared harness for the masked-green dead-zone suites (gh-759 / gh-829 —
+// hoisted to module scope so the next gh-7xx follow-up edits ONE copy of
+// the wiring instead of two). Both suites share the provider stub, the
+// loadModule wiring and the pr() factory; they differ only in the
+// issue-label fixtures, passed per load() call (omitted → every linked
+// issue resolves label-less — the pre-gh-829 wave shape).
+function maskedGreenHarness() {
     var providerStub = {
         findPr: function (n) { return providerStub._prs[n] || null; },
         prStatus: function (n) { return providerStub._status[n] || null; },
@@ -1647,14 +1650,20 @@ suite('sm github source: validate-fresh-masked-green (gh-759 dead zone)', functi
         _prs: {}, _status: {}, _reviews: {}, _threads: {}
     };
 
-    function load(tools, prs, statuses) {
+    // tools: dmtools-global overrides (github_list_prs,
+    // github_search_issues, github_get_issue, …) — merged OVER the
+    // default issue resolver, so a suite can pin contracts with a
+    // throwing stub. issueLabels / issueErrors: per-issue fixture maps
+    // for the gh-829 latch resolver.
+    function load(tools, prs, statuses, issueLabels, issueErrors) {
         providerStub._prs = prs || {};
         providerStub._status = statuses || {};
         var mergedTools = {
-            // No gh-829 latch anywhere in this wave: every linked issue
-            // resolves label-less, so the CLEAN head stays excluded.
             github_get_issue: function (args) {
-                return { number: args && args.issueNumber, labels: [] };
+                var n = args && args.issueNumber;
+                if (issueErrors && issueErrors[n]) return { message: 'Not Found' };
+                var ls = (issueLabels && issueLabels[n]) || [];
+                return { number: n, labels: ls.map(function (l) { return { name: l }; }) };
             }
         };
         Object.keys(tools || {}).forEach(function (k) { mergedTools[k] = tools[k]; });
@@ -1668,6 +1677,22 @@ suite('sm github source: validate-fresh-masked-green (gh-759 dead zone)', functi
         }), mergedTools);
     }
 
+    function pr(n, labels, mergeState, author) {
+        return {
+            number: n, labels: (labels || []).map(function (l) { return { name: l }; }),
+            draft: false, user: { login: author || 'ai-teammate' },
+            head: { ref: 'ai/gh-' + (n - 1) }, body: 'Closes #' + (n - 1)
+        };
+    }
+
+    return { load: load, providerStub: providerStub, pr: pr };
+}
+
+suite('sm github source: validate-fresh-masked-green (gh-759 dead zone)', function () {
+
+    var h = maskedGreenHarness();
+    var load = h.load;
+    var pr = h.pr;
 
     // gh-759 live fa wave (PRs #1305/#1306/#1309/#1311/#1312): dev leg
     // done, PR zero-label, rollup GREEN from the repo's kicker/CodeQL
@@ -1692,14 +1717,6 @@ suite('sm github source: validate-fresh-masked-green (gh-759 dead zone)', functi
         limit: 1,
         id: 'validate-fresh-masked-green'
     };
-
-    function pr(n, labels, mergeState, author) {
-        return {
-            number: n, labels: (labels || []).map(function (l) { return { name: l }; }),
-            draft: false, user: { login: author || 'ai-teammate' },
-            head: { ref: 'ai/gh-' + (n - 1) }, body: 'Closes #' + (n - 1)
-        };
-    }
 
     test('matches exactly the un-armed, un-approved, BLOCKED masked-green PRs (multi-item wave)', function () {
         var srcMod = load({
@@ -1784,37 +1801,11 @@ suite('sm github source: validate-fresh-masked-green CLEAN arm (gh-829)', functi
     // reach without first being validated. The CLEAN exclusion narrows to a
     // mergeStateLatch: green + CLEAN + zero lifecycle labels + the linked
     // issue's ai_developed latch → arm; without the latch the exclusion
-    // stands. Same harness as the gh-759 suite — local copy.
+    // stands. Same shared harness as the gh-759 suite (maskedGreenHarness).
 
-    var providerStub = {
-        findPr: function (n) { return providerStub._prs[n] || null; },
-        prStatus: function (n) { return providerStub._status[n] || null; },
-        lastReview: function () { return null; },
-        reviewThreads: function () { return { total: 0, unresolved: 0 }; },
-        _prs: {}, _status: {}, _reviews: {}, _threads: {}
-    };
-
-    function load(tools, prs, statuses, issueLabels, issueErrors) {
-        providerStub._prs = prs || {};
-        providerStub._status = statuses || {};
-        var mergedTools = {
-            github_get_issue: function (args) {
-                var n = args && args.issueNumber;
-                if (issueErrors && issueErrors[n]) return { message: 'Not Found' };
-                var ls = (issueLabels && issueLabels[n]) || [];
-                return { number: n, labels: ls.map(function (l) { return { name: l }; }) };
-            }
-        };
-        Object.keys(tools || {}).forEach(function (k) { mergedTools[k] = tools[k]; });
-        var smAsyncMod = loadModule('js/common/smAsync.js', makeRequire({
-            './common/smProvider.js': { createSmProvider: function () { return providerStub; } }
-        }), mergedTools);
-        return loadModule('js/sm/sources/githubSource.js', makeRequire({
-            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
-            '../../common/smProvider.js': { createSmProvider: function () { return providerStub; } },
-            '../../common/smAsync.js': smAsyncMod
-        }), mergedTools);
-    }
+    var h = maskedGreenHarness();
+    var load = h.load;
+    var pr = h.pr;
 
     // The deployed post-gh-829 rule shape: CLEAN left notMergeState, gated
     // by the issue latch instead.
@@ -1833,14 +1824,6 @@ suite('sm github source: validate-fresh-masked-green CLEAN arm (gh-829)', functi
         limit: 1,
         id: 'validate-fresh-masked-green'
     };
-
-    function pr(n, labels, mergeState, author) {
-        return {
-            number: n, labels: (labels || []).map(function (l) { return { name: l }; }),
-            draft: false, user: { login: author || 'ai-teammate' },
-            head: { ref: 'ai/gh-' + (n - 1) }, body: 'Closes #' + (n - 1)
-        };
-    }
 
     // Issue label map: pr(n) links issue n-1. Latched issues: 825 (pr-826),
     // 835 (pr-836), 837 (pr-838), 839 (pr-840), 841 (pr-842). Everything
