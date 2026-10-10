@@ -325,6 +325,7 @@ function makeSmAgent(opts) {
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
             './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({}), {}),
             './common/validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
+            './common/redConvergence.js': loadModule('js/common/redConvergence.js', makeRequire({}), {}),
             './common/smProvider.js': {
                 createSmProvider: function () {
                     return {
@@ -9192,55 +9193,25 @@ suite('smAgent: red-verdict convergence park (gh-832)', function () {
     });
 
     test('AC3: the #1453 12-cycle replay — parks at cycle 2, no third dispatch', function () {
-        // One action() = one tick. Cycle shape per the live incident:
-        //   arm (validate-armed) → dispatch → CI concludes red →
-        //   fail-validation unarms + reports → next tick re-arms.
-        // The re-arm between cycles models the live hole (the verdict probe
-        // reads non-failure in the interleave — registration lag / cancelled
-        // supersede), so validate-armed re-dispatches until the park.
+        // One action() = one tick; each cycle runs TWO phases mirroring the
+        // live incident ("the verdict rule un-arms ai_validating and
+        // validate-armed re-arms next tick"):
+        //   phase A (fail-validation): the armed head's CI concluded red →
+        //     unarm + report (+ the gh-832 park from the 2nd red on);
+        //   phase B (validate-armed): the re-arm tick — the live hole
+        //     (verdict probe non-failure in the interleave — registration
+        //     lag / cancelled supersede) lets the same head re-arm until
+        //     something parks it. The cli probe returning no runs models
+        //     that interleave; the 🔴 markers stay below redHeadCap 3, so
+        //     pre-fix guards alone would keep cycling (silently, with no
+        //     park comment) past cycle 3.
         var world = {
-            labels: ['pr_approved', 'ai_validating'],   // starts armed
+            labels: ['pr_approved', 'ai_validating'],   // starts armed (dispatch #1 pre-replay)
             runs: [],
             comments: [],
-            dispatches: 0, arms: 0, cycleLogs: []
+            dispatches: 0, cycleLogs: []
         };
-        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
-            github: {
-                items: function (rule) {
-                    if (rule.id === 'fail-validation') {
-                        return world.labels.indexOf('ai_validating') !== -1
-                            ? [prItem(1453, { labels: world.labels.slice(),
-                                author: 'ai-teammate', headSha: HEAD, branch: 'ai/gh-1450' })]
-                            : [];
-                    }
-                    // validate-armed: approved, not armed, not parked.
-                    return (world.labels.indexOf('pr_approved') !== -1 &&
-                            world.labels.indexOf('ai_validating') === -1 &&
-                            world.labels.indexOf('validation_failed') === -1)
-                        ? [prItem(1453, { labels: world.labels.slice(),
-                            author: 'ai-teammate', headSha: HEAD, branch: 'ai/gh-1450' })]
-                        : [];
-                },
-                pr: { number: 1453, labels: ['pr_approved'], body: 'Fixes #1450 — the quarantine' },
-                prComments: world.comments,
-                workflowApiRuns: world.runs,
-                commitCheckRuns: PTY_ROLLUP,
-                prList: [{ number: 1453, labels: [{ name: 'pr_approved' }], head: { sha: HEAD } }]
-            },
-            onCliExecute: function () { return { output: JSON.stringify({ workflow_runs: [] }) }; }
-        }));
-        var jobParams = { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
-            rules: [RULES.fail, RULES.validate] };
-
-        for (var cycle = 1; cycle <= 12; cycle++) {
-            // The dispatched CI of the previous arm concludes red (~hourly
-            // cadence of the live wave — always past the 15-min grace).
-            world.runs.unshift(redRun(38027168550 + cycle, HEAD,
-                '2026-10-10T0' + (cycle - 1) + ':38:00Z'));
-            sm.capturedCliCommands.length = 0;
-            sm.capturedPrLabelAdds.length = 0;
-            sm.capturedPrLabelRemoves.length = 0;
-            sm.action({ jobParams: jobParams });
+        function applyCaptured() {
             sm.capturedPrLabelAdds.forEach(function (a) {
                 a.labels.forEach(function (l) {
                     if (world.labels.indexOf(l) === -1) world.labels.push(l);
@@ -9250,24 +9221,71 @@ suite('smAgent: red-verdict convergence park (gh-832)', function () {
                 var i = world.labels.indexOf(r.label);
                 if (i !== -1) world.labels.splice(i, 1);
             });
+            world.comments = world.comments.concat(sm.capturedPrComments);
             if (sm.capturedCliCommands.some(function (c) {
                 return c.command.indexOf('gh workflow run') === 0;
             })) world.dispatches++;
-            world.comments = world.comments.concat(sm.capturedPrComments.filter(function (c) {
-                return c.body.indexOf('CONVERGENCE PARK') !== -1;
-            }));
+            sm.capturedPrLabelAdds.length = 0;
+            sm.capturedPrLabelRemoves.length = 0;
+            sm.capturedPrComments.length = 0;
+            sm.capturedCliCommands.length = 0;
+        }
+        function item() {
+            return prItem(1453, { labels: world.labels.slice(),
+                author: 'ai-teammate', headSha: HEAD, branch: 'ai/gh-1450' });
+        }
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: function (rule) {
+                    // fail-validation matches only the armed; validate-armed
+                    // only the approved-unarmed-unparked (its query excludes
+                    // validation_failed, so a parked PR never re-arms).
+                    var armed = world.labels.indexOf('ai_validating') !== -1;
+                    if (rule.id === 'fail-validation') return armed ? [item()] : [];
+                    return (world.labels.indexOf('pr_approved') !== -1 && !armed &&
+                            world.labels.indexOf('validation_failed') === -1)
+                        ? [item()] : [];
+                },
+                pr: { number: 1453, labels: ['pr_approved'], body: 'Fixes #1450 — the quarantine' },
+                prComments: world.comments,
+                workflowApiRuns: world.runs,
+                commitCheckRuns: PTY_ROLLUP,
+                prList: [{ number: 1453, labels: [{ name: 'pr_approved' }], head: { sha: HEAD } }]
+            },
+            onCliExecute: function () { return { output: JSON.stringify({ workflow_runs: [] }) }; }
+        }));
+        var failParams = { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.fail] };
+        var validateParams = { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.validate] };
+
+        for (var cycle = 1; cycle <= 12; cycle++) {
+            // The dispatched CI of the previous arm concludes red (~hourly
+            // cadence of the live wave — always past the 15-min grace).
+            world.runs.unshift(redRun(38027168550 + cycle, HEAD,
+                '2026-10-10T0' + (cycle - 1) + ':38:00Z'));
+            sm.action({ jobParams: failParams });
+            applyCaptured();
+            sm.action({ jobParams: validateParams });
+            applyCaptured();
             world.cycleLogs.push(cycle + ':' + world.labels.join('+'));
         }
 
-        assert.equal(world.dispatches, 2,
-            'exactly TWO dispatches — cycle 1 and cycle 2; the park kills every later dispatch (AC1: no third dispatch)');
-        assert.equal(world.comments.length, 1, 'exactly ONE park comment across the 12 cycles');
-        assert.ok(world.comments[0].body.indexOf('PTY/CLI integration (linux, shard 0/3)') !== -1,
+        var parks = world.comments.filter(function (c) {
+            return c.body.indexOf('CONVERGENCE PARK') !== -1;
+        });
+        assert.equal(world.dispatches, 1,
+            'exactly ONE re-arm dispatch (dispatch #2 after red #1) — the park kills every later arm (AC1: no third dispatch)');
+        assert.equal(parks.length, 1, 'exactly ONE convergence-park comment across the 12 cycles');
+        assert.ok(parks[0].body.indexOf('PTY/CLI integration (linux, shard 0/3)') !== -1,
             'AC3: the park lands at cycle 2 naming the PTY shard');
         assert.ok(world.labels.indexOf('validation_failed') !== -1 &&
                   world.labels.indexOf('ai_validating') === -1,
             'the replay ends parked and unarmed');
         assert.equal(world.cycleLogs[1].indexOf('validation_failed'), -1,
             'cycle 2 starts un-parked (the park lands DURING cycle 2, on the 2nd red)');
+        assert.ok(world.cycleLogs.slice(2).every(function (l) {
+            return l.indexOf('validation_failed') !== -1;
+        }), 'every later cycle stays parked — no cycle 3+ arm');
     });
 });
