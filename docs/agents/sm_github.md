@@ -21,3 +21,11 @@ The machine's state lives in labels; two are owner-facing semantics worth knowin
 - `blocked` — human hold: the item is invisible to EVERY rule (all legs) until a human removes the label.
 - `validation_failed` — sticky guest park (owner 2026-09-27, live: fa#923 — a guest PR cycled arm→CI red→silent-update→re-arm every tick, holding the validate-armed limit-1 slot hostage). The silent-update action sets it on a GUEST PR whose current head has red checks; while it is set the PR is excluded from the validate-armed arm queue and NO validation CI is dispatched for it at all. It is removed only when the head's last committer is NOT `sm-silent-update` — i.e. an author push; the SM's own silent-update merges never clear it. Machine-authored PRs never carry the label (their heads are pushed by the machine; they re-enter validation on a new head as usual).
 
+
+## Merge-window cadence (gh-837)
+
+The post-approval window is strictly serial by default: one `ai_validating` arm at a time (`mutex` + `mutexAmong [pr_approved]`), so each merge pays a BEHIND refresh (~10–15 min) plus a full validation CI (~30–40 min) — a ~45–60 min/merge ceiling (owner expectation: 1 merge / 30 min, floor 1/hour).
+
+`jobParams.validationConcurrency` (default **1** — unchanged legacy behavior; `.dmtools/config.js` `smValidationConcurrency` overrides, clamped to 5) relaxes the arm mutex to N concurrent approved validations **when the approved queue depth is at/above** `validationConcurrencyQueueWatermark` (default 3). With the knob active the SM also patches `query.mutexMax` onto validate-armed + the revalidate recovery twins and raises the arm limit to the cap, so every free slot fills in one tick: the parallel validations conclude together and the mergeBot's one-run batch (it merges every green + CLEAN approved head per run) lands them in a single window. L2 replay (`js/unit-tests/test_mergeCadence.js`, queue depth 6, validation 35 min): serial ~50 min/merge → parallel-2 ~25 min/merge.
+
+Runner cost stays hard-capped at N × `validationMinutesEstimate` (default 35) validation-minutes per tick and is reported on the tick log (and the action result's `validationCost` field). A red validation still parks exactly one head — fail-validation is per-PR and the parallel arms share no state (#832 semantics preserved); the dev lane (`mutexAmong [pr_approved]` scope) is untouched.

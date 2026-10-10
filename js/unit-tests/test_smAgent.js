@@ -331,6 +331,12 @@ function makeSmAgent(opts) {
                     return {
                         prStatus: function () {
                             return (opts.github && opts.github.prStatus) || null;
+                        },
+                        // gh-837: approvedQueueDepth / reportValidationCost
+                        // read the per-tick cached open-PR list — tests
+                        // drive it from the same prList as the mutex probe.
+                        listOpenPrs: function () {
+                            return (opts.github && opts.github.prList) || [];
                         }
                     };
                 },
@@ -356,6 +362,9 @@ function makeSmAgent(opts) {
         probeDispatchedState: sm.probeDispatchedState,
         hasRecentHeadRun: sm.hasRecentHeadRun,
         dispatchRaceGraceMs: sm.dispatchRaceGraceMs,
+        resolveValidationConcurrency: sm.resolveValidationConcurrency,
+        effectiveValidationConcurrency: sm.effectiveValidationConcurrency,
+        reportValidationCost: sm.reportValidationCost,
         capturedTriggers: capturedTriggers,
         capturedLabels: capturedLabels,
         capturedStatusMoves: capturedStatusMoves,
@@ -8140,6 +8149,331 @@ suite('smAgent: red yields the slot (owner directive 2026-10-04)', function () {
             '#637: merge-validated consumes a green arm before the sweeper can eat it');
         assert.equal(rules[idx['validate-armed']].redHeadSkip, true,
             'the arm rule carries the red-head skip flag');
+    });
+});
+
+suite('smAgent: gh-837 parallel validations knob (merge cadence)', function () {
+    // Owner expectation 2026-10-10: ~1 merge / 30 min (floor 1/h). The
+    // strictly serial refresh+validate cycle caps at ~1 merge / 45-60 min
+    // (single-flight ai_validating mutex). The knob relaxes the mutex to N
+    // concurrent approved-arm validations, gated by the approved-queue
+    // watermark (runner-budget protection). Default 1 = bit-identical
+    // legacy behavior.
+
+    var RULES = {
+        validate: { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved'],
+                notLabels: ['ai_validating', 'validation_failed'],
+                notMergeState: ['BEHIND', 'DIRTY'], draft: false,
+                mutex: 'ai_validating', mutexAmong: ['pr_approved'] },
+            localAction: 'validate_pr', skipIfValidatedHead: true, redHeadSkip: true,
+            limit: 1, id: 'validate-armed', deferRedHead: true }
+    };
+
+    function prItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved'], issueNumber: null,
+            prNumber: n, draft: false };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function prRest(n, labels) {
+        return { number: n, labels: labels.map(function (l) { return { name: l}; }),
+                 head: { sha: 'sha' + n } };
+    }
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    function dispatched(cmdList) {
+        return cmdList.some(function (c) { return c.command.indexOf('gh workflow run') === 0; });
+    }
+
+    // A deep approved queue: 4 approved PRs (#1 already armed). Depth 4 is
+    // at/above the default watermark 3.
+    function deepQueue() {
+        return [
+            prRest(1, ['pr_approved', 'ai_validating']),
+            prRest(2, ['pr_approved']),
+            prRest(3, ['pr_approved']),
+            prRest(4, ['pr_approved'])
+        ];
+    }
+
+    test('knob 2 + deep queue: a second approved arm is admitted (query mutex + action-time re-check)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            captureConsole: true,
+            github: {
+                items: [prItem(2, { branch: 'ai/gh-2', headSha: 'sha2', author: 'ai-teammate' })],
+                prList: deepQueue(),
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            validationConcurrency: 2, rules: [RULES.validate] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands),
+            'one holder < cap 2 — the second validation IS dispatched');
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.number === 2 && a.labels.join(',') === 'ai_validating';
+        }), 'pr-2 takes the second merge-window slot');
+        assert.ok(sm.capturedLogs.some(function (l) { return l.indexOf('🚈') !== -1; }),
+            'the tick logs the relaxed concurrency');
+    });
+
+    test('knob 2 but queue below the watermark: strictly serial (no second arm)', function () {
+        // Runner-budget protection: a shallow queue keeps the serial
+        // economy — the extra CI run is justified only by queue depth.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            captureConsole: true,
+            github: {
+                items: [prItem(2, { branch: 'ai/gh-2', headSha: 'sha2', author: 'ai-teammate' })],
+                // Depth 2 < default watermark 3.
+                prList: [prRest(1, ['pr_approved', 'ai_validating']),
+                         prRest(2, ['pr_approved'])],
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            validationConcurrency: 2, rules: [RULES.validate] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands), 'below the watermark — no parallel arm');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'the holder keeps the only slot');
+        assert.ok(sm.capturedLogs.some(function (l) {
+            return l.indexOf('below watermark') !== -1 && l.indexOf('serial mode') !== -1;
+        }), 'the tick says why it stayed serial');
+    });
+
+    test('knob 2 + deep queue + two holders: a third arm is refused (cap holds at action time)', function () {
+        var list = deepQueue();
+        list[1] = prRest(2, ['pr_approved', 'ai_validating']); // second holder
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(3, { branch: 'ai/gh-3', headSha: 'sha3', author: 'ai-teammate' })],
+                prList: list,
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            validationConcurrency: 2, rules: [RULES.validate] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands),
+            'two holders = cap 2 — no third dispatch');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no third arm — runner cost stays capped');
+    });
+
+    test('default knob (absent) with a deep queue: bit-identical serial behavior', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [prItem(2, { branch: 'ai/gh-2', headSha: 'sha2', author: 'ai-teammate' })],
+                prList: deepQueue(),
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.validate] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands),
+            'knob 1 (default) — a single holder still serializes the window');
+        assert.equal(sm.capturedPrLabelAdds.length, 0);
+    });
+
+    test('AC3: a red parallel arm parks exactly one head — no cross-contamination', function () {
+        // The cap widens WHO validates concurrently, never HOW reds are
+        // handled: fail-validation is per-PR (labels + the head's own
+        // verdict). A red #1 frees only #1's slot; #2's in-flight
+        // validation is untouched.
+        var fail = { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'red' },
+            localAction: 'fail_validation', limit: 10, id: 'fail-validation' };
+        var calls = 0;
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                // One tick: fail-validation sees red #1 (unarms, reports);
+                // validate-armed then sees #1 disarmed and #2/#3 waiting.
+                items: function (rule) {
+                    calls++;
+                    if (rule.id === 'fail-validation') {
+                        return [prItem(1, { labels: ['pr_approved', 'ai_validating'],
+                            branch: 'ai/gh-1', headSha: 'sha1', author: 'ai-teammate' })];
+                    }
+                    return [prItem(2, { branch: 'ai/gh-2', headSha: 'sha2', author: 'ai-teammate' })];
+                },
+                prList: deepQueue(),
+                prStatus: { checkConclusion: 'red' },
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            validationConcurrency: 2, rules: [fail, RULES.validate] } });
+
+        // #1 got exactly one fail report (its own), was unarmed, and #2
+        // armed into the freed slot — #3/#4 were NOT touched by #1's red.
+        assert.equal(sm.capturedPrComments.length, 1, 'exactly one red report — #2/#3/#4 uncontaminated');
+        assert.equal(sm.capturedPrComments[0].number, 1, 'the report names the red head only');
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
+            return r.number === 1 && r.label === 'ai_validating';
+        }), '#1 unarmed — its slot freed');
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.number === 2 && a.labels.join(',') === 'ai_validating';
+        }), '#2 arms into the freed slot');
+        assert.ok(sm.capturedPrLabelAdds.filter(function (a) {
+            return a.labels.indexOf('ai_validating') !== -1;
+        }).every(function (a) { return a.number === 2; }),
+            'no ai_validating arm landed on any PR but #2 — the red head\'s fail path armed nobody else');
+    });
+
+    test('AC2: per-tick runner-cost report — validation-minutes, cap-bounded', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            captureConsole: true,
+            github: {
+                items: [prItem(2, { branch: 'ai/gh-2', headSha: 'sha2', author: 'ai-teammate' })],
+                prList: deepQueue(),
+                prComments: []
+            }
+        }));
+        var result = sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            validationConcurrency: 2, validationMinutesEstimate: 35, rules: [RULES.validate] } });
+
+        var line = sm.capturedLogs.filter(function (l) { return l.indexOf('validation cost') !== -1; });
+        assert.equal(line.length, 1, 'exactly one cost line per tick');
+        assert.ok(line[0].indexOf('1/2 in use') !== -1, 'one slot in use of cap 2 at tick start');
+        assert.ok(line[0].indexOf('≈ 35 validation-min') !== -1, 'slots x estimate = the validation-minutes burn');
+        assert.ok(result && result.validationCost, 'the report rides the action result');
+        assert.equal(result.validationCost.slotsInUse, 1);
+        assert.equal(result.validationCost.mutexMax, 2);
+        assert.equal(result.validationCost.capMinutesPerTick, 70, 'hard ceiling: cap x estimate');
+    });
+
+    test('cost line stays silent at the serial default — knob 1, idle window (review thread)', function () {
+        // The knob ships at 1 (every production deployment): the 📊 line
+        // must not fire on every tick when the parallel window is off and
+        // nothing holds a validation slot. The validationCost field on the
+        // action result stays unconditional for downstream consumers.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            captureConsole: true,
+            github: {
+                items: [],
+                // Approved PRs waiting, but nobody holds ai_validating.
+                prList: [prRest(2, ['pr_approved']), prRest(3, ['pr_approved'])],
+                prComments: []
+            }
+        }));
+        var result = sm.action({ jobParams: { owner: 'a', repo: 'b',
+            machineAuthor: 'ai-teammate', rules: [RULES.validate] } });
+
+        assert.ok(!sm.capturedLogs.some(function (l) { return l.indexOf('validation cost') !== -1; }),
+            'no 📊 cost line at knob 1 with zero slots in use');
+        assert.ok(result && result.validationCost, 'the report field still rides the action result');
+        assert.equal(result.validationCost.mutexMax, 1, 'serial cap recorded');
+    });
+
+    test('cost line still fires at knob 1 while a serial validation is in flight', function () {
+        // Gate is mutexMax > 1 || slotsInUse > 0: a serial deployment with
+        // an active validation keeps the runner-cost visibility.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            captureConsole: true,
+            github: {
+                items: [],
+                prList: [prRest(1, ['pr_approved', 'ai_validating']),
+                    prRest(2, ['pr_approved'])],
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+            machineAuthor: 'ai-teammate', rules: [RULES.validate] } });
+
+        var line = sm.capturedLogs.filter(function (l) { return l.indexOf('validation cost') !== -1; });
+        assert.equal(line.length, 1, 'in-flight serial validation keeps the cost line');
+        assert.ok(line[0].indexOf('1/1 in use') !== -1, 'one slot in use of serial cap 1');
+    });
+
+    test('blocked/draft PRs excluded identically from slots and queue depth (shared filter)', function () {
+        // The label-filter lives in ONE helper now (review thread): a
+        // blocked approved PR and a draft PR count in neither slotsInUse
+        // nor the approved-queue depth printed on the cost line.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            captureConsole: true,
+            github: {
+                items: [prItem(2, { branch: 'ai/gh-2', headSha: 'sha2', author: 'ai-teammate' })],
+                prList: deepQueue().concat([
+                    prRest(5, ['pr_approved', 'blocked']),
+                    { number: 6, draft: true, labels: [{ name: 'pr_approved' }],
+                        head: { sha: 'sha6' } },
+                    prRest(7, ['blocked'])
+                ]),
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            validationConcurrency: 2, validationMinutesEstimate: 35, rules: [RULES.validate] } });
+
+        var line = sm.capturedLogs.filter(function (l) { return l.indexOf('validation cost') !== -1; });
+        assert.equal(line.length, 1);
+        assert.ok(line[0].indexOf('1/2 in use') !== -1,
+            'blocked/draft PRs never counted as validation slots');
+        assert.ok(line[0].indexOf('approved queue 4') !== -1,
+            'blocked/draft PRs excluded from the queue depth — only the 4 real approved count');
+    });
+
+    test('knob 2 + deep queue: BOTH free slots fill in ONE tick (arm limit rises with the cap)', function () {
+        // gh-837 cadence math: a limit-1 arm staggers the parallel
+        // validations by a tick, the second concludes after the first
+        // merge and its run is wasted (BEHIND) — simultaneous arms are
+        // what lets the mergeBot batch the merges into one window.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [
+                    prItem(2, { branch: 'ai/gh-2', headSha: 'sha2', author: 'ai-teammate' }),
+                    prItem(3, { branch: 'ai/gh-3', headSha: 'sha3', author: 'ai-teammate' })
+                ],
+                prList: deepQueue(),
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            validationConcurrency: 2, rules: [RULES.validate] } });
+
+        var armed = sm.capturedPrLabelAdds.filter(function (a) {
+            return a.labels.indexOf('ai_validating') !== -1;
+        });
+        assert.deepEqual(armed.map(function (a) { return a.number; }).sort(), [2, 3],
+            'both free slots armed in one tick — no 10-min stagger');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh workflow run') === 0;
+        }).length, 2, 'two validations dispatched');
+    });
+
+    test('knob resolution: repo-var string form, clamp, config override priority', function () {
+        var sm = makeSmAgent(config('a', 'b'));
+
+        var cfg = sm.resolveValidationConcurrency(
+            { validationConcurrency: '2', validationConcurrencyQueueWatermark: '4' }, null);
+        assert.equal(cfg.max, 2, "repo vars arrive as strings — '2' parses");
+        assert.equal(cfg.watermark, 4);
+        assert.equal(cfg.minutesEstimate, 35, 'estimate default');
+
+        var clamped = sm.resolveValidationConcurrency({ validationConcurrency: 9 }, null);
+        assert.equal(clamped.max, 5, 'clamped to the runner-budget ceiling');
+
+        var garbage = sm.resolveValidationConcurrency({ validationConcurrency: 'abc' }, null);
+        assert.equal(garbage.max, 1, 'garbage falls back to the serial default');
+
+        // .dmtools/config.js smValidationConcurrency wins over jobParams
+        // (same priority style as resolveWorkflowCap).
+        var overridden = sm.resolveValidationConcurrency({ validationConcurrency: 2 },
+            { smValidationConcurrency: 3 });
+        assert.equal(overridden.max, 3, 'config override wins');
+
+        // Watermark gate.
+        assert.equal(sm.effectiveValidationConcurrency({ max: 2, watermark: 3 }, 2), 1,
+            'below the watermark — serial');
+        assert.equal(sm.effectiveValidationConcurrency({ max: 2, watermark: 3 }, 3), 2,
+            'at the watermark — the knob engages');
+        assert.equal(sm.effectiveValidationConcurrency({ max: 1, watermark: 3 }, 10), 1,
+            'knob 1 never widens, however deep the queue');
     });
 });
 
