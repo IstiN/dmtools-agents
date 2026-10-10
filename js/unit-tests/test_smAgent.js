@@ -9003,3 +9003,271 @@ suite('smAgent: statePublish tokens — local file first, branch fallback', func
     });
 
 });
+
+// ─── gh-832: red-verdict convergence park ────────────────────────────────────
+// Live fa PR #1453 (2026-10-10 00:20–08:00Z): 12 dispatch→red→unarm→rearm
+// cycles on an approved UNCHANGED head — 5 concluded FAILUREs in a row (the
+// PTY/CLI shard 0/3 flake), zero merges fleet-wide for 3.5h, no
+// validation_failed park, no escalation. The old guards could not converge:
+// machine PRs are never parked (gh-757 parks guests only), the empty-lap cap
+// and the redHeadSkip arm-side skip are per-head-SHA marker counters that
+// every head refresh resets, and their terminal state is a SILENT log line.
+// Fix: the fail path counts CONSECUTIVE concluded-red dispatched runs on the
+// unchanged head (green run or head move resets — AC2; cancelled is never a
+// verdict — gh-755) and at redHeadParkCap (default 2) PARKS
+// validation_failed + a report naming the failing job(s) (AC1/AC3). Machine
+// PRs keep the rework arm (routing unchanged) and exit the park through the
+// gh-750/#633 reset probes on the next head.
+suite('smAgent: red-verdict convergence park (gh-832)', function () {
+
+    var RULES = {
+        fail: { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'], checks: 'red' },
+            localAction: 'fail_validation', limit: 10, id: 'fail-validation' },
+        // Same shape as sm_github.json validate-armed (red-head suite parity).
+        validate: { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved'],
+                notLabels: ['ai_validating', 'validation_failed'],
+                notMergeState: ['BEHIND', 'DIRTY'], draft: false,
+                mutex: 'ai_validating', mutexAmong: ['pr_approved'] },
+            localAction: 'validate_pr', skipIfValidatedHead: true, redHeadSkip: true,
+            limit: 1, id: 'validate-armed', deferRedHead: true }
+    };
+
+    var HEAD = '1453deadaa';   // the PR #1453 head — UNCHANGED across the wave
+
+    function prItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved'], issueNumber: null,
+            prNumber: n, draft: false };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    // The red leg of the live wave: the PTY shard job fails with a
+    // TimeoutException (known flake; the quarantine PR fa #1470 was stuck
+    // in the same loop).
+    var PTY_ROLLUP = { check_runs: [
+        { id: 11, name: 'PTY/CLI integration (linux, shard 0/3)', conclusion: 'failure' },
+        { id: 12, name: 'PTY/CLI integration (linux, shard 1/3)', conclusion: 'success' },
+        { id: 13, name: 'PTY/CLI integration (linux, shard 2/3)', conclusion: 'success' },
+        { id: 14, name: 'kicker / sm-liveness', conclusion: 'success' }
+    ] };
+
+    function redRun(id, h, iso) {
+        return { id: id, event: 'workflow_dispatch', head_sha: h || HEAD,
+            status: 'completed', conclusion: 'failure',
+            html_url: 'https://github.com/a/b/actions/runs/' + id,
+            created_at: iso, updated_at: iso };
+    }
+
+    function greenRun(id, h, iso) {
+        return { id: id, event: 'workflow_dispatch', head_sha: h || HEAD,
+            status: 'completed', conclusion: 'success',
+            html_url: 'https://github.com/a/b/actions/runs/' + id,
+            created_at: iso, updated_at: iso };
+    }
+
+    function failWorld(extra) {
+        return Object.assign({
+            items: [prItem(1453, { labels: ['pr_approved', 'ai_validating'],
+                author: 'ai-teammate', headSha: HEAD, branch: 'ai/gh-1450' })],
+            pr: { number: 1453, labels: ['pr_approved', 'ai_validating'],
+                  body: 'Fixes #1450 — the quarantine' },
+            commitCheckRuns: PTY_ROLLUP
+        }, extra || {});
+    }
+
+    test('AC1: the SECOND consecutive red on the unchanged head parks validation_failed + names the failing job', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: failWorld({
+                // Two concluded reds on the SAME head — the newest is the
+                // verdict this fail tick consumes.
+                workflowApiRuns: [
+                    redRun(38027168551, HEAD, '2026-10-10T02:59:00Z'),
+                    redRun(38027168550, HEAD, '2026-10-10T01:38:00Z')
+                ]
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.fail] } });
+
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.number === 1453 && a.labels.join(',') === 'validation_failed';
+        }), 'PARK: validation_failed lands on the machine PR — the loop must not continue');
+        var report = sm.capturedPrComments.filter(function (c) {
+            return c.number === 1453 && c.body.indexOf('CONVERGENCE PARK') !== -1;
+        })[0];
+        assert.ok(report, 'the report carries the convergence-park line');
+        assert.ok(report.body.indexOf(HEAD) !== -1, 'the park names the unchanged head');
+        assert.ok(report.body.indexOf('PTY/CLI integration (linux, shard 0/3)') !== -1,
+            'the park names the FAILING JOB (AC3 shape — the reader never hunts the runs tab)');
+        assert.ok(report.body.indexOf('https://github.com/a/b/actions/runs/38027168551') !== -1,
+            'the park report links the latest red run');
+        assert.ok(report.body.indexOf('PTY/CLI integration (linux, shard 1/3)') === -1,
+            'green shards are never named as failing');
+        // Non-goal: red→rework routing is UNCHANGED — the machine arm still
+        // fires; the parked PR exits the park via the reset probes when the
+        // rework push moves the head.
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.number === 1450 && a.labels.join(',') === 'agent:rework';
+        }), 'the machine rework arm still fires (routing unchanged)');
+    });
+
+    test('one red on the head — streak 1 below the default cap: report + marker, NO park', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: failWorld({ workflowApiRuns: [redRun(38027168550, HEAD, '2026-10-10T01:38:00Z')] })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.fail] } });
+
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.indexOf('validation_failed') !== -1;
+        }), 'a single red is not a loop — no park');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('\uD83D\uDD34 red head ' + HEAD) !== -1,
+            'the red-head audit marker still records 1/3');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('CONVERGENCE PARK') === -1,
+            'no park line on a sub-cap streak');
+    });
+
+    test('AC2 green reset: a success verdict between the reds breaks the streak — no park', function () {
+        // red (01:38), rerun green (02:00) after a cancel game, red (02:59):
+        // the two reds are NOT consecutive — the green reset the counter.
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: failWorld({
+                workflowApiRuns: [
+                    redRun(38027168551, HEAD, '2026-10-10T02:59:00Z'),
+                    greenRun(38027168550, HEAD, '2026-10-10T02:00:00Z'),
+                    redRun(38027168549, HEAD, '2026-10-10T01:38:00Z')
+                ]
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.fail] } });
+
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.indexOf('validation_failed') !== -1;
+        }), 'green verdict reset the consecutive-red counter (AC2) — no park');
+    });
+
+    test('AC2 head change: reds on a previous head never count against the current one', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: failWorld({
+                workflowApiRuns: [
+                    redRun(38027168551, HEAD, '2026-10-10T02:59:00Z'),
+                    redRun(38027168550, '0ldh3ad000', '2026-10-10T01:38:00Z')
+                ]
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.fail] } });
+
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.indexOf('validation_failed') !== -1;
+        }), 'the current head carries exactly ONE red — a fresh head starts a fresh streak (AC2)');
+    });
+
+    test('escape hatch: redHeadParkCap=false keeps the old never-park behavior', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: failWorld({
+                workflowApiRuns: [
+                    redRun(38027168551, HEAD, '2026-10-10T02:59:00Z'),
+                    redRun(38027168550, HEAD, '2026-10-10T01:38:00Z')
+                ]
+            })
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            redHeadParkCap: 'false', rules: [RULES.fail] } });
+
+        assert.ok(!sm.capturedPrLabelAdds.some(function (a) {
+            return a.labels.indexOf('validation_failed') !== -1;
+        }), 'the deployment escape hatch disables the park entirely');
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.number === 1450 && a.labels.join(',') === 'agent:rework';
+        }), 'the rework arm is untouched by the hatch');
+    });
+
+    test('AC3: the #1453 12-cycle replay — parks at cycle 2, no third dispatch', function () {
+        // One action() = one tick. Cycle shape per the live incident:
+        //   arm (validate-armed) → dispatch → CI concludes red →
+        //   fail-validation unarms + reports → next tick re-arms.
+        // The re-arm between cycles models the live hole (the verdict probe
+        // reads non-failure in the interleave — registration lag / cancelled
+        // supersede), so validate-armed re-dispatches until the park.
+        var world = {
+            labels: ['pr_approved', 'ai_validating'],   // starts armed
+            runs: [],
+            comments: [],
+            dispatches: 0, arms: 0, cycleLogs: []
+        };
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: function (rule) {
+                    if (rule.id === 'fail-validation') {
+                        return world.labels.indexOf('ai_validating') !== -1
+                            ? [prItem(1453, { labels: world.labels.slice(),
+                                author: 'ai-teammate', headSha: HEAD, branch: 'ai/gh-1450' })]
+                            : [];
+                    }
+                    // validate-armed: approved, not armed, not parked.
+                    return (world.labels.indexOf('pr_approved') !== -1 &&
+                            world.labels.indexOf('ai_validating') === -1 &&
+                            world.labels.indexOf('validation_failed') === -1)
+                        ? [prItem(1453, { labels: world.labels.slice(),
+                            author: 'ai-teammate', headSha: HEAD, branch: 'ai/gh-1450' })]
+                        : [];
+                },
+                pr: { number: 1453, labels: ['pr_approved'], body: 'Fixes #1450 — the quarantine' },
+                prComments: world.comments,
+                workflowApiRuns: world.runs,
+                commitCheckRuns: PTY_ROLLUP,
+                prList: [{ number: 1453, labels: [{ name: 'pr_approved' }], head: { sha: HEAD } }]
+            },
+            onCliExecute: function () { return { output: JSON.stringify({ workflow_runs: [] }) }; }
+        }));
+        var jobParams = { owner: 'a', repo: 'b', machineAuthor: 'ai-teammate',
+            rules: [RULES.fail, RULES.validate] };
+
+        for (var cycle = 1; cycle <= 12; cycle++) {
+            // The dispatched CI of the previous arm concludes red (~hourly
+            // cadence of the live wave — always past the 15-min grace).
+            world.runs.unshift(redRun(38027168550 + cycle, HEAD,
+                '2026-10-10T0' + (cycle - 1) + ':38:00Z'));
+            sm.capturedCliCommands.length = 0;
+            sm.capturedPrLabelAdds.length = 0;
+            sm.capturedPrLabelRemoves.length = 0;
+            sm.action({ jobParams: jobParams });
+            sm.capturedPrLabelAdds.forEach(function (a) {
+                a.labels.forEach(function (l) {
+                    if (world.labels.indexOf(l) === -1) world.labels.push(l);
+                });
+            });
+            sm.capturedPrLabelRemoves.forEach(function (r) {
+                var i = world.labels.indexOf(r.label);
+                if (i !== -1) world.labels.splice(i, 1);
+            });
+            if (sm.capturedCliCommands.some(function (c) {
+                return c.command.indexOf('gh workflow run') === 0;
+            })) world.dispatches++;
+            world.comments = world.comments.concat(sm.capturedPrComments.filter(function (c) {
+                return c.body.indexOf('CONVERGENCE PARK') !== -1;
+            }));
+            world.cycleLogs.push(cycle + ':' + world.labels.join('+'));
+        }
+
+        assert.equal(world.dispatches, 2,
+            'exactly TWO dispatches — cycle 1 and cycle 2; the park kills every later dispatch (AC1: no third dispatch)');
+        assert.equal(world.comments.length, 1, 'exactly ONE park comment across the 12 cycles');
+        assert.ok(world.comments[0].body.indexOf('PTY/CLI integration (linux, shard 0/3)') !== -1,
+            'AC3: the park lands at cycle 2 naming the PTY shard');
+        assert.ok(world.labels.indexOf('validation_failed') !== -1 &&
+                  world.labels.indexOf('ai_validating') === -1,
+            'the replay ends parked and unarmed');
+        assert.equal(world.cycleLogs[1].indexOf('validation_failed'), -1,
+            'cycle 2 starts un-parked (the park lands DURING cycle 2, on the 2nd red)');
+    });
+});

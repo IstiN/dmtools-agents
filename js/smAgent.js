@@ -2968,8 +2968,14 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // Graceful '' on any miss (no head SHA, empty run list,
                 // tool error): the report posts without the link and
                 // NOTHING else in this action changes.
-                var failedRunsLine = failedRunLinksLine(effectiveRepoInfo,
-                    rule.ciWorkflow || ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
+                // ONE github_list_workflow_runs fetch feeds BOTH the
+                // failed-run link line (below) and the gh-832
+                // consecutive-red streak — the list is the durable per-head
+                // verdict record; no markers, no second fetch.
+                var failCiWf = rule.ciWorkflow ||
+                    ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml';
+                var failRunList = dispatchedValidationRuns(effectiveRepoInfo, failCiWf);
+                var failedRunsLine = failedRunLinksFromList(failRunList,
                     (ticket.pr && ticket.pr.headSha) || ticket.headSha);
                 // ── COMPOSITION #703 (review #703 blocker): the caps live on
                 // THIS red, in one report — the red-head marker bounds the
