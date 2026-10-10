@@ -119,6 +119,11 @@ var trackersModule = require('./common/trackers.js');
 // gh-807: machine review-verdict records + their reconciliation logic.
 var reviewVerdictsModule = require('./common/reviewVerdicts.js');
 var redConvergenceModule = require('./common/redConvergence.js');
+// gh-840 (hoisted, never lazy — the gh-823 pack-require rule): fail-closed
+// agent:rework consumption bookkeeping — the consume-audit markers the
+// processRule consumeLabels paths stamp, and the pure consumed-without-work
+// sweep decision the restore_rework_arm localAction consults.
+var reworkConsumptionModule = require('./common/reworkConsumption.js');
 
 // Project config loaded once in action() — used as global default for rules without configPath
 var projectConfig = null;
@@ -1332,6 +1337,46 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 processedKeys.push(key);
             } catch (e) {
                 console.error('  ❌ arm_rework failed for ' + key + ': ' + (e.message || e));
+            }
+            continue;
+        }
+
+        if (rule.localAction === 'restore_rework_arm') {
+            // gh-840 (live dmtools-agents PR #826 / gh-825, 2026-10-10):
+            // agent:rework was CONSUMED — via the rework-on-label
+            // consumeLabels path (dispatch accepted, or the gh-715
+            // cross-anchor suppression while a REVIEW leg held the other
+            // anchor) — yet no rework leg ever ran, no push landed and no
+            // closing bookkeeping existed. The recovery that should have
+            // re-armed (arm_rework) is withheld in exactly this state
+            // (gh-806 latch, gh-807 verdict gate, agent:review notLabels),
+            // so the arm never returned: 4h+ hang with machine threads
+            // unresolved. This sweep is the fail-closed twin: it matches
+            // the consumed shape (unresolved machine threads + NO label)
+            // and restores the arm when the consumption is PROVEN bogus —
+            // a consume/restore audit marker exists, no rework is in
+            // flight, and the state stayed quiet past staleMinutes
+            // (default 30 min ≈ 6 ticks — the AC1 bound). The gh-807 gate
+            // still applies above the pure decision (verdict semantics
+            // untouched — a non-goal), and only machine-authored threads
+            // count (gh-744: human-thread-only PRs are never touched).
+            // The close proof is thread OWNERSHIP, not head position: a
+            // head move with the same open machine threads is a
+            // silentUpdateBranch refresh, not a close (gh-840 rework
+            // review, IMPORTANT) — a bare head advance never suppresses
+            // the sweep, so a post-consumption refresh cannot re-hide the
+            // hang.
+            try {
+                if (DRY) {
+                    console.log('  🧪 [dry] ' + key + ' would restore agent:rework (consumed-without-work sweep, gh-840)');
+                    processedKeys.push(key);
+                    continue;
+                }
+                if (restoreReworkArm(key, ticket, rule, effectiveRepoInfo, effectiveConfig)) {
+                    processedKeys.push(key);
+                }
+            } catch (e) {
+                console.error('  ❌ restore_rework_arm failed for ' + key + ': ' + (e.message || e));
             }
             continue;
         }
@@ -3258,6 +3303,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         if (triggered && rule.consumeLabels) {
             normalizeLabels(null, rule.consumeLabels).forEach(function (label) {
                 removeRuleLabel(key, label, rule, effectiveRepoInfo);
+                auditReworkConsumption(effectiveRepoInfo, ticket, label, 'dispatch');
             });
         } else if (!triggered && skipInfo.crossAnchorActive && rule.consumeLabels) {
             // gh-715: the cross-anchor guard suppressed this dispatch
@@ -3268,6 +3314,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // duplicate leg on the next quiet tick.
             normalizeLabels(null, rule.consumeLabels).forEach(function (label) {
                 removeRuleLabel(key, label, rule, effectiveRepoInfo);
+                auditReworkConsumption(effectiveRepoInfo, ticket, label, 'cross-anchor');
             });
         }
 
@@ -4021,15 +4068,222 @@ function linkedIssueLabels(repoInfo, issueNumber) {
 // machineLogins (gh-828 review round 2): the gh-728 machine-author
 // allowlist the verdict records are parsed with — forged markers must not
 // arm or withhold arms.
-function reworkArmGate(repoInfo, ticket, machineLogins) {
+// probeOverride (gh-840 rework review): a caller that already probed the
+// head (the restore sweep, for pr: null PR-carrier items) passes its
+// result to avoid a second identical github_get_pr read.
+function reworkArmGate(repoInfo, ticket, machineLogins, probeOverride) {
     var out = { arm: true, reason: 'no-verdict-records', headShort: null, effective: null };
-    var probe = prHeadAndLabels(repoInfo, ticket.prNumber);
+    var probe = probeOverride || prHeadAndLabels(repoInfo, ticket.prNumber);
     if (!probe) return out;
     out.headShort = String(probe.headSha).substring(0, 7);
     var decision = reviewVerdictsModule.armReworkDecision(
         readVerdictRecords(repoInfo, ticket.prNumber, machineLogins), probe.headSha);
     decision.headShort = out.headShort;
     return decision;
+}
+
+// ── gh-840 fail-closed agent:rework consumption ─────────────────────────────
+//
+// Live dmtools-agents PR #826 (gh-825, 2026-10-10 ~10:00Z): agent:rework
+// armed twice, later CONSUMED — and no rework leg ever ran (only review
+// legs), no push, 4/6 threads open, no close marker. The consumeLabels
+// paths below stamp an audit marker so every consumption is attributable,
+// and the restore_rework_arm sweep re-arms a consumption that left machine
+// threads unresolved (js/common/reworkConsumption.js is the pure side —
+// markers + the shouldRestoreArm decision).
+//
+// gh-840 rework review (BLOCKING): PR-carrier query items usually carry
+// pr: null — githubSource queryPrs populates item.pr only under
+// needsStatus (checks/mergeState/prChecks/verdict query keys), and neither
+// rework-on-label nor the rework-arm-restore query carries any. Both paths
+// below therefore probe the head fresh through prHeadAndLabels (the same
+// fresh-probe pattern reworkArmGate already uses) whenever the query item
+// has none.
+
+// One fetch of the PR's raw comment list (same payload shape as
+// readVerdictRecords / failMarkerState). Returns [] on any read failure —
+// the sweep then finds no consumption evidence and stays quiet (fail
+// closed: a missed sweep retries next tick, a bogus restore arms a
+// duplicate rework leg).
+function prCommentList(repoInfo, prNumber) {
+    try {
+        var raw = github_get_pr_comments({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            pullRequestId: String(prNumber)
+        });
+        var obj = (typeof raw === 'string') ? JSON.parse(raw) : (raw || []);
+        return Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+    } catch (e) {
+        console.warn('  ⚠️ gh-840: comment read failed (fail-closed): ' + (e.message || e));
+        return [];
+    }
+}
+
+// gh-840 audit log — called from processRule's two consumeLabels branches
+// after an agent:rework removal. Posts ONE machine-parseable marker comment
+// recording the consumption path (dispatch | cross-anchor) + head, so the
+// tick sweep can later tell a bogus consumption from a successful close.
+// Non-agent:rework labels and non-github sources are untouched; every
+// failure is a logged warn — the audit must never break the consumption.
+// When the query item carries no head (pr: null — the live PR-carrier
+// shape) the head is probed fresh; a consumption that STILL cannot be
+// attributed is logged LOUD (never a silent skip) — an unattributed
+// consumption leaves the sweep without evidence forever, which is exactly
+// the hang this machinery exists to kill.
+function auditReworkConsumption(repoInfo, ticket, label, path) {
+    if (label !== reviewVerdictsModule.LABEL_REWORK) return;
+    if (!ticket || !ticket.prNumber) {
+        console.warn('  ⚠️ gh-840: agent:rework consumed on ' + (ticket && ticket.key) +
+            ' with no PR anchor — audit marker skipped');
+        return;
+    }
+    var head = ((ticket.pr && ticket.pr.headSha) || ticket.headSha) || null;
+    if (!head) {
+        var probe = prHeadAndLabels(repoInfo, ticket.prNumber);
+        if (probe) head = probe.headSha;
+    }
+    var body = reworkConsumptionModule.buildConsumeAuditComment(path, head);
+    if (!body) {
+        console.warn('  ⚠️ gh-840: agent:rework consumed on PR #' + ticket.prNumber +
+            ' (path: ' + path + ') but the head could not be attributed ' +
+            '(item.pr null, fresh probe failed) — no audit marker posted; the sweep has no evidence');
+        return;
+    }
+    if (DRY) { console.log('  [dry] 🏷️ gh-840 consumption audit (' + path + ') on PR #' + ticket.prNumber); return; }
+    try {
+        github_create_comment({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            number: ticket.prNumber, body: body
+        });
+        console.log('  🏷️  gh-840: agent:rework consumption audited (path: ' + path +
+            ') on PR #' + ticket.prNumber);
+    } catch (eAudit) {
+        console.warn('  ⚠️ gh-840: consumption audit comment failed (non-fatal): ' + (eAudit.message || eAudit));
+    }
+}
+
+// Unresolved-machine-thread census for the sweep (AC3 — human-thread-only
+// PRs are untouched). Returns a count >= 0, or -1 when the threads tool is
+// unavailable in this runtime (the sweep then fails closed and retries next
+// tick — no census, no restore).
+function unresolvedMachineThreadCount(repoInfo, prNumber, machineLogins) {
+    if (typeof github_get_pr_review_threads !== 'function') return -1;
+    var lower = [];
+    (machineLogins || []).forEach(function (l) {
+        if (l) lower.push(String(l).toLowerCase());
+    });
+    if (!lower.length) return 0; // the machineAuthor doctrine: no identity, no trusted machine threads
+    try {
+        var raw = github_get_pr_review_threads({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            pullRequestId: String(prNumber)
+        });
+        var res = (typeof raw === 'string') ? JSON.parse(raw) : raw;
+        var nodes = (res && res.data && res.data.repository &&
+            res.data.repository.pullRequest &&
+            res.data.repository.pullRequest.reviewThreads &&
+            res.data.repository.pullRequest.reviewThreads.nodes) || [];
+        var n = 0;
+        nodes.forEach(function (t) {
+            if (!t || t.isResolved === true) return;
+            var first = (t.comments && t.comments.nodes && t.comments.nodes[0]) || {};
+            var who = first.author && (first.author.login || first.author.name);
+            who = who ? String(who).toLowerCase() : null;
+            if (who && lower.indexOf(who) !== -1) n++;
+        });
+        return n;
+    } catch (eCensus) {
+        console.warn('  ⚠️ gh-840: machine-thread census failed (fail-closed): ' + (eCensus.message || eCensus));
+        return -1;
+    }
+}
+
+// The gh-840 sweep action — see the restore_rework_arm branch comment.
+// Gate order (cheapest/most decisive first): head probe (when the item has
+// none) → latch → active leg run → gh-807 verdict gate → consumption
+// evidence → machine-thread census → pure shouldRestoreArm → restore
+// (label + bookkeeping marker + latch). Returns true when the arm was
+// restored (item processed).
+function restoreReworkArm(key, ticket, rule, repoInfo, effectiveConfig) {
+    var prNumber = ticket && ticket.prNumber;
+    if (!prNumber) {
+        console.log('  ⏭️  ' + key + ' sweep: no PR anchor — nothing to restore');
+        return false;
+    }
+    // gh-840 rework review (BLOCKING): live PR-carrier items carry
+    // pr: null (queryPrs populates item.pr only under needsStatus), so the
+    // head is probed fresh — without it the latch consult short-circuits,
+    // the in-flight gate is skipped and the restore marker records
+    // 'unknown'. The same probe feeds reworkArmGate below (no double read).
+    var probedHead = null;
+    var head = reworkLatchHeadOf(ticket);
+    if (!head) {
+        probedHead = prHeadAndLabels(repoInfo, prNumber);
+        if (probedHead) head = probedHead.headSha;
+    }
+    if (consultReworkLatch(key, ticket, repoInfo, head).latched) return false;
+    if (head && hasActiveLegRun(headWorkflowRunsSafe(repoInfo, head),
+            reworkLatchModule.DEFAULT_LEG_WORKFLOW)) {
+        console.log('  ⏭️  ' + key + ' sweep: a leg run is active on head ' +
+            String(head).substring(0, 7) + ' — the leg owns the threads');
+        return false;
+    }
+    var machineLogins = verdictMachineLogins(effectiveConfig);
+    var armGate = reworkArmGate(repoInfo, ticket, machineLogins, probedHead);
+    if (!armGate.arm) {
+        console.log('  ⏭️  ' + key + ' sweep: arm withheld — ' + armGate.reason +
+            ' on head ' + armGate.headShort + ' (gh-807 verdict semantics preserved)');
+        return false;
+    }
+    var comments = prCommentList(repoInfo, prNumber);
+    var allow = { authorLogins: machineLogins };
+    var consumed = reworkConsumptionModule.parseConsumeMarkers(comments, allow);
+    var restored = reworkConsumptionModule.parseRestoreMarkers(comments, allow);
+    var newestConsume = consumed.length ? consumed[consumed.length - 1] : null;
+    var machineThreads = unresolvedMachineThreadCount(repoInfo, prNumber, machineLogins);
+    if (machineThreads === -1) {
+        console.log('  ⏭️  ' + key + ' sweep: machine-thread census unavailable — fail closed, retry next tick');
+        return false;
+    }
+    var staleMin = (typeof rule.staleMinutes === 'number' && rule.staleMinutes > 0)
+        ? rule.staleMinutes : Math.round(reworkConsumptionModule.DEFAULT_RESTORE_STALE_MS / 60000);
+    // No head-position gate (gh-840 rework review, IMPORTANT): a head move
+    // with the same open machine threads is a silentUpdateBranch refresh,
+    // not a close — the close proof is thread ownership (the census above).
+    var decision = reworkConsumptionModule.shouldRestoreArm({
+        unresolvedMachineThreads: machineThreads,
+        hasReworkLabel: false, // the rule query (notLabels) already guarantees this
+        reworkInFlight: false, // latch + active-run gates above
+        consumedAtMs: newestConsume ? newestConsume.atMs : null,
+        restoredAtMs: restored.length ? restored[restored.length - 1].atMs : null,
+        nowMs: Date.now(),
+        staleMs: staleMin * 60 * 1000
+    });
+    if (!decision.restore) {
+        console.log('  ⏭️  ' + key + ' sweep: no restore (' + decision.reason + ')');
+        return false;
+    }
+    github_add_labels({
+        workspace: repoInfo.owner, repository: repoInfo.repo,
+        number: prNumber, labels: ['agent:rework']
+    });
+    var markerBody = reworkConsumptionModule.buildRestoreMarkerComment(
+        head || (newestConsume && newestConsume.head) || 'unknown', decision.reason);
+    if (markerBody) {
+        try {
+            github_create_comment({
+                workspace: repoInfo.owner, repository: repoInfo.repo,
+                number: prNumber, body: markerBody
+            });
+        } catch (eMarker) {
+            console.warn('  ⚠️ gh-840: restore marker comment failed (non-fatal): ' + (eMarker.message || eMarker));
+        }
+    }
+    armReworkLatch(ticket, head);
+    console.log('  🔄 ' + key + ' agent:rework RESTORED (gh-840: previous consumption left ' +
+        machineThreads + ' machine thread(s) unresolved, quiet > ' +
+        staleMin + 'm) — rework-on-label re-dispatches the leg');
+    return true;
 }
 
 // AC2 — label reconciliation for one contradictory head: removes the loser
@@ -5225,6 +5479,9 @@ function reworkLatchHeadOf(ticket) {
  * when latched. The canonical suppression line
  * `⏭️ <key> rework already in flight for (pr-N, head7)` is logged HERE,
  * exactly once per suppressed decision.
+ * headOverride (gh-840 rework review): callers that probed the head fresh
+ * (live PR-carrier items carry pr: null) pass it so the latch consult is
+ * not silently bypassed by a null item head.
  * Side effects on a PRESENT latch: one head-runs probe decides its fate —
  * an ACTIVE leg run keeps it alive past the stale window (the leg really
  * is flying), a CONCLUDED leg run at/after the arm clears it (AC2), no run
@@ -5232,9 +5489,9 @@ function reworkLatchHeadOf(ticket) {
  * degrades to age-only — fail-safe toward suppressing one extra arm,
  * never toward stacking legs. The clear is logged with its cause.
  */
-function consultReworkLatch(key, ticket, effectiveRepoInfo) {
+function consultReworkLatch(key, ticket, effectiveRepoInfo, headOverride) {
     var prNumber = ticket && ticket.prNumber;
-    var head = reworkLatchHeadOf(ticket);
+    var head = headOverride || reworkLatchHeadOf(ticket);
     if (!prNumber || !head) return { latched: false, head: head };
     var latchState = tickReworkLatchState(effectiveRepoInfo);
     var verdict = reworkLatchModule.isActive(latchState.map, prNumber, head, {});
@@ -5262,11 +5519,14 @@ function consultReworkLatch(key, ticket, effectiveRepoInfo) {
  * Record an arming decision (gh-806): from now on, one leg for (pr, head).
  * DRY never arms (the dry tick publishes nothing — arming a map that never
  * persists would silently swallow the NEXT real tick's first arm).
+ * headOverride (gh-840 rework review): the sweep passes its freshly probed
+ * head — a pr: null item would otherwise no-op the arming and leave the
+ * restored arm without latch protection.
  */
-function armReworkLatch(ticket) {
+function armReworkLatch(ticket, headOverride) {
     if (DRY) return;
     var prNumber = ticket && ticket.prNumber;
-    var head = reworkLatchHeadOf(ticket);
+    var head = headOverride || reworkLatchHeadOf(ticket);
     if (!prNumber || !head) return;
     var latchState = tickReworkLatchState(null);
     reworkLatchModule.arm(latchState.map, prNumber, head, null, 'sm');
@@ -5522,5 +5782,7 @@ if (typeof module !== 'undefined' && module.exports) {
         dispatchRaceGraceMs: dispatchRaceGraceMs,
         resolveValidationConcurrency: resolveValidationConcurrency,
         effectiveValidationConcurrency: effectiveValidationConcurrency,
-        reportValidationCost: reportValidationCost };
+        reportValidationCost: reportValidationCost,
+        restoreReworkArm: restoreReworkArm,
+        auditReworkConsumption: auditReworkConsumption };
 }
