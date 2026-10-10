@@ -191,17 +191,12 @@ function autoCommitAndPush(customParams, ticketKey) {
     var commitMsg = ticketKey + ' WIP auto-save ' + timestamp;
 
     try {
-        cli_execute_command({
-            // Untrack machine-local runtime logs that older/poisoned
-            // branches may already carry (gh-628: the timer itself swept
-            // .dmtools/credential-helper.log — the credential helper's
-            // serving trace — into three commits on ai/gh-628). Pathspec
-            // exclusion alone cannot help a TRACKED file's changes, so the
-            // cleanup removes them from the index. Shared canonical list:
-            // js/common/gitStaging.js. One command (the old copilot-sessions
-            // cleanup merged in) keeps the call count identical for tests.
-            command: gitStaging.buildUntrackCommand(),
-            workingDirectory: workingDir
+        // Untrack machine-local runtime logs that older/poisoned branches may already carry (gh-628: the
+        // timer itself swept .dmtools/credential-helper.log into three commits on ai/gh-628). Pathspec
+        // exclusion cannot help a TRACKED file, so they are removed from the index. Two plain commands
+        // (list tracked, then rm) — no shell pipe, which the Java validator rejects (epam/dm.ai#679).
+        gitStaging.untrackRuntimeArtifacts(function (command) {
+            return cli_execute_command({ command: command, workingDirectory: workingDir });
         });
     } catch (cleanupErr) {
         console.log('⏱️ timer: session cache cleanup skipped:', cleanupErr.toString().substring(0, 100));
