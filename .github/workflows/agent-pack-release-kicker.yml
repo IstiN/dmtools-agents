@@ -1,0 +1,53 @@
+# Agent pack release kicker (dmtools-agents#844).
+#
+# Belt for the silently-dropped push trigger (live 2026-10-10: #841 merged
+# 14:24Z, no release until an operator dispatch 17:05Z — #826 hung in the
+# gap). Every tick compares origin/main HEAD against the newest agents-rel-*
+# tag and re-dispatches agent-pack-release.yml when main is ahead on
+# non-ignored paths and no release run is pending. The push trigger stays —
+# belt AND suspenders; the release workflow's own ledger guard + no-release
+# no-op keep a double dispatch from cutting a duplicate release (gh-690).
+name: Agent Pack Release Kicker
+
+on:
+  schedule:
+    # gh-844 AC1: no agents-side fix may wait >15 min in main without a
+    # release cut — a 10-minute cadence detects within one tick.
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write # gh workflow run agent-pack-release.yml
+  contents: read # compare main against the latest release tag
+
+concurrency:
+  # Ticks must queue, never overlap: two concurrent ticks could both observe
+  # no pending run and double-dispatch.
+  group: agent-pack-release-kicker
+  cancel-in-progress: false
+
+jobs:
+  kick:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags for the since-tag diff
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Fetch main + release tags
+        # The named-ref fetch alone only updates FETCH_HEAD; write the
+        # remote-tracking ref and the tags explicitly so the diff below
+        # always sees current main and every agents-rel-* tag.
+        run: |
+          git fetch origin \
+            '+refs/heads/main:refs/remotes/origin/main' \
+            'refs/tags/*:refs/tags/*'
+
+      - name: Kick agent-pack-release when main is ahead
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node ci/release_kicker.mjs
