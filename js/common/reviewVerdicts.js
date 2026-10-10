@@ -40,6 +40,14 @@
  * Pure module — no dmtools globals; the tick actions and the query guards
  * feed it comment payloads and apply the decisions. Keep it GraalJS-clean
  * (var + plain functions, JSON-safe data only).
+ *
+ * gh-828: the withheld-arm branch's missing twin. APPROVE + blocking=0
+ * withholds the rework arm — and nothing owned the machine's own open
+ * suggestion threads, so the conversation gate (gh-683) held approved PRs
+ * BLOCKED forever (live fa #1457–#1470, 2026-10-10). threadSeverity /
+ * selectResolvableThreads / buildThreadAckReply are the pure side of the
+ * in-tick post-APPROVE resolution leg (gate on the effective record,
+ * resolve only machine-authored non-blocking threads, bounded).
  */
 'use strict';
 
@@ -350,6 +358,125 @@ function armReworkDecision(records, headSha) {
     return { arm: true, reason: 'changes-requested', effective: effective };
 }
 
+// ── gh-828: post-APPROVE in-tick resolution of non-blocking threads ─────────
+//
+// Live incident (fa PRs #1457–#1470, 2026-10-10): approve-with-suggestions
+// PRs (sticky pr_approved, verdict APPROVE, census blocking=0) sat
+// mergeStateStatus=BLOCKED for ~8h on repos with the "require conversation
+// resolution" branch protection (the gh-683 gate). The armReworkDecision
+// above correctly withholds the rework arm for APPROVE+blocking=0 — but the
+// rework leg is the ONLY owner of thread resolution, so the machine's own
+// suggestion threads stayed open and the conversation gate held every head
+// BLOCKED indefinitely. This block is the missing owner: the tick resolves
+// the machine's non-blocking threads itself, in the same tick.
+//
+// The per-thread severity convention is the machine review marker from
+// instructions/pr_review (each inline finding body carries 🚨 BLOCKING /
+// ⚠️ IMPORTANT / 💡 SUGGESTION) — the same mapping the review verdict rules
+// use to cross-check the record's census against the posted comments.
+// 🚨 = U+1F6A8, ⚠ = U+26A0, 💡 = U+1F4A1 (emoji written as escapes to keep
+// the source ASCII-safe for the GraalJS pack toolchain).
+
+var SEVERITY_BLOCKING_RE = /(\uD83D\uDEA8)|(\bBLOCKING\b)/i;
+var SEVERITY_IMPORTANT_RE = /(\u26A0)|(\bIMPORTANT\b)/i;
+var SEVERITY_SUGGESTION_RE = /(\uD83D\uDCA1)|(\bSUGGESTION\b)/i;
+
+/**
+ * Per-thread severity classification (pure — gh-828 L1): maps a machine
+ * review thread's body to 'blocking' | 'important' | 'suggestion' | 'none'
+ * via the marker convention. Only 'blocking' gates resolution — IMPORTANT
+ * and SUGGESTION findings are exactly the non-blocking class an APPROVE
+ * verdict legitimately leaves open (allowApproveWithSuggestions); 'none'
+ * (a machine thread without a recognizable marker) is treated as
+ * non-blocking too: the verdict record's census is the authority on
+ * blocking, the marker is the per-thread cross-check.
+ */
+function threadSeverity(body) {
+    var text = String(body || '');
+    if (!text) return 'none';
+    if (SEVERITY_BLOCKING_RE.test(text)) return 'blocking';
+    if (SEVERITY_IMPORTANT_RE.test(text)) return 'important';
+    if (SEVERITY_SUGGESTION_RE.test(text)) return 'suggestion';
+    return 'none';
+}
+
+// The default per-tick cap: a suggestion fleet of 4–13 threads per PR was
+// the live norm (#1457–#1470); 20 leaves headroom while bounding API calls.
+var DEFAULT_RESOLVE_THREADS_CAP = 20;
+
+/**
+ * Selects the machine-owned non-blocking threads the tick may resolve
+ * (pure — gh-828 AC1–AC3). Gate FIRST, per thread SECOND:
+ *
+ *   1. The effective machine verdict record for the CURRENT head must
+ *      exist, be APPROVE, and report census blocking == 0. Anything else
+ *      fails CLOSED with a gate reason ('no-verdict-record' |
+ *      'not-approve' | 'blocking-census') and an empty selection — a
+ *      stale-approval head (head moved past the verdict) or a record
+ *      claiming blocking must never auto-resolve threads. Only machine
+ *      identities' records count — callers pass parseVerdictRecords output
+ *      built with the machine-author allowlist.
+ *   2. Per unresolved thread: skip already-resolved (idempotency), threads
+ *      without a resolve id (cannot resolve — counted, never silently
+ *      dropped), HUMAN-authored threads (AC3 — the gh-744 never-resolve-
+ *      humans doctrine: only authors in opts.machineLogins resolve; an
+ *      empty list fails closed for every thread), and threads whose body
+ *      classifies 'blocking' (AC2 — they keep the rework arm).
+ *
+ * threads: [{ threadId, resolved, author, body }] (reviewThreadList shape).
+ * opts.machineLogins — REQUIRED machine-identity allowlist (the gh-728
+ * list semantics; case-insensitive here since API logins arrive
+ * canonicalized but tests/ADOs may not be). opts.maxThreads bounds the
+ * selection (default 20/tick/PR).
+ *
+ * Returns { gate, resolvable, skipped: { resolved, noThreadId, human,
+ * blocking } }.
+ */
+function selectResolvableThreads(records, headSha, threads, opts) {
+    var out = {
+        gate: null,
+        resolvable: [],
+        skipped: { resolved: 0, noThreadId: 0, human: 0, blocking: 0 }
+    };
+    var effective = latestVerdictForHead(records, headSha);
+    if (!effective) { out.gate = 'no-verdict-record'; return out; }
+    if (effective.record.verdict !== 'APPROVE') { out.gate = 'not-approve'; return out; }
+    if ((Number(effective.record.blocking || 0) || 0) > 0) {
+        out.gate = 'blocking-census';
+        return out;
+    }
+    out.gate = 'approve';
+    var logins = [];
+    ((opts && opts.machineLogins) || []).forEach(function (l) {
+        if (l) logins.push(String(l).toLowerCase());
+    });
+    var max = (opts && Number(opts.maxThreads) > 0) ? Math.floor(Number(opts.maxThreads))
+        : DEFAULT_RESOLVE_THREADS_CAP;
+    var list = Array.isArray(threads) ? threads : [];
+    for (var i = 0; i < list.length; i++) {
+        if (out.resolvable.length >= max) break;
+        var t = list[i] || {};
+        if (t.resolved) { out.skipped.resolved++; continue; }
+        if (!t.threadId) { out.skipped.noThreadId++; continue; }
+        var author = String(t.author || '').toLowerCase();
+        if (!author || logins.indexOf(author) === -1) { out.skipped.human++; continue; }
+        if (threadSeverity(t.body) === 'blocking') { out.skipped.blocking++; continue; }
+        out.resolvable.push(t);
+    }
+    return out;
+}
+
+/**
+ * The ack reply posted into each resolved thread (gh-828 capability
+ * surface wording) — a human skimming the closed conversation sees WHY
+ * the machine closed it.
+ */
+function buildThreadAckReply() {
+    return '🤖 non-blocking suggestion — resolved per APPROVE verdict (gh-828). ' +
+        'The machine resolves its own non-blocking threads in-tick so the ' +
+        'conversation gate cannot hold an approved PR (see gh-807/gh-828).';
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         MARKER_PREFIX: MARKER_PREFIX,
@@ -364,6 +491,10 @@ if (typeof module !== 'undefined' && module.exports) {
         resolveLoserLabel: resolveLoserLabel,
         buildReconciliationComment: buildReconciliationComment,
         reconcileDecision: reconcileDecision,
-        armReworkDecision: armReworkDecision
+        armReworkDecision: armReworkDecision,
+        threadSeverity: threadSeverity,
+        selectResolvableThreads: selectResolvableThreads,
+        buildThreadAckReply: buildThreadAckReply,
+        DEFAULT_RESOLVE_THREADS_CAP: DEFAULT_RESOLVE_THREADS_CAP
     };
 }

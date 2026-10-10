@@ -574,6 +574,71 @@ function githubProvider(cfg) {
                      unresolved: nodes.length - resolved };
         },
 
+        // ── gh-828 post-APPROVE thread resolution primitives ──
+        // reviewThreadList: the DETAILED thread list (vs the counts above) —
+        // each node mapped to its GraphQL resolve id, the root REST comment
+        // id (the reply anchor), the root author and body (the machine-auth
+        // and severity classification inputs) and the resolved flag. Fail
+        // OPEN to []: a broken threads read means "nothing eligible", never
+        // a throw — the resolve leg then no-ops for this PR this tick.
+        reviewThreadList: function (prNumber) {
+            try {
+                var res = parseMcp(github_get_pr_review_threads({
+                    workspace: owner, repository: repo, pullRequestId: String(prNumber)
+                }));
+                var nodes = (res && res.data && res.data.repository &&
+                             res.data.repository.pullRequest &&
+                             res.data.repository.pullRequest.reviewThreads &&
+                             res.data.repository.pullRequest.reviewThreads.nodes) || [];
+                var out = [];
+                nodes.forEach(function (t) {
+                    if (!t) return;
+                    var first = (t.comments && t.comments.nodes &&
+                                 t.comments.nodes[0]) || {};
+                    out.push({
+                        threadId: t.id || null,
+                        rootCommentId: first.databaseId || null,
+                        resolved: t.isResolved === true,
+                        author: (first.author && (first.author.login || first.author.name)) || '',
+                        body: first.body || '',
+                        path: t.path || null,
+                        line: (t.line === 0 || t.line) ? t.line : null
+                    });
+                });
+                return out;
+            } catch (e) {
+                console.warn('  ⚠️ review-thread list failed (fail-open): ' + (e.message || e));
+                return [];
+            }
+        },
+
+        // The ack reply rides the REST reply endpoint anchored on the root
+        // comment id; a thread-shaped item without one degrades to a PR-level
+        // comment so the ack is never lost silently.
+        replyToThread: function (prNumber, thread, text) {
+            if (thread && thread.rootCommentId) {
+                return github_reply_to_pr_thread({
+                    workspace: owner, repository: repo,
+                    pullRequestId: String(prNumber),
+                    inReplyToId: String(thread.rootCommentId), text: String(text || '')
+                });
+            }
+            return github_add_pr_comment({
+                workspace: owner, repository: repo,
+                pullRequestId: String(prNumber), text: String(text || '')
+            });
+        },
+
+        resolveThread: function (prNumber, thread) {
+            if (thread && thread.threadId) {
+                return github_resolve_pr_thread({
+                    workspace: owner, repository: repo,
+                    pullRequestId: String(prNumber), threadId: String(thread.threadId)
+                });
+            }
+            console.warn('smProvider(github): no threadId to resolve on PR #' + prNumber);
+        },
+
         activeMachineRuns: function (workflowFile) {
             var runs = parseMcp(github_list_workflow_runs({
                 workflowId: workflowFile, status: 'in_progress', perPage: 30

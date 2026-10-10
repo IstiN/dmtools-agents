@@ -895,3 +895,79 @@ suite('smProvider — gh-807 machine verdict records', function () {
         assert.equal(p.latestVerdictRecord(7, HEAD), null, 'no head resolution → guard inert');
     });
 });
+
+suite('smProvider — gh-828 post-APPROVE thread primitives', function () {
+
+    var MOD = 'js/common/smProvider.js';
+    function loadProvider(mocks) {
+        var mod = loadModule(MOD, makeRequire({ './reviewVerdicts.js': rvReal() }, mocks || {}), mocks || {});
+        return mod.createSmProvider({
+            scm: { provider: 'github' },
+            repository: { owner: 'mygroup', repo: 'my-repo' }
+        });
+    }
+
+    test('github: reviewThreadList maps nodes to thread/author/body/resolve ids', function () {
+        var p = loadProvider({
+            github_get_pr_review_threads: function () {
+                return { data: { repository: { pullRequest: { reviewThreads: {
+                    nodes: [
+                        { id: 'RT_1', isResolved: false, path: 'a.js', line: 12,
+                          comments: { nodes: [{ databaseId: 101, body: '💡 SUGGESTION: x',
+                                                author: { login: 'ai-teammate' } }] } },
+                        { id: 'RT_2', isResolved: true,
+                          comments: { nodes: [{ databaseId: 102, body: 'done',
+                                                author: { login: 'human' } }] } }
+                    ]
+                } } } } };
+            }
+        });
+        var list = p.reviewThreadList(6);
+        assert.equal(list.length, 2);
+        assert.equal(list[0].threadId, 'RT_1');
+        assert.equal(list[0].rootCommentId, 101);
+        assert.equal(list[0].author, 'ai-teammate');
+        assert.equal(list[0].body, '💡 SUGGESTION: x');
+        assert.equal(list[0].resolved, false);
+        assert.equal(list[1].resolved, true);
+    });
+
+    test('github: reviewThreadList fails open to [] on a broken read', function () {
+        var p = loadProvider({
+            github_get_pr_review_threads: function () { throw new Error('graphql down'); }
+        });
+        assert.deepEqual(p.reviewThreadList(6), []);
+        var bare = loadProvider({ github_get_pr_review_threads: function () { return null; } });
+        assert.deepEqual(bare.reviewThreadList(6), []);
+    });
+
+    test('github: replyToThread uses the root comment id; resolveThread uses the GraphQL thread id', function () {
+        var replies = [], resolves = [];
+        var p = loadProvider({
+            github_reply_to_pr_thread: function (args) { replies.push(args); },
+            github_resolve_pr_thread: function (args) { resolves.push(args); }
+        });
+        p.replyToThread(6, { rootCommentId: 101, threadId: 'RT_1' }, 'ack text');
+        assert.equal(replies.length, 1);
+        assert.equal(replies[0].inReplyToId, '101');
+        assert.equal(replies[0].pullRequestId, '6');
+        assert.contains(replies[0].text, 'ack text');
+        p.resolveThread(6, { threadId: 'RT_1' });
+        assert.equal(resolves.length, 1);
+        assert.equal(resolves[0].threadId, 'RT_1');
+        // no thread id → warn, no throw
+        p.resolveThread(6, {});
+        assert.equal(resolves.length, 1);
+    });
+
+    test('github: replyToThread without a root comment id falls back to a PR comment', function () {
+        var comments = [];
+        var p = loadProvider({
+            github_add_pr_comment: function (args) { comments.push(args); }
+        });
+        p.replyToThread(6, { threadId: 'RT_1' }, 'ack');
+        assert.equal(comments.length, 1);
+        assert.equal(comments[0].pullRequestId, '6');
+        assert.contains(comments[0].text, 'ack');
+    });
+});

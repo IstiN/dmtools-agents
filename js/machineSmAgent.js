@@ -46,6 +46,12 @@
 'use strict';
 
 var configLoader = require('./configLoader.js');
+// gh-828 (hoisted, never lazy — the gh-823 pack-require rule): the
+// post-APPROVE thread-resolution leg classifies threads through the
+// reviewVerdicts pure helpers, and the machine-auth allowlist comes from
+// the machineAuthor knob.
+var reviewVerdictsModule = require('./common/reviewVerdicts.js');
+var machineAuthorModule = require('./common/machineAuthor.js');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pure decision core — decideActions(state, cfg) → actions[]
@@ -147,6 +153,23 @@ function decideActions(state, cfg) {
         } else if (pr.mergeState === 'CLEAN' || pr.mergeable === true) {
             actions.push({ type: 'merge',
                 reason: 'approved + green + mergeable (merge-trigger parity)' });
+        } else if (pr.mergeState === 'BLOCKED') {
+            // gh-828 (live fa #1457–#1470, 2026-10-10): BLOCKED on an
+            // approved green head is the unresolved-thread conversation
+            // gate (gh-683 branch protection). The rework arm is withheld
+            // on APPROVE+blocking=0 (gh-807) and the rework leg is the
+            // only other owner of thread resolution — so the machine's own
+            // non-blocking suggestion threads held every approved PR
+            // BLOCKED for ~8h. Resolve them IN-TICK: gate on the head's
+            // effective machine verdict record (APPROVE + census
+            // blocking=0), then ack-reply + resolve each unresolved
+            // machine-authored non-blocking thread (bounded, idempotent).
+            // Human threads never resolve here (AC3) — they keep BLOCKED
+            // and surface to humans. If threads were not the blocker
+            // (e.g. a pending required check also reads BLOCKED), the leg
+            // is a harmless no-op and the next tick re-evaluates.
+            actions.push({ type: 'resolveSuggestionThreads',
+                reason: 'approved + BLOCKED — unresolved-thread conversation gate (gh-828): resolve machine-owned non-blocking threads in-tick' });
         } else {
             actions.push({ type: 'skip',
                 reason: 'approved but merge state ' + pr.mergeState });
@@ -203,9 +226,72 @@ function executeAction(provider, action, issue, cfg) {
             return provider.merge(action.prNumber);
         case 'closeIssue':
             return provider.closeIssue(issue.number, cfg.closeComment);
+        case 'resolveSuggestionThreads':
+            return resolveSuggestionThreads(provider, action.prNumber, action.headSha, cfg);
         default:
             return null;
     }
+}
+
+// gh-828 — the post-APPROVE in-tick thread-resolution leg (the missing
+// owner from the withheld-arm branch, live fa #1457–#1470). Gate on the
+// head's effective machine verdict record via the reviewVerdicts pure
+// selector, then per selected thread post the ack reply and resolve.
+// Idempotent (already-resolved threads are filtered by selection) and
+// bounded (maxResolveThreads per tick, default 20). Fail-closed
+// everywhere: no head sha, no machine logins configured, missing provider
+// primitives (gitlab), or a non-APPROVE / blocking census record → zero
+// resolutions. A per-thread failure is logged and never aborts the rest.
+function resolveSuggestionThreads(provider, prNumber, headSha, cfg) {
+    var none = { resolved: 0 };
+    if (!provider || typeof provider.verdictRecords !== 'function' ||
+        typeof provider.reviewThreadList !== 'function' ||
+        typeof provider.replyToThread !== 'function' ||
+        typeof provider.resolveThread !== 'function') {
+        console.warn('  ⚠️ resolveSuggestionThreads: provider lacks the verdict/thread primitives — skipped (gitlab twin has none yet)');
+        return none;
+    }
+    var logins = (cfg && cfg.machineLogins) || [];
+    if (!headSha || !logins.length) {
+        console.log('  ⏭️  resolveSuggestionThreads on PR #' + prNumber +
+            ': no head sha or no machine logins configured — nothing resolves (fail closed)');
+        return none;
+    }
+    var records = provider.verdictRecords(prNumber);
+    var threads = provider.reviewThreadList(prNumber);
+    var sel = reviewVerdictsModule.selectResolvableThreads(records, headSha, threads, {
+        machineLogins: logins,
+        maxThreads: (cfg && cfg.maxResolveThreads) || reviewVerdictsModule.DEFAULT_RESOLVE_THREADS_CAP
+    });
+    if (sel.gate !== 'approve') {
+        console.log('  ⏭️  resolveSuggestionThreads on PR #' + prNumber +
+            ': verdict gate "' + sel.gate + '" — nothing resolves (fail closed)');
+        return none;
+    }
+    if (!sel.resolvable.length) {
+        console.log('  ⏭️  resolveSuggestionThreads on PR #' + prNumber +
+            ': no eligible threads (human ' + sel.skipped.human + ', blocking ' + sel.skipped.blocking +
+            ', already resolved ' + sel.skipped.resolved + ', no id ' + sel.skipped.noThreadId + ')');
+        return none;
+    }
+    var ack = reviewVerdictsModule.buildThreadAckReply();
+    var resolved = 0;
+    sel.resolvable.forEach(function (t) {
+        try {
+            provider.replyToThread(prNumber, t, ack);
+        } catch (eReply) {
+            console.warn('  ⚠️ ack reply failed on a thread of PR #' + prNumber + ': ' + (eReply.message || eReply));
+        }
+        try {
+            provider.resolveThread(prNumber, t);
+            resolved++;
+        } catch (eResolve) {
+            console.warn('  ⚠️ resolveThread failed on PR #' + prNumber + ': ' + (eResolve.message || eResolve));
+        }
+    });
+    console.log('  ✅ resolveSuggestionThreads on PR #' + prNumber + ': resolved ' + resolved +
+        '/' + sel.resolvable.length + ' non-blocking machine thread(s)');
+    return { resolved: resolved };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -229,6 +315,15 @@ function action(params) {
         issueLimit:        override.issueLimit        || p.issueLimit     || 50,
         closeComment:      override.closeComment      || p.closeComment   || 'Machine SM: linked PR merged — closing the loop.'
     };
+    // gh-828: the post-APPROVE thread-resolution leg resolves ONLY threads
+    // authored by the machine identities (the gh-728 comma-separated list
+    // knob, same resolution chain as every other machine-keyed guard).
+    // Unconfigured → empty list → the leg fails closed and resolves
+    // nothing (human threads would otherwise be closed by the machine).
+    cfg.machineLogins = machineAuthorModule.machineAuthorLogins(
+        machineAuthorModule.resolveMachineAuthor(p, projectConfig));
+    cfg.maxResolveThreads = (typeof p.maxResolveThreads === 'number' && p.maxResolveThreads > 0)
+        ? Math.floor(p.maxResolveThreads) : reviewVerdictsModule.DEFAULT_RESOLVE_THREADS_CAP;
     var repoCfg = (projectConfig.repository && projectConfig.repository.owner &&
         projectConfig.repository.repo && projectConfig.repository) ||
         (p.repository || (p.repo ? { owner: String(p.repo).split('/')[0], repo: String(p.repo).split('/')[1] } : null));
@@ -290,6 +385,7 @@ function action(params) {
                 return;
             }
             a.prNumber = prRef ? prRef.number : null;
+            a.headSha = (pr && pr.headSha) || null;
             console.log('  ' + (cfg.dryRun ? '[dry] ' : '') + '▶️  gh-' + issue.number + ' ' +
                 a.type + (a.leg ? ':' + a.leg : '') + ' — ' + a.reason);
             if (cfg.dryRun) { acted++; if (a.type === 'dispatch') dispatched++; return; }
@@ -313,6 +409,7 @@ if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action: action,
         decideActions: decideActions,
-        issueFromRunTitle: issueFromRunTitle
+        issueFromRunTitle: issueFromRunTitle,
+        resolveSuggestionThreads: resolveSuggestionThreads
     };
 }

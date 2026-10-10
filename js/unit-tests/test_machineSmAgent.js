@@ -188,3 +188,126 @@ suite('machineSm decision core', function () {
     });
 
 });
+
+suite('machineSm resolveSuggestionThreads (gh-828)', function () {
+
+    var rvReal = function () {
+        if (!rvReal.mod) rvReal.mod = loadModule('js/common/reviewVerdicts.js', makeRequire({}), {});
+        return rvReal.mod;
+    };
+
+    // gh-823: every require of the agent must resolve in the map.
+    var agent = loadModule('js/machineSmAgent.js', makeRequire({
+        './configLoader.js': { loadProjectConfig: function () { return {}; } },
+        './common/smProvider.js': { createSmProvider: function () { return {}; } },
+        './common/reviewVerdicts.js': rvReal(),
+        './common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
+    }), {
+        cli_execute_command: function () { return '{}'; }
+    });
+
+    var HEAD = 'aaaabbbbccccddddeeeeffff0000111122223333';
+    var RECORD = { head: HEAD, verdict: 'APPROVE', blocking: 0, important: 1, suggestions: 4,
+                   at: '2026-10-10T05:47:30.000Z', source: 'pr_review.json' };
+
+    function providerWith(threads, opts) {
+        opts = opts || {};
+        return {
+            calls: { replies: [], resolves: [] },
+            verdictRecords: function () { return [RECORD]; },
+            reviewThreadList: function () { return threads; },
+            replyToThread: function (pr, thread, text) {
+                this.calls.replies.push({ pr: pr, threadId: thread.threadId, text: text });
+            },
+            resolveThread: function (pr, thread) {
+                this.calls.resolves.push({ pr: pr, threadId: thread.threadId });
+            }
+        };
+    }
+    function sug(i) {
+        return { threadId: 'RT_' + i, rootCommentId: 100 + i, resolved: false,
+                 author: 'ai-teammate', body: '💡 SUGGESTION: polish ' + i };
+    }
+
+    test('AC1 replay (#1457–#1470): 4 suggestion threads → 4 ack replies + 4 resolves in one tick', function () {
+        var p = providerWith([sug(1), sug(2), sug(3), sug(4)]);
+        var out = agent.resolveSuggestionThreads(p, 1457, HEAD,
+            { machineLogins: ['ai-teammate'] });
+        assert.equal(out.resolved, 4);
+        assert.equal(p.calls.replies.length, 4, 'one ack reply per resolved thread');
+        assert.contains(p.calls.replies[0].text, 'non-blocking suggestion');
+        assert.contains(p.calls.replies[0].text, 'resolved per APPROVE verdict');
+        assert.equal(p.calls.resolves.length, 4);
+    });
+
+    test('AC2: a blocking-marked thread is NOT resolved; the others are', function () {
+        var p = providerWith([sug(1),
+            { threadId: 'RT_9', rootCommentId: 109, resolved: false, author: 'ai-teammate',
+              body: '🚨 BLOCKING: data loss on retry' }]);
+        var out = agent.resolveSuggestionThreads(p, 1457, HEAD,
+            { machineLogins: ['ai-teammate'] });
+        assert.equal(out.resolved, 1);
+        assert.ok(p.calls.resolves.every(function (c) { return c.threadId !== 'RT_9'; }),
+            'the blocking thread keeps the rework arm');
+    });
+
+    test('AC3: human-authored threads are never resolved', function () {
+        var p = providerWith([sug(1),
+            { threadId: 'RT_H', rootCommentId: 110, resolved: false,
+              author: 'repo-owner', body: '💡 SUGGESTION: please rename' }]);
+        var out = agent.resolveSuggestionThreads(p, 1457, HEAD,
+            { machineLogins: ['ai-teammate'] });
+        assert.equal(out.resolved, 1);
+        assert.ok(p.calls.resolves.every(function (c) { return c.threadId !== 'RT_H'; }));
+    });
+
+    test('fail closed: no machine logins configured → nothing resolves', function () {
+        var p = providerWith([sug(1)]);
+        var out = agent.resolveSuggestionThreads(p, 1457, HEAD, { machineLogins: [] });
+        assert.equal(out.resolved, 0);
+        assert.equal(p.calls.resolves.length, 0);
+    });
+
+    test('fail closed: no head sha → nothing resolves', function () {
+        var p = providerWith([sug(1)]);
+        var out = agent.resolveSuggestionThreads(p, 1457, null, { machineLogins: ['ai-teammate'] });
+        assert.equal(out.resolved, 0);
+    });
+
+    test('fail closed: verdict record on another head (stale approval) → nothing resolves', function () {
+        var p = providerWith([sug(1)]);
+        var out = agent.resolveSuggestionThreads(p, 1457, 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+            { machineLogins: ['ai-teammate'] });
+        assert.equal(out.resolved, 0);
+        assert.equal(p.calls.resolves.length, 0);
+    });
+
+    test('idempotent: already-resolved threads are skipped', function () {
+        var t = sug(1);
+        t.resolved = true;
+        var p = providerWith([t]);
+        var out = agent.resolveSuggestionThreads(p, 1457, HEAD,
+            { machineLogins: ['ai-teammate'] });
+        assert.equal(out.resolved, 0);
+        assert.equal(p.calls.resolves.length, 0);
+    });
+
+    test('provider without the thread primitives (gitlab) is a logged no-op', function () {
+        var bare = { verdictRecords: function () { return [RECORD]; } };
+        var out = agent.resolveSuggestionThreads(bare, 1457, HEAD,
+            { machineLogins: ['ai-teammate'] });
+        assert.equal(out.resolved, 0);
+    });
+
+    test('a resolve failure does not abort the remaining threads', function () {
+        var p = providerWith([sug(1), sug(2)]);
+        p.resolveThread = function (pr, thread) {
+            if (thread.threadId === 'RT_1') throw new Error('boom');
+            this.calls.resolves.push({ pr: pr, threadId: thread.threadId });
+        };
+        var out = agent.resolveSuggestionThreads(p, 1457, HEAD,
+            { machineLogins: ['ai-teammate'] });
+        assert.equal(out.resolved, 1);
+        assert.equal(p.calls.resolves.length, 1);
+    });
+});
