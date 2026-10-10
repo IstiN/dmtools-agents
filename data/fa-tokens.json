@@ -420,6 +420,14 @@
       "completion": 17908,
       "total": 81496,
       "model": ""
+    },
+    {
+      "leg": "rework",
+      "at": "2026-10-10T06:53:08Z",
+      "prompt": 70284,
+      "completion": 2266,
+      "total": 72550,
+      "model": ""
     }
   ]
 }
