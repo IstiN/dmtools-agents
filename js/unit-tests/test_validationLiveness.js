@@ -162,6 +162,24 @@ suite('validationLiveness zombie markers', function () {
     });
 });
 
+suite('validationLiveness stale-cancel markers (gh-846)', function () {
+    test('staleCancelMarkerLine round-trips through the marker regex', function () {
+        var line = live.staleCancelMarkerLine(HEAD, '2026-10-10T18:39:00.000Z');
+        assert.ok(line.indexOf('stale-cancel') !== -1, 'the marker names the operation');
+        var re = new RegExp(live.STALE_CANCEL_MARKER_RE.source);
+        var m = re.exec(line);
+        assert.ok(m, 'parseable by the marker regex');
+        assert.equal(m[1], HEAD, 'the head sha is parseable back');
+        assert.equal(m[2], '2026-10-10T18:39:00.000Z', 'the timestamp is parseable back');
+    });
+
+    test('a stale-cancel line never parses as a zombie or red-head marker', function () {
+        // gh-755 parity: the bookkeeping must not feed verdict machinery.
+        var line = live.staleCancelMarkerLine(HEAD, '2026-10-10T18:39:00.000Z');
+        assert.deepEqual(live.zombieMarks([line]), {}, 'not a zombie re-dispatch count');
+    });
+});
+
 suite('validationLiveness knobs', function () {
     test('defaults: cap 3, window 1h (gh-821: 3 in a row ⇒ park, 1/head/hour)', function () {
         assert.equal(live.zombieCapOf({}), 3);

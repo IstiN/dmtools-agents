@@ -165,6 +165,32 @@ function zombieWindowMsOf(jobParams) {
     return Math.floor(n);
 }
 
+// ── Stale-cancel markers (gh-846) ───────────────────────────────────────────
+//
+// The refresh-path twin of the zombie marker: when a silent update moves
+// the head, every dispatched validation run on the superseded head is
+// cancelled (its result would be discarded). One marker line per cancelled
+// head records the 'cancelled: stale base' reason durably on the PR — the
+// gh-755 parity contract: CANCELLED is never a VERDICT, so the line is
+// bookkeeping/audit only. No tick-side machinery consumes it (the verdict
+// probes skip cancelled conclusions by construction; the zombie re-dispatch
+// and red-head counters key on head shas and only ever read the CURRENT
+// head), which is exactly why a cancelled-stale run can never trip
+// fail-validation / zombie re-dispatch / red-head counting (AC3).
+//
+//   🛑 stale-cancel <fullHeadSha> — stale base at <iso>
+
+var STALE_CANCEL_MARKER_RE = /\uD83D\uDED1 stale-cancel ([0-9a-f]{7,40}) \u2014 stale base at (\S+)/g;
+
+/**
+ * The marker line for one stale-cancelled head. Caller dedupes shas and
+ * joins lines; count/cap are meaningless here (a head is cancelled once).
+ */
+function staleCancelMarkerLine(headSha, atIso) {
+    return '\uD83D\uDED1 stale-cancel ' + headSha +
+        ' \u2014 stale base at ' + (atIso || '');
+}
+
 module.exports = {
     classify: classify,
     zombieMarks: zombieMarks,
@@ -172,5 +198,7 @@ module.exports = {
     zombieCapOf: zombieCapOf,
     zombieWindowMsOf: zombieWindowMsOf,
     ZOMBIE_MARKER_RE: ZOMBIE_MARKER_RE,
-    ACTIVE_RUN_STATES: ACTIVE_RUN_STATES
+    ACTIVE_RUN_STATES: ACTIVE_RUN_STATES,
+    STALE_CANCEL_MARKER_RE: STALE_CANCEL_MARKER_RE,
+    staleCancelMarkerLine: staleCancelMarkerLine
 };
