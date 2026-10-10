@@ -11,7 +11,9 @@ suite('machineSm decision core', function () {
 
     var agent = loadModule('js/machineSmAgent.js', makeRequire({
         './configLoader.js': { loadProjectConfig: function () { return {}; } },
-        './common/smProvider.js': { createSmProvider: function () { return {}; } }
+        './common/smProvider.js': { createSmProvider: function () { return {}; } },
+        './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
+        './common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {})
     }), {
         cli_execute_command: function () { return '{}'; }
     });
