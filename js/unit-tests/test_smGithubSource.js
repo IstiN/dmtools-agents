@@ -1635,10 +1635,13 @@ suite('sm github source — runAsync batching', function () {
 
 });
 
-suite('sm github source: validate-fresh-masked-green (gh-759 dead zone)', function () {
-
-    // Same harness as the main suite above — local copy (load is scoped
-    // to that suite's closure).
+// Shared harness for the masked-green dead-zone suites (gh-759 / gh-829 —
+// hoisted to module scope so the next gh-7xx follow-up edits ONE copy of
+// the wiring instead of two). Both suites share the provider stub, the
+// loadModule wiring and the pr() factory; they differ only in the
+// issue-label fixtures, passed per load() call (omitted → every linked
+// issue resolves label-less — the pre-gh-829 wave shape).
+function maskedGreenHarness() {
     var providerStub = {
         findPr: function (n) { return providerStub._prs[n] || null; },
         prStatus: function (n) { return providerStub._status[n] || null; },
@@ -1647,39 +1650,32 @@ suite('sm github source: validate-fresh-masked-green (gh-759 dead zone)', functi
         _prs: {}, _status: {}, _reviews: {}, _threads: {}
     };
 
-    function load(tools, prs, statuses) {
+    // tools: dmtools-global overrides (github_list_prs,
+    // github_search_issues, github_get_issue, …) — merged OVER the
+    // default issue resolver, so a suite can pin contracts with a
+    // throwing stub. issueLabels / issueErrors: per-issue fixture maps
+    // for the gh-829 latch resolver.
+    function load(tools, prs, statuses, issueLabels, issueErrors) {
         providerStub._prs = prs || {};
         providerStub._status = statuses || {};
+        var mergedTools = {
+            github_get_issue: function (args) {
+                var n = args && args.issueNumber;
+                if (issueErrors && issueErrors[n]) return { message: 'Not Found' };
+                var ls = (issueLabels && issueLabels[n]) || [];
+                return { number: n, labels: ls.map(function (l) { return { name: l }; }) };
+            }
+        };
+        Object.keys(tools || {}).forEach(function (k) { mergedTools[k] = tools[k]; });
         var smAsyncMod = loadModule('js/common/smAsync.js', makeRequire({
             './common/smProvider.js': { createSmProvider: function () { return providerStub; } }
-        }), tools || {});
+        }), mergedTools);
         return loadModule('js/sm/sources/githubSource.js', makeRequire({
             '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
             '../../common/smProvider.js': { createSmProvider: function () { return providerStub; } },
             '../../common/smAsync.js': smAsyncMod
-        }), tools || {});
+        }), mergedTools);
     }
-
-
-    // gh-759 live fa wave (PRs #1305/#1306/#1309/#1311/#1312): dev leg
-    // done, PR zero-label, rollup GREEN from the repo's kicker/CodeQL
-    // checks while the dispatch-only validation CI has no run on the
-    // head, mergeState BLOCKED. validate-fresh (checks [none, pending])
-    // cannot see these; the masked-green rule is the only matcher.
-
-    var RULE = {
-        source: 'github',
-        query: {
-            type: 'pr',
-            checks: 'green',
-            notLabels: ['ai_validating', 'pr_approved', 'ai_validated', 'chore:pin', 'validation_failed'],
-            notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'],
-            draft: false
-        },
-        localAction: 'validate_pr',
-        limit: 1,
-        id: 'validate-fresh-masked-green'
-    };
 
     function pr(n, labels, mergeState, author) {
         return {
@@ -1688,6 +1684,39 @@ suite('sm github source: validate-fresh-masked-green (gh-759 dead zone)', functi
             head: { ref: 'ai/gh-' + (n - 1) }, body: 'Closes #' + (n - 1)
         };
     }
+
+    return { load: load, providerStub: providerStub, pr: pr };
+}
+
+suite('sm github source: validate-fresh-masked-green (gh-759 dead zone)', function () {
+
+    var h = maskedGreenHarness();
+    var load = h.load;
+    var pr = h.pr;
+
+    // gh-759 live fa wave (PRs #1305/#1306/#1309/#1311/#1312): dev leg
+    // done, PR zero-label, rollup GREEN from the repo's kicker/CodeQL
+    // checks while the dispatch-only validation CI has no run on the
+    // head, mergeState BLOCKED. validate-fresh (checks [none, pending])
+    // cannot see these; the masked-green rule is the only matcher.
+
+    // Deployed query (post gh-829 — CLEAN moved from notMergeState to the
+    // mergeStateLatch below; this wave's issues carry no ai_developed, so
+    // the CLEAN head stays excluded exactly as pre-gh-829).
+    var RULE = {
+        source: 'github',
+        query: {
+            type: 'pr',
+            checks: 'green',
+            notLabels: ['ai_validating', 'pr_approved', 'ai_validated', 'chore:pin', 'validation_failed'],
+            notMergeState: ['BEHIND', 'DIRTY'],
+            mergeStateLatch: { CLEAN: ['ai_developed'] },
+            draft: false
+        },
+        localAction: 'validate_pr',
+        limit: 1,
+        id: 'validate-fresh-masked-green'
+    };
 
     test('matches exactly the un-armed, un-approved, BLOCKED masked-green PRs (multi-item wave)', function () {
         var srcMod = load({
@@ -1759,5 +1788,245 @@ suite('sm github source: validate-fresh-masked-green (gh-759 dead zone)', functi
         }, { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
         assert.equal(fresh.length, 0,
             'validate-fresh is blind to the masked-green head — this IS the gh-759 dead zone');
+    });
+});
+
+suite('sm github source: validate-fresh-masked-green CLEAN arm (gh-829)', function () {
+
+    // gh-829 live instance (2026-10-10, PR #826): dev leg done (issue gh-825
+    // latch ai_developed), head all-green from the ambient workflows, merge
+    // state CLEAN, ZERO labels for hours — no ai_validating, no review. The
+    // gh-759 rule excluded CLEAN ('merge-validated owns CLEAN'), but
+    // merge-validated needs pr_approved, which a zero-label PR can never
+    // reach without first being validated. The CLEAN exclusion narrows to a
+    // mergeStateLatch: green + CLEAN + zero lifecycle labels + the linked
+    // issue's ai_developed latch → arm; without the latch the exclusion
+    // stands. Same shared harness as the gh-759 suite (maskedGreenHarness).
+
+    var h = maskedGreenHarness();
+    var load = h.load;
+    var pr = h.pr;
+
+    // The deployed post-gh-829 rule shape: CLEAN left notMergeState, gated
+    // by the issue latch instead.
+    var RULE = {
+        source: 'github',
+        query: {
+            type: 'pr',
+            checks: 'green',
+            notLabels: ['ai_validating', 'pr_approved', 'ai_validated', 'chore:pin', 'validation_failed'],
+            notMergeState: ['BEHIND', 'DIRTY'],
+            mergeStateLatch: { CLEAN: ['ai_developed'] },
+            draft: false
+        },
+        localAction: 'validate_pr',
+        skipIfGreenCi: true,
+        limit: 1,
+        id: 'validate-fresh-masked-green'
+    };
+
+    // Issue label map: pr(n) links issue n-1. Latched issues: 825 (pr-826),
+    // 835 (pr-836), 837 (pr-838), 839 (pr-840), 841 (pr-842). Everything
+    // else resolves to a label-less issue; 827 simulates a fetch failure.
+    var ISSUE_LABELS = { 825: ['ai_developed'], 835: ['ai_developed'],
+                         837: ['ai_developed'], 839: ['ai_developed'], 841: ['ai_developed'] };
+
+    function wave() {
+        return {
+            github_list_prs: function () {
+                return [
+                    pr(826),                                   // CLEAN + latch — THE dead zone (AC1)
+                    pr(827, [], 'CLEAN', 'vendor-guest'),      // guest, no latch — stays unarmed (AC3)
+                    pr(828),                                   // CLEAN + latch issue fetch FAILS — fail closed
+                    { number: 829, labels: [], draft: false,  // CLEAN + latch, UNLINKED (no #N in body)
+                      user: { login: 'ai-teammate' }, head: { ref: 'ai/gh-x' }, body: 'no anchor here' },
+                    pr(830, ['ai_validating']),                // armed — sweep/fail own it (AC2)
+                    pr(831, ['pr_approved']),                  // merge window (AC2)
+                    pr(832, ['ai_validated']),                 // latched — review-after-dev (AC2)
+                    pr(833, ['chore:pin']),                    // factory pin (AC2)
+                    pr(834, ['validation_failed']),            // parked (AC2)
+                    pr(835, [], 'BLOCKED'),                    // gh-759 branch, NO latch — author-agnostic
+                    pr(836, [], 'BLOCKED'),                    // gh-759 branch + latch — matches too
+                    pr(837, [], 'BEHIND'),                     // silent-update refreshes first
+                    pr(838, [], 'DIRTY'),                      // conflict-rework owns it
+                    { number: 840, labels: [], draft: true,   // draft
+                      user: { login: 'ai-teammate' }, head: { ref: 'wip' }, body: 'Closes #839' },
+                    { number: 842, labels: [], draft: false,  // checks 'none' — validate-fresh's lane
+                      user: { login: 'ai-teammate' }, head: { ref: 'ai/gh-841' }, body: 'Closes #841' }
+                ];
+            }
+        };
+    }
+
+    function statuses() {
+        var s = {};
+        [826, 827, 828, 829, 830, 831, 832, 833, 834, 835, 836, 837, 838, 840, 842]
+            .forEach(function (n) {
+                s[n] = { number: n, state: 'OPEN', checks: 'green',
+                         mergeState: 'CLEAN', mergeable: true };
+            });
+        s[835].mergeState = 'BLOCKED'; s[835].mergeable = false;
+        s[836].mergeState = 'BLOCKED'; s[836].mergeable = false;
+        s[837].mergeState = 'BEHIND';  s[837].mergeable = null;
+        s[838].mergeState = 'DIRTY';   s[838].mergeable = null;
+        s[842].checks = 'none';
+        return s;
+    }
+
+    test('CLEAN + green + zero labels + ai_developed latch arms; the full matrix holds (AC1/AC2/AC3)', function () {
+        var srcMod = load(wave(), {}, statuses(), ISSUE_LABELS, { 828: true });
+
+        var full = srcMod.query(Object.assign({}, RULE, { limit: 50 }),
+            { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
+        assert.deepEqual(full.map(function (i) { return i.key; }), ['pr-826', 'pr-835', 'pr-836'],
+            'CLEAN+latch arms (AC1), the unlatched guest/failed-fetch/unlinked CLEAN heads stay ' +
+            'unarmed (AC3), every lifecycle label stays untouched (AC2), BEHIND/DIRTY/draft/' +
+            "checks-none stay in their owners' lanes, and the BLOCKED branch keeps matching " +
+            'with and without the latch (gh-759 author-agnostic contract)');
+
+        var one = srcMod.query(RULE, { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
+        assert.deepEqual(one.map(function (i) { return i.key; }), ['pr-826'],
+            'limit 1 paces the wave — the oldest dead-zone head first, same dev-lane pacing');
+    });
+
+    test('the pre-gh-829 deployed query could not arm pr-826 — the bug this fixes', function () {
+        var srcMod = load(wave(), {}, statuses(), ISSUE_LABELS, { 828: true });
+        var old = srcMod.query({
+            source: 'github',
+            query: {
+                type: 'pr',
+                checks: 'green',
+                notLabels: ['ai_validating', 'pr_approved', 'ai_validated', 'chore:pin', 'validation_failed'],
+                notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'],
+                draft: false
+            },
+            localAction: 'validate_pr',
+            skipIfGreenCi: true,
+            limit: 50,
+            id: 'validate-fresh-masked-green'
+        }, { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
+        assert.equal(old.map(function (i) { return i.key; }).indexOf('pr-826'), -1,
+            'CLEAN excluded, no latch guard → pr-826 invisible to every arming rule — the exact live dead zone');
+    });
+
+    test('string-form latch value arms exactly like the array form (config normalization)', function () {
+        // gh-829 review: latchWant was iterated as an array, but unlike
+        // notMergeState/mergeState/checks a string-form config value was
+        // never normalized — latchWant[li] indexed CHARACTERS and every
+        // lookup missed, silently disabling the CLEAN arm (zero signal).
+        // The established string | string[] normalization must hold here
+        // too, or a future config edit resurrects the #826 dead zone.
+        var srcMod = load({
+            github_list_prs: function () { return [pr(826)]; }
+        }, {}, {
+            826: { number: 826, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true }
+        }, { 825: ['ai_developed'] });
+
+        var items = srcMod.query({
+            source: 'github',
+            query: {
+                type: 'pr',
+                checks: 'green',
+                notLabels: ['ai_validating', 'pr_approved', 'ai_validated', 'chore:pin', 'validation_failed'],
+                notMergeState: ['BEHIND', 'DIRTY'],
+                mergeStateLatch: { CLEAN: 'ai_developed' },   // STRING form, not an array
+                draft: false
+            },
+            localAction: 'validate_pr',
+            skipIfGreenCi: true,
+            limit: 5,
+            id: 'validate-fresh-masked-green'
+        }, { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
+
+        assert.deepEqual(items.map(function (i) { return i.key; }), ['pr-826'],
+            'the string form normalizes to a one-element array — the CLEAN arm fires exactly as the array form');
+    });
+
+    test('latch guard fails closed on pr-less items — issue carrier without a linked PR', function () {
+        // gh-829 review: with item.pr absent, latchState is null →
+        // latchWant is null → the guard body was skipped and the item
+        // PASSED the latch check, contradicting the documented 'fails
+        // CLOSED' contract. An item whose merge state is UNKNOWN must not
+        // match a latch over CLEAN. Issue gh-100 has a linked CLEAN PR +
+        // the latch label; gh-101 carries the label but NO linked PR.
+        var srcMod = load({
+            github_search_issues: function () {
+                return [
+                    { number: 100, labels: [{ name: 'ai_developed' }] },
+                    { number: 101, labels: [{ name: 'ai_developed' }] }
+                ];
+            }
+        }, {
+            100: { number: 200, state: 'OPEN' }   // findPr(100) → open pr-200
+        }, {
+            200: { number: 200, state: 'OPEN', checks: 'green', mergeState: 'CLEAN', mergeable: true }
+        }, { 100: ['ai_developed'], 101: ['ai_developed'] });
+
+        var items = srcMod.query({
+            source: 'github',
+            query: {
+                type: 'issue',
+                labels: ['ai_developed'],
+                mergeStateLatch: { CLEAN: ['ai_developed'] }
+            },
+            localAction: 'validate_pr',
+            limit: 10,
+            id: 'latch-fail-closed-prless'
+        }, { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
+
+        assert.deepEqual(items.map(function (i) { return i.key; }), ['gh-100'],
+            'the pr-less issue is EXCLUDED — an unknown merge state never satisfies a latch over CLEAN');
+    });
+
+    test('latch guard fails closed on pr-less items — pr carrier whose status never resolved', function () {
+        // Same contract on the pr-carrier path: a latch-only query has no
+        // checks/mergeState/notMergeState guard, so queryPrs never fetches
+        // prStatus and item.pr stays null — the item must not sail through
+        // the latch. The linked issue carries the latch label; the pr-less
+        // head still stays unarmed.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [pr(950)];   // 'Closes #949', issue 949 latched
+            }
+        }, {}, {}, { 949: ['ai_developed'] });
+
+        var items = srcMod.query({
+            source: 'github',
+            query: {
+                type: 'pr',
+                mergeStateLatch: { CLEAN: ['ai_developed'] },
+                draft: false
+            },
+            localAction: 'validate_pr',
+            limit: 5,
+            id: 'latch-fail-closed-prcarrier'
+        }, { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
+
+        assert.equal(items.length, 0,
+            'a pr-less head is excluded even with the latch label on its issue — fail closed');
+    });
+
+    test('BLOCKED branch needs no latch and no issue fetch (guest-friendly, gh-759 contract)', function () {
+        // Only the BLOCKED PRs on the list. gh-829 review: load() always
+        // injects a label-less RETURNING stub, which would happily answer
+        // a regression that consults the issue on the BLOCKED path — so
+        // override it with a THROWING stub and pin the no-fetch half of
+        // the gh-757 contract for real (load()'s tools merge lets a caller
+        // override the default stub).
+        var srcMod = load({
+            github_list_prs: function () {
+                return [pr(900, [], 'BLOCKED', 'vendor-guest'), pr(901, [], 'BLOCKED')];
+            },
+            github_get_issue: function () {
+                throw new Error('latch must not fetch the issue on the BLOCKED path');
+            }
+        }, {}, {
+            900: { number: 900, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', mergeable: false },
+            901: { number: 901, state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', mergeable: false }
+        });
+        var items = srcMod.query(Object.assign({}, RULE, { limit: 10 }),
+            { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
+        assert.deepEqual(items.map(function (i) { return i.key; }), ['pr-900', 'pr-901'],
+            'the mergeStateLatch is inert on BLOCKED — guests keep the validation dispatch');
     });
 });
