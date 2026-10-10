@@ -41,27 +41,43 @@ var RUNTIME_ARTIFACT_PATHS = [
 ];
 
 /**
- * Untrack command for already-poisoned branches: removes the artifacts from
- * the index if tracked, tolerating every name being absent. `--cached` is
- * required — plain `git rm` refuses locally-modified files, and these logs
- * are always being appended.
- *
- * gh-683 hardening: the command names ONLY paths git actually tracks —
- * `git ls-files` feeds the rm through a while-read, so an empty result
- * (nothing tracked, the normal case) is a true no-op that exits 0, and no
- * untracked path is ever handed to `git rm` in any form. The old shape
- * (`git rm -r --cached --ignore-unmatch <all paths>` naming every artifact
- * explicitly) is empirically a safe no-op for ignored-untracked paths too,
- * but it names them — this form cannot be broken by any future guard on the
- * rm side either. Still one shell command, so call counts stay identical
- * for tests. Runtime paths never contain spaces (controlled names), so the
- * unquoted ls-files/while-read pairing is safe; [ -n "$p" ] guards a
- * trailing-newline artifact.
+ * Command that lists which runtime artifacts git actually TRACKS (gh-683: only tracked paths are ever
+ * handed to `git rm`). A plain `git ls-files -- <paths>` — no pipe, `;` or `&&` — so it passes the
+ * Java cli_execute_command shell-injection validator (epam/dm.ai#679: the old single-line
+ * `ls-files | while read … git rm` form was rejected there on every run).
  */
-function buildUntrackCommand() {
-    return 'git ls-files -- ' + RUNTIME_ARTIFACT_PATHS.join(' ') +
-        ' | while IFS= read -r p; do [ -n "$p" ] && ' +
-        'git rm -r --cached --ignore-unmatch -- "$p"; done';
+function buildTrackedArtifactsCommand() {
+    return 'git ls-files -- ' + RUNTIME_ARTIFACT_PATHS.join(' ');
+}
+
+/**
+ * `git rm --cached` for an explicit list of tracked paths (`--cached` is required — plain `git rm`
+ * refuses locally-modified files, and these logs are always being appended). Paths are quoted.
+ */
+function buildUntrackPathsCommand(paths) {
+    return 'git rm -r --cached --ignore-unmatch -- ' + (paths || []).map(function (p) {
+        return '"' + p + '"';
+    }).join(' ');
+}
+
+/**
+ * Untracks already-poisoned runtime artifacts: lists the tracked ones, then removes only those from
+ * the index. Nothing tracked (the normal case) = exactly ONE command (the listing) and no rm, so an
+ * untracked path is never named to `git rm`. Two plain commands instead of one shell pipeline, so the
+ * same code runs under the Java validator and the Dart bridge.
+ *
+ * @param {function(string): *} run executes a command string (the site's own wrapper, in the right
+ *        working directory) and returns its output; may throw — callers keep their own try/catch
+ * @returns {string[]} the paths that were untracked (empty when nothing was tracked)
+ */
+function untrackRuntimeArtifacts(run) {
+    var listed = String(run(buildTrackedArtifactsCommand()) || '');
+    var tracked = listed.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(function (l) {
+        return l && RUNTIME_ARTIFACT_PATHS.some(function (a) { return l === a || l.indexOf(a + '/') === 0; });
+    });
+    if (tracked.length === 0) return [];
+    run(buildUntrackPathsCommand(tracked));
+    return tracked;
 }
 
 /**
@@ -153,7 +169,9 @@ function isRuntimeArtifactStatusLine(line) {
 
 module.exports = {
     RUNTIME_ARTIFACT_PATHS: RUNTIME_ARTIFACT_PATHS,
-    buildUntrackCommand: buildUntrackCommand,
+    buildTrackedArtifactsCommand: buildTrackedArtifactsCommand,
+    buildUntrackPathsCommand: buildUntrackPathsCommand,
+    untrackRuntimeArtifacts: untrackRuntimeArtifacts,
     buildExclusionPathspecs: buildExclusionPathspecs,
     buildStagingPathspecs: buildStagingPathspecs,
     isRuntimeArtifactStatusLine: isRuntimeArtifactStatusLine
