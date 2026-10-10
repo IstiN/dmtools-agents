@@ -440,6 +440,22 @@
           "workflowRef": "{branch}"
         },
         {
+          "description": "gh-840 FAIL-CLOSED agent:rework consumption (live dmtools-agents PR #826 / gh-825, 2026-10-10 ~10:00Z): the label was CONSUMED — rework-on-label's consumeLabels fired (dispatch accepted, or the gh-715 cross-anchor suppression while a REVIEW leg held the other anchor) — yet no rework leg ever ran, no push, 4/6 machine threads unresolved, no closing bookkeeping: 4h+ hang, because every re-arm path is withheld in this state (gh-806 latch, gh-807 verdict gate, agent:review notLabels). This sweep matches the consumed shape — machine-authored PR, UNRESOLVED review threads, NO agent:rework label — and restores the arm when the consumption is proven bogus: a machine-authored consume/restore audit marker exists (rework-on-label's consumption paths stamp one per gh-840), the head did NOT advance past the consumed head (a real push is the close marker), no rework leg is in flight (gh-806 latch + active leg-run rollup), and the state stayed quiet past staleMinutes (default 30 ≈ 6 ticks — the AC1 bound). The gh-807 verdict gate still applies (verdict semantics untouched — non-goal) and only MACHINE-authored unresolved threads count (gh-744: human-thread-only PRs are untouched). Convergent: restore → rework-on-label re-dispatches the leg → a real close pushes (head advances) or resolves the threads → the sweep goes quiet; a re-consumed-without-work arm re-enters the same bounded cycle via the restore markers. limit 5: pure label writes + comments.",
+          "source": "github",
+          "query": {
+            "type": "pr",
+            "notLabels": [
+              "agent:rework"
+            ],
+            "threadsResolved": false,
+            "prMachineAuthor": true
+          },
+          "localAction": "restore_rework_arm",
+          "staleMinutes": 30,
+          "limit": 5,
+          "id": "rework-arm-restore"
+        },
+        {
           "id": "develop-done",
           "source": "github",
           "description": "Machine-loop completion backfill: an open issue with an open+green MACHINE-authored PR gets ai_developed, which arms review-after-dev. Machine-only (prMachineAuthor) so external PRs never enter the review loop through the backfill; no `in progress` requirement — issues whose dev leg predates the status-label convention (live: fa #503 / PR #676) must still be picked up. Idempotent: ai_developed in notLabels.",

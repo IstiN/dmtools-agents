@@ -324,6 +324,7 @@ function makeSmAgent(opts) {
             './common/machineAuthor.js': machineAuthorModule,
             './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {}),
             './common/reworkLatch.js': loadModule('js/common/reworkLatch.js', makeRequire({}), {}),
+            './common/reworkConsumption.js': loadModule('js/common/reworkConsumption.js', makeRequire({}), {}),
             './common/validationLiveness.js': loadModule('js/common/validationLiveness.js', makeRequire({}), {}),
             './common/redConvergence.js': loadModule('js/common/redConvergence.js', makeRequire({}), {}),
             './common/smProvider.js': {
