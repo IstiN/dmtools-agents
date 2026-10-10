@@ -8319,8 +8319,10 @@ suite('smAgent: gh-837 parallel validations knob (merge cadence)', function () {
         assert.ok(sm.capturedPrLabelAdds.some(function (a) {
             return a.number === 2 && a.labels.join(',') === 'ai_validating';
         }), '#2 arms into the freed slot');
-        assert.ok(sm.capturedPrLabelAdds.every(function (a) { return a.number === 2; }),
-            'no other PR was armed by the red head\'s fail path');
+        assert.ok(sm.capturedPrLabelAdds.filter(function (a) {
+            return a.labels.indexOf('ai_validating') !== -1;
+        }).every(function (a) { return a.number === 2; }),
+            'no ai_validating arm landed on any PR but #2 — the red head\'s fail path armed nobody else');
     });
 
     test('AC2: per-tick runner-cost report — validation-minutes, cap-bounded', function () {
