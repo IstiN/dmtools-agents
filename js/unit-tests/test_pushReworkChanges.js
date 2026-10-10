@@ -2053,13 +2053,14 @@ suite('pushReworkChanges.action — no-fix rework is not a success (agents#827)'
         return { result: result, resolved: resolved, moved: moved, comments: comments, removed: removed };
     }
 
-    test('open threads + no production change: failure, nothing resolved, ticket not moved, loud comment', function() {
+    test('open threads + no production change: BLOCKED — nothing resolved, ticket moved to Blocked, response.md posted', function() {
         var r = run('');
         assert.equal(r.result.success, false);
-        assert.ok(String(r.result.error).indexOf('no code changes') !== -1, String(r.result.error));
+        assert.equal(r.result.blocked, true);
         assert.equal(r.resolved.length, 0, 'threads must stay open');
-        assert.equal(r.moved.length, 0, 'ticket must not be advanced');
-        assert.ok(r.comments.some(function(c) { return c.indexOf('NOT resolved') !== -1; }), JSON.stringify(r.comments));
+        assert.deepEqual(r.moved.map(function(m) { return m.statusName; }), ['Blocked'], 'only the Blocked move, never In Review');
+        assert.ok(r.comments.some(function(c) { return c.indexOf('blocked') !== -1 && c.indexOf('NOT resolved') !== -1; }), JSON.stringify(r.comments));
+        assert.ok(r.comments.some(function(c) { return c.indexOf('Fix summary long enough') !== -1; }), 'the agent response.md is the explanation');
     });
 
     test('a real production change keeps the normal flow (guard does not fire)', function() {
