@@ -1989,6 +1989,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // invisible, mutexExcludeSelf honored — a self-holding
                 // recovery candidate drains the stack, #577); fails OPEN
                 // on probe error — the query-level mutex still guards the
+                // common case. The probe sits just ABOVE each arm site
+                // (review #703 💡): candidates parked/skipped by the cheap
+                // guards below never pay the uncached read.
                 if (rule.skipIfValidatedHead && vProbe &&
                     (ticket.labels || []).indexOf('ai_validated') !== -1 &&
                     vProbe.green &&
