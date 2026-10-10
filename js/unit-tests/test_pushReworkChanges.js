@@ -1985,3 +1985,87 @@ suite('pushReworkChanges.action — completion live re-check wiring (gh-799 AC5 
         assert.contains(text, 'appeared mid-run');
     });
 });
+
+suite('pushReworkChanges — no-fix rework guard (agents#827)', function() {
+    function load(diffOut, baseFile, threads) {
+        var cmds = [];
+        var loaded = loadPushReworkChangesForAction({
+            cli_execute_command: function(a) { cmds.push(a.command); if (a.command.indexOf('git diff --name-only') === 0) { if (diffOut === 'THROW') throw new Error('git failed'); return diffOut; } return ''; },
+            file_read: function(a) {
+                var p = a && (a.path || a);
+                if (p.indexOf('rework_base_head.txt') !== -1) { if (baseFile === null) throw new Error('nope'); return baseFile; }
+                if (p.indexOf('pr_discussions_raw.json') !== -1) return JSON.stringify({ threads: threads });
+                return null;
+            }
+        });
+        return { mod: loaded.mod, cmds: cmds };
+    }
+    var BASE = 'a'.repeat(40);
+
+    test('production file changed vs the pass start head => real fix (true)', function() {
+        var l = load('src/App.java\n', BASE, []);
+        assert.equal(l.mod.hasRealCodeChanges('T-1', {}), true);
+        assert.ok(l.cmds[0].indexOf("':!outputs'") !== -1 && l.cmds[0].indexOf(BASE) !== -1, l.cmds[0]);
+    });
+    test('only housekeeping (outputs/, WIP auto-save) => no real change (false)', function() {
+        assert.equal(load('', BASE, []).mod.hasRealCodeChanges('T-1', {}), false);
+    });
+    test('unknown base head (old setup / unreadable / bad sha) or git error => null (fail open)', function() {
+        assert.equal(load('x', null, []).mod.hasRealCodeChanges('T-1', {}), null);
+        assert.equal(load('x', 'not-a-sha', []).mod.hasRealCodeChanges('T-1', {}), null);
+        assert.equal(load('THROW', BASE, []).mod.hasRealCodeChanges('T-1', {}), null);
+    });
+});
+
+suite('pushReworkChanges.action — no-fix rework is not a success (agents#827)', function() {
+    var BASE = 'b'.repeat(40);
+    function run(diffOut) {
+        var resolved = [], moved = [], comments = [], removed = [];
+        var loaded = loadPushReworkChangesForAction({
+            cli_execute_command: function(a) {
+                if (a.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+                if (a.command.indexOf('git ls-remote --heads origin') === 0) return 'abc\trefs/heads/bug/PROJ-123\n';
+                if (a.command.indexOf('git diff --name-only') === 0) return diffOut;
+                return '';
+            },
+            file_read: function(a) {
+                var p = a && (a.path || a);
+                if (p.indexOf('rework_setup_failed.md') !== -1) throw new Error('nope');
+                if (p.indexOf('pr_info.md') !== -1) return '**Branch**: `bug/PROJ-123` → `develop`';
+                if (p.indexOf('rework_base_head.txt') !== -1) return BASE;
+                if (p.indexOf('pr_discussions_raw.json') !== -1) {
+                    return JSON.stringify({ threads: [{ threadId: 'T1', rootCommentId: 11, resolved: false }] });
+                }
+                return null;
+            },
+            jira_move_to_status: function(a) { moved.push(a); },
+            jira_remove_label: function(a) { removed.push(a); }
+        }, { scm: {
+            addComment: function(n, body) { comments.push(body); },
+            resolveThread: function(n, t) { resolved.push(t); },
+            replyToThread: function() {}
+        } });
+        var result = loaded.mod.action({
+            ticket: { key: 'PROJ-123', fields: { labels: [] } },
+            response: 'Fix summary long enough to be a meaningful rework completion summary.',
+            customParams: {}
+        });
+        return { result: result, resolved: resolved, moved: moved, comments: comments, removed: removed };
+    }
+
+    test('open threads + no production change: failure, nothing resolved, ticket not moved, loud comment', function() {
+        var r = run('');
+        assert.equal(r.result.success, false);
+        assert.ok(String(r.result.error).indexOf('no code changes') !== -1, String(r.result.error));
+        assert.equal(r.resolved.length, 0, 'threads must stay open');
+        assert.equal(r.moved.length, 0, 'ticket must not be advanced');
+        assert.ok(r.comments.some(function(c) { return c.indexOf('NOT resolved') !== -1; }), JSON.stringify(r.comments));
+    });
+
+    test('a real production change keeps the normal flow (guard does not fire)', function() {
+        var r = run('src/App.java\n');
+        assert.equal(r.result.success, true);
+        assert.equal(r.comments.filter(function(c) { return c.indexOf('NOT resolved') !== -1; }).length, 0);
+    });
+});
+
