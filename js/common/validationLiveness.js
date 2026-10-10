@@ -191,12 +191,79 @@ function staleCancelMarkerLine(headSha, atIso) {
         ' \u2014 stale base at ' + (atIso || '');
 }
 
+// ── Ghost-guard markers (gh-848) ───────────────────────────────────────────
+//
+// The gh-748 twin-guard cancel path must never cancel a run before its jobs
+// materialized — a queued cancel orphans the run's already-registered
+// check-runs as `in_progress` ghosts forever (no run to re-run, no API to
+// conclude them with the tick PAT) and the merge gate holds on the dead
+// checks indefinitely (live fa #1457 five ghost cycles / #1520, ghosts
+// #4-#6, 2026-10-10). One marker line per head records the two ghost-guard
+// events durably on the PR — same bookkeeping-only contract as the markers
+// above (gh-846/gh-755 parity: nothing tick-side consumes them; `cancelled`
+// is never a verdict, no fail-validation / zombie re-dispatch keys on them):
+//
+//   ⏸ ghost-guard defer <fullHeadSha> — run <id> still queued at <iso>
+//   🧹 ghost-guard clean <fullHeadSha> — <N> orphaned check-run(s) concluded at <iso>
+//
+// A head can sit queued across MANY ticks before its jobs materialize, and
+// the audit poster dedupes per (event, head) against these markers — exactly
+// ONE marker comment per head, never a comment per tick.
+
+var GHOST_GUARD_DEFER_RE = /⏸ ghost-guard defer ([0-9a-f]{7,40}) — run (\d+) still queued at (\S+)/g;
+var GHOST_GUARD_CLEAN_RE = /🧹 ghost-guard clean ([0-9a-f]{7,40}) — (\d+) orphaned check-run\(s\) concluded at (\S+)/g;
+
+function ghostGuardDeferMarkerLine(headSha, runId, atIso) {
+    return '⏸ ghost-guard defer ' + headSha +
+        ' — run ' + runId + ' still queued at ' + (atIso || '');
+}
+
+function ghostGuardCleanMarkerLine(headSha, count, atIso) {
+    return '🧹 ghost-guard clean ' + headSha +
+        ' — ' + count + ' orphaned check-run(s) concluded at ' + (atIso || '');
+}
+
+/**
+ * Aggregate ghost-guard marker lines over comment bodies →
+ * { deferred: { <fullSha>: <newest marker epoch ms> },
+ *   cleaned:  { <fullSha>: <newest marker epoch ms> } }.
+ * The audit poster treats a head already present for an event as recorded —
+ * that is the one-marker-per-head dedupe. Unparsable timestamps degrade to
+ * absent entries (a duplicate marker is audit noise, never a functional
+ * state).
+ */
+function ghostGuardMarks(bodies) {
+    var out = { deferred: {}, cleaned: {} };
+    (bodies || []).forEach(function (body) {
+        var s = String(body == null ? '' : body);
+        var m;
+        GHOST_GUARD_DEFER_RE.lastIndex = 0;
+        while ((m = GHOST_GUARD_DEFER_RE.exec(s)) !== null) {
+            var atMs = Date.parse(m[3]);
+            if (!isNaN(atMs) && (out.deferred[m[1]] === undefined || atMs > out.deferred[m[1]])) {
+                out.deferred[m[1]] = atMs;
+            }
+        }
+        GHOST_GUARD_CLEAN_RE.lastIndex = 0;
+        while ((m = GHOST_GUARD_CLEAN_RE.exec(s)) !== null) {
+            var atMs2 = Date.parse(m[3]);
+            if (!isNaN(atMs2) && (out.cleaned[m[1]] === undefined || atMs2 > out.cleaned[m[1]])) {
+                out.cleaned[m[1]] = atMs2;
+            }
+        }
+    });
+    return out;
+}
+
 module.exports = {
     classify: classify,
     zombieMarks: zombieMarks,
     zombieMarkerLine: zombieMarkerLine,
     zombieCapOf: zombieCapOf,
     zombieWindowMsOf: zombieWindowMsOf,
+    ghostGuardDeferMarkerLine: ghostGuardDeferMarkerLine,
+    ghostGuardCleanMarkerLine: ghostGuardCleanMarkerLine,
+    ghostGuardMarks: ghostGuardMarks,
     ZOMBIE_MARKER_RE: ZOMBIE_MARKER_RE,
     ACTIVE_RUN_STATES: ACTIVE_RUN_STATES,
     STALE_CANCEL_MARKER_RE: STALE_CANCEL_MARKER_RE,

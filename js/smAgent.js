@@ -42,6 +42,14 @@
  *   head, so it is only live while redHeadCap >= emptyLapMax + 2 (3 >= 1 + 2 at the
  *   defaults — with the old emptyLapMax=2 the arm-side red-head skip killed the 4th
  *   same-head validation first and the cap was dead code).
+ *   jobParams.cancelMaterializeTimeoutMs (default 45000, gh-848) — the
+ *   twin-guard cancel polls a selected stale run until its jobs materialize
+ *   (run.status != 'queued') up to this long before cancelling; still
+ *   queued → the cancel is DEFERRED to the next tick. A queued cancel
+ *   orphans the run's registered check-runs as `in_progress` ghosts that
+ *   seize the merge gate forever (live fa #1457/#1520, ghosts #4-#6).
+ *   0 restores the legacy cancel-immediately behavior. jobParams.
+ *   cancelMaterializePollMs (default 3000, gh-848) — the poll interval.
  *   jobParams.dispatchRaceGraceMs (default 60000, gh-748) — how long a COMPLETED
  *   run on the head still counts as "may have just ordered CI" for the validate_pr
  *   dispatch-race guard: before dispatching, the arm also counts ANY run on the
@@ -1802,11 +1810,16 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 var cancelStaleAfterRefreshUb = function () {
                     var newHeadUb = freshHeadSha(effectiveRepoInfo, ticket.prNumber);
                     if (!newHeadUb) return; // fail closed — retried next refresh
-                    var staleCancelledUb = cancelStaleDispatchedRuns(
+                    var ubCancelResult = cancelStaleDispatchedRuns(
                         effectiveRepoInfo,
                         rule.ciWorkflow ||
                             ((RUN_JOB_PARAMS || {}).ciWorkflow) || 'quality.yml',
                         ticket.branch, newHeadUb);
+                    // gh-848 audit: deferred cancels / belt-cleaned ghosts
+                    // get their own one-marker-per-head bookkeeping.
+                    postGhostGuardAudit(effectiveRepoInfo, ticket.prNumber,
+                                        ubCancelResult);
+                    var staleCancelledUb = ubCancelResult.cancelled;
                     if (!staleCancelledUb.length) return;
                     if (!DRY) {
                         try {
@@ -2210,8 +2223,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // dispatched run on an older head of THIS branch is pure
                 // waste — cancel before arming the fresh one.
                 if (vHead0) {
-                    cancelStaleDispatchedRuns(effectiveRepoInfo, vCiWf,
-                                              ticket.branch, vHead0);
+                    var vCancelResult = cancelStaleDispatchedRuns(
+                        effectiveRepoInfo, vCiWf, ticket.branch, vHead0);
+                    // gh-848 audit: deferred cancels / belt-cleaned ghosts
+                    // get their own one-marker-per-head bookkeeping.
+                    postGhostGuardAudit(effectiveRepoInfo, ticket.prNumber,
+                                        vCancelResult);
                 }
                 dispatchCiWorkflow(ticket.branch);
                 var vHead = vHead0;
@@ -3807,18 +3824,22 @@ function applyRuleOverrides(rules, overrides) {
 // push-triggered runs of the CI workflow on this branch. The
 // head_branch === branch filter keeps the merge winner's own post-merge
 // MAIN CI out of scope (its push runs carry head_branch === 'main').
-// Returns the cancelled runs ([]) for the caller's marker bookkeeping.
 // gh-748 twin-guard parity: only ACTIVE runs are selected, so a run we
 // already cancelled reads completed/cancelled and can never be re-selected
 // — cancel-only-once is structural, the reason is logged per cancel.
+// gh-848: returns { cancelled, deferred, cleaned } — cancelled carries
+// the gh-846 marker bookkeeping; deferred the still-queued runs whose
+// cancel was deferred to the next tick; cleaned the heads where the
+// belt concluded orphaned check-runs after a cancel.
 function cancelStaleDispatchedRuns(repoInfo, ciWorkflow, branch, currentSha) {
-    if (!branch || !currentSha) return [];
+    var empty = { cancelled: [], deferred: [], cleaned: [] };
+    if (!branch || !currentSha) return empty;
     if (DRY) {
         // Live bug doctrine (fa 2026-09-27): DRY means NO side effects —
         // a dry tick must not cancel live queued runs.
         console.log('  🧪 [dry] stale-cancel skipped (' + ciWorkflow + ' @ ' +
                     branch + ', head ' + String(currentSha).slice(0, 7) + ')');
-        return [];
+        return empty;
     }
     try {
         var list = [];
@@ -3839,30 +3860,267 @@ function cancelStaleDispatchedRuns(repoInfo, ciWorkflow, branch, currentSha) {
                    (r.status === 'queued' || r.status === 'in_progress' ||
                     r.status === 'waiting' || r.status === 'pending');
         });
-        var cancelled = [];
+        var result = { cancelled: [], deferred: [], cleaned: [] };
+        // gh-848 guard window (jobParams-tunable, header doc).
+        var matTimeoutMs = cancelMaterializeTimeoutMs(RUN_JOB_PARAMS);
+        var matPollMs = cancelMaterializePollMs(RUN_JOB_PARAMS);
         stale.forEach(function (r) {
             try {
+                // gh-848 GUARD: never cancel a run whose jobs have not
+                // materialized yet. The run's check-suite registers at
+                // dispatch time while jobs appear later; GitHub only
+                // concludes a cancelled run's check-runs `cancelled`
+                // when jobs exist. A cancel in the queued window leaves
+                // `in_progress` ghosts with an unresolvable run link —
+                // no run to re-run, no API to conclude them with the
+                // tick PAT — and the merge gate holds on them forever
+                // (live fa #1457 five ghost cycles / #1520, ghosts
+                // #4-#6, 2026-10-10). Poll until status != 'queued'
+                // within a short timeout; still queued (or the probe is
+                // degenerate) → DEFER to the next tick — one more tick
+                // of queue waste is always cheaper than a seized gate.
+                // AC3: the twin-guard still suppresses the duplicate —
+                // deferred, safely.
+                if (matTimeoutMs > 0 &&
+                    !waitForRunMaterialized(repoInfo, r.id,
+                                            matTimeoutMs, matPollMs)) {
+                    result.deferred.push(r);
+                    console.log('  ⏸️  gh-848: deferred cancel of stale run ' +
+                                r.id + ' on superseded head ' +
+                                String(r.head_sha).slice(0, 7) +
+                                ' — jobs not materialized yet (retried next tick)');
+                    return;
+                }
                 cli_execute_command({
                     command: 'gh api -X POST repos/' +
                         repoInfo.owner + '/' + repoInfo.repo +
                         '/actions/runs/' + r.id + '/cancel || true'
                 });
-                cancelled.push(r);
+                result.cancelled.push(r);
                 console.log('  🛑 cancelled stale validation run ' + r.id +
                             ' on superseded head ' +
                             String(r.head_sha).slice(0, 7) + ' (' +
                             branch + ')');
+                // gh-848 BELT: after ANY cancel, conclude whatever check
+                // runs of this run are still pending on its head — a
+                // materialized cancel normally concludes them all
+                // `cancelled` on its own; the belt mops up the residual
+                // orphans (propagation lag, edge registrations) so no
+                // `in_progress` ghost can survive the cancel path.
+                var concluded = concludeOrphanedCheckRuns(repoInfo, r);
+                if (concluded > 0 && r.head_sha) {
+                    result.cleaned.push({ head_sha: r.head_sha,
+                                          run_id: r.id, count: concluded });
+                }
             } catch (e2) {
                 console.warn('  ⚠️  cancel of stale run ' + r.id +
                              ' failed: ' + (e2.message || e2));
             }
         });
-        return cancelled;
+        return result;
     } catch (e) {
         // Fail OPEN: a stale-cancel probe error must not wedge the arm —
         // worst case is the wasted runs we are trying to prevent.
         console.warn('  ⚠️  stale-cancel probe failed: ' + (e.message || e));
-        return [];
+        return empty;
+    }
+}
+
+// ── gh-848 ghost-guard helpers (twin-guard cancel path) ───────────────
+
+function cancelMaterializeTimeoutMs(jobParams) {
+    var n = (jobParams || {}).cancelMaterializeTimeoutMs;
+    n = typeof n === 'string' ? parseInt(n, 10) : n;
+    return (typeof n === 'number' && !isNaN(n) && n >= 0)
+        ? Math.floor(n) : 45 * 1000;
+}
+
+function cancelMaterializePollMs(jobParams) {
+    var n = (jobParams || {}).cancelMaterializePollMs;
+    n = typeof n === 'string' ? parseInt(n, 10) : n;
+    return (typeof n === 'number' && !isNaN(n) && n >= 0)
+        ? Math.floor(n) : 3 * 1000;
+}
+
+function sleepMilliseconds(ms) {
+    ms = parseInt(ms, 10) || 0;
+    if (ms <= 0) return;
+    // Java bridge first (dmtools GraalJS); busy-wait fallback for the
+    // node test harness (same pattern as aiTeammateTokenUsageReporter).
+    if (typeof Java !== 'undefined' && Java.type) {
+        try {
+            Java.type('java.lang.Thread').sleep(ms);
+            return;
+        } catch (e) {}
+    }
+    var end = Date.now() + ms;
+    while (Date.now() < end) {}
+}
+
+// gh-848 guard poll: true once the run's jobs materialized (status !=
+// 'queued'), false when the timeout expires while still queued. A probe
+// error or an unreadable payload ALSO defers (returns false) — the
+// unknown state must never be cancelled blind: deferral costs one tick
+// of queue waste; a blind cancel can cost the merge gate.
+function waitForRunMaterialized(repoInfo, runId, timeoutMs, pollMs) {
+    var deadline = Date.now() + timeoutMs;
+    while (true) {
+        var status = null;
+        try {
+            var res = cli_execute_command({
+                command: 'gh api repos/' + repoInfo.owner + '/' +
+                         repoInfo.repo + '/actions/runs/' + runId
+            });
+            var run = mcpParse((res || {}).output ||
+                               (res || {}).stdout || res);
+            status = run && run.status ? String(run.status).toLowerCase() : null;
+        } catch (e) {
+            console.warn('  ⚠️  gh-848 materialization probe failed for run ' +
+                         runId + ': ' + (e.message || e) + ' — cancel deferred');
+            return false;
+        }
+        if (status !== null && status !== 'queued') return true;
+        if (status === null) {
+            // Unreadable payload — same fail-defer contract as a probe
+            // error above.
+            console.warn('  ⚠️  gh-848 materialization probe for run ' + runId +
+                         ' returned no status — cancel deferred');
+            return false;
+        }
+        if (Date.now() >= deadline) return false;
+        sleepMilliseconds(pollMs);
+    }
+}
+
+// gh-848 belt: conclude the cancelled run's check-runs that are still
+// pending (queued/in_progress, no conclusion) on its head, so no ghost
+// can survive the cancel path. The head's check-run rollup is the
+// bridge read (PAT-readable); a check-run belongs to this run when its
+// details_url/html_url backs the run's id (checkRunZombies.runIdOf —
+// the established run-link parser). Concluding rides the Checks API
+// PATCH, which requires the GitHub App token — the tick PAT gets 403
+(verified live) — so the GH_TOKEN swap mirrors
+// stampValidationChecksForModule (jobParams.silentToken in, sourceToken
+// restored). A degrade read ([] on the established null-on-error
+// contract) simply skips the belt — the gh-842/843 cure-side sweep
+// still owns the general ghost cleanup; this belt only hardens the
+// cancel path itself. Returns the number of check-runs concluded.
+function concludeOrphanedCheckRuns(repoInfo, cancelledRun) {
+    if (!cancelledRun || !cancelledRun.head_sha) return 0;
+    var checkRuns = headCheckRunsSafe(repoInfo, cancelledRun.head_sha);
+    if (!checkRuns || !checkRuns.length) return 0;
+    var orphans = [];
+    checkRuns.forEach(function (cr) {
+        if (!cr) return;
+        if (!checkRunZombiesModule.isPendingCheckRun(cr)) return;
+        if (checkRunZombiesModule.runIdOf(cr) !== String(cancelledRun.id)) return;
+        orphans.push(cr);
+    });
+    if (!orphans.length) return 0;
+    console.log('  🧹 gh-848 belt: ' + orphans.length +
+                ' orphaned check-run(s) of run ' + cancelledRun.id +
+                ' still pending on head ' +
+                String(cancelledRun.head_sha).slice(0, 7) +
+                ' — concluding them cancelled');
+    var appToken = (RUN_JOB_PARAMS || {}).silentToken;
+    var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
+    var swapped = false;
+    if (appToken) {
+        try {
+            set_env_variable('GH_TOKEN', appToken);
+            swapped = true;
+        } catch (eSwap) {
+            console.warn('  ⚠️  gh-848 token swap failed, belt uses the PAT ' +
+                         '(will 403): ' + (eSwap.message || eSwap));
+        }
+    }
+    var concluded = 0;
+    try {
+        orphans.forEach(function (cr) {
+            try {
+                cli_execute_command({
+                    command: 'gh api -X PATCH repos/' + repoInfo.owner +
+                        '/' + repoInfo.repo + '/check-runs/' + cr.id +
+                        ' -f status=completed -f conclusion=cancelled'
+                });
+                concluded++;
+            } catch (e2) {
+                console.warn('  ⚠️  gh-848 belt: concluding check-run ' +
+                             cr.id + ' failed: ' + (e2.message || e2));
+            }
+        });
+    } finally {
+        if (swapped && sourceTok) {
+            try { set_env_variable('GH_TOKEN', sourceTok); } catch (e3) {}
+        }
+    }
+    return concluded;
+}
+
+// gh-848 audit: ONE marker comment per head per ghost-guard event. A
+// head can sit queued across many ticks before its jobs materialize;
+// without dedupe the audit would churn a comment per tick. Existing
+// markers are re-read from the PR comments (validationLiveness.
+// ghostGuardMarks) and only new (event, head) pairs are posted. Marker
+// read failure posts anyway (a duplicate marker is audit noise; a
+// swallowed defer record would leave operators blind). Bookkeeping-only
+// (gh-755 parity): no tick-side machinery consumes these markers.
+function postGhostGuardAudit(repoInfo, prNumber, cancelResult) {
+    if (DRY || !prNumber || !cancelResult) return;
+    var wanted = [];
+    var seen = {};
+    (cancelResult.deferred || []).forEach(function (r) {
+        var sha = String((r && r.head_sha) || '');
+        if (!sha || seen['d:' + sha]) return;
+        seen['d:' + sha] = true;
+        wanted.push({ kind: 'd', sha: sha, line: validationLivenessModule
+            .ghostGuardDeferMarkerLine(sha, (r && r.id) || '?',
+                                       new Date().toISOString()) });
+    });
+    (cancelResult.cleaned || []).forEach(function (c) {
+        var sha = String((c && c.head_sha) || '');
+        if (!sha || seen['c:' + sha]) return;
+        seen['c:' + sha] = true;
+        wanted.push({ kind: 'c', sha: sha, line: validationLivenessModule
+            .ghostGuardCleanMarkerLine(sha, (c && c.count) || 0,
+                                       new Date().toISOString()) });
+    });
+    if (!wanted.length) return;
+    var marks = { deferred: {}, cleaned: {} };
+    try {
+        var raw = github_get_pr_comments({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            pullRequestId: prNumber
+        });
+        var obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
+        var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+        var bodies = list.map(function (c) { return String((c && c.body) || ''); });
+        marks = validationLivenessModule.ghostGuardMarks(bodies);
+    } catch (e) {
+        console.warn('  ⚠️  ghost-guard marker read failed — posting ' +
+                     'without dedupe: ' + (e.message || e));
+    }
+    var fresh = wanted.filter(function (w) {
+        return w.kind === 'd' ? !marks.deferred[w.sha] : !marks.cleaned[w.sha];
+    });
+    if (!fresh.length) return;
+    try {
+        github_create_comment({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            number: prNumber,
+            body: fresh.map(function (w) { return w.line; }).join('\n') +
+                '\n\nGhost-guard bookkeeping (gh-848): a stale validation ' +
+                'run was left running because its jobs had not materialized ' +
+                'yet — a queued cancel orphans its check-runs as ' +
+                '`in_progress` ghosts and the merge gate holds on them ' +
+                'forever — and/or its orphaned check-runs were concluded ' +
+                '`cancelled` via the Checks API. `cancelled` is not a ' +
+                'verdict (gh-755): no fail-validation, no zombie ' +
+                're-dispatch is recorded for these heads.'
+        });
+    } catch (e2) {
+        console.warn('  ⚠️  ghost-guard marker comment failed: ' +
+                     (e2.message || e2));
     }
 }
 
