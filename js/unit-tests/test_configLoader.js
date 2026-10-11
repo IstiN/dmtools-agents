@@ -1083,3 +1083,80 @@ suite('configLoader.loadHookFn', function() {
     });
 
 });
+
+// ── {status.KEY[:Literal]} placeholders (agents#855) ──────────────────────────
+
+suite('configLoader.interpolateJql — status placeholders (agents#855)', function() {
+
+    function cfg(statuses, useConfigured) {
+        return { jira: { project: 'PRJ', parentTicket: 'PRJ-1', statuses: statuses || {}, useConfiguredStatusesInQueries: useConfigured } };
+    }
+
+    test('{status.KEY:Literal} resolves to the Literal by default — existing deployments send the same JQL', function() {
+        var jql = "project = {jiraProject} AND status in ('{status.PO_REVIEW:PO Review}')";
+        assert.equal(configLoaderModule.interpolateJql(jql, cfg({ PO_REVIEW: 'PO REVIEW' })),
+            "project = PRJ AND status in ('PO Review')");
+    });
+
+    test('even with jira.statuses overridden, the Literal wins unless the project opted in', function() {
+        var jql = "status in ('{status.PO_REVIEW:PO Review}')";
+        assert.equal(configLoaderModule.interpolateJql(jql, cfg({ PO_REVIEW: 'Active' })), "status in ('PO Review')");
+    });
+
+    test('opt-in (useConfiguredStatusesInQueries): the configured status replaces the Literal', function() {
+        var jql = "status in ('{status.PO_REVIEW:PO Review}')";
+        assert.equal(configLoaderModule.interpolateJql(jql, cfg({ PO_REVIEW: 'Active' }, true)), "status in ('Active')");
+    });
+
+    test('opt-in with no configured value for the key still falls back to the Literal', function() {
+        assert.equal(configLoaderModule.interpolateJql("status = '{status.NOPE:Fallback}'", cfg({}, true)), "status = 'Fallback'");
+    });
+
+    test('{status.KEY} without a Literal always uses the configured value; unknown key is left as is', function() {
+        assert.equal(configLoaderModule.interpolateJql("status = '{status.DONE}'", cfg({ DONE: 'Closed' })), "status = 'Closed'");
+        assert.equal(configLoaderModule.interpolateJql("status = '{status.UNKNOWN}'", cfg({})), "status = '{status.UNKNOWN}'");
+    });
+
+    test('single quotes inside a configured value are escaped for the quoted position', function() {
+        assert.equal(configLoaderModule.interpolateJql("status = '{status.X:a}'", cfg({ X: "Won't Fix" }, true)), "status = 'Won\\'t Fix'");
+    });
+
+    test('several placeholders and {jiraProject} resolve together; JQL without placeholders is untouched', function() {
+        var jql = "project = {jiraProject} AND status in ('{status.IN_REVIEW_PASSED:In Review - Passed}', '{status.IN_REVIEW_FAILED:In Review - Failed}')";
+        assert.equal(configLoaderModule.interpolateJql(jql, cfg({})),
+            "project = PRJ AND status in ('In Review - Passed', 'In Review - Failed')");
+        assert.equal(configLoaderModule.interpolateJql("status = 'Done'", cfg({ DONE: 'X' }, true)), "status = 'Done'");
+    });
+});
+
+suite('shipped SM rules: placeholder JQL resolves to the previous literal JQL (agents#855)', function() {
+
+    var defaults = { jira: { project: 'PRJ', parentTicket: 'PRJ-1', statuses: configModule.STATUSES } };
+
+    ['sm.json', 'sm_merge.json'].forEach(function(file) {
+        test(file + ': with default configuration every rule queries exactly what it queried before', function() {
+            var rules = JSON.parse(file_read({ path: file })).params.jobParams.rules;
+            var literalCount = 0;
+            rules.forEach(function(r) {
+                if (!r.jql) return;
+                var resolved = configLoaderModule.interpolateJql(r.jql, defaults);
+                assert.equal(resolved.indexOf('{status.'), -1, 'unresolved placeholder in: ' + resolved);
+                if (r.jql.indexOf('{status.') !== -1) literalCount++;
+            });
+            assert.ok(literalCount > 0, 'expected rules to use status placeholders');
+        });
+
+        test(file + ': overriding jira.statuses + opting in changes the queries, nothing stays on the old literal', function() {
+            var rules = JSON.parse(file_read({ path: file })).params.jobParams.rules;
+            var statuses = {};
+            Object.keys(configModule.STATUSES).forEach(function(k) { statuses[k] = 'X_' + k; });
+            var cfg = { jira: { project: 'PRJ', parentTicket: '', statuses: statuses, useConfiguredStatusesInQueries: true } };
+            rules.forEach(function(r) {
+                if (!r.jql || r.jql.indexOf('{status.') === -1) return;
+                var resolved = configLoaderModule.interpolateJql(r.jql, cfg);
+                assert.ok(resolved.indexOf('X_') !== -1, 'override not applied: ' + resolved);
+            });
+        });
+    });
+});
+

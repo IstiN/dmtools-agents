@@ -533,12 +533,44 @@ function formatTemplate(template, vars) {
 }
 
 /**
+ * Replaces `{status.KEY}` and `{status.KEY:Literal}` placeholders in a JQL template (agents#855).
+ *
+ * - `{status.KEY:Literal}` — the form used by the shipped SM rules. It resolves to the project's
+ *   `jira.statuses.KEY` ONLY when the project opted in with `jira.useConfiguredStatusesInQueries: true`;
+ *   otherwise it resolves to `Literal`, so every existing deployment sends byte-for-byte the same JQL as
+ *   before the placeholders existed. (Several `jira.statuses` values are transition NAMES, not status
+ *   names — e.g. PO_REVIEW 'PO REVIEW' reaches status 'PO Review' — so substituting them by default
+ *   would change what existing projects query.)
+ * - `{status.KEY}` (no literal) — always the configured/default `jira.statuses.KEY`.
+ * - An unknown KEY is left untouched, like every other unknown placeholder.
+ * The substituted value has single quotes escaped, since the rules put the placeholder inside quotes.
+ */
+function interpolateStatusPlaceholders(jql, config) {
+    var jiraCfg = (config && config.jira) || {};
+    var statuses = jiraCfg.statuses || {};
+    var useConfigured = jiraCfg.useConfiguredStatusesInQueries === true;
+    return String(jql).replace(/\{status\.([A-Za-z0-9_]+)(?::([^}]*))?\}/g, function (match, key, literal) {
+        var configured = statuses[key];
+        var hasLiteral = literal !== undefined;
+        var value;
+        if (hasLiteral) {
+            value = (useConfigured && configured) ? configured : literal;
+        } else if (configured) {
+            value = configured;
+        } else {
+            return match;
+        }
+        return String(value).replace(/'/g, "\\'");
+    });
+}
+
+/**
  * Interpolate JQL template placeholders using config.
- * Replaces {jiraProject} and {parentTicket}.
+ * Replaces {jiraProject}, {parentTicket} and {status.KEY[:Literal]} (see interpolateStatusPlaceholders).
  */
 function interpolateJql(jql, config) {
     if (!jql) return jql;
-    return formatTemplate(jql, {
+    return formatTemplate(interpolateStatusPlaceholders(jql, config), {
         jiraProject: config.jira.project,
         parentTicket: config.jira.parentTicket
     });
@@ -754,6 +786,7 @@ module.exports = {
     deepMerge: deepMerge,
     formatTemplate: formatTemplate,
     interpolateJql: interpolateJql,
+    interpolateStatusPlaceholders: interpolateStatusPlaceholders,
     formatBranchName: formatBranchName,
     resolveBranchName: resolveBranchName,
     resolvePRTargetBranch: resolvePRTargetBranch,
