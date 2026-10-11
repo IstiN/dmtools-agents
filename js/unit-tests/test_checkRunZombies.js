@@ -261,6 +261,22 @@ suite('checkRunZombies placeholders — detection (gh-852)', function () {
         assert.equal(out[0].reason, 'placeholder');
     });
 
+    test('the check-run id rides the placeholder entry (gh-857 in-place PATCH target)', function () {
+        // The conclusion PATCH needs the check-run id; a payload without
+        // one yields id null (the caller falls back to the gh-852 reset).
+        var stamp = cr({ id: 991234001, name: 'Quality gate', details_url: null,
+                         started_at: '2026-10-11T12:06:29Z' });
+        var out = cz.placeholders([stamp],
+                                  Date.parse('2026-10-11T12:10:00Z'), {});
+        assert.equal(out.length, 1);
+        assert.equal(out[0].id, 991234001);
+        var noId = cz.placeholders([cr({ name: 'Quality gate', details_url: null,
+                                         started_at: '2026-10-11T12:06:29Z' })],
+                                   Date.parse('2026-10-11T12:10:00Z'), {});
+        assert.equal(noId[0].id, null);
+        assert.ok(noId[0].id === null, 'id is exactly null, not undefined');
+    });
+
     test('a FRESH link-less stamp is NOT a placeholder — the dispatch may still materialize', function () {
         // Fail safe toward live: a bridge stamp of a dispatch that JUST
         // fired carries no run link for seconds — age is the only proof.

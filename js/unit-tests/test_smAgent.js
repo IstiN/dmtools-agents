@@ -2667,6 +2667,224 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
             'AC3: no fresh-sha refresh for a run-id ghost (not the placeholder shape)');
     });
 
+    // ── gh-857: in-place placeholder conclusion — the cheap cure ahead of ──
+    // the gh-852 fresh-sha reset (live fa #1457 fd1b9aa2: the placeholder
+    // 18:51:25 pinned the gate forever while the SM's own green stamp at
+    // 19:04:35 never overrode it — branch protection takes the LATEST
+    // check-run per (context, head), so the pending placeholder wins).
+    function gh857GreenRule() {
+        return { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                     notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'], checks: ['green'], draft: false },
+            localAction: 'validate_pr', limit: 1, id: 'revalidate-armed-green',
+            skipIfGreenCi: true };
+    }
+    var GH857_GREEN_RUN = { id: 38137997380, event: 'workflow_dispatch',
+        head_branch: 'ai/gh-857', status: 'completed', conclusion: 'success',
+        html_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38137997380',
+        created_at: '2026-10-11T12:08:00Z' };
+
+    test('validate_pr: gh-857 AC1 — a green head\'s placeholders are CONCLUDED in place (no fresh-sha reset, no dispatch)', function () {
+        // Live fa #1457 (head d29efb16): the dispatched run concluded
+        // success, the placeholder (pending, no run id) is the LATEST
+        // 'Quality gate' check-run and pins BLOCKED. The SM must PATCH the
+        // placeholder completed/success (output referencing the covering
+        // run) instead of burning a fresh-sha reset + a full CI dispatch.
+        var CUR = '857ac1857ac1857ac1857ac1857ac1857ac1857';
+        var checkRuns = { check_runs: [
+            { id: 991234001, name: 'Quality gate', status: 'in_progress', conclusion: null,
+              started_at: '2026-10-11T12:06:29Z' },          // PLACEHOLDER: no URL at all
+            { id: 991234003, name: 'static / gate', status: 'queued', conclusion: null,
+              html_url: 'https://github.com/IstiN/flutter_agent_harness/checks/no-run-id-here',
+              started_at: '2026-10-11T12:06:30Z' },          // SECOND placeholder (queued, link-less)
+            { id: 991234002, name: 'Quality gate', status: 'completed', conclusion: 'success',
+              started_at: '2026-10-11T12:08:00Z',
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38137997380' }
+        ] };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(1457, { branch: 'ai/gh-857', headSha: CUR,
+                                            labels: ['pr_approved', 'ai_validating'] })],
+                      commitCheckRuns: checkRuns,
+                      prComments: [],
+                      workflowApiRuns: [] },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('workflows/ci.yml/runs?head_sha=') !== -1) {
+                    return { workflow_runs: [GH857_GREEN_RUN] };
+                }
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    // Whole-head rollup: only the concluded green run —
+                    // NOTHING active behind the placeholder.
+                    return { workflow_runs: [GH857_GREEN_RUN] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return undefined;   // the would-be silent-update clone/push + dispatch
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', silentToken: 'app-token', sourceToken: 'src-token',
+            rules: [gh857GreenRule()] } });
+
+        var patches = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('-X PATCH') !== -1 &&
+                   c.command.indexOf('/check-runs/') !== -1; });
+        assert.equal(patches.length, 2,
+            'AC1: BOTH placeholder check-runs are PATCH-concluded exactly once');
+        assert.ok(patches.every(function (p) {
+            return p.command.indexOf('conclusion=success') !== -1; }),
+            'AC1: every conclusion mirrors the real green verdict');
+        assert.ok(patches.every(function (p) {
+            return p.command.indexOf('38137997380') !== -1; }),
+            'AC1: every output references the covering run');
+        // the workflow token (checks:write) rides the PATCH, not the PAT
+        assert.ok(sm.capturedEnvSets.some(function (e) {
+            return e.name === 'GH_TOKEN' && e.value === 'app-token'; }),
+            'AC1: the App token is swapped in for the checks:write PATCH');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh repo clone') !== -1; }).length, 0,
+            'AC1: no fresh-sha reset — the head stays, the gate unblocks in place');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; }).length, 0,
+            'AC1: no CI re-dispatch — the green verdict already covers the head');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'no reset marker — no reset was spent (the per-PR cap is untouched)');
+    });
+
+    test('validate_pr: gh-857 AC2 — a placeholder with a LIVE run on the head is never concluded', function () {
+        // Fail-safe: an active run on the head may still stamp the context —
+        // concluding its placeholder would fake a verdict over live work.
+        var CUR = '857ac2857ac2857ac2857ac2857ac2857ac2857';
+        var checkRuns = { check_runs: [
+            { id: 991235001, name: 'Quality gate', status: 'in_progress', conclusion: null,
+              started_at: '2026-10-11T12:06:29Z' }
+        ] };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(1457, { branch: 'ai/gh-857', headSha: CUR,
+                                            labels: ['pr_approved', 'ai_validating'] })],
+                      commitCheckRuns: checkRuns,
+                      prComments: [],
+                      workflowApiRuns: [
+                          { id: 38140000001, status: 'in_progress', conclusion: null,
+                            head_sha: CUR, event: 'push' }
+                      ] },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('workflows/ci.yml/runs?head_sha=') !== -1) {
+                    return { workflow_runs: [GH857_GREEN_RUN] };
+                }
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    // The WHOLE-head rollup carries the LIVE run behind
+                    // the pending placeholder.
+                    return { workflow_runs: [GH857_GREEN_RUN,
+                        { id: 38140000001, event: 'push', path: '.github/workflows/kicker.yml',
+                          head_branch: 'ai/gh-857', head_sha: CUR,
+                          status: 'in_progress', conclusion: null,
+                          created_at: '2026-10-11T12:09:00Z' }] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', 'repo': 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', silentToken: 'app-token', sourceToken: 'src-token',
+            rules: [gh857GreenRule()] } });
+
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('-X PATCH') !== -1; }).length, 0,
+            'AC2: no placeholder is concluded while a live run owns the head');
+    });
+
+    test('validate_pr: gh-857 AC3 — no green verdict on the head → placeholders are never concluded green', function () {
+        // Verdict mirror only: without a concluded-success dispatched run
+        // the SM has no green verdict to mirror — concluding a placeholder
+        // would fake a pass. The gh-852 fresh-sha reset remains the cure.
+        var CUR = '857ac3857ac3857ac3857ac3857ac3857ac3857';
+        var checkRuns = { check_runs: [
+            { id: 991236001, name: 'Quality gate', status: 'in_progress', conclusion: null,
+              started_at: '2026-10-11T12:06:29Z' }
+        ] };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(1457, { branch: 'ai/gh-857', headSha: CUR,
+                                            labels: ['pr_approved', 'ai_validating'] })],
+                      commitCheckRuns: checkRuns,
+                      prComments: [],
+                      workflowApiRuns: [] },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    // NO concluded dispatched run on this head at all.
+                    return { workflow_runs: [] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', silentToken: 'app-token', sourceToken: 'src-token',
+            rules: [gh857GreenRule()] } });
+
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('-X PATCH') !== -1; }).length, 0,
+            'AC3: nothing is concluded without a real green verdict');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh repo clone') !== -1; }).length, 1,
+            'AC3: the gh-852 fresh-sha reset still fires as the cure');
+    });
+
+    test('validate_pr: gh-857 — a 403-rejected PATCH logs the evidence and falls back to the gh-852 reset', function () {
+        // Ownership rules: the Actions app's check-runs may refuse PATCH by
+        // the workflow token (verified live for foreign-app check-runs).
+        // The 403 evidence goes to the PR (the gh-848 trail) and the
+        // established fresh-sha reset runs as today.
+        var CUR = '857ac4857ac4857ac4857ac4857ac4857ac4857';
+        var checkRuns = { check_runs: [
+            { id: 991237001, name: 'Quality gate', status: 'in_progress', conclusion: null,
+              started_at: '2026-10-11T12:06:29Z' }
+        ] };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(1457, { branch: 'ai/gh-857', headSha: CUR,
+                                            labels: ['pr_approved', 'ai_validating'] })],
+                      commitCheckRuns: checkRuns,
+                      prComments: [],
+                      workflowApiRuns: [] },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('-X PATCH') !== -1) {
+                    throw new Error('HTTP 403: Resource not accessible by integration');
+                }
+                if (c.indexOf('workflows/ci.yml/runs?head_sha=') !== -1) {
+                    return { workflow_runs: [GH857_GREEN_RUN] };
+                }
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    return { workflow_runs: [GH857_GREEN_RUN] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', silentToken: 'app-token', sourceToken: 'src-token',
+            rules: [gh857GreenRule()] } });
+
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh repo clone') !== -1; }).length, 1,
+            'fallback: the gh-852 fresh-sha reset fires exactly as today');
+        var evidence = sm.capturedPrComments.filter(function (c) {
+            return (c.body || '').indexOf('403') !== -1; });
+        assert.equal(evidence.length, 1,
+            'the 403 evidence is logged once');
+        assert.ok(evidence[0].body.indexOf('gh-848') !== -1,
+            'the evidence feeds the gh-848 placeholder-law trail');
+    });
+
     test('config order: unarm precedes silent-update (same-tick actualization)', function () {
         // Owner 2026-09-23: a BEHIND queue head with ai_validating armed
         // took 3 ticks to refresh (rule 0 skipped the armed PR, the unarm
