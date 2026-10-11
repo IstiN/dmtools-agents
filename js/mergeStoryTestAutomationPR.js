@@ -160,7 +160,7 @@ function finalizeAlreadyMergedPR(params, scm, storyKey, pr, testCaseType, custom
             'Linked Test Cases moved to final status: *' + tcResult.moved + '* moved, *' + tcResult.skipped + '* skipped.');
 
     try {
-        tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator });
+        tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
     } catch (e) {
         console.warn('Failed to post token usage comments:', e);
     }
@@ -313,7 +313,7 @@ function attemptMerge(params) {
                 'Linked Test Cases moved to final status: *' + tcResult.moved + '* moved, *' + tcResult.skipped + '* skipped.');
 
         try {
-            tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator });
+            tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }
