@@ -3901,6 +3901,10 @@ suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', f
             github: {
                 items: [prItem(81, { labels: ['pr_approved', 'ai_validated'], branch: 'feat/v', headSha: 'sha111' })],
                 prStatus: { checkConclusion: 'green' },
+                // gh-862: the live PR gate the in-tick merge-validated probe
+                // re-reads (github_get_pr) — pr_approved present, so the
+                // probe attempts the merge in the SAME tick as the arm.
+                pr: { number: 81, labels: ['pr_approved', 'ai_validated'], body: '' },
             },
                 onCliExecute: runsCli({ run: oldRun('success', 'sha111') })
         }));
@@ -3908,7 +3912,9 @@ suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', f
 
         assert.ok(!dispatched(sm.capturedCliCommands), 'NO CI re-dispatch — the existing green covers the head');
         assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
-            ['ai_validating'], 'arm only — merge-validated consumes it on the existing green');
+            ['ai_validating'], 'arm only — no dispatch behind the arm');
+        assert.equal(sm.capturedPrMerges.length, 1,
+            'gh-862: the merge-validated probe consumes the arm on the existing green IN THE SAME TICK');
     });
 
     test('validate-armed: moved head (no green run on the new SHA) → real validation dispatched', function () {
@@ -4395,6 +4401,150 @@ suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', f
             'the crash-loop park fired (cancelled-newest classifies zombie; cap 3 reached)');
         assert.ok(sm.capturedPrComments[0].body.indexOf('An older GREEN dispatched run exists') !== -1,
             'the park comment points the human at the possibly-merge-eligible head');
+    });
+});
+
+// ─── gh-862: the latch-skip 'arm only' path runs the merge-validated probe ──
+// Live fa #1457 (rel-20261011-204928, ticks 38174670336 / 38174907277): the
+// PR carried ai_validated, the head was unchanged-green, the gate was pinned
+// BLOCKED by a placeholder-shaped in_progress check-run — and every tick
+// logged ONLY 'stale arm swept → latch-skip (arm only) → head already
+// carries a green dispatched CI run, skip re-dispatch'. NO conclude action,
+// NO merge-validated probe line, NO merge attempt. Root cause: the latch-skip
+// arm-only branch arms ai_validating and continues WITHOUT running the
+// merge-validated probe — and in the deployed rule order (sm_github.json)
+// merge-validated (index 6) runs BEFORE validate-armed (index 11), so the
+// arm always lands after the merge window has closed. The sweep then eats
+// the arm next tick ('stale arm swept') and the latch-skip re-arms — the
+// ping-pong never merges. gh-857's conclude sits past the same continue,
+// and even where it fires the branch continues without a merge attempt.
+suite('smAgent: gh-862 latch-skip arm-only must run the merge-validated probe same tick (live fa #1457)', function () {
+
+    var LATCH_RULE = { source: 'github',
+        query: { type: 'pr', labels: ['pr_approved'],
+                 notLabels: ['ai_validating', 'validation_failed'],
+                 notMergeState: ['BEHIND', 'DIRTY'], draft: false },
+        localAction: 'validate_pr', skipIfValidatedHead: true, limit: 1, id: 'validate-armed' };
+
+    function prItem(n, extra) {
+        var it = { key: 'pr-' + n, labels: ['pr_approved'], issueNumber: null, prNumber: n, draft: false };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    // The unchanged head's green dispatched run, concluded 3h ago (outside
+    // every fresh-run window), and NOTHING active on the head.
+    function greenRun(headSha) {
+        var t = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+        return { id: 38137997380, event: 'workflow_dispatch',
+            head_branch: 'ai/gh-1457', head_sha: headSha,
+            status: 'completed', conclusion: 'success',
+            html_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38137997380',
+            created_at: t, updated_at: t };
+    }
+    function cliFor(headSha) {
+        return function (cmdOpts) {
+            var c = cmdOpts.command;
+            if (c.indexOf('runs?head_sha=') !== -1) {
+                return { workflow_runs: [greenRun(headSha)] };
+            }
+            if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                return { workflow_runs: [] };
+            }
+            return undefined;
+        };
+    }
+
+    test('gh-862 AC2: ai_validated + unchanged head + placeholder-pinned gate → conclude PATCH AND merge attempt in the SAME tick', function () {
+        // The exact live #1457 shape: the latch-skip is VOID (gh-852 — a
+        // placeholder pins the gate), the gh-857 conclude fires in the
+        // placeholder gate — pre-fix the branch then continued WITHOUT
+        // attempting the merge, and the merge-validated rule had already
+        // run earlier in the tick (sm_github.json order) — so the PR never
+        // merged. The conclude-success path must attempt the merge in the
+        // same tick.
+        var CUR = '862ac1862ac1862ac1862ac1862ac1862ac1862';
+        var phStamp = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+        var checkRuns = { check_runs: [
+            { id: 991862001, name: 'Quality gate', status: 'in_progress', conclusion: null,
+              started_at: phStamp },                          // PLACEHOLDER: link-less, past the grace
+            { id: 991862002, name: 'Quality gate', status: 'completed', conclusion: 'success',
+              started_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38137997380' }
+        ] };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: {
+                items: [prItem(1457, { branch: 'ai/gh-1457', headSha: CUR,
+                    labels: ['pr_approved', 'ai_validated'] })],
+                commitCheckRuns: checkRuns,
+                prComments: [],
+                workflowApiRuns: [],
+                prStatus: { checkConclusion: 'green', mergeState: 'BLOCKED',
+                            labels: ['pr_approved', 'ai_validated'] },
+                pr: { number: 1457, labels: ['pr_approved', 'ai_validated'], body: '' }
+            },
+            onCliExecute: cliFor(CUR)
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', silentToken: 'app-token', sourceToken: 'src-token',
+            rules: [LATCH_RULE] } });
+
+        var patches = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('-X PATCH') !== -1 &&
+                   c.command.indexOf('/check-runs/') !== -1; });
+        assert.equal(patches.length, 1,
+            'the gh-857 conclude PATCH fires (the placeholder pins the gate)');
+        assert.equal(sm.capturedPrMerges.length, 1,
+            'AC2: the merge is ATTEMPTED in the SAME tick as the conclude — the probe is reachable from the latch-skip flow');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh repo clone') !== -1; }).length, 0,
+            'no fresh-sha reset — the in-place cure fired');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; }).length, 0,
+            'no CI re-dispatch — the existing green covers the head');
+    });
+
+    test('gh-862: latch-skip arm-only (clean green head) → arm + merge attempt in the SAME tick', function () {
+        // The pure arm-only shape: no placeholder, no zombie — the head is
+        // unchanged since the green validation. Pre-fix the branch armed
+        // ai_validating and continued; with the deployed rule order the
+        // merge-validated rule had ALREADY run (index 6 < 11), the sweep
+        // ate the arm next tick ('stale arm swept') and the latch-skip
+        // re-armed — the live ping-pong. The arm-only path must run the
+        // merge-validated probe itself.
+        var CUR = '862ac2862ac2862ac2862ac2862ac2862ac2862';
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: {
+                items: [prItem(1457, { branch: 'ai/gh-1457', headSha: CUR,
+                    labels: ['pr_approved', 'ai_validated'] })],
+                commitCheckRuns: { check_runs: [] },
+                prComments: [],
+                workflowApiRuns: [],
+                prStatus: { checkConclusion: 'green', mergeState: 'CLEAN',
+                            labels: ['pr_approved', 'ai_validated'] },
+                pr: { number: 1457, labels: ['pr_approved', 'ai_validated'], body: '' }
+            },
+            onCliExecute: cliFor(CUR)
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', silentToken: 'app-token', sourceToken: 'src-token',
+            rules: [LATCH_RULE] } });
+
+        assert.deepEqual(sm.capturedPrLabelAdds.map(function (a) { return a.labels.join(','); }),
+            ['ai_validating'], 'the arm still lands (arm only — no CI re-dispatch)');
+        assert.equal(sm.capturedPrMerges.length, 1,
+            'the merge is ATTEMPTED in the SAME tick as the arm — no arm → sweep → re-arm ping-pong');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; }).length, 0,
+            'no CI re-dispatch — the existing green covers the head');
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
+            return r.number === 1457 && r.label === 'pr_approved'; }),
+            'a successful merge clears the armed markers');
     });
 });
 
