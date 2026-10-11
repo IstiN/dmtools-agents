@@ -73,7 +73,7 @@ _Post Bug Creation Action (postJSAction for bug_creation agent)_
 
 ## Custom params
 
-- `openBugsJql`: `"project = {jiraProject} AND issuetype in (Bug) AND status not in (Done)"`
+- `openBugsJql`: `"project = {jiraProject} AND issuetype in (Bug) AND status not in ({status.DONE:Done})"`
 - `removeLabel`: `"sm_bug_creation_triggered"`
 - `checkOpenPR` _(used by JS action)_
 

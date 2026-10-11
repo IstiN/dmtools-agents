@@ -1160,3 +1160,93 @@ suite('shipped SM rules: placeholder JQL resolves to the previous literal JQL (a
     });
 });
 
+// ── {stage.KEY[:Literal]} status-or-label clause, jqlByTracker, quoting (agents#855/#856) ─────────
+
+suite('configLoader — stage placeholders, per-tracker queries and quoting (agents#855)', function() {
+
+    function cfg(extra) {
+        var jira = { project: 'PRJ', parentTicket: '', statuses: configModule.STATUSES };
+        Object.keys(extra || {}).forEach(function(k) { jira[k] = extra[k]; });
+        return { jira: jira };
+    }
+    var STAGE = "project = {jiraProject} AND issuetype in ('Story') AND {stage.PO_REVIEW:PO Review}";
+
+    test('default (stageFallback off): the stage clause is the plain status clause the rule always had', function() {
+        assert.equal(configLoaderModule.interpolateJql(STAGE, cfg()),
+            "project = PRJ AND issuetype in ('Story') AND status in ('PO Review')");
+    });
+
+    test('stageFallback=label on Jira: status OR the stage label', function() {
+        assert.equal(configLoaderModule.interpolateJql(STAGE, cfg({ stageFallback: 'label' }), 'jira'),
+            "project = PRJ AND issuetype in ('Story') AND (status in ('PO Review') OR labels = 'stage_po_review')");
+    });
+
+    test('stageFallback=label on Azure DevOps: native WIQL System.State / System.Tags', function() {
+        assert.equal(configLoaderModule.interpolateJql("{stage.PO_REVIEW:PO Review}", cfg({ stageFallback: 'label' }), 'ado'),
+            "([System.State] IN ('PO Review') OR [System.Tags] CONTAINS 'stage_po_review')");
+        assert.equal(configLoaderModule.interpolateJql("{stage.PO_REVIEW:PO Review}", cfg(), 'ado'),
+            "[System.State] IN ('PO Review')");
+    });
+
+    test('the stage clause follows an opted-in jira.statuses override', function() {
+        var c = cfg({ stageFallback: 'label', useConfiguredStatusesInQueries: true });
+        c.jira.statuses = Object.assign({}, configModule.STATUSES, { PO_REVIEW: 'Active' });
+        assert.equal(configLoaderModule.interpolateJql("{stage.PO_REVIEW:PO Review}", c, 'jira'),
+            "(status in ('Active') OR labels = 'stage_po_review')");
+    });
+
+    test('the label name is the same one the tracker writes (shared stageLabel)', function() {
+        assert.equal(configModule.stageLabel('PO_REVIEW'), 'stage_po_review');
+        assert.equal(configModule.stageLabel('In Review - Passed'), 'stage_in_review_passed');
+        assert.ok(configLoaderModule.interpolateJql("{stage.IN_REVIEW_PASSED:In Review - Passed}", cfg({ stageFallback: 'label' }), 'jira')
+            .indexOf("labels = 'stage_in_review_passed'") !== -1);
+    });
+
+    test('unknown stage key with no literal is left untouched', function() {
+        assert.equal(configLoaderModule.interpolateJql("x {stage.NOPE} y", cfg()), "x {stage.NOPE} y");
+    });
+
+    test('selectRuleQuery: jqlByTracker[provider] wins, everything else uses rule.jql', function() {
+        var rule = { jql: 'JQL', jqlByTracker: { ado: 'SELECT [System.Id] FROM WorkItems' } };
+        assert.equal(configLoaderModule.selectRuleQuery(rule, 'ado'), 'SELECT [System.Id] FROM WorkItems');
+        assert.equal(configLoaderModule.selectRuleQuery(rule, 'ADO'), 'SELECT [System.Id] FROM WorkItems');
+        assert.equal(configLoaderModule.selectRuleQuery(rule, 'jira'), 'JQL');
+        assert.equal(configLoaderModule.selectRuleQuery(rule, null), 'JQL');
+        assert.equal(configLoaderModule.selectRuleQuery({ jql: 'JQL' }, 'ado'), 'JQL');
+        assert.equal(configLoaderModule.selectRuleQuery({ jql: 'JQL', jqlByTracker: { ado: '' } }, 'ado'), 'JQL');
+        assert.equal(configLoaderModule.selectRuleQuery(null, 'ado'), null);
+    });
+
+    test('unquoted position: a plain word stays bare (default identical to the old literal), anything else is quoted', function() {
+        assert.equal(configLoaderModule.interpolateJql("status not in ({status.DONE:Done})", cfg()), "status not in (Done)");
+        assert.equal(configLoaderModule.interpolateJql("status not in ({status.DONE:Done})",
+            cfg({ useConfiguredStatusesInQueries: true, statuses: { DONE: 'Won Fix' } })), 'status not in ("Won Fix")');
+        assert.equal(configLoaderModule.interpolateJql("status = {status.FAILED:Failed}", cfg()), "status = Failed");
+    });
+
+    test('quoted position: a double-quoted template escapes double quotes only', function() {
+        assert.equal(configLoaderModule.interpolateJql('status = "{status.X:a}"', cfg({ useConfiguredStatusesInQueries: true, statuses: { X: 'say "hi"' } })),
+            'status = "say \\"hi\\""');
+    });
+
+    test('SM rule: only the PO Review rule uses the stage clause; every other rule is unchanged', function() {
+        var rules = JSON.parse(file_read({ path: 'sm.json' })).params.jobParams.rules;
+        var withStage = rules.filter(function(r) { return (r.jql || '').indexOf('{stage.') !== -1; });
+        assert.equal(withStage.length, 1);
+        assert.equal(withStage[0].configFile, 'agents/story_ba_check.json');
+        // default config: identical to the previous status clause
+        assert.equal(configLoaderModule.interpolateJql(withStage[0].jql, cfg()),
+            "project = PRJ AND issuetype in ('Story') AND status in ('PO Review')");
+    });
+});
+
+suite('smAgent builds every rule query through selectRuleQuery (agents#855)', function() {
+    test('both rule processors pick the per-tracker query and pass the provider to interpolateJql', function() {
+        var src = file_read({ path: 'js/smAgent.js' });
+        var uses = src.split('configLoader.selectRuleQuery(rule, ruleTrackerProvider)').length - 1;
+        assert.equal(uses, 2, 'expected the local and the dispatch rule processor to use selectRuleQuery');
+        assert.equal(src.indexOf('configLoader.interpolateJql(rule.jql, effectiveConfig)'), -1,
+            'a rule processor still interpolates rule.jql directly and would ignore jqlByTracker/{stage.*}');
+    });
+});
+

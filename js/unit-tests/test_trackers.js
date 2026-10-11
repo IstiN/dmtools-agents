@@ -1205,3 +1205,33 @@ suite('trackers.js — moveToStatusOrMark / stageFallback (agents#856)', functio
     });
 });
 
+suite('trackers.js — stage label cleanup on a successful move (agents#855/#856)', function () {
+    function t(mode) {
+        var m = jiraMocks();
+        var tr = loadTrackers(m).createTracker({}, { trackerProvider: 'jira', stageFallback: mode });
+        return { t: tr, m: m };
+    }
+    test('label mode: after a real move the previous stage label is removed', function () {
+        var x = t('label');
+        var r = x.t.moveToStatusOrMark('PS-1', 'BA Analysis', 'BA_ANALYSIS', 'PO_REVIEW');
+        assert.equal(r.moved, true);
+        assert.equal(x.m.jira_remove_label.calls.length, 1);
+        assert.equal(x.m.jira_remove_label.calls[0].label, 'stage_po_review');
+    });
+    test('default mode: a successful move makes no extra label call', function () {
+        var x = t('none');
+        x.t.moveToStatusOrMark('PS-1', 'BA Analysis', 'BA_ANALYSIS', 'PO_REVIEW');
+        assert.equal(x.m.jira_remove_label.calls.length, 0);
+    });
+    test('label mode: no previous stage given means nothing to remove', function () {
+        var x = t('label');
+        x.t.moveToStatusOrMark('PS-1', 'BA Analysis', 'BA_ANALYSIS');
+        assert.equal(x.m.jira_remove_label.calls.length, 0);
+    });
+    test('label mode: a failing cleanup never fails a successful move', function () {
+        var m = jiraMocks({ removeLabelFails: true });
+        var tr = loadTrackers(m).createTracker({}, { trackerProvider: 'jira', stageFallback: 'label' });
+        assert.equal(tr.moveToStatusOrMark('PS-1', 'BA Analysis', 'BA_ANALYSIS', 'PO_REVIEW').moved, true);
+    });
+});
+

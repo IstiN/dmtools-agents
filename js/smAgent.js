@@ -70,7 +70,10 @@
  *     concurrency x estimate).
  *
  * Rule fields:
- *   jql            (required) — JQL to find tickets (supports {jiraProject}, {parentTicket})
+ *   jql            (required) — JQL to find tickets (supports {jiraProject}, {parentTicket},
+ *                               {status.KEY[:Literal]} and {stage.KEY[:Literal]}, see configLoader)
+ *   jqlByTracker   (optional) — { ado: '<WIQL>', github: '<query>' }: the query for that tracker replaces
+ *                               `jql` (a project on ADO supplies native WIQL without forking sm.json)
  *   configFile     (required) — agents/*.json to pass as config_file workflow input
  *   configPath     (optional) — path to a project config (.dmtools/config.js) for this rule
  *                               overrides the global config; enables multi-project orchestration
@@ -876,7 +879,11 @@ function processRuleLocally(rule, globalRepoInfo, ruleIndex) {
         return { processedKeys: [], skippedKeys: [] };
     }
     var effectiveConfig = loadRuleConfig(rule);
-    var interpolatedJql = configLoader.interpolateJql(rule.jql, effectiveConfig);
+    // agents#855: per-tracker query override (rule.jqlByTracker) and {stage.KEY} status-or-label clauses,
+    // in the syntax of the tracker this run uses. Without either, this is the same interpolation as before.
+    var ruleTrackerProvider = smTracker(effectiveConfig).provider();
+    var interpolatedJql = configLoader.interpolateJql(
+        configLoader.selectRuleQuery(rule, ruleTrackerProvider), effectiveConfig, ruleTrackerProvider);
     var effectiveRepoInfo = globalRepoInfo || {};
 
     var label = rule.description || ('Rule #' + (ruleIndex + 1));
@@ -1061,7 +1068,11 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
     }
 
     // JQL interpolation per rule using effectiveConfig (so {jiraProject} resolves correctly per project)
-    var interpolatedJql = configLoader.interpolateJql(rule.jql, effectiveConfig);
+    // agents#855: per-tracker query override (rule.jqlByTracker) and {stage.KEY} status-or-label clauses,
+    // in the syntax of the tracker this run uses. Without either, this is the same interpolation as before.
+    var ruleTrackerProvider = smTracker(effectiveConfig).provider();
+    var interpolatedJql = configLoader.interpolateJql(
+        configLoader.selectRuleQuery(rule, ruleTrackerProvider), effectiveConfig, ruleTrackerProvider);
 
     var label = rule.description || ('Rule #' + (ruleIndex + 1));
     console.log('\n══ ' + label + ' ══');

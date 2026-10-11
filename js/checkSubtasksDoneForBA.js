@@ -51,7 +51,7 @@ function action(params) {
         if (totalSubtasks === 0) {
             console.log('No subtasks found — no PO clarifications are required, moving', ticketKey, 'to', baAnalysisStatus);
 
-            tracker.moveToStatus(ticketKey, baAnalysisStatus);
+            tracker.moveToStatusOrMark(ticketKey, baAnalysisStatus, 'BA_ANALYSIS', 'PO_REVIEW');
 
             tracker.postComment(ticketKey, 'h3. ✅ PO Review Complete — Moving to ' + baAnalysisStatus + '\n\n' +
                     'No clarification subtasks were created for this story, so there is nothing waiting for PO answers.\n\n' +
@@ -76,7 +76,7 @@ function action(params) {
         // All subtasks Done → move to BA Analysis
         console.log('All', totalSubtasks, 'subtask(s) done — moving', ticketKey, 'to', baAnalysisStatus);
 
-        tracker.moveToStatus(ticketKey, baAnalysisStatus);
+        tracker.moveToStatusOrMark(ticketKey, baAnalysisStatus, 'BA_ANALYSIS', 'PO_REVIEW');
 
         tracker.postComment(ticketKey, 'h3. ✅ PO Review Complete — Moving to ' + baAnalysisStatus + '\n\n' +
                 'All *' + totalSubtasks + '* subtask(s) are *Done*.\n\n' +
