@@ -142,7 +142,7 @@ function action(params) {
             console.log('✅ Story', ticketKey, 'moved to Done');
 
             try {
-                tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
+                tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
             } catch (e) {
                 console.warn('Failed to post token usage comments:', e);
             }
@@ -175,7 +175,7 @@ function action(params) {
             releaseLock();
 
             try {
-                tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
+                tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
             } catch (e) {
                 console.warn('Failed to post token usage comments:', e);
             }
@@ -202,7 +202,7 @@ function action(params) {
         releaseLock();
 
         try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
+            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }

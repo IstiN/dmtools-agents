@@ -50,7 +50,7 @@ function action(params) {
 
         // Post token usage summary comments from the test-case generation run
         try {
-            tokenUsageComment.postTokenUsageComments(bugKey, { initiator: params.initiator });
+            tokenUsageComment.postTokenUsageComments(bugKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }

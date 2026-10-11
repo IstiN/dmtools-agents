@@ -776,7 +776,7 @@ function action(params) {
 
         // Step 11: Token usage comments
         try {
-            tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator });
+            tokenUsageComment.postTokenUsageComments(storyKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }
