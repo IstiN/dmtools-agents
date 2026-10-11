@@ -180,6 +180,45 @@ suite('validationLiveness stale-cancel markers (gh-846)', function () {
     });
 });
 
+suite('validationLiveness ghost-guard markers (gh-848)', function () {
+    test('defer + clean marker lines round-trip through the marks parser, keyed by head', function () {
+        var defer = live.ghostGuardDeferMarkerLine(HEAD, 7101, '2026-10-10T21:40:05.000Z');
+        var clean = live.ghostGuardCleanMarkerLine(HEAD, 2, '2026-10-10T21:41:12.000Z');
+        assert.ok(defer.indexOf('ghost-guard defer') !== -1, 'the defer names the operation');
+        assert.ok(clean.indexOf('ghost-guard clean') !== -1, 'the clean names the operation');
+        var marks = live.ghostGuardMarks([defer + '\n' + clean]);
+        assert.ok(marks.deferred[HEAD] !== undefined, 'the defer is keyed by head');
+        assert.ok(marks.cleaned[HEAD] !== undefined, 'the clean is keyed by head');
+        assert.equal(marks.deferred[OTHER], undefined, 'other heads untouched');
+        assert.equal(marks.cleaned[OTHER], undefined);
+    });
+
+    test('the newest timestamp wins per head; heads stay separate', function () {
+        var d1 = live.ghostGuardDeferMarkerLine(HEAD, 7101, '2026-10-10T21:40:05.000Z');
+        var d2 = live.ghostGuardDeferMarkerLine(HEAD, 7101, '2026-10-10T21:45:09.000Z');
+        var d3 = live.ghostGuardDeferMarkerLine(OTHER, 7201, '2026-10-10T21:42:00.000Z');
+        var marks = live.ghostGuardMarks([d1, 'noise', d2, d3]);
+        assert.equal(marks.deferred[HEAD], Date.parse('2026-10-10T21:45:09.000Z'),
+            'newest marker wins for the head');
+        assert.equal(marks.deferred[OTHER], Date.parse('2026-10-10T21:42:00.000Z'));
+    });
+
+    test('ghost-guard lines never parse as zombie or stale-cancel markers (gh-755 parity)', function () {
+        var defer = live.ghostGuardDeferMarkerLine(HEAD, 7101, '2026-10-10T21:40:05.000Z');
+        var clean = live.ghostGuardCleanMarkerLine(HEAD, 1, '2026-10-10T21:41:12.000Z');
+        assert.deepEqual(live.zombieMarks([defer, clean]), {}, 'not a zombie re-dispatch count');
+        var re = new RegExp(live.STALE_CANCEL_MARKER_RE.source);
+        assert.ok(!re.exec(defer) && !re.exec(clean), 'not a stale-cancel marker');
+    });
+
+    test('unparsable timestamps degrade to absent entries (the poster re-posts rather than swallow)', function () {
+        var marks = live.ghostGuardMarks(
+            ['⏸ ghost-guard defer ' + HEAD + ' — run 7101 still queued at garbage']);
+        assert.deepEqual(marks.deferred, {}, 'no epoch ms — dedupe cannot fire');
+        assert.deepEqual(marks.cleaned, {});
+    });
+});
+
 suite('validationLiveness knobs', function () {
     test('defaults: cap 3, window 1h (gh-821: 3 in a row ⇒ park, 1/head/hour)', function () {
         assert.equal(live.zombieCapOf({}), 3);

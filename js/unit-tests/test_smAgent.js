@@ -1818,7 +1818,24 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
             ciWorkflow: 'quality.yml', rules: [RULES.update] } });
     }
 
-    test('gh-846: refresh cancels the QUEUED workflow_dispatch run on the superseded head (AC1 same-tick)', function () {
+    // gh-848 tests: short materialization window so a never-materializing
+    // queued run defers fast instead of polling the 45s default.
+    function gh848Action(sm) {
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            silentToken: 'SILENT-TOKEN', sourceToken: 'PAT-TOKEN',
+            ciWorkflow: 'quality.yml',
+            cancelMaterializeTimeoutMs: 25, cancelMaterializePollMs: 1,
+            rules: [RULES.update] } });
+    }
+
+    test('gh-848: refresh DEFERS the cancel of a still-queued run — a queued cancel would orphan in_progress check-runs (the ghost window)', function () {
+        // The ghost #5 replay shape: the stale run is still QUEUED (its
+        // check-suite registered at dispatch time, its jobs not yet
+        // materialized). The twin-guard must NOT cancel it — a queued
+        // cancel leaves the registered check-runs `in_progress` forever
+        // (no run to re-run, no API to conclude them with the PAT) and
+        // the merge gate holds on the ghosts. The cancel is deferred to
+        // the next tick and audited with exactly one marker per head.
         var sm = gh846Sm({
             onCliExecute: function (cmdOpts) {
                 var c = cmdOpts.command;
@@ -1834,6 +1851,46 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
                 if (c.indexOf('runs?event=push') !== -1) {
                     return { workflow_runs: [] };
                 }
+                if (c.indexOf('actions/runs/7101') !== -1) {
+                    return { status: 'queued' }; // never materializes inside the window
+                }
+                return '';
+            }
+        });
+        gh848Action(sm);
+
+        assert.equal(updateCommands(sm).length, 1, 'the refresh itself ran');
+        assert.equal(cancelCommands(sm).length, 0,
+            'a still-queued run is NEVER cancelled (gh-848 guard) — supersedes the gh-846 same-tick cancel of queued runs');
+        assert.equal(sm.capturedPrComments.length, 1, 'one audit comment');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('ghost-guard defer ' + GH846_OLD) !== -1,
+            'the defer is recorded for the head');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('run 7101') !== -1,
+            'the deferred run id is recorded');
+    });
+
+    test('gh-846/848: refresh cancels the stale run once its jobs materialized — the clean-terminal-state path', function () {
+        var sm = gh846Sm({
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=' + GH846_OLD) !== -1) {
+                    return { workflow_runs: [] }; // no leg on the head
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [
+                        { id: 7101, event: 'workflow_dispatch', head_branch: 'ai/gh-846',
+                          head_sha: GH846_OLD, status: 'queued' }
+                    ] };
+                }
+                if (c.indexOf('runs?event=push') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                if (c.indexOf('actions/runs/7101') !== -1) {
+                    // Materialized by the time the guard polls: a cancel
+                    // now concludes the run's check-runs `cancelled`
+                    // (clean terminal state) on its own.
+                    return { status: 'in_progress' };
+                }
                 return '';
             }
         });
@@ -1841,9 +1898,9 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
 
         assert.equal(updateCommands(sm).length, 1, 'the refresh itself ran');
         var cancels = cancelCommands(sm);
-        assert.equal(cancels.length, 1, 'exactly the dead-head run is cancelled — same tick as the refresh');
+        assert.equal(cancels.length, 1, 'exactly the dead-head run is cancelled');
         assert.ok(cancels[0].command.indexOf('/actions/runs/7101/cancel') !== -1,
-            'the 18:07-style queued run on the old head');
+            'the queued-then-materialized run on the old head');
         assert.equal(sm.capturedPrComments.length, 1, 'one bookkeeping comment');
         assert.ok(sm.capturedPrComments[0].body.indexOf('stale-cancel ' + GH846_OLD) !== -1,
             'the marker records the cancelled-as-stale head (gh-755 parity: no verdict)');
@@ -1868,6 +1925,9 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
                         { id: 7203, event: 'push', head_branch: 'ai/gh-846',
                           head_sha: GH846_NEW, status: 'queued' }
                     ] };
+                }
+                if (c.indexOf('actions/runs/7201') !== -1) {
+                    return { status: 'in_progress' }; // gh-848 guard: already materialized
                 }
                 return '';
             }
@@ -1950,6 +2010,150 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedPrComments.length, 0, 'no marker in DRY');
     });
 
+    test('gh-848 belt: after a materialized cancel, the run\'s still-pending check-runs are concluded cancelled via the Checks API (App token)', function () {
+        // The belt hardens the cancel path itself: any check-run of the
+        // cancelled run still pending on its head gets concluded
+        // `cancelled` (clean terminal state) so no ghost can survive.
+        // The Checks API write needs the GitHub App token (PAT 403s).
+        var sm = gh846Sm({
+            github: {
+                items: [prItem(1457, { branch: 'ai/gh-846', headSha: GH846_OLD })],
+                pr: { number: 1457, head: { sha: GH846_NEW } },
+                commitCheckRuns: { check_runs: [
+                    { id: 9011, name: 'kicker / sm-liveness', status: 'in_progress',
+                      details_url: 'https://github.com/epam/dmtools-dart/actions/runs/7201' },
+                    { id: 9012, name: 'kicker / docs-freshness', status: 'in_progress',
+                      details_url: 'https://github.com/epam/dmtools-dart/actions/runs/9999' },
+                    { id: 9013, name: 'kicker / sm-liveness', status: 'completed',
+                      conclusion: 'success',
+                      details_url: 'https://github.com/epam/dmtools-dart/actions/runs/7201' }
+                ] }
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=' + GH846_OLD) !== -1) {
+                    return { workflow_runs: [] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                if (c.indexOf('runs?event=push') !== -1) {
+                    return { workflow_runs: [
+                        { id: 7201, event: 'push', head_branch: 'ai/gh-846',
+                          head_sha: GH846_OLD, status: 'in_progress' }
+                    ] };
+                }
+                if (c.indexOf('actions/runs/7201') !== -1) {
+                    return { status: 'in_progress' };
+                }
+                return '';
+            }
+        });
+        gh846Action(sm);
+
+        assert.equal(cancelCommands(sm).length, 1, 'the materialized stale run is cancelled');
+        var patches = sm.capturedCliCommands.filter(function (cmdOpts) {
+            return cmdOpts.command.indexOf('check-runs/') !== -1 &&
+                   cmdOpts.command.indexOf('PATCH') !== -1;
+        });
+        assert.equal(patches.length, 1, 'exactly the orphaned check-run of the cancelled run is concluded');
+        assert.ok(patches[0].command.indexOf('check-runs/9011') !== -1,
+            'the pending check-run backing the cancelled run');
+        assert.ok(patches[0].command.indexOf('conclusion=cancelled') !== -1,
+            'concluded cancelled — a clean terminal state (gh-755: not a verdict)');
+        assert.ok(patches[0].command.indexOf('check-runs/9012') === -1 &&
+                  patches[0].command.indexOf('check-runs/9013') === -1,
+            'a check-run of a DIFFERENT run and a settled one are untouched');
+        var envValues = sm.capturedEnvSets.filter(function (e) { return e.name === 'GH_TOKEN'; })
+            .map(function (e) { return e.value; });
+        assert.ok(envValues.indexOf('SILENT-TOKEN') !== -1,
+            'the belt swapped to the GitHub App token (the PAT gets 403 on the Checks API)');
+        assert.equal(sm.capturedPrComments.length, 2,
+            'gh-846 stale-cancel marker + gh-848 clean audit');
+        var bodies = sm.capturedPrComments.map(function (c) { return c.body; }).join('\n');
+        assert.ok(bodies.indexOf('ghost-guard clean ' + GH846_OLD) !== -1,
+            'the belt clean-up is recorded for the head');
+    });
+
+    test('gh-848: two stale runs in one sweep — the queued one is deferred, the materialized one is cancelled', function () {
+        var sm = gh846Sm({
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=' + GH846_OLD) !== -1) {
+                    return { workflow_runs: [] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [
+                        { id: 7101, event: 'workflow_dispatch', head_branch: 'ai/gh-846',
+                          head_sha: GH846_OLD, status: 'queued' },
+                        { id: 7201, event: 'workflow_dispatch', head_branch: 'ai/gh-846',
+                          head_sha: GH846_OLD, status: 'in_progress' }
+                    ] };
+                }
+                if (c.indexOf('runs?event=push') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                if (c.indexOf('actions/runs/7101') !== -1) {
+                    return { status: 'queued' };
+                }
+                if (c.indexOf('actions/runs/7201') !== -1) {
+                    return { status: 'in_progress' };
+                }
+                return '';
+            }
+        });
+        gh848Action(sm);
+
+        var cancels = cancelCommands(sm);
+        assert.equal(cancels.length, 1, 'exactly the materialized run is cancelled');
+        assert.ok(cancels[0].command.indexOf('/actions/runs/7201/cancel') !== -1,
+            'the in_progress run — the queued one is left for the next tick');
+        var bodies = sm.capturedPrComments.map(function (c) { return c.body; }).join('\n');
+        assert.ok(bodies.indexOf('stale-cancel ' + GH846_OLD) !== -1,
+            'the gh-846 marker records the cancelled head');
+        assert.ok(bodies.indexOf('ghost-guard defer ' + GH846_OLD) !== -1,
+            'the defer of the queued run is audited');
+    });
+
+    test('gh-848 audit: a head already carrying a defer marker gets NO second comment on the next tick', function () {
+        // A run can sit queued across MANY ticks before its jobs
+        // materialize — the audit must record the defer ONCE per head,
+        // never churn a comment per tick.
+        var priorComment = '⏸ ghost-guard defer ' + GH846_OLD +
+            ' — run 7101 still queued at 2026-10-10T21:40:05.000Z';
+        var sm = gh846Sm({
+            github: {
+                items: [prItem(1457, { branch: 'ai/gh-846', headSha: GH846_OLD })],
+                pr: { number: 1457, head: { sha: GH846_NEW } },
+                prComments: [{ body: priorComment }]
+            },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=' + GH846_OLD) !== -1) {
+                    return { workflow_runs: [] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [
+                        { id: 7101, event: 'workflow_dispatch', head_branch: 'ai/gh-846',
+                          head_sha: GH846_OLD, status: 'queued' }
+                    ] };
+                }
+                if (c.indexOf('runs?event=push') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                if (c.indexOf('actions/runs/7101') !== -1) {
+                    return { status: 'queued' };
+                }
+                return '';
+            }
+        });
+        gh848Action(sm);
+
+        assert.equal(cancelCommands(sm).length, 0, 'still queued — still deferred');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'the defer marker for this head already exists — one marker per head');
+    });
+
     test('validate_pr: dispatches the CI workflow on the head + ai_validating label on the PR', function () {
         // Dispatch-only CI: no push ever fires CI — the SM is the only
         // trigger. The PAT update-branch dance is retired.
@@ -2000,6 +2204,9 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
                         { id: 444, event: 'workflow_dispatch', head_branch: 'ai/gh-77',
                           head_sha: 'dddd0000dddd', status: 'completed' }
                     ] };
+                }
+                if (c.indexOf('actions/runs/111') !== -1) {
+                    return { status: 'in_progress' }; // gh-848 guard: already materialized
                 }
                 return undefined;
             }
