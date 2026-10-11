@@ -276,10 +276,18 @@ function action(params) {
             }
         }
 
-        // 6. Move parent story to PO Review
+        // 6. Move parent story to PO Review (agents#856: with stageFallback 'label' a rejected transition
+        //    leaves a stage_po_review marker instead of losing the hand-off; default keeps the old behaviour)
+        var stageOutcome = 'failed';
         try {
-            getTracker().moveToStatus(ticketKey, jiraConfig.statuses.PO_REVIEW);
-            console.log('Moved ' + ticketKey + ' to PO Review');
+            var stageResult = getTracker().moveToStatusOrMark(ticketKey, jiraConfig.statuses.PO_REVIEW, 'PO_REVIEW');
+            if (stageResult && stageResult.marked) {
+                stageOutcome = 'marked';
+                console.log('Marked ' + ticketKey + ' with ' + stageResult.label + ' (transition to PO Review rejected)');
+            } else {
+                stageOutcome = 'moved';
+                console.log('Moved ' + ticketKey + ' to PO Review');
+            }
         } catch (statusError) {
             console.warn('Failed to move ' + ticketKey + ' to PO Review:', statusError);
         }
@@ -329,7 +337,12 @@ function action(params) {
 
         return {
             success: true,
-            message: 'Ticket ' + ticketKey + ' moved to PO Review, created ' + createdTickets.length + ' question subtask(s)',
+            message: stageOutcome === 'moved'
+                ? 'Ticket ' + ticketKey + ' moved to PO Review, created ' + createdTickets.length + ' question subtask(s)'
+                : stageOutcome === 'marked'
+                    ? 'Ticket ' + ticketKey + ' marked stage PO Review (transition rejected), created ' + createdTickets.length + ' question subtask(s)'
+                    : 'Ticket ' + ticketKey + ' NOT moved to PO Review (transition failed), created ' + createdTickets.length + ' question subtask(s)',
+            stageStatus: stageOutcome,
             createdQuestions: createdTickets
         };
 
