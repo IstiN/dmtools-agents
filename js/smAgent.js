@@ -2311,8 +2311,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // real check green; 5 operator resets/day). Branch
                 // protection takes the LATEST check-run per (context, head)
                 // and a same-sha re-dispatch re-mints placeholders whenever
-                // it queues again — so the ONLY cure is a FRESH SHA plus a
-                // validation that starts immediately. Remedy (AC1): cap
+                // it queues again — so the fresh-sha reset was the ONLY
+                // cure until gh-857: FIRST the in-place conclusion above
+                // PATCHes the placeholders completed/success when the head
+                // carries the real green verdict (no reset spent, no CI
+                // burned); the reset below is the fallback (403 ownership)
+                // and the no-green-verdict cure. Remedy (AC1): cap
                 // check (AC2, per PR per window) → pool-free probe (AC2,
                 // fail closed) → silent-update fresh-sha refresh → dispatch
                 // on the branch (lands on the new head) → stamp the new
@@ -2321,6 +2325,75 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // dispatch below (AC3).
                 var vPh = vHead0 ? headPlaceholders(effectiveRepoInfo, vHead0) : null;
                 if (vPh && vPh.length) {
+                    // ── gh-857 IN-PLACE CONCLUSION — the cheap cure ahead
+                    // of the gh-852 fresh-sha reset (live fa #1457 fd1b9aa2:
+                    // the placeholder pinned the gate forever while the
+                    // SM's own later green stamp never overrode it — branch
+                    // protection takes the LATEST check-run per (context,
+                    // head)). Only with a REAL green verdict on this head
+                    // (a completed-success dispatched run — AC3: the
+                    // conclusion mirrors the verdict, red never concludes
+                    // green) and NO active run on the head (AC2: a
+                    // placeholder with a live run behind it is the run's
+                    // own business — hasActiveHeadRun semantics, the
+                    // conservative fail-safe): PATCH each placeholder
+                    // completed/success via checks:write (the workflow
+                    // token, same App that minted it). When every
+                    // placeholder concludes, the head unblocks WITHOUT a
+                    // fresh sha — no reset is consumed against the per-PR
+                    // cap and no CI is re-dispatched; the gate unblock
+                    // fires a check-run-completed event the same tick.
+                    // The PATCH rides the workflow token (jobParams.
+                    // silentToken — the tick PAT gets a verified-live 403
+                    // from checks:write, gh-848 belt); with no App token
+                    // configured the in-place cure is skipped entirely —
+                    // the reset below is the only working remedy.
+                    if (vProbe && vProbe.green && (RUN_JOB_PARAMS || {}).silentToken) {
+                        var phHeadRuns = headWorkflowRunsSafe(effectiveRepoInfo, vHead0);
+                        if (phHeadRuns !== null && !hasActiveHeadRun(phHeadRuns)) {
+                            var phCover = greenCoverRun(effectiveRepoInfo, vCiWf, vHead0);
+                            if (phCover) {
+                                var phConc = concludePlaceholderCheckRuns(
+                                    effectiveRepoInfo, vPh, phCover);
+                                if (phConc.concluded === vPh.length && !phConc.rejected) {
+                                    console.log('  ✅ ' + key + ' concluded ' +
+                                        phConc.concluded + ' placeholder check-run(s) in' +
+                                        ' place (gh-857) — the green head unblocks without' +
+                                        ' a fresh-sha reset or a CI re-dispatch');
+                                    processedKeys.push(key);
+                                    continue;
+                                }
+                                if (phConc.rejected) {
+                                    console.warn('  ⚠️  ' + key + ' placeholder conclusion' +
+                                        ' rejected (' + phConc.rejected + ') — falling back' +
+                                        ' to the gh-852 fresh-sha reset');
+                                    if (!DRY) {
+                                        try {
+                                            github_create_comment({
+                                                workspace: effectiveRepoInfo.owner,
+                                                repository: effectiveRepoInfo.repo,
+                                                number: ticket.prNumber,
+                                                body: '🔒 Placeholder conclusion rejected by' +
+                                                    ' GitHub (`' + phConc.rejected + '`) — the' +
+                                                    ' Actions app\'s check-runs refuse PATCH by' +
+                                                    ' the workflow token (ownership rules,' +
+                                                    ' gh-857). Falling back to the gh-852' +
+                                                    ' fresh-sha reset. Evidence for the gh-848' +
+                                                    ' placeholder law.'
+                                            });
+                                        } catch (ePh403) {
+                                            console.warn('  ⚠️  gh-857 403-evidence comment' +
+                                                ' failed: ' + (ePh403.message || ePh403));
+                                        }
+                                    }
+                                }
+                            }
+                        } else if (phHeadRuns !== null) {
+                            console.log('  ⏭️  ' + key + ' placeholders carry a LIVE run on' +
+                                        ' the head (gh-857 AC2) — no in-place conclusion,' +
+                                        ' the run owns the contexts');
+                        }
+                    }
                     var phCap = checkRunZombiesModule.placeholderCapOf(RUN_JOB_PARAMS);
                     var phState = failMarkerState(effectiveRepoInfo, ticket.prNumber);
                     var phMarks = phState.placeholders || { count: 0, lastAtMs: null };
@@ -5329,6 +5402,112 @@ function headPlaceholders(repoInfo, headSha) {
     return checkRunZombiesModule.placeholders(checkRuns, Date.now(), {
         placeholderMinutes: (RUN_JOB_PARAMS || {}).checkRunPlaceholderMinutes
     });
+}
+
+// ── gh-857: in-place placeholder conclusion ────────────────────────────────
+//
+// Live fa #1457 (head fd1b9aa2): the placeholder check-run (18:51:25)
+// pinned the gate forever while the SM's own green stamp (19:04:35) never
+// overrode it — branch protection takes the LATEST check-run per
+// (context, head), so a pending placeholder wins over any later stamp.
+// The gh-852 fresh-sha reset cures the pin but burns a full validation
+// cycle; when the head already carries the real green verdict the cheap
+// cure is to conclude the placeholder IN PLACE via the Checks API PATCH.
+//
+// greenCoverRun — the "real green verdict" probe: the newest
+// COMPLETED-SUCCESS dispatched validation run on this head. The
+// placeholder conclusion MIRRORS this verdict (AC3: red/absent never
+// concludes a placeholder green — the caller must only conclude with a
+// success cover; a 'skipped' real stamp is never a green cover either).
+// CANCELLED is never a verdict (gh-755). Fail CLOSED (null): no verdict,
+// no conclusion.
+function greenCoverRun(repoInfo, ciWorkflow, headSha) {
+    try {
+        var res = cli_execute_command({
+            command: 'gh api "repos/' + repoInfo.owner + '/' +
+                     repoInfo.repo +
+                     '/actions/workflows/' + ciWorkflow +
+                     '/runs?head_sha=' + headSha +
+                     '&event=workflow_dispatch&per_page=5"'
+        });
+        var runs = mcpParse((res || {}).output ||
+                            (res || {}).stdout || res);
+        var list = ((runs && runs.workflow_runs) || []).filter(function (r) {
+            return r.status === 'completed' && r.conclusion === 'success';
+        });
+        if (!list.length) return null;
+        list.sort(function (a, b) {
+            return new Date(b.updated_at || b.created_at).getTime() -
+                   new Date(a.updated_at || a.created_at).getTime();
+        });
+        return list[0];
+    } catch (e) {
+        console.warn('  ⚠️  green-cover probe failed: ' + (e.message || e));
+        return null;
+    }
+}
+
+// gh-857 conclusion transport — PATCH each placeholder check-run to
+// completed/success, output referencing the covering run. Mirrors the
+// gh-848 belt (concludeOrphanedCheckRuns): the check-runs belong to the
+// github-actions App, so the PATCH rides the workflow token
+// (jobParams.silentToken) with checks:write; the tick PAT would 403.
+// Returns { concluded, rejected } — rejected carries the first failure
+// message (403 ownership, missing id, transient): the caller logs the
+// evidence and falls back to the gh-852 fresh-sha reset.
+function concludePlaceholderCheckRuns(repoInfo, placeholders, coverRun) {
+    var out = { concluded: 0, rejected: null };
+    if (!placeholders || !placeholders.length) return out;
+    var coverUrl = (coverRun && (coverRun.html_url || coverRun.url))
+        ? String(coverRun.html_url || coverRun.url) : null;
+    var coverLine = 'Concluded in place by the SM tick (gh-857) — the head\'s' +
+        ' dispatched validation run concluded success' +
+        (coverUrl ? (': ' + coverUrl) : '') +
+        '. The gh-852 fresh-sha reset is the fallback cure.';
+    var appToken = (RUN_JOB_PARAMS || {}).silentToken;
+    var sourceTok = (RUN_JOB_PARAMS || {}).sourceToken;
+    var swapped = false;
+    if (appToken) {
+        try {
+            set_env_variable('GH_TOKEN', appToken);
+            swapped = true;
+        } catch (eSwap) {
+            console.warn('  ⚠️  gh-857 token swap failed, conclusion uses the' +
+                         ' PAT (may 403): ' + (eSwap.message || eSwap));
+        }
+    }
+    try {
+        placeholders.forEach(function (ph) {
+            if (!ph || ph.id === null || ph.id === undefined) {
+                if (!out.rejected) out.rejected = 'check-run id missing (cannot PATCH)';
+                return;
+            }
+            if (DRY) {
+                console.log('  🧪 [dry] conclude placeholder check-run ' + ph.id +
+                            ' ("' + (ph.name || '?') + '") completed/success (gh-857)');
+                return;
+            }
+            try {
+                cli_execute_command({
+                    command: 'gh api -X PATCH repos/' + repoInfo.owner +
+                        '/' + repoInfo.repo + '/check-runs/' + ph.id +
+                        ' -f status=completed' +
+                        ' -f conclusion=success' +
+                        (coverUrl ? (' -f details_url="' + coverUrl + '"') : '') +
+                        ' -f "output[title]=SM concluded a placeholder check-run (gh-857)"' +
+                        ' -f "output[summary]=' + coverLine + '"'
+                });
+                out.concluded++;
+            } catch (ePatch) {
+                if (!out.rejected) out.rejected = (ePatch && ePatch.message) || String(ePatch);
+            }
+        });
+    } finally {
+        if (swapped && sourceTok) {
+            try { set_env_variable('GH_TOKEN', sourceTok); } catch (e3) {}
+        }
+    }
+    return out;
 }
 
 // gh-852 AC2 pool-free probe: a fresh-sha reset cures the placeholder-pinned

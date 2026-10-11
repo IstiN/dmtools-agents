@@ -2694,6 +2694,9 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         var checkRuns = { check_runs: [
             { id: 991234001, name: 'Quality gate', status: 'in_progress', conclusion: null,
               started_at: '2026-10-11T12:06:29Z' },          // PLACEHOLDER: no URL at all
+            { id: 991234003, name: 'static / gate', status: 'queued', conclusion: null,
+              html_url: 'https://github.com/IstiN/flutter_agent_harness/checks/no-run-id-here',
+              started_at: '2026-10-11T12:06:30Z' },          // SECOND placeholder (queued, link-less)
             { id: 991234002, name: 'Quality gate', status: 'completed', conclusion: 'success',
               started_at: '2026-10-11T12:08:00Z',
               details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38137997380' }
@@ -2726,13 +2729,15 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
 
         var patches = sm.capturedCliCommands.filter(function (c) {
             return c.command.indexOf('-X PATCH') !== -1 &&
-                   c.command.indexOf('/check-runs/991234001') !== -1; });
-        assert.equal(patches.length, 1,
-            'AC1: the placeholder check-run is PATCH-concluded exactly once');
-        assert.ok(patches[0].command.indexOf('conclusion=success') !== -1,
-            'AC1: the conclusion mirrors the real green verdict');
-        assert.ok(patches[0].command.indexOf('38137997380') !== -1,
-            'AC1: the output references the covering run');
+                   c.command.indexOf('/check-runs/') !== -1; });
+        assert.equal(patches.length, 2,
+            'AC1: BOTH placeholder check-runs are PATCH-concluded exactly once');
+        assert.ok(patches.every(function (p) {
+            return p.command.indexOf('conclusion=success') !== -1; }),
+            'AC1: every conclusion mirrors the real green verdict');
+        assert.ok(patches.every(function (p) {
+            return p.command.indexOf('38137997380') !== -1; }),
+            'AC1: every output references the covering run');
         // the workflow token (checks:write) rides the PATCH, not the PAT
         assert.ok(sm.capturedEnvSets.some(function (e) {
             return e.name === 'GH_TOKEN' && e.value === 'app-token'; }),
@@ -2872,11 +2877,11 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedCliCommands.filter(function (c) {
             return c.command.indexOf('gh repo clone') !== -1; }).length, 1,
             'fallback: the gh-852 fresh-sha reset fires exactly as today');
-        assert.equal(sm.capturedPrComments.length, 1,
+        var evidence = sm.capturedPrComments.filter(function (c) {
+            return (c.body || '').indexOf('403') !== -1; });
+        assert.equal(evidence.length, 1,
             'the 403 evidence is logged once');
-        assert.ok(sm.capturedPrComments[0].body.indexOf('403') !== -1,
-            'the evidence names the rejection');
-        assert.ok(sm.capturedPrComments[0].body.indexOf('gh-848') !== -1,
+        assert.ok(evidence[0].body.indexOf('gh-848') !== -1,
             'the evidence feeds the gh-848 placeholder-law trail');
     });
 

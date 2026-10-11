@@ -214,10 +214,12 @@ function isPlaceholderShape(checkRun) {
  * whose stamp is older than the placeholder grace. Fresh/unparseable
  * stamps are NOT placeholders (fail safe toward live — see above).
  *
- * @param checkRuns [{name, status, conclusion, started_at, details_url}]
+ * @param checkRuns [{name, status, conclusion, started_at, details_url, id}]
  * @param nowMs     epoch ms (Date.now() at the probe)
  * @param opts      {placeholderMinutes}
- * @returns [{name, runId: null, reason: 'placeholder', startedAtMs}]
+ * @returns [{name, runId: null, id, reason: 'placeholder', startedAtMs}]
+ *          id = the check-run id (null when the API payload carried none —
+ *          such a stamp cannot be PATCH-concluded in place, gh-857).
  */
 function placeholders(checkRuns, nowMs, opts) {
     var out = [];
@@ -229,6 +231,7 @@ function placeholders(checkRuns, nowMs, opts) {
         if (started === null) return;               // fail safe
         if ((now - started) > graceMs) {
             out.push({ name: (cr && cr.name) || null, runId: null,
+                       id: (cr && cr.id !== undefined && cr.id !== null) ? cr.id : null,
                        reason: 'placeholder', startedAtMs: started });
         }
     });
