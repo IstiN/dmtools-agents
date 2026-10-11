@@ -2470,6 +2470,203 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
         assert.equal(sm.capturedPrLabelAdds.length, 0, 'no arm churn');
     });
 
+    test('validate_pr: gh-852 AC1 — placeholder check-runs pin the gate → fresh-sha reset + fast-start dispatch', function () {
+        // Live fa #1457 (2026-10-11, head d29efb16): the real run 38137997380
+        // is all-green, but placeholder check-runs (pending, html_url with
+        // NO run id, minted ~20s after a dispatch that queued without a
+        // job) pin mergeStateStatus=BLOCKED. A same-sha re-dispatch can
+        // never cure it — the engine must silently refresh to a FRESH SHA
+        // and dispatch validation on it (pool-free probed, capped per PR).
+        var CUR = 'd29efb16d29efb16d29efb16d29efb16d29efb16';
+        var greenRule = { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                     notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'], checks: ['green'], draft: false },
+            localAction: 'validate_pr', limit: 1, id: 'revalidate-armed-green',
+            skipIfGreenCi: true };
+        var checkRuns = { check_runs: [
+            { name: 'Quality gate', status: 'in_progress', conclusion: null,
+              started_at: '2026-10-11T12:06:29Z' },          // PLACEHOLDER: no URL at all
+            { name: 'Quality gate', status: 'completed', conclusion: 'success',
+              started_at: '2026-10-11T12:08:00Z',
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38137997380' }
+        ] };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(1457, { branch: 'ai/gh-852', headSha: CUR,
+                                            labels: ['pr_approved', 'ai_validating'] })],
+                      commitCheckRuns: checkRuns,
+                      prComments: [],
+                      workflowApiRuns: [] },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('workflows/ci.yml/runs?head_sha=') !== -1) {
+                    return { workflow_runs: [
+                        { id: 38137997380, event: 'workflow_dispatch', head_branch: 'ai/gh-852',
+                          head_sha: CUR, status: 'completed', conclusion: 'success',
+                          created_at: '2026-10-11T12:08:00Z' }
+                    ] };
+                }
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    return { workflow_runs: [
+                        { id: 38137997380, event: 'workflow_dispatch', head_branch: 'ai/gh-852',
+                          head_sha: CUR, status: 'completed', conclusion: 'success',
+                          created_at: '2026-10-11T12:08:00Z' }
+                    ] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return undefined;   // the silent-update clone/merge/push + the dispatch
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [greenRule] } });
+
+        var refresh = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh repo clone') !== -1; });
+        assert.equal(refresh.length, 1, 'AC1: a fresh-sha silent-update refresh fires (no operator reset)');
+        var dispatch = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; });
+        assert.equal(dispatch.length, 1, 'AC1: validation dispatched (on the fresh head, pool free)');
+        assert.ok(sm.capturedPrLabelAdds.some(function (l) {
+            return (l.labels || []).indexOf('ai_validating') !== -1; }), 'arm re-applied');
+        assert.equal(sm.capturedPrComments.length, 1, 'one marker comment');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('placeholder reset 1/3') !== -1,
+            'the reset is counted against the per-PR cap (1/3)');
+    });
+
+    test('validate_pr: gh-852 AC2 — a BUSY pool defers the fresh-sha reset (no churn)', function () {
+        var CUR = 'b85fbu55b85fbu55b85fbu55b85fbu55b85fbu55';
+        var greenRule = { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                     notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'], checks: ['green'], draft: false },
+            localAction: 'validate_pr', limit: 1, id: 'revalidate-armed-green',
+            skipIfGreenCi: true };
+        var checkRuns = { check_runs: [
+            { name: 'Quality gate', status: 'in_progress', conclusion: null,
+              started_at: '2026-10-11T12:06:29Z' }
+        ] };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(1457, { branch: 'ai/gh-852', headSha: CUR,
+                                            labels: ['pr_approved', 'ai_validating'] })],
+                      commitCheckRuns: checkRuns,
+                      workflowApiRuns: [
+                          { id: 38140000001, status: 'in_progress', conclusion: null,
+                            head_sha: 'otherhead1', event: 'workflow_dispatch' }
+                      ] },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=') !== -1 || c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [greenRule] } });
+
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh repo clone') !== -1; }).length, 0,
+            'AC2: no fresh-sha refresh while the pool is busy (it would re-mint placeholders)');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run') !== -1; }).length, 0, 'no dispatch either');
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'no arm churn');
+    });
+
+    test('validate_pr: gh-852 AC2 — the per-PR per-window reset cap parks the resets (one note)', function () {
+        var CUR = 'caaaaaaaaaaaaaaaaaaaaaaaaaaaaaap852';
+        var greenRule = { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                     notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'], checks: ['green'], draft: false },
+            localAction: 'validate_pr', limit: 1, id: 'revalidate-armed-green',
+            skipIfGreenCi: true };
+        var recentIso = function (minAgo) {
+            return new Date(Date.now() - minAgo * 60000).toISOString();
+        };
+        var cz = loadModule('js/common/checkRunZombies.js', makeRequire({}), {});
+        var checkRuns = { check_runs: [
+            { name: 'Quality gate', status: 'in_progress', conclusion: null,
+              started_at: '2026-10-11T12:06:29Z' }
+        ] };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(1457, { branch: 'ai/gh-852', headSha: CUR,
+                                            labels: ['pr_approved', 'ai_validating'] })],
+                      commitCheckRuns: checkRuns,
+                      // 3 in-window resets already — the cap is 3 per 2h.
+                      prComments: [
+                          { body: cz.placeholderMarkerLine(1, 3, recentIso(90)) },
+                          { body: cz.placeholderMarkerLine(2, 3, recentIso(60)) },
+                          { body: cz.placeholderMarkerLine(3, 3, recentIso(30)) }
+                      ] },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=') !== -1 || c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [greenRule] } });
+
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh repo clone') !== -1; }).length, 0,
+            'AC2: cap reached — no further reset storm');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run') !== -1; }).length, 0);
+        assert.equal(sm.capturedPrComments.length, 1, 'exactly the ONE park note');
+        assert.ok(sm.capturedPrComments[0].body.indexOf('Placeholder resets capped') !== -1);
+        assert.equal(sm.capturedPrLabelAdds.length, 0);
+    });
+
+    test('validate_pr: gh-852 AC3 — a run-id zombie ghost keeps the legacy same-sha dispatch (no fresh-sha refresh)', function () {
+        // The placeholder gate must NOT hijack run-id ghosts: those carry a
+        // backing-run id, the plain re-dispatch overrides them on the gate,
+        // and moving the sha would only churn. d29efb16's twin with a
+        // resolvable ghost run id (cancelled).
+        var CUR = 'ac3z0mb1eac3z0mb1eac3z0mb1eac3z0mb1eac3';
+        var greenRule = { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved', 'ai_validating'],
+                     notMergeState: ['BEHIND', 'DIRTY', 'CLEAN'], checks: ['green'], draft: false },
+            localAction: 'validate_pr', limit: 1, id: 'revalidate-armed-green',
+            skipIfGreenCi: true };
+        var checkRuns = { check_runs: [
+            { name: 'Quality gate', status: 'in_progress', conclusion: null,
+              started_at: '2026-10-10T14:30:00Z',
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38099999999' }
+        ] };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(1457, { branch: 'ai/gh-842', headSha: CUR,
+                                            labels: ['pr_approved', 'ai_validating'] })],
+                      commitCheckRuns: checkRuns },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    return { workflow_runs: [
+                        { id: 38099999999, event: 'workflow_dispatch', head_branch: 'ai/gh-842',
+                          head_sha: CUR, status: 'completed', conclusion: 'cancelled',
+                          created_at: '2026-10-10T14:31:00Z' },
+                        { id: 38057801418, event: 'workflow_dispatch', head_branch: 'ai/gh-842',
+                          head_sha: CUR, status: 'completed', conclusion: 'success',
+                          created_at: '2026-10-10T13:58:00Z' }
+                    ] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', rules: [greenRule] } });
+
+        var dispatch = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; });
+        assert.equal(dispatch.length, 1, 'legacy gh-842 re-dispatch still fires');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh repo clone') !== -1; }).length, 0,
+            'AC3: no fresh-sha refresh for a run-id ghost (not the placeholder shape)');
+    });
+
     test('config order: unarm precedes silent-update (same-tick actualization)', function () {
         // Owner 2026-09-23: a BEHIND queue head with ai_validating armed
         // took 3 ticks to refresh (rule 0 skipped the armed PR, the unarm

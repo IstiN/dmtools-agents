@@ -2009,13 +2009,29 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 if (rule.skipIfGreenCi && vProbe && vProbe.green) {
                     var gGreenZombies = vHead0
                         ? headCheckRunZombies(effectiveRepoInfo, vHead0) : null;
-                    if (gGreenZombies && gGreenZombies.zombies.length) {
+                    // gh-852: the no-cancel variant — PLACEHOLDER check-runs
+                    // (link-less pending stamps past the short placeholder
+                    // grace) void the green cover too, even young ones the
+                    // 30-min zombie classifier still reads as live. The
+                    // dispatch gate below answers them with a fresh-sha
+                    // reset — a same-sha re-dispatch would only re-mint
+                    // placeholders if it queues again.
+                    var gGreenPh = (gGreenZombies && !gGreenZombies.zombies.length && vHead0)
+                        ? headPlaceholders(effectiveRepoInfo, vHead0) : null;
+                    if ((gGreenZombies && gGreenZombies.zombies.length) ||
+                        (gGreenPh && gGreenPh.length)) {
                         console.log('  🧟 ' + key + ' green cover VOID — ' +
-                                    gGreenZombies.zombies.length + ' zombie check-run(s) hold the' +
-                                    ' gate (gh-842: ' +
-                                    gGreenZombies.zombies.map(function (z) {
-                                        return String(z.name || '?') + ' (' + z.reason + ')';
-                                    }).join(', ') + ') — re-dispatching to override the ghosts');
+                            (gGreenZombies && gGreenZombies.zombies.length
+                                ? gGreenZombies.zombies.length + ' zombie check-run(s) hold the' +
+                                  ' gate (gh-842: ' +
+                                  gGreenZombies.zombies.map(function (z) {
+                                      return String(z.name || '?') + ' (' + z.reason + ')';
+                                  }).join(', ') + ') — re-dispatching to override the ghosts'
+                                : gGreenPh.length + ' placeholder check-run(s) pin the gate' +
+                                  ' (gh-852: ' + gGreenPh.map(function (p) {
+                                      return String(p.name || '?');
+                                  }).join(', ') + ') — the dispatch gate will mint a fresh sha' +
+                                  ' (a same-sha re-dispatch re-mints placeholders)'));
                         // fall through to the dispatch guards below
                     } else {
                         console.log('  ⏭️  ' + key +
@@ -2066,12 +2082,24 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // ghosts keep mergeState BLOCKED forever, and no run is
                     // ever ordered to override them. Dispatch instead (same
                     // fall-through as the green-cover void above).
+                    // gh-852: PLACEHOLDER check-runs (link-less pending
+                    // stamps past the short placeholder grace) void the
+                    // arm-only skip too — even young ones, before the
+                    // 30-min zombie staleness. The dispatch gate below
+                    // answers them with a fresh-sha reset, the only cure.
                     var latchZombies = vHead0
                         ? headCheckRunZombies(effectiveRepoInfo, vHead0) : null;
-                    if (latchZombies && latchZombies.zombies.length) {
+                    var latchPh = (latchZombies && !latchZombies.zombies.length && vHead0)
+                        ? headPlaceholders(effectiveRepoInfo, vHead0) : null;
+                    if ((latchZombies && latchZombies.zombies.length) ||
+                        (latchPh && latchPh.length)) {
                         console.log('  🧟 ' + key + ' latch-skip VOID — ' +
-                                    latchZombies.zombies.length + ' zombie check-run(s) hold the' +
-                                    ' gate (gh-842) — dispatching instead of arm-only');
+                            (latchZombies && latchZombies.zombies.length
+                                ? latchZombies.zombies.length + ' zombie check-run(s) hold the' +
+                                  ' gate (gh-842) — dispatching instead of arm-only'
+                                : latchPh.length + ' placeholder check-run(s) pin the gate' +
+                                  ' (gh-852) — the dispatch gate will mint a fresh sha' +
+                                  ' instead of arm-only'));
                         // fall through to the dispatch guards below
                     } else {
                         var latchMutexHolder = validationMutexHeldByAnother(
@@ -2274,6 +2302,145 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // get their own one-marker-per-head bookkeeping.
                     postGhostGuardAudit(effectiveRepoInfo, ticket.prNumber,
                                         vCancelResult);
+                }
+                // gh-852 PLACEHOLDER GATE — the head carries placeholder
+                // check-runs: pending/in_progress stamps with NO run id in
+                // their URL, minted ~20s after a dispatch that queued
+                // without materializing a job (live fa #1457, 2026-10-11:
+                // heads d29efb16 + 3 predecessors pinned BLOCKED with every
+                // real check green; 5 operator resets/day). Branch
+                // protection takes the LATEST check-run per (context, head)
+                // and a same-sha re-dispatch re-mints placeholders whenever
+                // it queues again — so the ONLY cure is a FRESH SHA plus a
+                // validation that starts immediately. Remedy (AC1): cap
+                // check (AC2, per PR per window) → pool-free probe (AC2,
+                // fail closed) → silent-update fresh-sha refresh → dispatch
+                // on the branch (lands on the new head) → stamp the new
+                // head → re-arm → marker. Run-id ghosts (no-run/cancelled/
+                // run-concluded) deliberately keep the plain same-sha
+                // dispatch below (AC3).
+                var vPh = vHead0 ? headPlaceholders(effectiveRepoInfo, vHead0) : null;
+                if (vPh && vPh.length) {
+                    var phCap = checkRunZombiesModule.placeholderCapOf(RUN_JOB_PARAMS);
+                    var phState = failMarkerState(effectiveRepoInfo, ticket.prNumber);
+                    var phMarks = phState.placeholders || { count: 0, lastAtMs: null };
+                    if (!checkRunZombiesModule.placeholderRetryAllowed(phMarks, phCap)) {
+                        // AC2 storm cap: this PR already burned its
+                        // fresh-sha resets inside the window — pause and
+                        // say so ONCE (a human push or the next window
+                        // resumes; the gate stays pinned meanwhile, same as
+                        // the operator-reset end state but without churn).
+                        if (!phState.placeholderParked && !DRY) {
+                            try {
+                                github_create_comment({
+                                    workspace: effectiveRepoInfo.owner,
+                                    repository: effectiveRepoInfo.repo,
+                                    number: ticket.prNumber,
+                                    body: PLACEHOLDER_PARK_MARKER + ' (' + phMarks.count + '/' +
+                                        phCap + ' fresh-sha resets in the current window) — ' +
+                                        'automatic placeholder gate resets paused (gh-852 AC2). ' +
+                                        'A human push (fresh head) or the next window resumes them.'
+                                });
+                            } catch (ePhPark) {
+                                console.warn('  ⚠️  placeholder park comment failed: ' +
+                                             (ePhPark.message || ePhPark));
+                            }
+                        }
+                        console.log('  🅿️  ' + key + ' placeholder resets capped (' + phMarks.count +
+                                    '/' + phCap + ' in window) — reset paused (gh-852 AC2)');
+                        continue; // NOT processedKeys — nothing happened
+                    }
+                    var phPoolFree = repoPoolFree(effectiveRepoInfo);
+                    if (phPoolFree === null) {
+                        console.warn('  ⚠️  ' + key + ' pool-free probe failed — placeholder' +
+                                     ' reset deferred (fail closed, retry next tick)');
+                        continue;
+                    }
+                    if (!phPoolFree) {
+                        console.log('  ⏳ ' + key + ' placeholder-pinned but the repo pool is BUSY' +
+                                    ' (active runs) — fresh-sha reset deferred (gh-852 AC2 pool probe)');
+                        continue;
+                    }
+                    if (DRY) {
+                        console.log('  🧪 [dry] placeholder reset skipped (gh-852: silent-update' +
+                                    ' fresh sha + validation dispatch on ' + ticket.branch + ')');
+                        continue;
+                    }
+                    try {
+                        silentUpdateBranch(ticket.branch);
+                    } catch (ePhUp) {
+                        console.warn('  ⚠️  ' + key + ' placeholder fresh-sha refresh failed: ' +
+                                     (ePhUp.message || ePhUp) + ' — head unchanged, retry next tick');
+                        continue;
+                    }
+                    // Re-read the fresh head for the in_progress stamp (the
+                    // dispatch rides the branch ref and lands on it; a
+                    // failed read only skips the stamp, never the dispatch).
+                    var phNewHead = null;
+                    try {
+                        var phPrRaw = github_get_pr({
+                            workspace: effectiveRepoInfo.owner,
+                            repository: effectiveRepoInfo.repo,
+                            pullRequestId: ticket.prNumber
+                        });
+                        var phPrObj = typeof phPrRaw === 'string'
+                            ? JSON.parse(phPrRaw) : (phPrRaw || {});
+                        phNewHead = (phPrObj.head && (phPrObj.head.sha || phPrObj.head)) || null;
+                    } catch (ePhHead) {
+                        console.warn('  ⚠️  ' + key + ' new-head read failed after the placeholder' +
+                                     ' reset: ' + (ePhHead.message || ePhHead) +
+                                     ' — stamp skipped, the dispatch still lands on the fresh head');
+                    }
+                    try {
+                        dispatchCiWorkflow(ticket.branch);
+                    } catch (ePhCi) {
+                        // The fresh sha stands — next tick sees a head with
+                        // no placeholders and dispatches normally (self-
+                        // healing); no arm, no marker (the attempt is not
+                        // counted, matching the zombie re-dispatch contract).
+                        console.warn('  ⚠️  ' + key + ' placeholder validation dispatch failed: ' +
+                                     (ePhCi.message || ePhCi) +
+                                     ' — fresh sha stands, next tick validates it');
+                        continue;
+                    }
+                    if (phNewHead) {
+                        stampValidationChecksForModule(
+                            effectiveRepoInfo, phNewHead, 'in_progress', null, null);
+                    }
+                    try {
+                        github_add_labels({
+                            workspace: effectiveRepoInfo.owner,
+                            repository: effectiveRepoInfo.repo,
+                            number: ticket.prNumber,
+                            labels: ['ai_validating']
+                        });
+                    } catch (ePhArm) {
+                        console.warn('  ⚠️  placeholder arm failed: ' + (ePhArm.message || ePhArm));
+                    }
+                    if (!DRY) {
+                        try {
+                            github_create_comment({
+                                workspace: effectiveRepoInfo.owner,
+                                repository: effectiveRepoInfo.repo,
+                                number: ticket.prNumber,
+                                body: checkRunZombiesModule.placeholderMarkerLine(
+                                          phMarks.count + 1, phCap, new Date().toISOString()) +
+                                    '\n\nPlaceholder check-runs pinned the merge gate on the old head' +
+                                    ' (pending stamps with no backing run — gh-852). The head was' +
+                                    ' refreshed to a fresh sha via a silent update and validation' +
+                                    ' dispatched on it, pool-free probed. Bounded: ' + phCap +
+                                    ' fresh-sha resets per PR per window.'
+                            });
+                        } catch (ePhMark) {
+                            console.warn('  ⚠️  placeholder marker comment failed: ' +
+                                         (ePhMark.message || ePhMark));
+                        }
+                    }
+                    console.log('  ♻️  ' + key + ' placeholder reset ' + (phMarks.count + 1) + '/' +
+                                phCap + ' — fresh sha via silent update, validation dispatched on' +
+                                ' the new head (gh-852)');
+                    processedKeys.push(key);
+                    continue;
                 }
                 dispatchCiWorkflow(ticket.branch);
                 var vHead = vHead0;
@@ -4820,6 +4987,10 @@ function reconcileReviewVerdicts(repoInfo, ticket, machineLogins) {
 // carriers. jobParams.redHeadSkip=false is the escape hatch (disables the
 // SKIP only; recording continues for the audit trail).
 var RED_HEAD_MARKER_RE = /\uD83D\uDD34 red head ([0-9a-f]{7,40}) \u2014 red (\d+)\/(\d+)/g;
+
+// gh-852 AC2: the once-per-cap-hit park note under the placeholder reset
+// cap (failMarkerState.placeholderParked dedupes the comment).
+var PLACEHOLDER_PARK_MARKER = '\uD83C\uDFF7\uFE0F Placeholder resets capped';
 
 function redHeadCapOf(jobParams) {
     // Default 3 reds on the same head (owner directive 2026-10-04);
