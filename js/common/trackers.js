@@ -893,8 +893,66 @@ function createTracker(config, customParams) {
         }
     }
 
+    // agents#856: how a rejected status transition is handled. 'none' (default) keeps the exact previous
+    // behaviour — the error propagates to the caller, which logs it. 'label' leaves a stage marker on the
+    // ticket instead, so a restricted workflow (no such state, no admin rights) does not silently lose the
+    // hand-off. Set via customParams.stageFallback or config.jira.stageFallback.
+    var stageFallbackRaw = (customParams && customParams.stageFallback) ||
+        (config && config.jira && config.jira.stageFallback) || 'none';
+    var stageFallback = String(stageFallbackRaw).toLowerCase() === 'label' ? 'label' : 'none';
+
+    function _stageLabel(stageKey) {
+        return 'stage_' + String(stageKey == null ? '' : stageKey)
+            .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    }
+
+    /**
+     * Moves the ticket to a stage status; when the tracker rejects the transition and the fallback is
+     * enabled, marks the stage with a `stage_<key>` label, drops the previous stage label and explains why
+     * in a comment. Returns { moved, marked, label, error } so callers can report what really happened.
+     * With stageFallback 'none' (default) a rejected transition throws, exactly like moveToStatus.
+     *
+     * @param {string} ticketKey
+     * @param {string} statusName  the status to move to
+     * @param {string} stageKey    stable stage name used for the label (e.g. 'PO_REVIEW')
+     * @param {string} [previousStageKey] stage whose label is removed after a successful mark
+     */
+    function moveToStatusOrMark(ticketKey, statusName, stageKey, previousStageKey) {
+        try {
+            impl.moveToStatus(ticketKey, statusName);
+            return { moved: true, marked: false, label: null, error: null };
+        } catch (moveError) {
+            if (stageFallback !== 'label') {
+                throw moveError;
+            }
+            var label = _stageLabel(stageKey || statusName);
+            var reason = String((moveError && (moveError.message || moveError)) || 'unknown error');
+            try {
+                impl.addLabel(ticketKey, label);
+            } catch (labelError) {
+                // Neither the transition nor the marker worked: report it loudly instead of pretending.
+                throw new Error('Status transition to "' + statusName + '" was rejected (' + reason +
+                    ') and the stage label "' + label + '" could not be added: ' +
+                    String((labelError && (labelError.message || labelError)) || labelError));
+            }
+            if (previousStageKey) {
+                try { impl.removeLabel(ticketKey, _stageLabel(previousStageKey)); } catch (e) { /* previous label may not exist */ }
+            }
+            try {
+                impl.postComment(ticketKey, 'Could not move this ticket to "' + statusName + '" (' + reason +
+                    '). The stage is recorded with the label `' + label + '` instead.');
+            } catch (commentError) {
+                console.warn('Could not post the stage-fallback comment on ' + ticketKey + ':', commentError);
+            }
+            console.warn('⚠️ ' + ticketKey + ': transition to "' + statusName + '" rejected — marked with label "' + label + '"');
+            return { moved: false, marked: true, label: label, error: reason };
+        }
+    }
+
     return {
         provider: provider,
+        stageFallback: function () { return stageFallback; },
+        moveToStatusOrMark: moveToStatusOrMark,
         getTicket: function (k) { return impl.getTicket(k); },
         search: function (q) { return impl.search(q); },
         postComment: function (k, c) { return impl.postComment(k, c); },

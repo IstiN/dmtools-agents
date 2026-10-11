@@ -299,3 +299,41 @@ suite('createQuestionsAndAssignForReview — failed ticket creation throws', fun
         );
     });
 });
+
+suite('createQuestionsAndAssignForReview — status transition outcome is reported honestly (agents#856)', function () {
+    function run(extraGlobals, customParams) {
+        var loaded = loadCreateQuestionsModule({
+            'outputs/questions.json': '[]',
+            'outputs/response.md': 'No gaps found.'
+        }, extraGlobals);
+        var result = loaded.mod.action({
+            ticket: { key: 'BICE-829' },
+            metadata: { contextId: 'story_questions' },
+            jobParams: { customParams: customParams || {} }
+        });
+        return { result: result, loaded: loaded };
+    }
+    var reject = { jira_move_to_status: function () { throw new Error('State not allowed'); } };
+
+    test('success keeps the exact previous message', function () {
+        var r = run({});
+        assert.equal(r.result.stageStatus, 'moved');
+        assert.contains(r.result.message, 'moved to PO Review');
+    });
+
+    test('default: a rejected move is no longer reported as "moved"', function () {
+        var r = run(reject);
+        assert.equal(r.result.success, true, 'the job itself still succeeds, as before');
+        assert.equal(r.result.stageStatus, 'failed');
+        assert.contains(r.result.message, 'NOT moved to PO Review');
+        assert.ok(!r.loaded.labels.some(function (l) { return String(l.label).indexOf('stage_') === 0; }), 'default mode adds no stage marker label');
+    });
+
+    test('stageFallback=label: the stage is marked and the message says so', function () {
+        var r = run(reject, { stageFallback: 'label' });
+        assert.equal(r.result.stageStatus, 'marked');
+        assert.contains(r.result.message, 'marked stage PO Review');
+        assert.ok(r.loaded.labels.some(function (l) { return l.label === 'stage_po_review'; }), JSON.stringify(r.loaded.labels));
+    });
+});
+
