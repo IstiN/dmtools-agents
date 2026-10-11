@@ -1116,3 +1116,92 @@ suite('trackers.js getIssue / searchIssues (Jira-shaped reads)', function () {
         assert.equal(r[0].fields.status.name, 'Active');
     });
 });
+
+suite('trackers.js — moveToStatusOrMark / stageFallback (agents#856)', function () {
+    function setup(opts) {
+        opts = opts || {};
+        var m = jiraMocks();
+        m.jira_move_to_status = opts.moveOk
+            ? recorder('jira_move_to_status', '{}')
+            : recorder('jira_move_to_status', { __throw__: new Error("The field 'State' contains the value 'PO REVIEW' that is not in the list of supported values") });
+        if (opts.addLabelFails) {
+            m.jira_add_label = recorder('jira_add_label', { __throw__: new Error('label api down') });
+        }
+        var t = loadTrackers(m).createTracker({}, Object.assign({ trackerProvider: 'jira' }, opts.customParams || {}));
+        return { t: t, m: m };
+    }
+
+    test('default is "none": a rejected transition throws exactly like moveToStatus (no labels, no comment)', function () {
+        var x = setup();
+        assert.equal(x.t.stageFallback(), 'none');
+        assert.throws(function () { x.t.moveToStatusOrMark('PS-1', 'PO Review', 'PO_REVIEW'); }, /not in the list of supported values/);
+        assert.equal(x.m.jira_add_label.calls.length, 0);
+        assert.equal(x.m.jira_post_comment.calls.length, 0);
+    });
+
+    test('a successful move reports moved and touches no label (any mode)', function () {
+        ['none', 'label'].forEach(function (mode) {
+            var x = setup({ moveOk: true, customParams: { stageFallback: mode } });
+            var r = x.t.moveToStatusOrMark('PS-1', 'PO Review', 'PO_REVIEW');
+            assert.deepEqual(r, { moved: true, marked: false, label: null, error: null });
+            assert.equal(x.m.jira_add_label.calls.length, 0);
+            assert.equal(x.m.jira_post_comment.calls.length, 0);
+        });
+    });
+
+    test('"label": a rejected transition adds stage_<key>, drops the previous stage label, explains in a comment', function () {
+        var x = setup({ customParams: { stageFallback: 'label' } });
+        var r = x.t.moveToStatusOrMark('PS-1', 'PO Review', 'PO_REVIEW', 'BA_ANALYSIS');
+        assert.equal(r.moved, false);
+        assert.equal(r.marked, true);
+        assert.equal(r.label, 'stage_po_review');
+        assert.contains(r.error, 'not in the list of supported values');
+        assert.equal(x.m.jira_add_label.calls[0].label, 'stage_po_review');
+        assert.equal(x.m.jira_remove_label.calls[0].label, 'stage_ba_analysis');
+        assert.contains(x.m.jira_post_comment.calls[0].comment, 'stage_po_review');
+        assert.contains(x.m.jira_post_comment.calls[0].comment, 'PO Review');
+    });
+
+    test('"label" via config.jira.stageFallback works too, and unknown values mean none', function () {
+        var m = jiraMocks();
+        m.jira_move_to_status = recorder('jira_move_to_status', { __throw__: new Error('nope') });
+        var viaConfig = loadTrackers(m).createTracker({ jira: { stageFallback: 'LABEL' } }, { trackerProvider: 'jira' });
+        assert.equal(viaConfig.stageFallback(), 'label');
+        var weird = loadTrackers(jiraMocks()).createTracker({}, { trackerProvider: 'jira', stageFallback: 'banana' });
+        assert.equal(weird.stageFallback(), 'none');
+    });
+
+    test('"label": when the marker cannot be added either, it throws loudly with both reasons', function () {
+        var x = setup({ addLabelFails: true, customParams: { stageFallback: 'label' } });
+        assert.throws(function () { x.t.moveToStatusOrMark('PS-1', 'PO Review', 'PO_REVIEW'); }, /stage label "stage_po_review" could not be added/);
+    });
+
+    test('"label": a failing comment or previous-label removal never fails the hand-off', function () {
+        var m = jiraMocks();
+        m.jira_move_to_status = recorder('jira_move_to_status', { __throw__: new Error('rejected') });
+        m.jira_post_comment = recorder('jira_post_comment', { __throw__: new Error('comment api down') });
+        m.jira_remove_label = recorder('jira_remove_label', { __throw__: new Error('no such label') });
+        var t = loadTrackers(m).createTracker({}, { trackerProvider: 'jira', stageFallback: 'label' });
+        var r = t.moveToStatusOrMark('PS-1', 'PO Review', 'PO_REVIEW', 'BA_ANALYSIS');
+        assert.equal(r.marked, true);
+    });
+
+    test('stage keys are normalized into safe labels', function () {
+        var x = setup({ customParams: { stageFallback: 'label' } });
+        assert.equal(x.t.moveToStatusOrMark('PS-1', 'In Review - Passed', 'In Review - Passed').label, 'stage_in_review_passed');
+    });
+
+    test('works on the ADO provider through the ADO label tool', function () {
+        var m = {
+            ado_move_to_state: recorder('ado_move_to_state', { __throw__: new Error('state not allowed') }),
+            ado_add_work_item_label: recorder('ado_add_work_item_label', '{}'),
+            ado_add_work_item_comment: recorder('ado_add_work_item_comment', '{}')
+        };
+        var t = loadTrackers(m).createTracker({}, { trackerProvider: 'ado', stageFallback: 'label' });
+        var r = t.moveToStatusOrMark('2023979', 'PO Review', 'PO_REVIEW');
+        assert.equal(r.marked, true);
+        assert.equal(m.ado_add_work_item_label.calls[0].label, 'stage_po_review');
+        assert.equal(m.ado_add_work_item_label.calls[0].id, '2023979');
+    });
+});
+
