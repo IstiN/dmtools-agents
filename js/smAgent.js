@@ -2094,6 +2094,51 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         continue;
                     }
                 }
+                // gh-850 LATCH ECONOMY (validate-fresh family — rules
+                // without skipIfValidatedHead): the ai_validated latch is
+                // per-head-sha. A completed-green dispatched run covering
+                // THIS head stands even when the REST rollup reads
+                // none/pending (fa #762 invisible-rollup shape) — the old
+                // query-level notLabels exclusion was the only thing
+                // preventing a re-validation loop there, so the action
+                // re-checks the cover probe before any dispatch.
+                // skipIfValidatedHead rules deliberately keep the stricter
+                // gate above: a red FOREIGN required check on an otherwise
+                // covered head must still force the normal validation path.
+                if (!rule.skipIfValidatedHead &&
+                    (ticket.labels || []).indexOf('ai_validated') !== -1 &&
+                    vProbe && vProbe.green) {
+                    console.log('  ⏭️  ' + key + ' latch covers the current head (completed-green' +
+                                ' dispatched run on this sha) — no re-validation');
+                    continue;
+                }
+                // gh-850 LATCH VOID (live fa #1457, 2026-10-11 05:0x — the
+                // zombie-FREE twin of the gh-842 void): the latch survives
+                // a head move with NO CI at all on the new sha; reaching
+                // here with the latch on means the head-scoped probe found
+                // no completed-green dispatched run ON THE CURRENT HEAD —
+                // the latch is stale for this head and must not gate any
+                // lane (the operator's manual `gh pr edit --remove-label
+                // ai_validated` surgery, automated). Non-fatal: the normal
+                // guarded dispatch below re-validates regardless; a failed
+                // strip only leaves the label-state reconciliation to the
+                // re-latch on the next green.
+                if ((ticket.labels || []).indexOf('ai_validated') !== -1 &&
+                    vProbe && !vProbe.green) {
+                    try {
+                        github_remove_label({
+                            workspace: effectiveRepoInfo.owner,
+                            repository: effectiveRepoInfo.repo,
+                            number: ticket.prNumber, label: 'ai_validated'
+                        });
+                        console.log('  🏷️  ' + key + ' latch VOID — no completed-green dispatched CI' +
+                                    ' run covers the current head (gh-850) — ai_validated stripped,' +
+                                    ' re-validating');
+                    } catch (eLatchVoid) {
+                        console.warn('  ⚠️  ' + key + ' stale latch strip failed: ' +
+                                     (eLatchVoid.message || eLatchVoid));
+                    }
+                }
                 // Red-current-head defer (owner 2026-09-27, live: fa wave
                 // stall — the oldest APPROVED PR was a guest whose head
                 // validation had FAILED; validate-armed kept re-dispatching

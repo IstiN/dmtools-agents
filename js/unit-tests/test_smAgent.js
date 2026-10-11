@@ -3983,6 +3983,239 @@ suite('smAgent: validation latch-skip + stale-arm sweeper (owner 2026-09-27)', f
     });
 });
 
+// ─── gh-850: latch VOID — validation latches are per-head-sha, never per-PR ──
+// Live fa #1457 (2026-10-11 02:59–05:09Z): the PR carried ai_validated
+// latched from an OLDER head; the head moved (refresh/rebase) and the new
+// sha carried NO CI at all — no check-runs, no dispatched run. validate-fresh
+// excluded the PR on the per-PR latch (notLabels ai_validated), the
+// masked-green dead-zone wanted an existing green rollup, the armed twins
+// wanted pr_approved + ai_validating — no rule ever re-dispatched. The tick
+// looped "in-progress" for 2h+ until an operator ran
+// `gh pr edit 1457 --remove-label ai_validated` — the tick armed + dispatched
+// within seconds. gh-842 covered the zombie-carrying head; gh-850 covers the
+// zombie-FREE but CI-absent head. Both share the invariant: a validation
+// latch is per-head-sha, never per-PR — absent a completed-green dispatched
+// run ON THE CURRENT HEAD, the latch is VOID (auto-strip / treat as
+// not-validated; no operator label surgery).
+suite('smAgent: gh-850 latch VOID — per-head-sha latches (live fa #1457 05:0x)', function () {
+
+    var OLD_HEAD = '0f320340old';   // the sha the green validation ran on
+    var NEW_HEAD = '856a145new';    // the moved head — ZERO CI on it
+
+    function realRule(id) {
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var found = null;
+        cfg.params.jobParams.rules.forEach(function (r) { if (r.id === id) found = r; });
+        if (!found) throw new Error('rule not found in sm_github.json: ' + id);
+        return found;
+    }
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    // REST /pulls payload for the real githubSource query (labels as objects).
+    function prPayload(n, labels, headSha) {
+        return { number: n, draft: false, title: 'gh-850 replay',
+            body: 'gh-850 latch VOID replay PR',
+            user: { login: 'ai-teammate' },
+            labels: labels.map(function (l) { return { name: l }; }),
+            head: { sha: headSha, ref: 'ai/gh-' + n } };
+    }
+
+    // gh-api mock: ONLY the old head carries the concluded green dispatched
+    // run; every probe on the new head returns an empty run list.
+    function runsCli() {
+        return function (cmd) {
+            var m = /head_sha=([^&"]+)/.exec(cmd.command);
+            if (m && m[1] === OLD_HEAD) {
+                var t = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+                return JSON.stringify({ workflow_runs: [
+                    { id: 1, status: 'completed', conclusion: 'success', head_sha: OLD_HEAD,
+                      event: 'workflow_dispatch', created_at: t, updated_at: t,
+                      html_url: 'https://example.com/run/1' }
+                ] });
+            }
+            return JSON.stringify({ workflow_runs: [] });
+        };
+    }
+
+    function dispatched(cmdList) {
+        return cmdList.some(function (c) { return c.command.indexOf('gh workflow run') === 0; });
+    }
+
+    // AC1 (dev lane, REAL query path): an UNAPPROVED latched PR whose head
+    // moved to a CI-absent sha must re-enter validation on the next tick.
+    test('AC1: validate-fresh re-validates a latched PR on a CI-absent moved head (real query)', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                realSource: true,
+                prList: JSON.stringify([prPayload(1457, ['ai_validated'], NEW_HEAD)]),
+                prStatus: { checkConclusion: 'none', mergeState: 'BLOCKED',
+                            headSha: NEW_HEAD, branch: 'ai/gh-1457' }
+            },
+            onCliExecute: runsCli()
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+            rules: [realRule('validate-fresh')] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands),
+            'AC1: the next tick DISPATCHES validation — the per-PR latch must not exclude the PR forever');
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
+            return r.number === 1457 && r.label === 'ai_validated';
+        }), 'AC1: the stale per-PR latch is auto-stripped (the operator surgery, automated)');
+        assert.ok(sm.capturedPrLabelAdds.some(function (a) {
+            return a.number === 1457 && a.labels.indexOf('ai_validating') !== -1;
+        }), 'AC1: validation arms on the fresh dispatch');
+    });
+
+    // AC1 (dev lane, gh-759 masked-green shape): the moved head carries
+    // AMBIENT green checks (kicker/CodeQL) but NO dispatched validation run —
+    // the dead-zone rule must not trust the per-PR latch either.
+    test('AC1: masked-green dead-zone re-validates a latched PR with ambient green but no dispatched run', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                realSource: true,
+                prList: JSON.stringify([prPayload(1457, ['ai_validated'], NEW_HEAD)]),
+                prStatus: { checkConclusion: 'green', mergeState: 'BLOCKED',
+                            headSha: NEW_HEAD, branch: 'ai/gh-1457' }
+            },
+            onCliExecute: runsCli()
+        }));
+        sm.action({ jobParams: { owner: 'a', repo: 'b',
+            rules: [realRule('validate-fresh-masked-green')] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands),
+            'ambient green masks the rollup but no dispatched run covers the head — re-validate');
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
+            return r.number === 1457 && r.label === 'ai_validated';
+        }), 'the stale latch is stripped before the re-dispatch');
+    });
+
+    // AC1 (approved lane): validate-armed already dispatches via the
+    // latch-skip fall-through — the gh-850 addition is the explicit VOID:
+    // the stale latch is stripped while the dispatch fires.
+    test('AC1: validate-armed strips the stale latch while dispatching on the bare moved head', function () {
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [{ key: 'pr-1457', labels: ['pr_approved', 'ai_validated'],
+                    issueNumber: null, prNumber: 1457, draft: false,
+                    branch: 'ai/gh-1457', headSha: NEW_HEAD }],
+                prStatus: { checkConclusion: 'none', mergeState: 'BLOCKED' }
+            },
+            onCliExecute: runsCli()
+        }));
+        var validateArmed = { source: 'github',
+            query: { type: 'pr', labels: ['pr_approved'],
+                notLabels: ['ai_validating', 'validation_failed'],
+                notMergeState: ['BEHIND', 'DIRTY'], draft: false,
+                mutex: 'ai_validating', mutexAmong: ['pr_approved'] },
+            localAction: 'validate_pr', skipIfValidatedHead: true, redHeadSkip: true,
+            limit: 1, id: 'validate-armed', deferRedHead: true };
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [validateArmed] } });
+
+        assert.ok(dispatched(sm.capturedCliCommands), 'the approved lane dispatches (latch-skip fall-through)');
+        assert.ok(sm.capturedPrLabelRemoves.some(function (r) {
+            return r.number === 1457 && r.label === 'ai_validated';
+        }), 'the stale per-PR latch is voided, not left to rot');
+    });
+
+    // AC2 (economy): a latch covering the CURRENT head stands even when the
+    // REST rollup reads none/pending (fa #762 invisible-rollup shape) — the
+    // old query-level exclusion was the only thing preventing a
+    // re-validation loop there; the action-level cover probe replaces it.
+    test('AC2: covering green on the unchanged head → NO re-dispatch (economy, invisible rollup)', function () {
+        var coveredHead = '0f320340old';   // the green run's sha == the CURRENT head
+        var sm = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                items: [{ key: 'pr-1457', labels: ['ai_validated'],
+                    issueNumber: null, prNumber: 1457, draft: false,
+                    branch: 'ai/gh-1457', headSha: coveredHead }],
+                // rollup invisible on this deployment despite the green run
+                prStatus: { checkConclusion: 'none', mergeState: 'BLOCKED' }
+            },
+            onCliExecute: function (cmd) {
+                var m = /head_sha=([^&"]+)/.exec(cmd.command);
+                if (m && m[1] === coveredHead) {
+                    var t = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+                    return JSON.stringify({ workflow_runs: [
+                        { id: 1, status: 'completed', conclusion: 'success',
+                          head_sha: coveredHead, event: 'workflow_dispatch',
+                          created_at: t, updated_at: t }
+                    ] });
+                }
+                return JSON.stringify({ workflow_runs: [] });
+            }
+        }));
+        var validateFresh = { source: 'github',
+            query: { type: 'pr', checks: ['none', 'pending'],
+                notLabels: ['ai_validating', 'pr_approved', 'chore:pin'],
+                notMergeState: 'BEHIND', draft: false },
+            localAction: 'validate_pr', limit: 1, id: 'validate-fresh' };
+        sm.action({ jobParams: { owner: 'a', repo: 'b', rules: [validateFresh] } });
+
+        assert.ok(!dispatched(sm.capturedCliCommands),
+            'AC2: a completed-green dispatched run ON THE CURRENT HEAD still covers — no CI burn');
+        assert.ok(!sm.capturedPrLabelRemoves.some(function (r) { return r.label === 'ai_validated'; }),
+            'AC2: the covering latch is kept');
+    });
+
+    // AC3: L2 replay of the 05:0x #1457 timeline — tick 1: latched PR on a
+    // CI-absent moved head → dispatch + strip + arm; tick 2: the dispatched
+    // run concludes green on the new head → validated-green re-latches
+    // ai_validated (review follows) — the conveyor recovers with no operator.
+    test('AC3: L2 replay — bare moved head tick dispatches+strips; green conclusion re-latches', function () {
+        var tick1 = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                realSource: true,
+                prList: JSON.stringify([prPayload(1457, ['ai_validated'], NEW_HEAD)]),
+                prStatus: { checkConclusion: 'none', mergeState: 'BLOCKED',
+                            headSha: NEW_HEAD, branch: 'ai/gh-1457' }
+            },
+            onCliExecute: runsCli()
+        }));
+        tick1.action({ jobParams: { owner: 'a', repo: 'b',
+            rules: [realRule('validate-fresh')] } });
+        assert.ok(dispatched(tick1.capturedCliCommands),
+            'tick 1 (02:59–05:09 live wedge): the tick itself dispatches — no manual label strip');
+        assert.ok(tick1.capturedPrLabelRemoves.some(function (r) {
+            return r.number === 1457 && r.label === 'ai_validated';
+        }), 'tick 1: the latch is voided automatically (operator surgery no longer needed)');
+
+        // tick 2: the re-dispatched run landed on the new head and concluded
+        // green; the PR is now armed (ai_validating) and unlatched.
+        var greenAt = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+        var tick2 = makeSmAgent(Object.assign(config('a', 'b'), {
+            github: {
+                realSource: true,
+                prList: JSON.stringify([prPayload(1457, ['ai_validating'], NEW_HEAD)]),
+                prStatus: { checkConclusion: 'green', mergeState: 'BLOCKED',
+                            headSha: NEW_HEAD, branch: 'ai/gh-1457' }
+            },
+            onCliExecute: function (cmd) {
+                var m = /head_sha=([^&"]+)/.exec(cmd.command);
+                if (m && m[1] === NEW_HEAD) {
+                    return JSON.stringify({ workflow_runs: [
+                        { id: 2, status: 'completed', conclusion: 'success', head_sha: NEW_HEAD,
+                          event: 'workflow_dispatch', created_at: greenAt, updated_at: greenAt,
+                          html_url: 'https://example.com/run/2' }
+                    ] });
+                }
+                return JSON.stringify({ workflow_runs: [] });
+            }
+        }));
+        tick2.action({ jobParams: { owner: 'a', repo: 'b',
+            rules: [realRule('validated-green')] } });
+        assert.ok(tick2.capturedPrLabelRemoves.some(function (r) {
+            return r.number === 1457 && r.label === 'ai_validating';
+        }), 'tick 2: the arm is consumed');
+        assert.ok(tick2.capturedPrLabelAdds.some(function (a) {
+            return a.number === 1457 && a.labels.indexOf('ai_validated') !== -1;
+        }), 'tick 2: the latch re-latches ON THE NEW HEAD — review follows, conveyor recovered');
+    });
+});
+
 suite('smAgent: red-head park + dry-run dispatch + conclusion grace (fa wave stall 2026-09-27)', function () {
     // Live diagnosis (fa, 2026-09-27 evening): the oldest APPROVED PR was a
     // guest whose head validation had FAILED — validate-armed kept
@@ -9415,7 +9648,10 @@ suite('smAgent: validate-fresh-masked-green (gh-759 post-dev dead zone)', functi
         query: {
             type: 'pr',
             checks: 'green',
-            notLabels: ['ai_validating', 'pr_approved', 'ai_validated', 'chore:pin', 'validation_failed'],
+            // gh-850: ai_validated left the notLabels list — the latch is
+            // per-head-sha, so a latched PR on a moved (masked-green but
+            // CI-absent) head re-enters here and the action voids/re-validates.
+            notLabels: ['ai_validating', 'pr_approved', 'chore:pin', 'validation_failed'],
             notMergeState: ['BEHIND', 'DIRTY'],
             mergeStateLatch: { CLEAN: ['ai_developed'] },
             draft: false
@@ -9446,9 +9682,13 @@ suite('smAgent: validate-fresh-masked-green (gh-759 post-dev dead zone)', functi
         assert.deepEqual(rule.query.mergeStateLatch, { CLEAN: ['ai_developed'] },
             'gh-829: green + CLEAN + zero labels arms ONLY when the linked issue carries the ' +
             'ai_developed dev-done latch — guests/unlinked heads stay unarmed (fail closed)');
-        ['ai_validating', 'pr_approved', 'ai_validated', 'chore:pin', 'validation_failed'].forEach(function (l) {
+        ['ai_validating', 'pr_approved', 'chore:pin', 'validation_failed'].forEach(function (l) {
             assert.ok((rule.query.notLabels || []).indexOf(l) !== -1, 'excludes ' + l);
         });
+        assert.ok((rule.query.notLabels || []).indexOf('ai_validated') === -1,
+            'gh-850: the per-PR latch no longer excludes the PR — a latched head that moved onto ' +
+            'a masked-green but CI-absent sha is the gh-850 deadlock shape; validate_pr voids the ' +
+            'stale latch and re-dispatches (skipIfGreenCi still skips when a green run covers the head)');
         assert.equal(rule.query.draft, false);
     });
 
