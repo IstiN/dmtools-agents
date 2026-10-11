@@ -1116,4 +1116,3 @@ suite('trackers.js getIssue / searchIssues (Jira-shaped reads)', function () {
         assert.equal(r[0].fields.status.name, 'Active');
     });
 });
-
