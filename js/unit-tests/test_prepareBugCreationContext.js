@@ -36,7 +36,7 @@ function loadPrepareBugCreationContext(mocks) {
 
     var mod = loadModule(
         'js/prepareBugCreationContext.js',
-        makeRequire({ './common/trackers.js': d2Trackers(Object.assign({}, defaults, mocks || {})) }),
+        makeRequire({ './common/trackers.js': d2Trackers(Object.assign({}, defaults, mocks || {})), './configLoader.js': configLoaderModule }),
         Object.assign({}, defaults, mocks || {})
     );
 
@@ -240,3 +240,107 @@ suite('prepareBulkBugsCreationContext', function() {
     });
 
 });
+
+suite('creation automation queries follow jira.statuses when the project opts in (agents#855)', function() {
+
+    // real loader, but loadProjectConfig returns the defaults patched with the given jira overrides
+    function loaderWith(jiraOverrides) {
+        return {
+            loadProjectConfig: function() {
+                // build a fresh object: loadProjectConfig shares nested default objects between calls, so
+                // mutating its result would leak one test's overrides into the next
+                var base = configLoaderModule.loadProjectConfig({});
+                var jira = Object.assign({}, base.jira);
+                Object.keys(jiraOverrides || {}).forEach(function(k) {
+                    jira[k] = (k === 'statuses') ? Object.assign({}, base.jira.statuses, jiraOverrides[k]) : jiraOverrides[k];
+                });
+                return Object.assign({}, base, { jira: jira });
+            },
+            interpolateJql: configLoaderModule.interpolateJql
+        };
+    }
+    function trackersFor(searches) {
+        return loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), {
+            jira_search_by_jql: function(args) { searches.push(args.jql); return []; },
+            jira_get_ticket: function() { return JSON.stringify({ key: 'TS-1', fields: { summary: 's' } }); },
+            jira_post_comment: function() {}
+        });
+    }
+    function runBug(jiraOverrides, customParams) {
+        var searches = [];
+        var mocks = { jira_search_by_jql: function(a) { searches.push(a.jql); return []; },
+            jira_get_ticket: function() { return JSON.stringify({ key: 'TS-1', fields: { summary: 's' } }); },
+            file_write: function() {} };
+        var mod = loadModule('js/prepareBugCreationContext.js', makeRequire({
+            './common/trackers.js': trackersFor(searches), './configLoader.js': loaderWith(jiraOverrides)
+        }), mocks);
+        mod.action({ inputFolderPath: 'input/TS-614', customParams: customParams || {} });
+        return searches;
+    }
+    function runBulk(jiraOverrides, customParams) {
+        var searches = [];
+        var mocks = { file_write: function() {} };
+        // the open-bugs query only runs after at least one failed Test Case was found
+        var bulkTrackers = loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), {
+            jira_search_by_jql: function(args) {
+                searches.push(args.jql);
+                return args.jql.indexOf('issuetype = "Test Case"') !== -1
+                    ? [{ key: 'TS-9', fields: { summary: 'tc', description: 'd', comment: { comments: [] } } }]
+                    : [];
+            },
+            jira_get_ticket: function() { return JSON.stringify({ key: 'TS-9', fields: { summary: 'tc' } }); }
+        });
+        var mod = loadModule('js/prepareBulkBugsCreationContext.js', makeRequire({
+            './configLoader.js': loaderWith(jiraOverrides), './config.js': configModule, './common/trackers.js': bulkTrackers
+        }), mocks);
+        mod.action({ inputFolderPath: 'input/bulk', customParams: customParams || { batchSize: 5 }, jira: { project: 'TS' } });
+        return searches;
+    }
+
+    test('default: bug creation queries are exactly the previous ones', function() {
+        var q = runBug({});
+        assert.ok(q.some(function(j) { return j === 'project = TS AND issuetype in (Bug) AND status not in (Done)'; }), JSON.stringify(q));
+        assert.ok(q.some(function(j) { return j.indexOf('issuetype = Bug AND status in (Done) ORDER BY updated DESC') !== -1; }), JSON.stringify(q));
+    });
+
+    test('opt-in: the Done status of bug creation follows jira.statuses.DONE', function() {
+        var q = runBug({ useConfiguredStatusesInQueries: true, statuses: { DONE: 'Closed' } });
+        assert.ok(q.some(function(j) { return j === 'project = TS AND issuetype in (Bug) AND status not in (Closed)'; }), JSON.stringify(q));
+        assert.ok(q.some(function(j) { return j.indexOf('status in (Closed)') !== -1; }), JSON.stringify(q));
+    });
+
+    test('override without opt-in changes nothing (existing deployments keep their queries)', function() {
+        var q = runBug({ statuses: { DONE: 'Closed' } });
+        assert.ok(q.some(function(j) { return j.indexOf('status not in (Done)') !== -1; }), JSON.stringify(q));
+        assert.ok(!q.some(function(j) { return j.indexOf('Closed') !== -1; }), JSON.stringify(q));
+    });
+
+    test('an explicit customParams.openBugsJql is used as given (with placeholders still resolved)', function() {
+        var q = runBug({}, { openBugsJql: 'project = X AND status = {status.DONE:Done}' });
+        assert.ok(q.some(function(j) { return j === 'project = X AND status = Done'; }), JSON.stringify(q));
+    });
+
+    test('bulk: default queries are exactly the previous ones', function() {
+        var q = runBulk({});
+        assert.ok(q.some(function(j) { return j === 'project = TS AND issuetype in (Bug) AND status not in (Done)'; }), JSON.stringify(q));
+        assert.ok(q.some(function(j) { return j.indexOf('issuetype = "Test Case" AND status = Failed AND (labels is EMPTY') !== -1; }), JSON.stringify(q));
+    });
+
+    test('bulk opt-in: Failed and Done both follow jira.statuses', function() {
+        var q = runBulk({ useConfiguredStatusesInQueries: true, statuses: { FAILED: 'Test Failed', DONE: 'Closed' } });
+        assert.ok(q.some(function(j) { return j.indexOf('status = "Test Failed" AND (labels is EMPTY') !== -1; }), JSON.stringify(q));
+        assert.ok(q.some(function(j) { return j === 'project = TS AND issuetype in (Bug) AND status not in (Closed)'; }), JSON.stringify(q));
+    });
+
+    test('the shipped bug-creation agent JSONs use placeholders whose defaults equal the old literals', function() {
+        ['bug_creation.json', 'bulk_bugs_creation.json'].forEach(function(f) {
+            var cp = JSON.parse(file_read({ path: f })).params.customParams;
+            var cfg = { jira: { project: 'TS', parentTicket: '', statuses: configModule.STATUSES } };
+            assert.equal(configLoaderModule.interpolateJql(cp.openBugsJql, cfg), 'project = TS AND issuetype in (Bug) AND status not in (Done)', f);
+            if (cp.failedTCsJql) {
+                assert.contains(configLoaderModule.interpolateJql(cp.failedTCsJql, cfg), 'status = Failed AND');
+            }
+        });
+    });
+});
+

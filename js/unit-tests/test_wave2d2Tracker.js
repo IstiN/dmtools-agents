@@ -126,7 +126,7 @@ suite('wave2d2 ado — prepareBugCreationContext', function() {
             ado_get_work_item: function(a) { return w2Wi(Number(a.id), 'TC title', 'Ready', { 'System.Description': 'tc desc' }); },
             ado_search_by_wiql: function() { return [w2Wi(900, 'Existing bug', 'Active', { 'System.Description': 'bug desc' })]; }
         });
-        var mod = loadModule('js/prepareBugCreationContext.js', makeRequire({ './common/trackers.js': w2Trackers(rec.mocks) }),
+        var mod = loadModule('js/prepareBugCreationContext.js', makeRequire({ './common/trackers.js': w2Trackers(rec.mocks), './configLoader.js': configLoaderModule }),
             Object.assign({ file_write: function(p, c) { writes.push({ path: p, content: c }); } }, rec.mocks));
         var r = mod.action({ inputFolderPath: 'input/614', customParams: { trackerProvider: 'ado', openBugsJql: 'SELECT [System.Id] FROM WorkItems' } });
         assert.equal(r.success, true);

@@ -543,13 +543,15 @@ function formatTemplate(template, vars) {
  *   would change what existing projects query.)
  * - `{status.KEY}` (no literal) — always the configured/default `jira.statuses.KEY`.
  * - An unknown KEY is left untouched, like every other unknown placeholder.
- * The substituted value has single quotes escaped, since the rules put the placeholder inside quotes.
+ * Quoting: inside quotes written in the template the value is only escaped; in an unquoted position a plain
+ * word stays bare (so the default query is byte-identical to the old literal) and any other value is
+ * wrapped in double quotes.
  */
 function interpolateStatusPlaceholders(jql, config) {
     var jiraCfg = (config && config.jira) || {};
     var statuses = jiraCfg.statuses || {};
     var useConfigured = jiraCfg.useConfiguredStatusesInQueries === true;
-    return String(jql).replace(/\{status\.([A-Za-z0-9_]+)(?::([^}]*))?\}/g, function (match, key, literal) {
+    return String(jql).replace(/\{status\.([A-Za-z0-9_]+)(?::([^}]*))?\}/g, function (match, key, literal, offset, whole) {
         var configured = statuses[key];
         var hasLiteral = literal !== undefined;
         var value;
@@ -560,17 +562,80 @@ function interpolateStatusPlaceholders(jql, config) {
         } else {
             return match;
         }
-        return String(value).replace(/'/g, "\\'");
+        value = String(value);
+        var before = offset > 0 ? whole.charAt(offset - 1) : '';
+        var after = whole.charAt(offset + match.length);
+        var quoted = (before === "'" || before === '"') && after === before;
+        if (quoted) {
+            // the template already quotes it: only escape the same quote character
+            return value.replace(new RegExp(before, 'g'), '\\' + before);
+        }
+        // Unquoted position (e.g. `status not in ({status.DONE:Done})`): a plain word stays bare, so the
+        // default query is byte-identical to the old literal; anything else (spaces, dashes) is quoted so a
+        // configured multi-word status cannot break the query.
+        return /^[A-Za-z0-9_]+$/.test(value) ? value : '"' + value.replace(/"/g, '\\"') + '"';
     });
 }
 
 /**
- * Interpolate JQL template placeholders using config.
- * Replaces {jiraProject}, {parentTicket} and {status.KEY[:Literal]} (see interpolateStatusPlaceholders).
+ * Expands `{stage.KEY:Literal}` into a clause that selects a ticket by its status OR by the stage label a
+ * rejected status transition left behind (agents#855/#856), in the syntax of the tracker in use:
+ *   Jira / GitHub:  (status in ('X') OR labels = 'stage_x')
+ *   Azure DevOps:   ([System.State] IN ('X') OR [System.Tags] CONTAINS 'stage_x')
+ * It is OFF by default — the placeholder then expands to the plain status clause the rule always had
+ * (`status in ('X')` / `[System.State] IN ('X')`), so nothing changes unless the project sets
+ * `jira.stageFallback: 'label'` (the same switch that makes the tracker write the label). The status value
+ * itself follows the `{status.KEY:Literal}` rules above.
  */
-function interpolateJql(jql, config) {
+function interpolateStagePlaceholders(jql, config, trackerProvider) {
+    var jiraCfg = (config && config.jira) || {};
+    var statuses = jiraCfg.statuses || {};
+    var useConfigured = jiraCfg.useConfiguredStatusesInQueries === true;
+    var withLabel = String(jiraCfg.stageFallback || '').toLowerCase() === 'label';
+    var ado = String(trackerProvider || '').toLowerCase() === 'ado';
+    return String(jql).replace(/\{stage\.([A-Za-z0-9_]+)(?::([^}]*))?\}/g, function (match, key, literal) {
+        var configured = statuses[key];
+        var name = literal !== undefined
+            ? ((useConfigured && configured) ? configured : literal)
+            : configured;
+        if (!name) return match;
+        name = String(name);
+        var quotedName = "'" + name.replace(/'/g, "\\'") + "'";
+        var statusClause = ado
+            ? '[System.State] IN (' + quotedName + ')'
+            : 'status in (' + quotedName + ')';
+        if (!withLabel) return statusClause;
+        var label = DEFAULT_CONFIG.stageLabel(key);
+        var labelClause = ado
+            ? "[System.Tags] CONTAINS '" + label + "'"
+            : "labels = '" + label + "'";
+        return '(' + statusClause + ' OR ' + labelClause + ')';
+    });
+}
+
+/**
+ * Picks the query for the tracker in use: `rule.jqlByTracker[provider]` wins over `rule.jql` when present
+ * (agents#855 — an ADO project supplies native WIQL for a rule without forking sm.json). Rules without
+ * `jqlByTracker`, and trackers without an entry, use `rule.jql` exactly as before.
+ */
+function selectRuleQuery(rule, trackerProvider) {
+    if (!rule) return null;
+    var map = rule.jqlByTracker;
+    var provider = String(trackerProvider || '').toLowerCase();
+    if (map && typeof map === 'object' && provider && typeof map[provider] === 'string' && map[provider]) {
+        return map[provider];
+    }
+    return rule.jql;
+}
+
+/**
+ * Interpolate JQL template placeholders using config.
+ * Replaces {jiraProject}, {parentTicket}, {status.KEY[:Literal]} (see interpolateStatusPlaceholders) and
+ * {stage.KEY[:Literal]} (see interpolateStagePlaceholders; needs trackerProvider for the ADO syntax).
+ */
+function interpolateJql(jql, config, trackerProvider) {
     if (!jql) return jql;
-    return formatTemplate(interpolateStatusPlaceholders(jql, config), {
+    return formatTemplate(interpolateStatusPlaceholders(interpolateStagePlaceholders(jql, config, trackerProvider), config), {
         jiraProject: config.jira.project,
         parentTicket: config.jira.parentTicket
     });
@@ -787,6 +852,8 @@ module.exports = {
     formatTemplate: formatTemplate,
     interpolateJql: interpolateJql,
     interpolateStatusPlaceholders: interpolateStatusPlaceholders,
+    interpolateStagePlaceholders: interpolateStagePlaceholders,
+    selectRuleQuery: selectRuleQuery,
     formatBranchName: formatBranchName,
     resolveBranchName: resolveBranchName,
     resolvePRTargetBranch: resolvePRTargetBranch,

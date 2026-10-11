@@ -11,15 +11,20 @@
 // Load-time require (gh-823): a deferred require would resolve against the
 // pack js/ root only — hoist every require to the top of the module.
 var trackersModule = require('./common/trackers.js');
+var configLoader = require('./configLoader.js');
 function sanitizeFilename(str) {
     return str.replace(/[\/\\:*?"<>|]/g, '-').replace(/\s+/g, ' ').substring(0, 100).trim();
 }
 
-function fetchHistoricalDoneBugs(ticketKey, tracker) {
+function fetchHistoricalDoneBugs(ticketKey, tracker, queryConfig) {
     tracker = tracker || trackersModule.createTracker(null, {});
     try {
-        // JQL text: provider-specific query (WIQL on ado)
-        return tracker.searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug AND status in (Done) ORDER BY updated DESC', {
+        // JQL text: provider-specific query (WIQL on ado). The Done status follows jira.statuses.DONE when
+        // the project opted in (agents#855); otherwise it is the literal Done, as before.
+        var historicalJql = configLoader.interpolateJql(
+            'issue in linkedIssues("' + ticketKey + '") AND issuetype = Bug AND status in ({status.DONE:Done}) ORDER BY updated DESC',
+            queryConfig || { jira: {} });
+        return tracker.searchIssues(historicalJql, {
             fields: ['key', 'summary', 'description', 'status', 'updated'],
             maxResults: 10
         }) || [];
@@ -29,8 +34,8 @@ function fetchHistoricalDoneBugs(ticketKey, tracker) {
     }
 }
 
-function writeHistoricalDoneBugs(inputFolder, ticketKey, tracker) {
-    var doneBugs = fetchHistoricalDoneBugs(ticketKey, tracker);
+function writeHistoricalDoneBugs(inputFolder, ticketKey, tracker, queryConfig) {
+    var doneBugs = fetchHistoricalDoneBugs(ticketKey, tracker, queryConfig);
     if (!doneBugs || doneBugs.length === 0) {
         return 0;
     }
@@ -69,9 +74,14 @@ function action(params) {
         var ticketKey = inputFolder.split('/').pop();
 
         var customParams = actualParams.customParams || {};
-        var tracker = trackersModule.createTracker(null, customParams);
-        var openBugsJql = customParams.openBugsJql
-            || 'project = ' + ticketKey.split('-')[0] + ' AND issuetype in (Bug) AND status not in (Done)';
+        // agents#855: status names in these queries follow jira.statuses when the project opted in
+        // (jira.useConfiguredStatusesInQueries); otherwise they stay the literals below, as before.
+        var queryConfig = configLoader.loadProjectConfig(actualParams);
+        var tracker = trackersModule.createTracker(queryConfig, customParams);
+        var openBugsJql = configLoader.interpolateJql(
+            customParams.openBugsJql
+                || 'project = ' + ticketKey.split('-')[0] + ' AND issuetype in (Bug) AND status not in ({status.DONE:Done})',
+            queryConfig);
 
         console.log('=== Preparing bug creation context for', ticketKey, '===');
 
@@ -97,7 +107,7 @@ function action(params) {
             console.log('Wrote ticket.md for', ticketKey);
         }
 
-        var historicalDoneCount = writeHistoricalDoneBugs(inputFolder, ticketKey, tracker);
+        var historicalDoneCount = writeHistoricalDoneBugs(inputFolder, ticketKey, tracker, queryConfig);
 
         // Fetch all open bugs
         console.log('Fetching open bugs with JQL:', openBugsJql);

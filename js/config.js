@@ -202,7 +202,18 @@ const DEFAULT_FORMATS = {
 };
 
 // Export all configuration
+/**
+ * Name of the label that marks a ticket as being in a stage when the tracker rejected the status
+ * transition (agents#856): 'PO_REVIEW' / 'PO Review' -> 'stage_po_review'. One definition shared by the
+ * tracker (which writes the label) and the SM query placeholders (which select by it).
+ */
+function stageLabel(stageKey) {
+    return 'stage_' + String(stageKey == null ? '' : stageKey)
+        .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
 module.exports = {
+    stageLabel,
     ISSUE_TYPES,
     STATUSES,
     PRIORITIES,

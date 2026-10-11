@@ -85,14 +85,21 @@ function action(params) {
             || 'TS';
         var batchSize = customParams.batchSize || 50;
 
-        var openBugsJql = (customParams.openBugsJql || 'project = {jiraProject} AND issuetype in (Bug) AND status not in (Done)')
-            .replace('{jiraProject}', projectKey);
-
-        var failedTCsJql = (customParams.failedTCsJql ||
-            'project = {jiraProject} AND issuetype = "Test Case" AND status = Failed AND (labels is EMPTY OR labels NOT IN (sm_bug_creation_triggered)) ORDER BY created ASC')
-            .replace('{jiraProject}', projectKey);
-
         var config = configLoader.loadProjectConfig(actualParams);
+        // agents#855: {jiraProject} is replaced with the project key derived above; {status.KEY:Literal}
+        // follows jira.statuses only when the project opted in (jira.useConfiguredStatusesInQueries),
+        // otherwise it stays the literal — the default queries are byte-identical to the previous ones.
+        var statusConfig = { jira: { statuses: (config.jira && config.jira.statuses) || {},
+            useConfiguredStatusesInQueries: !!(config.jira && config.jira.useConfiguredStatusesInQueries),
+            project: projectKey, parentTicket: '' } };
+        var openBugsJql = configLoader.interpolateJql(
+            customParams.openBugsJql || 'project = {jiraProject} AND issuetype in (Bug) AND status not in ({status.DONE:Done})',
+            statusConfig);
+
+        var failedTCsJql = configLoader.interpolateJql(customParams.failedTCsJql ||
+            'project = {jiraProject} AND issuetype = "Test Case" AND status = {status.FAILED:Failed} AND (labels is EMPTY OR labels NOT IN (sm_bug_creation_triggered)) ORDER BY created ASC',
+            statusConfig);
+
         var tracker = trackersModule.createTracker(config, customParams);
         var failedReasonFieldName = getFailedReasonFieldName(config, customParams);
         console.log('Failed Reason field name:', failedReasonFieldName);

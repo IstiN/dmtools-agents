@@ -10,7 +10,7 @@
       "rules": [
         {
           "description": "PO Review Stories with all subtasks Done → BA Analysis",
-          "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('{status.PO_REVIEW:PO Review}')",
+          "jql": "project = {jiraProject} AND issuetype in ('Story') AND {stage.PO_REVIEW:PO Review}",
           "configFile": "agents/story_ba_check.json",
           "skipIfLabel": "sm_story_ba_check_triggered",
           "localExecution": true,

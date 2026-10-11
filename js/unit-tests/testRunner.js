@@ -291,6 +291,11 @@ function makeDefaultConfigLoaderMock(extraConfig) {
                 }
             }
             return result;
+        },
+        // agents#855: scripts now resolve {jiraProject}/{status.*} through the loader; delegate to the real
+        // implementation so mocks of the loader keep behaving like it for query building.
+        interpolateJql: function(jql, config, trackerProvider) {
+            return configLoaderModule.interpolateJql(jql, config, trackerProvider);
         }
     };
 }

@@ -39,7 +39,7 @@
  * while search/assignTo throw a clear error.
  */
 
-const { STATUSES, LABELS } = require('../config.js');
+const { STATUSES, LABELS, stageLabel: stageLabelOf } = require('../config.js');
 // Single owner of the GitHub key-shape convention (gh-770): the router's
 // issue-number parser derives from it, so a key the convention accepts can
 // never die with "cannot parse GitHub issue key".
@@ -901,10 +901,7 @@ function createTracker(config, customParams) {
         (config && config.jira && config.jira.stageFallback) || 'none';
     var stageFallback = String(stageFallbackRaw).toLowerCase() === 'label' ? 'label' : 'none';
 
-    function _stageLabel(stageKey) {
-        return 'stage_' + String(stageKey == null ? '' : stageKey)
-            .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-    }
+    var _stageLabel = stageLabelOf;
 
     /**
      * Moves the ticket to a stage status; when the tracker rejects the transition and the fallback is
@@ -920,6 +917,11 @@ function createTracker(config, customParams) {
     function moveToStatusOrMark(ticketKey, statusName, stageKey, previousStageKey) {
         try {
             impl.moveToStatus(ticketKey, statusName);
+            if (previousStageKey && stageFallback === 'label') {
+                // the ticket advanced for real: a stage marker left by an earlier rejected hand-off is stale
+                // and would make the SM select it again. Only in 'label' mode, so the default adds no API call.
+                try { impl.removeLabel(ticketKey, _stageLabel(previousStageKey)); } catch (e) { /* label may not exist */ }
+            }
             return { moved: true, marked: false, label: null, error: null };
         } catch (moveError) {
             if (stageFallback !== 'label') {
