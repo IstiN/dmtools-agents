@@ -1,0 +1,12 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "js/unit-tests/testRunner.js",
+    "jobParams": {
+      "testFiles": [
+        "js/unit-tests/test_smAgent.js",
+        "js/unit-tests/test_gh850_scratch3.js"
+      ]
+    }
+  }
+}
