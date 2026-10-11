@@ -169,7 +169,7 @@ function action(params) {
         }
 
         try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator });
+            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }

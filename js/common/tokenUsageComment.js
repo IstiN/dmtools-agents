@@ -126,12 +126,27 @@ function formatUsageComment(filePath, data, initiator) {
 }
 
 /**
+ * The customParams of a job action's params (jobParams.customParams or params.customParams), {} when
+ * absent. Call sites that have no tracker object pass this so the usage comment goes through the
+ * provider the run selected (customParams.trackerProvider) and not through the Jira default (agents#854).
+ * @param {Object|null} params the action params
+ * @returns {Object}
+ */
+function customParamsOf(params) {
+    return (params && params.jobParams && params.jobParams.customParams) ||
+        (params && params.customParams) || {};
+}
+
+/**
  * Post token usage comments for the given ticket.
  *
  * @param {string} ticketKey - Jira ticket key to comment on.
  * @param {object} options - Optional settings.
  * @param {string} options.outputsDir - Directory to scan for *_usage.json files (default: outputs).
- * @param {object} options.tracker - Optional tracker (js/common/trackers.js); defaults to env/jira.
+ * @param {object} options.tracker - Optional tracker (js/common/trackers.js); defaults to the provider this
+ *     job run already selected (agents#854), then env/jira.
+ * @param {object} [options.config] - Optional project config used to build the tracker when none is passed.
+ * @param {object} [options.customParams] - Optional customParams (trackerProvider) for the same purpose.
  * @param {string} options.initiator - Optional initiator account id to mention in the comment.
  * @returns {object} Result summary { posted: number, files: string[], errors: string[] }.
  */
@@ -159,7 +174,7 @@ function postTokenUsageComments(ticketKey, options) {
 
         var comment = formatUsageComment(filePath, data, initiator);
         try {
-            if (!tracker) tracker = trackersModule.createTracker(null, {});
+            if (!tracker) tracker = trackersModule.createTracker(options.config || null, options.customParams || {});
             tracker.postComment(ticketKey, comment);
             console.log('Posted token usage comment for ' + ticketKey + ' from ' + filePath);
             posted += 1;
@@ -177,6 +192,7 @@ function postTokenUsageComments(ticketKey, options) {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         postTokenUsageComments: postTokenUsageComments,
+        customParamsOf: customParamsOf,
         findUsageFiles: findUsageFiles,
         formatUsageComment: formatUsageComment,
         avoidBridgeArrayMisparse: avoidBridgeArrayMisparse
