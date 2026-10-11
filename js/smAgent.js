@@ -4350,7 +4350,8 @@ function failingCheckNames(repoInfo, headSha) {
 // must not strand a red head that these caps exist to un-stall — the
 // next red re-reads and re-evaluates.
 function failMarkerState(repoInfo, prNumber) {
-    var out = { redHeads: {}, emptyLaps: {}, zombies: {} };
+    var out = { redHeads: {}, emptyLaps: {}, zombies: {}, placeholders: null,
+                placeholderParked: false };
     var bodies = [];
     try {
         var raw = github_get_pr_comments({
@@ -4386,6 +4387,21 @@ function failMarkerState(repoInfo, prNumber) {
         out.zombies = validationLivenessModule.zombieMarks(bodies);
     } catch (eZomb) {
         console.warn('  ⚠️  zombie-marker parse failed: ' + (eZomb.message || eZomb));
+    }
+    // gh-852 placeholder-reset bookkeeping (js/common/checkRunZombies.js):
+    // same single comment fetch — per-PR windowed reset count (AC2 storm
+    // cap; per PR, NOT per head: every reset mints a NEW head, so head-
+    // keyed counting would never reach a cap) + whether the cap-park note
+    // was already posted (once-per-cap-hit pacing).
+    try {
+        out.placeholders = checkRunZombiesModule.placeholderMarks(
+            bodies, Date.now(), checkRunZombiesModule.placeholderWindowMsOf(RUN_JOB_PARAMS));
+        out.placeholderParked = bodies.some(function (b) {
+            return String(b == null ? '' : b).indexOf(PLACEHOLDER_PARK_MARKER) !== -1;
+        });
+    } catch (ePh) {
+        console.warn('  ⚠️  placeholder-marker parse failed: ' + (ePh.message || ePh));
+        out.placeholders = { count: 0, lastAtMs: null };
     }
     return out;
 }
@@ -5126,6 +5142,51 @@ function headCheckRunZombies(repoInfo, headSha) {
         staleNoRunnerMinutes: (RUN_JOB_PARAMS || {}).checkRunZombieStaleMinutes,
         runConcludedGraceMinutes: (RUN_JOB_PARAMS || {}).checkRunZombieGraceMinutes
     });
+}
+
+// Placeholder probe (gh-852) — the check-run-level twin of
+// headCheckRunZombies, at the PLACEHOLDER grace (default 3 min), not the
+// 30-min zombie staleness: GitHub mints pending placeholder check-runs
+// ~20s after a dispatch that queued without materializing a job; while
+// they are young they are indistinguishable from a live dispatch's fresh
+// bridge stamp (both link-less), so only the short grace safely separates
+// them. Same transport contract: null = the check-run probe failed — the
+// caller keeps the legacy behavior (fail safe toward live).
+function headPlaceholders(repoInfo, headSha) {
+    var checkRuns = headCheckRunsSafe(repoInfo, headSha);
+    if (checkRuns === null) return null;
+    return checkRunZombiesModule.placeholders(checkRuns, Date.now(), {
+        placeholderMinutes: (RUN_JOB_PARAMS || {}).checkRunPlaceholderMinutes
+    });
+}
+
+// gh-852 AC2 pool-free probe: a fresh-sha reset cures the placeholder-pinned
+// gate ONLY when the next dispatch materializes its first job immediately —
+// a queued dispatch mints FRESH placeholders on the new head ~20s later and
+// the pathology re-arms. "No ACTIVE run repo-wide" is the conservative
+// proxy for the ticket's "no in_progress macos/ubuntu-arm runs" (self-hosted
+// runner labels ride job objects, not the run list). Also subsumes the
+// gh-798 leg guard: an in-flight ai-teammate leg IS an active run, so a
+// pool-free read proves no leg owns the head either. Returns
+// true (pool free) | false (busy) | null (probe failed — callers fail
+// CLOSED: one deferred reset costs a tick, a reset under a busy pool
+// re-mints the placeholders it exists to clear).
+function repoPoolFree(repoInfo) {
+    try {
+        var runs = mcpParse(github_list_workflow_runs({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            perPage: 50
+        })) || {};
+        var list = runs.workflow_runs || runs.workflowRuns || [];
+        var busy = list.some(function (r) {
+            return r && validationLivenessModule.ACTIVE_RUN_STATES
+                .indexOf(String(r.status || '').toLowerCase()) !== -1;
+        });
+        return !busy;
+    } catch (ePool) {
+        console.warn('  ⚠️  pool-free probe failed: ' + (ePool.message || ePool));
+        return null;
+    }
 }
 
 
