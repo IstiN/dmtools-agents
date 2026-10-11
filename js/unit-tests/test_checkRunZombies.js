@@ -235,7 +235,129 @@ suite('checkRunZombies classify — knobs', function () {
     });
 });
 
-// ── L2-lite: the real #1457 timeline replay ──────────────────────────────────
+// ── gh-852: placeholders — the no-cancel gate-pinning variant ────────────────
+//
+// Live fa #1457 (2026-10-11, head d29efb16 + 3 predecessors): a dispatch
+// queued without materializing a job; GitHub minted PENDING placeholder
+// check-runs (~20s after dispatch, html_url with NO numeric run id) on
+// contexts the later real run never stamped. Branch protection takes the
+// LATEST check-run per (context, head) ⇒ placeholders pin BLOCKED with
+// every real check green. A same-sha re-dispatch re-mints placeholders
+// when it queues again — ONLY a fresh sha + an immediate-start validation
+// cures the gate. Detection: the placeholder grace (minutes), not the
+// 30-min zombie staleness; remedy: fresh-sha reset, pool-free probe,
+// per-PR per-window retry cap.
+
+suite('checkRunZombies placeholders — detection (gh-852)', function () {
+    test('a link-less pending stamp older than the placeholder grace IS a placeholder', function () {
+        // The d29efb16 shape: placeholder minted 12:06:29, probed 12:10.
+        var stamp = cr({ name: 'Quality gate', details_url: null,
+                         started_at: '2026-10-11T12:06:29Z' });
+        var out = cz.placeholders([stamp],
+                                  Date.parse('2026-10-11T12:10:00Z'), {});
+        assert.equal(out.length, 1);
+        assert.equal(out[0].name, 'Quality gate');
+        assert.equal(out[0].runId, null);
+        assert.equal(out[0].reason, 'placeholder');
+    });
+
+    test('a FRESH link-less stamp is NOT a placeholder — the dispatch may still materialize', function () {
+        // Fail safe toward live: a bridge stamp of a dispatch that JUST
+        // fired carries no run link for seconds — age is the only proof.
+        var stamp = cr({ name: 'Quality gate', details_url: null,
+                         started_at: '2026-10-11T12:09:30Z' });
+        var out = cz.placeholders([stamp],
+                                  Date.parse('2026-10-11T12:10:00Z'), {});
+        assert.equal(out.length, 0);
+    });
+
+    test('an UNPARSEABLE stamp timestamp is NOT a placeholder (fail safe)', function () {
+        var stamp = cr({ name: 'Quality gate', details_url: null,
+                         started_at: 'not-a-date' });
+        var out = cz.placeholders([stamp],
+                                  Date.parse('2026-10-11T12:10:00Z'), {});
+        assert.equal(out.length, 0);
+    });
+
+    test('a stamp WITH a run id and a settled check are NOT placeholders', function () {
+        var withId = cr({ started_at: '2026-10-11T12:00:00Z' });       // has details_url
+        var settled = cr({ status: 'completed', conclusion: 'success',
+                           started_at: '2026-10-11T12:00:00Z' });
+        var out = cz.placeholders([withId, settled],
+                                  Date.parse('2026-10-11T12:10:00Z'), {});
+        assert.equal(out.length, 0);
+    });
+
+    test('placeholderMinutes tunes the grace (young by default, placeholder at 1 min)', function () {
+        var stamp = cr({ details_url: null, started_at: '2026-10-11T12:08:30Z' });
+        var at = Date.parse('2026-10-11T12:10:00Z');
+        assert.equal(cz.placeholders([stamp], at, {}).length, 0, '90 s old < 3-min default grace');
+        assert.equal(cz.placeholders([stamp], at, { placeholderMinutes: 1 }).length, 1);
+    });
+
+    test('the #1457 d29efb16 replay: placeholders next to a green real run are detected at the 3-min grace', function () {
+        // classify() alone reads the young placeholder LIVE (30-min stale
+        // threshold) — the placeholder detector catches it 27 min earlier.
+        var ph = cr({ name: 'Quality gate', details_url: null,
+                      started_at: '2026-10-11T12:06:29Z' });
+        var green = cr({ name: 'Quality gate', status: 'completed', conclusion: 'success',
+                         started_at: '2026-10-11T12:08:00Z',
+                         details_url: 'https://github.com/o/r/actions/runs/38137997380' });
+        var at = Date.parse('2026-10-11T12:10:00Z');
+        var out = cz.placeholders([ph, green], at, {});
+        assert.equal(out.length, 1, 'exactly the placeholder — the green real stamp is evidence');
+        // And the classify() partition still sees the ghost as live this
+        // early (AC3 — the zombie path is untouched):
+        var cls = cz.classify([ph, green], function () { return null; }, at, {});
+        assert.equal(cls.zombies.length, 0);
+    });
+});
+
+suite('checkRunZombies placeholders — zombie-shape partition (gh-852)', function () {
+    test('hasPlaceholderZombies: true only when a zombie carries no run id (the placeholder shape)', function () {
+        assert.equal(cz.hasPlaceholderZombies([{ name: 'a', runId: null, reason: 'stale-no-runner' }]), true);
+        assert.equal(cz.hasPlaceholderZombies([{ name: 'a', runId: '42', reason: 'no-run' }]), false);
+        assert.equal(cz.hasPlaceholderZombies([]), false);
+        assert.equal(cz.hasPlaceholderZombies(null), false);
+    });
+});
+
+suite('checkRunZombies placeholders — reset cap bookkeeping (gh-852 AC2)', function () {
+    test('placeholderMarks counts ONLY markers inside the trailing per-PR window', function () {
+        var now = Date.parse('2026-10-11T14:00:00Z');
+        var bodies = [
+            cz.placeholderMarkerLine(1, 3, '2026-10-11T13:30:00Z'),   // in window (30 min ago)
+            cz.placeholderMarkerLine(2, 3, '2026-10-11T13:45:00Z'),   // in window (15 min ago)
+            cz.placeholderMarkerLine(3, 3, '2026-10-11T11:00:00Z')    // OUTSIDE the 2h window
+        ];
+        var marks = cz.placeholderMarks(bodies, now, 2 * 60 * 60 * 1000);
+        assert.equal(marks.count, 2, 'the stale 11:00 marker does not count against the cap');
+        assert.equal(marks.lastAtMs, Date.parse('2026-10-11T13:45:00Z'));
+    });
+
+    test('placeholderRetryAllowed: under the cap yes, at the cap no', function () {
+        assert.equal(cz.placeholderRetryAllowed({ count: 0, lastAtMs: null }, 3), true);
+        assert.equal(cz.placeholderRetryAllowed({ count: 2, lastAtMs: 1 }, 3), true);
+        assert.equal(cz.placeholderRetryAllowed({ count: 3, lastAtMs: 1 }, 3), false);
+        assert.equal(cz.placeholderRetryAllowed(null, 3), true, 'no marks → allowed');
+    });
+
+    test('marker line round-trips through placeholderMarks', function () {
+        var now = Date.parse('2026-10-11T14:00:00Z');
+        var marks = cz.placeholderMarks([cz.placeholderMarkerLine(1, 3, '2026-10-11T13:59:00Z')],
+                                        now, 2 * 60 * 60 * 1000);
+        assert.equal(marks.count, 1);
+    });
+
+    test('cap/window knobs: defaults 3 per 2h, jobParams-tunable (string numbers too)', function () {
+        assert.equal(cz.placeholderCapOf({}), 3);
+        assert.equal(cz.placeholderCapOf({ placeholderResetCap: '5' }), 5);
+        assert.equal(cz.placeholderCapOf({ placeholderResetCap: 0 }), 3, 'non-positive falls back');
+        assert.equal(cz.placeholderWindowMsOf({}), 2 * 60 * 60 * 1000);
+        assert.equal(cz.placeholderWindowMsOf({ placeholderResetWindowMs: '3600000' }), 3600000);
+        assert.equal(typeof cz.DEFAULT_PLACEHOLDER_MINUTES, 'number');
+    });
+});
 
 suite('checkRunZombies — #1457 timeline replay', function () {
     test('three ghost contexts (run deleted) next to green terminal entries ⇒ 3 zombies, gate ghost-held', function () {
