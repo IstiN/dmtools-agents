@@ -2117,7 +2117,23 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                             labels: ['ai_validating']
                         });
                         console.log('  ⏭️  ' + key + ' latch-skip: head unchanged since the green' +
-                                    ' validation — arm only, merge window proceeds on the existing green');
+                                    ' validation — arm only');
+                        // gh-862: the merge-validated rule ran EARLIER in
+                        // this tick (deployed sm_github.json order) — the
+                        // arm alone never reaches it (live fa #1457: arm →
+                        // 'stale arm swept' → re-arm ping-pong, merge never
+                        // attempted). Run the merge-validated probe IN
+                        // PLACE: attempt the merge on the existing green.
+                        // A refusal keeps the arm — merge-validated retries
+                        // next tick; a missing pr_approved latches
+                        // ai_validated instead (review follows).
+                        try {
+                            attemptMergeProbe(effectiveRepoInfo, ticket, key);
+                        } catch (eMergeProbe) {
+                            console.warn('  ⚠️  ' + key + ' latch-skip merge probe: ' +
+                                (eMergeProbe.message || eMergeProbe) +
+                                ' — arm stays, merge-validated retries next tick');
+                        }
                         processedKeys.push(key);
                         continue;
                     }
@@ -2360,6 +2376,23 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                         phConc.concluded + ' placeholder check-run(s) in' +
                                         ' place (gh-857) — the green head unblocks without' +
                                         ' a fresh-sha reset or a CI re-dispatch');
+                                    // gh-862: the gate just unblocked — but
+                                    // the merge-validated rule ran EARLIER
+                                    // in this tick (deployed rule order), so
+                                    // it cannot consume the unblock. Run the
+                                    // merge-validated probe HERE, in the
+                                    // same tick as the conclude. A refusal
+                                    // (the mergeability read lags the PATCH)
+                                    // leaves the labels armed — the
+                                    // latch-skip re-arms / merge-validated
+                                    // retries next tick.
+                                    try {
+                                        attemptMergeProbe(effectiveRepoInfo, ticket, key);
+                                    } catch (eMergeProbe) {
+                                        console.warn('  ⚠️  ' + key + ' post-conclude merge probe: ' +
+                                            (eMergeProbe.message || eMergeProbe) +
+                                            ' — retry next tick (the mergeability read may lag the PATCH)');
+                                    }
                                     processedKeys.push(key);
                                     continue;
                                 }
@@ -2984,75 +3017,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
         if (rule.localAction === 'merge_pr') {
             // Validated green + CLEAN + APPROVED → squash-merge, then clear
             // the armed markers. ai_validating no longer implies armed
-            // (pre-review validation uses the same marker): verify the
-            // sticky pr_approved latch on the PR itself — an un-approved
-            // green head latches ai_validated and defers to review instead
-            // of merging (defense in depth for the rule guards).
+            // (pre-review validation uses the same marker): the sticky
+            // pr_approved gate lives in attemptMergeProbe — the shared
+            // merge-validated probe (gh-862: the latch-skip arm-only path
+            // and the gh-857 conclude-success path call the same helper).
             try {
-                var gateRaw = github_get_pr({
-                    workspace: effectiveRepoInfo.owner,
-                    repository: effectiveRepoInfo.repo,
-                    pullRequestId: ticket.prNumber
-                });
-                var gatePr = {};
-                try {
-                    gatePr = typeof gateRaw === 'string' ? JSON.parse(gateRaw) : (gateRaw || {});
-                } catch (gateParseErr) { gatePr = {}; }
-                var gateLabels = (gatePr.labels || []).map(function (l) {
-                    return (l && l.name) || l;
-                });
-                if (gateLabels.indexOf('pr_approved') === -1) {
-                    // Pre-review validation green: latch, unarm, review
-                    // follows (review-after-dev requires ai_validated).
-                    github_remove_label({
-                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                        number: ticket.prNumber, label: 'ai_validating'
-                    });
-                    github_add_labels({
-                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                        number: ticket.prNumber, labels: ['ai_validated']
-                    });
-                    console.log('  ✅ ' + key + ' validated (no approval yet) — ai_validated latched, review follows');
-                    processedKeys.push(key);
-                    continue;
-                }
-                var mergeRaw = github_merge_pr({
-                    workspace: effectiveRepoInfo.owner,
-                    repository: effectiveRepoInfo.repo,
-                    pullRequestId: ticket.prNumber,
-                    mergeMethod: 'squash'
-                });
-                // The HTTP layer returns the raw body for error statuses
-                // (Java parity) — a 405 "not mergeable" arrives as
-                // {"merged": false, ...} with NO thrown error (live: fa
-                // pr-753 — the merge was refused, the SM still cleared
-                // pr_approved/ai_validating and logged "squash-merged",
-                // orphaning the armed PR). Anything but an explicit
-                // merged:true is a failure: keep the markers so the loop
-                // self-heals (unarm-stale → refresh → re-validate → retry).
-                var mergeResp = {};
-                try {
-                    mergeResp = typeof mergeRaw === 'string' ? JSON.parse(mergeRaw) : (mergeRaw || {});
-                } catch (parseErr) { /* non-JSON body counts as refusal */ }
-                if (mergeResp.merged !== true) {
-                    throw new Error('merge refused: ' +
-                        (typeof mergeRaw === 'string' ? mergeRaw : JSON.stringify(mergeRaw)));
-                }
-                try {
-                    github_remove_label({
-                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                        number: ticket.prNumber, label: 'ai_validating'
-                    });
-                    github_remove_label({
-                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                        number: ticket.prNumber, label: 'pr_approved'
-                    });
-                    github_remove_label({
-                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                        number: ticket.prNumber, label: 'ai_validated'
-                    });
-                } catch (e2) { /* absent labels are fine post-merge */ }
-                console.log('  🎉 ' + key + ' squash-merged');
+                attemptMergeProbe(effectiveRepoInfo, ticket, key);
                 processedKeys.push(key);
             } catch (e) {
                 console.error('  ❌ merge_pr failed for ' + key + ': ' + (e.message || e));
@@ -5161,6 +5131,84 @@ function dropOpenPrsCache(repoInfo) {
                 repoInfo.owner, repoInfo.repo, 'openPrs', null);
         }
     } catch (eDrop) { /* stale cache costs one extra tick, never a wrong arm */ }
+}
+
+// gh-862: the merge-validated probe — the squash-merge attempt shared by
+// the merge_pr action, the latch-skip arm-only path and the gh-857
+// conclude-success path. Live fa #1457 (rel-20261011-204928, two ticks
+// 21:01Z/21:06Z): the latch-skip armed ai_validating WITHOUT a dispatch
+// and continued — but merge-validated runs EARLIER in the deployed rule
+// order (sm_github.json index 6 vs validate-armed 11), so the arm landed
+// after the merge window had already closed; the sweep ate the arm next
+// tick ('stale arm swept') and the latch-skip re-armed — arm → sweep →
+// re-arm ping-pong, the conclude and the merge unreachable for exactly
+// the PRs that need them. Every ai_validated + green PR must get the
+// probe (placeholder conclude first, then the merge attempt) in the tick
+// that arms/concludes it.
+// Returns 'merged' | 'latched' (an un-approved green head: ai_validating
+// unarmed + ai_validated latched, review follows — review-after-dev
+// requires ai_validated). THROWS on a refused merge (anything but an
+// explicit merged:true — fa pr-753 parity: the HTTP layer returns the
+// raw body for error statuses, a 405 "not mergeable" arrives as
+// {"merged": false, ...} with NO thrown error; the markers MUST stay so
+// the loop self-heals: unarm-stale → refresh → re-validate → retry).
+function attemptMergeProbe(repoInfo, ticket, key) {
+    // Verify the sticky pr_approved latch on the PR itself (defense in
+    // depth for the rule guards — the query list may be a stale snapshot).
+    var gateRaw = github_get_pr({
+        workspace: repoInfo.owner,
+        repository: repoInfo.repo,
+        pullRequestId: ticket.prNumber
+    });
+    var gatePr = {};
+    try {
+        gatePr = typeof gateRaw === 'string' ? JSON.parse(gateRaw) : (gateRaw || {});
+    } catch (gateParseErr) { gatePr = {}; }
+    var gateLabels = (gatePr.labels || []).map(function (l) {
+        return (l && l.name) || l;
+    });
+    if (gateLabels.indexOf('pr_approved') === -1) {
+        github_remove_label({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            number: ticket.prNumber, label: 'ai_validating'
+        });
+        github_add_labels({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            number: ticket.prNumber, labels: ['ai_validated']
+        });
+        console.log('  ✅ ' + key + ' validated (no approval yet) — ai_validated latched, review follows');
+        return 'latched';
+    }
+    var mergeRaw = github_merge_pr({
+        workspace: repoInfo.owner,
+        repository: repoInfo.repo,
+        pullRequestId: ticket.prNumber,
+        mergeMethod: 'squash'
+    });
+    var mergeResp = {};
+    try {
+        mergeResp = typeof mergeRaw === 'string' ? JSON.parse(mergeRaw) : (mergeRaw || {});
+    } catch (parseErr) { /* non-JSON body counts as refusal */ }
+    if (mergeResp.merged !== true) {
+        throw new Error('merge refused: ' +
+            (typeof mergeRaw === 'string' ? mergeRaw : JSON.stringify(mergeRaw)));
+    }
+    try {
+        github_remove_label({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            number: ticket.prNumber, label: 'ai_validating'
+        });
+        github_remove_label({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            number: ticket.prNumber, label: 'pr_approved'
+        });
+        github_remove_label({
+            workspace: repoInfo.owner, repository: repoInfo.repo,
+            number: ticket.prNumber, label: 'ai_validated'
+        });
+    } catch (e2) { /* absent labels are fine post-merge */ }
+    console.log('  🎉 ' + key + ' squash-merged');
+    return 'merged';
 }
 
 // Action-time mutex re-verification for the validate_pr arms (owner
