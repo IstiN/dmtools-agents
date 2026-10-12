@@ -77,7 +77,7 @@ function action(params) {
             return { success: false, error: 'contentOutput.field is required for jira_field target' };
         }
         try {
-            contentOutput.writeToTrackerField(ticketKey, cfg.field, content, cfg.operationType || 'replace');
+            contentOutput.writeToTrackerField(ticketKey, cfg.field, content, cfg.operationType || 'replace', tracker);
             console.log('Updated "' + cfg.field + '" field for ' + ticketKey);
             result.field = cfg.field;
         } catch (e) {
@@ -109,7 +109,7 @@ function action(params) {
                     ? 'Published to Confluence: ' + result.pageUrl
                     : 'Published to Confluence page ' + result.pageId;
                 try {
-                    contentOutput.writeToTrackerField(ticketKey, cfg.field || 'Description', linkText, 'replace');
+                    contentOutput.writeToTrackerField(ticketKey, cfg.field || 'Description', linkText, 'replace', tracker);
                 } catch (e) {
                     console.warn('Failed to write Confluence link to tracker field:', e);
                 }

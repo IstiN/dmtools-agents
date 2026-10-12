@@ -871,7 +871,15 @@ function createTracker(config, customParams) {
         var statusName = targetStatus || STATUSES.IN_REVIEW;
         try {
             console.log('Processing ticket:', ticketKey);
-            impl.assignTo(ticketKey, initiatorId);
+            if (initiatorId === undefined || initiatorId === null || String(initiatorId).trim() === '') {
+                // agents#874: without an initiator there is nobody to assign to; the provider tools reject an
+                // empty assignee (ADO: "Required parameter 'userEmail' is missing") and the whole hand-off —
+                // status move, AI label — used to be lost. Skip only the assignment.
+                console.warn('⚠️ No initiator for ' + ticketKey + ' — skipping assignment; the ticket is still moved to ' +
+                    statusName + ' and labelled. Set "initiator" in the job params to assign it.');
+            } else {
+                impl.assignTo(ticketKey, initiatorId);
+            }
             impl.moveToStatus(ticketKey, statusName);
             impl.addLabel(ticketKey, aiLabel);
             if (wipLabel) {
