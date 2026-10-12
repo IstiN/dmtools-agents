@@ -827,5 +827,15 @@
       "total": 6696,
       "model": "kimi-for-coding"
     }
+  ],
+  "pr-884": [
+    {
+      "leg": "review",
+      "at": "2026-10-12T22:29:31Z",
+      "prompt": 62346,
+      "completion": 12508,
+      "total": 74854,
+      "model": "glm-5.3-flash"
+    }
   ]
 }
