@@ -238,6 +238,65 @@ function placeholders(checkRuns, nowMs, opts) {
     return out;
 }
 
+// ── Numeric-id orphans (gh-865) ─────────────────────────────────────────────
+//
+// The fd1b9aa2 twin of the gh-852 placeholder: GitHub's ~10-13 min
+// speculative-placeholder window expired on a head whose kicker suite
+// existed but whose required contexts were never stamped — so GitHub
+// minted PENDING placeholder check-runs WITH numeric run ids, owned by
+// the kicker run itself (live fa #1457, run 38164305157 concluded success
+// at 18:33:24 while its three pseudo-job check-runs stayed in_progress
+// for 4+ hours, pinning mergeStateStatus=BLOCKED with 4 green CI runs on
+// the same head). gh-852's detector keys on the MISSING run id — these
+// carry one — and classify()'s 'run-concluded' zombie keeps only the
+// same-sha re-dispatch remedy, which cannot cure a stamp nothing will
+// ever conclude.
+//
+// Generalized orphan rule: a PENDING check-run whose OWNING RUN has
+// CONCLUSIONED (any conclusion, past the propagation grace) is
+// definitionally orphaned. The caller concludes it with the mirrored
+// verdict under the gh-857 fail-safes (a real completed-success green
+// cover on the head AND no active run on the head) — the verdict mirror
+// and the live-run guard are call-site duties, not the detector's.
+//
+// Disjoint from the other detectors by design:
+//  - no run link        → the placeholder detector's domain (gh-852);
+//  - owning run ABSENT  → classify()'s 'no-run' zombie — the re-dispatch
+//    remedy (AC3) stays its cure;
+//  - owning run ACTIVE  → live evidence, never disturbed (AC2).
+
+/**
+ * @param checkRuns  [{name, status, conclusion, started_at, details_url, id}]
+ * @param resolveRun fn(runId) → null (absent) | {status, conclusion,
+ *                   updated_at}; THROWS on probe error (fails safe to live)
+ * @param nowMs      epoch ms (Date.now() at the probe)
+ * @param opts       {runConcludedGraceMinutes}
+ * @returns [{name, runId, id, reason: 'orphan-run-concluded'}]
+ *          id = the check-run id (null when the API payload carried none)
+ */
+function orphanedRunChecks(checkRuns, resolveRun, nowMs, opts) {
+    var out = [];
+    var graceMs = _num(opts, 'runConcludedGraceMinutes', DEFAULT_RUN_CONCLUDED_GRACE_MINUTES) * 60 * 1000;
+    var now = typeof nowMs === 'number' ? nowMs : Date.now();
+    (checkRuns || []).forEach(function (cr) {
+        if (!isPendingCheckRun(cr)) return;
+        var runId = runIdOf(cr);
+        if (runId === null || typeof resolveRun !== 'function') return;
+        var state = null;
+        try { state = resolveRun(runId); } catch (e) { return; }   // fail safe — retry next tick
+        if (state === null || state === undefined) return;          // absent — the 'no-run' zombie's cure
+        if (String(state.status || '').toLowerCase() !== 'completed') return;   // ACTIVE — AC2, untouched
+        if (!state.conclusion) return;              // completed w/o conclusion — odd, fail safe (classify parity)
+        var endTs = Date.parse(state.updated_at || state.created_at || '');
+        var lag = isNaN(endTs) ? null : now - endTs;
+        if (lag !== null && lag >= 0 && lag <= graceMs) return;     // propagation lag — the conclusion is landing
+        out.push({ name: (cr && cr.name) || null, runId: runId,
+                   id: (cr && cr.id !== undefined && cr.id !== null) ? cr.id : null,
+                   reason: 'orphan-run-concluded' });
+    });
+    return out;
+}
+
 function hasPlaceholderZombies(zombies) {
     // Among a classify() zombie set, the placeholder shape is a ghost with
     // NO backing run id — those are the ones a same-sha re-dispatch cannot
@@ -309,6 +368,7 @@ module.exports = {
     isPendingCheckRun: isPendingCheckRun,
     isPlaceholderShape: isPlaceholderShape,
     placeholders: placeholders,
+    orphanedRunChecks: orphanedRunChecks,
     hasPlaceholderZombies: hasPlaceholderZombies,
     placeholderMarks: placeholderMarks,
     placeholderMarkerLine: placeholderMarkerLine,

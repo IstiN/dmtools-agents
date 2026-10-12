@@ -5463,6 +5463,33 @@ function headPlaceholders(repoInfo, headSha) {
     });
 }
 
+// Orphan probe (gh-865) — the numeric-id twin of headPlaceholders: PENDING
+// check-runs whose OWNING RUN has concluded (any conclusion, past the
+// propagation grace). Live fa #1457 head fd1b9aa2: GitHub minted in_progress
+// placeholder check-runs WITH run ids on the kicker suite (run 38164305157,
+// concluded success) after the ~10-13 min speculative-placeholder window
+// expired; headPlaceholders() keys on the ABSENT run id so the gh-857
+// conclude step never saw them and they pinned the gate 4+ hours. Same
+// transport contract as the sibling probes: null = the check-run probe
+// failed — the caller keeps the legacy behavior (fail safe toward live).
+function headOrphanedRunChecks(repoInfo, headSha) {
+    var checkRuns = headCheckRunsSafe(repoInfo, headSha);
+    if (checkRuns === null) return null;
+    if (!checkRuns.length) return [];
+    var runs = headWorkflowRunsSafe(repoInfo, headSha);
+    if (runs === null) return null;
+    var byId = {};
+    runs.forEach(function (r) {
+        if (r && r.id !== undefined && r.id !== null) byId[String(r.id)] = r;
+    });
+    return checkRunZombiesModule.orphanedRunChecks(checkRuns, function (runId) {
+        var hit = byId[String(runId)];
+        return hit === undefined ? null : hit;
+    }, Date.now(), {
+        runConcludedGraceMinutes: (RUN_JOB_PARAMS || {}).checkRunZombieGraceMinutes
+    });
+}
+
 // ── gh-857: in-place placeholder conclusion ────────────────────────────────
 //
 // Live fa #1457 (head fd1b9aa2): the placeholder check-run (18:51:25)

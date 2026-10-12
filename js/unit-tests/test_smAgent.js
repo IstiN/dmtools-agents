@@ -2885,6 +2885,133 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
             'the evidence feeds the gh-848 placeholder-law trail');
     });
 
+    // ── gh-865: numeric-id orphans — the fd1b9aa2 variant the gh-857 ──
+    // detector missed (in_progress check-runs WITH run ids, minted on the
+    // CONCLUDED kicker suite after the ~10-13 min speculative-placeholder
+    // window expired; the owning kicker run 38164305157 concluded success
+    // while the pseudo-job checks never were concluded — pinning the
+    // required contexts BLOCKED for 4+ hours with 4 green CI runs).
+    var GH865_KICKER_RUN = { id: 38164305157, event: 'push',
+        path: '.github/workflows/kicker.yml',
+        head_branch: 'ai/gh-865',
+        status: 'completed', conclusion: 'success',
+        html_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38164305157',
+        created_at: '2026-10-11T18:15:00Z', updated_at: '2026-10-11T18:33:24Z' };
+    var GH865_GREEN_RUN = { id: 38165000001, event: 'workflow_dispatch',
+        head_branch: 'ai/gh-865', status: 'completed', conclusion: 'success',
+        html_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38165000001',
+        created_at: '2026-10-11T19:04:35Z', updated_at: '2026-10-11T19:04:35Z' };
+    var GH865_ORPHANS = { check_runs: [
+        { id: 114566277295, name: 'Quality gate', status: 'in_progress', conclusion: null,
+          started_at: '2026-10-11T18:33:45Z',
+          details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38164305157' },
+        { id: 114566278905, name: 'JS engine integration (quickjs-ng)',
+          status: 'in_progress', conclusion: null,
+          started_at: '2026-10-11T18:33:50Z',
+          details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38164305157' },
+        { id: 114566280823, name: 'Binaries smoke gate', status: 'in_progress',
+          conclusion: null, started_at: '2026-10-11T18:33:55Z',
+          details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38164305157' },
+        // the real green stamp the SM later dispatched (settled evidence)
+        { id: 114570000001, name: 'Quality gate', status: 'completed', conclusion: 'success',
+          started_at: '2026-10-11T19:04:35Z',
+          details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38165000001' }
+    ] };
+
+    function gh865Cli() {
+        return function (cmdOpts) {
+            var c = cmdOpts.command;
+            if (c.indexOf('workflows/ci.yml/runs?head_sha=') !== -1) {
+                return { workflow_runs: [GH865_GREEN_RUN] };
+            }
+            if (c.indexOf('runs?head_sha=') !== -1) {
+                // Whole-head rollup: the concluded kicker run BEHIND the
+                // orphans + the green dispatched run. NOTHING active.
+                return { workflow_runs: [GH865_KICKER_RUN, GH865_GREEN_RUN] };
+            }
+            if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                return { workflow_runs: [] };
+            }
+            return undefined;
+        };
+    }
+
+    test('validate_pr: gh-865 — in_progress check-runs on a CONCLUDED suite are concluded in place (numeric-id orphans)', function () {
+        // The live fd1b9aa2 shape: GitHub minted placeholders WITH numeric
+        // run ids on the kicker suite; the kicker run concluded success,
+        // nothing will ever conclude the pseudo-job checks. The gh-857
+        // conclude gate must catch them (gh-852's link-less detector never
+        // could) and PATCH them completed/success mirroring the head's
+        // green dispatched run — no fresh-sha reset, no re-dispatch.
+        var CUR = '865ac1865ac1865ac1865ac1865ac1865ac1865';
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(1457, { branch: 'ai/gh-865', headSha: CUR,
+                                            labels: ['pr_approved', 'ai_validating'] })],
+                      commitCheckRuns: GH865_ORPHANS,
+                      prComments: [],
+                      workflowApiRuns: [] },
+            onCliExecute: gh865Cli()
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', silentToken: 'app-token', sourceToken: 'src-token',
+            rules: [gh857GreenRule()] } });
+
+        var patches = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('-X PATCH') !== -1 &&
+                   c.command.indexOf('/check-runs/') !== -1; });
+        assert.equal(patches.length, 3,
+            'ALL THREE numeric-id orphan check-runs are PATCH-concluded exactly once');
+        assert.deepEqual(patches.map(function (p) {
+            return p.command.split('/check-runs/')[1].split(' ')[0]; }).sort(),
+            ['114566277295', '114566278905', '114566280823']);
+        assert.ok(patches.every(function (p) {
+            return p.command.indexOf('conclusion=success') !== -1; }),
+            'every conclusion mirrors the real green verdict');
+        assert.ok(patches.every(function (p) {
+            return p.command.indexOf('38165000001') !== -1; }),
+            'every output references the covering green run');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('gh repo clone') !== -1; }).length, 0,
+            'no fresh-sha reset — numeric-id orphans never touch the gh-852 reset budget');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; }).length, 0,
+            'no same-sha re-dispatch — the green verdict already covers the head');
+        assert.equal(sm.capturedPrComments.length, 0, 'no reset marker — no reset was spent');
+    });
+
+    test('validate_pr: gh-865 — an orphan whose owning run is STILL in_progress is untouched (AC2 fail-safe)', function () {
+        // The owning run alive ⇒ the check may still be concluded by the
+        // runner itself — concluding it would fake a verdict over live
+        // work. The legacy same-sha dispatch is the only cure attempted.
+        var CUR = '865ac2865ac2865ac2865ac2865ac2865ac2865';
+        var liveKicker = Object.assign({}, GH865_KICKER_RUN,
+            { status: 'in_progress', conclusion: null });
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(1457, { branch: 'ai/gh-865', headSha: CUR,
+                                            labels: ['pr_approved', 'ai_validating'] })],
+                      commitCheckRuns: GH865_ORPHANS,
+                      prComments: [],
+                      workflowApiRuns: [] },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    return { workflow_runs: [liveKicker, GH865_GREEN_RUN] };
+                }
+                if (c.indexOf('runs?event=workflow_dispatch') !== -1) {
+                    return { workflow_runs: [] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', silentToken: 'app-token', sourceToken: 'src-token',
+            rules: [gh857GreenRule()] } });
+
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('-X PATCH') !== -1; }).length, 0,
+            'AC2: no orphan is concluded while its owning run is in progress');
+    });
+
     test('config order: unarm precedes silent-update (same-tick actualization)', function () {
         // Owner 2026-09-23: a BEHIND queue head with ai_validating armed
         // took 3 ticks to refresh (rule 0 skipped the armed PR, the unarm
