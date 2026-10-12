@@ -3012,6 +3012,159 @@ suite('smAgent: PR lifecycle localActions (#687)', function () {
             'AC2: no orphan is concluded while its owning run is in progress');
     });
 
+    test('validate_pr: gh-869 — numeric-id orphans on a green-covered head never reach the skipIfGreenCi "skip re-dispatch" continue', function () {
+        // Live fa #1457 head fd1b9aa2 (SM tick run 38189175303, release
+        // agents-rel-20261012-003317): three in_progress orphan check-runs
+        // (Quality gate / JS engine / Binaries smoke — ids 114566277295,
+        // 114566278905, 114566280823) pinned BLOCKED on the CONCLUDED
+        // kicker suite 103398997480 while 4 green CI runs covered the head.
+        // The tick looped latch-skip → merge-refused → "skip re-dispatch"
+        // forever: the green-cover branch never probed the gh-865 orphan
+        // detector, and its 'skip re-dispatch' continue skipped the
+        // dispatch gate where the gh-857/865 in-place conclusion lives.
+        // AC: pending check-run + concluded owning run + green cover + no
+        // active head run, on the skipIfGreenCi path → the conclusion is
+        // attempted and the continue is NOT hit.
+        var CUR = '869ac1869ac1869ac1869ac1869ac1869ac1869';
+        var kicker = { id: 103398997480, event: 'push',
+            path: '.github/workflows/kicker.yml',
+            head_branch: 'ai/gh-869',
+            status: 'completed', conclusion: 'success',
+            html_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/103398997480',
+            created_at: '2026-10-12T00:20:00Z', updated_at: '2026-10-12T00:31:00Z' };
+        var green = { id: 38189176001, event: 'workflow_dispatch',
+            head_branch: 'ai/gh-869', status: 'completed', conclusion: 'success',
+            html_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38189176001',
+            created_at: '2026-10-12T00:40:00Z', updated_at: '2026-10-12T00:40:00Z' };
+        var orphans = { check_runs: [
+            { id: 114566277295, name: 'Quality gate', status: 'in_progress', conclusion: null,
+              started_at: '2026-10-12T00:31:20Z',
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/103398997480' },
+            { id: 114566278905, name: 'JS engine integration (quickjs-ng)',
+              status: 'in_progress', conclusion: null,
+              started_at: '2026-10-12T00:31:25Z',
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/103398997480' },
+            { id: 114566280823, name: 'Binaries smoke gate', status: 'in_progress',
+              conclusion: null, started_at: '2026-10-12T00:31:30Z',
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/103398997480' },
+            { id: 114570000869, name: 'Quality gate', status: 'completed', conclusion: 'success',
+              started_at: '2026-10-12T00:40:00Z',
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38189176001' }
+        ] };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(1457, { branch: 'ai/gh-869', headSha: CUR,
+                                            labels: ['pr_approved', 'ai_validating'] })],
+                      commitCheckRuns: orphans,
+                      prComments: [],
+                      workflowApiRuns: [] },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('workflows/ci.yml/runs?head_sha=') !== -1) {
+                    return { workflow_runs: [green] };
+                }
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    // whole-head rollup: the concluded kicker + the green
+                    // dispatched run — NOTHING active
+                    return { workflow_runs: [kicker, green] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', silentToken: 'app-token', sourceToken: 'src-token',
+            rules: [gh857GreenRule()] } });
+
+        assert.equal(sm.capturedLogs.filter(function (l) {
+            return l.indexOf('skip re-dispatch') !== -1; }).length, 0,
+            'AC: the skipIfGreenCi green-cover branch must NOT hit the ' +
+            '"skip re-dispatch" continue while orphan check-runs pin the gate');
+        var patches = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('-X PATCH') !== -1 &&
+                   c.command.indexOf('/check-runs/') !== -1; });
+        assert.equal(patches.length, 3,
+            'AC: all three orphan check-runs are concluded in place (gh-857/865)');
+        assert.ok(patches.every(function (p) {
+            return p.command.indexOf('conclusion=success') !== -1; }),
+            'every conclusion mirrors the real green verdict');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; }).length, 0,
+            'no same-sha re-dispatch — the green verdict already covers the head');
+    });
+
+    test('validate_pr: gh-869 — numeric-id orphans on a green-covered head never reach the latch-skip "arm only" path', function () {
+        // The fa #1457 live shape (tick run 38189175303): the PR carried
+        // the ai_validated latch, so the tick took the skipIfValidatedHead
+        // latch-skip branch and logged "latch-skip: head unchanged — arm
+        // only" — arming WITHOUT a dispatch while the orphan check-runs
+        // pinned the gate, then merge-refused on the in-progress required
+        // check, forever. Same AC as the skipIfGreenCi twin above: the
+        // orphans must void the arm-only skip and reach the in-place
+        // conclusion instead.
+        var CUR = '869ac2869ac2869ac2869ac2869ac2869ac2869';
+        var kicker = { id: 103398997480, event: 'push',
+            path: '.github/workflows/kicker.yml',
+            head_branch: 'ai/gh-869',
+            status: 'completed', conclusion: 'success',
+            html_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/103398997480',
+            created_at: '2026-10-12T00:20:00Z', updated_at: '2026-10-12T00:31:00Z' };
+        var green = { id: 38189176001, event: 'workflow_dispatch',
+            head_branch: 'ai/gh-869', status: 'completed', conclusion: 'success',
+            html_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38189176001',
+            created_at: '2026-10-12T00:40:00Z', updated_at: '2026-10-12T00:40:00Z' };
+        var orphans = { check_runs: [
+            { id: 114566277295, name: 'Quality gate', status: 'in_progress', conclusion: null,
+              started_at: '2026-10-12T00:31:20Z',
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/103398997480' },
+            { id: 114566278905, name: 'JS engine integration (quickjs-ng)',
+              status: 'in_progress', conclusion: null,
+              started_at: '2026-10-12T00:31:25Z',
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/103398997480' },
+            { id: 114566280823, name: 'Binaries smoke gate', status: 'in_progress',
+              conclusion: null, started_at: '2026-10-12T00:31:30Z',
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/103398997480' },
+            { id: 114570000869, name: 'Quality gate', status: 'completed', conclusion: 'success',
+              started_at: '2026-10-12T00:40:00Z',
+              details_url: 'https://github.com/IstiN/flutter_agent_harness/actions/runs/38189176001' }
+        ] };
+        var sm = makeSmAgent(Object.assign(config('IstiN', 'flutter_agent_harness'), {
+            github: { items: [prItem(1457, { branch: 'ai/gh-869', headSha: CUR,
+                                            labels: ['pr_approved', 'ai_validated'] })],
+                      commitCheckRuns: orphans,
+                      prStatus: { checkConclusion: 'green' },
+                      prComments: [],
+                      workflowApiRuns: [] },
+            onCliExecute: function (cmdOpts) {
+                var c = cmdOpts.command;
+                if (c.indexOf('workflows/ci.yml/runs?head_sha=') !== -1) {
+                    return { workflow_runs: [green] };
+                }
+                if (c.indexOf('runs?head_sha=') !== -1) {
+                    return { workflow_runs: [kicker, green] };
+                }
+                return undefined;
+            }
+        }));
+        sm.action({ jobParams: { owner: 'IstiN', repo: 'flutter_agent_harness',
+            ciWorkflow: 'ci.yml', silentToken: 'app-token', sourceToken: 'src-token',
+            rules: [{ source: 'github',
+                query: { type: 'pr', labels: ['pr_approved'],
+                    notLabels: ['ai_validating'], notMergeState: ['BEHIND', 'DIRTY'],
+                    draft: false },
+                localAction: 'validate_pr', skipIfValidatedHead: true, limit: 1,
+                id: 'validate-armed' }] } });
+
+        assert.equal(sm.capturedLogs.filter(function (l) {
+            return l.indexOf('arm only') !== -1; }).length, 0,
+            'AC: the latch-skip branch must NOT arm-only while orphan check-runs pin the gate');
+        var patches = sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('-X PATCH') !== -1 &&
+                   c.command.indexOf('/check-runs/') !== -1; });
+        assert.equal(patches.length, 3,
+            'AC: all three orphan check-runs are concluded in place (gh-857/865)');
+        assert.equal(sm.capturedCliCommands.filter(function (c) {
+            return c.command.indexOf('workflow run ci.yml') !== -1; }).length, 0,
+            'no same-sha re-dispatch — the green verdict already covers the head');
+    });
     test('config order: unarm precedes silent-update (same-tick actualization)', function () {
         // Owner 2026-09-23: a BEHIND queue head with ai_validating armed
         // took 3 ticks to refresh (rule 0 skipped the armed PR, the unarm
