@@ -375,6 +375,138 @@ suite('checkRunZombies placeholders — reset cap bookkeeping (gh-852 AC2)', fun
     });
 });
 
+// ── gh-865: orphaned run-linked checks — the numeric-id placeholder twin ────
+//
+// Live fa #1457 (2026-10-11, head fd1b9aa2): a rework push created the
+// kicker suite instantly; the SM dispatched CI only on its next tick
+// (+18 min); GitHub's ~10-13 min speculative-placeholder window expired
+// with no required-context stamps, so GitHub minted PENDING placeholder
+// check-runs ON THE KICKER'S SUITE — WITH numeric run ids (run 38164305157,
+// concluded success at 18:33:24). gh-852's detector keys on the ABSENT
+// run id, so the gh-857 conclude step never saw them; classify() flags
+// them 'run-concluded' but that path's remedy (same-sha re-dispatch)
+// cannot cure a stamp nothing will ever conclude. They pinned
+// mergeStateStatus=BLOCKED for 4+ hours with every real check green.
+//
+// Generalized orphan rule: a PENDING check-run whose OWNING RUN has
+// CONCLUSIONED (any conclusion, past the propagation grace) is
+// definitionally orphaned — conclude it with the mirrored verdict. The
+// call site keeps the gh-857 fail-safes (real green cover required, no
+// live run on the head).
+
+suite('checkRunZombies orphanedRunChecks — detection (gh-865)', function () {
+    var KICKER_RUN = '38164305157';     // the concluded kicker suite run
+    var AT = Date.parse('2026-10-11T22:40:00Z');
+
+    function orphanCr(extra) {
+        var base = { id: 114566277295, name: 'Quality gate',
+                     status: 'in_progress', conclusion: null,
+                     started_at: '2026-10-11T18:33:45Z',
+                     details_url: 'https://github.com/o/r/actions/runs/' + KICKER_RUN };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) base[k] = extra[k]; } }
+        return base;
+    }
+
+    function kickerResolver(extra, opts) {
+        var map = {};
+        map[KICKER_RUN] = { id: KICKER_RUN, status: 'completed', conclusion: 'success',
+                            updated_at: '2026-10-11T18:33:24Z' };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) map[k] = extra[k]; } }
+        return resolver(map, opts || {});
+    }
+
+    test('the fd1b9aa2 replay: an in_progress check-run whose owning run concluded IS an orphan', function () {
+        var out = cz.orphanedRunChecks([orphanCr()], kickerResolver(), AT, {});
+        assert.equal(out.length, 1);
+        assert.equal(out[0].name, 'Quality gate');
+        assert.equal(out[0].runId, KICKER_RUN);
+        assert.equal(out[0].id, 114566277295, 'the check-run id rides the entry (PATCH target)');
+        assert.equal(out[0].reason, 'orphan-run-concluded');
+    });
+
+    test('MULTI-ITEM: three orphan contexts on one concluded suite are all detected', function () {
+        // The real head carried THREE pseudo-job check-runs on the same
+        // kicker suite — a single-item test would pass while multi-item
+        // iteration was broken.
+        var crs = [
+            orphanCr({ id: 114566277295, name: 'Quality gate' }),
+            orphanCr({ id: 114566278905, name: 'JS engine integration (quickjs-ng)',
+                       started_at: '2026-10-11T18:33:50Z' }),
+            orphanCr({ id: 114566280823, name: 'Binaries smoke gate',
+                       started_at: '2026-10-11T18:33:55Z' })
+        ];
+        var out = cz.orphanedRunChecks(crs, kickerResolver(), AT, {});
+        assert.equal(out.length, 3);
+        assert.deepEqual(out.map(function (o) { return o.id; }),
+            [114566277295, 114566278905, 114566280823]);
+    });
+
+    test('the owning run still in_progress → the check is NOT an orphan (AC2 — untouched)', function () {
+        var live = {};
+        live[KICKER_RUN] = { id: KICKER_RUN, status: 'in_progress', conclusion: null };
+        var out = cz.orphanedRunChecks([orphanCr()], resolver(live, {}), AT, {});
+        assert.equal(out.length, 0);
+    });
+
+    test('a run that concluded CANCELLED still orphans its pending checks (any conclusion)', function () {
+        var map = {};
+        map[KICKER_RUN] = { id: KICKER_RUN, status: 'completed', conclusion: 'cancelled',
+                            updated_at: '2026-10-11T18:33:24Z' };
+        var out = cz.orphanedRunChecks([orphanCr()], resolver(map, {}), AT, {});
+        assert.equal(out.length, 1, 'the run is over — nothing will ever conclude the check');
+        assert.equal(out[0].reason, 'orphan-run-concluded');
+    });
+
+    test('the owning run ABSENT from the head list is NOT this detector\'s orphan (no-run keeps the legacy remedy)', function () {
+        // classify() 'no-run' zombies deliberately keep the re-dispatch
+        // remedy (AC3) — the two detectors are disjoint by design.
+        var out = cz.orphanedRunChecks([orphanCr()], resolver({}, {}), AT, {});
+        assert.equal(out.length, 0);
+    });
+
+    test('a conclusion inside the propagation grace is still landing — NOT an orphan (fail safe)', function () {
+        var young = Date.parse('2026-10-11T18:36:00Z');   // 2.5 min after 18:33:24
+        var out = cz.orphanedRunChecks([orphanCr()], kickerResolver(), young, {});
+        assert.equal(out.length, 0);
+        var later = Date.parse('2026-10-11T18:39:00Z');   // 5.5 min after
+        out = cz.orphanedRunChecks([orphanCr()], kickerResolver(), later, {});
+        assert.equal(out.length, 1, 'past the 5-min grace the same check is an orphan');
+    });
+
+    test('a probe error fails SAFE toward live (retry next tick, never a wrongful conclusion)', function () {
+        var out = cz.orphanedRunChecks([orphanCr()],
+                                       kickerResolver({}, { throwFor: [KICKER_RUN] }), AT, {});
+        assert.equal(out.length, 0);
+    });
+
+    test('a completed run with NO conclusion is odd — NOT an orphan (mirrors classify fail-safe)', function () {
+        var map = {};
+        map[KICKER_RUN] = { id: KICKER_RUN, status: 'completed', conclusion: null,
+                            updated_at: '2026-10-11T18:33:24Z' };
+        var out = cz.orphanedRunChecks([orphanCr()], resolver(map, {}), AT, {});
+        assert.equal(out.length, 0);
+    });
+
+    test('settled check-runs and link-less stamps are NOT orphans (complementary to the placeholder detector)', function () {
+        var settled = orphanCr({ status: 'completed', conclusion: 'success' });
+        var linkLess = orphanCr({ id: 991234001, details_url: null,
+                                  started_at: '2026-10-11T18:33:45Z' });
+        var out = cz.orphanedRunChecks([settled, linkLess], kickerResolver(), AT, {});
+        assert.equal(out.length, 0, 'the placeholder detector owns the link-less shape');
+        // And the placeholder detector does NOT see the numeric-id orphan:
+        var ph = cz.placeholders([orphanCr(), linkLess], AT, {});
+        assert.equal(ph.length, 1);
+        assert.equal(ph[0].id, 991234001);
+    });
+
+    test('runConcludedGraceMinutes tunes the propagation window', function () {
+        var at4min = Date.parse('2026-10-11T18:37:24Z');   // exactly 4 min after
+        assert.equal(cz.orphanedRunChecks([orphanCr()], kickerResolver(), at4min, {}).length, 0);
+        assert.equal(cz.orphanedRunChecks([orphanCr()], kickerResolver(), at4min,
+                                          { runConcludedGraceMinutes: 2 }).length, 1);
+    });
+});
+
 suite('checkRunZombies — #1457 timeline replay', function () {
     test('three ghost contexts (run deleted) next to green terminal entries ⇒ 3 zombies, gate ghost-held', function () {
         // fa #1457 head 7d00a1b2, 2026-10-10 ~14:30→16:00Z:
