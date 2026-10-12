@@ -425,3 +425,116 @@ suite('writeContentOutput', function() {
     });
 
 });
+
+suite('writeContentOutput uses the configured tracker for the field write (agents#873)', function() {
+
+    test('ado provider: the field is written through ADO and jira_update_field is never called', function() {
+        var adoCalls = [];
+        var mocks = {
+            __outputs: { 'response.md': '# Description\n\nContent here' },
+            ado_update_description: function(a) { adoCalls.push(a); },
+            ado_update_field: function(a) { adoCalls.push(a); },
+            jira_update_field: function() { throw new Error('jira_update_field must not be called on an ADO run'); }
+        };
+        var mod = loadWriteContentOutput(mocks);
+        var result = mod.action(makeParams({
+            ticket: { key: '2039670', fields: { summary: 'Some story' } },
+            customParams: { trackerProvider: 'ado', contentOutput: { target: 'jira_field', field: 'Description' } }
+        }));
+
+        assert.equal(result.success, true, JSON.stringify(result));
+        assert.equal(adoCalls.length, 1, 'exactly one ADO write');
+        assert.equal(adoCalls[0].id, '2039670');
+    });
+
+    test('ado provider: a non-Description field goes through ado_update_field, not Jira', function() {
+        var adoCalls = [];
+        var mocks = {
+            __outputs: { 'response.md': 'Criteria text' },
+            ado_update_field: function(a) { adoCalls.push(a); },
+            jira_update_field: function() { throw new Error('jira_update_field must not be called on an ADO run'); }
+        };
+        var mod = loadWriteContentOutput(mocks);
+        var result = mod.action(makeParams({
+            ticket: { key: '77', fields: { summary: 's' } },
+            customParams: { trackerProvider: 'ado', contentOutput: { target: 'jira_field', field: 'Microsoft.VSTS.Common.AcceptanceCriteria' } }
+        }));
+        assert.equal(result.success, true, JSON.stringify(result));
+        assert.equal(adoCalls.length, 1);
+        assert.equal(adoCalls[0].field, 'Microsoft.VSTS.Common.AcceptanceCriteria');
+    });
+
+    test('jira (default) is unchanged: still jira_update_field', function() {
+        var jiraCalls = [];
+        var mocks = {
+            __outputs: { 'response.md': 'x' },
+            jira_update_field: function(a) { jiraCalls.push(a); }
+        };
+        var mod = loadWriteContentOutput(mocks);
+        mod.action(makeParams({ customParams: { contentOutput: { target: 'jira_field', field: 'Description' } } }));
+        assert.equal(jiraCalls.length, 1);
+    });
+
+    test('both writeToTrackerField calls in writeContentOutput.js pass the tracker (guard)', function() {
+        var src = file_read({ path: 'js/writeContentOutput.js' });
+        var calls = src.match(/writeToTrackerField\([^;]*\);/g) || [];
+        assert.ok(calls.length >= 2, 'expected the field write and the Confluence-link write, saw ' + calls.length);
+        calls.forEach(function(c) { assert.contains(c, 'tracker', 'call does not pass the tracker: ' + c); });
+    });
+});
+
+suite('assignForReview without an initiator (agents#874)', function() {
+
+    function setup(provider) {
+        var m = jiraMocks();
+        m.ado_assign_work_item = recorder('ado_assign_work_item', function() { throw new Error("Required parameter 'userEmail' is missing"); });
+        m.ado_move_to_state = recorder('ado_move_to_state', '{}');
+        m.ado_add_work_item_label = recorder('ado_add_work_item_label', '{}');
+        m.ado_remove_work_item_label = recorder('ado_remove_work_item_label', '{}');
+        var t = loadTrackers(m).createTracker({}, { trackerProvider: provider });
+        return { t: t, m: m };
+    }
+
+    test('ADO: no initiator skips ONLY the assignment; status move, AI label and WIP cleanup still happen', function() {
+        var x = setup('ado');
+        var r = x.t.assignForReview('2039670', undefined, 'wip_label', 'Committed');
+        assert.equal(r.success, true, JSON.stringify(r));
+        assert.equal(x.m.ado_assign_work_item.calls.length, 0, 'no assignment attempted');
+        assert.equal(x.m.ado_move_to_state.calls.length, 1);
+        assert.equal(x.m.ado_move_to_state.calls[0].state, 'Committed');
+        assert.ok(x.m.ado_add_work_item_label.calls.some(function(c) { return c.label === 'ai_generated'; }), 'AI label added');
+        assert.ok(x.m.ado_remove_work_item_label.calls.some(function(c) { return c.label === 'wip_label'; }), 'WIP label removed');
+    });
+
+    test('empty string, null and whitespace count as "no initiator" on every provider', function() {
+        ['', null, '   '].forEach(function(blank) {
+            var x = setup('jira');
+            var r = x.t.assignForReview('PROJ-1', blank);
+            assert.equal(r.success, true, JSON.stringify(r));
+            assert.equal(x.m.jira_assign_ticket_to.calls.length, 0);
+            assert.equal(x.m.jira_move_to_status.calls.length, 1);
+        });
+    });
+
+    test('with an initiator the assignment is made exactly as before (Jira and ADO)', function() {
+        var j = setup('jira');
+        j.t.assignForReview('PROJ-1', 'acc-1');
+        assert.equal(j.m.jira_assign_ticket_to.calls.length, 1);
+        assert.equal(j.m.jira_assign_ticket_to.calls[0].accountId, 'acc-1');
+
+        var a = setup('ado');
+        a.m.ado_assign_work_item = recorder('ado_assign_work_item', '{}');
+        var t = loadTrackers(a.m).createTracker({}, { trackerProvider: 'ado' });
+        t.assignForReview('42', 'jane@acme.dev');
+        assert.equal(a.m.ado_assign_work_item.calls.length, 1);
+        assert.equal(a.m.ado_assign_work_item.calls[0].userEmail, 'jane@acme.dev');
+    });
+
+    test('a real assignment failure with an initiator still fails the hand-off (no silent swallow)', function() {
+        var x = setup('ado');
+        var r = x.t.assignForReview('42', 'jane@acme.dev');
+        assert.equal(r.success, false);
+        assert.contains(r.error, 'userEmail');
+    });
+});
+
