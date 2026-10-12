@@ -243,3 +243,74 @@ suite('tokenUsageComment call sites pass the job context (agents#854)', function
         assert.deepEqual(offenders, [], 'call sites without tracker/customParams:\n' + offenders.join('\n'));
     });
 });
+
+suite('tokenUsageComment — Azure DevOps rendering (agents#877, #878)', function() {
+    var mod = loadTokenUsageComment({ file_read: function() { return null; } });
+    var DATA = { total_tokens: 42, provider: 'copilot' };
+
+    test('ADO: a bold label and a fenced json block, never the "[label]: {json}" link-reference form', function() {
+        var c = mod.formatUsageComment('outputs/story_description_usage.json', DATA, undefined, 'ado');
+        assert.equal(c, '**story_description**\n```json\n{"total_tokens":42,"provider":"copilot"}\n```');
+        assert.equal(c.indexOf('[story_description]:'), -1, 'the unrendered link-reference definition is gone');
+    });
+
+    test('ADO: the initiator is plain text, not Jira mention markup', function() {
+        var c = mod.formatUsageComment('outputs/x_usage.json', DATA, 'y.b@x.com', 'ado');
+        assert.contains(c, '\nInitiator: y.b@x.com');
+        assert.equal(c.indexOf('[~accountid'), -1);
+        assert.ok(!/\.$/.test(c), 'no bridge-workaround trailing dot after the plain initiator');
+    });
+
+    test('ADO: an already formatted Jira mention is reduced to the plain id', function() {
+        assert.contains(mod.formatUsageComment('outputs/x_usage.json', DATA, '[~accountid:abc]', 'ado'), 'Initiator: abc');
+        assert.contains(mod.formatUsageComment('outputs/x_usage.json', DATA, '~accountid:abc', 'ado'), 'Initiator: ~accountid:abc');
+    });
+
+    test('ADO provider name is case-insensitive', function() {
+        assert.contains(mod.formatUsageComment('outputs/x_usage.json', DATA, undefined, 'ADO'), '```json');
+    });
+
+    test('Jira, GitHub and no provider keep the exact previous format', function() {
+        ['jira', 'github', undefined, null, ''].forEach(function(p) {
+            var c = mod.formatUsageComment('outputs/story_solution_usage.json', { total_tokens: 42 }, 'user-123', p);
+            // the trailing '.' is the pre-existing GraalJS-bridge guard (a comment ending in ']' is mis-parsed
+            // as an array) — Jira keeps it exactly as before
+            assert.equal(c, '[story_solution]: {"total_tokens":42}\nInitiator: [~accountid:user-123].', 'provider=' + p);
+        });
+    });
+
+    test('end to end on an ADO run: the comment posted through the ADO tool is the fenced block', function() {
+        var posted = [];
+        var m = loadTokenUsageComment({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/token_usage_files.json') return JSON.stringify(['outputs/a_usage.json']);
+                if (opts.path === 'outputs/a_usage.json') return JSON.stringify({ provider: 'copilot', total_tokens: 5 });
+                return null;
+            },
+            ado_add_work_item_comment: function(a) { posted.push(a); },
+            jira_post_comment: function() { throw new Error('jira_post_comment must not be called on an ADO run'); }
+        });
+        var r = m.postTokenUsageComments('2039670', { initiator: 'y.b@x.com', customParams: { trackerProvider: 'ado' } });
+        assert.equal(r.posted, 1, JSON.stringify(r));
+        assert.equal(posted.length, 1);
+        assert.contains(posted[0].comment, '**a**\n```json\n');
+        assert.contains(posted[0].comment, 'Initiator: y.b@x.com');
+        assert.equal(posted[0].comment.indexOf('[a]:'), -1);
+    });
+
+    test('end to end on Jira: still the "[label]: {json}" comment with the mention', function() {
+        var posted = [];
+        var m = loadTokenUsageComment({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/token_usage_files.json') return JSON.stringify(['outputs/a_usage.json']);
+                if (opts.path === 'outputs/a_usage.json') return JSON.stringify({ total_tokens: 5 });
+                return null;
+            },
+            jira_post_comment: function(a) { posted.push(a); }
+        });
+        m.postTokenUsageComments('PS-1', { initiator: 'user-1' });
+        assert.contains(posted[0].comment, '[a]: {"total_tokens":5}');
+        assert.contains(posted[0].comment, 'Initiator: [~accountid:user-1]');
+    });
+});
+
