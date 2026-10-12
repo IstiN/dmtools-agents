@@ -139,11 +139,32 @@ suite('fetchQuestionsToInput.questionsFetchPlan', function() {
         assert.ok(plan.reason.indexOf('parent = {ticketKey}') !== -1, 'reason names the skipped query');
     });
 
-    test('ado provider: skip for the same reason', function() {
+    test('ado provider with the shipped JQL default: skip for the same reason, and the reason says how to enable it', function() {
         var mod = loadFetchQuestionsWithMocks({}).mod;
         var plan = mod.questionsFetchPlan('ado', { fetchJql: QUESTIONS_JQL }, '42');
         assert.equal(plan.skip, true);
         assert.ok(plan.reason.indexOf('ado') !== -1);
+        assert.ok(plan.reason.indexOf('WIQL') !== -1, 'tells the operator to configure a WIQL fetchJql');
+    });
+
+    test('ado provider with a WIQL fetchJql (agents#871): the configured query runs, ticket key interpolated', function() {
+        var mod = loadFetchQuestionsWithMocks({}).mod;
+        var wiql = "SELECT [Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.Id] = {ticketKey} MODE (MustContain)";
+        var plan = mod.questionsFetchPlan('ado', { fetchJql: wiql }, '1839749');
+        assert.equal(plan.skip, false);
+        assert.equal(plan.jql, "SELECT [Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.Id] = 1839749 MODE (MustContain)");
+    });
+
+    test('ado WIQL detection is case-insensitive and tolerates leading whitespace; jira/github never take this branch', function() {
+        var mod = loadFetchQuestionsWithMocks({}).mod;
+        assert.equal(mod.questionsFetchPlan('ado', { fetchJql: '  select [System.Id] from WorkItems where [System.Parent] = {ticketKey}' }, '7').skip, false);
+        assert.equal(mod.questionsFetchPlan('github', { fetchJql: 'SELECT [System.Id] FROM WorkItems' }, 'gh-1').skip, true);
+        assert.equal(mod.questionsFetchPlan('jira', { fetchJql: 'parent = {ticketKey}' }, 'P-1').jql, 'parent = P-1');
+    });
+
+    test('provider defaults to jira when absent (unchanged)', function() {
+        var mod = loadFetchQuestionsWithMocks({}).mod;
+        assert.equal(mod.questionsFetchPlan(undefined, { fetchJql: 'parent = {ticketKey}' }, 'P-2').jql, 'parent = P-2');
     });
 
 });

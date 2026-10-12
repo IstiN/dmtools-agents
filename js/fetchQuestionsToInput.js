@@ -83,13 +83,22 @@ function getAnswerValue(fields, answerField) {
  */
 function questionsFetchPlan(provider, questionsConfig, ticketKey) {
     var p = String(provider || 'jira').toLowerCase();
+    var fetchJql = String((questionsConfig && questionsConfig.fetchJql) || '');
+    if (p === 'ado' && /^\s*SELECT\b/i.test(fetchJql)) {
+        // agents#871: the project supplied a WIQL query for jira.questions.fetchJql — it is native to this
+        // tracker, so run it. The shipped default is Jira JQL and still takes the skip branch below.
+        return {
+            skip: false,
+            jql: fetchJql.replace('{ticketKey}', ticketKey)
+        };
+    }
     if (p !== 'jira') {
         return {
             skip: true,
-            reason: 'question subtasks are a Jira issue-type concept (' +
-                String((questionsConfig && questionsConfig.fetchJql) || '') +
+            reason: 'question subtasks are a Jira issue-type concept (' + fetchJql +
                 ') — the query is Jira-speak and would silently return nothing on the ' +
-                p + ' tracker'
+                p + ' tracker' +
+                (p === 'ado' ? '; set jira.questions.fetchJql to a WIQL query (SELECT ...) to fetch them on ADO' : '')
         };
     }
     return {
