@@ -1235,3 +1235,59 @@ suite('trackers.js — stage label cleanup on a successful move (agents#855/#856
     });
 });
 
+suite('trackers.js — createGithubTracker: repository-pinned tracker for the SM (agents: tracker abstraction)', function () {
+    function gh() {
+        var m = {
+            github_add_labels: recorder('github_add_labels', '[]'),
+            github_remove_label: recorder('github_remove_label', '{}'),
+            github_create_comment: recorder('github_create_comment', '{}')
+        };
+        return { t: loadTrackers(m).createGithubTracker('epam', 'dmtools-dart'), m: m, mod: loadTrackers(m) };
+    }
+
+    test('is a github tracker even when the global provider is something else', function () {
+        assert.equal(gh().t.provider(), 'github');
+    });
+
+    test('addLabel sends owner/repo of the RULE repository, the number and a one-element labels array', function () {
+        var x = gh();
+        x.t.addLabel(1211, 'agent:rework');
+        assert.deepEqual(x.m.github_add_labels.calls[0], { owner: 'epam', repo: 'dmtools-dart', number: 1211, labels: ['agent:rework'] });
+    });
+
+    test('removeLabel sends owner/repo/number and the singular label', function () {
+        var x = gh();
+        x.t.removeLabel(1428, 'pr_approved');
+        assert.deepEqual(x.m.github_remove_label.calls[0], { owner: 'epam', repo: 'dmtools-dart', number: 1428, label: 'pr_approved' });
+    });
+
+    test('postComment writes the text to the issue/PR number of that repository', function () {
+        var x = gh();
+        x.t.postComment(77, 'hello');
+        var c = x.m.github_create_comment.calls[0];
+        assert.equal(c.workspace, 'epam');
+        assert.equal(c.repository, 'dmtools-dart');
+        assert.equal(c.pullRequestId, 77);
+        assert.equal(c.text, 'hello');
+    });
+
+    test('string numbers and gh-N / owner/repo#N keys all resolve to the same number', function () {
+        var x = gh();
+        x.t.addLabel('5', 'a');
+        x.t.addLabel('gh-6', 'a');
+        x.t.addLabel('epam/dmtools-dart#7', 'a');
+        assert.deepEqual(x.m.github_add_labels.calls.map(function (c) { return c.number; }), [5, 6, 7]);
+    });
+
+    test('a composite key keeps its own repository (the key is authoritative)', function () {
+        var x = gh();
+        x.t.postComment('other/repo#9', 'hi');
+        // the comment tool takes the number; the key's repo is not silently replaced by the pinned one
+        assert.equal(x.m.github_create_comment.calls[0].pullRequestId, 9);
+    });
+
+    test('an unparsable key still fails loudly with the provider-named error', function () {
+        assert.throws(function () { gh().t.addLabel('not-a-key', 'a'); }, /cannot parse GitHub issue key/);
+    });
+});
+
