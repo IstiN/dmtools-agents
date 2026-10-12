@@ -232,9 +232,21 @@ function makeSmAgent(opts) {
                 ? opts.github.mergeResult
                 : JSON.stringify({ merged: true, sha: 'deadbeef', message: 'Pull Request successfully merged' });
         };
-        smMocks.github_add_labels = function (labelOpts) { capturedPrLabelAdds.push(labelOpts); };
-        smMocks.github_remove_label = function (remOpts) { capturedPrLabelRemoves.push(remOpts); };
-        smMocks.github_create_comment = function (cOpts) { capturedPrComments.push(cOpts); };
+        // The SM now writes through the tracker wrapper (js/common/trackers.js), which sends the argument
+        // spellings every dmtools version accepts (owner/repo, text). The tool accepts both families, so the
+        // captured calls are normalised to workspace/repository/body: the assertions below are about WHAT was
+        // written and WHERE, not about which alias the wrapper picked.
+        function normalizedGithubCall(o) {
+            var n = Object.assign({}, o);
+            if (n.workspace === undefined && n.owner !== undefined) n.workspace = n.owner;
+            if (n.repository === undefined && n.repo !== undefined) n.repository = n.repo;
+            if (n.body === undefined && n.text !== undefined) n.body = n.text;
+            if (n.number === undefined && n.pullRequestId !== undefined) n.number = n.pullRequestId;
+            return n;
+        }
+        smMocks.github_add_labels = function (labelOpts) { capturedPrLabelAdds.push(normalizedGithubCall(labelOpts)); };
+        smMocks.github_remove_label = function (remOpts) { capturedPrLabelRemoves.push(normalizedGithubCall(remOpts)); };
+        smMocks.github_create_comment = function (cOpts) { capturedPrComments.push(normalizedGithubCall(cOpts)); };
         smMocks.github_get_pr = function () {
             return JSON.stringify(opts.github.pr || { number: 1, body: opts.github.prBody || '' });
         };
@@ -11550,3 +11562,19 @@ suite('smAgent: fail-closed agent:rework consumption (gh-840)', function () {
         assert.ok(rule.staleMinutes >= 1, 'the ≤6-tick bound is configurable');
     });
 });
+
+suite('smAgent writes labels and comments through the tracker wrapper (agents: tracker abstraction)', function () {
+    test('no direct github_add_labels / github_remove_label / github_create_comment call is left in smAgent.js', function () {
+        var src = file_read({ path: 'js/smAgent.js' });
+        var direct = src.match(/\bgithub_(add_labels|remove_label|create_comment)\(/g) || [];
+        assert.deepEqual(direct, [], 'direct GitHub tool calls bypass the tracker wrapper: ' + direct.join(', '));
+    });
+
+    test('every write goes through the repository-pinned helper', function () {
+        var src = file_read({ path: 'js/smAgent.js' });
+        var viaHelper = (src.match(/githubTracker\(/g) || []).length;
+        assert.ok(viaHelper >= 60, 'expected the SM label/comment writes to use githubTracker(), saw ' + viaHelper);
+        assert.ok(src.indexOf('trackersModule.createGithubTracker(') !== -1);
+    });
+});
+

@@ -694,6 +694,17 @@ function runTeammateLocally(ticketKey, rule, effectiveConfig) {
 // add/remove, full-ticket fetch). Built lazily per call from the effective project config and the
 // per-run customParams: the provider (jira | ado | github) follows config.tracker.provider /
 // customParams.trackerProvider / DEFAULT_TRACKER, exactly like every other agent script.
+// Tracker pinned to the repository of the rule being processed (github-source rules read and write the
+// issues/PRs of THAT repository, which can differ from the project config). Label and comment writes on
+// GitHub items go through it instead of calling github_add_labels / github_remove_label /
+// github_create_comment directly. Memoised per owner/repo: a tick makes dozens of writes.
+var _githubTrackers = {};
+function githubTracker(owner, repo) {
+    var k = String(owner || '') + '/' + String(repo || '');
+    if (!_githubTrackers[k]) _githubTrackers[k] = trackersModule.createGithubTracker(owner, repo);
+    return _githubTrackers[k];
+}
+
 function smTracker(config) {
     var cfg = config || projectConfig || {};
     var cp = (RUN_JOB_PARAMS && RUN_JOB_PARAMS.customParams) || {};
@@ -748,12 +759,10 @@ function addRuleLabels(ticketKey, rule, repoInfo) {
                 // never lands — include them whenever the rule context
                 // knows the repo.
                 if (n) {
-                    var params = { number: parseInt(n[1], 10), labels: [label] };
-                    if (repoInfo && repoInfo.owner && repoInfo.repo) {
-                        params.workspace = repoInfo.owner;
-                        params.repository = repoInfo.repo;
-                    }
-                    github_add_labels(params);
+                    // repoInfo is the rule context's repository; without it the tracker falls back to the
+                    // project config (same as the previous direct call without workspace/repository).
+                    githubTracker(repoInfo && repoInfo.owner, repoInfo && repoInfo.repo)
+                        .addLabel(parseInt(n[1], 10), label);
                 }
             } else {
                 if (DRY) { console.log('  [dry] 🏷️ ' + ticketKey + ' +' + label); }
@@ -795,12 +804,8 @@ function removeRuleLabel(ticketKey, label, rule, repoInfo) {
             // rule context's repo and the singular param the bridge reads.
             if (n) {
                 if (DRY) { console.log('  [dry] 🏷️ ' + ticketKey + ' -' + label); return; }
-                var params = { number: parseInt(n[1], 10), label: label };
-                if (repoInfo && repoInfo.owner && repoInfo.repo) {
-                    params.workspace = repoInfo.owner;
-                    params.repository = repoInfo.repo;
-                }
-                github_remove_label(params);
+                githubTracker(repoInfo && repoInfo.owner, repoInfo && repoInfo.repo)
+                    .removeLabel(parseInt(n[1], 10), label);
             }
         } else {
             if (DRY) { console.log('  [dry] 🏷️ ' + ticketKey + ' -' + label); }
@@ -1214,12 +1219,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // green PR) and labels the ISSUE — self-healing every stuck
             // ticket on the first tick after deploy, no manual backfill.
             try {
-                github_add_labels({
-                    workspace: effectiveRepoInfo.owner,
-                    repository: effectiveRepoInfo.repo,
-                    number: ticket.issueNumber,
-                    labels: ['ai_developed']
-                });
+                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.issueNumber, 'ai_developed');
                 console.log('  ✅ ' + key + ' issue #' + ticket.issueNumber +
                     ' labeled ai_developed (green PR #' + ticket.prNumber + ')');
                 processedKeys.push(key);
@@ -1238,12 +1238,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // carries the head's commit_id, so the stale query never
             // matches it again (convergent, no loop).
             try {
-                github_add_labels({
-                    workspace: effectiveRepoInfo.owner,
-                    repository: effectiveRepoInfo.repo,
-                    number: ticket.prNumber,
-                    labels: ['agent:review']
-                });
+                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'agent:review');
                 console.log('  ✅ ' + key + ' agent:review re-armed (stale CHANGES_REQUESTED on PR #' + ticket.prNumber + ')');
                 processedKeys.push(key);
             } catch (e) {
@@ -1339,22 +1334,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     console.log('  ℹ️  ' + key + ' rework arm allowed — ' + armGate.reason +
                         ' on head ' + armGate.headShort);
                 }
-                github_add_labels({
-                    workspace: effectiveRepoInfo.owner,
-                    repository: effectiveRepoInfo.repo,
-                    number: ticket.prNumber,
-                    labels: ['agent:rework']
-                });
-                github_create_comment({
-                    workspace: effectiveRepoInfo.owner,
-                    repository: effectiveRepoInfo.repo,
-                    number: ticket.prNumber,
-                    body: '🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed ' +
-                        '(ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: ' +
-                        'agent:rework is armed on this PR and the rework runner will work through the threads and push. ' +
-                        'Validation re-runs automatically afterwards, and once the threads are resolved a fresh ' +
-                        're-review is armed (review-threads-resolved).'
-                });
+                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'agent:rework');
+                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed ' + '(ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: ' + 'agent:rework is armed on this PR and the rework runner will work through the threads and push. ' + 'Validation re-runs automatically afterwards, and once the threads are resolved a fresh ' + 're-review is armed (review-threads-resolved).');
                 console.log('  ✅ ' + key + ' agent:rework armed (unresolved review threads on PR #' + ticket.prNumber + ')');
                 armReworkLatch(ticket);
                 processedKeys.push(key);
@@ -1664,26 +1645,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     } else if (headChangedNoVerdictVf) {
                         if (!DRY) {
                             try {
-                                github_remove_label({
-                                    workspace: effectiveRepoInfo.owner,
-                                    repository: effectiveRepoInfo.repo,
-                                    number: ticket.prNumber,
-                                    label: parkLabelVf
-                                });
+                                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, parkLabelVf);
                             } catch (eUnparkHc) {
                                 console.warn('  ⚠️  un-park label failed: ' + (eUnparkHc.message || eUnparkHc));
                             }
                             try {
-                                github_create_comment({
-                                    workspace: effectiveRepoInfo.owner,
-                                    repository: effectiveRepoInfo.repo,
-                                    number: ticket.prNumber,
-                                    body: '🅿️→▶ validation_failed cleared — the park was set on head `' +
-                                        parkedHeadVf + '`, but the head is now `' + uHead +
-                                        '` (silent refresh merged main in) and this head has no red ' +
-                                        'verdict of its own. The old verdict does not transfer across ' +
-                                        'sha changes — re-entering validation for a first verdict.'
-                                });
+                                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🅿️→▶ validation_failed cleared — the park was set on head `' + parkedHeadVf + '`, but the head is now `' + uHead + '` (silent refresh merged main in) and this head has no red ' + 'verdict of its own. The old verdict does not transfer across ' + 'sha changes — re-entering validation for a first verdict.');
                             } catch (eUnparkHcC) {
                                 console.warn('  ⚠️  un-park comment failed: ' + (eUnparkHcC.message || eUnparkHcC));
                             }
@@ -1696,26 +1663,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     } else if (machineUnparkVf) {
                         if (!DRY) {
                             try {
-                                github_remove_label({
-                                    workspace: effectiveRepoInfo.owner,
-                                    repository: effectiveRepoInfo.repo,
-                                    number: ticket.prNumber,
-                                    label: parkLabelVf
-                                });
+                                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, parkLabelVf);
                             } catch (eUnparkMv) {
                                 console.warn('  ⚠️  un-park label failed: ' + (eUnparkMv.message || eUnparkMv));
                             }
                             try {
-                                github_create_comment({
-                                    workspace: effectiveRepoInfo.owner,
-                                    repository: effectiveRepoInfo.repo,
-                                    number: ticket.prNumber,
-                                    body: '🅿️→▶ validation_failed cleared — this MACHINE-authored PR was ' +
-                                        'parked with no self-clear path (the machine pushes its own heads, so ' +
-                                        'the human-push reset can never fire): ' + machineUnparkWhyVf + '. ' +
-                                        'The parked red verdict is void for the current head — re-entering ' +
-                                        'validation (owner directive 2026-10-05).'
-                                });
+                                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🅿️→▶ validation_failed cleared — this MACHINE-authored PR was ' + 'parked with no self-clear path (the machine pushes its own heads, so ' + 'the human-push reset can never fire): ' + machineUnparkWhyVf + '. ' + 'The parked red verdict is void for the current head — re-entering ' + 'validation (owner directive 2026-10-05).');
                             } catch (eUnparkMvC) {
                                 console.warn('  ⚠️  un-park comment failed: ' + (eUnparkMvC.message || eUnparkMvC));
                             }
@@ -1735,25 +1688,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     } else {
                         if (!DRY) {
                             try {
-                                github_remove_label({
-                                    workspace: effectiveRepoInfo.owner,
-                                    repository: effectiveRepoInfo.repo,
-                                    number: ticket.prNumber,
-                                    label: parkLabelVf
-                                });
+                                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, parkLabelVf);
                             } catch (eUnparkVf) {
                                 console.warn('  ⚠️  un-park label failed: ' + (eUnparkVf.message || eUnparkVf));
                             }
                             try {
-                                github_create_comment({
-                                    workspace: effectiveRepoInfo.owner,
-                                    repository: effectiveRepoInfo.repo,
-                                    number: ticket.prNumber,
-                                    body: '🅿️→▶ validation_failed cleared — the last substantive commit `' +
-                                        (actorVf.sha || uHead) + '` (head `' + uHead +
-                                        '`) was pushed by `' + (actorLoginVf || lastCommitter || 'unknown') +
-                                        '` (human, newer than the park event; machine merges of main walked past) — re-entering validation.'
-                                });
+                                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🅿️→▶ validation_failed cleared — the last substantive commit `' + (actorVf.sha || uHead) + '` (head `' + uHead + '`) was pushed by `' + (actorLoginVf || lastCommitter || 'unknown') + '` (human, newer than the park event; machine merges of main walked past) — re-entering validation.');
                             } catch (eUnparkVfC) {
                                 console.warn('  ⚠️  un-park comment failed: ' + (eUnparkVfC.message || eUnparkVfC));
                             }
@@ -1768,27 +1708,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     headChecksRed(effectiveRepoInfo, ticket.prNumber)) {
                     if (!DRY) {
                         try {
-                            github_add_labels({
-                                workspace: effectiveRepoInfo.owner,
-                                repository: effectiveRepoInfo.repo,
-                                number: ticket.prNumber,
-                                labels: [parkLabelVf]
-                            });
+                            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, parkLabelVf);
                         } catch (eParkVf) {
                             console.warn('  ⚠️  park label failed: ' + (eParkVf.message || eParkVf));
                         }
                         try {
-                            github_create_comment({
-                                workspace: effectiveRepoInfo.owner,
-                                repository: effectiveRepoInfo.repo,
-                                number: ticket.prNumber,
-                                body: '🛑 validation_failed — the current head `' + uHead +
-                                    '` has failing checks. This GUEST PR is parked: no validation ' +
-                                    'CI is dispatched for it and the merge window skips it until a ' +
-                                    'HUMAN push newer than the park clears it (machine pushes — ' +
-                                    'silent-updates, agent auto-saves — never do). The failure itself ' +
-                                    'is reported separately. parked-head: ' + uHead
-                            });
+                            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🛑 validation_failed — the current head `' + uHead + '` has failing checks. This GUEST PR is parked: no validation ' + 'CI is dispatched for it and the merge window skips it until a ' + 'HUMAN push newer than the park clears it (machine pushes — ' + 'silent-updates, agent auto-saves — never do). The failure itself ' + 'is reported separately. parked-head: ' + uHead);
                         } catch (eParkVfC) {
                             console.warn('  ⚠️  park comment failed: ' + (eParkVfC.message || eParkVfC));
                         }
@@ -1844,19 +1769,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                         .staleCancelMarkerLine(sha, new Date().toISOString()));
                                 }
                             });
-                            github_create_comment({
-                                workspace: effectiveRepoInfo.owner,
-                                repository: effectiveRepoInfo.repo,
-                                number: ticket.prNumber,
-                                body: linesUb.join('\n') + '\n\n' +
-                                    'Cancelled ' + staleCancelledUb.length + ' validation run(s) ' +
-                                    'dispatched on a superseded head of this PR — the silent refresh ' +
-                                    'moved the base and their results would be discarded anyway ' +
-                                    '(gh-846). `cancelled` is not a verdict (gh-755): no ' +
-                                    'fail-validation, no zombie re-dispatch, no red-head count is ' +
-                                    'recorded for these heads — validation re-dispatches only on the ' +
-                                    'current head.'
-                            });
+                            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, linesUb.join('\n') + '\n\n' + 'Cancelled ' + staleCancelledUb.length + ' validation run(s) ' + 'dispatched on a superseded head of this PR — the silent refresh ' + 'moved the base and their results would be discarded anyway ' + '(gh-846). `cancelled` is not a verdict (gh-755): no ' + 'fail-validation, no zombie re-dispatch, no red-head count is ' + 'recorded for these heads — validation re-dispatches only on the ' + 'current head.');
                         } catch (eStaleMark) {
                             console.warn('  ⚠️  stale-cancel marker comment failed: ' +
                                          (eStaleMark.message || eStaleMark));
@@ -1946,22 +1859,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 if (vprActor !== null && vprParkedAt !== null && vprFreshPush && !vprMachinePush) {
                     if (!DRY) {
                         try {
-                            github_remove_label({ workspace: effectiveRepoInfo.owner,
-                                repository: effectiveRepoInfo.repo,
-                                number: ticket.prNumber, label: 'validation_failed' });
+                            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, 'validation_failed');
                         } catch (eVfClr) {
                             console.warn('  ⚠️  un-park label failed: ' + (eVfClr.message || eVfClr));
                         }
                         try {
-                            github_create_comment({ workspace: effectiveRepoInfo.owner,
-                                repository: effectiveRepoInfo.repo, number: ticket.prNumber,
-                                body: '🅿️→▶ validation_failed cleared — human push by `' +
-                                    (vprActorLogin || 'unknown') + '` at ' + vprActor.date +
-                                    ' (last substantive commit `' + (vprActor.sha || vprHead) +
-                                    '` of head `' + vprHead + '`, machine merges of main walked past — #681)' +
-                                    ' is newer than the park (' + vprParkedAt +
-                                    '). Re-entering validation (update_branch RESET never ' +
-                                    'ran: the head is not BEHIND — live fa 2026-10-03).' });
+                            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🅿️→▶ validation_failed cleared — human push by `' + (vprActorLogin || 'unknown') + '` at ' + vprActor.date + ' (last substantive commit `' + (vprActor.sha || vprHead) + '` of head `' + vprHead + '`, machine merges of main walked past — #681)' + ' is newer than the park (' + vprParkedAt + '). Re-entering validation (update_branch RESET never ' + 'ran: the head is not BEHIND — live fa 2026-10-03).');
                         } catch (eVfSay) {}
                     }
                     console.log('  ▶ ' + key + ' park cleared (fresh human push) — validation proceeds');
@@ -2121,12 +2024,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                         ' the query-time mutex scanned a stale list)');
                             continue; // NOT processedKeys — the slot stays with the holder
                         }
-                        github_add_labels({
-                            workspace: effectiveRepoInfo.owner,
-                            repository: effectiveRepoInfo.repo,
-                            number: ticket.prNumber,
-                            labels: ['ai_validating']
-                        });
+                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'ai_validating');
                         console.log('  ⏭️  ' + key + ' latch-skip: head unchanged since the green' +
                                     ' validation — arm only');
                         // gh-862: the merge-validated rule ran EARLIER in
@@ -2181,11 +2079,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 if ((ticket.labels || []).indexOf('ai_validated') !== -1 &&
                     vProbe && !vProbe.green) {
                     try {
-                        github_remove_label({
-                            workspace: effectiveRepoInfo.owner,
-                            repository: effectiveRepoInfo.repo,
-                            number: ticket.prNumber, label: 'ai_validated'
-                        });
+                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, 'ai_validated');
                         console.log('  🏷️  ' + key + ' latch VOID — no completed-green dispatched CI' +
                                     ' run covers the current head (gh-850) — ai_validated stripped,' +
                                     ' re-validating');
@@ -2236,16 +2130,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         } catch (eParkRead) { /* read failed — comment again is safe */ }
                         if (!alreadyParked && !DRY) {
                             try {
-                                github_create_comment({
-                                    workspace: effectiveRepoInfo.owner,
-                                    repository: effectiveRepoInfo.repo,
-                                    number: ticket.prNumber,
-                                    body: parkMarker + ' — the current head `' + vHead0 +
-                                        '` failed validation and the head has not moved. ' +
-                                        'Re-running CI on the same SHA cannot pass, so the merge ' +
-                                        'window skips this PR until the head moves (push a fix or ' +
-                                        'rebase). The failure itself is reported separately above.'
-                                });
+                                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, parkMarker + ' — the current head `' + vHead0 + '` failed validation and the head has not moved. ' + 'Re-running CI on the same SHA cannot pass, so the merge ' + 'window skips this PR until the head moves (push a fix or ' + 'rebase). The failure itself is reported separately above.');
                             } catch (eParkComment) {
                                 console.warn('  ⚠️  park comment failed: ' + (eParkComment.message || eParkComment));
                             }
@@ -2431,18 +2316,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                         ' to the gh-852 fresh-sha reset');
                                     if (!DRY) {
                                         try {
-                                            github_create_comment({
-                                                workspace: effectiveRepoInfo.owner,
-                                                repository: effectiveRepoInfo.repo,
-                                                number: ticket.prNumber,
-                                                body: '🔒 Placeholder conclusion rejected by' +
-                                                    ' GitHub (`' + phConc.rejected + '`) — the' +
-                                                    ' Actions app\'s check-runs refuse PATCH by' +
-                                                    ' the workflow token (ownership rules,' +
-                                                    ' gh-857). Falling back to the gh-852' +
-                                                    ' fresh-sha reset. Evidence for the gh-848' +
-                                                    ' placeholder law.'
-                                            });
+                                            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🔒 Placeholder conclusion rejected by' + ' GitHub (`' + phConc.rejected + '`) — the' + ' Actions app\'s check-runs refuse PATCH by' + ' the workflow token (ownership rules,' + ' gh-857). Falling back to the gh-852' + ' fresh-sha reset. Evidence for the gh-848' + ' placeholder law.');
                                         } catch (ePh403) {
                                             console.warn('  ⚠️  gh-857 403-evidence comment' +
                                                 ' failed: ' + (ePh403.message || ePh403));
@@ -2473,15 +2347,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                             // the operator-reset end state but without churn).
                             if (!phState.placeholderParked && !DRY) {
                                 try {
-                                    github_create_comment({
-                                        workspace: effectiveRepoInfo.owner,
-                                        repository: effectiveRepoInfo.repo,
-                                        number: ticket.prNumber,
-                                        body: PLACEHOLDER_PARK_MARKER + ' (' + phMarks.count + '/' +
-                                            phCap + ' fresh-sha resets in the current window) — ' +
-                                            'automatic placeholder gate resets paused (gh-852 AC2). ' +
-                                            'A human push (fresh head) or the next window resumes them.'
-                                    });
+                                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, PLACEHOLDER_PARK_MARKER + ' (' + phMarks.count + '/' + phCap + ' fresh-sha resets in the current window) — ' + 'automatic placeholder gate resets paused (gh-852 AC2). ' + 'A human push (fresh head) or the next window resumes them.');
                                 } catch (ePhPark) {
                                     console.warn('  ⚠️  placeholder park comment failed: ' +
                                                  (ePhPark.message || ePhPark));
@@ -2549,29 +2415,13 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                 effectiveRepoInfo, phNewHead, 'in_progress', null, null);
                         }
                         try {
-                            github_add_labels({
-                                workspace: effectiveRepoInfo.owner,
-                                repository: effectiveRepoInfo.repo,
-                                number: ticket.prNumber,
-                                labels: ['ai_validating']
-                            });
+                            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'ai_validating');
                         } catch (ePhArm) {
                             console.warn('  ⚠️  placeholder arm failed: ' + (ePhArm.message || ePhArm));
                         }
                         if (!DRY) {
                             try {
-                                github_create_comment({
-                                    workspace: effectiveRepoInfo.owner,
-                                    repository: effectiveRepoInfo.repo,
-                                    number: ticket.prNumber,
-                                    body: checkRunZombiesModule.placeholderMarkerLine(
-                                              phMarks.count + 1, phCap, new Date().toISOString()) +
-                                        '\n\nPlaceholder check-runs pinned the merge gate on the old head' +
-                                        ' (pending stamps with no backing run — gh-852). The head was' +
-                                        ' refreshed to a fresh sha via a silent update and validation' +
-                                        ' dispatched on it, pool-free probed. Bounded: ' + phCap +
-                                        ' fresh-sha resets per PR per window.'
-                                });
+                                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, checkRunZombiesModule.placeholderMarkerLine( phMarks.count + 1, phCap, new Date().toISOString()) + '\n\nPlaceholder check-runs pinned the merge gate on the old head' + ' (pending stamps with no backing run — gh-852). The head was' + ' refreshed to a fresh sha via a silent update and validation' + ' dispatched on it, pool-free probed. Bounded: ' + phCap + ' fresh-sha resets per PR per window.');
                             } catch (ePhMark) {
                                 console.warn('  ⚠️  placeholder marker comment failed: ' +
                                              (ePhMark.message || ePhMark));
@@ -2589,12 +2439,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 if (vHead) {
                     stampValidationChecksForModule(effectiveRepoInfo, vHead, 'in_progress', null, null);
                 }
-                github_add_labels({
-                    workspace: effectiveRepoInfo.owner,
-                    repository: effectiveRepoInfo.repo,
-                    number: ticket.prNumber,
-                    labels: ['ai_validating']
-                });
+                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'ai_validating');
                 console.log('  🧪 ' + key + ' validation dispatched (CI runs on the head via workflow_dispatch)');
                 processedKeys.push(key);
             } catch (e) {
@@ -2640,15 +2485,9 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 var uProbe = uHead
                     ? probeDispatchedState(effectiveRepoInfo, uCiWf, uHead) : null;
                 var uGreen = !!(uHead && uProbe && uProbe.green);
-                github_remove_label({
-                    workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                    number: ticket.prNumber, label: 'ai_validating'
-                });
+                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, 'ai_validating');
                 if (uGreen) {
-                    github_add_labels({
-                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                        number: ticket.prNumber, labels: ['ai_validated']
-                    });
+                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'ai_validated');
                 }
                 // Same-tick slot yield (owner 2026-10-04): this rule runs
                 // BEFORE validate-armed — drop the cached open-PR list so
@@ -2805,16 +2644,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     : 'a pending run superseded by the silent-refresh push wave ' +
                       '(live fa#1202/#1203 2026-10-03, still reproducing 2026-10-04 06:21 — dmtools-agents#682)';
                 if (!DRY && !rcUncovered.length) {
-                    github_create_comment({
-                        workspace: effectiveRepoInfo.owner,
-                        repository: effectiveRepoInfo.repo,
-                        number: ticket.prNumber,
-                        body: rcMarker + ': ' +
-                              rcTargets.map(function (t) { return '`' + t.context + '`'; }).join(', ') +
-                              ' ended CANCELLED on this head — ' + rcEvidence + '. ' +
-                              'CANCELLED is never a verdict: nothing failed, the re-run re-stamps the contexts and merging resumes automatically.' +
-                              ' (head `' + rcHead + '`)'
-                    });
+                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, rcMarker + ': ' + rcTargets.map(function (t) { return '`' + t.context + '`'; }).join(', ') + ' ended CANCELLED on this head — ' + rcEvidence + '. ' + 'CANCELLED is never a verdict: nothing failed, the re-run re-stamps the contexts and merging resumes automatically.' + ' (head `' + rcHead + '`)');
                 } else if (rcUncovered.length && !DRY) {
                     console.warn('  ⚠️  ' + key + ' rerun set covers ' +
                                  (rcCancelled.length - rcUncovered.length) + '/' + rcCancelled.length +
@@ -2960,10 +2790,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // agent:rework re-arms right here — the label is the
                     // functional bit (idempotent add if the read was stale).
                     if (!DRY && cIsMachinePr && cLinked && cLinkedOpen && !cIssueHasRework) {
-                        github_add_labels({
-                            workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                            number: cLinked, labels: ['agent:rework']
-                        });
+                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(cLinked, 'agent:rework');
                         armReworkLatch(ticket);
                         console.log('  🔁 ' + key + ' conflict marker present but issue #' + cLinked +
                             ' has no agent:rework — re-armed (gh-683 self-heal)');
@@ -2973,10 +2800,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     continue;
                 }
                 try {
-                    github_remove_label({
-                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                        number: ticket.prNumber, label: 'ai_validating'
-                    });
+                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, 'ai_validating');
                 } catch (e7) { /* absent label is fine */ }
                 var cReworkNote = (cLinked && cLinkedOpen)
                     ? ' Rework re-queued (linked issue #' + cLinked + ' re-armed): resolve the conflicts and push — validation re-runs automatically.'
@@ -3000,10 +2824,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 if (cIsMachinePr) {
                     if (cLinked && cLinkedOpen) {
                         if (!DRY) {
-                            github_add_labels({
-                                workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                                number: cLinked, labels: ['agent:rework']
-                            });
+                            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(cLinked, 'agent:rework');
                         }
                     } else {
                         // #579: no OPEN linked issue (missing, dangling, or
@@ -3033,10 +2854,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // gh-806: the PR-anchored dispatch landed — record the latch
                 // so later ticks see the leg as in flight for this (pr, head).
                 armReworkLatch(ticket);
-                if (!DRY) github_create_comment({
-                    workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                    number: ticket.prNumber, body: cReport
-                });
+                if (!DRY) githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, cReport);
                 console.log('  🔁 ' + key + ' merge conflict with main — ' +
                     (cIsMachinePr
                         ? ((cLinked && cLinkedOpen)
@@ -3072,14 +2890,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // dispatches the review leg on the latched head. Idempotent by
             // the query guard (only fires while ai_validating is armed).
             try {
-                github_remove_label({
-                    workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                    number: ticket.prNumber, label: 'ai_validating'
-                });
-                github_add_labels({
-                    workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                    number: ticket.prNumber, labels: ['ai_validated']
-                });
+                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, 'ai_validating');
+                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'ai_validated');
                 console.log('  ✅ ' + key + ' validation green — ai_validated latched, review follows');
                 processedKeys.push(key);
             } catch (e) {
@@ -3165,35 +2977,17 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // gh-750 self-clear parity) — no silent loop.
                     try {
                         if (!DRY) {
-                            github_remove_label({
-                                workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                                number: ticket.prNumber, label: 'ai_validating'
-                            });
+                            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, 'ai_validating');
                         }
                     } catch (eZarm) { /* absent arm is fine */ }
                     if (!DRY) {
                         try {
-                            github_add_labels({
-                                workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                                number: ticket.prNumber, labels: ['validation_failed']
-                            });
+                            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'validation_failed');
                         } catch (eZpark) {
                             console.warn('  ⚠️  zombie park label failed: ' + (eZpark.message || eZpark));
                         }
                         try {
-                            github_create_comment({
-                                workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                                number: ticket.prNumber,
-                                body: '🅿️ Validation parked — zombie crash-loop (' + zMarks.count + '/' + zCap +
-                                    ' automatic re-dispatches on head `' + sHead +
-                                    '` died cancelled or never started; the ai_validating arm kept holding' +
-                                    ' the merge window with no live run behind it — gh-821). No further' +
-                                    ' automatic re-dispatches: a new push (new head SHA) restarts validation.' +
-                                    (sProbe && sProbe.green
-                                        ? ' An older GREEN dispatched run exists on this head (gh-751/latch-skip ' +
-                                          'semantics) — worth a manual look before re-dispatching or pushing.'
-                                        : '')
-                            });
+                            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🅿️ Validation parked — zombie crash-loop (' + zMarks.count + '/' + zCap + ' automatic re-dispatches on head `' + sHead + '` died cancelled or never started; the ai_validating arm kept holding' + ' the merge window with no live run behind it — gh-821). No further' + ' automatic re-dispatches: a new push (new head SHA) restarts validation.' + (sProbe && sProbe.green ? ' An older GREEN dispatched run exists on this head (gh-751/latch-skip ' + 'semantics) — worth a manual look before re-dispatching or pushing.' : ''));
                         } catch (eZsay) {
                             console.warn('  ⚠️  zombie park comment failed: ' + (eZsay.message || eZsay));
                         }
@@ -3233,10 +3027,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 // leaves this PR once the run is flying).
                 try {
                     if (!DRY) {
-                        github_remove_label({
-                            workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                            number: ticket.prNumber, label: 'ai_validating'
-                        });
+                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, 'ai_validating');
                     }
                 } catch (eZun) { /* absent arm is fine */ }
                 dropOpenPrsCache(effectiveRepoInfo);
@@ -3259,10 +3050,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                                  (eZci.message || eZci) + ' — re-arming, retry next tick');
                     try {
                         if (!DRY) {
-                            github_add_labels({
-                                workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                                number: ticket.prNumber, labels: ['ai_validating']
-                            });
+                            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'ai_validating');
                         }
                     } catch (eZre2) { /* validate-armed re-arms next tick anyway */ }
                     continue;
@@ -3272,25 +3060,12 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                 }
                 if (!DRY) {
                     try {
-                        github_add_labels({
-                            workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                            number: ticket.prNumber, labels: ['ai_validating']
-                        });
+                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'ai_validating');
                     } catch (eZre) {
                         console.warn('  ⚠️  zombie re-arm failed: ' + (eZre.message || eZre));
                     }
                     try {
-                        github_create_comment({
-                            workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                            number: ticket.prNumber,
-                            body: validationLivenessModule.zombieMarkerLine(zMarks.count + 1, sHead, zCap,
-                                new Date().toISOString()) + '\n\n' +
-                                (sState === 'zombie-cancelled'
-                                    ? 'The dispatched validation run on this head concluded `cancelled` — no live run existed behind the ai_validating arm (gh-821).'
-                                    : 'This head carried no dispatched validation run at all — the dispatch was lost (gh-821).') +
-                                ' CI was re-dispatched automatically (bounded: 1 per head per hour; ' +
-                                zCap + ' in a row on the same head park the PR validation_failed).'
-                        });
+                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, validationLivenessModule.zombieMarkerLine(zMarks.count + 1, sHead, zCap, new Date().toISOString()) + '\n\n' + (sState === 'zombie-cancelled' ? 'The dispatched validation run on this head concluded `cancelled` — no live run existed behind the ai_validating arm (gh-821).' : 'This head carried no dispatched validation run at all — the dispatch was lost (gh-821).') + ' CI was re-dispatched automatically (bounded: 1 per head per hour; ' + zCap + ' in a row on the same head park the PR validation_failed).');
                     } catch (eZmark) {
                         console.warn('  ⚠️  zombie marker comment failed: ' + (eZmark.message || eZmark));
                     }
@@ -3310,14 +3085,8 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             }
             if (sRun.conclusion === 'success') {
                 try {
-                    github_remove_label({
-                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                        number: ticket.prNumber, label: 'ai_validating'
-                    });
-                    github_add_labels({
-                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                        number: ticket.prNumber, labels: ['ai_validated']
-                    });
+                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, 'ai_validating');
+                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'ai_validated');
                     // Same-tick slot yield (owner 2026-10-04): the sweep
                     // runs before validate-armed — the freed mutex must be
                     // visible to the arm rule's re-scan in THIS tick.
@@ -3374,10 +3143,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     continue;
                 }
                 try {
-                    github_remove_label({
-                        workspace: effectiveRepoInfo.owner, repository: effectiveRepoInfo.repo,
-                        number: ticket.prNumber, label: 'ai_validating'
-                    });
+                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).removeLabel(ticket.prNumber, 'ai_validating');
                 } catch (e3) { /* absent label is fine */ }
                 var machineAuthor = machineAuthorModule.resolveMachineAuthor(RUN_JOB_PARAMS, effectiveConfig);
                 // gh-728: the knob is a LIST — a direct single-login string
@@ -3534,12 +3300,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     + (emptyLapLine ? '\n' + emptyLapLine : '')
                     + (parkLine ? '\n' + parkLine : '')
                     + (failingJobsLine ? '\n' + failingJobsLine : '');
-                github_create_comment({
-                    workspace: effectiveRepoInfo.owner,
-                    repository: effectiveRepoInfo.repo,
-                    number: ticket.prNumber,
-                    body: report
-                });
+                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, report);
                 if (convergencePark) {
                     // The park label — the loud terminal state the live
                     // window never got: the PR leaves validate-armed's FIFO
@@ -3547,12 +3308,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // dispatched for it at all (the validate_pr sticky-park
                     // backstop) until a new head clears the park.
                     try {
-                        github_add_labels({
-                            workspace: effectiveRepoInfo.owner,
-                            repository: effectiveRepoInfo.repo,
-                            number: ticket.prNumber,
-                            labels: ['validation_failed']
-                        });
+                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'validation_failed');
                     } catch (eConvPark) {
                         console.warn('  ⚠️  convergence park label failed: ' +
                             (eConvPark.message || eConvPark));
@@ -3575,18 +3331,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // owner (#701 guest-cap marker style) so a human is
                     // actually summoned to the dead head.
                     try {
-                        github_create_comment({
-                            workspace: effectiveRepoInfo.owner,
-                            repository: effectiveRepoInfo.repo,
-                            number: ticket.prNumber,
-                            body: '🛑 @' + effectiveRepoInfo.owner + ' \u2014 pr-' + ticket.prNumber +
-                                ' needs a human: validation went red on head `' + failHead +
-                                '` left UNCHANGED after ' + (emptyLaps + 1) + ' empty rework lap(s)' +
-                                ' (each lap closed itself successful without pushing a fix \u2014 owner' +
-                                ' finding 2026-10-04, live fa#1211). The agent:rework arm is WITHHELD' +
-                                ' (empty-lap cap ' + emptyLaps + '/' + lapMax + ') and this head will' +
-                                ' not be re-validated \u2014 the machine will not re-arm itself here.'
-                        });
+                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🛑 @' + effectiveRepoInfo.owner + ' \u2014 pr-' + ticket.prNumber + ' needs a human: validation went red on head `' + failHead + '` left UNCHANGED after ' + (emptyLaps + 1) + ' empty rework lap(s)' + ' (each lap closed itself successful without pushing a fix \u2014 owner' + ' finding 2026-10-04, live fa#1211). The agent:rework arm is WITHHELD' + ' (empty-lap cap ' + emptyLaps + '/' + lapMax + ') and this head will' + ' not be re-validated \u2014 the machine will not re-arm itself here.');
                     } catch (eEscalate) {
                         console.warn('  ⚠️  empty-lap escalation post failed: ' +
                             (eEscalate.message || eEscalate));
@@ -3595,12 +3340,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     if (reworkLatched) {
                         console.log('  ⏭️  ' + key + ' rework re-arm suppressed — leg already in flight for this head (AC1)');
                     } else {
-                        github_add_labels({
-                            workspace: effectiveRepoInfo.owner,
-                            repository: effectiveRepoInfo.repo,
-                            number: linked,
-                            labels: ['agent:rework']
-                        });
+                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(linked, 'agent:rework');
                         armReworkLatch(ticket);
                     }
                 } else if (isMachinePr) {
@@ -3612,12 +3352,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         console.log('  ⏭️  ' + key + ' PR-anchored rework arm suppressed — leg already in flight for this head (AC1)');
                     } else {
                         try {
-                            github_add_labels({
-                                workspace: effectiveRepoInfo.owner,
-                                repository: effectiveRepoInfo.repo,
-                                number: ticket.prNumber,
-                                labels: ['agent:rework']
-                            });
+                            githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'agent:rework');
                             armReworkLatch(ticket);
                         } catch (eUnlinkedArm) {
                             console.warn('  ⚠️  unlinked machine rework arm failed: ' +
@@ -3637,12 +3372,7 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                     // agent:rework label by a human still fires via
                     // rework-on-label (any author, owner override).
                     try {
-                        github_add_labels({
-                            workspace: effectiveRepoInfo.owner,
-                            repository: effectiveRepoInfo.repo,
-                            number: ticket.prNumber,
-                            labels: ['validation_failed']
-                        });
+                        githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'validation_failed');
                     } catch (eGuestPark) {
                         console.warn('  ⚠️  guest park label failed: ' +
                             (eGuestPark.message || eGuestPark));
@@ -4396,19 +4126,7 @@ function postGhostGuardAudit(repoInfo, prNumber, cancelResult) {
     });
     if (!fresh.length) return;
     try {
-        github_create_comment({
-            workspace: repoInfo.owner, repository: repoInfo.repo,
-            number: prNumber,
-            body: fresh.map(function (w) { return w.line; }).join('\n') +
-                '\n\nGhost-guard bookkeeping (gh-848): a stale validation ' +
-                'run was left running because its jobs had not materialized ' +
-                'yet — a queued cancel orphans its check-runs as ' +
-                '`in_progress` ghosts and the merge gate holds on them ' +
-                'forever — and/or its orphaned check-runs were concluded ' +
-                '`cancelled` via the Checks API. `cancelled` is not a ' +
-                'verdict (gh-755): no fail-validation, no zombie ' +
-                're-dispatch is recorded for these heads.'
-        });
+        githubTracker(repoInfo.owner, repoInfo.repo).postComment(prNumber, fresh.map(function (w) { return w.line; }).join('\n') + '\n\nGhost-guard bookkeeping (gh-848): a stale validation ' + 'run was left running because its jobs had not materialized ' + 'yet — a queued cancel orphans its check-runs as ' + '`in_progress` ghosts and the merge gate holds on them ' + 'forever — and/or its orphaned check-runs were concluded ' + '`cancelled` via the Checks API. `cancelled` is not a ' + 'verdict (gh-755): no fail-validation, no zombie ' + 're-dispatch is recorded for these heads.');
     } catch (e2) {
         console.warn('  ⚠️  ghost-guard marker comment failed: ' +
                      (e2.message || e2));
@@ -4830,10 +4548,7 @@ function auditReworkConsumption(repoInfo, ticket, label, path) {
     }
     if (DRY) { console.log('  [dry] 🏷️ gh-840 consumption audit (' + path + ') on PR #' + ticket.prNumber); return; }
     try {
-        github_create_comment({
-            workspace: repoInfo.owner, repository: repoInfo.repo,
-            number: ticket.prNumber, body: body
-        });
+        githubTracker(repoInfo.owner, repoInfo.repo).postComment(ticket.prNumber, body);
         console.log('  🏷️  gh-840: agent:rework consumption audited (path: ' + path +
             ') on PR #' + ticket.prNumber);
     } catch (eAudit) {
@@ -4942,18 +4657,12 @@ function restoreReworkArm(key, ticket, rule, repoInfo, effectiveConfig) {
         console.log('  ⏭️  ' + key + ' sweep: no restore (' + decision.reason + ')');
         return false;
     }
-    github_add_labels({
-        workspace: repoInfo.owner, repository: repoInfo.repo,
-        number: prNumber, labels: ['agent:rework']
-    });
+    githubTracker(repoInfo.owner, repoInfo.repo).addLabel(prNumber, 'agent:rework');
     var markerBody = reworkConsumptionModule.buildRestoreMarkerComment(
         head || (newestConsume && newestConsume.head) || 'unknown', decision.reason);
     if (markerBody) {
         try {
-            github_create_comment({
-                workspace: repoInfo.owner, repository: repoInfo.repo,
-                number: prNumber, body: markerBody
-            });
+            githubTracker(repoInfo.owner, repoInfo.repo).postComment(prNumber, markerBody);
         } catch (eMarker) {
             console.warn('  ⚠️ gh-840: restore marker comment failed (non-fatal): ' + (eMarker.message || eMarker));
         }
@@ -5009,10 +4718,7 @@ function reconcileReviewVerdicts(repoInfo, ticket, machineLogins) {
     var removed = false;
     if (decision.removeFromPr) {
         try {
-            github_remove_label({
-                workspace: repoInfo.owner, repository: repoInfo.repo,
-                number: ticket.prNumber, label: decision.loserLabel
-            });
+            githubTracker(repoInfo.owner, repoInfo.repo).removeLabel(ticket.prNumber, decision.loserLabel);
             removed = true;
             console.log('  ⚖️  removed ' + decision.loserLabel + ' from PR #' + ticket.prNumber +
                 ' (head ' + String(probe.headSha).substring(0, 7) + ')');
@@ -5023,10 +4729,7 @@ function reconcileReviewVerdicts(repoInfo, ticket, machineLogins) {
     }
     if (decision.removeFromIssue) {
         try {
-            github_remove_label({
-                workspace: repoInfo.owner, repository: repoInfo.repo,
-                number: ticket.issueNumber, label: decision.loserLabel
-            });
+            githubTracker(repoInfo.owner, repoInfo.repo).removeLabel(ticket.issueNumber, decision.loserLabel);
             removed = true;
             console.log('  ⚖️  removed ' + decision.loserLabel + ' from linked issue #' + ticket.issueNumber);
         } catch (eIss) {
@@ -5036,10 +4739,7 @@ function reconcileReviewVerdicts(repoInfo, ticket, machineLogins) {
     }
     if (removed) {
         try {
-            github_create_comment({
-                workspace: repoInfo.owner, repository: repoInfo.repo,
-                number: ticket.prNumber, body: decision.comment
-            });
+            githubTracker(repoInfo.owner, repoInfo.repo).postComment(ticket.prNumber, decision.comment);
         } catch (eC) {
             console.warn('  ⚠️ reconciliation comment failed (labels already reconciled): ' + (eC.message || eC));
         }
@@ -5204,14 +4904,8 @@ function attemptMergeProbe(repoInfo, ticket, key) {
         return (l && l.name) || l;
     });
     if (gateLabels.indexOf('pr_approved') === -1) {
-        github_remove_label({
-            workspace: repoInfo.owner, repository: repoInfo.repo,
-            number: ticket.prNumber, label: 'ai_validating'
-        });
-        github_add_labels({
-            workspace: repoInfo.owner, repository: repoInfo.repo,
-            number: ticket.prNumber, labels: ['ai_validated']
-        });
+        githubTracker(repoInfo.owner, repoInfo.repo).removeLabel(ticket.prNumber, 'ai_validating');
+        githubTracker(repoInfo.owner, repoInfo.repo).addLabel(ticket.prNumber, 'ai_validated');
         console.log('  ✅ ' + key + ' validated (no approval yet) — ai_validated latched, review follows');
         return 'latched';
     }
@@ -5230,18 +4924,9 @@ function attemptMergeProbe(repoInfo, ticket, key) {
             (typeof mergeRaw === 'string' ? mergeRaw : JSON.stringify(mergeRaw)));
     }
     try {
-        github_remove_label({
-            workspace: repoInfo.owner, repository: repoInfo.repo,
-            number: ticket.prNumber, label: 'ai_validating'
-        });
-        github_remove_label({
-            workspace: repoInfo.owner, repository: repoInfo.repo,
-            number: ticket.prNumber, label: 'pr_approved'
-        });
-        github_remove_label({
-            workspace: repoInfo.owner, repository: repoInfo.repo,
-            number: ticket.prNumber, label: 'ai_validated'
-        });
+        githubTracker(repoInfo.owner, repoInfo.repo).removeLabel(ticket.prNumber, 'ai_validating');
+        githubTracker(repoInfo.owner, repoInfo.repo).removeLabel(ticket.prNumber, 'pr_approved');
+        githubTracker(repoInfo.owner, repoInfo.repo).removeLabel(ticket.prNumber, 'ai_validated');
     } catch (e2) { /* absent labels are fine post-merge */ }
     console.log('  🎉 ' + key + ' squash-merged');
     return 'merged';

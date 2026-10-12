@@ -1003,7 +1003,29 @@ function extractTicketKey(result) {
     return null;
 }
 
+/**
+ * A GitHub tracker bound to one repository (agents: move to the tracker abstraction).
+ *
+ * The SM and the merge bot address issues/PRs of a repository taken from the RULE context, not from the
+ * project config, and used to call github_add_labels / github_remove_label / github_create_comment directly.
+ * This returns the same tracker object every other script uses, pinned to that repository, so those writes go
+ * through addLabel / removeLabel / postComment (one call shape per operation, the provider differences stay
+ * inside this module). Behaviour is the previous one: the wrapper sends the argument names every dmtools
+ * version already accepts (owner/repo/number, labels:[x], text).
+ *
+ * @param {string} owner repository owner
+ * @param {string} repo  repository name
+ * @returns {Object} tracker (see createTracker)
+ */
+function createGithubTracker(owner, repo) {
+    return createTracker(
+        { repository: { owner: owner || '', repo: repo || '' }, tracker: { provider: 'github' } },
+        { trackerProvider: 'github' }
+    );
+}
+
 module.exports = {
     createTracker: createTracker,
+    createGithubTracker: createGithubTracker,
     extractTicketKey: extractTicketKey
 };
