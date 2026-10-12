@@ -761,5 +761,15 @@
       "total": 55312,
       "model": "kimi-for-coding"
     }
+  ],
+  "issue-865": [
+    {
+      "leg": "dev",
+      "at": "2026-10-12T00:05:24Z",
+      "prompt": 82967,
+      "completion": 29691,
+      "total": 112658,
+      "model": "kimi-for-coding"
+    }
   ]
 }
