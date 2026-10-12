@@ -123,6 +123,7 @@
         "js/unit-tests/test_instructionRefs.js",
         "js/unit-tests/test_packLaunchContract.js",
         "js/unit-tests/test_releaseKicker.js",
+        "js/unit-tests/test_releaseMachineMerge.js",
         "js/unit-tests/test_releasePacks.js",
         "js/unit-tests/test_packRequireGate.js",
         "js/unit-tests/test_packRequirePath.js",

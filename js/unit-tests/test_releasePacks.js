@@ -184,8 +184,12 @@ suite('release workflow wiring', function () {
         var build = wf.indexOf('node ci/release_packs.mjs');
         assert.ok(build !== -1 && reset < build,
             'the reset must happen BEFORE the affected-set computation');
-        assert.ok(wf.indexOf("github.event_name == 'push'") !== -1,
-            'the reset is gated to push events — manual dispatch may target a branch');
+        assert.ok(wf.indexOf("github.event_name == 'push' || github.event_name == 'workflow_run'") !== -1,
+            'the reset is gated to push + workflow_run events (gh-867: a ' +
+            'machine-merge-triggered run must release current main) — a ' +
+            'manual dispatch may target a branch');
+        assert.ok(wf.indexOf("github.event_name == 'push' || github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch'") === -1,
+            'the sync must stay gated OFF workflow_dispatch');
     });
 
     test('R2 guard 1: main-already-carries-it skips the push entirely', function () {

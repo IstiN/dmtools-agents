@@ -26,6 +26,21 @@ on:
       - '.github/**'
       - 'docs/**'
       - 'site/**'
+  workflow_run:
+    # gh-867: the merge bot's GITHUB_TOKEN merge push never fires the push
+    # trigger above (GitHub suppresses workflow triggers on GITHUB_TOKEN
+    # events — #863/#866 reached main with no release until an operator
+    # dispatched one). The bot's own run completion IS a normal event, so
+    # a successful 'Machine Merge Bot' run now cuts a release within
+    # seconds (the suspenders; the gh-844 kicker stays the 10-min belt).
+    #
+    # NO branches: filter — the bot runs on PR-branch events, so its
+    # workflow_run head_branch is the PR branch, never main; a
+    # branches: [main] filter would silence this trigger entirely. "Main
+    # filtering" is the tag...main diff + dist/.no-release no-op (gh-690
+    # dedup), and the job gate below drops failed bot runs.
+    workflows: ['Machine Merge Bot']
+    types: [completed]
   workflow_dispatch:
     inputs:
       agents:
@@ -53,6 +68,15 @@ permissions:
 
 jobs:
   release:
+    # gh-867: workflow_run fires on EVERY bot completion (label latch
+    # ticks merge nothing; 'completed' also covers failures) — only a
+    # successful bot run may reach the build. A successful run whose
+    # merge changed nothing release-relevant then no-ops via
+    # dist/.no-release (the same gh-690 dedup that absorbs the kicker's
+    # double dispatch).
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     # The JS unit-test suite is NOT re-run here (owner 2026-10-01): quality.yml
     # runs it on every PR and main's protection is strict (required `crap` +
     # up-to-date), so every commit reaching main already passed the suite on a
@@ -106,9 +130,12 @@ jobs:
         # ledger PR #689). Reset to origin/main so base-tag...HEAD covers
         # exactly the unreleased content ONCE, from the current ledger; a
         # queued run that finds everything already released writes
-        # dist/.no-release and no-ops. Gated to push events — a manual
-        # dispatch may deliberately target a non-main ref.
-        if: github.event_name == 'push'
+        # dist/.no-release and no-ops. Gated to push + workflow_run
+        # events — a workflow_run-triggered checkout resolves to the
+        # event-time main (gh-867: the merge may land after the bot-run
+        # event fired), and queued runs must release current main; a
+        # manual dispatch may deliberately target a non-main ref.
+        if: github.event_name == 'push' || github.event_name == 'workflow_run'
         run: |
           git fetch origin main
           git reset --hard origin/main
