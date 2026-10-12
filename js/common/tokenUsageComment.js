@@ -106,7 +106,7 @@ function avoidBridgeArrayMisparse(str) {
     return str;
 }
 
-function formatUsageComment(filePath, data, initiator) {
+function formatUsageComment(filePath, data, initiator, provider) {
     var fileName = fileNameFromPath(filePath);
     // Strip the _usage suffix so the comment label matches the agent name
     // (e.g. outputs/story_acceptance_criteria_usage.json -> [story_acceptance_criteria]: {...})
@@ -117,12 +117,39 @@ function formatUsageComment(filePath, data, initiator) {
     if (suffixIndex !== -1 && fileName.substring(suffixIndex) === USAGE_SUFFIX) {
         label = fileName.substring(0, suffixIndex);
     }
+    if (String(provider || '').toLowerCase() === 'ado') {
+        // agents#877/#878: ADO comments are posted as Markdown, where "[label]: {json}" is a link-reference
+        // definition (stored but never rendered) and "[~accountid:x]" is Jira mention markup, not a mention.
+        // Use a bold label + fenced json block and show the initiator as plain text. A real @-mention would
+        // need the identity GUID, which the job does not have. (Jira/GitHub keep the format below.)
+        var adoComment = '**' + label + '**\n```json\n' + JSON.stringify(data) + '\n```';
+        if (initiator) {
+            adoComment += '\nInitiator: ' + plainInitiator(initiator);
+        }
+        return adoComment;
+    }
     var comment = '[' + label + ']: ' + JSON.stringify(data);
     var mention = formatJiraMention(initiator);
     if (mention) {
         comment += '\nInitiator: ' + mention;
     }
     return avoidBridgeArrayMisparse(comment);
+}
+
+/**
+ * The initiator as plain text: an account id / email as given, with Jira mention markup removed when the
+ * caller passed an already formatted "[~accountid:x]".
+ */
+function plainInitiator(initiator) {
+    var id = String(initiator).trim();
+    var prefix = '[~accountid:';
+    if (id.indexOf(prefix) === 0 && id.charAt(id.length - 1) === ']') {
+        return id.substring(prefix.length, id.length - 1);
+    }
+    if (id.charAt(0) === '[' && id.charAt(1) === '~' && id.charAt(id.length - 1) === ']') {
+        return id.substring(2, id.length - 1);
+    }
+    return id;
 }
 
 /**
@@ -172,9 +199,10 @@ function postTokenUsageComments(ticketKey, options) {
             return;
         }
 
-        var comment = formatUsageComment(filePath, data, initiator);
         try {
             if (!tracker) tracker = trackersModule.createTracker(options.config || null, options.customParams || {});
+            var comment = formatUsageComment(filePath, data, initiator,
+                typeof tracker.provider === 'function' ? tracker.provider() : null);
             tracker.postComment(ticketKey, comment);
             console.log('Posted token usage comment for ' + ticketKey + ' from ' + filePath);
             posted += 1;
