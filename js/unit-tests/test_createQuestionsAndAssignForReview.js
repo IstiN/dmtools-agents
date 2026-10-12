@@ -337,3 +337,64 @@ suite('createQuestionsAndAssignForReview — status transition outcome is report
     });
 });
 
+suite('createQuestionsAndAssignForReview — question subtasks on Azure DevOps (agents#870)', function () {
+
+    function runAdo(extraGlobals, jiraQuestions) {
+        var calls = { created: [], links: [], labels: [], priority: [], jira: [] };
+        var globals = Object.assign({
+            ado_create_work_item: function (a) { calls.created.push(a); return JSON.stringify({ id: 5001, key: '5001' }); },
+            ado_link_work_items: function (a) { calls.links.push(a); return '{}'; },
+            ado_add_work_item_label: function (a) { calls.labels.push(a); },
+            ado_set_priority: function (a) { calls.priority.push(a); },
+            ado_add_work_item_comment: function () {},
+            ado_move_to_state: function () {},
+            ado_remove_work_item_label: function () {},
+            jira_create_ticket_with_json: function (a) { calls.jira.push(a); return JSON.stringify({ key: 'X-1' }); }
+        }, extraGlobals || {});
+        var loaded = loadCreateQuestionsModule({
+            'outputs/questions.json': JSON.stringify([{ summary: 'Confirm container security posture', priority: 'High', description: 'outputs/q1.md' }]),
+            'outputs/q1.md': 'Is the rootfs read-only?'
+        }, globals);
+        var result = loaded.mod.action({
+            ticket: { key: '1839749' },
+            metadata: { contextId: 'story_questions' },
+            jobParams: { customParams: { trackerProvider: 'ado' } }
+        });
+        return { result: result, calls: calls, loaded: loaded };
+    }
+
+    test('creates a Task, links it to the parent, labels it and sets the priority — no Jira-shaped fieldsJson', function () {
+        var r = runAdo();
+        assert.equal(r.result.success, true, JSON.stringify(r.result));
+        assert.equal(r.calls.created.length, 1, 'one work item created');
+        assert.equal(r.calls.created[0].workItemType, 'Task', 'the child type of a PBI/Bug');
+        assert.contains(r.calls.created[0].title, '[Q] Confirm container security posture');
+        assert.equal(r.calls.links.length, 1);
+        assert.equal(r.calls.links[0].targetId, '1839749', 'linked under the parent story');
+        assert.equal(r.calls.links[0].relationship, 'parent');
+        assert.ok(r.calls.labels.some(function (l) { return l.label === 'q'; }), 'question label added: ' + JSON.stringify(r.calls.labels));
+        assert.equal(r.calls.priority.length, 1);
+        assert.equal(r.calls.jira.length, 0, 'the Jira creation path is never used on ADO');
+        assert.equal(r.result.createdQuestions[0].success, true);
+    });
+
+    test('a failing priority never fails the question (non-fatal)', function () {
+        var r = runAdo({ ado_set_priority: function () { throw new Error('priority field is read-only'); } });
+        assert.equal(r.result.success, true, JSON.stringify(r.result));
+        assert.equal(r.result.createdQuestions[0].success, true);
+    });
+
+    test('Jira path is byte-identical: still createTicketWithFields, never the ADO tools', function () {
+        var jira = [];
+        var loaded = loadCreateQuestionsModule({
+            'outputs/questions.json': JSON.stringify([{ summary: 'Q1', priority: 'High' }])
+        }, {
+            jira_create_ticket_with_json: function (a) { jira.push(a); return JSON.stringify({ key: 'BICE-1' }); },
+            ado_create_work_item: function () { throw new Error('ADO must not be used on a Jira run'); }
+        });
+        var result = loaded.mod.action({ ticket: { key: 'BICE-829' }, metadata: { contextId: 'story_questions' }, jobParams: { customParams: {} } });
+        assert.equal(result.success, true);
+        assert.equal(jira.length, 1);
+    });
+});
+

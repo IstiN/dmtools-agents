@@ -155,7 +155,25 @@ function createQuestion(entry, parentKey, projectKey, jiraConfig, priorityMap) {
     }
 
     try {
-        var result = getTracker().createTicketWithFields(projectKey, fieldsJson);
+        var tracker = getTracker();
+        var result;
+        if (tracker.provider() === 'ado') {
+            // agents#870: fieldsJson above is Jira-shaped (issuetype/parent/summary); createTicketWithFields on
+            // ADO needs ADO field names and would throw. Create the work item, link it to its parent and add
+            // the question label through the tracker instead. The work item type is jira.questions.workItemType
+            // (default 'Task' — the child type of a PBI/Bug in the standard ADO processes).
+            var adoType = (jiraConfig.questions && jiraConfig.questions.workItemType) || 'Task';
+            result = tracker.createTicketWithParent(projectKey, adoType, summary, description, parentKey, { labels: [questionLabel] });
+            if (result && entry.priority) {
+                try {
+                    tracker.setPriority(result, (priorityMap && priorityMap[entry.priority]) || entry.priority);
+                } catch (priorityError) {
+                    console.warn('Could not set priority on question ' + result + ' (non-fatal):', priorityError);
+                }
+            }
+        } else {
+            result = tracker.createTicketWithFields(projectKey, fieldsJson);
+        }
         var key = (typeof result === 'string' && result) ? result : extractTicketKey(result);
         console.log('Created question subtask ' + (key || '(unknown key)') + ': ' + summary);
         return key;
