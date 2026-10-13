@@ -1291,3 +1291,59 @@ suite('trackers.js — createGithubTracker: repository-pinned tracker for the SM
     });
 });
 
+suite('trackers.js — ADO project for created work items (agents#870, found on a live ADO)', function () {
+
+    function ado(config) {
+        var m = {
+            ado_create_work_item: recorder('ado_create_work_item', JSON.stringify({ id: 880 })),
+            ado_link_work_items: recorder('ado_link_work_items', '{}'),
+            ado_add_work_item_label: recorder('ado_add_work_item_label', '{}')
+        };
+        return { t: loadTrackers(m).createTracker(config || {}, { trackerProvider: 'ado' }), m: m };
+    }
+
+    test('a numeric "project" (taken from an ADO work item id) is replaced by the configured jira.project', function () {
+        var x = ado({ jira: { project: 'ai-native-sdlc-blueprint' } });
+        x.t.createTicketWithParent('879', 'Task', 'title', 'desc', '879');
+        assert.equal(x.m.ado_create_work_item.calls[0].project, 'ai-native-sdlc-blueprint');
+    });
+
+    test('config.tracker.adoProject wins over jira.project', function () {
+        var x = ado({ tracker: { adoProject: 'Team A' }, jira: { project: 'other' } });
+        x.t.createTicketWithParent('12', 'Task', 't', 'd', '12');
+        assert.equal(x.m.ado_create_work_item.calls[0].project, 'Team A');
+    });
+
+    test('a real project name is passed through untouched (and trimmed), whatever the config says', function () {
+        var x = ado({ jira: { project: 'configured' } });
+        x.t.createTicketWithParent('  my-project ', 'Task', 't', 'd', '5');
+        assert.equal(x.m.ado_create_work_item.calls[0].project, 'my-project');
+    });
+
+    test('an alphanumeric Jira-style project prefix is a name, not an id: unchanged', function () {
+        var x = ado({ jira: { project: 'configured' } });
+        x.t.createTicketWithParent('PROJ', 'Task', 't', 'd', 'PROJ-1');
+        assert.equal(x.m.ado_create_work_item.calls[0].project, 'PROJ');
+    });
+
+    test('createTicketWithFields uses the same project resolution', function () {
+        var x = ado({ jira: { project: 'ai-native-sdlc-blueprint' } });
+        x.t.createTicketWithFields('879', { workItemType: 'Task', title: 'q' });
+        assert.equal(x.m.ado_create_work_item.calls[0].project, 'ai-native-sdlc-blueprint');
+    });
+
+    test('with nothing configured the original value is kept (no crash, same call as before)', function () {
+        var x = ado({});
+        x.t.createTicketWithParent('879', 'Task', 't', 'd', '879');
+        assert.equal(x.m.ado_create_work_item.calls[0].project, '879');
+    });
+
+    test('Jira and GitHub are not affected by the ADO resolution', function () {
+        var m = jiraMocks();
+        m.jira_create_ticket_basic = recorder('jira_create_ticket_basic', '{"key":"PROJ-9"}');
+        var t = loadTrackers(m).createTracker({ jira: { project: 'configured' } }, { trackerProvider: 'jira' });
+        t.createTicket('123', 'Task', 'x', 'y');
+        assert.equal(m.jira_create_ticket_basic.calls[0].project, '123', 'Jira path untouched');
+    });
+});
+
