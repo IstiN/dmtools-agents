@@ -1140,7 +1140,7 @@ function handleReworkSetupAlreadyFailed(tracker, ticketKey, customParams, failur
         if (failureContent) {
             comment += m.code(failureContent.trim());
         } else {
-            comment += 'See ' + m.code('input/' + ticketKey + '/rework_setup_failed.md') + ' for details.';
+            comment += 'See ' + m.inline('input/' + ticketKey + '/rework_setup_failed.md') + ' for details.';
         }
         tracker.postComment(ticketKey, comment);
         console.log('✅ Posted rework-setup-already-failed comment to ticket:', ticketKey);

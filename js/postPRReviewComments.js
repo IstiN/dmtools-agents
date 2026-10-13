@@ -248,7 +248,7 @@ function handleMissingReviewData(params, config, customParams, tracker) {
         tracker.postComment(
             ticketKey,
             mm.h(3, '⚠️ PR Review Output Missing') + '\n\n' +
-                'The PR review agent completed without writing ' + mm.code('outputs/pr_review.json') + '. ' +
+                'The PR review agent completed without writing ' + mm.inline('outputs/pr_review.json') + '. ' +
                 'A resume was attempted once, but mandatory outputs are still missing. ' +
                 'The SM trigger label was cleared so the review can retry.'
         );
@@ -732,7 +732,7 @@ function applyFormalGithubReview(scm, pullRequestId, isApproved, recommendation,
  * verdict without a head is exactly the pathology this fixes, so the post is
  * skipped when the sha cannot be resolved.
  */
-function postVerdictRecord(scm, repoInfo, prNumber, isApproved, recommendation, issueCounts) {
+function postVerdictRecord(scm, repoInfo, prNumber, isApproved, recommendation, issueCounts, provider) {
     try {
         var headSha = null;
         try {
@@ -757,7 +757,7 @@ function postVerdictRecord(scm, repoInfo, prNumber, isApproved, recommendation, 
             important: issueCounts.important,
             suggestions: issueCounts.suggestions,
             source: 'pr_review.json'
-        });
+        }, provider);
         if (!body) {
             console.warn('verdict record: unbuildable record (verdict ' + verdict + ') — not posted');
             return;
@@ -1016,7 +1016,8 @@ function action(params) {
             // gh-807 verdict persistence: the machine-parseable record
             // (head sha + effective verdict + census) the tick reconciles
             // per head — see js/common/reviewVerdicts.js.
-            postVerdictRecord(scm, repoInfo, prNumber, isApproved, recommendation, issueCounts);
+            postVerdictRecord(scm, repoInfo, prNumber, isApproved, recommendation, issueCounts,
+                (config && config.scm && config.scm.provider) || 'github');
 
             // Step 5: Two-state outcome
             if (isApproved) {
