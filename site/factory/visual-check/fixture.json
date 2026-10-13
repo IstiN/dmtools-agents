@@ -170,7 +170,8 @@
             "completion": 12980,
             "total": 61190,
             "model": "claude-sonnet-4-5",
-            "cost": 0.33933
+            "cost": 0.33933,
+            "cacheRead": 40978
           },
           {
             "leg": "pr_review",
@@ -179,7 +180,8 @@
             "completion": 4310,
             "total": 26450,
             "model": "claude-sonnet-4-5",
-            "cost": 0.13107
+            "cost": 0.13107,
+            "cacheRead": 18819
           }
         ]
       },
@@ -275,7 +277,8 @@
             "completion": 18320,
             "total": 79370,
             "model": "claude-sonnet-4-5",
-            "cost": 0.45795
+            "cost": 0.45795,
+            "cacheRead": 51892
           },
           {
             "leg": "pr_review",
