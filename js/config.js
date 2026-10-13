@@ -192,7 +192,9 @@ const DEFAULT_FORMATS = {
         testAutomation: '{ticketKey} test: automate {ticketSummary}',
         testRework: '{ticketKey} test rework: {result} test after review',
         rework: '{ticketKey} Rework: address PR review comments',
-        wip: '{ticketKey} WIP: partial analysis (agent interrupted)'
+        wip: '{ticketKey} WIP: partial analysis (agent interrupted)',
+        // timerAutoCommitAndSave.js periodic WIP commits; {timestamp} is e.g. 2026-10-12T19-55-14 (agents#883)
+        autoSave: '{ticketKey} WIP auto-save {timestamp}'
     },
     prTitle: {
         development: '{ticketKey} {ticketSummary}',

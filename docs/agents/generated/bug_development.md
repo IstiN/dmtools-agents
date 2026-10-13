@@ -78,6 +78,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
   - git push
   - git merge
 - Parameters (customParams):
+  - `autoSaveCommitMessage`
   - `cacheToReleases`
   - `cacheToReleases.releaseNameTemplate`
   - `cacheToReleases.releaseTagTemplate`
@@ -95,6 +96,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `checkOpenPR` _(used by JS action)_
 - `branchCreateFnPath` _(used by JS action)_
 - `targetRepository.workingDir` _(used by JS action)_
+- `autoSaveCommitMessage` _(used by JS action)_
 - `cacheToReleases` _(used by JS action)_
 - `cacheToReleases.releaseNameTemplate` _(used by JS action)_
 - `cacheToReleases.releaseTagTemplate` _(used by JS action)_
