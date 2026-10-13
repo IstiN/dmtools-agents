@@ -13,6 +13,10 @@ on:
 
 permissions:
   contents: read
+  # The canonical guard files the `sm-guard` alarm ISSUE on red — the
+  # caller token is a ceiling for the reusable workflow: without
+  # issues:write the alarm path 403s (review round-1..5 blocking finding).
+  issues: write
 
 jobs:
   guard:
