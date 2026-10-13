@@ -1,0 +1,17 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "agents/js/factory/token_usage_publish.js",
+    "jobParams": {
+      "customParams": {
+        "runOutput": ".dmtools/run-output.txt",
+        "configPath": "{config}",
+        "kind": "{kind}",
+        "anchor": "{anchor}",
+        "repo": "{owner}/{repo}",
+        "dataBranch": "factory-data",
+        "dataPath": "data/fa-tokens.json"
+      }
+    }
+  }
+}

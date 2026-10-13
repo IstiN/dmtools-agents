@@ -1,0 +1,95 @@
+/**
+ * JSRunner entry — publish per-leg token usage (fa-tokens ledger →
+ * factory-data). Thin caller for js/factory/token_usage.js, the JS port of
+ * the awf factory-teammate.yml «Publish leg token usage» step
+ * (IstiN/dmtools-agentic-workflows#34 scripts/publish-token-usage.sh).
+ *
+ * Invocation (machine-kit / awf stage-3 rewire — the sh call becomes):
+ *   dmtools run agents/js/factory/run_token_usage_publish.json
+ *
+ * Params resolve customParams first, then the sh step's env names, then the
+ * sh defaults — so the same config works from a workflow env block or a
+ * fully-materialized runner config. See js/factory/README.md for the full
+ * env/file contract.
+ */
+
+var tokenUsage = require('./token_usage.js');
+
+/**
+ * Env reader for the fallback path. The dmtools JS runtimes do not
+ * guarantee a java bridge (GraalJS has one; QuickJS does not), so every
+ * access is guarded and missing env simply yields '' — the caller's
+ * defaults take over.
+ */
+function envValue(name) {
+    try {
+        if (typeof java !== 'undefined' && java && java.lang &&
+            java.lang.System && typeof java.lang.System.getenv === 'function') {
+            var v = java.lang.System.getenv(name);
+            return (v === null || v === undefined) ? '' : String(v);
+        }
+    } catch (e) { /* no env bridge on this runtime */ }
+    return '';
+}
+
+/**
+ * customParams > env > sh-step defaults. envMap is a test seam (name →
+ * value); production passes nothing and reads the process env.
+ */
+function resolveParams(params, envMap) {
+    var custom = (params && params.jobParams && params.jobParams.customParams) || {};
+    function env(name) {
+        if (envMap && Object.prototype.hasOwnProperty.call(envMap, name)) return envMap[name];
+        return envValue(name);
+    }
+    function pick(key, envName, dflt) {
+        var v = custom[key];
+        if (v === undefined || v === null || v === '') v = env(envName);
+        if (v === undefined || v === null || v === '') v = dflt;
+        return v === undefined || v === null ? '' : String(v);
+    }
+    return {
+        runOutput: pick('runOutput', 'RUN_OUTPUT', ''),
+        configPath: pick('configPath', 'CONFIG', ''),
+        kind: pick('kind', 'KIND', ''),
+        anchor: pick('anchor', 'ANCHOR', ''),
+        repo: pick('repo', 'REPO', ''),
+        dataBranch: pick('dataBranch', 'DATA_BRANCH', tokenUsage.DEFAULT_DATA_BRANCH),
+        dataPath: pick('dataPath', 'DATA_PATH', tokenUsage.DEFAULT_DATA_PATH),
+        now: custom.now
+    };
+}
+
+/**
+ * JSRunner action. deps is a test seam: production resolves the dmtools
+ * globals (cli_execute_command / file_read) exactly like smAgent.js wires
+ * publishFactoryState — exec MUST return the child output for the sha
+ * probe to work.
+ */
+function action(params, deps) {
+    deps = deps || {};
+    var exec = deps.cli_execute_command ||
+        (typeof cli_execute_command === 'function' ? cli_execute_command : null);
+    var readRaw = deps.file_read ||
+        (typeof file_read === 'function' ? file_read : null);
+    var read = readRaw ? function (p) { return readRaw({ path: p }); } : null;
+    var opts = resolveParams(params, deps.env);
+    var result = tokenUsage.publishTokenUsage(opts, {
+        exec: exec ? function (args) { return exec(args); } : undefined,
+        read: read || undefined,
+        log: function (line) { console.log(line); }
+    });
+    console.log('  🪙 token publish: ' + result.status +
+        (result.reason ? ' (' + result.reason + ')' : '') +
+        (result.key ? ' — ' + result.key + ' ' + result.leg : '') +
+        (result.attempts ? ' after ' + result.attempts + ' attempt(s)' : ''));
+    return result;
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        action: action,
+        resolveParams: resolveParams,
+        envValue: envValue
+    };
+}
