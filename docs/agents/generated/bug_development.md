@@ -8,6 +8,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 
 - `branchCreateFnPath` — path to a JS hook that creates the feature branch (two-branch flow customization).
 - `cacheToReleases` — when enabled, the autocommit timer also snapshots accumulated CLI output into a git release asset (restore point on a killed run).
+- `autoSaveCommitMessage` — optional template for the periodic WIP auto-save commit made by the timer (default `{ticketKey} WIP auto-save {timestamp}`; also `formats.commitMessage.autoSave` in the project config). Use it when the target repo's commit-msg hook requires a tracker key, e.g. `AB#{ticketKey} WIP auto-save {timestamp}`.
 - `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
 - `scmProvider` — SCM provider override (`github`, `gitlab`, …) for this run (autocommit timer and release snapshots route through it).
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).
@@ -78,6 +79,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
   - git push
   - git merge
 - Parameters (customParams):
+  - `autoSaveCommitMessage`
   - `cacheToReleases`
   - `cacheToReleases.releaseNameTemplate`
   - `cacheToReleases.releaseTagTemplate`
@@ -95,6 +97,7 @@ _Timer JS Action — Auto-commit, push, and save session artefacts_
 - `checkOpenPR` _(used by JS action)_
 - `branchCreateFnPath` _(used by JS action)_
 - `targetRepository.workingDir` _(used by JS action)_
+- `autoSaveCommitMessage` _(used by JS action)_
 - `cacheToReleases` _(used by JS action)_
 - `cacheToReleases.releaseNameTemplate` _(used by JS action)_
 - `cacheToReleases.releaseTagTemplate` _(used by JS action)_
