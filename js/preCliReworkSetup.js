@@ -95,7 +95,7 @@ function buildReworkStartedComment(flavor, ctx) {
         comment += m.panel(null,
             '⚠️ ' + m.bold('Merge conflicts detected') + ' — ' + conflicts.length +
                 ' file(s) must be resolved before rework can be applied:\n' +
-            conflicts.map(function (f) { return '* ' + m.code(f); }).join('\n'),
+            conflicts.map(function (f) { return '* ' + m.inline(f); }).join('\n'),
             'bgColor=#FFEBE6|borderColor=#DE350B') + '\n\n';
     }
 
@@ -103,8 +103,8 @@ function buildReworkStartedComment(flavor, ctx) {
     if (checks.length > 0) {
         comment += m.panel(null,
             '⚠️ ' + m.bold('CI checks failing') + ' — ' + checks.length + ' check(s) must pass before merge:\n' +
-            checks.map(function (c) { return '* ' + m.code(c.name); }).join('\n') +
-            '\nError logs: ' + m.code('ci_failures.md') + ' (summary) and ' + m.code('ci_failures_full.log') + ' (full logs).',
+            checks.map(function (c) { return '* ' + m.inline(c.name); }).join('\n') +
+            '\nError logs: ' + m.inline('ci_failures.md') + ' (summary) and ' + m.inline('ci_failures_full.log') + ' (full logs).',
             'bgColor=#FFEBE6|borderColor=#DE350B') + '\n\n';
     }
 

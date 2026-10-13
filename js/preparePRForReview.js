@@ -152,8 +152,8 @@ function action(params) {
             if (failedChecks.length > 0) {
                 jiraComment += m.panel(null,
                     '⚠️ ' + m.bold('CI checks failing') + ' — ' + failedChecks.length + ' check(s) did not pass:\n' +
-                    failedChecks.map(function(c) { return '* ' + m.code(c.name); }).join('\n') +
-                    '\nError logs: ' + m.code('ci_failures.md') + ' (summary) and ' + m.code('ci_failures_full.log') + ' (full logs).',
+                    failedChecks.map(function(c) { return '* ' + m.inline(c.name); }).join('\n') +
+                    '\nError logs: ' + m.inline('ci_failures.md') + ' (summary) and ' + m.inline('ci_failures_full.log') + ' (full logs).',
                     'bgColor=#FFEBE6|borderColor=#DE350B') + '\n\n';
             }
 
