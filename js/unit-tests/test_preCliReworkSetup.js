@@ -249,6 +249,21 @@ suite('preCliReworkSetup.buildReworkStartedComment — per-tracker markup (gh-77
         assert.equal(out.indexOf('[PR #1308|'), -1, 'no wiki link');
     });
 
+    test('markdown flavor (ADO/GitHub): bullets and the log names are single-line code spans, never fenced blocks (agents#882)', function() {
+        var out = loadMod().buildReworkStartedComment(reworkCommentMarkup.forFlavor('markdown'), FULL_CTX);
+        assert.contains(out, '> * `build`\n> * `test`');
+        assert.contains(out, 'Error logs: `ci_failures.md` (summary) and `ci_failures_full.log` (full logs).');
+        assert.contains(out, '> * `src/a.dart`');
+        assert.equal(out.indexOf('```'), -1, 'no fenced block anywhere in this comment: ' + out);
+    });
+
+    test('markdown flavor: the quoted panel keeps one line per bullet (no orphan "> ```" lines)', function() {
+        var out = loadMod().buildReworkStartedComment(reworkCommentMarkup.forFlavor('markdown'), FULL_CTX);
+        out.split('\n').forEach(function(line) {
+            assert.ok(line.indexOf('> ```') === -1, 'broken quote line: ' + line);
+        });
+    });
+
     test('clean run: no conflict/CI panels are emitted', function() {
         var out = loadMod().buildReworkStartedComment(reworkCommentMarkup.forFlavor('jira'), {
             prNumber: 1, prUrl: 'https://x/1', branchName: 'b'
