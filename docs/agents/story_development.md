@@ -10,6 +10,7 @@ Configured via `customParams` in the agent JSON or the project `.dmtools/config.
 - `autoStartReviewConfigFile` — agent config file used for the auto-started review workflow.
 - `branchCreateFnPath` — path to a JS hook that creates the feature branch (two-branch flow customization).
 - `cacheToReleases` — when enabled, caches the workspace into a git release so later runs restore instead of re-cloning.
+- `autoSaveCommitMessage` — optional template for the periodic WIP auto-save commit made by the timer (default `{ticketKey} WIP auto-save {timestamp}`; also `formats.commitMessage.autoSave` in the project config). Use it when the target repo's commit-msg hook requires a tracker key, e.g. `AB#{ticketKey} WIP auto-save {timestamp}`.
 - `checkOpenPR` — when `true`, skip tickets that already have an open pull request for this work.
 - `customStatuses` — status name overrides for this workflow (maps logical statuses to project-specific names).
 - `removeLabel` — label removed from the ticket after a successful run (idempotency cleanup).

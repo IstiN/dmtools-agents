@@ -40,8 +40,13 @@ function loadTimer(mocks, opts) {
 
     var configLoaderMock = {
         loadProjectConfig: function(params) {
-            return { scm: { provider: opts.scmProvider || 'github' } };
-        }
+            var cfg = { scm: { provider: opts.scmProvider || 'github' } };
+            if (opts.formats) cfg.formats = opts.formats;
+            if (opts.configThrows) throw new Error('config unreadable');
+            return cfg;
+        },
+        // the real implementation (the template is resolved through it)
+        formatTemplate: function(t, v) { return configLoaderModule.formatTemplate(t, v); }
     };
 
     var requireFn = makeRequire({
@@ -868,3 +873,63 @@ suite('timerAutoCommitAndSave — gh-798 push self-heal wrapper', function() {
             'the WIP commit still landed on the remote');
     });
 });
+
+suite('timerAutoCommitAndSave — auto-save commit message is a template (agents#883)', function() {
+
+    function commitFor(opts, customParams) {
+        var cliCalls = [];
+        var m = loadTimer({
+            cli_execute_command: function(args) {
+                cliCalls.push(args.command);
+                if (args.command.indexOf('git rev-parse --quiet --verify MERGE_HEAD') !== -1) throw new Error('exit 1');
+                if (args.command.indexOf('git status --porcelain') !== -1) return ' M src/a.js\n';
+                if (args.command.indexOf('git branch --show-current') !== -1) return 'ai/gh-9\n';
+                return '';
+            }
+        }, { formats: opts.formats, configThrows: opts.configThrows });
+        m.action({
+            ticket: { key: opts.key || '2039670' },
+            jobParams: { customParams: Object.assign({ targetRepository: { workingDir: '/w', baseBranch: 'main' } }, customParams || {}),
+                metadata: { contextId: 'sf_story_development' } },
+            currentCliOutput: ''
+        });
+        return cliCalls.filter(function(c) { return c.indexOf('git commit') === 0; })[0];
+    }
+
+    test('default: exactly the previous message "<key> WIP auto-save <timestamp>"', function() {
+        var c = commitFor({});
+        assert.ok(/^git commit -m "2039670 WIP auto-save \d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}"/.test(c), c);
+    });
+
+    test('config.formats.commitMessage.autoSave is used, with {ticketKey} and {timestamp}', function() {
+        var c = commitFor({ formats: { commitMessage: { autoSave: 'AB#{ticketKey} WIP auto-save {timestamp}' } } });
+        assert.ok(/^git commit -m "AB#2039670 WIP auto-save \d{4}-/.test(c), c);
+    });
+
+    test('customParams.autoSaveCommitMessage overrides the project config', function() {
+        var c = commitFor({ formats: { commitMessage: { autoSave: 'from config' } } }, { autoSaveCommitMessage: 'US{ticketKey} auto' });
+        assert.contains(c, 'git commit -m "US2039670 auto"');
+    });
+
+    test('double quotes and newlines in a template can never break the shell command', function() {
+        var c = commitFor({ formats: { commitMessage: { autoSave: 'x "quoted"\nsecond {ticketKey}' } } });
+        assert.contains(c, "git commit -m \"x 'quoted' second 2039670\"");
+    });
+
+    test('an unreadable project config falls back to the default message (the auto-save must never stop)', function() {
+        var c = commitFor({ configThrows: true });
+        assert.ok(/^git commit -m "2039670 WIP auto-save /.test(c), c);
+    });
+
+    test('autoSaveMessage is exported and never returns an empty message', function() {
+        var m = loadTimer({}, {});
+        assert.equal(m.autoSaveMessage('K-1', 'T', '   ', null), 'K-1 WIP auto-save T', 'blank template -> default');
+        assert.equal(m.autoSaveMessage('K-1', 'T', '{ticketKey} {timestamp}', null), 'K-1 T');
+    });
+
+    test('the shipped default template equals the old hardcoded text', function() {
+        assert.equal(configModule.DEFAULT_FORMATS ? configModule.DEFAULT_FORMATS.commitMessage.autoSave : '{ticketKey} WIP auto-save {timestamp}',
+            '{ticketKey} WIP auto-save {timestamp}');
+    });
+});
+
