@@ -845,5 +845,15 @@
       "total": 76680,
       "model": "glm-5.3-flash"
     }
+  ],
+  "pr-885": [
+    {
+      "leg": "review",
+      "at": "2026-10-13T06:36:05Z",
+      "prompt": 63008,
+      "completion": 15481,
+      "total": 78489,
+      "model": "glm-5.3-flash"
+    }
   ]
 }
