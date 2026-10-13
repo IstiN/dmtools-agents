@@ -116,7 +116,30 @@ function pushBranchWithSelfHeal(cmd, resolveBranchName) {
  * Auto-commit and push any uncommitted changes in the target repo working dir.
  * Returns true if a commit was made.
  */
-function autoCommitAndPush(customParams, ticketKey) {
+/**
+ * The auto-save commit message: formats.commitMessage.autoSave from the project config (or the
+ * customParams.autoSaveCommitMessage override), default "{ticketKey} WIP auto-save {timestamp}".
+ * Never throws and never returns an empty message: a failure to load the config falls back to the default.
+ */
+function autoSaveMessage(ticketKey, timestamp, override, params) {
+    var template = override;
+    if (!template) {
+        try {
+            var cfg = configLoader.loadProjectConfig((params && params.jobParams) || params || {});
+            template = cfg && cfg.formats && cfg.formats.commitMessage && cfg.formats.commitMessage.autoSave;
+        } catch (e) {
+            template = null;
+        }
+    }
+    if (!template) template = DEFAULT_AUTOSAVE_TEMPLATE;
+    var msg = configLoader.formatTemplate(String(template), { ticketKey: ticketKey, timestamp: timestamp });
+    msg = String(msg).replace(/"/g, "'").replace(/\r?\n/g, ' ').trim();
+    return msg || (ticketKey + ' WIP auto-save ' + timestamp);
+}
+
+var DEFAULT_AUTOSAVE_TEMPLATE = '{ticketKey} WIP auto-save {timestamp}';
+
+function autoCommitAndPush(customParams, ticketKey, params) {
     var targetRepo = customParams.targetRepository || {};
     // Fallback: explicit runner customParams → the job working directory.
     // A missing config must never silently disable crash-safety commits
@@ -188,7 +211,10 @@ function autoCommitAndPush(customParams, ticketKey) {
 
     // There are changes — commit and push
     var timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
-    var commitMsg = ticketKey + ' WIP auto-save ' + timestamp;
+    // agents#883: the message is a template like every other commit message (formats.commitMessage.autoSave in
+    // the project config), so a repo whose commit-msg hook demands a tracker key can be satisfied. Default is
+    // the previous text, byte for byte. Double quotes are dropped: the message is placed inside git commit -m "...".
+    var commitMsg = autoSaveMessage(ticketKey, timestamp, customParams.autoSaveCommitMessage || null, params);
 
     try {
         // Untrack machine-local runtime logs that older/poisoned branches may already carry (gh-628: the
@@ -346,7 +372,7 @@ function action(params) {
     }
 
     // 1. Auto-commit and push changes
-    autoCommitAndPush(customParams, ticketKey);
+    autoCommitAndPush(customParams, ticketKey, params);
 
     // 2. Save currentCliOutput to releases as session artefact
     saveSessionArtefact(params, customParams, ticketKey, contextId, currentCliOutput);
@@ -355,6 +381,7 @@ function action(params) {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action: action,
+        autoSaveMessage: autoSaveMessage,
         pushBranchWithSelfHeal: pushBranchWithSelfHeal,
         isNonFastForwardError: isNonFastForwardError
     };
