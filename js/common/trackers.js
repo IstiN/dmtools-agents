@@ -141,6 +141,18 @@ function _defaultTrackerEnv() {
     }
 }
 
+/**
+ * Read ADO_PROJECT when running under GraalJS (Java host access); null elsewhere or when unset.
+ */
+function _adoProjectEnv() {
+    try {
+        var v = java.lang.System.getenv('ADO_PROJECT');
+        return v ? String(v).trim() : null;
+    } catch (e) {
+        return null;
+    }
+}
+
 function createTracker(config, customParams) {
     var VALID = ['jira', 'ado', 'github'];
     var raw =
@@ -361,9 +373,25 @@ function createTracker(config, customParams) {
         return ado_remove_work_item_label({ id: String(key), label: label });
     }
 
+    /**
+     * The ADO project to create work items in. Scripts written for Jira derive the project from the ticket key
+     * (`PROJ-12` -> `PROJ`); an ADO work item id is a bare number, so that yields the id ("879") and ADO answers
+     * TF200016 "project does not exist" (agents#870, live). A value that is empty or only digits is therefore
+     * not a project name: use the configured one (config.tracker.adoProject, config.jira.project, ADO_PROJECT).
+     * A real project name is passed through unchanged.
+     */
+    function adoProjectFor(project) {
+        var p = String(project == null ? '' : project).trim();
+        if (p && !/^\d+$/.test(p)) return p;
+        return (config && config.tracker && config.tracker.adoProject) ||
+            (config && config.jira && config.jira.project) ||
+            _adoProjectEnv() ||
+            p;
+    }
+
     function adoCreateTicket(project, type, title, description) {
         var raw = ado_create_work_item(withAdoFormat({
-            project: project,
+            project: adoProjectFor(project),
             workItemType: type,
             title: title,
             description: description
@@ -480,7 +508,7 @@ function createTracker(config, customParams) {
         Object.keys(f).forEach(function (k) {
             if (k !== 'workItemType' && k !== 'System.WorkItemType' && k !== 'title' && k !== 'System.Title') rest[k] = f[k];
         });
-        var raw = ado_create_work_item(withAdoFormat({ project: project, workItemType: type, title: title, fieldsJson: JSON.stringify(rest) }));
+        var raw = ado_create_work_item(withAdoFormat({ project: adoProjectFor(project), workItemType: type, title: title, fieldsJson: JSON.stringify(rest) }));
         var parsed = _parseJson(raw);
         if (parsed && typeof parsed === 'object') {
             if (typeof parsed.key === 'string') return parsed.key;
