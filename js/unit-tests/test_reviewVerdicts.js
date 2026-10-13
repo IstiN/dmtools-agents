@@ -41,6 +41,30 @@ suite('reviewVerdicts — marker protocol (gh-807 AC4)', function () {
         assert.contains(body, '"source":"pr_review.json"');
     });
 
+    test('GitHub keeps the explanatory sentence; Azure DevOps gets a neutral one without gh-807 / SM-tick wording (agents#881)', function () {
+        var rec = { head: 'abc123', verdict: 'APPROVE', at: '2026-10-09T05:47:30.000Z' };
+        var gh = rv.buildVerdictComment(rec);
+        assert.contains(gh, 'Review verdict record (gh-807)');
+        assert.contains(gh, 'machine-parsed by the SM tick');
+        ['ado', 'ADO', 'azure'].forEach(function (p) {
+            var ado = rv.buildVerdictComment(rec, p);
+            assert.equal(ado.indexOf('gh-807'), -1, 'provider=' + p);
+            assert.equal(ado.indexOf('SM tick'), -1, 'provider=' + p);
+            assert.contains(ado, 'Automated review record');
+        });
+        assert.equal(rv.buildVerdictComment(rec, 'github'), gh, 'github text is unchanged');
+        assert.equal(rv.buildVerdictComment(rec, undefined), gh, 'no provider = the old text');
+    });
+
+    test('the machine marker is identical for every provider and still parses (the SM only reads the marker)', function () {
+        var rec = { head: 'abc123', verdict: 'REQUEST_CHANGES', blocking: 2, at: '2026-10-09T05:47:30.000Z' };
+        var a = rv.extractVerdictRecord(rv.buildVerdictComment(rec, 'ado'));
+        var g = rv.extractVerdictRecord(rv.buildVerdictComment(rec, 'github'));
+        assert.deepEqual(a, g);
+        assert.equal(a.verdict, 'REQUEST_CHANGES');
+        assert.equal(rv.buildVerdictComment(rec, 'ado').split('\n')[0], rv.buildVerdictComment(rec, 'github').split('\n')[0]);
+    });
+
     test('buildVerdictComment normalizes the verdict and rejects unpostable records', function () {
         assert.equal(
             rv.extractVerdictRecord(rv.buildVerdictComment({ head: 'abc', verdict: 'approve' })).verdict,

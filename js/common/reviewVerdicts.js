@@ -79,7 +79,7 @@ var LABEL_REWORK = 'agent:rework';
  * Returns null when the record is not postable (no head / no verdict) —
  * callers skip the post; a head-less record must never exist.
  */
-function buildVerdictComment(record) {
+function buildVerdictComment(record, provider) {
     if (!record || !record.head || !record.verdict) return null;
     if (VERDICTS.indexOf(String(record.verdict).toUpperCase()) === -1) return null;
     var payload = {
@@ -91,9 +91,14 @@ function buildVerdictComment(record) {
         at: record.at || new Date().toISOString(),
         source: record.source || 'pr_review.json'
     };
-    return MARKER_PREFIX + JSON.stringify(payload) + MARKER_SUFFIX + '\n' +
-        '🤖 Review verdict record (gh-807) — machine-parsed by the SM tick to ' +
-        'reconcile contradictory review legs on one head. Do not edit or reply.';
+    // The machine-readable marker (first line) is the only thing the SM parses. The sentence below it is only for
+    // a human who opens the PR: GitHub keeps the original text, other SCMs (Azure DevOps) get a neutral one without
+    // the internal gh-807 / SM-tick wording (agents#881).
+    var note = String(provider || '').toLowerCase() === 'ado' || String(provider || '').toLowerCase() === 'azure'
+        ? '🤖 Automated review record. Please do not edit or reply.'
+        : '🤖 Review verdict record (gh-807) — machine-parsed by the SM tick to ' +
+          'reconcile contradictory review legs on one head. Do not edit or reply.';
+    return MARKER_PREFIX + JSON.stringify(payload) + MARKER_SUFFIX + '\n' + note;
 }
 
 /**
