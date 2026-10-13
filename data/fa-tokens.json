@@ -882,5 +882,16 @@
       "total": 123608,
       "model": "glm-5.3-flash"
     }
+  ],
+  "pr-888": [
+    {
+      "leg": "review",
+      "at": "2026-10-13T07:16:57Z",
+      "prompt": 73849,
+      "completion": 16363,
+      "total": 90212,
+      "cacheRead": 763072,
+      "model": "glm-5.3-flash"
+    }
   ]
 }
