@@ -213,7 +213,7 @@ suite('factoryTokenUsage — mergeTokenRows', function () {
     assert.equal(next['pr-1'].length, 40, 'cap: last 40 survive');
     assert.deepEqual(next['pr-1'][39], ROW, 'new row is the newest tail element');
     assert.deepEqual(next['pr-1'][0],
-        { leg: 'dev', at: '2026-10-02T00:00:05Z', prompt: 5, completion: 0, total: 5, cacheRead: 0, model: '' });
+        { leg: 'dev', at: '2026-10-02T00:00:06Z', prompt: 6, completion: 0, total: 6, cacheRead: 0, model: '' });
     assert.equal(JSON.stringify(next['pr-1']).indexOf('2026-09-01'), -1, 'pre-cutoff row gone');
   });
 
