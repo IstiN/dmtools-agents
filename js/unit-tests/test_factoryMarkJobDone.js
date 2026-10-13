@@ -124,8 +124,15 @@ suite('factoryMarkJobDone — flipTaskListItems', function () {
     assert.equal(r.body, '- [x] Run started 09:4a [1777](' + RUN_URL + ')\n');
   });
 
-  test('checkbox with no trailing space ("- [ ]x") is not a flip candidate', function () {
+  test('checkbox without trailing space: no flip, but the done tail still lands (awk guard has no trailing space)', function () {
     var body = '- [ ]Run started 09:15 [1777](' + RUN_URL + ')\n';
+    var r = mjdModule.flipTaskListItems(body, RUN_URL, '✅', '12:34');
+    assert.equal(r.body, '- [ ]Run started 09:15 · done 12:34 ✅\n');
+    assert.equal(r.flipped, 1, 'body changed (cmp -s would see a diff)');
+  });
+
+  test('checkbox without trailing space and no started time: fully untouched', function () {
+    var body = '- [ ]Run [1777](' + RUN_URL + ')\n';
     var r = mjdModule.flipTaskListItems(body, RUN_URL, '✅', '12:34');
     assert.equal(r.body, body);
     assert.equal(r.flipped, 0);
@@ -141,38 +148,45 @@ suite('factoryMarkJobDone — flipTaskListItems', function () {
     assert.equal(r.flipped, 2);
   });
 
-  test('time at end-of-line without trailing space: flips but no done suffix (awk sub needs " .*")', function () {
-    var body = '- [ ] Run started 09:15 [1777](' + RUN_URL + ')';
+  test('time at absolute end-of-line (no trailing space): flips but no done suffix (awk-verified)', function () {
+    var body = '- [ ] Run [1777](' + RUN_URL + ') started 09:15';
     var r = mjdModule.flipTaskListItems(body, RUN_URL, '✅', '12:34');
-    assert.equal(r.body, '- [x] Run started 09:15 [1777](' + RUN_URL + ')');
+    assert.equal(r.body, '- [x] Run [1777](' + RUN_URL + ') started 09:15\n');
   });
 
-  test('trailing space at EOL: empty .* still matches → done suffix lands', function () {
+  test('trailing space at EOL: empty .* still matches → done suffix lands, trailing space consumed', function () {
     var body = '- [ ] Run started 09:15 [1777](' + RUN_URL + ') \n';
     var r = mjdModule.flipTaskListItems(body, RUN_URL, '✅', '12:34');
-    assert.equal(r.body, '- [x] Run started 09:15 · done 12:34 ✅ \n');
+    assert.equal(r.body, '- [x] Run started 09:15 · done 12:34 ✅\n');
   });
 
-  test('first match() wins for st even when the replace hits a later occurrence (awk quirk)', function () {
-    var body = '- [ ] A started 09:00 mid started 10:00 tail [1777](' + RUN_URL + ')\n';
+  test('first match() wins for st when the replace must skip it (awk quirk, awk-verified)', function () {
+    // "09:00" is followed directly by "started" (no space) — match() finds
+    // "started 09:00" but the full tail pattern first matches at the LATER
+    // "started 10:00 tail…", whose replacement TEXT reuses st. Verified
+    // byte-for-byte against the sh's awk program (see the parity harness).
+    var body = '- [ ] A started 09:00started 10:00 tail [1777](' + RUN_URL + ')\n';
     var r = mjdModule.flipTaskListItems(body, RUN_URL, '✅', '12:34');
-    // match() finds "started 09:00"; the replace pattern first matches at
-    // "started 10:00 tail…" (the earlier occurrence lacks " .*"), and the
-    // replacement TEXT reuses st="started 09:00" — exactly awk's behavior.
     assert.equal(r.body,
-      '- [x] A started 09:00 mid started 09:00 · done 12:34 ✅\n');
+      '- [x] A started 09:00started 09:00 · done 12:34 ✅\n');
   });
 
-  test('already-done tail is replaced wholesale (re-run of a retried leg)', function () {
+  test('already-done tail is replaced wholesale — everything after "started HH:MM " is consumed (awk-verified)', function () {
     var body = '- [ ] Run started 09:15 · done 09:40 ✅ [1777](' + RUN_URL + ')\n';
     var r = mjdModule.flipTaskListItems(body, RUN_URL, '❌', '12:34');
-    assert.equal(r.body, '- [x] Run started 09:15 · done 12:34 ❌ [1777](' + RUN_URL + ')\n');
+    assert.equal(r.body, '- [x] Run started 09:15 · done 12:34 ❌\n');
   });
 
-  test('body without trailing newline is preserved byte-exact', function () {
+  test('body without trailing newline still comes out with one (awk { print } ORS)', function () {
     var body = '- [ ] Run started 09:15 (' + RUN_URL + ')';
     var r = mjdModule.flipTaskListItems(body, RUN_URL, '✅', '12:34');
-    assert.equal(r.body, '- [x] Run started 09:15 · done 12:34 ✅');
+    assert.equal(r.body, '- [x] Run started 09:15 · done 12:34 ✅\n');
+  });
+
+  test('CRLF record: the replaced tail consumes the CR (awk .* eats it)', function () {
+    var body = '- [ ] Run started 09:15 (' + RUN_URL + ')\r\n- [ ] other\r\n';
+    var r = mjdModule.flipTaskListItems(body, RUN_URL, '✅', '12:34');
+    assert.equal(r.body, '- [x] Run started 09:15 · done 12:34 ✅\n- [ ] other\r\n');
   });
 
   test('empty body is a no-op', function () {

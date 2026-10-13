@@ -87,3 +87,69 @@ block and `if: always()` on the step.
 before the implementation) — run standalone with
 `dmtools run js/unit-tests/run_factoryTokenUsage.json`; registered in
 `js/unit-tests/run_all.json` for the Dart suite gate.
+
+### mark_job_done.js — issue task-list job marker
+
+JS port of the awf factory-teammate.yml step «Mark machine job done (issue
+task list)», byte-extracted as `scripts/mark-job-done.sh` by
+IstiN/dmtools-agentic-workflows#34. Behavior contract is identical:
+
+1. **Mark** — `success`→✅ `failure`→❌ `cancelled`→🚫 else `⚠️ <JOB_RESULT>`.
+2. **Flip** — every body line containing the literal `(<RUN_URL>)` needle
+   (awk `index()`) AND starting with the two-checkbox prefix `- [ ]` is
+   processed: `- [ ] ` → `- [x] ` (note: the guard has no trailing space, the
+   flip sub does), and if the line matches `/started \d\d:\d\d/` the tail from
+   the first `/started \d\d:\d\d .*$/` match is replaced with
+   `<st> · done <HH:MM> <mark>` (st from match() may be an earlier occurrence
+   than the one replaced — awk sub/match independence, kept byte-identical;
+   see the parity harness). Non-empty output always ends with `\n` (awk
+   `{ print }` ORS); CRLF records lose the CR only inside a replaced tail.
+3. **Publish** — changed body → staged to the temp file and pushed with
+   `gh issue edit N --repo R --body-file <tmp>`, logging
+   `job marker flipped to [x] <mark>`; unchanged body →
+   `::warning::start marker not found for <RUN_URL> — nothing to flip`.
+4. **Errors propagate** — the sh dies under `bash -e`; gh failures redden
+   the step (it runs under `always()`, so a dead flip must be loud).
+
+### Env/file contract (what the awf side passes today)
+
+| env name            | param       | meaning                                   | default                |
+|---------------------|-------------|-------------------------------------------|------------------------|
+| `NUMBER`            | `number`    | issue holding the task list               | — (nothing to flip)    |
+| `RUN_URL`           | `runUrl`    | run URL; `(url)` marks the line           | — (nothing to flip)    |
+| `JOB_RESULT`        | `jobResult` | success / failure / cancelled / other     | `⚠️ ` (sh fallback)    |
+| `GITHUB_REPOSITORY` | `repo`      | `owner/repo` of the issue                 | — (gh call fails loud) |
+| (tempPath)          | `tempPath`  | staging path for the edited body          | `/tmp/issue_body_new.md`|
+
+Files touched: the temp body file only (`gh issue edit --body-file`), same
+as `pullRequest.js` conventions. Transport is gh-first (`gh issue view/edit`).
+
+### mark_job_done_publish.js — JSRunner entry
+
+`action(params, deps)` glue: resolves `jobParams.customParams` → env →
+defaults (via `resolveParams`), wires `exec` → `cli_execute_command` and
+`writeFile` → `file_write`, calls `markJobDone`, logs the sh's line plus a
+`✅ job marker: <status>` summary, and returns
+`{ status, mark, flipped, endTs }`. gh failures propagate (see above).
+
+## Parity + regression harnesses
+
+- `node js/unit-tests/parity_factoryMarkJobDone.js [N]` — flips N randomized
+  task-list bodies through BOTH the JS port and the spec's literal awk
+  program (embedded, byte-for-byte from scripts/mark-job-done.sh) and
+  byte-compares. Node-only (needs `awk`), not part of the testRunner suite.
+  Found and pinned three awk semantics on the way: `.` consumes `\r`,
+  `{ print }` ORS, first-match/replace-position independence.
+- `js/unit-tests/test_factoryTokenUsageIssue889.js` — the issue #889
+  scenario («copilot usage is not posted to ADO») as a regression guard:
+  copilot `fa-tokens:` ledger rows reach the factory-data board with the
+  copilot model preserved through a gh-only transport, and
+  `outputs/copilot_usage.json` posts through the vendor-agnostic ADO tracker
+  in ADO markdown — never through the Jira-only `jira_post_comment`.
+
+## Tests (this module)
+
+`js/unit-tests/test_factoryMarkJobDone.js` (TDD: red commit `109ec3fa`
+before the implementation; 37 tests) — run standalone with
+`dmtools run js/unit-tests/run_factoryMarkJobDone.json`; registered in
+`js/unit-tests/run_all.json` for the Dart suite gate.
