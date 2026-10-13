@@ -653,18 +653,22 @@
     if (!rows.length) {
       body = '<p class="drawer-empty">tokens — not reported by this factory</p>';
     } else {
-      var tot = { prompt: 0, completion: 0, total: 0, cost: null };
+      var tot = { prompt: 0, cached: 0, completion: 0, total: 0, cost: null };
       var trs = rows.map(function (t) {
         tot.prompt += t.prompt || 0;
+        tot.cached += t.cacheRead || 0;
         tot.completion += t.completion || 0;
         tot.total += t.total || 0;
         if (t.cost != null) tot.cost = (tot.cost || 0) + t.cost;
         // gh-825: model + $ per leg — unknown/absent model renders '—' and
-        // no $ (tokens only, AC2); model ids are report input → esc()
+        // no $ (tokens only, AC2); model ids are report input → esc().
+        // cacheRead (input cached) rides the producer's row once the
+        // factory-teammate publish step sums it; absent on old rows → 0.
         return '<tr><td>' + esc(t.leg || '—') + '</td>' +
           '<td>' + (t.model ? esc(t.model) : '—') + '</td>' +
           '<td>' + (t.at ? esc(ago(t.at)) : '—') + '</td>' +
           '<td class="num">' + (t.prompt || 0).toLocaleString() + '</td>' +
+          '<td class="num">' + (t.cacheRead || 0).toLocaleString() + '</td>' +
           '<td class="num">' + (t.completion || 0).toLocaleString() + '</td>' +
           '<td class="num"><b>' + (t.total || 0).toLocaleString() + '</b></td>' +
           '<td class="num">' + (t.cost != null ? esc(fmtUsd(t.cost)) : '—') +
@@ -672,11 +676,13 @@
       }).join('');
       body = '<table class="tok-table"><thead><tr>' +
         '<th>leg</th><th>model</th><th>when</th><th class="num">prompt</th>' +
-        '<th class="num">completion</th><th class="num">total</th>' +
+        '<th class="num">input cached</th><th class="num">completion</th>' +
+        '<th class="num">total</th>' +
         '<th class="num">$</th>' +
         '</tr></thead><tbody>' + trs +
         '<tr class="tok-total"><td>total</td><td></td><td></td>' +
         '<td class="num">' + tot.prompt.toLocaleString() + '</td>' +
+        '<td class="num">' + tot.cached.toLocaleString() + '</td>' +
         '<td class="num">' + tot.completion.toLocaleString() + '</td>' +
         '<td class="num"><b>' + tot.total.toLocaleString() + '</b></td>' +
         '<td class="num"><b>' + (tot.cost != null ? esc(fmtUsd(tot.cost)) : '—') +
