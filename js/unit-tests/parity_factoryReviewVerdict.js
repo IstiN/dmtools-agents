@@ -275,6 +275,11 @@ function canon(a) {
         // sides to the one-line form — the jq OUTPUT is compared through
         // the same stub.
         s = s.replace(/\n\s+then "PENDING" else/g, ' then "PENDING" else');
+        // The two sides run in sibling scenario dirs (<tmp>/sh vs
+        // <tmp>/js); the verdict-logic log line carries the dir. Normalize
+        // the side segment — the path SHAPE is compared, the side is not
+        // an artifact of the port.
+        s = s.replace(/\/(sh|js)\//g, '/<SIDE>/');
         // The comment body rides a temp file whose NAME is an artifact of
         // the side (mktemp vs the entry's rv-N-comment.md); the bytes are
         // compared separately in `comment`. Normalize the argv token.
