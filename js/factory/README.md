@@ -186,7 +186,6 @@ porting:
   busy-loop `gh pr view` against the deadline) — deadline-compressed
   parity scenario in the harness proves the loop invariants.
 - **Layer 3 (implemented here):** graphql review-threads summary
-- **Layer 3 (implemented here):** graphql review-threads summary
   transport (`gh api graphql` + the spec's threads renderer).
 
 Bugs the sh-parity harness caught in the port (pinned: the pr-list jq
