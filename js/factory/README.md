@@ -161,3 +161,105 @@ defaults (via `resolveParams`), wires `exec` → `cli_execute_command` and
 before the implementation; 37 tests) — run standalone with
 `dmtools run js/unit-tests/run_factoryMarkJobDone.json`; registered in
 `js/unit-tests/run_all.json` for the Dart suite gate.
+
+### review_verdict.js — review-verdict glue (LAYERS 1–3 PORTED)
+
+JS port of the awf factory-teammate.yml step «Apply the review verdict
+(review runs only)», spec = `js/unit-tests/fixtures/apply-review-verdict.spec.sh`
+(byte-verbatim snapshot of scripts/apply-review-verdict.sh @ awf PR #34; the
+sh + its A/B harness stay intact there until the final rewire). All three
+review-steered layers are implemented in this PR and covered by the unit
+suite + the sh-parity harness — what remains is the awf rewire, not more
+porting:
+
+- **Layer 1:** decision extraction (issue labels → run output →
+  linked-PR comments/reviews → issue comments), approve path
+  (pr_approved latch, needs-human removal, linked-PR guard), rework path
+  (round labels strip/add, rework-round-N creation), escalation
+  (needs-human B60205 + diagnosis comment + exit-1), verdict-logic
+  resolution (pack glob wins, legacy `$FACTORY_ROOT/setup/review-verdict.sh`
+  fallback), machineAuthor order #2 (.dmtools/config.js), loud no-verdict
+  path (gh-305: ::error:: + needs-human + per-source diagnosis + exit 1).
+- **Layer 2 (implemented here):** the CI-green poll/deadline loop for
+  pending checks (10 min of 30 s polls — `productionSleepMs` rides
+  `java.lang.Thread.sleep` on GraalJS; a no-op sleep here would
+  busy-loop `gh pr view` against the deadline) — deadline-compressed
+  parity scenario in the harness proves the loop invariants.
+- **Layer 3 (implemented here):** graphql review-threads summary
+  transport (`gh api graphql` + the spec's threads renderer).
+
+Bugs the sh-parity harness caught in the port (pinned: the pr-list jq
+program by a unit test — `test_factoryReviewVerdict.js` asserts the
+double-backslash argv; the rest by the parity harness's artifact compare):
+- the pr-list jq program must carry DOUBLE backslashes (`\\b`, `\\s`)
+  exactly like the sh's double-quoted string — a lone `\s` is an invalid jq
+  string escape and real gh silently empties find_linked_pr;
+- a failing verdict probe is `eval "$(cmd)"` semantics: empty output →
+  decision=unknown → the LOUD path, never a transport abort;
+- exec unwrap: an empty-output result object is an empty output, not
+  `'[object Object]'` (the pilot's `(res.output || res.stdout) || res`
+  pattern stringified the object; fix landed in this entry + module).
+
+### Env/file contract (what the awf side passes today)
+
+| env name              | param        | meaning                                     | default                       |
+|-----------------------|--------------|---------------------------------------------|-------------------------------|
+| `NUMBER`              | `number`     | the factory issue number                    | — (nothing to apply)          |
+| `GITHUB_REPOSITORY`   | `repo`       | `owner/repo`                                | — (gh call fails loud)        |
+| `RUN_OUTPUT`          | `runOutput`  | the review leg's run output file            | `.dmtools/run-output.txt`     |
+| `MAX_ROUNDS`          | `maxRounds`  | auto-rework cap before needs-human          | sh default (empty)            |
+| `CONFIG`              | `config`     | agent config file name (pack resolution)    | — (legacy tree fallback)      |
+| `FACTORY_ROOT`        | `factoryRoot`| legacy `setup/review-verdict.sh` root       | — (pack glob only)            |
+| `HOME`                | `home`       | pack cache root (`~/.dmtools/packs/`)       | — (legacy tree fallback)      |
+| `GH_TOKEN`            | `ghToken`    | must be set or the step skips (no-token)    | — (skip with ::warning::)     |
+| `MACHINE_AUTHOR`      | `machineAuthor`| trusted non-[bot] comment author          | `.dmtools/config.js` lookup   |
+| (temp) workspace     | (tempFile)   | staged comment/threads bodies — one `mktemp -d` dir per run, `rm -rf`-ed when action finishes (the sh's trap); transport-less fallback: randomized `rv-<ts>-<rand>-*` files under the runOutput dir (absolute) or `/tmp/` | — (created on first staged file) |
+
+Files touched: temp comment/threads bodies only; transports are gh
+(`gh issue view/edit`, `gh pr view/list`, `gh label create`, `gh api
+graphql` in layer 3) plus `bash "$VERDICT_SH" decide` for the pack's
+verdict logic — identical argv shapes to the sh step.
+
+### review_verdict_publish.js — JSRunner entry
+
+`action(params, deps)` glue: resolves customParams → env → defaults, wires
+`exec` → `cli_execute_command` (unwrapped through the module's canonical
+`unwrap` — one definition, no trim, empty-output-safe), `file_write`/
+`file_read`, calls `applyReviewVerdict`, logs the sh's lines plus
+`⚖️ review verdict: <status>` and returns
+`{ status, decision, pr, roundsDone }`. The loud no-verdict path THROWS
+(exit-1 parity — the workflow step must redden); every other terminal state
+returns normally. `js/factory/run_review_verdict.json` is the JSRunner
+config for the final awf rewire.
+
+Production seams (the sh equivalents — `deps.*` override them in tests):
+`sleepMs` defaults to `productionSleepMs` (`java.lang.Thread.sleep` on
+GraalJS, wall-clock busy-wait otherwise — the sh's `sleep 30` inside the
+poll gate; a no-op here would busy-loop `gh pr view` into the 10-min
+deadline), and the temp workspace defaults to the `mktemp -d` + trap
+equivalent (unique per-run dir created through the transport, best-effort
+`rm -rf` when action exits — throw path included; transport-less fallback:
+randomized per-run file names, `rm -f`ed on the way out).
+
+### Parity harness (this module)
+
+`node js/unit-tests/parity_factoryReviewVerdict.js` — runs the spec's FULL
+sh (byte-verbatim fixture) under `bash -e` with PATH-stubbed `gh` (argv
+logged, fixtures served, `--jq` applied by the real jq binary) against the
+JS module driven with the same stub world; byte-compares gh_calls.log,
+graphql payload, posted comment bodies, exit codes and the diagnostic log
+stream (the sh's stdout echo lines vs the JS io.log lines — the → progress
+lines and the ::warning::/::error:: annotations, temp-path/side-dir
+normalized). Deterministic
+scenarios (approve green, rework under cap, escalation, cancelled,
+graphql-failure, probe-failure, deadline) + 100 randomized decision/round/
+label/checks combos. Hard `execSync` timeouts on both sides — the harness
+cannot hang (the spec's 600 s pending-checks deadline is compressed by a
+poll-count stub; the deadline-exhaustion scenario compares loop invariants
+of the SIGKILLed sh run against the JS terminal artifacts).
+
+### Tests (this module)
+
+`js/unit-tests/test_factoryReviewVerdict.js` (TDD: red commit `a0419aee`,
+30 cases — contract parsing, decision branches, label/comment transports,
+escalation, loud path, machineAuthor resolution).

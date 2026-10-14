@@ -180,7 +180,12 @@ global.java = { lang: { System: { getenv: function() { return null; } } } };
 
 // Pre-load base modules exactly like GraalJS testRunner does.
 var configModule = loadModule('agents/js/config.js');
-var scmModule = loadModule('agents/js/common/scm.js', require);
+// scm.js does a bare `require('./machineNotice.js')` — a raw node require
+// resolves against js/unit-tests/ and cannot find it. Mirror testRunner.js:
+// inject machineNotice through makeRequire.
+var machineNoticeModule = loadModule('agents/js/common/machineNotice.js');
+var scmModule = loadModule('agents/js/common/scm.js',
+    makeRequire({ './machineNotice.js': machineNoticeModule }));
 var configLoaderModule = loadModule(
     'agents/js/configLoader.js',
     makeRequire({

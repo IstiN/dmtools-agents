@@ -17,6 +17,7 @@
         "js/unit-tests/test_factoryTokenUsage.js",
         "js/unit-tests/test_factoryTokenUsageIssue889.js",
         "js/unit-tests/test_factoryMarkJobDone.js",
+        "js/unit-tests/test_factoryReviewVerdict.js",
         "js/unit-tests/test_reworkLatch.js",
         "js/unit-tests/test_reworkConsumption.js",
         "js/unit-tests/test_validationLiveness.js",
