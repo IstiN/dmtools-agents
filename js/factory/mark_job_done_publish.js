@@ -1,0 +1,107 @@
+/**
+ * JSRunner entry — mark the machine job done (issue task list). Thin caller
+ * for js/factory/mark_job_done.js, the JS port of the awf
+ * factory-teammate.yml «Mark machine job done (issue task list)» step
+ * (IstiN/dmtools-agentic-workflows#34 scripts/mark-job-done.sh).
+ *
+ * Invocation (machine-kit / final awf rewire — the sh call becomes):
+ *   dmtools run agents/js/factory/run_mark_job_done.json
+ *
+ * Params resolve customParams first, then the sh step's env names, then the
+ * sh defaults — so the same config works from a workflow env block or a
+ * fully-materialized runner config. See js/factory/README.md for the full
+ * env/file contract.
+ *
+ * Error contract mirrors the sh under `bash -e`: gh failures PROPAGATE (the
+ * step runs under always() and a dead marker flip must redden); the
+ * no-marker path is a warning, not an error.
+ */
+
+var markJobDone = require('./mark_job_done.js');
+
+/**
+ * Env reader for the fallback path. The dmtools JS runtimes do not
+ * guarantee a java bridge (GraalJS has one; QuickJS does not), so every
+ * access is guarded and missing env simply yields '' — the caller's
+ * defaults take over.
+ */
+function envValue(name) {
+    try {
+        if (typeof java !== 'undefined' && java && java.lang &&
+            java.lang.System && typeof java.lang.System.getenv === 'function') {
+            var v = java.lang.System.getenv(name);
+            return (v === null || v === undefined) ? '' : String(v);
+        }
+    } catch (e) { /* no env bridge on this runtime */ }
+    return '';
+}
+
+/**
+ * customParams > env > sh-step defaults. envMap is a test seam (name →
+ * value); production passes nothing and reads the process env.
+ */
+function resolveParams(params, envMap) {
+    var custom = (params && params.jobParams && params.jobParams.customParams) || {};
+    function env(name) {
+        if (envMap && Object.prototype.hasOwnProperty.call(envMap, name)) return envMap[name];
+        return envValue(name);
+    }
+    function pick(key, envName, dflt) {
+        var v = custom[key];
+        if (v === undefined || v === null || v === '') v = env(envName);
+        if (v === undefined || v === null || v === '') v = dflt;
+        return v === undefined || v === null ? '' : String(v);
+    }
+    return {
+        number: pick('number', 'NUMBER', ''),
+        runUrl: pick('runUrl', 'RUN_URL', ''),
+        jobResult: pick('jobResult', 'JOB_RESULT', ''),
+        repo: pick('repo', 'GITHUB_REPOSITORY', ''),
+        tempPath: pick('tempPath', '', markJobDone.DEFAULT_TEMP_PATH),
+        endTs: pick('endTs', '', '')
+    };
+}
+
+/**
+ * JSRunner action. deps is a test seam: production resolves the dmtools
+ * globals (cli_execute_command / file_write) exactly like
+ * token_usage_publish.js wires its transport.
+ */
+function action(params, deps) {
+    deps = deps || {};
+    var exec = deps.cli_execute_command ||
+        (typeof cli_execute_command === 'function' ? cli_execute_command : null);
+    var write = deps.file_write ||
+        (typeof file_write === 'function' ? file_write : null);
+    var opts = resolveParams(params, deps.env);
+    var result = markJobDone.markJobDone(opts, {
+        exec: function (cmd) {
+            // Defensive unwrap (token_usage.js execOut pattern): some dmtools
+            // runtimes return a result object from cli_execute_command —
+            // String(res) would feed '[object Object]' to the flip and
+            // silently no-op every marker. No .trim(): the sh consumes the
+            // gh body byte-for-byte (trailing newline included) and the
+            // awk-port ORS semantics handle the rest.
+            var res = exec({ command: cmd });
+            return String((res && (res.output || res.stdout)) || res || '');
+        },
+        writeFile: function (path, content) {
+            if (!write) throw new Error('file_write is not available on this runtime');
+            return write(path, content);
+        },
+        clock: function () { return new Date(); },
+        log: function (line) { console.log(line); }
+    });
+    console.log('  ✅ job marker: ' + result.status +
+        (result.flipped ? ' (' + result.flipped + ' line(s))' : '') +
+        ' — ' + result.mark);
+    return result;
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        action: action,
+        resolveParams: resolveParams,
+        envValue: envValue
+    };
+}

@@ -1,0 +1,14 @@
+{
+  "name": "JSRunner",
+  "params": {
+    "jsPath": "agents/js/factory/mark_job_done_publish.js",
+    "jobParams": {
+      "customParams": {
+        "number": "{issue}",
+        "runUrl": "{runUrl}",
+        "jobResult": "{jobResult}",
+        "repo": "{owner}/{repo}"
+      }
+    }
+  }
+}
