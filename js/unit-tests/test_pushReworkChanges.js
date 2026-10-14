@@ -2070,3 +2070,61 @@ suite('pushReworkChanges.action — no-fix rework is not a success (agents#827)'
     });
 });
 
+
+// ── agents#895: squash the timer's WIP auto-save commits (opt-in) ────────────
+suite('pushReworkChanges.commitAndPush — squashReworkWip (agents#895)', function() {
+
+    function run(subjects, customParams, opts) {
+        opts = opts || {};
+        var commands = [];
+        var mod = loadPushReworkChangesForCommitAndPush({
+            file_read: function(args) {
+                if (args.path.indexOf('pr_info.md') !== -1) return '**Branch**: `bug/PROJ-123` → `develop`';
+                if (args.path.indexOf('rework_base_head.txt') !== -1) return opts.noBase ? null : 'abc1234\n';
+                return null;
+            },
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
+                if (args.command.indexOf('git rev-list --merges') === 0) return opts.merge ? 'deadbeef\n' : '';
+                if (args.command.indexOf('git log --format=%s') === 0) return subjects.join('\n') + '\n';
+                if (args.command.indexOf('git ls-remote --heads origin bug/PROJ-123') === 0) return 'abc\trefs/heads/bug/PROJ-123\n';
+                return '';
+            }
+        });
+        mod.commitAndPush('PROJ-123', baseConfig(), customParams);
+        return commands;
+    }
+    function has(cmds, part) { return cmds.some(function(c) { return c.indexOf(part) !== -1; }); }
+
+    test('only WIP auto-save commits since the base: soft reset, one rework commit, force-with-lease push', function() {
+        var cmds = run(['PROJ-123 WIP auto-save 2026-10-13T21-52-12', 'PROJ-123 WIP auto-save 2026-10-13T21-58-01'], { squashReworkWip: true });
+        assert.ok(has(cmds, 'git reset --soft abc1234'));
+        assert.ok(has(cmds, 'git commit -m "PROJ-123 rework"'));
+        assert.ok(has(cmds, 'git push -u --force-with-lease origin bug/PROJ-123'));
+    });
+
+    test('default (option off): history untouched, plain push', function() {
+        var cmds = run(['PROJ-123 WIP auto-save a', 'PROJ-123 WIP auto-save b'], {});
+        assert.ok(!has(cmds, 'git reset --soft'));
+        assert.ok(!has(cmds, '--force-with-lease'));
+    });
+
+    test('a foreign commit in the range: nothing is squashed', function() {
+        var cmds = run(['PROJ-123 WIP auto-save a', 'someone else fixed it'], { squashReworkWip: true });
+        assert.ok(!has(cmds, 'git reset --soft'));
+        assert.ok(!has(cmds, '--force-with-lease'));
+    });
+
+    test('missing rework base marker or a merge commit: nothing is squashed', function() {
+        var a = run(['PROJ-123 WIP auto-save a', 'PROJ-123 WIP auto-save b'], { squashReworkWip: true }, { noBase: true });
+        assert.ok(!has(a, 'git reset --soft'));
+        var b = run(['PROJ-123 WIP auto-save a', 'PROJ-123 WIP auto-save b'], { squashReworkWip: true }, { merge: true });
+        assert.ok(!has(b, 'git reset --soft'));
+    });
+
+    test('a single WIP commit is left as is (nothing to squash)', function() {
+        var cmds = run(['PROJ-123 WIP auto-save a'], { squashReworkWip: true });
+        assert.ok(!has(cmds, 'git reset --soft'));
+    });
+});

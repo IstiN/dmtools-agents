@@ -331,6 +331,13 @@ function commitAndPush(ticketKey, config, customParams) {
         console.warn('No file changes detected — pushing existing commits only');
     }
 
+    // agents#895: the timer already committed (and pushed) the work as "WIP auto-save" commits, so the
+    // clean rework commit above is often never created. Opt-in (customParams.squashReworkWip): when EVERY
+    // commit since the rework base is a WIP auto-save (or the commit just made) and none is a merge, fold
+    // them into one commit with the rework message and push it with --force-with-lease.
+    var squashed = (customParams && customParams.squashReworkWip === true) ?
+        squashReworkWipCommits(cmd, ticketKey, config, workingDir) : false;
+
     var syncResult = prHelper.syncBranchWithBase({
         branchName: branchName,
         baseBranch: baseBranch,
@@ -346,7 +353,7 @@ function commitAndPush(ticketKey, config, customParams) {
     }
 
     try {
-        cmd('git push -u origin ' + branchName);
+        cmd(squashed ? 'git push -u --force-with-lease origin ' + branchName : 'git push -u origin ' + branchName);
     } catch (pushError) {
         console.warn('Normal push failed; synchronizing with origin/' + branchName + ' before retry:', pushError.message || pushError);
         try {
@@ -369,6 +376,35 @@ function commitAndPush(ticketKey, config, customParams) {
 
     console.log('✅ Pushed to remote branch:', branchName);
     return { branch: branchName, hasChanges: hasChanges };
+}
+
+/**
+ * agents#895: squash the timer's WIP auto-save commits into one commit with the rework message.
+ * Returns true only when it rewrote history. Fails closed (returns false, history untouched) when the
+ * rework base is unknown, HEAD has no commits since it, any commit is not a WIP auto-save / the rework
+ * commit, or any commit is a merge.
+ */
+function squashReworkWipCommits(cmd, ticketKey, config, workingDir) {
+    try {
+        var base = String(file_read({ path: 'input/' + ticketKey + '/rework_base_head.txt' }) || '').trim();
+        if (!/^[0-9a-f]{7,40}$/i.test(base)) return false;
+        var range = base + '..HEAD';
+        var merges = cleanCommandOutput(cmd('git rev-list --merges ' + range) || '').trim();
+        if (merges) return false;
+        var subjects = cleanCommandOutput(cmd('git log --format=%s ' + range) || '').split('\n')
+            .map(function (l) { return l.trim(); }).filter(Boolean);
+        if (subjects.length < 2) return false;
+        var reworkMsg = stripCiSkipTokens(configLoader.formatTemplate(config.formats.commitMessage.rework, { ticketKey: ticketKey }));
+        var allOurs = subjects.every(function (sub) { return /WIP auto-save/.test(sub) || sub === reworkMsg; });
+        if (!allOurs) return false;
+        cmd('git reset --soft ' + base);
+        cmd('git commit -m "' + reworkMsg + '"');
+        console.log('✅ Squashed ' + subjects.length + ' WIP/rework commits into one: ' + reworkMsg);
+        return true;
+    } catch (e) {
+        console.warn('squashReworkWipCommits skipped (history untouched):', e.message || e);
+        return false;
+    }
 }
 
 /**
@@ -1649,5 +1685,5 @@ function action(params) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, hasRealCodeChanges, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment };
+    module.exports = { action, squashReworkWipCommits, hasRealCodeChanges, resolveCustomParams, isInterruptedReworkResponse, isFailedCliReworkResponse, handleFailedReworkCli, postThreadReplies, commitAndPush, readReworkSetupFailure, headMovedSinceLastReview, extractCitedThreadIds, readInputRawThreads, buildThreadLookup, resolveRemainingAddressedThreads, isOpenThread, threadKeyOf, threadLabel, readRepliesArray, buildReplyCoverage, logReplyCoverageGap, fetchLiveOpenThreads, latestConcludedVerdict, concludedReviewsSorted, selectReworkCompletionWording, buildOpenThreadAccountingBlock, buildReworkCompletionComment, buildCompletionLiveState, postJiraComment };
 }
