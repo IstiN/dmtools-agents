@@ -105,8 +105,8 @@ function action(params, deps) {
                 ? opts.runOutput.replace(/[^/]*$/, '') : '/tmp/';
             return base + 'rv-' + seq() + '-' + hint;
         },
-        clock: function () { return new Date(); },
-        sleepMs: function (ms) { /* the runtime's own timer would go here */ },
+        clock: deps.clock || function () { return new Date(); },
+        sleepMs: deps.sleepMs || function (ms) { /* the runtime's own timer would go here */ },
         log: function (line) { console.log(line); }
     });
     console.log('  ⚖️ review verdict: ' + result.status +

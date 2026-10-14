@@ -59,7 +59,7 @@ var GH_STUB = [
     '      esac',
     '    else',
     '      printf \'{"statusCheckRollup":[{"status":"IN_PROGRESS","conclusion":null}]}\\n\'',
-    '    fi',
+    '    fi | apply_jq',
     '    exit 0',
     '    ;;',
     '  esac',
