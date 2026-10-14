@@ -76,8 +76,14 @@ function action(params, deps) {
     var opts = resolveParams(params, deps.env);
     var result = markJobDone.markJobDone(opts, {
         exec: function (cmd) {
-            var out = exec({ command: cmd });
-            return (out === null || out === undefined) ? '' : String(out);
+            // Defensive unwrap (token_usage.js execOut pattern): some dmtools
+            // runtimes return a result object from cli_execute_command —
+            // String(res) would feed '[object Object]' to the flip and
+            // silently no-op every marker. No .trim(): the sh consumes the
+            // gh body byte-for-byte (trailing newline included) and the
+            // awk-port ORS semantics handle the rest.
+            var res = exec({ command: cmd });
+            return String((res && (res.output || res.stdout)) || res || '');
         },
         writeFile: function (path, content) {
             if (!write) throw new Error('file_write is not available on this runtime');

@@ -48,6 +48,12 @@
 
 var DEFAULT_TEMP_PATH = '/tmp/issue_body_new.md';
 
+// shellQuote from the sibling token_usage.js module (pilot convention):
+// number/repo/tempPath ride the command string, so quote them like the sh's
+// "..." would be safe — the executor shell-parses the string back into the
+// same argv the unquoted sh command produces.
+var shellQuote = require('./token_usage.js').shellQuote;
+
 var STARTED_RE = /started [0-9][0-9]:[0-9][0-9]/;
 // [\s\S] = awk's `.`: consumes \r (CRLF records) where JS `.` would
 // stop — parity-harness finding #13/#18/#20.
@@ -126,14 +132,14 @@ function markJobDone(opts, io) {
         utcHHMM(io.clock ? io.clock() : new Date());
     var log = io.log || function () {};
 
-    var body = io.exec('gh issue view ' + number + ' --repo ' + repo +
+    var body = io.exec('gh issue view ' + shellQuote(number) + ' --repo ' + shellQuote(repo) +
         ' --json body -q .body');
     var r = flipTaskListItems(body, runUrl, mark, endTs);
     if (r.flipped > 0) {
         var tempPath = opts.tempPath || DEFAULT_TEMP_PATH;
         io.writeFile(tempPath, r.body);
-        io.exec('gh issue edit ' + number + ' --repo ' + repo +
-            ' --body-file ' + tempPath);
+        io.exec('gh issue edit ' + shellQuote(number) + ' --repo ' + shellQuote(repo) +
+            ' --body-file ' + shellQuote(tempPath));
         log('job marker flipped to [x] ' + mark);
         return { status: 'flipped', mark: mark, flipped: r.flipped, endTs: endTs };
     }

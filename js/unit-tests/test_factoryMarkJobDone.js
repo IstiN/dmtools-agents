@@ -29,7 +29,10 @@
 
 var assert = globalThis.assert;
 
-var mjdModule = loadModule('js/factory/mark_job_done.js', makeRequire({}, {}), {});
+var tokenUsageModule = loadModule('js/factory/token_usage.js', makeRequire({}, {}), {});
+var mjdModule = loadModule('js/factory/mark_job_done.js', makeRequire({
+  './token_usage.js': tokenUsageModule
+}), {});
 
 // Fixed clock: 2026-10-13T12:34:56Z → "12:34".
 var RUN_URL = 'https://github.com/IstiN/target-repo/actions/runs/1777';
