@@ -534,3 +534,152 @@ suite('factoryReviewVerdict — entry action (review_verdict_publish.js)', funct
     });
   });
 });
+
+// ── round-3 rework: production seams (sleep, temp workspace, guards) ─────────
+
+suite('factoryReviewVerdict — entry production seams (round-3 rework)', function () {
+
+  var entryModule = loadModule('js/factory/review_verdict_publish.js', makeRequire({
+    './review_verdict.js': rvModule,
+    './token_usage.js': tokenUsageModule
+  }), {});
+
+  function runAction(st, customParams, depsOver) {
+    depsOver = depsOver || {};
+    var deps = {
+      cli_execute_command: function (args) {
+        return { output: st.exec(String((args && args.command) || args || '')) };
+      },
+      file_write: function (p, c) { st.written = st.written || {}; st.written[p] = c; },
+      file_read: function () { return null; },
+      env: {}
+    };
+    Object.keys(depsOver).forEach(function (k) { deps[k] = depsOver[k]; });
+    return entryModule.action(
+      { jobParams: { customParams: Object.assign({
+        repo: REPO, number: NUMBER, maxRounds: '2', ghToken: 't',
+        config: 'factory-agents/pr_review.json', factoryRoot: STUB_DIR,
+        home: STUB_DIR + '/home'
+      }, customParams || {}) } }, deps);
+  }
+
+  test('production sleepMs is a REAL sleep (the no-op busy-loop blocker)', function () {
+    assert.equal(typeof entryModule.productionSleepMs, 'function');
+    var t0 = Date.now();
+    entryModule.productionSleepMs(25);
+    var took = Date.now() - t0;
+    assert.ok(took >= 20, 'productionSleepMs(25) must block ~25ms, took ' + took + 'ms');
+    var t1 = Date.now();
+    entryModule.productionSleepMs(0);
+    entryModule.productionSleepMs(-5);
+    entryModule.productionSleepMs('garbage');
+    assert.ok(Date.now() - t1 < 100, 'non-positive/garbage ms must return immediately');
+  });
+
+  test('production sleepMs rides the Java bridge when present (the JSRunner runtime)', function () {
+    var sleeps = [];
+    var withJava = loadModule('js/factory/review_verdict_publish.js', makeRequire({
+      './review_verdict.js': rvModule,
+      './token_usage.js': tokenUsageModule
+    }), { Java: { type: function (name) {
+      assert.equal(name, 'java.lang.Thread');
+      return { sleep: function (ms) { sleeps.push(ms); } };
+    } } });
+    withJava.productionSleepMs(123);
+    assert.deepEqual(sleeps, [123]);
+  });
+
+  test('action wires the production sleep by default (the poll loop beats 30s)', function () {
+    var real = entryModule.productionSleepMs;
+    var spied = [];
+    entryModule.productionSleepMs = function (ms) { spied.push(ms); };
+    try {
+      var t = NOW_MS;
+      var st = withParser(execStub(baseRules({ rollup: 'PENDING\n' })),
+        contractLines({ decision: 'approve' }));
+      var r = runAction(st, {}, { clock: function () { return new Date(t += 300); } });
+      assert.equal(r.status, 'ci-timeout');
+      assert.ok(spied.length >= 1, 'the default sleep must sit inside the poll loop');
+      assert.deepEqual(spied, spied.map(function () { return 300; }));
+    } finally {
+      entryModule.productionSleepMs = real;
+    }
+  });
+
+  test('staged bodies ride a mktemp -d workspace, cleaned up like the sh trap', function () {
+    var st = withParser(execStub([['^mktemp -d$', 'out', '/tmp/rvw-mk-4242']]
+      .concat(baseRules())), contractLines({ decision: 'rework', escalate: 'true' }),
+      'thread summary line\n');
+    var r = runAction(st);
+    assert.equal(r.status, 'escalated');
+    var commentCmds = st.commands.filter(function (c) { return c.indexOf('issue comment') !== -1; });
+    assert.equal(commentCmds.length, 1);
+    assert.contains(commentCmds[0], '--body-file \'/tmp/rvw-mk-4242/comment.md\'');
+    var cleans = st.commands.filter(function (c) { return c.indexOf('rm -rf') === 0; });
+    assert.equal(cleans.length, 1);
+    assert.contains(cleans[0], 'rm -rf \'/tmp/rvw-mk-4242\'');
+    assert.ok(st.commands.indexOf(cleans[0]) > st.commands.indexOf(commentCmds[0]),
+      'cleanup runs after the comment is posted (the sh trap ordering)');
+  });
+
+  test('the loud no-verdict path still cleans the workspace (finally ≈ the sh trap)', function () {
+    var st = withParser(execStub([['^mktemp -d$', 'out', '/tmp/rvw-mk-77']]
+      .concat(baseRules())), contractLines({ decision: 'unknown' }));
+    var threw = null;
+    try { runAction(st); } catch (e) { threw = e; }
+    assert.ok(threw, 'the loud path must throw (exit-1 parity)');
+    var cleans = st.commands.filter(function (c) { return c.indexOf('rm -rf') === 0; });
+    assert.equal(cleans.length, 1);
+    assert.contains(cleans[0], 'rm -rf \'/tmp/rvw-mk-77\'');
+  });
+
+  test('no mktemp on the transport → unpredictable per-run names, staged files rm -f\'ed', function () {
+    var st = withParser(execStub(baseRules()), contractLines({ decision: 'rework', escalate: 'true' }),
+      'thread summary line\n');
+    var r = runAction(st);
+    assert.equal(r.status, 'escalated');
+    var commentCmds = st.commands.filter(function (c) { return c.indexOf('issue comment') !== -1; });
+    var m = commentCmds[0].match(/--body-file '([^']+)'/);
+    assert.ok(m, 'body file staged');
+    assert.equal(/^\/tmp\/rv-\d+-\d+-comment\.md$/.test(m[1]), true,
+      'unpredictable per-run fallback name, got: ' + m[1]);
+    assert.notEqual(m[1], '/tmp/rv-1-comment.md');
+    var cleans = st.commands.filter(function (c) { return c.indexOf('rm -f ') === 0; });
+    assert.equal(cleans.length, 1);
+    assert.contains(cleans[0], m[1]);
+  });
+});
+
+// ── round-3 rework: module guards ────────────────────────────────────────────
+
+suite('factoryReviewVerdict — applyReviewVerdict guards (round-3 rework)', function () {
+
+  test('non-numeric NUMBER fails loud BEFORE any gh call (the raw jq-splice guard)', function () {
+    ['42abc', 'abc', '4 2', "42'; echo pwned", ''].forEach(function (bad) {
+      var st = withParser(execStub(baseRules()), contractLines({ decision: 'approve' }));
+      var io = ioStub(st);
+      var threw = null;
+      try { rvModule.applyReviewVerdict(baseOpts({ number: bad }), io); } catch (e) { threw = e; }
+      assert.ok(threw, 'must throw for NUMBER=' + JSON.stringify(bad));
+      assert.contains(String(threw && threw.message || threw), 'NUMBER must be numeric');
+      assert.equal(st.commands.length, 0, 'zero gh calls for NUMBER=' + JSON.stringify(bad));
+    });
+  });
+
+  test('token gate precedes the NUMBER guard (the sh checks the token first)', function () {
+    var st = execStub([]);
+    var io = ioStub(st);
+    var r = rvModule.applyReviewVerdict(baseOpts({ ghToken: '', number: 'abc' }), io);
+    assert.equal(r.status, 'no-token');
+    assert.equal(st.commands.length, 0);
+  });
+
+  test('pr-list jq program carries DOUBLE backslashes (pin the README parity claim)', function () {
+    var st = withParser(execStub(baseRules()), contractLines({ decision: 'rework' }));
+    var io = ioStub(st);
+    rvModule.applyReviewVerdict(baseOpts(), io);
+    var prList = st.commands.filter(function (c) { return c.indexOf('pr list') !== -1; })[0];
+    assert.ok(prList, 'pr list was called');
+    assert.contains(prList, '\\\\b(closes|fixes|resolves)\\\\s+#' + NUMBER + '\\\\b');
+  });
+});
