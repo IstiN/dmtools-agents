@@ -107,7 +107,8 @@ function action(params, deps) {
         },
         clock: deps.clock || function () { return new Date(); },
         sleepMs: deps.sleepMs || function (ms) { /* the runtime's own timer would go here */ },
-        log: function (line) { console.log(line); }
+        log: deps.console_log ||
+            (typeof console_log === 'function' ? console_log : function (line) { console.log(line); })
     });
     console.log('  ⚖️ review verdict: ' + result.status +
         (result.pr ? ' (PR #' + result.pr + ')' : '') +

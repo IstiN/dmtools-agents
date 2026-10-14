@@ -36,7 +36,7 @@ var GH_STUB = [
     '  prev="$a"',
     'done',
     '{ printf \'gh\'; for a in "$@"; do printf \' [%s]\' "$a"; done; printf \'\\n\'; } >> "$SCENARIO_DIR/gh_calls.log"',
-    'apply_jq() { if [ -n "$JQ" ]; then jq "$JQ"; else cat; fi; }',
+    'apply_jq() { if [ -n "$JQ" ]; then jq -r "$JQ"; else cat; fi; }',
 'if [ "$1" = issue ] && [ "$2" = view ]; then',
     '  apply_jq < "$SCENARIO_DIR/issue_view.json"',
     '  exit 0',
@@ -123,16 +123,23 @@ function makeScenario(dir, fx) {
     // $FACTORY_ROOT/setup/review-verdict.sh. Stub the legacy path with the
     // real contract: eval-safe key=value lines (NOT json).
     fs.mkdirSync(path.join(dir, 'setup'), { recursive: true });
+    // The real verdict.sh emits EVAL-SAFE key=value lines (the spec evals
+    // them under bash -e): multi-word values must be shell-quoted or the
+    // eval explodes with rc 127 ('agent:rework-2: command not found').
+    var evalSafe = function (v) {
+        v = String(v);
+        return /^[A-Za-z0-9._@/-]+$/.test(v) ? v : "'" + v.replace(/'/g, "'\\''") + "'";
+    };
     fs.writeFileSync(path.join(dir, 'setup', 'review-verdict.sh'), fx.verdictFails
         ? '#!/usr/bin/env bash\nexit 1\n'
         : '#!/usr/bin/env bash\n' +
-          'echo "decision=' + fx.verdict.decision + '"\n' +
-          'echo "source=stub-source"\n' +
-          'echo "override=false"\n' +
-          'echo "rounds_done=' + fx.verdict.roundsDone + '"\n' +
-          'echo "next_round=' + fx.verdict.nextRound + '"\n' +
-          'echo "escalate=' + fx.verdict.escalate + '"\n' +
-          'echo "round_labels=' + (fx.verdict.roundLabels || '') + '"\n');
+          'echo "decision=' + evalSafe(fx.verdict.decision) + '"\n' +
+          'echo "source=' + evalSafe('stub-source') + '"\n' +
+          'echo "override=' + evalSafe('false') + '"\n' +
+          'echo "rounds_done=' + evalSafe(fx.verdict.roundsDone) + '"\n' +
+          'echo "next_round=' + evalSafe(fx.verdict.nextRound) + '"\n' +
+          'echo "escalate=' + evalSafe(fx.verdict.escalate) + '"\n' +
+          'echo "round_labels=' + evalSafe(fx.verdict.roundLabels || '') + '"\n');
     fs.chmodSync(path.join(dir, 'setup', 'review-verdict.sh'), 0o755);
     return {
         dir: dir,
@@ -267,6 +274,7 @@ var outcomes = { total: 0, pass: 0, fails: [] };
 function compare(name, fx) {
     outcomes.total++;
     if (process.env.RV_PROG) console.error('→ scenario ' + name);
+    if (process.env.RV_ONLY && name !== process.env.RV_ONLY) return;
     fx.tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rv-parity-'));
     try {
         var a = runSh(fx);
