@@ -103,7 +103,16 @@ function parseVerdictContract(text) {
     return out;
 }
 
-/** machineAuthor resolution order #2 (js/common/machineAuthor.js). */
+/**
+ * machineAuthor resolution order #2 (js/common/machineAuthor.js). NOTE
+ * (gh-728): the knob became a comma-separated login list there
+ * (`machineAuthor: "ai-teammate,github-actions[bot]"`), but this matcher —
+ * deliberately mirroring the spec's `sed -nE` capture ([A-Za-z0-9._-]+,
+ * closing quote right after) — resolves SINGLE-login values only; a
+ * comma-list matches nothing and MACHINE_AUTHOR stays empty (only *[bot]
+ * comment authors trusted). Parity holds by construction; route through
+ * machineAuthorLogins-style parsing only if the spec itself is updated.
+ */
 function resolveMachineAuthor(machineAuthor, io) {
     if (machineAuthor) return machineAuthor;
     try {
@@ -174,6 +183,14 @@ function applyReviewVerdict(opts, io) {
     var repo = opts.repo;
     var number = opts.number;
     var q = shellQuote;
+    // `number` is spliced INSIDE the single-quoted pr-list jq program (the
+    // sh's '"$NUMBER"' splice) — the one interpolation that cannot go
+    // through shellQuote. A non-numeric value would break out of the shell
+    // string at the argv level; fail loud instead of exec-weird (the sh
+    // dies under bash -e on the same condition — the loud-fail contract).
+    if (!/^\d+$/.test(String(number))) {
+        throw new Error('review verdict: NUMBER must be numeric, got: ' + number);
+    }
 
     function tryExec(cmd, fallback) {
         try { return unwrap(io.exec(cmd)); } catch (e) { return fallback; }

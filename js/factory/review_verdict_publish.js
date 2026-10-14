@@ -13,11 +13,27 @@
  * Error contract mirrors the sh under `bash -e`: the loud no-verdict path
  * (gh-305) THROWS after leaving needs-human + the diagnosis comment (the sh
  * exits 1 — the step must redden); the parser-invocation transport is
- * unwrapped ((res.output || res.stdout) || res — the #893 review lesson)
- * and never trimmed.
+ * unwrapped through the module's canonical `unwrap` (the #893 review
+ * lesson — one definition) and never trimmed.
+ *
+ * Production seams (the sh equivalents):
+ *   - sleepMs — the sh's `sleep 30` inside the CI-green poll gate. The
+ *     default rides `java.lang.Thread.sleep` on GraalJS (the
+ *     aiTeammateTokenUsageReporter.js pattern) and busy-walls on plain
+ *     engines; `deps.sleepMs` overrides it in tests. A NO-OP default is
+ *     forbidden here: inside a 10-min deadline loop it degenerates into a
+ *     `gh pr view` busy-loop (rate-limit burn).
+ *   - temp workspace — the sh's `mktemp -d` + `trap 'rm -rf' EXIT`: one
+ *     unique per-run directory (created through the transport on the first
+ *     staged file), every staged body inside it, best-effort `rm -rf` when
+ *     action finishes — throw path included. Without `mktemp` on the
+ *     transport the fallback is a randomized per-run file prefix under the
+ *     runOutput dir (absolute) or /tmp — never the predictable
+ *     /tmp/rv-N-* names, and the staged files are `rm -f`ed on the way out.
  */
 
 var reviewVerdict = require('./review_verdict.js');
+var shellQuote = require('./token_usage.js').shellQuote;
 
 /**
  * Env reader for the fallback path (guarded — no java bridge on QuickJS).
@@ -48,7 +64,6 @@ function resolveParams(params, envMap) {
         if (v === undefined || v === null || v === '') v = dflt;
         return v === undefined || v === null ? '' : String(v);
     }
-    var tmpSeq = 0;
     return {
         repo: pick('repo', 'GITHUB_REPOSITORY', ''),
         number: pick('number', 'NUMBER', ''),
@@ -58,8 +73,64 @@ function resolveParams(params, envMap) {
         config: pick('config', 'CONFIG', ''),
         factoryRoot: pick('factoryRoot', 'FACTORY_ROOT', ''),
         home: pick('home', 'HOME', ''),
-        ghToken: pick('ghToken', 'GH_TOKEN', ''),
-        _tmpSeq: function () { return ++tmpSeq; }
+        ghToken: pick('ghToken', 'GH_TOKEN', '')
+    };
+}
+
+/**
+ * The production side of the sleepMs seam — the sh's `sleep 30`. Real
+ * Thread.sleep under GraalJS; a wall-clock busy-wait keeps plain engines
+ * honest (a no-op here busy-loops the CI-green poll gate).
+ */
+function productionSleepMs(ms) {
+    ms = parseInt(ms, 10) || 0;
+    if (ms <= 0) return;
+    if (typeof Java !== 'undefined' && Java.type) {
+        Java.type('java.lang.Thread').sleep(ms);
+        return;
+    }
+    var end = Date.now() + ms;
+    while (Date.now() < end) {}
+}
+
+/**
+ * The mktemp -d + trap equivalent. The workspace is decided lazily (the
+ * first staged file — a no-token run touches nothing): `mktemp -d` through
+ * the transport wins; when the transport cannot mktemp, staged files fall
+ * back to a randomized per-run prefix under the runOutput dir (absolute)
+ * or /tmp — never the old predictable /tmp/rv-N-* names. cleanup() is the
+ * trap: rm -rf the dir (or rm -f the fallback files), best-effort.
+ */
+function makeTempWorkspace(exec, opts) {
+    var dir = null;
+    var fallbackPrefix = '';
+    var staged = [];
+    function decide() {
+        if (dir !== null) return;
+        try { dir = String(exec('mktemp -d') || '').trim(); } catch (e) { dir = ''; }
+        if (dir) return;
+        var base = (opts.runOutput && opts.runOutput.indexOf('/') === 0)
+            ? opts.runOutput.replace(/[^/]*$/, '') : '/tmp/';
+        fallbackPrefix = base + 'rv-' + Date.now() + '-' +
+            Math.floor(Math.random() * 10000) + '-';
+    }
+    return {
+        tempFile: function (hint) {
+            decide();
+            var p = dir ? (dir + '/' + hint) : (fallbackPrefix + hint);
+            staged.push(p);
+            return p;
+        },
+        cleanup: function () {
+            try {
+                if (dir) exec('rm -rf ' + shellQuote(dir));
+                else if (staged.length) {
+                    exec('rm -f' + staged.map(function (p) {
+                        return ' ' + shellQuote(p);
+                    }).join(''));
+                }
+            } catch (e) { /* the sh's trap is best-effort */ }
+        }
     };
 }
 
@@ -71,55 +142,51 @@ function resolveParams(params, envMap) {
  */
 function action(params, deps) {
     deps = deps || {};
-    var exec = deps.cli_execute_command ||
+    var execRaw = deps.cli_execute_command ||
         (typeof cli_execute_command === 'function' ? cli_execute_command : null);
     var writeRaw = deps.file_write ||
         (typeof file_write === 'function' ? file_write : null);
     var readRaw = deps.file_read ||
         (typeof file_read === 'function' ? file_read : null);
     var opts = resolveParams(params, deps.env);
-    var seq = opts._tmpSeq;
-    delete opts._tmpSeq;
-    var result = reviewVerdict.applyReviewVerdict(opts, {
-        exec: function (cmd) {
-            var res = exec({ command: cmd });
-            // execOut pattern, no trim: bodies/file paths ride verbatim.
-            // An empty-output result object is an empty output — never the
-            // object itself ('[object Object]' as a command string).
-            var out = res && (res.output || res.stdout);
-            if (out === undefined || out === null) {
-                out = (typeof res === 'string') ? res : '';
-            }
-            return String(out || '');
-        },
-        writeFile: function (p, c) {
-            if (!writeRaw) throw new Error('file_write is not available on this runtime');
-            return writeRaw(p, c);
-        },
-        readFile: function (p) {
-            if (!readRaw) throw new Error('file_read is not available on this runtime');
-            return readRaw({ path: p });
-        },
-        tempFile: function (hint) {
-            var base = (opts.runOutput && opts.runOutput.indexOf('/') === 0)
-                ? opts.runOutput.replace(/[^/]*$/, '') : '/tmp/';
-            return base + 'rv-' + seq() + '-' + hint;
-        },
-        clock: deps.clock || function () { return new Date(); },
-        sleepMs: deps.sleepMs || function (ms) { /* the runtime's own timer would go here */ },
-        log: deps.console_log ||
-            (typeof console_log === 'function' ? console_log : function (line) { console.log(line); })
-    });
-    console.log('  ⚖️ review verdict: ' + result.status +
-        (result.pr ? ' (PR #' + result.pr + ')' : '') +
-        (result.decision ? ' — ' + result.decision : ''));
-    return result;
+    // execOut unwrap through the module's canonical definition (no trim:
+    // bodies/file paths ride verbatim; an empty-output result object is an
+    // empty output — never '[object Object]' as a command string).
+    var exec = function (cmd) {
+        return reviewVerdict.unwrap(execRaw({ command: cmd }));
+    };
+    var ws = makeTempWorkspace(exec, opts);
+    try {
+        var result = reviewVerdict.applyReviewVerdict(opts, {
+            exec: exec,
+            writeFile: function (p, c) {
+                if (!writeRaw) throw new Error('file_write is not available on this runtime');
+                return writeRaw(p, c);
+            },
+            readFile: function (p) {
+                if (!readRaw) throw new Error('file_read is not available on this runtime');
+                return readRaw({ path: p });
+            },
+            tempFile: ws.tempFile,
+            clock: deps.clock || function () { return new Date(); },
+            sleepMs: deps.sleepMs || module.exports.productionSleepMs,
+            log: deps.console_log ||
+                (typeof console_log === 'function' ? console_log : function (line) { console.log(line); })
+        });
+        console.log('  ⚖️ review verdict: ' + result.status +
+            (result.pr ? ' (PR #' + result.pr + ')' : '') +
+            (result.decision ? ' — ' + result.decision : ''));
+        return result;
+    } finally {
+        ws.cleanup();
+    }
 }
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         action: action,
         resolveParams: resolveParams,
-        envValue: envValue
+        envValue: envValue,
+        productionSleepMs: productionSleepMs
     };
 }

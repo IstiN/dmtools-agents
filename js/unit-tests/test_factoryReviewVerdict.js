@@ -488,7 +488,8 @@ suite('factoryReviewVerdict — applyReviewVerdict (orchestration)', function ()
 suite('factoryReviewVerdict — entry action (review_verdict_publish.js)', function () {
 
   var entryModule = loadModule('js/factory/review_verdict_publish.js', makeRequire({
-    './review_verdict.js': rvModule
+    './review_verdict.js': rvModule,
+    './token_usage.js': tokenUsageModule
   }), {});
 
   test('resolveParams: customParams > env > defaults', function () {
@@ -597,10 +598,10 @@ suite('factoryReviewVerdict — entry production seams (round-3 rework)', functi
       var t = NOW_MS;
       var st = withParser(execStub(baseRules({ rollup: 'PENDING\n' })),
         contractLines({ decision: 'approve' }));
-      var r = runAction(st, {}, { clock: function () { return new Date(t += 300); } });
+      var r = runAction(st, {}, { clock: function () { return new Date(t += 30000); } });
       assert.equal(r.status, 'ci-timeout');
       assert.ok(spied.length >= 1, 'the default sleep must sit inside the poll loop');
-      assert.deepEqual(spied, spied.map(function () { return 300; }));
+      assert.deepEqual(spied, spied.map(function () { return 30000; }));
     } finally {
       entryModule.productionSleepMs = real;
     }
@@ -659,7 +660,7 @@ suite('factoryReviewVerdict — applyReviewVerdict guards (round-3 rework)', fun
       var st = withParser(execStub(baseRules()), contractLines({ decision: 'approve' }));
       var io = ioStub(st);
       var threw = null;
-      try { rvModule.applyReviewVerdict(baseOpts({ number: bad }), io); } catch (e) { threw = e; }
+      try { rvModule.applyReviewVerdict(Object.assign(baseOpts(), { number: bad }), io); } catch (e) { threw = e; }
       assert.ok(threw, 'must throw for NUMBER=' + JSON.stringify(bad));
       assert.contains(String(threw && threw.message || threw), 'NUMBER must be numeric');
       assert.equal(st.commands.length, 0, 'zero gh calls for NUMBER=' + JSON.stringify(bad));

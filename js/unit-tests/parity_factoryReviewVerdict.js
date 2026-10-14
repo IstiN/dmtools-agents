@@ -13,7 +13,10 @@
 //   - the posted comment body file bytes,
 //   - the graphql -f query payload,
 //   - the exit code,
-//   - the stderr warn lines for the non-fatal failure mode.
+//   - the diagnostic log stream (the sh's stdout echo lines vs the JS
+//     io.log lines — the → progress lines plus the ::warning::/::error::
+//     annotations, i.e. the warn lines for the non-fatal failure mode;
+//     the sh prints them on stdout, the JS side logs them).
 //
 // Run: node js/unit-tests/parity_factoryReviewVerdict.js
 
@@ -169,7 +172,10 @@ var CHILD_TIMEOUT_MS = 20000;
 // deadline scenario orphans a bash that busy-polls for 600 real seconds.
 function runSh(fx) {
     var sc = makeScenario(path.join(fx.tmp, 'sh'), fx);
-    var cmd = 'exec bash -e ' + q(SPECS.sh) + ' >/dev/null 2>' +
+    // stdout is captured (not /dev/null): the sh's echo lines ARE the
+    // diagnostic log stream compared against the JS io.log lines below.
+    var cmd = 'exec bash -e ' + q(SPECS.sh) + ' >' +
+        q(path.join(sc.dir, 'stdout.txt')) + ' 2>' +
         q(path.join(sc.dir, 'stderr.txt'));
     var rc;
     try {
@@ -180,7 +186,9 @@ function runSh(fx) {
         rc = e.status;
         if (typeof rc !== 'number') throw e;
     }
-    return artifacts(sc.dir, rc);
+    var a = artifacts(sc.dir, rc);
+    a.logs = a.stdout; // the sh's log stream rides stdout
+    return a;
 }
 
 // Run the JS module through the JSRunner entry with the same stub world:
@@ -228,7 +236,9 @@ function runJs(fx) {
         });
     } catch (e) { rc = 1; if (process.env.RV_DEBUG) console.log('  JS-ERR:', String(e && e.message || e).slice(0, 300)); }
     var a = artifacts(sc.dir, rc);
-    a.logs = logs;
+    // the JS log stream: the io.log lines, newline-terminated like the
+    // sh's echo lines (the entry's own ⚖️ console.log is NOT io.log).
+    a.logs = logs.join('\n') + (logs.length ? '\n' : '');
     return a;
 }
 
@@ -242,6 +252,7 @@ function artifacts(dir, rc) {
         ghCalls: read('gh_calls.log'),
         graphql: read('graphql.log'),
         comment: read('posted_comment.md'),
+        stdout: read('stdout.txt'),
         stderr: read('stderr.txt')
     };
 }
@@ -275,7 +286,7 @@ function canon(a) {
         ghCalls: norm(a.ghCalls),
         graphql: norm(a.graphql),
         comment: a.comment,
-        logs: a.logs
+        logs: norm(a.logs)
     };
 }
 
@@ -302,7 +313,7 @@ function compare(name, fx) {
             if (polls < 5) diffs.push('sh not in poll loop (polls=' + polls + ')');
             if (posted !== null) diffs.push('sh posted before deadline');
             if (gh && /pr_approved/.test(gh)) diffs.push('sh labeled pr_approved before deadline');
-            var jsLog = (b.logs || []).join('\n');
+            var jsLog = b.logs || '';
             if (jsLog.indexOf('checks still pending') === -1) diffs.push('js missing pending warning');
             if (b.comment) diffs.push('js posted unexpected comment');
             if (b.ghCalls && /add-label.*pr_approved/.test(b.ghCalls)) diffs.push('js labeled pr_approved');
@@ -317,14 +328,14 @@ function compare(name, fx) {
         a = canon(a);
         var diffs = [];
         if (a.rc !== b.rc) diffs.push('rc ' + a.rc + ' vs ' + b.rc);
-        ['ghCalls', 'graphql', 'comment'].forEach(function (k) {
+        ['ghCalls', 'graphql', 'comment', 'logs'].forEach(function (k) {
             if (a[k] !== b[k]) diffs.push(k);
         });
         if (diffs.length) {
             outcomes.fails.push(name + ': ' + diffs.join(', '));
             console.log('  MISMATCH ' + name + ' — ' + diffs.join(', '));
             if (process.env.RV_KEEP) console.log('    KEPT ' + fx.tmp);
-            ['ghCalls', 'graphql', 'comment'].forEach(function (k) {
+            ['ghCalls', 'graphql', 'comment', 'logs'].forEach(function (k) {
                 if (a[k] !== b[k]) {
                     console.log('    sh: ' + JSON.stringify(String(a[k]).slice(0, 200)));
                     console.log('    js: ' + JSON.stringify(String(b[k]).slice(0, 200)));
