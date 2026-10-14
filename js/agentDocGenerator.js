@@ -220,7 +220,7 @@ function collectSideEffects(src) {
         { re: /tracker\.addLabel\s*\([^,]+,\s*(['"`])([^'"`]+)\1\s*\)/g, label: 'add label "$2" (via tracker)' },
         { re: /tracker\.removeLabel\s*\([^,]+,\s*(['"`])([^'"`]+)\1\s*\)/g, label: 'remove label "$2" (via tracker)' },
         { re: /tracker\.postComment\s*\(/g, label: 'post ticket comment (via tracker)' },
-        { re: /tracker\.moveToStatus\s*\(/g, label: 'move ticket to status (via tracker)' },
+        { re: /tracker\.moveToStatus(?:OrMark)?\s*\(/g, label: 'move ticket to status (via tracker)' },
         { re: /tracker\.assignTo\s*\(/g, label: 'assign ticket (via tracker)' },
         { re: /tracker\.createTicket\s*\(/g, label: 'create ticket (via tracker)' },
         { re: /github_create_pr\s*\(/g, label: 'create GitHub PR' },

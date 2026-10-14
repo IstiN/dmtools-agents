@@ -36,6 +36,7 @@ _Check Subtasks Done For BA — postJSAction for story_ba_check agent._
 - Source: `agents/js/checkSubtasksDoneForBA.js`
 - Side effects:
   - post ticket comment (via tracker)
+  - move ticket to status (via tracker)
 - Parameters (customParams):
   - `removeLabel`
 
