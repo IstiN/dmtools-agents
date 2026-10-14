@@ -243,8 +243,8 @@ suite('factoryMarkJobDone — markJobDone', function () {
       repo: 'IstN/target-repo', number: 42, runUrl: RUN_URL,
       jobResult: 'success', endTs: '12:34'
     }, io);
-    assert.equal(io.commands[0], 'gh issue view 42 --repo IstN/target-repo --json body -q .body');
-    assert.equal(io.commands[1], 'gh issue edit 42 --repo IstN/target-repo --body-file /tmp/issue_body_new.md');
+    assert.equal(io.commands[0], "gh issue view '42' --repo 'IstN/target-repo' --json body -q .body");
+    assert.equal(io.commands[1], "gh issue edit '42' --repo 'IstN/target-repo' --body-file '/tmp/issue_body_new.md'");
     assert.ok(io.written, 'temp body written');
     assert.equal(io.written.path, '/tmp/issue_body_new.md');
     assert.equal(io.written.content, '- [x] Run factory agent started 09:15 · done 12:34 ✅\n');
@@ -261,7 +261,7 @@ suite('factoryMarkJobDone — markJobDone', function () {
       repo: 'O/R', number: 7, runUrl: RUN_URL, jobResult: 'failure',
       endTs: '23:59', tempPath: '/var/tmp/issue_body_new.md'
     }, io);
-    assert.equal(io.commands[1], 'gh issue edit 7 --repo O/R --body-file /var/tmp/issue_body_new.md');
+    assert.equal(io.commands[1], "gh issue edit '7' --repo 'O/R' --body-file '/var/tmp/issue_body_new.md'");
     assert.equal(io.written.path, '/var/tmp/issue_body_new.md');
   });
 
@@ -311,6 +311,10 @@ suite('factoryMarkJobDone — markJobDone', function () {
 
 suite('factoryMarkJobDone — entry action (mark_job_done_publish.js)', function () {
 
+  var writtenObj = {};
+  var writtenStdout = {};
+  var writtenStr = {};
+
   var entryModule = loadModule('js/factory/mark_job_done_publish.js', makeRequire({
     './mark_job_done.js': mjdModule
   }), {});
@@ -359,17 +363,73 @@ suite('factoryMarkJobDone — entry action (mark_job_done_publish.js)', function
         file_write: function (path, content) { written = { path: path, content: content }; },
         env: {}
       });
-    assert.equal(commands[0], 'gh issue view 42 --repo IstN/target-repo --json body -q .body');
-    assert.equal(commands[1], 'gh issue edit 42 --repo IstN/target-repo --body-file /tmp/issue_body_new.md');
+    assert.equal(commands[0], "gh issue view '42' --repo 'IstN/target-repo' --json body -q .body");
+    assert.equal(commands[1], "gh issue edit '42' --repo 'IstN/target-repo' --body-file '/tmp/issue_body_new.md'");
     assert.equal(written.content, '- [x] Run started 09:15 · done 12:34 ✅\n');
     assert.equal(r.status, 'flipped');
   });
 
-  test('action without any gh transport surfaces the transport error (sh: dead step)', function () {
+  test('action unwraps a result-object transport ({output}) — String() would silently no-op the flip', function () {
+    var r = entryModule.action(
+      { jobParams: { customParams: {
+        repo: 'IstN/target-repo', number: '42', runUrl: RUN_URL,
+        jobResult: 'success', endTs: '12:34'
+      } } },
+      {
+        // the runtime transport shape (cli_execute_command in some dmtools
+        // runtimes returns a result object, not a bare string)
+        cli_execute_command: function () {
+          return { output: '- [ ] Run started 09:15 [1777](' + RUN_URL + ')\n' };
+        },
+        file_write: function (path, content) { writtenObj.content = content; },
+        env: {}
+      });
+    assert.equal(r.status, 'flipped', 'result-object transport must still flip');
+    assert.equal(writtenObj.content, '- [x] Run started 09:15 · done 12:34 ✅\n');
+  });
+
+  test('action unwraps a result-object transport ({stdout}) too', function () {
+    var r = entryModule.action(
+      { jobParams: { customParams: {
+        repo: 'IstN/target-repo', number: '42', runUrl: RUN_URL,
+        jobResult: 'success', endTs: '12:34'
+      } } },
+      {
+        cli_execute_command: function () {
+          return { stdout: '- [ ] Run started 09:15 [1777](' + RUN_URL + ')\n' };
+        },
+        file_write: function (path, content) { writtenStdout.content = content; },
+        env: {}
+      });
+    assert.equal(r.status, 'flipped');
+    assert.equal(writtenStdout.content, '- [x] Run started 09:15 · done 12:34 ✅\n');
+  });
+
+  test('action with a plain-string transport keeps working (backward compat)', function () {
+    var r = entryModule.action(
+      { jobParams: { customParams: {
+        repo: 'IstN/target-repo', number: '42', runUrl: RUN_URL,
+        jobResult: 'success', endTs: '12:34'
+      } } },
+      {
+        cli_execute_command: function () {
+          return '- [ ] Run started 09:15 [1777](' + RUN_URL + ')\n';
+        },
+        file_write: function (path, content) { writtenStr.content = content; },
+        env: {}
+      });
+    assert.equal(r.status, 'flipped');
+    assert.equal(writtenStr.content, '- [x] Run started 09:15 · done 12:34 ✅\n');
+  });
+
+  test('action with a throwing transport surfaces the error (stubbed — no network, AGENTS.md mock rule)', function () {
     assert.throws(function () {
       entryModule.action(
         { jobParams: { customParams: { repo: 'O/R', number: '1', runUrl: 'u', jobResult: 'success' } } },
-        { env: {} });
+        {
+          cli_execute_command: function () { throw new Error('gh: view failed'); },
+          env: {}
+        });
     });
   });
 });
