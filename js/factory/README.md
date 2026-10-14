@@ -140,6 +140,14 @@ defaults (via `resolveParams`), wires `exec` → `cli_execute_command` and
   byte-compares. Node-only (needs `awk`), not part of the testRunner suite.
   Found and pinned three awk semantics on the way: `.` consumes `\r`,
   `{ print }` ORS, first-match/replace-position independence.
+- the same harness also runs the **full sh pipeline** end-to-end: the
+  embedded scripts/mark-job-done.sh executes under `bash` with PATH-stubbed
+  `gh`/`date`, and the POSTED BODY FILE and stdout marker line are
+  byte-compared against the JS module driven with the same gh view output —
+  3 scenarios: canonical flip (trailing newline flows through both paths),
+  newline-stripped transport (the JS ORS rule lands the same posted bytes
+  the sh's always-newline file has), and the no-marker warning path (no
+  post on either side).
 - `js/unit-tests/test_factoryTokenUsageIssue889.js` — the issue #889
   scenario («copilot usage is not posted to ADO») as a regression guard:
   copilot `fa-tokens:` ledger rows reach the factory-data board with the
