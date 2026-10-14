@@ -107,6 +107,7 @@ function baseOpts(over) {
 function baseRules(over) {
     over = over || {};
     return [
+        ["bash -c 'ls -1", 'out', STUB_DIR + '/home/.dmtools/packs/pr_review-2.0.0/loop/verdict.sh\n'],
         ['issue view.*--json labels', 'out', over.labels || 'needs-human rework-round-2'],
         ['pr list', 'out', over.prList !== undefined ? over.prList : PR],
         ['pr view.*--json comments,reviews', 'out', '[{"author":"machine-reviewer[bot]","body":"REQUEST_CHANGES"}]'],
@@ -125,7 +126,7 @@ function contractLines(over) {
     over = over || {};
     return [
         'decision=' + (over.decision || 'unknown'),
-        'source=' + (over.source || 'stub-source'),
+        'source=' + (over.source !== undefined ? over.source : 'stub-source'),
         'override=false',
         'rounds_done=' + (over.roundsDone !== undefined ? over.roundsDone : '2'),
         'next_round=' + (over.nextRound !== undefined ? over.nextRound : '3'),
@@ -294,12 +295,13 @@ suite('factoryReviewVerdict — applyReviewVerdict (orchestration)', function ()
       'thread summary line 1\n' +
       'thread summary line 2\n' +
       '\n' +
+      '\n' +
       '_If no threads are listed, the findings live in the PR review comments._\n' +
       '\n' +
       '**Next step (human):** fix the remaining findings directly and re-label `agent:review` for a fresh review — or re-label `agent:rework` to re-arm the agent loop with a fresh round cap.\n';
     var commentCmds = st.commands.filter(function (c) { return c.indexOf('issue comment') !== -1; });
     assert.equal(commentCmds.length, 1);
-    var bodyPath = commentCmds[0].replace(/^.*--body-file /, '').replace(/'$/, '');
+    var bodyPath = commentCmds[0].replace(/^.*--body-file '/, '').replace(/'$/, '');
     assert.equal(io.written[bodyPath], expected);
     assert.contains(io.logs.join('\n'),
       '→ labeled needs-human — auto-rework capped after 2 round(s)');
@@ -318,7 +320,7 @@ suite('factoryReviewVerdict — applyReviewVerdict (orchestration)', function ()
     var gql = st.commands.filter(function (c) { return c.indexOf('api graphql') !== -1; });
     assert.equal(gql.length, 0, 'no PR → no threads query');
     var commentCmds = st.commands.filter(function (c) { return c.indexOf('issue comment') !== -1; });
-    var bodyPath = commentCmds[0].replace(/^.*--body-file /, '').replace(/'$/, '');
+    var bodyPath = commentCmds[0].replace(/^.*--body-file '/, '').replace(/'$/, '');
     assert.equal(io.written[bodyPath],
       '🛑 **Auto-rework loop capped** — 2 automatic rework rounds without an APPROVE verdict (cap: 2). The machine stopped labeling `agent:rework`.\n' +
       '\n' +
@@ -328,15 +330,15 @@ suite('factoryReviewVerdict — applyReviewVerdict (orchestration)', function ()
   });
 
   test('escalate with a failing threads fetch: warn line, comment without summary', function () {
-    var rules = baseRules();
-    rules.push(['api graphql', 'throw', 'server error']);
+    var rules = [['api graphql', 'throw', 'server error']];
+    Array.prototype.push.apply(rules, baseRules());
     var st = withParser(execStub(rules), contractLines({ decision: 'rework', escalate: 'true' }));
     var io = ioStub(st);
     rvModule.applyReviewVerdict(baseOpts(), io);
     assert.contains(io.logs.join('\n'),
       '::warning::reviewThreads fetch failed — the findings live in the PR review comments');
     var commentCmds = st.commands.filter(function (c) { return c.indexOf('issue comment') !== -1; });
-    var bodyPath = commentCmds[0].replace(/^.*--body-file /, '').replace(/'$/, '');
+    var bodyPath = commentCmds[0].replace(/^.*--body-file '/, '').replace(/'$/, '');
     assert.ok(io.written[bodyPath].indexOf('thread summary') === -1);
   });
 
@@ -404,8 +406,8 @@ suite('factoryReviewVerdict — applyReviewVerdict (orchestration)', function ()
   });
 
   test('rollup fetch failure is tolerated (sh: `|| true` → empty states → keep polling)', function () {
-    var rules = baseRules();
-    rules.push(['statusCheckRollup', 'throw', 'boom']);
+    var rules = [['statusCheckRollup', 'throw', 'boom']];
+    Array.prototype.push.apply(rules, baseRules());
     var t = NOW_MS;
     var st = withParser(execStub(rules), contractLines({ decision: 'approve' }));
     var io = ioStub(st, { clock: function () { return new Date(t += 300000); } });
@@ -428,7 +430,7 @@ suite('factoryReviewVerdict — applyReviewVerdict (orchestration)', function ()
     var adds = st.commands.filter(function (c) { return c.indexOf('--add-label') !== -1; });
     assert.contains(adds.join('\n'), "--add-label 'needs-human'");
     var commentCmds = st.commands.filter(function (c) { return c.indexOf('issue comment') !== -1; });
-    var bodyPath = commentCmds[0].replace(/^.*--body-file /, '').replace(/'$/, '');
+    var bodyPath = commentCmds[0].replace(/^.*--body-file '/, '').replace(/'$/, '');
     assert.equal(io.written[bodyPath],
       '🛑 **Review verdict missing** — the review leg finished, but no verdict (APPROVE / REQUEST_CHANGES / BLOCK) was found in any source, so the cycle cannot be labeled.\n' +
       '\n' +
