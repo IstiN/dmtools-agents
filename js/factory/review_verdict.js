@@ -285,8 +285,11 @@ function applyReviewVerdict(opts, io) {
                     log('::warning::reviewThreads fetch failed — the findings live in the PR review comments');
                 }
                 if (gqlOk) {
+                    // sh: summary="$(bash …)" — command substitution strips
+                    // ALL trailing newlines; the raw exec keeps them.
                     threadSummary = unwrap(io.exec(
-                        'bash ' + q(verdictSh) + ' threads ' + q(threadsPath)));
+                        'bash ' + q(verdictSh) + ' threads ' + q(threadsPath)))
+                        .replace(/\n+$/, '');
                 }
             }
             var lines = [
@@ -297,7 +300,7 @@ function applyReviewVerdict(opts, io) {
                 lines.push('### Unresolved review threads on PR #' + pr, '');
                 if (threadSummary) lines.push(threadSummary);
                 lines.push('');
-                lines.push('_If no threads are listed, the findings live in the PR review comments._');
+                lines.push('_If no threads are listed, the findings live in the PR general comments._');
             } else {
                 lines.push('_No linked open PR found for this issue._');
             }

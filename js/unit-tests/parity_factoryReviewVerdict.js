@@ -257,8 +257,18 @@ function canon(a) {
     // one-line form — the jq OUTPUT is compared through the same stub.
     var norm = function (s) {
         if (s === null || s === undefined) return s;
-        return String(s).replace(
-            /\n\s+then "PENDING" else/g, ' then "PENDING" else');
+        s = String(s);
+        // The sh's --jq literal for the rollup query is a line-continued
+        // single-quoted string (newline + indent INSIDE the argv); the JS
+        // port carries the same expression on one line. Normalize both
+        // sides to the one-line form — the jq OUTPUT is compared through
+        // the same stub.
+        s = s.replace(/\n\s+then "PENDING" else/g, ' then "PENDING" else');
+        // The comment body rides a temp file whose NAME is an artifact of
+        // the side (mktemp vs the entry's rv-N-comment.md); the bytes are
+        // compared separately in `comment`. Normalize the argv token.
+        s = s.replace(/\[--body-file\] \[[^\]]+\]/g, '[--body-file] [BODY_FILE]');
+        return s;
     };
     return {
         rc: a.rc,

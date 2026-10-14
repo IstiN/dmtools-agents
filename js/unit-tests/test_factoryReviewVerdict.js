@@ -295,8 +295,7 @@ suite('factoryReviewVerdict — applyReviewVerdict (orchestration)', function ()
       'thread summary line 1\n' +
       'thread summary line 2\n' +
       '\n' +
-      '\n' +
-      '_If no threads are listed, the findings live in the PR review comments._\n' +
+      '_If no threads are listed, the findings live in the PR general comments._\n' +
       '\n' +
       '**Next step (human):** fix the remaining findings directly and re-label `agent:review` for a fresh review — or re-label `agent:rework` to re-arm the agent loop with a fresh round cap.\n';
     var commentCmds = st.commands.filter(function (c) { return c.indexOf('issue comment') !== -1; });
