@@ -256,9 +256,15 @@ DMTOOLS_ARGS=(--debug run "${CONFIG_FILE}")
 if [ -n "${ENCODED_CONFIG}" ]; then
   DMTOOLS_ARGS+=("${ENCODED_CONFIG}")
 fi
-DMTOOLS_ARGS+=(--inputJql "key = ${TICKET_KEY}" --ciRunUrl "${CI_RUN_URL}")
+# agents#894: WIQL has no field called "key"; Azure DevOps work items are selected by [System.Id].
+if [ "${DEFAULT_TRACKER:-}" = "ado" ] || [[ "${TICKET_KEY}" =~ ^[0-9]+$ && -n "${ADO_ORGANIZATION:-}" ]]; then
+  INPUT_JQL="[System.Id] = ${TICKET_KEY}"
+else
+  INPUT_JQL="key = ${TICKET_KEY}"
+fi
+DMTOOLS_ARGS+=(--inputJql "${INPUT_JQL}" --ciRunUrl "${CI_RUN_URL}")
 
-echo "▶ ${DMTOOLS_BIN} --debug run ${CONFIG_FILE} ... --inputJql \"key = ${TICKET_KEY}\" --ciRunUrl ${CI_RUN_URL}"
+echo "▶ ${DMTOOLS_BIN} --debug run ${CONFIG_FILE} ... --inputJql \"${INPUT_JQL}\" --ciRunUrl ${CI_RUN_URL}"
 set -o pipefail
 "${DMTOOLS_BIN}" "${DMTOOLS_ARGS[@]}" 2>&1 | tee "${LOG_FILE}"
 
