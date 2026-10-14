@@ -368,7 +368,7 @@ suite('postPRReviewComments', function() {
                     './common/outputFiles.js': outputFiles,
                     './common/githubHelpers.js': githubHelpersStub,
                     './common/trackers.js': makeTrackersModule(mergedMocks),
-                    './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+                    './common/tokenUsageComment.js': opts.tokenUsage || { postTokenUsageComments: function() {} },
                     './common/commentMarkup.js': commentMarkupModule,
                     './common/reviewVerdicts.js': loadModule('js/common/reviewVerdicts.js', makeRequire({}), {})
                 }),
@@ -483,6 +483,45 @@ suite('postPRReviewComments', function() {
                 false,
                 'must not post the "could not attach" comment when a PR was found'
             );
+        });
+
+        test('agents#889: token usage is posted through the tracker resolved for the run, not a Jira fallback', function() {
+            var usageCalls = [];
+            var loaded = loadPostPRReviewCommentsForAction({
+                reviewData: { recommendation: 'APPROVE', issueCounts: { blocking: 0, important: 0, suggestions: 0 }, inlineComments: [] },
+                repoInfo: null,
+                openPrs: [],
+                tokenUsage: { postTokenUsageComments: function(key, o) { usageCalls.push({ key: key, o: o }); } }
+            });
+            loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1'
+            });
+            assert.equal(usageCalls.length, 1);
+            assert.ok(usageCalls[0].o.tracker && typeof usageCalls[0].o.tracker.postComment === 'function',
+                'the run tracker must be handed over');
+        });
+
+        test('agents#890: a rejected In Rework transition is marked with a label when stageFallback is label', function() {
+            var labels = [];
+            var loaded = loadPostPRReviewCommentsForAction({
+                reviewData: { recommendation: 'REQUEST_CHANGES', issueCounts: { blocking: 1, important: 0, suggestions: 0 }, inlineComments: [] },
+                repoInfo: { owner: 'IstiN', repo: 'dmtools-agents' },
+                prInfoContent: '- **PR #**: 42\n- **URL**: https://github.com/IstiN/dmtools-agents/pull/42\n- **Branch**: bug/PROJ-1\n',
+                mocks: {
+                    jira_move_to_status: function() { throw new Error("The field 'State' contains the value 'In Rework' that is not in the list of supported values"); },
+                    jira_add_label: function(a) { labels.push(a.label); }
+                }
+            });
+            var result = loaded.mod.action({
+                ticket: { key: 'PROJ-1', fields: { labels: [] } },
+                response: 'Jira review content',
+                inputFolderPath: 'input/PROJ-1',
+                customParams: { stageFallback: 'label' }
+            });
+            assert.equal(result.success, true);
+            assert.ok(labels.some(function(l) { return /in_rework/i.test(l); }), 'stage label added: ' + JSON.stringify(labels));
         });
 
         test('github provider: ticket operations dispatch to github_* tools, jira_* stay untouched (#414)', function() {

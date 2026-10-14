@@ -1105,8 +1105,11 @@ function action(params) {
                 console.log('✅ Added pr_approved label to ticket — SM will retry merge');
             } else if (prNumber && repoInfo) {
                 // Has issues, and there is an actual PR to rework → move to In Rework for focused fixes
-                tracker.moveToStatus(ticketKey, statuses.IN_REWORK);
-                console.log('✅ Ticket moved to', statuses.IN_REWORK);
+                // agents#890: an ADO process may have no "In Rework" state; with stageFallback 'label' the
+                // stage is recorded as a label instead of being lost (default 'none' = same as moveToStatus).
+                var reworkMove = tracker.moveToStatusOrMark(ticketKey, statuses.IN_REWORK, 'IN_REWORK');
+                console.log(reworkMove.moved ? '✅ Ticket moved to ' + statuses.IN_REWORK
+                    : '⚠️ Ticket could not move to ' + statuses.IN_REWORK + '; marked with label ' + reworkMove.label);
             } else {
                 // Has issues, but no PR was ever matched to this ticket — moving to In Rework
                 // would start a rework cycle with nothing to rework. Leave the status alone
@@ -1293,7 +1296,9 @@ function action(params) {
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
         try {
-            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, customParams: tokenUsageComment.customParamsOf(params) });
+            // agents#889: reuse the tracker resolved for this run (customParams patched by the pr_review
+            // instructions); customParamsOf(params) alone misses it and fell back to Jira on ADO.
+            tokenUsageComment.postTokenUsageComments(ticketKey, { initiator: params.initiator, tracker: tracker });
         } catch (e) {
             console.warn('Failed to post token usage comments:', e);
         }
