@@ -134,3 +134,58 @@ run_resume_notice_case "resume-gets-notice" "yes" "yes"
 run_resume_notice_case "first-run-no-notice" "no" "no"
 
 echo "Claude provider integration tests passed"
+
+# agents#898: a stored session that cannot be resumed on this machine must not fail the run — one retry
+# without --resume, and the stale .claude-session-id is removed (the new run then writes a fresh one).
+run_stale_session_case() {
+  local case_dir="${TEST_ROOT}/stale-session"
+  local fake_bin="${case_dir}/bin"
+  mkdir -p "${fake_bin}" "${case_dir}/outputs"
+  cat > "${fake_bin}/claude" << 'BINEOF'
+#!/bin/bash
+echo "$*" >> "${CALLS_FILE}"
+if [[ "$*" == *"--resume"* ]]; then
+  echo '{"type":"result","is_error":true,"errors":["No conversation found with session ID: stale-id"]}'
+  exit 1
+fi
+echo '{"type":"result","session_id":"fresh-456"}'
+exit 0
+BINEOF
+  chmod +x "${fake_bin}/claude"
+  (
+    cd "${case_dir}"
+    export PATH="${fake_bin}:${PATH}"
+    export CLAUDE_CODE_API_KEY="test-key" CLAUDE_CODE_BASE_URL="https://example.com"
+    export CALLS_FILE="${case_dir}/calls.txt" DMTOOLS_CLI_LOG_DIR="${case_dir}/logs"
+    echo "stale-id" > .claude-session-id
+    PROMPT_ARG="nonexistent-file"; PROMPT="p"; PROMPT_BYTES=1; PASS_ARGS=()
+    rc=0; run_claude_code >/dev/null 2>&1 || rc=$?
+    [ "${rc}" -eq 0 ] || { echo "[stale-session] expected exit 0 after retry, got ${rc}" >&2; exit 1; }
+    [ "$(wc -l < "${CALLS_FILE}" | tr -d ' ')" = "2" ] || { echo "[stale-session] expected exactly 2 claude calls" >&2; exit 1; }
+    grep -q -- "--resume" <(sed -n 2p "${CALLS_FILE}") && { echo "[stale-session] retry must not use --resume" >&2; exit 1; }
+    [ "$(cat .claude-session-id)" = "fresh-456" ] || { echo "[stale-session] stale id must be replaced by the fresh one" >&2; exit 1; }
+  )
+}
+run_stale_session_case
+
+# A real failure that is NOT a stale session must not be retried or masked.
+run_non_stale_failure_case() {
+  local case_dir="${TEST_ROOT}/non-stale"
+  local fake_bin="${case_dir}/bin"
+  mkdir -p "${fake_bin}" "${case_dir}/outputs"
+  printf '#!/bin/bash\necho "$*" >> "${CALLS_FILE}"\necho "{\\"type\\":\\"result\\",\\"is_error\\":true}"\nexit 1\n' > "${fake_bin}/claude"
+  chmod +x "${fake_bin}/claude"
+  (
+    cd "${case_dir}"
+    export PATH="${fake_bin}:${PATH}"
+    export CLAUDE_CODE_API_KEY="test-key" CLAUDE_CODE_BASE_URL="https://example.com"
+    export CALLS_FILE="${case_dir}/calls.txt" DMTOOLS_CLI_LOG_DIR="${case_dir}/logs"
+    echo "ok-id" > .claude-session-id
+    PROMPT_ARG="nonexistent-file"; PROMPT="p"; PROMPT_BYTES=1; PASS_ARGS=()
+    rc=0; run_claude_code >/dev/null 2>&1 || rc=$?
+    [ "${rc}" -eq 1 ] || { echo "[non-stale] failure must keep exit 1, got ${rc}" >&2; exit 1; }
+    [ "$(wc -l < "${CALLS_FILE}" | tr -d ' ')" = "1" ] || { echo "[non-stale] must not retry" >&2; exit 1; }
+  )
+}
+run_non_stale_failure_case
+echo "claude provider stale-session cases passed"

@@ -37,7 +37,8 @@ var RUNTIME_ARTIFACT_PATHS = [
     '.dmtools/run-output.txt',
     '.dmtools/stall-capture.log',
     '.dmtools/fa-sessions',
-    '.dmtools-session-output.log'
+    '.dmtools-session-output.log',
+    '.claude-session-id'
 ];
 
 /**
