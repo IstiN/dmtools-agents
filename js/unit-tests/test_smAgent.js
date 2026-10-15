@@ -373,6 +373,7 @@ function makeSmAgent(opts) {
     return {
         action: sm.action,
         applyRuleOverridesForTest: sm.applyRuleOverridesForTest,
+        runLocalAction: sm.runLocalAction,
         probeDispatchedState: sm.probeDispatchedState,
         hasRecentHeadRun: sm.hasRecentHeadRun,
         dispatchRaceGraceMs: sm.dispatchRaceGraceMs,
@@ -11578,3 +11579,143 @@ suite('smAgent writes labels and comments through the tracker wrapper (agents: t
     });
 });
 
+
+// ── runLocalAction require shim (gh-908) ──────────────────────────────────────
+
+// The localExecution sandbox used to answer every unrecognized require id with
+// config.js exports, so any postJS action requiring the shared helper layer
+// died with a TypeError on its first member call (live: story_ba_check —
+// "TypeError: trackersModule.createTracker is not a function"). These suites
+// pin the shim contract: known ids resolve to the REAL module exports
+// (UT-1/UT-2), unknown ids keep the backwards-compat config.js fallback
+// (UT-3), and the live checkSubtasksDoneForBA action runs end-to-end through
+// the sandbox (IT-1). Both CWD layouts are exercised (AC4).
+
+suite('smAgent: runLocalAction require shim (gh-908)', function() {
+
+    var TRACKER_ACTION_KEY = 'js/unit-tests/fixtures/gh908_tracker_action.js';
+    var TRACKER_ACTION_SRC = [
+        'var trackersModule = require("./common/trackers.js");',
+        'var tokenUsageComment = require("./common/tokenUsageComment.js");',
+        'module.exports.action = function(params) {',
+        '    var tracker = trackersModule.createTracker(params.jobParams.projectConfig, {});',
+        '    return {',
+        '        createTrackerType: typeof trackersModule.createTracker,',
+        '        provider: tracker.provider(),',
+        '        searchIssuesType: typeof tracker.searchIssues,',
+        '        postTokenUsageCommentsType: typeof tokenUsageComment.postTokenUsageComments',
+        '    };',
+        '};'
+    ].join('\n');
+
+    var CHAIN_ACTION_KEY = 'js/unit-tests/fixtures/gh908_chain_action.js';
+    var CHAIN_ACTION_SRC = [
+        'var autoStart = require("./common/autoStart.js");',
+        'var aiChatModule = require("./common/aiChat.js");',
+        'var buildEncodedConfig = require("./common/buildEncodedConfig.js");',
+        'module.exports.action = function() {',
+        '    return {',
+        '        triggerConfiguredWorkflowForTicket: typeof autoStart.triggerConfiguredWorkflowForTicket,',
+        '        aiChat: typeof aiChatModule.aiChat,',
+        '        buildEncodedConfig: typeof buildEncodedConfig.buildEncodedConfig,',
+        '        resolveConfigFile: typeof buildEncodedConfig.resolveConfigFile',
+        '    };',
+        '};'
+    ].join('\n');
+
+    var FALLBACK_ACTION_KEY = 'js/unit-tests/fixtures/gh908_fallback_action.js';
+    var FALLBACK_ACTION_SRC = [
+        'var unknownModule = require("./definitely-not-a-module.js");',
+        'module.exports.action = function() {',
+        '    return {',
+        '        looksLikeConfig: typeof unknownModule.STATUSES,',
+        '        hasStageLabel: typeof unknownModule.stageLabel',
+        '    };',
+        '};'
+    ].join('\n');
+
+    function fileMapWith(key, src) {
+        var m = {};
+        m[key] = src;
+        return m;
+    }
+
+    test('UT-1: action requiring the tracker layer gets real exports, not config.js (AC1)', function() {
+        var sm = makeSmAgent({ fileMap: fileMapWith(TRACKER_ACTION_KEY, TRACKER_ACTION_SRC) });
+        var result = sm.runLocalAction(TRACKER_ACTION_KEY, { key: 'PROJ-1' }, { projectConfig: {}, customParams: {} });
+        assert.equal(result.createTrackerType, 'function', 'trackers.js exports must reach the action');
+        assert.equal(result.provider, 'jira', 'createTracker must return a working jira tracker');
+        assert.equal(result.searchIssuesType, 'function', 'tracker must expose searchIssues');
+        assert.equal(result.postTokenUsageCommentsType, 'function', 'tokenUsageComment.js exports must reach the action');
+    });
+
+    test('UT-1b: agents/-prefixed action path resolves through the same shim (AC4)', function() {
+        var agentsKey = 'agents/' + TRACKER_ACTION_KEY;
+        var sm = makeSmAgent({ fileMap: fileMapWith(agentsKey, TRACKER_ACTION_SRC) });
+        var result = sm.runLocalAction(agentsKey, { key: 'PROJ-1' }, { projectConfig: {}, customParams: {} });
+        assert.equal(result.createTrackerType, 'function', 'parent-repo layout must resolve helper requires too');
+        assert.equal(result.provider, 'jira', 'tracker must work from the agents/ layout as well');
+    });
+
+    test('UT-2: autoStart/aiChat/buildEncodedConfig chains resolve incl. transitive requires (AC2)', function() {
+        var sm = makeSmAgent({ fileMap: fileMapWith(CHAIN_ACTION_KEY, CHAIN_ACTION_SRC) });
+        var result = sm.runLocalAction(CHAIN_ACTION_KEY, { key: 'PROJ-1' }, {});
+        assert.equal(result.triggerConfiguredWorkflowForTicket, 'function', 'autoStart.js exports must reach the action');
+        assert.equal(result.aiChat, 'function', 'aiChat.js exports must reach the action');
+        assert.equal(result.buildEncodedConfig, 'function', 'buildEncodedConfig.js exports must reach the action');
+        assert.equal(result.resolveConfigFile, 'function', 'buildEncodedConfig own exports must survive its transitive requires');
+    });
+
+    test('UT-3: unknown require ids keep the config.js fallback (AC3 backwards compat)', function() {
+        var sm = makeSmAgent({ fileMap: fileMapWith(FALLBACK_ACTION_KEY, FALLBACK_ACTION_SRC) });
+        var result = sm.runLocalAction(FALLBACK_ACTION_KEY, { key: 'PROJ-1' }, {});
+        assert.equal(result.looksLikeConfig, 'object', 'unmatched ids must still receive config.js exports');
+        assert.equal(result.hasStageLabel, 'function', 'fallback must be the real config module (stageLabel present)');
+    });
+
+    test('IT-1: live checkSubtasksDoneForBA.js runs end-to-end through the sandbox (AC1, AC4)', function() {
+        var moved = [];
+        var comments = [];
+        var sm = makeSmAgent({
+            fileMap: {
+                '.dmtools/config.js': 'module.exports = { jira: { project: "PROJ", ' +
+                    'questions: { fetchJql: "parent = {ticketKey} AND issuetype = Subtask ORDER BY created ASC" }, ' +
+                    'statuses: { BA_ANALYSIS: "BA Analysis", DONE: "Done" } } };'
+            },
+            extraMocks: {
+                jira_search_by_jql: function() { return []; },
+                jira_move_to_status: function(args) { moved.push(args); return args; },
+                jira_post_comment: function(args) { comments.push(args); return args; },
+                jira_remove_label: function(args) { return args; }
+            }
+        });
+        var result = sm.runLocalAction('js/checkSubtasksDoneForBA.js', { key: 'PROJ-123' }, { customParams: {} });
+        assert.equal(result.success, true, 'live action must succeed, got: ' + JSON.stringify(result));
+        assert.equal(result.action, 'moved_to_ba_analysis_no_subtasks');
+        assert.deepEqual(moved[0], { key: 'PROJ-123', statusName: 'BA Analysis' });
+        assert.contains(comments[0].comment, 'PO Review Complete');
+    });
+
+    test('E3: helper module that throws at load surfaces an error naming the module', function() {
+        var fm = fileMapWith(TRACKER_ACTION_KEY, 'module.exports.action = function() { return {}; };');
+        fm['js/common/trackers.js'] = 'throw new Error("boom at load");';
+        var sm = makeSmAgent({ fileMap: fm });
+        var err = null;
+        try { sm.runLocalAction(TRACKER_ACTION_KEY, { key: 'PROJ-1' }, {}); }
+        catch (e) { err = e; }
+        assert.ok(err, 'runLocalAction must throw when a helper module fails to load');
+        assert.contains(err.message, 'trackers.js', 'error must name the failing module');
+        assert.contains(err.message, 'boom at load', 'original error reason must be preserved');
+    });
+
+    test('E4: unreadable helper source fails fast with Cannot read (like the config.js/scm.js guards)', function() {
+        var fm = fileMapWith(TRACKER_ACTION_KEY, 'module.exports.action = function() { return 1; };');
+        fm['js/common/ticketKeyShapes.js'] = null;
+        var sm = makeSmAgent({ fileMap: fm });
+        var err = null;
+        try { sm.runLocalAction(TRACKER_ACTION_KEY, { key: 'PROJ-1' }, {}); }
+        catch (e) { err = e; }
+        assert.ok(err, 'must throw when a helper source cannot be read');
+        assert.contains(err.message, 'Cannot read: common/ticketKeyShapes.js');
+    });
+});
