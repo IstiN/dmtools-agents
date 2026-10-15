@@ -2266,4 +2266,34 @@ suite('sm github source: validate-fresh-masked-green CLEAN arm (gh-829)', functi
         assert.ok(ids.indexOf('fail-validation') < ids.indexOf('rework-on-red-gate-unlatched'),
             'fail-validation precedes its unlatched twin');
     });
+
+    test('rework-on-validation-failed rule exists (parked machine PRs reach rework)', function () {
+        // Owner directive (2026-10-15): red pre-merge gate MUST raise a
+        // rework leg — for machine-authored PRs the validation_failed PARK
+        // (guest semantics: wait for a human push) must never become a
+        // dead end. Live hole (dart 410, 2026-10-15 19:53Z; the #390
+        // validation_failed retry loop family): fail_validation stamped
+        // the latch, no rule arms rework from it, the machine PR sits
+        // parked while the gate stays red. The leg's push is a newer head
+        // event, so the park-clear path re-opens validation on the fix.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.rules || (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules)) || [];
+        var r = rules.filter(function (x) { return x.id === 'rework-on-validation-failed'; })[0];
+        assert.ok(r, 'rework-on-validation-failed present');
+        assert.equal(r.query.type, 'pr', 'PR-carried');
+        assert.ok(r.query.labels.indexOf('validation_failed') !== -1,
+            'fires from the failure latch');
+        assert.ok(r.query.notLabels.indexOf('agent:rework') !== -1,
+            'no double-arm while a rework is already armed');
+        assert.ok(r.query.notLabels.indexOf('ai_validating') !== -1,
+            'an armed validation still owns the verdict');
+        assert.equal(r.query.prMachineAuthor, true,
+            'guest parked PRs keep the human-push semantics (owner rule)');
+        assert.deepEqual(r.query.checks, ['red'],
+            'the failure stands — not a mid-revalidate wave');
+        assert.equal(r.localAction, 'arm_rework', 'arms via the shared arm path');
+        var ids = rules.map(function (x) { return x.id; });
+        assert.ok(ids.indexOf('rework-on-red-gate-unlatched') < ids.indexOf('rework-on-validation-failed'),
+            'the unlatched twin precedes the latched-park twin');
+    });
 });
