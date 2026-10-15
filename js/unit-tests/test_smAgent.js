@@ -11698,6 +11698,8 @@ suite('smAgent: runLocalAction require shim (gh-908)', function() {
 
     test('E3: helper module that throws at load surfaces an error naming the module', function() {
         var fm = fileMapWith(TRACKER_ACTION_KEY, 'module.exports.action = function() { return {}; };');
+        // both CWD shapes: the reader probes agents/js/common/... first
+        fm['agents/js/common/trackers.js'] = 'throw new Error("boom at load");';
         fm['js/common/trackers.js'] = 'throw new Error("boom at load");';
         var sm = makeSmAgent({ fileMap: fm });
         var err = null;
@@ -11710,6 +11712,8 @@ suite('smAgent: runLocalAction require shim (gh-908)', function() {
 
     test('E4: unreadable helper source fails fast with Cannot read (like the config.js/scm.js guards)', function() {
         var fm = fileMapWith(TRACKER_ACTION_KEY, 'module.exports.action = function() { return 1; };');
+        // both CWD shapes must come up empty for the fail-fast guard to fire
+        fm['agents/js/common/ticketKeyShapes.js'] = null;
         fm['js/common/ticketKeyShapes.js'] = null;
         var sm = makeSmAgent({ fileMap: fm });
         var err = null;
