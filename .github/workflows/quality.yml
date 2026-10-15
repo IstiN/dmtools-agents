@@ -1,14 +1,21 @@
-# Quality gate — CRAP ratchet via crap4js, pinned like crap4dart in dmd.
+# Quality gate — per-function CRAP ratchet via crap4js (IstiN fork).
 #
-# Threshold policy (owner 2026-09-28): the CRAP bar is NOT lowered to pass —
-# the CURRENT measured maximum is fixed as the ratchet baseline, so the code
-# can only improve. Baseline: 4879.8 (action/developTicketAndCreatePR.js,
-# CC=116 @ 29.3% coverage). Improvements lower the max freely; any change
-# that pushes the max ABOVE the baseline fails the gate.
+# Policy: CRAP may only DECREASE. crap-baseline.json records every function's
+# CRAP score; the gate fails when
+#   - a function in the baseline gets a higher CRAP, or
+#   - a function not in the baseline (new/renamed) exceeds CRAP_THRESHOLD.
+# Improvements pass and are reported; lock them in by re-baselining:
+#   crap4js . --coverage <coverage-final.json> --baseline crap-baseline.json --write-baseline
 #
-# Tool pin: crap4js v0.8.1 by release tag (same discipline as dmd pinning
-# crap4dart 0.9.5). Install from GitHub — the npm 'crap4js' package is an
-# unrelated third-party project.
+# Coverage comes from the unit suite run in this same job (instrumented tree),
+# so the ratchet is evaluated with the unit-test results of the PR head.
+#
+# Labels: the job sets crap:regression on a failing PR and removes it when the
+# ratchet passes; crap:improved marks PRs that lowered CRAP.
+#
+# Tool pin: IstiN/crap4js by commit SHA (fork of vabhzw17eg2qu4m9-bit/crap4js
+# v0.15.0 + --baseline ratchet). Installed from GitHub — the npm 'crap4js'
+# package is an unrelated third-party project.
 name: Quality
 
 on:
@@ -19,12 +26,13 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write   # crap:regression / crap:improved labels
 
 env:
-  # Ratchet baseline — the measured repo-wide maximum CRAP (see header).
-  # Re-measure with the steps below; lower it when the code improves.
-  CRAP_THRESHOLD: '4879.8'
-  CRAP4JS_REF: 'v0.8.1'
+  # Threshold for functions NOT in crap-baseline.json (new or renamed code).
+  CRAP_THRESHOLD: '8'
+  CRAP4JS_REPO: 'IstiN/crap4js'
+  CRAP4JS_REF: 'b7e0fd1d58563bd52aa333a905e29342ebdfd7e8'
 
 jobs:
   crap:
@@ -39,7 +47,7 @@ jobs:
       - name: Install pinned tools (separate prefix — never node_modules here)
         run: |
           npm install --prefix "$RUNNER_TEMP/tools" --no-fund --no-audit \
-            "github:vabhzw17eg2qu4m9-bit/crap4js#${CRAP4JS_REF}" nyc@17
+            "github:${CRAP4JS_REPO}#${CRAP4JS_REF}" nyc@17
 
       - name: Instrument the tree (harness eval-loads bypass nyc's hook)
         run: |
@@ -67,8 +75,32 @@ jobs:
             "$RUNNER_TEMP/cov/coverage-final.json" $FILES \
             || echo "::warning::node harness has known mock gaps — coverage still collected"
 
-      - name: crap4js gate (ratchet — baseline ${{ env.CRAP_THRESHOLD }})
+      - name: crap4js ratchet (per-function baseline)
+        id: ratchet
         run: |
+          set +e
           "$RUNNER_TEMP/tools/node_modules/.bin/crap4js" . \
             --coverage "$RUNNER_TEMP/cov/coverage-final.json" \
-            --threshold "${CRAP_THRESHOLD}"
+            --threshold "${CRAP_THRESHOLD}" \
+            --baseline crap-baseline.json | tee "$RUNNER_TEMP/crap.txt"
+          code=${PIPESTATUS[0]}
+          sed -n '/^CRAP Ratchet/,$p' "$RUNNER_TEMP/crap.txt" >> "$GITHUB_STEP_SUMMARY"
+          if grep -q '^improved ' "$RUNNER_TEMP/crap.txt"; then echo "improved=true" >> "$GITHUB_OUTPUT"; fi
+          exit $code
+
+      - name: Label PR (crap:regression / crap:improved)
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          OUTCOME: ${{ steps.ratchet.outcome }}
+          IMPROVED: ${{ steps.ratchet.outputs.improved }}
+        run: |
+          if [ "$OUTCOME" = "failure" ]; then
+            gh pr edit "$PR" -R "$GITHUB_REPOSITORY" --add-label crap:regression || true
+          elif [ "$OUTCOME" = "success" ]; then
+            gh pr edit "$PR" -R "$GITHUB_REPOSITORY" --remove-label crap:regression || true
+          fi
+          if [ "$IMPROVED" = "true" ] && [ "$OUTCOME" = "success" ]; then
+            gh pr edit "$PR" -R "$GITHUB_REPOSITORY" --add-label crap:improved || true
+          fi
