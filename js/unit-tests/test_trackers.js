@@ -1115,6 +1115,33 @@ suite('trackers.js getIssue / searchIssues (Jira-shaped reads)', function () {
         assert.equal(r[0].key, '3');
         assert.equal(r[0].fields.status.name, 'Active');
     });
+
+    // agents#899: the SM asks for fields ['key','labels']; dmtools 1.7.280 returns only System.Id + System.Tags
+    // (no System.Title), which used to be mistaken for a Jira payload and left key undefined.
+    test('agents#899: ado searchIssues keeps the work item id as key when only System.Id/System.Tags come back', function () {
+        var s = recorder('ado_search_by_wiql', JSON.stringify({ value: [{ id: 2041388, fields: { 'System.Id': 2041388, 'System.Tags': 'ai_factory; x' } }] }));
+        var r = make('ado', { ado_search_by_wiql: s }).searchIssues('SELECT [System.Id] FROM WorkItems', { fields: ['key', 'labels'] });
+        assert.equal(r.length, 1);
+        assert.equal(r[0].key, '2041388');
+        assert.deepEqual(r[0].fields.labels, ['ai_factory', 'x']);
+    });
+
+    test('agents#899: ado searchIssues drops Jira-only key/id columns, maps labels, always asks for Title/State/Tags/Type', function () {
+        var s = recorder('ado_search_by_wiql', JSON.stringify({ value: [] }));
+        make('ado', { ado_search_by_wiql: s }).searchIssues('q', { fields: ['key', 'id', 'labels', 'status', 'summary'] });
+        var f = s.calls[0].fields;
+        assert.equal(f.indexOf('key'), -1);
+        assert.equal(f.indexOf('id'), -1);
+        ['System.Title', 'System.State', 'System.Tags', 'System.WorkItemType'].forEach(function (x) {
+            assert.ok(f.indexOf(x) !== -1, 'asks for ' + x);
+        });
+        assert.equal(f.filter(function (x) { return x === 'System.Tags'; }).length, 1, 'no duplicate columns');
+    });
+
+    test('agents#899: a Jira payload fetched with a fields filter is still passed through unchanged', function () {
+        var t = make('jira', { jira_get_ticket: recorder('jira_get_ticket', JSON.stringify({ key: 'A-1', fields: { labels: ['x'] } })) });
+        assert.equal(t.getIssue('A-1', ['labels']).key, 'A-1');
+    });
 });
 
 suite('trackers.js — moveToStatusOrMark / stageFallback (agents#856)', function () {
