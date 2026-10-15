@@ -2189,4 +2189,34 @@ suite('sm github source: validate-fresh-masked-green CLEAN arm (gh-829)', functi
         assert.deepEqual(items.map(function (i) { return i.key; }), ['pr-900', 'pr-901'],
             'the mergeStateLatch is inert on BLOCKED — guests keep the validation dispatch');
     });
+
+    test('review-on-issue-label rule exists in sm_github.json (issue-carried review arm)', function () {
+        // Live dead loop (dart gh-377, 2026-10-15): agent:review sat on the
+        // ISSUE while every review arm in the catalog is PR-carried — the PR
+        // carried no labels, the tick processed 0 for hours, the whole
+        // dart pipeline serialized behind one unreachable review. Mirrors
+        // rework's dual-carrier design (rework-on-red-ci is issue-carried,
+        // rework-on-label is PR-carried): review gets the same issue arm.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.rules || (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules)) || [];
+        var r = rules.filter(function (x) { return x.id === 'review-on-issue-label'; })[0];
+        assert.ok(r, 'review-on-issue-label present');
+        assert.equal(r.query.type, 'issue', 'matches the ISSUE carrier');
+        assert.deepEqual(r.query.labels, ['agent:review'],
+            'arms on the issue label only');
+        assert.equal(r.workflowFile, 'ai-teammate.yml', 'dispatches the review leg');
+        assert.equal(r.inputs.leg, 'review', 'leg=review');
+        assert.equal(r.inputs.issue, '{issueNumber}',
+            'issue-carried: the engine resolves the linked PR from the issue');
+        assert.equal(r.workflowRef, '{branch}', 'the leg runs on the PR head');
+        assert.deepEqual(r.query.notPrLabels, ['agent:review', 'pr_approved'],
+            'defers to the PR-carrier rule and skips concluded reviews');
+        assert.deepEqual(r.query.notLabels, ['agent:rework'],
+            'a PR sent to rework must not simultaneously arm a re-review (#683)');
+        // Catalog order: the PR-carrier arm must stay ahead of the issue one
+        // (RULE ORDER discipline — the closer anchor wins the tick).
+        var ids = rules.map(function (x) { return x.id; });
+        assert.ok(ids.indexOf('review-on-label') < ids.indexOf('review-on-issue-label'),
+            'review-on-label (PR carrier) precedes review-on-issue-label');
+    });
 });
