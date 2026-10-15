@@ -664,6 +664,34 @@
           "workflowRef": "{branch}"
         },
         {
+          "description": "GitHub issue: agent:review label on the ISSUE (review armed on the issue carrier — the mirror of rework's issue anchor rework-on-red-ci) with an OPEN linked PR -> review on demand. The engine resolves the linked PR from the issue ({issueNumber}); workflowRef={branch} runs the leg on the PR head so GitHub links the run to the PR. notPrLabels defers to the PR-carrier rule (review-on-label) and skips concluded reviews; agent:rework is excluded (#683) — a PR sent to rework must not simultaneously arm a re-review. Live dead loop this closes (dart gh-377, 2026-10-15): agent:review sat on the ISSUE, the PR carried no labels, every review arm in the catalog was PR-carried — the tick processed 0 for hours and the whole dart pipeline serialized behind one unreachable review. Review legs parallelize freely (limit 1 per label event; the arm persists until the verdict flow removes it, mirroring rework-on-red-ci's no-consumeLabels design).",
+          "source": "github",
+          "query": {
+            "type": "issue",
+            "labels": [
+              "agent:review"
+            ],
+            "notLabels": [
+              "agent:rework"
+            ],
+            "notPrLabels": [
+              "agent:review",
+              "pr_approved"
+            ],
+            "prState": "open",
+            "draft": false
+          },
+          "workflowFile": "ai-teammate.yml",
+          "inputs": {
+            "issue": "{issueNumber}",
+            "leg": "review",
+            "reason": "sm: agent:review label on issue"
+          },
+          "limit": 1,
+          "id": "review-on-issue-label",
+          "workflowRef": "{branch}"
+        },
+        {
           "description": "GitHub: linked PR merged → close the issue (cycle complete)",
           "source": "github",
           "query": {
