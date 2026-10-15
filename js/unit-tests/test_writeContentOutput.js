@@ -280,7 +280,8 @@ suite('writeContentOutput', function() {
             confluence_create_page: function(a) { return { id: 'p1', title: a.title, _links: { webui: '/wiki/x', base: 'https://c.example.com' } }; },
             confluence_sync_markdown_directory: function() { return JSON.stringify({ syncedPages: [] }); },
             jira_post_comment: function(a) { jiraComments.push(a); },
-            ado_add_work_item_comment: function(a) { adoComments.push(a); }
+            ado_add_work_item_comment: function(a) { adoComments.push(a); },
+            file_write: function() {}
         };
         var mod = loadWriteContentOutput(mocks, { confluence: { space: 'S', parentPageId: '1' } });
         var result = mod.action(makeParams({
@@ -482,6 +483,63 @@ suite('writeContentOutput uses the configured tracker for the field write (agent
         calls.forEach(function(c) { assert.contains(c, 'tracker', 'call does not pass the tracker: ' + c); });
     });
 });
+
+// ── Local helpers for the assignForReview suite (agents#874) ────────────────
+// These were written against test_trackers.js's helper set but the suite
+// lives here: define them locally so this file is self-contained (the dart
+// agents-gate runs the full suite; a missing helper = ReferenceError).
+function recorder(name, result) {
+    var calls = [];
+    var fn = function (args) {
+        calls.push(args);
+        if (result && result.__throw__) {
+            throw result.__throw__;
+        }
+        return typeof result === 'function' ? result(args) : result;
+    };
+    fn.calls = calls;
+    fn.toolName = name;
+    return fn;
+}
+
+var JIRA_TICKET = {
+    key: 'PROJ-1',
+    id: '10001',
+    fields: {
+        summary: 'Sample ticket',
+        status: { name: 'Open' },
+        assignee: null,
+        reporter: { name: 'reviewer', displayName: 'Reviewer' },
+        labels: [],
+        priority: { name: 'Major' }
+    }
+};
+
+/** Standard jira provider mock set (canonical jira_* tools). */
+function jiraMocks(opts) {
+    return {
+        jira_get_ticket: recorder('jira_get_ticket', JSON.stringify(JIRA_TICKET)),
+        jira_search_by_jql: recorder('jira_search_by_jql', JSON.stringify({
+            issues: [JIRA_TICKET]
+        })),
+        jira_post_comment: recorder('jira_post_comment', '{}'),
+        jira_get_comments: recorder('jira_get_comments', JSON.stringify({
+            comments: [{ author: { displayName: 'Reviewer' }, body: 'please fix', created: '2026-09-07T10:00:00.000+0000' }]
+        })),
+        jira_add_label: recorder('jira_add_label', '{}'),
+        jira_remove_label: opts && opts.removeLabelFails
+            ? recorder('jira_remove_label', { __throw__: new Error('label api down') })
+            : recorder('jira_remove_label', '{}'),
+        jira_move_to_status: recorder('jira_move_to_status', '{}'),
+        jira_assign_ticket_to: recorder('jira_assign_ticket_to', '{}'),
+        jira_create_ticket_basic: recorder('jira_create_ticket_basic', '{"key":"PROJ-9"}')
+    };
+}
+
+/** Mock-injecting trackers loader (name-compat with test_trackers.js). */
+function loadTrackers(mocks) {
+    return loadTrackersWc(mocks);
+}
 
 suite('assignForReview without an initiator (agents#874)', function() {
 
