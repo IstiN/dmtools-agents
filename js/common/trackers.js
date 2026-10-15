@@ -421,9 +421,27 @@ function createTracker(config, customParams) {
         return toIssueView(ado_get_work_item(args));
     }
 
+    // agents#899: Jira-style column names mapped to ADO reference names; Jira-only identity columns dropped
+    // (the id always comes back), and Title/State/Tags/Type are always requested so the result is a complete ADO
+    // item that normalizeTicket can turn into a key, on every dmtools version.
+    var ADO_SEARCH_COLUMNS = { labels: 'System.Tags', tags: 'System.Tags', summary: 'System.Title', title: 'System.Title',
+        status: 'System.State', state: 'System.State', description: 'System.Description' };
+
+    function adoSearchFields(fields) {
+        var out = ['System.Title', 'System.State', 'System.Tags', 'System.WorkItemType'];
+        for (var i = 0; i < (fields || []).length; i++) {
+            var raw = String(fields[i]);
+            var low = raw.toLowerCase();
+            if (low === 'key' || low === 'id') continue;
+            var mapped = ADO_SEARCH_COLUMNS[low] || raw;
+            if (out.indexOf(mapped) === -1) out.push(mapped);
+        }
+        return out;
+    }
+
     function adoSearchIssues(query, opts) {
         var args = { wiql: query };
-        if (opts && opts.fields) args.fields = opts.fields;
+        args.fields = adoSearchFields(opts && opts.fields);
         return _issueList(ado_search_by_wiql(args), 'value');
     }
 
@@ -719,6 +737,15 @@ function createTracker(config, customParams) {
      * deliberately not embedded — agents needing backend specifics should
      * call the provider tools directly.
      */
+    /** True when a payload's `fields` is an ADO field bag (any System.* reference name), whichever columns were asked for. */
+    function _isAdoFields(f) {
+        if (!f || typeof f !== 'object') return false;
+        for (var k in f) {
+            if (Object.prototype.hasOwnProperty.call(f, k) && String(k).indexOf('System.') === 0) return true;
+        }
+        return false;
+    }
+
     function normalizeTicket(rawTicket) {
         var t = _parseJson(rawTicket);
         if (!t || typeof t !== 'object' || typeof t === 'string') return null;
@@ -749,7 +776,7 @@ function createTracker(config, customParams) {
         }
 
         // ADO: { id, fields: { 'System.Title', 'System.State', ... } }
-        if (t.fields && t.fields['System.Title'] !== undefined) {
+        if (_isAdoFields(t.fields)) {
             var af = t.fields;
             return _extraFields(_flatTicket(
                 t.id != null ? String(t.id) : null,
@@ -819,7 +846,7 @@ function createTracker(config, customParams) {
         // Jira payload fetched with a fields filter (e.g. fields:['Description']) carries no summary —
         // still a Jira payload: pass it through unchanged (ADO items always carry System.Title).
         if (t && typeof t === 'object' && !Array.isArray(t) && t.fields && typeof t.fields === 'object' &&
-            t.fields['System.Title'] === undefined) return t;
+            !_isAdoFields(t.fields)) return t;
         var n = normalizeTicket(t);
         if (!n) return null;
         var fields = {
