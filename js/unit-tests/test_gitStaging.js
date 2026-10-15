@@ -22,7 +22,8 @@ var ALL_ARTIFACTS = [
     '.dmtools/run-output.txt',
     '.dmtools/stall-capture.log',
     '.dmtools/fa-sessions',
-    '.dmtools-session-output.log'
+    '.dmtools-session-output.log',
+    '.claude-session-id'
 ];
 
 suite('gitStaging', function() {
