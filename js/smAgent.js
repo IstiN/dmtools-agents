@@ -848,6 +848,56 @@ function runLocalAction(jsPath, ticket, agentParams) {
     var configLoaderCode = file_read({ path: 'agents/js/configLoader.js' });
     if (!configLoaderCode || !configLoaderCode.trim()) configLoaderCode = file_read({ path: 'js/configLoader.js' });
 
+    // gh-908: the sandbox used to answer every unrecognized require id with
+    // config.js exports, so any postJS action requiring the shared helper
+    // layer (tracker trio, autoStart chain, aiChat) died with a TypeError on
+    // its first member call — live on story_ba_check. Load the known helper
+    // sources with the same dual-read CWD pattern as config.js/scm.js, in
+    // dependency order, and resolve their ids explicitly in the shim below.
+    var helperModules = [
+        { id: 'ticketKeyShapes.js', varName: '_tks' },
+        { id: 'trackers.js', varName: '_tr' },
+        { id: 'tokenUsageComment.js', varName: '_tu' },
+        { id: 'aiChat.js', varName: '_ac' },
+        { id: 'validateInputJql.js', varName: '_vq' },
+        { id: 'buildEncodedConfig.js', varName: '_bc' },
+        { id: 'autoStart.js', varName: '_as' }
+    ];
+    var helperBlocks = '';
+    for (var hmi = 0; hmi < helperModules.length; hmi++) {
+        var helperModule = helperModules[hmi];
+        var helperCode = file_read({ path: 'agents/js/common/' + helperModule.id });
+        if (!helperCode || !helperCode.trim()) helperCode = file_read({ path: 'js/common/' + helperModule.id });
+        if (!helperCode || !helperCode.trim()) throw new Error('Cannot read: common/' + helperModule.id);
+        helperBlocks +=
+            '  var ' + helperModule.varName + ' = { exports: {} };\n' +
+            '  try {\n' +
+            '  (function(module, exports, require) {\n' + helperCode + '\n  })(' + helperModule.varName + ', ' + helperModule.varName + '.exports, _shim);\n' +
+            '  } catch (e) {\n' +
+            '    throw new Error("Failed to load localExecution helper ' + helperModule.id + ': " + (e.message || e));\n' +
+            '  }\n';
+    }
+
+    // One require shim for the helper modules AND the action: exact
+    // configLoader ids (plus the ../configLoader.js spelling used from
+    // common/), then a substring match per helper — consistent with the
+    // existing scm.js handling, ./trackers.js, common/trackers.js and bare
+    // trackers all resolve — then the config.js catch-all keeps unmatched
+    // ids working exactly as before.
+    var shimFn =
+        'function(id) {\n' +
+        '      if (id === "./configLoader.js" || id === "./configLoader" || id.indexOf("configLoader.js") !== -1) return _cl.exports;\n' +
+        '      if (id.indexOf("scm.js") !== -1) return _scm.exports;\n' +
+        '      if (id.indexOf("ticketKeyShapes.js") !== -1) return _tks.exports;\n' +
+        '      if (id.indexOf("trackers.js") !== -1) return _tr.exports;\n' +
+        '      if (id.indexOf("tokenUsageComment.js") !== -1) return _tu.exports;\n' +
+        '      if (id.indexOf("aiChat.js") !== -1) return _ac.exports;\n' +
+        '      if (id.indexOf("validateInputJql.js") !== -1) return _vq.exports;\n' +
+        '      if (id.indexOf("buildEncodedConfig.js") !== -1) return _bc.exports;\n' +
+        '      if (id.indexOf("autoStart.js") !== -1) return _as.exports;\n' +
+        '      return _cm.exports;\n' +
+        '    }';
+
     var script =
         '(function() {\n' +
         '  var _cm = { exports: {} };\n' +
@@ -858,14 +908,12 @@ function runLocalAction(jsPath, ticket, agentParams) {
         (configLoaderCode ?
         '  (function(module, exports, require) {\n' + configLoaderCode + '\n  })(_cl, _cl.exports, function(id) { return id.indexOf("scm.js") !== -1 ? _scm.exports : _cm.exports; });\n' :
         '') +
+        '  var _shim = ' + shimFn + ';\n' +
+        helperBlocks +
         '  var _am = { exports: {} };\n' +
         '  (function(module, exports, require) {\n' + actionCode + '\n  })(\n' +
         '    _am, _am.exports,\n' +
-        '    function(id) {\n' +
-        '      if (id === "./configLoader.js" || id === "./configLoader") return _cl.exports;\n' +
-        '      if (id.indexOf("scm.js") !== -1) return _scm.exports;\n' +
-        '      return _cm.exports;\n' +
-        '    }\n' +
+        '    _shim\n' +
         '  );\n' +
         '  return _am.exports;\n' +
         '})()';
@@ -6493,5 +6541,6 @@ if (typeof module !== 'undefined' && module.exports) {
         effectiveValidationConcurrency: effectiveValidationConcurrency,
         reportValidationCost: reportValidationCost,
         restoreReworkArm: restoreReworkArm,
-        auditReworkConsumption: auditReworkConsumption };
+        auditReworkConsumption: auditReworkConsumption,
+        runLocalAction: runLocalAction };
 }
