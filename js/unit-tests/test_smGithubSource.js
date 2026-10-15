@@ -2219,4 +2219,17 @@ suite('sm github source: validate-fresh-masked-green CLEAN arm (gh-829)', functi
         assert.ok(ids.indexOf('review-on-label') < ids.indexOf('review-on-issue-label'),
             'review-on-label (PR carrier) precedes review-on-issue-label');
     });
+
+    test('sm_github.json carries validationConcurrency=3 (parallel validations on the widened runner pool)', function () {
+        // Live stall (2026-10-15 sweep): the guest FIFO queued 6+ approved
+        // PRs while the pool sat 3-wide idle — the serial mutex (default 1)
+        // was the governor, not runner capacity. The knob (gh-837, clamped
+        // ≤5, watermark-gated) engages only at queue depth ≥ watermark(3),
+        // so thin queues keep the legacy serial window.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var p = (cfg.params && cfg.params.jobParams) || {};
+        assert.equal(p.validationConcurrency, 3, '3-wide validation window');
+        assert.ok(p.validationConcurrency >= 1 && p.validationConcurrency <= 5,
+            'inside the gh-837 clamp');
+    });
 });
