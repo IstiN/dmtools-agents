@@ -2232,4 +2232,38 @@ suite('sm github source: validate-fresh-masked-green CLEAN arm (gh-829)', functi
         assert.ok(p.validationConcurrency >= 1 && p.validationConcurrency <= 5,
             'inside the gh-837 clamp');
     });
+
+    test('rework-on-red-gate-unlatched rule exists (red gate arms rework, latch or no latch)', function () {
+        // Owner directive (2026-10-15): a red pre-merge gate MUST arm a
+        // rework leg — always. Live hole (dart 408, head 01a95d5, 18:11Z):
+        // a red CRAP-ratchet wave dispatched outside the ai_validating arm
+        // armed NOTHING (fail-validation is latch-gated), the follow-up
+        // green wave papered it over, and the PR sat blocked instead of
+        // entering rework round N+1. This rule is the unlatched twin:
+        // machine-authored PR + a concluded red required-gate run on the
+        // current head -> arm_rework (the PR-carrier rework-on-label then
+        // dispatches the leg). The latched case stays with fail-validation.
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.rules || (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules)) || [];
+        var r = rules.filter(function (x) { return x.id === 'rework-on-red-gate-unlatched'; })[0];
+        assert.ok(r, 'rework-on-red-gate-unlatched present');
+        assert.equal(r.query.type, 'pr', 'PR-carried');
+        assert.deepEqual(r.query.checks, ['red'], 'fires on a concluded red gate');
+        assert.ok(r.query.notLabels.indexOf('ai_validating') !== -1,
+            'the latched case belongs to fail-validation');
+        assert.ok(r.query.notLabels.indexOf('validation_failed') !== -1,
+            'no re-arm while the failure latch is fresh');
+        assert.ok(r.query.notLabels.indexOf('agent:rework') !== -1,
+            'no double-arm while a rework is already armed');
+        assert.equal(r.query.prMachineAuthor, true,
+            'auto-rework is machine-only (owner rule)');
+        assert.deepEqual(r.query.notMergeState, ['BEHIND', 'DIRTY'],
+            'stale waves on old heads are the silent-update\'s business');
+        assert.equal(r.localAction, 'arm_rework', 'arms via the shared arm path');
+        // Catalog order: directly after fail-validation (latched first, then
+        // the unlatched twin — RULE ORDER discipline).
+        var ids = rules.map(function (x) { return x.id; });
+        assert.ok(ids.indexOf('fail-validation') < ids.indexOf('rework-on-red-gate-unlatched'),
+            'fail-validation precedes its unlatched twin');
+    });
 });
