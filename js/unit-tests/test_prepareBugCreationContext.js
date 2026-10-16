@@ -119,7 +119,7 @@ suite('prepareBulkBugsCreationContext', function() {
         var loaded = loadPrepareBulkBugsCreationContext({
             jira_search_by_jql: function(args) {
                 loaded.calls.searches.push(args);
-                if (args.jql.indexOf('status = Failed') !== -1) {
+                if (args.jql.indexOf("status in ('Failed')") !== -1) {
                     return [{
                         key: 'TS-614',
                         fields: {
@@ -171,7 +171,7 @@ suite('prepareBulkBugsCreationContext', function() {
         var loaded = loadPrepareBulkBugsCreationContext({
             jira_search_by_jql: function(args) {
                 loaded.calls.searches.push(args);
-                if (args.jql.indexOf('status = Failed') !== -1) {
+                if (args.jql.indexOf("status in ('Failed')") !== -1) {
                     return [{
                         key: 'TS-800',
                         fields: {
@@ -206,7 +206,7 @@ suite('prepareBulkBugsCreationContext', function() {
         var loaded = loadPrepareBulkBugsCreationContext({
             jira_search_by_jql: function(args) {
                 loaded.calls.searches.push(args);
-                if (args.jql.indexOf('status = Failed') !== -1) {
+                if (args.jql.indexOf("status in ('Failed')") !== -1) {
                     // Verify the raw custom field ID is requested
                     assert.ok(args.fields.indexOf('customfield_10535') !== -1,
                         'raw customfield ID should be requested');
@@ -323,12 +323,12 @@ suite('creation automation queries follow jira.statuses when the project opts in
     test('bulk: default queries are exactly the previous ones', function() {
         var q = runBulk({});
         assert.ok(q.some(function(j) { return j === 'project = TS AND issuetype in (Bug) AND status not in (Done)'; }), JSON.stringify(q));
-        assert.ok(q.some(function(j) { return j.indexOf('issuetype = "Test Case" AND status = Failed AND (labels is EMPTY') !== -1; }), JSON.stringify(q));
+        assert.ok(q.some(function(j) { return j.indexOf('issuetype = "Test Case" AND status in (\'Failed\') AND (labels is EMPTY') !== -1; }), JSON.stringify(q));
     });
 
     test('bulk opt-in: Failed and Done both follow jira.statuses', function() {
         var q = runBulk({ useConfiguredStatusesInQueries: true, statuses: { FAILED: 'Test Failed', DONE: 'Closed' } });
-        assert.ok(q.some(function(j) { return j.indexOf('status = "Test Failed" AND (labels is EMPTY') !== -1; }), JSON.stringify(q));
+        assert.ok(q.some(function(j) { return j.indexOf("status in ('Test Failed') AND (labels is EMPTY") !== -1; }), JSON.stringify(q));
         assert.ok(q.some(function(j) { return j === 'project = TS AND issuetype in (Bug) AND status not in (Closed)'; }), JSON.stringify(q));
     });
 
@@ -338,7 +338,7 @@ suite('creation automation queries follow jira.statuses when the project opts in
             var cfg = { jira: { project: 'TS', parentTicket: '', statuses: configModule.STATUSES } };
             assert.equal(configLoaderModule.interpolateJql(cp.openBugsJql, cfg), 'project = TS AND issuetype in (Bug) AND status not in (Done)', f);
             if (cp.failedTCsJql) {
-                assert.contains(configLoaderModule.interpolateJql(cp.failedTCsJql, cfg), 'status = Failed AND');
+                assert.contains(configLoaderModule.interpolateJql(cp.failedTCsJql, cfg), "status in ('Failed') AND");
             }
         });
     });

@@ -102,3 +102,26 @@ suite('recoverFailedTCBugStatus', function() {
     });
 
 });
+
+// ── gh-916: stage-label fallback for the Bug To Fix recovery move ──
+
+suite('recoverFailedTCBugStatus: stage-label fallback (gh-916)', function() {
+    test("'label' mode: a rejected Bug To Fix move marks stage_bug_to_fix, no throw", function() {
+        var added = [];
+        var loaded = loadRecoverFailedTCBugStatus({
+            jira_search_by_jql: function() {
+                return [{ key: 'BUG-5', fields: { status: { name: 'New' } } }];
+            },
+            jira_move_to_status: function() { throw new Error('state rejected'); },
+            jira_add_label: function(args) { added.push(args); }
+        });
+
+        var result = loaded.mod.action({
+            ticket: { key: 'TS-500' },
+            jobParams: { customParams: { stageFallback: 'label' } }
+        });
+
+        assert.equal(result.action, 'moved_to_bug_to_fix');
+        assert.deepEqual(added, [{ key: 'TS-500', label: 'stage_bug_to_fix' }]);
+    });
+});

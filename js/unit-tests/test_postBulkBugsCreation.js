@@ -539,3 +539,36 @@ suite('postBulkBugsCreation', function() {
     });
 
 });
+
+suite('postBulkBugsCreation: stage-label fallback (gh-916)', function() {
+    test("'label' mode: a rejected Bug To Fix move marks stage_bug_to_fix, no throw, decision still recorded", function() {
+        var added = [];
+        var module = loadPostBulkBugsCreation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/bulk_bug_decisions.json') {
+                    return JSON.stringify({
+                        processed: ['TS-980'],
+                        links: [{ tcKey: 'TS-980', bugKey: 'BUG-1' }],
+                        newBugs: [],
+                        skipped: []
+                    });
+                }
+                return null;
+            },
+            jira_move_to_status: function(args) {
+                if (args.statusName === 'Bug To Fix') throw new Error('state rejected');
+                return {};
+            },
+            jira_add_label: function(args) { added.push(args); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-979' },
+            jobParams: { customParams: { stageFallback: 'label' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.results.linked.length, 1);
+        assert.deepEqual(added, [{ key: 'TS-980', label: 'stage_bug_to_fix' }]);
+    });
+});

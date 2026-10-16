@@ -86,16 +86,22 @@ function fetchLinkedTestCases(storyKey, testCaseType) {
     // JQL text: provider-specific query (WIQL on ado)
     var jql = 'issue in linkedIssues("' + storyKey + '") AND issuetype = "' + testCaseType + '"';
     try {
-        return getTracker().searchIssues(jql, { maxResults: 100, fields: ['key', 'status'] }) || [];
+        // gh-916: in label mode the final-status gate also reads stage markers, so labels are requested;
+        // 'none' mode sends the exact same fields list as before.
+        var fields = ['key', 'status'];
+        if (getTracker().stageFallback() === 'label') fields = fields.concat(['labels']);
+        return getTracker().searchIssues(jql, { maxResults: 100, fields: fields }) || [];
     } catch (e) {
         console.warn('Failed to fetch linked Test Cases for merge:', e);
         return [];
     }
 }
 
-function resolveFinalStatus(currentStatus, jiraConfig) {
-    if (currentStatus === jiraConfig.statuses.IN_REVIEW_PASSED) return jiraConfig.statuses.PASSED;
-    if (currentStatus === jiraConfig.statuses.IN_REVIEW_FAILED) return jiraConfig.statuses.FAILED;
+function resolveFinalStatus(tc, jiraConfig, tracker) {
+    // gh-916: hasStage also accepts the stage_<key> marker a rejected In Review - Passed/Failed
+    // transition left (jira.stageFallback 'label'); 'none' mode compares the status only.
+    if (tracker.hasStage(tc, 'IN_REVIEW_PASSED', jiraConfig.statuses.IN_REVIEW_PASSED)) return jiraConfig.statuses.PASSED;
+    if (tracker.hasStage(tc, 'IN_REVIEW_FAILED', jiraConfig.statuses.IN_REVIEW_FAILED)) return jiraConfig.statuses.FAILED;
     return null;
 }
 
@@ -104,17 +110,22 @@ function moveLinkedTestCases(storyKey, testCaseType, jiraConfig) {
     var moved = 0;
     var skipped = 0;
     testCases.forEach(function(tc) {
-        var currentStatus = tc.fields && tc.fields.status ? tc.fields.status.name : '';
-        var finalStatus = resolveFinalStatus(currentStatus, jiraConfig);
+        var finalStatus = resolveFinalStatus(tc, jiraConfig, getTracker());
         if (!finalStatus) {
-            console.log('Skipping linked TC', tc.key, '— current status', currentStatus);
+            console.log('Skipping linked TC', tc.key, '— current status', tc.fields && tc.fields.status ? tc.fields.status.name : '');
             skipped++;
             return;
         }
         try {
-            getTracker().moveToStatus(tc.key, finalStatus);
-            console.log('✅ Moved', tc.key, 'to', finalStatus);
-            moved++;
+            // gh-916: Passed/Failed can be tag-only (restricted ADO workflows) — stage-label fallback.
+            var result = getTracker().moveToStatusOrMark(tc.key, finalStatus,
+                finalStatus === jiraConfig.statuses.PASSED ? 'PASSED' : 'FAILED');
+            if (result.moved || result.marked) {
+                console.log('✅ Moved', tc.key, 'to', finalStatus);
+                moved++;
+            } else {
+                skipped++;
+            }
         } catch (e) {
             console.warn('Failed to move', tc.key, 'to', finalStatus, ':', e);
             skipped++;

@@ -12,19 +12,19 @@
         },
         {
           "description": "In Testing Stories (pr_approved) → merge test automation PR",
-          "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('{status.IN_TESTING:In Testing}') AND labels = 'pr_approved' ORDER BY created ASC",
+          "jql": "project = {jiraProject} AND issuetype in ('Story') AND {stage.IN_TESTING:In Testing} AND labels = 'pr_approved' ORDER BY created ASC",
           "configFile": "agents/story_test_automation_merge.json",
           "localExecution": true
         },
         {
           "description": "In Testing Bugs (pr_approved) → merge test automation PR",
-          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('{status.IN_TESTING:In Testing}') AND labels = 'pr_approved' ORDER BY created ASC",
+          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND {stage.IN_TESTING:In Testing} AND labels = 'pr_approved' ORDER BY created ASC",
           "configFile": "agents/bug_test_automation_merge.json",
           "localExecution": true
         },
         {
           "description": "In Review Test Cases (pr_approved) → retry merge",
-          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('{status.IN_REVIEW_PASSED:In Review - Passed}', '{status.IN_REVIEW_FAILED:In Review - Failed}') AND labels = 'pr_approved' ORDER BY created ASC",
+          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND ({stage.IN_REVIEW_PASSED:In Review - Passed} OR {stage.IN_REVIEW_FAILED:In Review - Failed}) AND labels = 'pr_approved' ORDER BY created ASC",
           "configFile": "agents/retry_merge_test.json",
           "localExecution": true
         }

@@ -159,8 +159,11 @@ function action(params) {
 
             try { tracker.postComment(ticketKey, comment); } catch (e) {}
             try {
-                tracker.moveToStatus(ticketKey, jiraConfig.statuses.PASSED);
-                console.log('✅ Tests pass — moved', ticketKey, 'to', jiraConfig.statuses.PASSED);
+                // gh-916: PASSED can be tag-only (restricted ADO workflows) — stage-label fallback.
+                var passMove = tracker.moveToStatusOrMark(ticketKey, jiraConfig.statuses.PASSED, 'PASSED');
+                if (passMove.moved || passMove.marked) {
+                    console.log('✅ Tests pass — moved', ticketKey, 'to', jiraConfig.statuses.PASSED);
+                }
             } catch (e) {
                 console.warn('Failed to move to Passed:', e);
             }
@@ -196,8 +199,11 @@ function action(params) {
         // Move TC to Bug To Fix after successful link or create
         if (bugLinked) {
             try {
-                tracker.moveToStatus(ticketKey, jiraConfig.statuses.BUG_TO_FIX);
-                console.log('✅ Moved', ticketKey, 'to', jiraConfig.statuses.BUG_TO_FIX);
+                // gh-916: BUG_TO_FIX can be tag-only (restricted ADO workflows) — stage-label fallback.
+                var b2fMove = tracker.moveToStatusOrMark(ticketKey, jiraConfig.statuses.BUG_TO_FIX, 'BUG_TO_FIX');
+                if (b2fMove.moved || b2fMove.marked) {
+                    console.log('✅ Moved', ticketKey, 'to', jiraConfig.statuses.BUG_TO_FIX);
+                }
             } catch (e) {
                 console.warn('Failed to move to Bug To Fix:', e);
             }

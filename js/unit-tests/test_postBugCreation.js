@@ -109,3 +109,58 @@ suite('postBugCreation', function() {
     });
 
 });
+
+suite('postBugCreation: stage-label fallback (gh-916)', function() {
+    test("'label' mode: tests_pass decision marks stage_passed when Passed is rejected, no throw", function() {
+        var added = [];
+        var moves = [];
+        var module = loadPostBugCreation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/bug_decision.json') {
+                    return JSON.stringify({ action: 'tests_pass', reason: 'green now' });
+                }
+                return null;
+            },
+            jira_move_to_status: function() { throw new Error("The field 'State' contains the value 'Passed' that is not in the list of supported values"); },
+            jira_add_label: function(args) { added.push(args); },
+            jira_post_comment: function(args) { moves.push(args); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-230' },
+            metadata: { contextId: 'bug_creation' },
+            jobParams: { customParams: { stageFallback: 'label', removeLabel: 'sm_bug_creation_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'tests_pass');
+        assert.deepEqual(added, [{ key: 'TS-230', label: 'stage_passed' }]);
+    });
+
+    test("'label' mode: link decision marks stage_bug_to_fix when Bug To Fix is rejected, no throw", function() {
+        var added = [];
+        var module = loadPostBugCreation({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/bug_decision.json') {
+                    return JSON.stringify({ action: 'link', existingKey: 'BUG-9' });
+                }
+                return null;
+            },
+            jira_move_to_status: function(args) {
+                if (args.statusName === 'Bug To Fix') throw new Error('state rejected');
+                return {};
+            },
+            jira_add_label: function(args) { added.push(args); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-231' },
+            metadata: { contextId: 'bug_creation' },
+            jobParams: { customParams: { stageFallback: 'label', removeLabel: 'sm_bug_creation_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.equal(result.action, 'link');
+        assert.deepEqual(added, [{ key: 'TS-231', label: 'stage_bug_to_fix' }], 'only the Bug To Fix stage is marked; Ready For Development exists everywhere');
+    });
+});

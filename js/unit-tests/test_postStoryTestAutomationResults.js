@@ -486,3 +486,79 @@ suite('postStoryTestAutomationResults: bulk result processing', function() {
     });
 
 });
+
+// ── gh-916: stage-label fallback for per-TC final/intermediate status moves ──
+
+suite('postStoryTestAutomationResults: stage-label fallback (gh-916)', function() {
+    function gh916StoryResult(resultJson, mocks) {
+        return loadPostStoryTestAutomationResults(Object.assign({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/story_test_automation_result.json') return JSON.stringify(resultJson);
+                if (opts.path === 'outputs/tracker_comment.md') return 'h3. Story Test Result';
+                return null;
+            },
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git branch --show-current') return 'test/TS-299';
+                if (opts.command === 'git status --short -- testing') return '';
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-299') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/TS-299';
+                if (opts.command.indexOf('gh pr list --head test/TS-299') === 0) return '';
+                if (opts.command.indexOf('gh pr create') === 0) return 'https://github.com/IstiN/trackstate/pull/299';
+                return '';
+            },
+            jira_post_comment: function() {},
+            jira_remove_label: function() {},
+            jira_update_field: function() {},
+            jira_attach_file_to_ticket: function() {}
+        }, mocks));
+    }
+
+    test("'label' mode: a rejected In Review - Failed move marks stage_in_review_failed, no throw", function() {
+        var added = [];
+        var moves = [];
+        var module = gh916StoryResult(
+            { overall: 'failed', results: [{ testCaseKey: 'TS-300', status: 'failed', testPath: 'testing/tests/TS-300/test.py' }] },
+            {
+                jira_move_to_status: function(args) {
+                    moves.push(args);
+                    throw new Error("The field 'State' contains the value 'In Review - Failed' that is not in the list of supported values");
+                },
+                jira_add_label: function(args) { added.push(args); }
+            }
+        );
+
+        var result = module.action({
+            ticket: { key: 'TS-299', fields: { issuetype: { name: 'Story' } } },
+            jobParams: { customParams: { stageFallback: 'label' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.ok(moves.some(function(m) { return m.statusName === 'In Review - Failed'; }));
+        assert.ok(added.some(function(a) { return a.key === 'TS-300' && a.label === 'stage_in_review_failed'; }));
+    });
+
+    test("'label' mode: skipped and irrelevant TCs get their stage markers when the move is rejected", function() {
+        var added = [];
+        var module = gh916StoryResult(
+            {
+                overall: 'passed',
+                results: [
+                    { testCaseKey: 'TS-301', status: 'skipped', testPath: 'testing/tests/TS-301/test.py' },
+                    { testCaseKey: 'TS-302', status: 'irrelevant' }
+                ]
+            },
+            {
+                jira_move_to_status: function() { throw new Error('state rejected'); },
+                jira_add_label: function(args) { added.push(args); }
+            }
+        );
+
+        var result = module.action({
+            ticket: { key: 'TS-299', fields: { issuetype: { name: 'Story' } } },
+            jobParams: { customParams: { stageFallback: 'label' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.ok(added.some(function(a) { return a.key === 'TS-301' && a.label === 'stage_skipped'; }));
+        assert.ok(added.some(function(a) { return a.key === 'TS-302' && a.label === 'stage_irrelevant'; }));
+    });
+});

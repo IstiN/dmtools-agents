@@ -19,7 +19,8 @@ function action(params) {
 
         console.log('Moving ' + ticketKey + ' to ' + jiraConfig.statuses.IN_TESTING);
 
-        tracker.moveToStatus(ticketKey, jiraConfig.statuses.IN_TESTING);
+        // gh-916: IN_TESTING can be tag-only (restricted ADO workflows) — stage-label fallback in 'label' mode.
+        var moveResult = tracker.moveToStatusOrMark(ticketKey, jiraConfig.statuses.IN_TESTING, 'IN_TESTING');
 
         try {
             tracker.removeLabel(ticketKey, 'sm_test_cases_triggered');
@@ -27,7 +28,9 @@ function action(params) {
             console.log('Label sm_test_cases_triggered not found or already removed');
         }
 
-        console.log('✅ ' + ticketKey + ' moved to ' + jiraConfig.statuses.IN_TESTING);
+        if (moveResult.moved || moveResult.marked) {
+            console.log('✅ ' + ticketKey + ' moved to ' + jiraConfig.statuses.IN_TESTING);
+        }
 
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.
