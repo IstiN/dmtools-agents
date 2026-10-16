@@ -33,7 +33,11 @@
  *   the slot"): disables the validate-arm red-head skip. Recording of red heads on the
  *   fail reports continues (audit trail); only the arm-side skip goes dark. A rule can
  *   also opt out alone with rule.redHeadSkip = false. jobParams.redHeadCap (default 3)
- *   tunes how many reds on the SAME head SHA block the re-arm.
+ *   tunes how many reds on the SAME head SHA block the re-arm. The SAME budget bounds
+ *   the red-gate rework arm (rule.redHeadGated — rework-on-red-gate-unlatched, gh-917):
+ *   that arm_rework path records the shared 🔴 marker history and, at redHeadCap reds
+ *   on an unchanged head, withholds the arm and escalates the owner once per head
+ *   (🛑 marker comment — no infinite retry on unfixable-without-toolchain violations).
  *   jobParams.emptyLapMax (default 1, review #703 retune — was 2) — after this many
  *   consecutive EMPTY rework laps on the same head (a lap that closes itself successful
  *   without moving the head — live fa#1211 run 37196297279), fail_validation withholds
