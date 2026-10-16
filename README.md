@@ -863,6 +863,9 @@ warmup-session.sh --repo <git-url> --dir <target-dir> [--branch <name>] \
 - `--exclude` — space-separated tool names to skip (forwarded to `setup/install.sh all`
   as `-tool1 -tool2 ...`; see `setup/install.sh` for the full tool list: `java maven node
   dmtools maestro copilot codemie cursor codegraph playwright kimi gradle android konan dart`).
+  Non-Dart targets should pass `--exclude dart` — `install.sh all` now provisions the Dart
+  SDK everywhere (~215 MB download, ~1 GB under `~/.dart-sdk`); `install.sh <tools>` runs
+  unaffected.
 - `--install-args` — extra raw arguments appended to the `install.sh` invocation.
 
 It does **not** create or touch a `dmtools.env` file and does **not** run the agent
