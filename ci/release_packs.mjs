@@ -115,7 +115,9 @@ function setupTouched() {
       // the pack landing first).
       f === 'scripts/apply-review-verdict.sh' ||
       f === 'scripts/close-review-cycle.sh' ||
-      f === 'scripts/close-rework-cycle.sh',
+      f === 'scripts/close-rework-cycle.sh' ||
+      f === 'scripts/hand-issue-to-reviewer.sh' ||
+      f === 'scripts/publish-token-usage.sh',
   );
 }
 
@@ -137,6 +139,8 @@ function buildFactorySetup() {
       'apply-review-verdict.sh',
       'close-review-cycle.sh',
       'close-rework-cycle.sh',
+      'hand-issue-to-reviewer.sh',
+      'publish-token-usage.sh',
     ]) {
       copyFileSync(join(ROOT, 'scripts', engineScript), join(staging, 'scripts', engineScript));
     }
