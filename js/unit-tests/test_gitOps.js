@@ -9,6 +9,10 @@
  */
 
 var gitStagingModuleForGitOps = loadModule('js/common/gitStaging.js');
+// Real PR helper (gh-912): the remote-existence probes live there — the
+// strict ref-line parser must be exercised, not a stub.
+var prHelperRealForGitOps = loadModule('js/common/pullRequest.js',
+    makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }));
 
 function loadGitOps(mocks) {
     return loadModule(
@@ -17,30 +21,7 @@ function loadGitOps(mocks) {
             '../config.js': configModule,
             'config': configModule,
             './gitStaging.js': gitStagingModuleForGitOps,
-            './pullRequest.js': {
-                buildTargetedOriginFetchCommand: function(branches) {
-                    var list = (branches || []).filter(function(b) { return b; });
-                    if (!list.length) return null;
-                    return 'git -c fetch.recurseSubmodules=no fetch origin ' + list.map(function(b) {
-                        return '+refs/heads/' + b + ':refs/remotes/origin/' + b;
-                    }).join(' ');
-                },
-                buildOriginFetchCommand: function(refSpec) {
-                    return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
-                },
-                ensureRemoteBranchRef: function(runCommand, workingDir, branchName) {
-                    if (!branchName) return false;
-                    try {
-                        runCommand(
-                            'git -c fetch.recurseSubmodules=no fetch origin +refs/heads/' + branchName + ':refs/remotes/origin/' + branchName,
-                            workingDir
-                        );
-                        return true;
-                    } catch (e) {
-                        return false;
-                    }
-                }
-            }
+            './pullRequest.js': prHelperRealForGitOps
         }),
         mocks || {}
     );
@@ -57,7 +38,7 @@ suite('gitOps.checkoutPRBranch', function() {
                     return branchExists ? '  ai/TS-1268\nCOMMAND_EXIT_CODE=0' : '\nCOMMAND_EXIT_CODE=0';
                 }
                 if (args.command === 'git ls-remote --heads origin ai/TS-1268') {
-                    return 'abc123\trefs/heads/ai/TS-1268\nCOMMAND_EXIT_CODE=0';
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/ai/TS-1268\nCOMMAND_EXIT_CODE=0';
                 }
                 if (args.command === 'git -c fetch.recurseSubmodules=no fetch origin ai/TS-1268:ai/TS-1268') {
                     branchExists = true;
@@ -349,4 +330,62 @@ suite('gitOps.writePRContext — resolved threads filtered from pr_discussions_r
         assert.equal(raw.threads.length, 1);
         assert.equal(raw.threads[0].threadId, 'A');
     });
+});
+
+// ── gh-912: _switchToBranch decides on ref lines, never on stderr noise ──────
+// preCliReworkSetup.js:426-428 wraps checkoutPRBranch in failSetup — a
+// warning-only `git ls-remote` capture (central-mode insteadOf origin, git ≥
+// 2.54) used to be read as "branch exists on remote" and died mid-fetch /
+// mid-checkout with a fatal. AC2: with the branch genuinely absent, the
+// decision must be the explicit "Branch not found locally or remotely";
+// with warning + real ref line (AC3), the checkout proceeds.
+
+suite('gitOps._switchToBranch — warning-only ls-remote captures (gh-912)', function() {
+
+    var WARNING = 'warning: redirecting to https://git.example.com/\n';
+
+    test('AC2: warning-only capture + absent branch → explicit not-found decision, no fatal mid-checkout', function() {
+        var commands = [];
+        var gitOps = loadGitOps({
+            cli_execute_command: function(args) {
+                commands.push(args.command);
+                if (args.command === 'git status --porcelain') return '\nCOMMAND_EXIT_CODE=0';
+                if (args.command === 'git branch --list "ai/TS-1268"') return '\nCOMMAND_EXIT_CODE=0';
+                if (args.command === 'git ls-remote --heads origin ai/TS-1268') return WARNING;
+                if (args.command === 'git checkout -b ai/TS-1268 origin/ai/TS-1268') {
+                    throw new Error('fatal: \'origin/ai/TS-1268\' is not a commit');
+                }
+                return 'COMMAND_EXIT_CODE=0';
+            }
+        });
+
+        var err = null;
+        try { gitOps.checkoutPRBranch('ai/TS-1268'); } catch (e) { err = e; }
+
+        assert.ok(err, 'a genuinely absent branch must still be reported');
+        assert.contains(err.message, 'Branch not found locally or remotely',
+            'the decision must come from strict ref-line parsing, not from a fatal checkout — got: ' + err.message);
+    });
+
+    test('AC3: warning + real ref line → branch is checked out (noise tolerated, both merge orders)', function() {
+        var refLine = '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/ai/TS-1268';
+        [WARNING + refLine, refLine + '\n' + WARNING.replace('\n', '')].forEach(function(capture) {
+            var commands = [];
+            var gitOps = loadGitOps({
+                cli_execute_command: function(args) {
+                    commands.push(args.command);
+                    if (args.command === 'git status --porcelain') return '\nCOMMAND_EXIT_CODE=0';
+                    if (args.command === 'git branch --list "ai/TS-1268"') return '\nCOMMAND_EXIT_CODE=0';
+                    if (args.command === 'git ls-remote --heads origin ai/TS-1268') return capture;
+                    return 'COMMAND_EXIT_CODE=0';
+                }
+            });
+
+            gitOps.checkoutPRBranch('ai/TS-1268');
+
+            assert.ok(commands.indexOf('git checkout -b ai/TS-1268 origin/ai/TS-1268') !== -1,
+                'an existing remote branch (noise-polluted capture) must still be checked out, got: ' + JSON.stringify(commands));
+        });
+    });
+
 });
