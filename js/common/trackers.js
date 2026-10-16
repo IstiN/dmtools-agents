@@ -965,6 +965,37 @@ function createTracker(config, customParams) {
     var stageFallback = String(stageFallbackRaw).toLowerCase() === 'label' ? 'label' : 'none';
 
     var _stageLabel = stageLabelOf;
+    var STAGE_LABEL_PREFIX = _stageLabel('');   // 'stage_'
+
+    /**
+     * agents#907: every stage marker that must go once a hand-off progresses. The caller-supplied
+     * previousStageKey alone is not enough — a skipped stage or a mismatched previous key left the old
+     * marker behind, so the ticket carried two stage_* labels and the SM re-selected it. Reads the
+     * ticket's labels (label mode only) and returns all stage_* labels except `keepLabel`; the
+     * previous-stage label is always included so the old contract holds even when the read fails.
+     */
+    function _staleStageLabels(ticketKey, keepLabel, previousStageKey) {
+        var stale = [];
+        function add(l) { if (l && l !== keepLabel && stale.indexOf(l) === -1) stale.push(l); }
+        if (previousStageKey) add(_stageLabel(previousStageKey));
+        try {
+            var ticket = normalizeTicket(impl.getTicket(ticketKey));
+            var labels = (ticket && ticket.labels) || [];
+            for (var i = 0; i < labels.length; i++) {
+                var l = String(labels[i]);
+                if (l.indexOf(STAGE_LABEL_PREFIX) === 0) add(l);
+            }
+        } catch (e) {
+            console.warn('Could not read labels of ' + ticketKey + ' for stage-label cleanup (non-fatal):', e && e.message ? e.message : e);
+        }
+        return stale;
+    }
+
+    function _removeLabels(ticketKey, labels) {
+        for (var i = 0; i < labels.length; i++) {
+            try { impl.removeLabel(ticketKey, labels[i]); } catch (e) { /* label may already be gone */ }
+        }
+    }
 
     /**
      * Moves the ticket to a stage status; when the tracker rejects the transition and the fallback is
@@ -975,15 +1006,17 @@ function createTracker(config, customParams) {
      * @param {string} ticketKey
      * @param {string} statusName  the status to move to
      * @param {string} stageKey    stable stage name used for the label (e.g. 'PO_REVIEW')
-     * @param {string} [previousStageKey] stage whose label is removed after a successful mark
+     * @param {string} [previousStageKey] optional, kept for compatibility: its label is always removed; in
+     *        'label' mode every other stale stage_* label on the ticket is removed as well (agents#907)
      */
     function moveToStatusOrMark(ticketKey, statusName, stageKey, previousStageKey) {
         try {
             impl.moveToStatus(ticketKey, statusName);
-            if (previousStageKey && stageFallback === 'label') {
-                // the ticket advanced for real: a stage marker left by an earlier rejected hand-off is stale
-                // and would make the SM select it again. Only in 'label' mode, so the default adds no API call.
-                try { impl.removeLabel(ticketKey, _stageLabel(previousStageKey)); } catch (e) { /* label may not exist */ }
+            if (stageFallback === 'label') {
+                // the ticket advanced for real: every stage marker left by earlier rejected hand-offs is
+                // stale and would make the SM select it again (agents#907 sweep). Only in 'label' mode,
+                // so the default adds no API call.
+                _removeLabels(ticketKey, _staleStageLabels(ticketKey, null, previousStageKey));
             }
             return { moved: true, marked: false, label: null, error: null };
         } catch (moveError) {
@@ -1000,9 +1033,8 @@ function createTracker(config, customParams) {
                     ') and the stage label "' + label + '" could not be added: ' +
                     String((labelError && (labelError.message || labelError)) || labelError));
             }
-            if (previousStageKey) {
-                try { impl.removeLabel(ticketKey, _stageLabel(previousStageKey)); } catch (e) { /* previous label may not exist */ }
-            }
+            // agents#907: the new marker is now the only valid one — drop every other stage_* label.
+            _removeLabels(ticketKey, _staleStageLabels(ticketKey, label, previousStageKey));
             try {
                 impl.postComment(ticketKey, 'Could not move this ticket to "' + statusName + '" (' + reason +
                     '). The stage is recorded with the label `' + label + '` instead.');

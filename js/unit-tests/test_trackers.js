@@ -1213,6 +1213,17 @@ suite('trackers.js — moveToStatusOrMark / stageFallback (agents#856)', functio
         assert.equal(r.marked, true);
     });
 
+    test('agents#907 "label": a fallback mark keeps only the new marker — any other stale stage_* label is removed', function () {
+        var m = jiraMocks();
+        m.jira_move_to_status = recorder('jira_move_to_status', { __throw__: new Error('rejected') });
+        m.jira_get_ticket = recorder('jira_get_ticket', JSON.stringify({ key: 'PS-1', fields: { summary: 's', labels: ['stage_po_review', 'stage_in_review', 'wip'] } }));
+        var t = loadTrackers(m).createTracker({}, { trackerProvider: 'jira', stageFallback: 'label' });
+        // skipped stage: the caller passes BA_ANALYSIS, but the ticket was stuck at PO_REVIEW
+        var r = t.moveToStatusOrMark('PS-1', 'In Review', 'IN_REVIEW', 'BA_ANALYSIS');
+        assert.equal(r.label, 'stage_in_review');
+        assert.deepEqual(m.jira_remove_label.calls.map(function (c) { return c.label; }), ['stage_ba_analysis', 'stage_po_review']);
+    });
+
     test('stage keys are normalized into safe labels', function () {
         var x = setup({ customParams: { stageFallback: 'label' } });
         assert.equal(x.t.moveToStatusOrMark('PS-1', 'In Review - Passed', 'In Review - Passed').label, 'stage_in_review_passed');
@@ -1254,6 +1265,35 @@ suite('trackers.js — stage label cleanup on a successful move (agents#855/#856
         var x = t('label');
         x.t.moveToStatusOrMark('PS-1', 'BA Analysis', 'BA_ANALYSIS');
         assert.equal(x.m.jira_remove_label.calls.length, 0);
+    });
+    test('agents#907 label mode: a successful move sweeps every stage_* label, not only the previous one', function () {
+        var m = jiraMocks();
+        m.jira_get_ticket = recorder('jira_get_ticket', JSON.stringify({ key: 'PS-1', fields: { summary: 's', labels: ['backend', 'stage_po_review', 'stage_ba_analysis'] } }));
+        var tr = loadTrackers(m).createTracker({}, { trackerProvider: 'jira', stageFallback: 'label' });
+        tr.moveToStatusOrMark('PS-1', 'In Development', 'IN_DEVELOPMENT', 'SOLUTION_ARCHITECTURE');
+        var removed = m.jira_remove_label.calls.map(function (c) { return c.label; });
+        assert.deepEqual(removed, ['stage_solution_architecture', 'stage_po_review', 'stage_ba_analysis']);
+    });
+    test('agents#907 label mode: works without previousStageKey (caller does not need to know the stuck stage)', function () {
+        var m = jiraMocks();
+        m.jira_get_ticket = recorder('jira_get_ticket', JSON.stringify({ key: 'PS-1', fields: { summary: 's', labels: ['stage_po_review'] } }));
+        var tr = loadTrackers(m).createTracker({}, { trackerProvider: 'jira', stageFallback: 'label' });
+        tr.moveToStatusOrMark('PS-1', 'BA Analysis', 'BA_ANALYSIS');
+        assert.deepEqual(m.jira_remove_label.calls.map(function (c) { return c.label; }), ['stage_po_review']);
+    });
+    test('agents#907 label mode: a failing label read falls back to removing only the previous stage label', function () {
+        var m = jiraMocks();
+        m.jira_get_ticket = recorder('jira_get_ticket', { __throw__: new Error('read down') });
+        var tr = loadTrackers(m).createTracker({}, { trackerProvider: 'jira', stageFallback: 'label' });
+        assert.equal(tr.moveToStatusOrMark('PS-1', 'BA Analysis', 'BA_ANALYSIS', 'PO_REVIEW').moved, true);
+        assert.deepEqual(m.jira_remove_label.calls.map(function (c) { return c.label; }), ['stage_po_review']);
+    });
+    test('agents#907 default mode: no label read and no removal on a successful move', function () {
+        var m = jiraMocks();
+        var tr = loadTrackers(m).createTracker({}, { trackerProvider: 'jira' });
+        tr.moveToStatusOrMark('PS-1', 'BA Analysis', 'BA_ANALYSIS', 'PO_REVIEW');
+        assert.equal(m.jira_get_ticket.calls.length, 0);
+        assert.equal(m.jira_remove_label.calls.length, 0);
     });
     test('label mode: a failing cleanup never fails a successful move', function () {
         var m = jiraMocks({ removeLabelFails: true });
