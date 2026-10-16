@@ -1914,8 +1914,10 @@ suite('sm github source: validate-fresh-masked-green (gh-759 dead zone)', functi
 
         var items = srcMod.query(RULE, { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
 
-        assert.deepEqual(items.map(function (i) { return i.key; }), ['pr-1305'],
+        assert.equal(items[0].key, 'pr-1305',
             'limit 1 paces the wave — the OLDEST masked-green head first (validate-fresh pacing)');
+        assert.deepEqual(items.slice(1).map(function (i) { return i.key; }), ['pr-1314'],
+            'the tail is the gh-922 fallthrough reserve — reachable only when the head candidate yields');
 
         var wave = srcMod.query(Object.assign({}, RULE, { limit: 10 }),
             { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
@@ -2045,8 +2047,10 @@ suite('sm github source: validate-fresh-masked-green CLEAN arm (gh-829)', functi
             'with and without the latch (gh-759 author-agnostic contract)');
 
         var one = srcMod.query(RULE, { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
-        assert.deepEqual(one.map(function (i) { return i.key; }), ['pr-826'],
+        assert.equal(one[0].key, 'pr-826',
             'limit 1 paces the wave — the oldest dead-zone head first, same dev-lane pacing');
+        assert.deepEqual(one.slice(1).map(function (i) { return i.key; }), ['pr-835', 'pr-836'],
+            'the tail is the gh-922 fallthrough reserve — the engine still dispatches only the head');
     });
 
     test('the pre-gh-829 deployed query could not arm pr-826 — the bug this fixes', function () {

@@ -107,10 +107,11 @@ function triggerFailMarkerLine(count, branch, cap, atIso) {
  * (the engine's fail-open slot yield is independent of this cap).
  */
 function capOf(jobParams) {
-    if (String((jobParams || {}).triggerFailParkCap) === 'false') return 0;
-    var n = (jobParams || {}).triggerFailParkCap;
-    n = typeof n === 'string' ? parseInt(n, 10) : n;
-    if (typeof n !== 'number' || isNaN(n) || n <= 0) return 3;
+    var raw = (jobParams || {}).triggerFailParkCap;
+    if (raw === undefined || raw === null || raw === '') return 3; // unset → default
+    if (typeof raw === 'string' && /false/i.test(raw)) return 0;   // explicit disable
+    var n = typeof raw === 'string' ? parseInt(raw, 10) : raw;
+    if (typeof n !== 'number' || isNaN(n) || n <= 0) return 0;     // 0 / negative = disable
     return Math.floor(n);
 }
 

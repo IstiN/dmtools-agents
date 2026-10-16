@@ -129,6 +129,18 @@ var DEFAULT_PRIORITY_LABELS = {
 };
 var PRIORITY_RANKS = { blocker: 0, medium: 1, low: 2 };
 
+// gh-922: the sticky-park label (shared vocabulary with smAgent's
+// validation_failed park) — a parked item's blocker tier is voided so a
+// park can never preempt the FIFO.
+var PARKED_LABEL = 'validation_failed';
+
+// gh-922 (fail-open dispatch): how many EXTRA tier-sorted candidates
+// queryPrs returns past `limit` so the engine loop can fall through to
+// the next candidate in the same tick when a trigger fails (422 no-ref).
+// The engine's processedKeys cap still bounds successful dispatches at
+// `limit` — the reserve is only reachable when earlier candidates yield.
+var TRIGGER_FALLTHROUGH_RESERVE = 3;
+
 // Defensive twin of smAgent's resolvePriorityLabels: the ctx knob arrives
 // pre-validated, but this source is also called directly (tests, forges) —
 // anything that is not a non-empty string keeps the default name.
@@ -770,6 +782,16 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
         var pl = resolvePriorityLabels(priorityLabels);
         matched.forEach(function (item) {
             item.priorityTier = priorityTier(item, pl, repoInfo);
+            // gh-922 (parked items don't preempt): the sticky
+            // validation_failed park voids the blocker tier to medium, so
+            // a parked PR waits in plain FIFO order instead of jumping the
+            // queue it can no longer be dispatched against — consistent
+            // with the park's existing rule (parked PRs leave the
+            // merge-window lanes entirely).
+            if (item.priorityTier === 'blocker' &&
+                (item.labels || []).indexOf(PARKED_LABEL) !== -1) {
+                item.priorityTier = 'medium';
+            }
             item.priorityRank = PRIORITY_RANKS[item.priorityTier];
         });
         matched.sort(function (a, b) {
@@ -796,7 +818,16 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
         matched.sort(function (a, b) { return (a.prNumber || 0) - (b.prNumber || 0); });
     }
 
-    return matched.slice(0, limit);
+    // gh-922 (fail-open dispatch): return the limit slots PLUS a small
+    // fallthrough reserve. The engine loop gives failed candidates no
+    // slot credit (processedKeys only grows on success), so when a
+    // candidate's trigger fails (422 no-ref — deleted head ref, live fa
+    // pr-1615) the loop walks into the reserve and the NEXT candidate
+    // gets the slot in the SAME tick; when nothing fails, the loop's
+    // processedKeys cap still bounds successful dispatches at `limit`.
+    // Pre-fix the slice stopped at `limit`, so a limit:1 rule returned
+    // ONLY the dead head and the whole FIFO starved behind it.
+    return matched.slice(0, limit + TRIGGER_FALLTHROUGH_RESERVE);
 }
 
 if (typeof module !== 'undefined' && module.exports) {
