@@ -213,3 +213,58 @@ suite('checkBugToFixReady', function() {
     });
 
 });
+
+// ── gh-916: stage-label fallback — Ready For Testing is markable; Backlog stays direct ──
+
+suite('checkBugToFixReady: stage-label fallback (gh-916)', function() {
+    test("'label' mode: a rejected Ready For Testing move marks stage_ready_for_testing, no throw", function() {
+        var added = [];
+        var moved = [];
+        var module = loadCheckBugToFixReady({
+            jira_search_by_jql: function(args) {
+                if (args.jql.indexOf('status != "Done"') !== -1) return [];
+                return [{ key: 'BUG-2', fields: { summary: 's', status: { name: 'Done' } } }];
+            },
+            jira_move_to_status: function(args) {
+                moved.push(args);
+                throw new Error("The field 'State' contains the value 'Ready For Testing' that is not in the list of supported values");
+            },
+            jira_add_label: function(args) { added.push(args); },
+            jira_post_comment: function() {},
+            jira_remove_label: function() {}
+        });
+
+        var result = module.action({
+            ticket: makeTicket('TS-95', 'Story'),
+            jobParams: { customParams: { stageFallback: 'label', removeLabel: 'sm_bug_to_fix_check_triggered' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.deepEqual(moved, [{ key: 'TS-95', statusName: 'Ready For Testing' }]);
+        assert.deepEqual(added, [{ key: 'TS-95', label: 'stage_ready_for_testing' }]);
+    });
+
+    test("'label' mode: the Backlog move for a Test Case stays a direct transition (no marker)", function() {
+        var added = [];
+        var moved = [];
+        var module = loadCheckBugToFixReady({
+            jira_search_by_jql: function(args) {
+                if (args.jql.indexOf('status != "Done"') !== -1) return [];
+                return [{ key: 'BUG-3', fields: { summary: 's', status: { name: 'Done' } } }];
+            },
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_add_label: function(args) { added.push(args); },
+            jira_post_comment: function() {},
+            jira_remove_label: function() {}
+        });
+
+        var result = module.action({
+            ticket: makeTicket('TS-96', 'Test Case'),
+            jobParams: { customParams: { stageFallback: 'label', removeLabel: 'sm_bug_to_fix_check_triggered' } }
+        });
+
+        assert.equal(result.action, 'moved_to_backlog');
+        assert.deepEqual(moved, [{ key: 'TS-96', statusName: 'Backlog' }]);
+        assert.deepEqual(added, [], 'Backlog is not a tag-only stage — no marker');
+    });
+});

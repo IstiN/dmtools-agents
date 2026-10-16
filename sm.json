@@ -73,14 +73,14 @@
         },
         {
           "description": "Failed Test Cases with linked Bugs → recover Bug To Fix",
-          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('{status.FAILED:Failed}') ORDER BY updated ASC",
+          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND {stage.FAILED:Failed} ORDER BY updated ASC",
           "configFile": "agents/recover_failed_tc_bug_status.json",
           "localExecution": true,
           "enabled": true
         },
         {
           "description": "Failed Test Cases → create or link bugs in batch",
-          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('{status.FAILED:Failed}') AND (labels is EMPTY OR labels NOT IN ('sm_bug_creation_triggered')) ORDER BY created ASC",
+          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND {stage.FAILED:Failed} AND (labels is EMPTY OR labels NOT IN ('sm_bug_creation_triggered')) ORDER BY created ASC",
           "configFile": "agents/bulk_bugs_creation.json",
           "concurrencyKey": "bulk_bugs_creation",
           "skipIfLabel": "sm_bulk_bugs_creation_triggered",
@@ -138,28 +138,28 @@
         },
         {
           "description": "In Review Test Cases (pr_approved) → retry merge",
-          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('{status.IN_REVIEW_PASSED:In Review - Passed}', '{status.IN_REVIEW_FAILED:In Review - Failed}') AND labels = 'pr_approved' ORDER BY created ASC",
+          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND ({stage.IN_REVIEW_PASSED:In Review - Passed} OR {stage.IN_REVIEW_FAILED:In Review - Failed}) AND labels = 'pr_approved' ORDER BY created ASC",
           "configFile": "agents/retry_merge_test.json",
           "localExecution": true,
           "enabled": true
         },
         {
           "description": "In Testing Stories (pr_approved) → merge test automation PR",
-          "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('{status.IN_TESTING:In Testing}') AND labels = 'pr_approved' ORDER BY created ASC",
+          "jql": "project = {jiraProject} AND issuetype in ('Story') AND {stage.IN_TESTING:In Testing} AND labels = 'pr_approved' ORDER BY created ASC",
           "configFile": "agents/story_test_automation_merge.json",
           "localExecution": true,
           "enabled": true
         },
         {
           "description": "In Testing Bugs (pr_approved) → merge test automation PR",
-          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('{status.IN_TESTING:In Testing}') AND labels = 'pr_approved' ORDER BY created ASC",
+          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND {stage.IN_TESTING:In Testing} AND labels = 'pr_approved' ORDER BY created ASC",
           "configFile": "agents/bug_test_automation_merge.json",
           "localExecution": true,
           "enabled": true
         },
         {
           "description": "Merged Stories → Ready For Testing + generate test cases",
-          "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('{status.MERGED:Merged}')",
+          "jql": "project = {jiraProject} AND issuetype in ('Story') AND {stage.MERGED:Merged}",
           "targetStatus": "Ready For Testing",
           "configFile": "agents/test_cases_generator.json",
           "skipIfLabel": "sm_test_cases_triggered",
@@ -168,7 +168,7 @@
         },
         {
           "description": "Merged Bugs → Ready For Testing",
-          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('{status.MERGED:Merged}')",
+          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND {stage.MERGED:Merged}",
           "targetStatus": "Ready For Testing",
           "configFile": "agents/bug_merged.json",
           "skipIfLabel": "sm_bug_merged_triggered",
@@ -177,7 +177,7 @@
         },
         {
           "description": "Ready For Testing Bugs → generate test cases",
-          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('{status.READY_FOR_TESTING:Ready For Testing}') AND (labels is EMPTY OR labels NOT IN ('sm_bug_test_cases_triggered'))",
+          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND {stage.READY_FOR_TESTING:Ready For Testing} AND (labels is EMPTY OR labels NOT IN ('sm_bug_test_cases_triggered'))",
           "configFile": "agents/bug_test_cases_generator.json",
           "skipIfLabel": "sm_bug_test_cases_triggered",
           "addLabel": "sm_bug_test_cases_triggered",
@@ -185,7 +185,7 @@
         },
         {
           "description": "Ready For Testing Bugs → automate linked test cases in bulk",
-          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('{status.READY_FOR_TESTING:Ready For Testing}')",
+          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND {stage.READY_FOR_TESTING:Ready For Testing}",
           "configFile": "agents/bug_test_automation.json",
           "skipIfLabel": "sm_bug_test_automation_triggered",
           "addLabel": "sm_bug_test_automation_triggered",
@@ -193,7 +193,7 @@
         },
         {
           "description": "Ready For Testing Stories → automate linked test cases in bulk",
-          "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('{status.READY_FOR_TESTING:Ready For Testing}')",
+          "jql": "project = {jiraProject} AND issuetype in ('Story') AND {stage.READY_FOR_TESTING:Ready For Testing}",
           "configFile": "agents/story_test_automation.json",
           "skipIfLabel": "sm_story_test_automation_triggered",
           "skipIfLabels": [
@@ -204,7 +204,7 @@
         },
         {
           "description": "In Testing Stories → check all TCs passed → Done",
-          "jql": "project = {jiraProject} AND issuetype in ('Story') AND status in ('{status.IN_TESTING:In Testing}')",
+          "jql": "project = {jiraProject} AND issuetype in ('Story') AND {stage.IN_TESTING:In Testing}",
           "configFile": "agents/story_done_check.json",
           "skipIfLabel": "sm_story_done_check_triggered",
           "enabled": true,
@@ -212,7 +212,7 @@
         },
         {
           "description": "In Testing Bugs → check all TCs passed → Done",
-          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND status in ('{status.IN_TESTING:In Testing}')",
+          "jql": "project = {jiraProject} AND issuetype in ('Bug') AND {stage.IN_TESTING:In Testing}",
           "configFile": "agents/bug_done_check.json",
           "skipIfLabel": "sm_bug_done_check_triggered",
           "enabled": true,
@@ -243,7 +243,7 @@
         },
         {
           "description": "In Review Test Cases → trigger pr_test_automation_review",
-          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('{status.IN_REVIEW_PASSED:In Review - Passed}', '{status.IN_REVIEW_FAILED:In Review - Failed}') AND (labels is EMPTY OR labels NOT IN ('pr_approved'))",
+          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND ({stage.IN_REVIEW_PASSED:In Review - Passed} OR {stage.IN_REVIEW_FAILED:In Review - Failed}) AND (labels is EMPTY OR labels NOT IN ('pr_approved'))",
           "configFile": "agents/pr_test_automation_review.json",
           "skipIfLabel": "sm_test_review_triggered",
           "addLabel": "sm_test_review_triggered",
@@ -251,14 +251,14 @@
         },
         {
           "description": "In Review Test Cases with dirty PR → move to In Rework",
-          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('{status.IN_REVIEW_PASSED:In Review - Passed}', '{status.IN_REVIEW_FAILED:In Review - Failed}')",
+          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND ({stage.IN_REVIEW_PASSED:In Review - Passed} OR {stage.IN_REVIEW_FAILED:In Review - Failed})",
           "configFile": "agents/recover_dirty_review_test_case.json",
           "localExecution": true,
           "enabled": true
         },
         {
           "description": "Failed Test Cases → create or link bug (single, disabled by default — use bulk_bugs_creation instead)",
-          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND status in ('{status.FAILED:Failed}')",
+          "jql": "project = {jiraProject} AND issuetype in ('Test Case') AND {stage.FAILED:Failed}",
           "configFile": "agents/bug_creation.json",
           "skipIfLabel": "sm_bug_creation_triggered",
           "addLabel": "sm_bug_creation_triggered",
@@ -276,7 +276,7 @@
         },
         {
           "description": "Bug To Fix Tickets → all linked Bugs Done → move to Backlog / Ready For Testing",
-          "jql": "project = {jiraProject} AND issuetype in ('Test Case', 'Story') AND status in ('{status.BUG_TO_FIX:Bug To Fix}')",
+          "jql": "project = {jiraProject} AND issuetype in ('Test Case', 'Story') AND {stage.BUG_TO_FIX:Bug To Fix}",
           "configFile": "agents/bug_to_fix_check.json",
           "skipIfLabel": "sm_bug_to_fix_check_triggered",
           "localExecution": true,

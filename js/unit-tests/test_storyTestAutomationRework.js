@@ -19,7 +19,7 @@ function loadTrackersSr(mocks) {
     }), mocks || {});
 }
 
-function loadRework(mocks) {
+function loadRework(mocks, loaderOverride) {
     var requireMap = {
         './configLoader.js': {
             formatTemplate: function (template, values) {
@@ -44,6 +44,7 @@ function loadRework(mocks) {
         file_write: function () {}
     }, mocks || {});
     requireMap['./common/trackers.js'] = loadTrackersSr(allMocks);
+    if (loaderOverride) requireMap['./configLoader.js'] = loaderOverride;
     return loadModule(
         'js/storyTestAutomationRework.js',
         makeRequire(requireMap),
@@ -163,5 +164,57 @@ suite('storyTestAutomationRework — mergeMain mid-merge guard (gh-761)', functi
         assert.equal(tools.filter(function (t) { return t.indexOf('jira_') === 0; }).length, 0);
         assert.ok(tools.indexOf('ado_add_work_item_comment') !== -1);
         assert.ok(tools.indexOf('ado_remove_work_item_label') !== -1);
+    });
+});
+
+// ── gh-916: stage-label fallback for the In Testing move ──
+
+suite('storyTestAutomationRework: stage-label fallback (gh-916)', function() {
+    var GH916_LOADER = {
+        formatTemplate: function (template, values) {
+            return template.replace(/\{ticketKey\}/g, values.ticketKey);
+        },
+        loadProjectConfig: function () {
+            return {
+                jira: makeDefaultJiraConfig(),
+                workingDir: null,
+                git: { authorName: 'AI Teammate', authorEmail: 'ai@example.com' },
+                formats: { commitMessage: { testRework: '{ticketKey}: address review comments' } }
+            };
+        },
+        createScm: function () {
+            return { listPrs: function () { return []; } };
+        }
+    };
+
+    test("'label' mode: a rejected In Testing move marks stage_in_testing, no throw", function() {
+        var added = [];
+        var moved = [];
+        var module = loadRework({
+            cli_execute_command: function(args) {
+                if (args.command === 'git branch --show-current') return 'test/TS-800';
+                if (args.command === 'git rev-parse --quiet --verify MERGE_HEAD') throw new Error('exit 1');
+                if (args.command === 'git diff --cached --stat') return ' testing/tests/x.py | 1 +';
+                if (args.command.indexOf('git ls-remote --heads origin test/TS-800') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/TS-800';
+                return '';
+            },
+            jira_move_to_status: function(args) {
+                moved.push(args);
+                throw new Error("The field 'State' contains the value 'In Testing' that is not in the list of supported values");
+            },
+            jira_add_label: function(args) { added.push(args); },
+            jira_remove_label: function() {},
+            jira_post_comment: function() {}
+        }, GH916_LOADER);
+
+        var result = module.action({
+            ticket: { key: 'TS-800' },
+            response: 'fixed flaky locator',
+            jobParams: { customParams: { stageFallback: 'label' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.deepEqual(moved, [{ key: 'TS-800', statusName: 'In Testing' }]);
+        assert.deepEqual(added, [{ key: 'TS-800', label: 'stage_in_testing' }]);
     });
 });

@@ -198,6 +198,57 @@ var configLoaderModule = loadModule(
 
 global.configModule = configModule;
 global.configLoaderModule = configLoaderModule;
+// ── Mirrored testRunner.js helpers (node mirror parity) ──────────────────────
+// testRunner.js (the GraalJS harness) exposes these as suite globals; several
+// suites (recover*/check* families) call makeDefaultConfigLoaderMock directly.
+// Mirror them here so those suites run under the degraded node harness too.
+
+function makeDefaultJiraConfig() {
+    return {
+        issueTypes: Object.assign({}, configModule.ISSUE_TYPES),
+        statuses: Object.assign({}, configModule.STATUSES)
+    };
+}
+
+function makeDefaultConfigLoaderMock(extraConfig) {
+    return {
+        loadProjectConfig: function(params) {
+            var cfg = extraConfig || {};
+            var result = {
+                jira: makeDefaultJiraConfig()
+            };
+            if (cfg.repository) {
+                result.repository = cfg.repository;
+            }
+            if (cfg.jobParamPatches) {
+                result.jobParamPatches = cfg.jobParamPatches;
+            }
+            if (cfg.jira) {
+                if (cfg.jira.issueTypes) {
+                    for (var it in cfg.jira.issueTypes) {
+                        if (cfg.jira.issueTypes.hasOwnProperty(it)) {
+                            result.jira.issueTypes[it] = cfg.jira.issueTypes[it];
+                        }
+                    }
+                }
+                if (cfg.jira.statuses) {
+                    for (var st in cfg.jira.statuses) {
+                        if (cfg.jira.statuses.hasOwnProperty(st)) {
+                            result.jira.statuses[st] = cfg.jira.statuses[st];
+                        }
+                    }
+                }
+            }
+            return result;
+        },
+        interpolateJql: function(jql, config, trackerProvider) {
+            return configLoaderModule.interpolateJql(jql, config, trackerProvider);
+        }
+    };
+}
+
+global.makeDefaultJiraConfig = makeDefaultJiraConfig;
+global.makeDefaultConfigLoaderMock = makeDefaultConfigLoaderMock;
 
 function main() {
     var testFiles = process.argv.slice(2);

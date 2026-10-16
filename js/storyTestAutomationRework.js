@@ -293,8 +293,11 @@ function action(params) {
 
         // Step 3: Move Story back to In Testing
         try {
-            tracker.moveToStatus(storyKey, jiraConfig.statuses.IN_TESTING);
-            console.log('✅ Moved Story', storyKey, 'to', jiraConfig.statuses.IN_TESTING);
+            // gh-916: IN_TESTING can be tag-only (restricted ADO workflows) — stage-label fallback.
+            var moveResult = tracker.moveToStatusOrMark(storyKey, jiraConfig.statuses.IN_TESTING, 'IN_TESTING');
+            if (moveResult.moved || moveResult.marked) {
+                console.log('✅ Moved Story', storyKey, 'to', jiraConfig.statuses.IN_TESTING);
+            }
         } catch (e) {
             console.warn('Failed to move Story to In Testing:', e);
         }

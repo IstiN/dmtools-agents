@@ -312,3 +312,70 @@ suite('mergeStoryTestAutomationPR', function() {
         assert.ok(calls.some(function(c) { return c.tool === 'rm' && c.args.id === '50' && c.args.label === 'sm_lock'; }));
     });
 });
+
+// ── gh-916: stage-label fallback for the linked-TC final-status gates and moves ──
+
+suite('mergeStoryTestAutomationPR: stage-label fallback (gh-916)', function() {
+    function gh916MergeLoad(mocks) {
+        return loadMergeStoryTestAutomationPR(Object.assign({
+            cli_execute_command: function(opts) {
+                if (opts.command === 'git config --get remote.origin.url') return 'https://github.com/IstiN/trackstate.git';
+                return '';
+            },
+            github_list_prs: function() {
+                return [{ number: 91, head: { ref: 'test/TS-90' }, html_url: 'https://github.com/IstiN/trackstate/pull/91' }];
+            },
+            github_get_pr: function() { return { mergeable: true, mergeable_state: 'clean' }; },
+            github_merge_pr: function() {},
+            github_remove_pr_label: function() {},
+            jira_remove_label: function() {},
+            jira_post_comment: function() {}
+        }, mocks));
+    }
+
+    test("'label' mode: a TC marked stage_in_review_passed resolves to Passed and marks stage_passed when rejected", function() {
+        var added = [];
+        var moves = [];
+        var module = gh916MergeLoad({
+            jira_search_by_jql: function(args) {
+                assert.deepEqual(args.fields, ['key', 'status', 'labels'], 'labels requested in label mode');
+                return [{ key: 'TS-91', fields: { status: { name: 'New' }, labels: ['stage_in_review_passed'] } }];
+            },
+            jira_move_to_status: function(args) {
+                moves.push(args);
+                throw new Error("The field 'State' contains the value 'Passed' that is not in the list of supported values");
+            },
+            jira_add_label: function(args) { added.push(args); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-90' },
+            jobParams: { customParams: { stageFallback: 'label', removeLabel: 'sm_story_test_merge_triggered' } }
+        });
+
+        assert.equal(result, true, 'the merge completes even when the TC move is rejected');
+        assert.deepEqual(moves, [{ key: 'TS-91', statusName: 'Passed' }]);
+        var stageLabels = added.filter(function(a) { return a.label.indexOf('stage_') === 0; });
+        assert.deepEqual(stageLabels, [{ key: 'TS-91', label: 'stage_passed' }]);
+        assert.ok(added.some(function(a) { return a.key === 'TS-90' && a.label === 'test_pr_finalized'; }),
+            'the story finalize label is still applied');
+    });
+
+    test("'none' mode: the marker is ignored — the TC is skipped with the old fields list", function() {
+        var moves = [];
+        var module = gh916MergeLoad({
+            jira_search_by_jql: function(args) {
+                assert.deepEqual(args.fields, ['key', 'status'], 'no labels requested in none mode');
+                return [{ key: 'TS-92', fields: { status: { name: 'New' }, labels: ['stage_in_review_passed'] } }];
+            },
+            jira_move_to_status: function(args) { moves.push(args); }
+        });
+
+        module.action({
+            ticket: { key: 'TS-90' },
+            jobParams: { customParams: { removeLabel: 'sm_story_test_merge_triggered' } }
+        });
+
+        assert.deepEqual(moves, [], 'a marker-only TC has no resolvable final status in none mode');
+    });
+});

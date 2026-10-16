@@ -44,8 +44,12 @@ function action(params) {
     function findLinkedTCs() {
         try {
             // JQL text: provider-specific query (WIQL on ado)
+            // gh-916: in label mode the stage gates also read markers, so labels are requested;
+            // 'none' mode sends the exact same fields list as before.
+            var fields = ['key', 'status'];
+            if (tracker.stageFallback() === 'label') fields = fields.concat(['labels']);
             return tracker.searchIssues('issue in linkedIssues("' + ticketKey + '") AND issuetype = "' + testCaseType + '"', {
-                fields: ['key', 'status'],
+                fields: fields,
                 maxResults: 100
             }) || [];
         } catch (e) {
@@ -78,11 +82,19 @@ function action(params) {
         return null;
     }
 
-    function isInFlightStatus(status) {
-        return status === statuses.IN_REVIEW_PASSED ||
-            status === statuses.IN_REVIEW_FAILED ||
+    // gh-916: stage gates go through tracker.hasStage — a TC marked stage_<key> by a rejected
+    // transition counts as being in the stage when jira.stageFallback is 'label'; in the default
+    // 'none' mode hasStage compares the status only (the exact previous behaviour).
+    function isInFlightStatus(tc) {
+        var status = tcStatus(tc);
+        return tracker.hasStage(tc, 'IN_REVIEW_PASSED', statuses.IN_REVIEW_PASSED) ||
+            tracker.hasStage(tc, 'IN_REVIEW_FAILED', statuses.IN_REVIEW_FAILED) ||
             status === statuses.IN_DEVELOPMENT ||
             status === statuses.READY_FOR_DEVELOPMENT;
+    }
+
+    function tcStatus(tc) {
+        return tc && tc.fields && tc.fields.status && tc.fields.status.name;
     }
 
     try {
@@ -105,13 +117,15 @@ function action(params) {
         const readyForRetestTCs = [];
 
         allTCs.forEach(function(tc) {
-            var status = tc.fields && tc.fields.status && tc.fields.status.name;
+            var status = tcStatus(tc);
 
-            if (status === statuses.PASSED || status === statuses.SKIPPED || status === statuses.IRRELEVANT) {
+            if (tracker.hasStage(tc, 'PASSED', statuses.PASSED) ||
+                tracker.hasStage(tc, 'SKIPPED', statuses.SKIPPED) ||
+                tracker.hasStage(tc, 'IRRELEVANT', statuses.IRRELEVANT)) {
                 return;
             }
 
-            if (isInFlightStatus(status)) {
+            if (isInFlightStatus(tc)) {
                 inFlightTCs.push(tc.key);
                 return;
             }
@@ -122,7 +136,7 @@ function action(params) {
                 return;
             }
 
-            if (status === statuses.FAILED) {
+            if (tracker.hasStage(tc, 'FAILED', statuses.FAILED)) {
                 waitingForBugsTCs.push(tc.key);
             } else {
                 readyForRetestTCs.push(tc.key);
@@ -165,13 +179,15 @@ function action(params) {
 
             console.log('Found', pendingBugTCs.length, 'TC(s) with pending bugs — moving Story to Bug To Fix');
 
-            tracker.moveToStatus(ticketKey, statuses.BUG_TO_FIX);
+            // gh-916: BUG_TO_FIX can be tag-only (restricted ADO workflows) — stage-label fallback.
+            var bugToFixMove = tracker.moveToStatusOrMark(ticketKey, statuses.BUG_TO_FIX, 'BUG_TO_FIX');
+            if (bugToFixMove.moved || bugToFixMove.marked) {
+                tracker.postComment(ticketKey, 'h3. 🐛 Story Moved to Bug To Fix\n\n' +
+                        'The following linked Test Cases have open bugs:\n\n' + bugList + '\n\n' +
+                        'The Story has been moved to *Bug To Fix*. It will return to *Ready For Testing* once all linked bugs are *Done*.');
 
-            tracker.postComment(ticketKey, 'h3. 🐛 Story Moved to Bug To Fix\n\n' +
-                    'The following linked Test Cases have open bugs:\n\n' + bugList + '\n\n' +
-                    'The Story has been moved to *Bug To Fix*. It will return to *Ready For Testing* once all linked bugs are *Done*.');
-
-            console.log('✅ Story', ticketKey, 'moved to Bug To Fix');
+                console.log('✅ Story', ticketKey, 'moved to Bug To Fix');
+            }
             releaseLock();
 
             try {
@@ -193,12 +209,14 @@ function action(params) {
         // Step 5: All remaining non-passed TCs are ready for re-test → back to Ready For Testing
         console.log('All non-passed TCs are ready for re-test — moving Story to Ready For Testing');
 
-        tracker.moveToStatus(ticketKey, statuses.READY_FOR_TESTING);
+        // gh-916: READY_FOR_TESTING can be tag-only (restricted ADO workflows) — stage-label fallback.
+        var retestMove = tracker.moveToStatusOrMark(ticketKey, statuses.READY_FOR_TESTING, 'READY_FOR_TESTING');
+        if (retestMove.moved || retestMove.marked) {
+            tracker.postComment(ticketKey, 'h3. 🔄 Story Ready for Re-test\n\n' +
+                    'All linked bugs are resolved. The Story has been moved back to *Ready For Testing* to re-run the linked Test Cases.');
 
-        tracker.postComment(ticketKey, 'h3. 🔄 Story Ready for Re-test\n\n' +
-                'All linked bugs are resolved. The Story has been moved back to *Ready For Testing* to re-run the linked Test Cases.');
-
-        console.log('✅ Story', ticketKey, 'moved to Ready For Testing');
+            console.log('✅ Story', ticketKey, 'moved to Ready For Testing');
+        }
         releaseLock();
 
         try {

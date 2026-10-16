@@ -69,6 +69,21 @@ function action(params) {
                     tcs.push(other);
                 }
             });
+            // gh-916 review: Jira returns issuelinks stubs with a reduced field set (summary/status/
+            // issuetype — never labels), so in 'label' mode hasStage could not recognise a stage_<key>
+            // marker on this, the preferred path, and a marked TC blocked the Bug forever. Re-fetch each
+            // TC in full so labels are real; the 'none' default keeps the stubs — status-only comparison,
+            // no extra reads, the exact previous behaviour.
+            if (tracker.stageFallback() === 'label' && tcs.length > 0) {
+                return tcs.map(function(tc) {
+                    try {
+                        return tracker.getIssue(tc.key) || tc;
+                    } catch (e) {
+                        console.warn('Could not re-fetch', tc.key, 'with full fields — falling back to the link stub:', e);
+                        return tc;
+                    }
+                });
+            }
             return tcs;
         } catch (e) {
             console.warn('Failed to read direct issue links for', ticketKey, ':', e);
@@ -101,10 +116,15 @@ function action(params) {
     }
 
     function isBlockingTC(tc) {
+        // gh-916: stage gates go through tracker.hasStage — a TC marked stage_<key> by a rejected
+        // transition counts as being in the stage when jira.stageFallback is 'label'; in the default
+        // 'none' mode hasStage compares the status only (the exact previous behaviour).
         var status = tc.fields && tc.fields.status && tc.fields.status.name;
 
         // Passed / intentionally skipped / no longer applicable are always non-blocking.
-        if (status === jiraConfig.statuses.PASSED || status === jiraConfig.statuses.SKIPPED || status === jiraConfig.statuses.IRRELEVANT) {
+        if (tracker.hasStage(tc, 'PASSED', jiraConfig.statuses.PASSED) ||
+            tracker.hasStage(tc, 'SKIPPED', jiraConfig.statuses.SKIPPED) ||
+            tracker.hasStage(tc, 'IRRELEVANT', jiraConfig.statuses.IRRELEVANT)) {
             return false;
         }
 
@@ -115,7 +135,7 @@ function action(params) {
         // regression TCs TS-501/TS-252 were Bug To Fix). We count *any* other
         // linked Bug (even Done) so stale TCs that were already addressed do not
         // hold the current Bug hostage.
-        if (status === jiraConfig.statuses.BUG_TO_FIX) {
+        if (tracker.hasStage(tc, 'BUG_TO_FIX', jiraConfig.statuses.BUG_TO_FIX)) {
             var linkedBugs = findLinkedBugs(tc.key);
             var hasOtherBug = linkedBugs.some(function(bug) {
                 var bugStatus = bug.fields && bug.fields.status && bug.fields.status.name;

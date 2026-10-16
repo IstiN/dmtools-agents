@@ -161,8 +161,11 @@ function findAnyLinkedNonDoneBug(tcKeys) {
 
 function moveToBugToFix(tcKey, jiraConfig) {
     try {
-        getTracker().moveToStatus(tcKey, jiraConfig.statuses.BUG_TO_FIX);
-        console.log('  📋 Moved to Bug To Fix:', tcKey);
+        // gh-916: BUG_TO_FIX can be tag-only (restricted ADO workflows) — stage-label fallback.
+        var moveResult = getTracker().moveToStatusOrMark(tcKey, jiraConfig.statuses.BUG_TO_FIX, 'BUG_TO_FIX');
+        if (moveResult.moved || moveResult.marked) {
+            console.log('  📋 Moved to Bug To Fix:', tcKey);
+        }
     } catch (e) {
         console.warn('  ⚠️ Could not move to Bug To Fix:', tcKey, e);
     }

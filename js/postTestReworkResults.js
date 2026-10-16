@@ -565,10 +565,14 @@ function action(params) {
 
         // Step 4: Move ticket to In Review - Passed or In Review - Failed
         // Bug creation/linking is handled by the bug_creation agent when TC reaches Failed status
+        const stageKey = passed ? 'IN_REVIEW_PASSED' : 'IN_REVIEW_FAILED';
         const targetStatus = passed ? jiraConfig.statuses.IN_REVIEW_PASSED : jiraConfig.statuses.IN_REVIEW_FAILED;
         try {
-            getTracker().moveToStatus(ticketKey, targetStatus);
-            console.log('✅ Moved', ticketKey, 'to', targetStatus);
+            // gh-916: In Review - Passed/Failed can be tag-only (restricted ADO workflows) — stage-label fallback.
+            const moveResult = getTracker().moveToStatusOrMark(ticketKey, targetStatus, stageKey);
+            if (moveResult.moved || moveResult.marked) {
+                console.log('✅ Moved', ticketKey, 'to', targetStatus);
+            }
         } catch (e) {
             console.warn('Failed to move ticket status:', e);
         }

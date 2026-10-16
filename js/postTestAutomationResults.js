@@ -597,18 +597,26 @@ function action(params) {
 
         if (passed) {
             try {
+                var passedStage = noCodeChanges ? 'PASSED' : 'IN_REVIEW_PASSED';
                 var passedStatus = noCodeChanges ? jiraConfig.statuses.PASSED : jiraConfig.statuses.IN_REVIEW_PASSED;
-                tracker.moveToStatus(ticketKey, passedStatus);
-                console.log('✅ Passed — moved', ticketKey, 'to', passedStatus);
+                // gh-916: Passed / In Review - Passed can be tag-only (restricted ADO workflows) — stage-label fallback.
+                var passMove = tracker.moveToStatusOrMark(ticketKey, passedStatus, passedStage);
+                if (passMove.moved || passMove.marked) {
+                    console.log('✅ Passed — moved', ticketKey, 'to', passedStatus);
+                }
             } catch (e) {
                 console.warn('Failed to move to Passed:', e);
             }
         } else {
             // Bug creation is handled by the bug_creation agent when TC reaches Failed status
             try {
+                var failedStage = noCodeChanges ? 'FAILED' : 'IN_REVIEW_FAILED';
                 var failedStatus = noCodeChanges ? jiraConfig.statuses.FAILED : jiraConfig.statuses.IN_REVIEW_FAILED;
-                tracker.moveToStatus(ticketKey, failedStatus);
-                console.log('✅ Failed — moved', ticketKey, 'to', failedStatus);
+                // gh-916: Failed / In Review - Failed can be tag-only (restricted ADO workflows) — stage-label fallback.
+                var failMove = tracker.moveToStatusOrMark(ticketKey, failedStatus, failedStage);
+                if (failMove.moved || failMove.marked) {
+                    console.log('✅ Failed — moved', ticketKey, 'to', failedStatus);
+                }
             } catch (e) {
                 console.warn('Failed to move to Failed:', e);
             }

@@ -241,8 +241,11 @@ function action(params) {
 
         // ── 6. Move ticket to In Testing ─────────────────────────────────────
         try {
-            tracker.moveToStatus(ticketKey, statuses.IN_TESTING);
-            console.log('✅ Moved', ticketKey, 'to In Testing');
+            // gh-916: IN_TESTING can be tag-only (restricted ADO workflows) — stage-label fallback.
+            var moveResult = tracker.moveToStatusOrMark(ticketKey, statuses.IN_TESTING, 'IN_TESTING');
+            if (moveResult.moved || moveResult.marked) {
+                console.log('✅ Moved', ticketKey, 'to In Testing');
+            }
         } catch (e) {
             console.warn('⚠️ Could not move ticket to In Testing:', e.message || e);
         }

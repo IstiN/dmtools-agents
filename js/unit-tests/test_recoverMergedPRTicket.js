@@ -191,3 +191,53 @@ suite('recoverMergedPRTicket: ado tracker provider', function() {
         assert.equal(calls.filter(function(c) { return c[0] === 'comment'; }).length, 1);
     });
 });
+
+// ── gh-916: stage-label fallback for the Merged recovery move ──
+
+suite('recoverMergedPRTicket: stage-label fallback (gh-916)', function() {
+    function gh916RecoverMergedLoad(mocks, scm) {
+        var added = [];
+        var moves = [];
+        var withMoves = Object.assign({
+            jira_move_to_status: function(args) {
+                moves.push(args);
+                throw new Error("The field 'State' contains the value 'Merged' that is not in the list of supported values");
+            },
+            jira_add_label: function(args) { added.push(args); },
+            jira_remove_label: function() {},
+            jira_post_comment: function() {}
+        }, mocks);
+        var mod = loadModule('js/recoverMergedPRTicket.js', makeRequire({
+            './config.js': configModule,
+            './configLoader.js': makeDefaultConfigLoaderMock({ repository: { owner: 'IstiN', repo: 'trackstate' } }),
+            './common/scm.js': { createScm: function() { return scm; } },
+            './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
+            './common/trackers.js': trackersWith(withMoves)
+        }), withMoves);
+        return { mod: mod, added: added, moves: moves };
+    }
+
+    test("'label' mode: a rejected Merged move marks stage_merged, no throw, recovery still completes", function() {
+        var x = gh916RecoverMergedLoad({}, {
+            listPrs: function(state) {
+                if (state === 'open') return [];
+                return [{
+                    number: 1600,
+                    title: 'TS-700 fix',
+                    html_url: 'https://github.com/IstiN/trackstate/pull/1600',
+                    head: { ref: 'ai/TS-700' },
+                    merged_at: '2026-06-21T14:00:00Z'
+                }];
+            }
+        });
+
+        var result = x.mod.action({
+            ticket: { key: 'TS-700' },
+            jobParams: { customParams: { stageFallback: 'label' } }
+        });
+
+        assert.equal(result.action, 'moved_to_merged');
+        assert.deepEqual(x.moves, [{ key: 'TS-700', statusName: 'Merged' }]);
+        assert.deepEqual(x.added, [{ key: 'TS-700', label: 'stage_merged' }]);
+    });
+});

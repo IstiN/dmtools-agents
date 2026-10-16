@@ -416,3 +416,126 @@ suite('checkBugTestsPassed', function() {
     });
 
 });
+
+// ── gh-916: stage-label fallback — gates recognise the stage_<key> marker in label mode ──
+
+suite('checkBugTestsPassed: stage-label fallback (gh-916)', function() {
+    // Realistic Jira issuelinks stub (gh-916 review): the embedded issue carries a REDUCED
+    // field set — summary/status/issuetype, NEVER labels. The full issue is what a
+    // tracker.getIssue(key) re-fetch returns; only that shape can carry stage markers.
+    function gh916DirectTc(key, status) {
+        return { key: key, fields: { summary: 's', issuetype: { name: 'Test Case' }, status: { name: status } } };
+    }
+
+    function gh916FullTc(key, status, labels) {
+        var fields = { summary: 's', issuetype: { name: 'Test Case' }, status: { name: status } };
+        if (labels) fields.labels = labels;
+        return { key: key, fields: fields };
+    }
+
+    function gh916BugTicket(tc) {
+        return {
+            key: 'BUG-77',
+            fields: {
+                labels: [],
+                issuelinks: [{ type: { name: 'Blocks' }, outwardIssue: tc }]
+            }
+        };
+    }
+
+    // Key-aware jira_get_ticket mock: BUG-77 → the bug ticket (with the label-less link stub),
+    // a TC key → the full issue. Records every fetched key for re-fetch assertions.
+    function gh916JiraMock(tc, fetchedKeys) {
+        var bug = gh916BugTicket(gh916DirectTc(tc.key, tc.status));
+        return function(args) {
+            fetchedKeys.push(args && args.key);
+            if (args && args.key === 'BUG-77') return bug;
+            return gh916FullTc(args && args.key, tc.status, tc.labels);
+        };
+    }
+
+    test("'none' mode: a stage_passed stub does NOT make a TC non-blocking — the Bug waits, no TC re-fetch", function() {
+        var moved = [];
+        var fetchedKeys = [];
+        var module = loadCheckBugTestsPassed({
+            jira_get_ticket: gh916JiraMock({ key: 'TS-70', status: 'New', labels: ['stage_passed'] }, fetchedKeys),
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_post_comment: function() {},
+            jira_remove_label: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'BUG-77' },
+            jobParams: { customParams: { removeLabel: 'sm_bug_done_check_triggered' } }
+        });
+
+        assert.equal(result.action, 'waiting');
+        assert.deepEqual(moved, []);
+        assert.deepEqual(fetchedKeys, ['BUG-77'], 'the default mode must not spend extra reads on the link stubs');
+    });
+
+    test("'label' mode: a TC marked stage_passed is non-blocking even though the link stub carries no labels", function() {
+        var moved = [];
+        var fetchedKeys = [];
+        var module = loadCheckBugTestsPassed({
+            jira_get_ticket: gh916JiraMock({ key: 'TS-71', status: 'New', labels: ['stage_passed'] }, fetchedKeys),
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_post_comment: function() {},
+            jira_remove_label: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'BUG-77' },
+            jobParams: { customParams: { stageFallback: 'label', removeLabel: 'sm_bug_done_check_triggered' } }
+        });
+
+        assert.equal(result.action, 'moved_to_done');
+        assert.deepEqual(moved, [{ key: 'BUG-77', statusName: 'Done' }]);
+        assert.ok(fetchedKeys.indexOf('TS-71') !== -1, 'label mode must re-fetch the TC to see real labels');
+    });
+
+    test("'label' mode: a TC marked stage_bug_to_fix with another linked non-Done bug is non-blocking", function() {
+        var moved = [];
+        var fetchedKeys = [];
+        var module = loadCheckBugTestsPassed({
+            jira_get_ticket: gh916JiraMock({ key: 'TS-72', status: 'New', labels: ['stage_bug_to_fix'] }, fetchedKeys),
+            jira_search_by_jql: function() {
+                return [{ key: 'BUG-OTHER', fields: { status: { name: 'New' } } }];
+            },
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_post_comment: function() {},
+            jira_remove_label: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'BUG-77' },
+            jobParams: { customParams: { stageFallback: 'label', removeLabel: 'sm_bug_done_check_triggered' } }
+        });
+
+        assert.equal(result.action, 'moved_to_done');
+        assert.deepEqual(moved, [{ key: 'BUG-77', statusName: 'Done' }]);
+        assert.ok(fetchedKeys.indexOf('TS-72') !== -1, 'label mode must re-fetch the TC to see real labels');
+    });
+
+    test("'label' mode: a TC whose re-fetch fails degrades to the link stub — the Bug keeps waiting", function() {
+        var moved = [];
+        var bug = gh916BugTicket(gh916DirectTc('TS-73', 'New'));
+        var module = loadCheckBugTestsPassed({
+            jira_get_ticket: function(args) {
+                if (args && args.key === 'BUG-77') return bug;
+                throw new Error('read timeout');
+            },
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_post_comment: function() {},
+            jira_remove_label: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'BUG-77' },
+            jobParams: { customParams: { stageFallback: 'label', removeLabel: 'sm_bug_done_check_triggered' } }
+        });
+
+        assert.equal(result.action, 'waiting');
+        assert.deepEqual(moved, []);
+    });
+});
