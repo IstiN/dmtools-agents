@@ -11,9 +11,11 @@
 # pull_request / workflow_dispatch (the factory SM dispatches this on PR heads): measure the
 #   head and COMPARE with the released baseline. Fails when a function's CRAP grew or a new
 #   function exceeds CRAP_THRESHOLD; labels crap:regression / crap:improved.
-# push to main: after a green measurement, ratchet the released baseline DOWN
-#   (crap4js --update-baseline: min(old, now), never up, refuses on regression) and upload it.
-#   Concurrent merges are serialized by the concurrency group below.
+# main (push, merge-bot completion via workflow_run — the bot merges with GITHUB_TOKEN, which
+#   never fires 'push' —, or manual dispatch on main): after a green measurement, ratchet the
+#   released baseline DOWN (crap4js --update-baseline: min(old, now), never up, refuses on
+#   regression) and upload it. The release notes carry 'main@<sha>' so repeated triggers for
+#   the same HEAD are skipped. Concurrent merges are serialized by the concurrency group.
 # No baseline asset yet (first run / fork): bootstrap from the measured main, no comparison.
 #
 # Coverage comes from the unit suite run in the same job (instrumented tree), so the
@@ -27,8 +29,16 @@ name: Quality
 on:
   push:
     branches: [main]
+  workflow_run:
+    # The merge bot merges with GITHUB_TOKEN, and GitHub suppresses workflow triggers on
+    # GITHUB_TOKEN events — the push trigger above never fires for machine merges (same
+    # reason agent-pack-release.yml listens to this workflow, gh-867). The bot's own run
+    # completion is a normal event. Runs on every bot completion are cheap no-ops: the
+    # 'gate' job skips when the baseline already covers main's HEAD.
+    workflows: ['Machine Merge Bot']
+    types: [completed]
   pull_request:
-  workflow_dispatch:  # the Machine SM / sm-kicker dispatch validation runs
+  workflow_dispatch:  # the Machine SM / sm-kicker dispatch validation runs; on main it re-seeds the baseline
 
 permissions:
   contents: write        # push to main: update the crap-baseline release asset
@@ -36,7 +46,7 @@ permissions:
 
 # Serializes baseline updates of consecutive merges (never cancels a running update).
 concurrency:
-  group: quality-${{ github.event_name == 'push' && 'baseline-update' || github.run_id }}
+  group: quality-${{ (github.event_name == 'push' || github.event_name == 'workflow_run' || github.ref == 'refs/heads/main') && 'baseline-update' || github.run_id }}
   cancel-in-progress: false
 
 env:
@@ -48,7 +58,39 @@ env:
   BASELINE_ASSET: 'crap-baseline.json'
 
 jobs:
+  gate:
+    # PR / dispatch on a PR head: always measure. Main-side events (push, merge-bot completion,
+    # manual dispatch on main): measure only when the released baseline does not yet cover HEAD.
+    runs-on: ubuntu-24.04
+    outputs:
+      run: ${{ steps.g.outputs.run }}
+    steps:
+      - id: g
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BOT_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          main_side=false
+          [ "$EVENT" = "push" ] || [ "$EVENT" = "workflow_run" ] && main_side=true
+          [ "$EVENT" = "workflow_dispatch" ] && [ "$REF" = "refs/heads/main" ] && main_side=true
+          if [ "$main_side" != "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0      # pull_request / dispatch on a PR head: always measure
+          fi
+          if [ "$EVENT" = "workflow_run" ] && [ "$BOT_CONCLUSION" != "success" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "merge bot run was not successful — skip"; exit 0
+          fi
+          body="$(gh release view "$BASELINE_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || true)"
+          if printf '%s' "$body" | grep -q "main@${GITHUB_SHA}"; then
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "baseline already covers ${GITHUB_SHA} — skip"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
   crap:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -119,12 +161,13 @@ jobs:
           exit $code
 
       - name: Update the released baseline (main only — ratchets down, never up)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && (steps.ratchet.outcome == 'success' || steps.baseline.outputs.present != 'true')
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (steps.ratchet.outcome == 'success' || steps.baseline.outputs.present != 'true')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
           CRAP="$RUNNER_TEMP/tools/node_modules/.bin/crap4js"
+          NOTES="Rolling per-function CRAP baseline used by the Quality workflow. Updated after every merge to main; not a product release. Measured at main@${GITHUB_SHA}"
           OUT="$RUNNER_TEMP/baseline-out/$BASELINE_ASSET"
           mkdir -p "$(dirname "$OUT")"
           if [ "${{ steps.baseline.outputs.present }}" = "true" ]; then
@@ -132,7 +175,11 @@ jobs:
             "$CRAP" . --coverage "$RUNNER_TEMP/cov/coverage-final.json" --threshold "$CRAP_THRESHOLD" \
               --baseline "$OUT" --update-baseline > "$RUNNER_TEMP/update.txt"
             sed -n '/^CRAP Ratchet/,$p' "$RUNNER_TEMP/update.txt" | tee -a "$GITHUB_STEP_SUMMARY"
-            if cmp -s "$OUT" "$RUNNER_TEMP/base/$BASELINE_ASSET"; then echo "baseline unchanged — nothing to upload"; exit 0; fi
+            if cmp -s "$OUT" "$RUNNER_TEMP/base/$BASELINE_ASSET"; then
+              echo "baseline unchanged — nothing to upload (marker refreshed)"
+              gh release edit "$BASELINE_TAG" --repo "$GITHUB_REPOSITORY" --notes "$NOTES"
+              exit 0
+            fi
           else
             "$CRAP" . --coverage "$RUNNER_TEMP/cov/coverage-final.json" --threshold "$CRAP_THRESHOLD" \
               --baseline "$OUT" --write-baseline > "$RUNNER_TEMP/update.txt"
@@ -145,6 +192,8 @@ jobs:
               --title "CRAP baseline (rolling)" \
               --notes "Rolling per-function CRAP baseline used by the Quality workflow. Updated after every merge to main; not a product release."
           fi
+          # Marker the 'gate' job reads to skip runs when the baseline already covers main's HEAD.
+          gh release edit "$BASELINE_TAG" --repo "$GITHUB_REPOSITORY" --notes "$NOTES"
           echo "baseline released: $(node -e "const b=require('$OUT');console.log(Object.keys(b.functions).length+' functions, max '+b.maxCrap)")" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Label PR (crap:regression / crap:improved)
