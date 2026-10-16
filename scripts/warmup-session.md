@@ -3,7 +3,7 @@
 Prepares a fresh machine (cloud dev-environment session, Codespace, throwaway VM/container)
 so that this repo's `agents` submodule works out of the box — clones the product repo
 (with the `agents` submodule) and pre-installs/pre-warms the toolchain used by
-`setup/install.sh` (java, node, dmtools, copilot, gradle, android, konan, ...).
+`setup/install.sh` (java, node, dmtools, copilot, gradle, android, konan, dart, ...).
 
 It does **not** run the agent pipeline itself. Secrets (`JIRA_EMAIL`, `JIRA_API_TOKEN`,
 `GH_TOKEN`/`PAT_TOKEN`, `COPILOT_GITHUB_TOKEN`, ...) must already be exposed as real

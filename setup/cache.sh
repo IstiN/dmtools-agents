@@ -159,6 +159,17 @@ _cache_konan() {
   export_var "KONAN_CACHE_RESTORE_KEY" "konan-"
 }
 
+_cache_dart() {
+  # Dart SDK (gh-918: factory legs on dart repos need the same gate toolchain
+  # as CI — setup/dart.sh resolves the channel/version and installs under
+  # ~/.dart-sdk/dart-sdk). Key on the requested channel/version; the restore
+  # key keeps any previously cached SDK until the channel moves.
+  local version="${1:-${DART_VERSION:-stable}}"
+  export_var "DART_CACHE_PATH" "${HOME}/.dart-sdk"
+  export_var "DART_CACHE_KEY"  "dart-${version}-${OS_TAG}"
+  export_var "DART_CACHE_RESTORE_KEY" "dart-"
+}
+
 _cache_android() {
   local compile_sdk="${1:-${ANDROID_COMPILE_SDK:-36}}"
   # Android SDK packages are large but stable — key on compileSdk version.
@@ -191,6 +202,7 @@ _dispatch_tool() {
     cursor)   _cache_cursor ;;
     gradle)   _cache_gradle ;;
     konan)    _cache_konan ;;
+    dart)     _cache_dart  "${version}" ;;
     android)  _cache_android  "${version}" ;;
     *)        echo "⚠️  Unknown tool '${tool}' — skipping cache config" ;;
   esac
@@ -213,6 +225,7 @@ _print_info() {
   printf "│ %-11s │ %-32s │ %-46s │\n" "playwright" "~/.cache/ms-playwright" "playwright-browsers-latest-linux-x86_64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "gradle"    "~/.gradle/wrapper + caches" "gradle-wrapper-<hash> / gradle-caches-<hash>"
   printf "│ %-11s │ %-32s │ %-46s │\n" "konan"     "~/.konan"            "konan-<libs.versions.toml-hash>"
+  printf "│ %-11s │ %-32s │ %-46s │\n" "dart"      "~/.dart-sdk"         "dart-stable-linux-x86_64"
   printf "│ %-11s │ %-32s │ %-46s │\n" "android"   "\$ANDROID_HOME/..."  "android-sdk-36-linux-x86_64"
   echo "└─────────────┴──────────────────────────────────┴────────────────────────────────────────────────┘"
   echo ""
@@ -231,7 +244,7 @@ _print_info() {
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-ALL_TOOLS="java node dmtools maestro copilot copilot-session kimi-session fa-session cursor-session codemie cursor codegraph playwright kimi"  # cursor has no cache
+ALL_TOOLS="java node dmtools maestro copilot copilot-session kimi-session fa-session cursor-session codemie cursor codegraph playwright kimi dart"  # cursor has no cache
 MODE="${1:-info}"
 shift || true
 

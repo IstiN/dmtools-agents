@@ -87,10 +87,19 @@ function dsRun(subcommand, opts) {
     }
     if (opts.stubDart !== undefined) {
         lines.push('mkdir -p "$d/bin"');
-        lines.push("printf '#!/bin/sh\\necho %s\\n' " + dsShq(opts.stubDart) + ' > "$d/bin/dart"');
+        // The banner is quoted INSIDE the stub script (dsShq(opts.stubDart) rides
+        // inside the script text, not as a shell argument) — an unquoted echo
+        // would die on the banner's parentheses and print no version at all.
+        lines.push('printf %s ' + dsShq('#!/bin/sh\necho ' + dsShq(opts.stubDart)) + ' > "$d/bin/dart"');
         lines.push('chmod +x "$d/bin/dart"');
     }
     var env = (opts.env || []).slice();
+    // Hermetic against the HOST: the script's installed-version probe falls
+    // back to <DART_INSTALL_DIR>/dart-sdk/bin/dart, so a real SDK cached on
+    // the runner (or left by a manual install — live: the verification step
+    // of this very ticket) would leak into `status`/`plan`. Point the
+    // install dir INSIDE the sandbox for every invocation.
+    env.push('DART_INSTALL_DIR="$d/nodart"');
     if (opts.stubDart !== undefined) {
         env.push('PATH="$d/bin:$PATH"');
     }

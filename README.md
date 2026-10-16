@@ -862,7 +862,7 @@ warmup-session.sh --repo <git-url> --dir <target-dir> [--branch <name>] \
 - `--branch` — checkout/track this branch instead of the repo's default.
 - `--exclude` — space-separated tool names to skip (forwarded to `setup/install.sh all`
   as `-tool1 -tool2 ...`; see `setup/install.sh` for the full tool list: `java maven node
-  dmtools maestro copilot codemie cursor codegraph playwright kimi gradle android konan`).
+  dmtools maestro copilot codemie cursor codegraph playwright kimi gradle android konan dart`).
 - `--install-args` — extra raw arguments appended to the `install.sh` invocation.
 
 It does **not** create or touch a `dmtools.env` file and does **not** run the agent
@@ -1196,3 +1196,32 @@ layout `install_local.sh` produces) lands in `~/.local/bin` + `~/.local/lib`
 (override with `FA_INSTALL_DIR`), pin a release with `fa.sh v0.1.324` /
 `FA_VERSION`. Fallback: the fa1.dev upstream installer. The bin dir is
 registered on PATH for subsequent CI steps.
+
+### Dart SDK (agent legs on Dart repos)
+
+`setup/install.sh dart` (or `setup/dart.sh [stable|beta|dev|<version>]`,
+env `DART_VERSION`) provisions the Dart SDK for machine-factory leg sessions —
+the same gap the golden-test Flutter toolchain covers for fa legs (gh-918):
+hosted runner images ship no `dart`, so a rework leg on a Dart repo could not
+run `dart analyze/test/format` or `crap4dart check` and claimed success while
+quality-gate violations stayed in place. The installer:
+
+- resolves the target exactly the way the repo's CI does — explicit
+  argument/env first, then the `dart-lang/setup-dart` step's `sdk:`/`channel:`
+  inputs in the checked-out repo's `.github/workflows/*.yml` ("same channel
+  the repo's quality.yml uses"), else `stable`;
+- downloads the SDK from the same dart-archive CDN `dart-lang/setup-dart`
+  uses, so leg-local gate output matches CI gate output;
+- installs under `~/.dart-sdk/dart-sdk` (override `DART_INSTALL_DIR`), registers
+  `bin` on PATH for the leg session (and subsequent CI steps), and exports
+  `DART_HOME` / `DART_VERSION`;
+- is version-aware: an installed-but-stale SDK is reinstalled on mismatch
+  (pool VMs keep a persistent `$HOME` — a presence-only check lets an ancient
+  binary shadow the requested toolchain forever).
+
+Cache it per resolved version with `setup/cache.sh dart` (`DART_CACHE_*`).
+Network-free inspection: `dart.sh plan` (resolved target/URL/layout) and
+`dart.sh status`. Unit-tested in `js/unit-tests/test_dartSetup.js`.
+
+Dart-repo runners wire it via `customParams.setupCommands`:
+`["bash agents/setup/dart.sh"]` (see `docs/machine-factory-integration.md` §3.3).
