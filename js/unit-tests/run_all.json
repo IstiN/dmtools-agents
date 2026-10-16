@@ -113,6 +113,7 @@
         "js/unit-tests/test_smGithubSource.js",
         "js/unit-tests/test_mergeCadence.js",
         "js/unit-tests/test_reviewVerdict.js",
+        "js/unit-tests/test_dartSetup.js",
         "js/unit-tests/test_reviewVerdicts.js",
         "js/unit-tests/test_mergeBot.js",
         "js/unit-tests/test_mergeTrigger.js",
