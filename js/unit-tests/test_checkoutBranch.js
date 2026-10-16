@@ -41,18 +41,10 @@ function makeConfigLoaderStub(config, branchNameByRole, hookFn, hookLoadCalls) {
     };
 }
 
-var DEFAULT_PR_HELPER_STUB = {
-    buildTargetedOriginFetchCommand: function(branches) {
-        var list = (branches || []).filter(function(b) { return b; });
-        if (!list.length) return null;
-        return 'git -c fetch.recurseSubmodules=no fetch origin ' + list.map(function(b) {
-            return '+refs/heads/' + b + ':refs/remotes/origin/' + b;
-        }).join(' ');
-    },
-    buildOriginFetchCommand: function(refSpec) {
-        return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
-    }
-};
+// Real PR helper (gh-912): the remote-existence probes live there — the
+// strict ref-line parser must be exercised, not a stub.
+var DEFAULT_PR_HELPER_STUB = loadModule('js/common/pullRequest.js',
+    makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }));
 
 function loadCheckoutBranch(configLoaderStub, mocks) {
     return loadModule(

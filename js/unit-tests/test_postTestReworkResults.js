@@ -9,6 +9,11 @@
  *   - a resolved MERGE_HEAD (non-empty sha) is a merge in progress.
  */
 
+// Real PR helper (gh-912): the push-verify SHA extraction lives there — the
+// strict ref-line parser must be exercised, not a stub.
+var prHelperRealForRework = loadModule('js/common/pullRequest.js',
+    makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }));
+
 function loadPostTestReworkResults(cliMock) {
     return loadModule(
         'js/postTestReworkResults.js',
@@ -27,12 +32,7 @@ function loadPostTestReworkResults(cliMock) {
                 '../config.js': configModule,
                 './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js')
             }), {}),
-            './common/pullRequest.js': {
-                // Mirrors the real readStagedDiffStat(runCommand, workingDir).
-                readStagedDiffStat: function(runCommand) {
-                    return String(runCommand('git diff --cached --stat') || '').trim();
-                }
-            },
+            './common/pullRequest.js': prHelperRealForRework,
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} },
             './mergeState.js': loadModule('js/common/mergeState.js'),
             './common/mergeState.js': loadModule('js/common/mergeState.js')
@@ -46,15 +46,23 @@ var REWORK_CONFIG = {
     formats: { commitMessage: { testRework: '{{ticketKey}} {{result}}' } }
 };
 
+var SHA40 = '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec';
+
 /**
  * Build a cli_execute_command double.
  *  - mergeHeadSha: probe returns this sha (merge in progress)
  *  - loose: probe RETURNS '' instead of throwing (loose test double — the
  *    drift detector: the old local probe misread this as "merge in progress")
+ *  - lsRemote: capture for `git ls-remote --heads origin <branch>`; defaults
+ *    to a realistic `<40-hex>\trefs/heads/<branch>` ref line (gh-912: probes
+ *    decide on ref lines, so mocks must carry real ones).
  */
 function makeCli(options) {
     options = options || {};
     var calls = [];
+    var lsRemoteCapture = options.lsRemote !== undefined
+        ? options.lsRemote
+        : SHA40 + '\trefs/heads/' + (options.branch || 'test/PROJ-123');
     var fn = function(args) {
         var command = args.command;
         calls.push(command);
@@ -65,9 +73,9 @@ function makeCli(options) {
         }
         if (command === 'git branch --show-current') return options.branch || 'test/PROJ-123';
         if (command.indexOf('git ls-remote --heads origin') === 0) {
-            return '9a7e2aecommitsha refs/heads/' + (options.branch || 'test/PROJ-123');
+            return lsRemoteCapture;
         }
-        if (command === 'git rev-parse HEAD') return '9a7e2aecommitsha';
+        if (command === 'git rev-parse HEAD') return options.headSha || SHA40;
         return '';
     };
     fn.calls = calls;
@@ -122,6 +130,61 @@ suite('postTestReworkResults — canonical MERGE_HEAD probe (gh-761)', function(
         });
         assert.ok(mergeCalls.length > 0,
             'prIsDirty + no merge in progress → base-branch merge must be started');
+    });
+
+});
+
+// ── gh-912: push-verify extracts the SHA from the ref line ───────────────────
+// The JS bridge merges stderr into every capture. The old
+// `remoteCheck.split(/\s+/)[0]` read the FIRST whitespace token of the
+// capture — on a central-mode runner that is `warning:` (git ≥ 2.54 prints
+// `warning: redirecting to …` on every network command), so a SUCCESSFUL
+// push was reported as "Push rejected". AC4: the SHA comes from the matched
+// `refs/heads/<branch>` line; a warning-only capture is "branch not found".
+
+suite('postTestReworkResults.commitAndPush — push-verify SHA extraction (gh-912 AC4)', function() {
+
+    test('IT-1: warning-polluted capture with a real ref line verifies successfully', function() {
+        var cli = makeCli({
+            lsRemote: 'warning: redirecting to https://git.example.com/\n' +
+                SHA40 + '\trefs/heads/test/PROJ-123'
+        });
+        var m = loadPostTestReworkResults(cli);
+
+        var branch = m.commitAndPush('PROJ-123', true, REWORK_CONFIG, false);
+
+        assert.equal(branch, 'test/PROJ-123',
+            'a successful push must not be misreported as rejected because of stderr noise');
+    });
+
+    test('warning-only capture → "Branch not found on remote after push", never a phantom SHA mismatch', function() {
+        var cli = makeCli({
+            lsRemote: 'warning: redirecting to https://git.example.com/\n'
+        });
+        var m = loadPostTestReworkResults(cli);
+
+        var err = null;
+        try { m.commitAndPush('PROJ-123', true, REWORK_CONFIG, false); } catch (e) { err = e; }
+
+        assert.ok(err, 'a push that produced no ref line must be reported');
+        assert.contains(err.message, 'Branch not found on remote after push',
+            'stderr noise must never be parsed as a SHA — got: ' + err.message);
+    });
+
+    test('SHA mismatch detection survives: a different remote tip still fails the verify', function() {
+        var otherSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+        var cli = makeCli({
+            headSha: SHA40,
+            lsRemote: otherSha + '\trefs/heads/test/PROJ-123'
+        });
+        var m = loadPostTestReworkResults(cli);
+
+        var err = null;
+        try { m.commitAndPush('PROJ-123', true, REWORK_CONFIG, false); } catch (e) { err = e; }
+
+        assert.ok(err, 'a genuinely mismatched remote tip must still be caught');
+        assert.contains(err.message, 'Push rejected',
+            'the mismatch error is preserved for real mismatches — got: ' + err.message);
     });
 
 });

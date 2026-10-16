@@ -5,14 +5,27 @@
  * handling, and URL extraction in one place for all agents.
  */
 
+// gh-912: the JS bridge hands scripts stdout+stderr merged (deliberate
+// Java-parity contract in dmtools-dart's _runShellScript), and git ≥ 2.54
+// prints `warning: redirecting to <url>/` on EVERY network command against a
+// redirecting (central-mode insteadOf) server. Filters are line-ANCHORED on
+// purpose — diffs and logs legitimately contain "warning:"/"note:" mid-line,
+// and only whole stderr-noise lines must be dropped.
 function cleanCommandOutput(output) {
     if (!output) return '';
     return output.split('\n').filter(function(line) {
         return line.indexOf('Script started') === -1 &&
                line.indexOf('Script done') === -1 &&
                line.indexOf('COMMAND=') === -1 &&
-               line.indexOf('COMMAND_EXIT_CODE=') === -1;
+               line.indexOf('COMMAND_EXIT_CODE=') === -1 &&
+               !/^warning: /.test(line) &&
+               !/^note: /.test(line);
     }).join('\n').trim();
+}
+
+/** Escape a string for literal use inside a RegExp (branch names, gh-912 E2). */
+function escapeRegExp(text) {
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // Both GitHub and GitLab reject PR/MR titles over 255 characters. A prTitle
@@ -285,6 +298,50 @@ function ensureRemoteBranchRef(runCommand, workingDir, branchName) {
         console.warn('Could not fetch explicit ref for origin/' + branchName + ':', e.message || e);
         return false;
     }
+}
+
+// ── Strict ls-remote ref-line parsing (gh-912) ──────────────────────────────
+// Branch-existence probes must NEVER decide on capture non-emptiness: the JS
+// bridge merges git's stderr into every capture, and a `warning: redirecting
+// to …` line survives cleanCommandOutput's wrapper filtering (the anchored
+// ^warning:/^note: filter above is defense in depth; the parser below is the
+// primary defense). A branch exists on origin iff the capture contains a real
+// ref line `<sha>\trefs/heads/<name>`. The {7,40} window accepts any real SHA
+// form ls-remote may print and rejects prose; the name is regex-escaped so
+// dotted/special branch names match literally (E2).
+
+/**
+ * Returns only real remote-ref lines (`<sha>\trefs/...`) from an ls-remote
+ * capture — stderr noise and wrapper artifacts are dropped.
+ */
+function remoteRefLines(output) {
+    return cleanCommandOutput(output || '').split('\n').filter(function (line) {
+        return /^[0-9a-f]{7,40}\trefs\//.test(line);
+    }).join('\n');
+}
+
+/**
+ * Extracts the tip SHA of `branchName` from a `git ls-remote --heads origin
+ * <branch>` capture, or null when the capture carries no real ref line for
+ * the branch. Throws through when the probe command itself fails — callers
+ * keep their existing try/catch semantics.
+ *
+ * @returns {string|null} the matched SHA, or null when the branch is absent
+ */
+function remoteBranchSha(runCommand, workingDir, branchName) {
+    var out = cleanCommandOutput(runCommand('git ls-remote --heads origin ' + branchName, workingDir) || '');
+    var m = new RegExp('^([0-9a-f]{7,40})\\trefs/heads/' + escapeRegExp(branchName) + '\\r?$', 'm').exec(out);
+    return m ? m[1] : null;
+}
+
+/**
+ * True iff `branchName` exists on origin — decided strictly on a real
+ * `refs/heads/<branchName>` ref line in the ls-remote capture, tolerating
+ * stderr noise merged into it (gh-912). See remoteBranchSha for the
+ * error-propagation contract.
+ */
+function remoteBranchExists(runCommand, workingDir, branchName) {
+    return remoteBranchSha(runCommand, workingDir, branchName) !== null;
 }
 
 function readTrackedStatus(runCommand, workingDir) {
@@ -605,6 +662,9 @@ module.exports = {
     buildOriginFetchCommand: buildOriginFetchCommand,
     buildTargetedOriginFetchCommand: buildTargetedOriginFetchCommand,
     ensureRemoteBranchRef: ensureRemoteBranchRef,
+    remoteRefLines: remoteRefLines,
+    remoteBranchSha: remoteBranchSha,
+    remoteBranchExists: remoteBranchExists,
     readTrackedStatus: readTrackedStatus,
     readStagedDiffStat: readStagedDiffStat,
     syncBranchWithBase: syncBranchWithBase,

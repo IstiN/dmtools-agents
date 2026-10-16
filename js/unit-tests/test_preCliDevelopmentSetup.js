@@ -854,6 +854,9 @@ suite('preCliDevelopmentSetup.checkoutBranch — warning-only ls-remote captures
                 var calls = [];
                 var responses = {};
                 responses['git ls-remote --heads origin ai/PROJ-1'] = capture;
+                responses['git ls-remote --heads origin release/rc_mobile_proj-1'] = WARNING;
+                // The branch EXISTS in this scenario — its fetch succeeds like real git.
+                responses['git -c fetch.recurseSubmodules=no fetch origin ai/PROJ-1:ai/PROJ-1'] = '';
                 var mod = loadPreCliDevelopmentSetup(configLoaderStub, {
                     cli_execute_command: makeFirstRunCli(calls, responses)
                 });

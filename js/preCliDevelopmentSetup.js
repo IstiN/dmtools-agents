@@ -38,21 +38,14 @@ function runCommandStr(command) {
 }
 
 /**
- * Clean command output from script wrapper artifacts
+ * Clean command output from script wrapper artifacts and line-anchored git
+ * noise — delegated to the canonical helper (gh-823 one-copy rule; gh-912
+ * warning filter lives there once).
  * @param {string} output - Raw command output
  * @returns {string} Cleaned output
  */
 function cleanCommandOutput(output) {
-    if (!output) {
-        return '';
-    }
-    const lines = output.split('\n').filter(function (line) {
-        return line.indexOf('Script started') === -1 &&
-            line.indexOf('Script done') === -1 &&
-            line.indexOf('COMMAND=') === -1 &&
-            line.indexOf('COMMAND_EXIT_CODE=') === -1;
-    });
-    return lines.join('\n').trim();
+    return prHelper.cleanCommandOutput(output);
 }
 
 function writeBranchConflictGuidance(ticketKey, branchName, baseBranch, details) {
@@ -254,15 +247,18 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
             runCmd({ command: 'git checkout ' + branchName });
             alignBranchWithBase(ticketKey, branchName, rebaseBase);
         } else {
-            var remoteBranches = '';
+            var remoteBranchExists = false;
             try {
-                var rawRemote = runCmd({ command: 'git ls-remote --heads origin ' + branchName }) || '';
-                remoteBranches = cleanCommandOutput(rawRemote);
+                // gh-912: decide on a real refs/heads/<branch> ref line — a
+                // warning-only capture (central-mode insteadOf origin, git ≥
+                // 2.54) must classify as "branch absent" so the create-branch
+                // path runs instead of a fatal checkout of a missing ref.
+                remoteBranchExists = prHelper.remoteBranchExists(runCommandStr, _workingDir, branchName);
             } catch (e) {
                 console.warn('Error checking remote branches:', e);
             }
 
-            if (remoteBranches.trim()) {
+            if (remoteBranchExists) {
                 console.log('Branch exists on remote, fetching and aligning with base:', branchName);
                 // Explicitly fetch the branch so origin/<branch> tracking ref is available locally.
                 // git fetch origin --prune may not populate it if the repo is sparse/shallow.
@@ -284,11 +280,11 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
                     try {
                         featureLocal = cleanCommandOutput(runCmd({ command: 'git branch --list "' + featureBranchName + '"' }) || '');
                     } catch (e) { }
-                    var featureRemote = '';
+                    var featureRemoteExists = false;
                     try {
-                        featureRemote = cleanCommandOutput(runCmd({ command: 'git ls-remote --heads origin ' + featureBranchName }) || '');
+                        featureRemoteExists = prHelper.remoteBranchExists(runCommandStr, _workingDir, featureBranchName);
                     } catch (e) { }
-                    if (!featureLocal.trim() && !featureRemote.trim()) {
+                    if (!featureLocal.trim() && !featureRemoteExists) {
                         var branchCreateFn = customParams.branchCreateFnPath
                             ? configLoader.loadHookFn(customParams.branchCreateFnPath, 'branchCreateFnPath')
                             : null;
@@ -319,7 +315,7 @@ function checkoutBranch(ticketKey, config, ticket, customParams) {
                             runCmd({ command: 'git checkout -b ' + featureBranchName });
                             runCmd({ command: 'git push -u origin ' + featureBranchName });
                         }
-                    } else if (featureRemote.trim() && !featureLocal.trim()) {
+                    } else if (featureRemoteExists && !featureLocal.trim()) {
                         runCmd({ command: 'git checkout -b ' + featureBranchName + ' origin/' + featureBranchName });
                     } else {
                         runCmd({ command: 'git checkout ' + featureBranchName });
@@ -361,14 +357,14 @@ function reportExistingDevBranch(ticketKey, config, ticket, inputFolder) {
     var branchName = configLoader.resolveBranchName(config, ticket, 'development');
     var baseBranch = configLoader.resolvePRTargetBranch(config, ticket);
 
-    var lsRemote = '';
+    var lsRemoteExists = false;
     try {
-        lsRemote = cleanCommandOutput(runCmd({ command: 'git ls-remote --heads origin ' + branchName }) || '');
+        lsRemoteExists = prHelper.remoteBranchExists(runCommandStr, _workingDir, branchName);
     } catch (e) {
         console.warn('Could not check remote branch state (non-fatal):', e);
         return false;
     }
-    if (!lsRemote.trim()) {
+    if (!lsRemoteExists) {
         console.log('No existing remote branch origin/' + branchName + ' — fresh development leg');
         return false;
     }
