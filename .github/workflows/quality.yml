@@ -5,7 +5,12 @@
 #   - a function in the baseline gets a higher CRAP, or
 #   - a function not in the baseline (new/renamed) exceeds CRAP_THRESHOLD.
 # Improvements pass and are reported; lock them in by re-baselining:
-#   crap4js . --coverage <coverage-final.json> --baseline crap-baseline.json --write-baseline
+#   crap4js . --coverage <coverage-final.json> --threshold 8 --baseline crap-baseline.json --write-baseline
+#
+# The baseline stores ONLY functions above the threshold (~570 entries, ~34 KB) — a function
+# absent from it is already held to CRAP_THRESHOLD, so recording the ~5000 compliant ones would
+# only bloat the file and create merge conflicts. Trade-off: a compliant function may drift up
+# to the threshold (8) without a regression; everything above it can only decrease.
 #
 # Coverage comes from the unit suite run in this same job (instrumented tree),
 # so the ratchet is evaluated with the unit-test results of the PR head.
@@ -32,7 +37,7 @@ env:
   # Threshold for functions NOT in crap-baseline.json (new or renamed code).
   CRAP_THRESHOLD: '8'
   CRAP4JS_REPO: 'IstiN/crap4js'
-  CRAP4JS_REF: 'eb4a7d6e9077589434fa2cfbba69e83ca6a37869'
+  CRAP4JS_REF: '122ff845cbe128a71637faa846d6252f1d756423'
 
 jobs:
   crap:
