@@ -69,6 +69,21 @@ function action(params) {
                     tcs.push(other);
                 }
             });
+            // gh-916 review: Jira returns issuelinks stubs with a reduced field set (summary/status/
+            // issuetype — never labels), so in 'label' mode hasStage could not recognise a stage_<key>
+            // marker on this, the preferred path, and a marked TC blocked the Bug forever. Re-fetch each
+            // TC in full so labels are real; the 'none' default keeps the stubs — status-only comparison,
+            // no extra reads, the exact previous behaviour.
+            if (tracker.stageFallback() === 'label' && tcs.length > 0) {
+                return tcs.map(function(tc) {
+                    try {
+                        return tracker.getIssue(tc.key) || tc;
+                    } catch (e) {
+                        console.warn('Could not re-fetch', tc.key, 'with full fields — falling back to the link stub:', e);
+                        return tc;
+                    }
+                });
+            }
             return tcs;
         } catch (e) {
             console.warn('Failed to read direct issue links for', ticketKey, ':', e);

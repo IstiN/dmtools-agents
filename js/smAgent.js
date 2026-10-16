@@ -135,6 +135,10 @@ var buildEncodedConfigModule = require('./common/buildEncodedConfig.js');
 var machineAuthorModule = require('./common/machineAuthor.js');
 var smProviderModule = require('./common/smProvider.js');
 var trackersModule = require('./common/trackers.js');
+// gh-916 review: the DEFAULT status names (config.js STATUSES) back the second pass of
+// stageKeyForStatusName — a project that renames a status still keeps the sm.json literal
+// targetStatus, and the stage-key resolution must not silently lose the fallback there.
+var configModule = require('./config.js');
 // gh-807: machine review-verdict records + their reconciliation logic.
 var reviewVerdictsModule = require('./common/reviewVerdicts.js');
 var redConvergenceModule = require('./common/redConvergence.js');
@@ -762,6 +766,23 @@ function stageKeyForStatusName(statusName) {
             TAG_ONLY_STAGE_KEYS[key] &&
             statuses[key] === statusName) {
             return key;
+        }
+    }
+    // gh-916 review: a project that renames the status (jira.statuses override, e.g.
+    // READY_FOR_TESTING: 'ReadyForTest') keeps the sm.json literal targetStatus
+    // ('Ready For Testing'), so the configured-name pass above misses and the fallback would
+    // never apply exactly where useConfiguredStatusesInQueries projects need it most. Second
+    // pass: the default (key-derived) status name, case-insensitive — the stage KEY is what the
+    // marker and the {stage.*} JQL placeholders are built from, so resolving it keeps the
+    // restricted-workflow hand-off visible even when the transition itself cannot succeed.
+    var wanted = String(statusName === undefined || statusName === null ? '' : statusName).toLowerCase();
+    if (wanted) {
+        for (var dkey in TAG_ONLY_STAGE_KEYS) {
+            if (!Object.prototype.hasOwnProperty.call(TAG_ONLY_STAGE_KEYS, dkey)) continue;
+            var derived = configModule.STATUSES[dkey];
+            if (derived && String(derived).toLowerCase() === wanted) {
+                return dkey;
+            }
         }
     }
     return null;
