@@ -355,7 +355,10 @@ suite('mergeStoryTestAutomationPR: stage-label fallback (gh-916)', function() {
 
         assert.equal(result, true, 'the merge completes even when the TC move is rejected');
         assert.deepEqual(moves, [{ key: 'TS-91', statusName: 'Passed' }]);
-        assert.deepEqual(added, [{ key: 'TS-91', label: 'stage_passed' }]);
+        var stageLabels = added.filter(function(a) { return a.label.indexOf('stage_') === 0; });
+        assert.deepEqual(stageLabels, [{ key: 'TS-91', label: 'stage_passed' }]);
+        assert.ok(added.some(function(a) { return a.key === 'TS-90' && a.label === 'test_pr_finalized'; }),
+            'the story finalize label is still applied');
     });
 
     test("'none' mode: the marker is ignored — the TC is skipped with the old fields list", function() {
