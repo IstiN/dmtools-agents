@@ -54,19 +54,24 @@ os_arch() {
 }
 
 # ── Version probes ────────────────────────────────────────────────────────────
-# Installed version from the `dart --version` banner. Checks PATH first, then
-# our own install dir — a cache-restored SDK is real even before its bin dir
-# is registered on PATH.
+# Installed version from the `dart --version` banner. Probes OUR managed
+# install dir FIRST, then PATH — the cache-hit decision in do_install
+# registers <SDK_BIN> on PATH and points DART_HOME at it, so it must describe
+# the SDK this script owns, never a foreign dart (e.g. a Flutter-bundled one)
+# that happens to sit on PATH. The banner capture takes the FULL version
+# token — beta/dev banners are "3.14.0-315.1.beta (beta) …", and truncating at
+# the first "-" would never equal the version channel_latest resolves, so the
+# version-aware cache hit would never fire on non-stable channels.
 installed_version() {
   local d=""
-  if command -v dart >/dev/null 2>&1; then
-    d="$(command -v dart)"
-  elif [ -x "${SDK_BIN}/dart" ]; then
+  if [ -x "${SDK_BIN}/dart" ]; then
     d="${SDK_BIN}/dart"
+  elif command -v dart >/dev/null 2>&1; then
+    d="$(command -v dart)"
   fi
   [ -n "${d}" ] || { echo ""; return 0; }
   "${d}" --version 2>&1 \
-    | sed -n 's/^Dart SDK version: \([0-9][0-9.]*\).*/\1/p' | head -1
+    | sed -n 's/^Dart SDK version: \([^ )]*\).*/\1/p' | head -1
 }
 
 # Latest concrete version of a channel (dart-lang/setup-dart resolves "latest"
@@ -91,7 +96,13 @@ quality_detection() {
       esac
     done <<EOF
 $(awk -v sq="'" '
-  /uses:[[:space:]]*dart-lang\/setup-dart/ { inb = 1; print "step=1"; next }
+  # Comment lines never contribute — neither a commented-out step
+  # ("# - uses: dart-lang/setup-dart@v1") nor a stale "# channel: beta" note.
+  inb && /^[[:space:]]*#/ { next }
+  # The step marker must be a live list item ("  - uses: …"), optionally with
+  # a QUOTED action ref (uses: "dart-lang/setup-dart@v1" — legal YAML, common
+  # in generated/templated workflows).
+  /^[[:space:]]*-[[:space:]]*uses:[[:space:]]*"?(dart-lang\/setup-dart)/ { inb = 1; print "step=1"; next }
   inb && /^[[:space:]]*-[[:space:]]*(name|uses|run):[[:space:]]/ { inb = 0 }
   inb && /sdk:/ {
     sub(/.*sdk:[[:space:]]*/, ""); gsub(/["]/, ""); gsub(sq, "")
@@ -101,6 +112,7 @@ $(awk -v sq="'" '
     sub(/.*channel:[[:space:]]*/, ""); gsub(/["]/, ""); gsub(sq, "")
     sub(/[[:space:]]*#.*/, ""); gsub(/[[:space:]]/, ""); print "channel=" $0
   }
+' "${f}" 2>/dev/null)
 ' "${f}" 2>/dev/null)
 EOF
   done

@@ -93,6 +93,14 @@ function dsRun(subcommand, opts) {
         lines.push('printf %s ' + dsShq('#!/bin/sh\necho ' + dsShq(opts.stubDart)) + ' > "$d/bin/dart"');
         lines.push('chmod +x "$d/bin/dart"');
     }
+    if (opts.managedBanner !== undefined) {
+        // A fake SDK installed at <DART_INSTALL_DIR>/dart-sdk/bin/dart — what
+        // dart.sh itself (or a CI cache restore) would have put there.
+        lines.push('mkdir -p "$d/nodart/dart-sdk/bin"');
+        lines.push('printf %s ' + dsShq('#!/bin/sh\necho ' + dsShq(opts.managedBanner)) +
+            ' > "$d/nodart/dart-sdk/bin/dart"');
+        lines.push('chmod +x "$d/nodart/dart-sdk/bin/dart"');
+    }
     var env = (opts.env || []).slice();
     // Hermetic against the HOST: the script's installed-version probe falls
     // back to <DART_INSTALL_DIR>/dart-sdk/bin/dart, so a real SDK cached on
@@ -128,6 +136,70 @@ var DS_QUALITY_BETA = [
 // Fixture: quality workflow pinning BOTH an sdk version and a channel.
 var DS_QUALITY_PINNED = DS_QUALITY_BETA
     .replace('          channel: beta', '          channel: beta\n          sdk: 3.9.4');
+
+// Fixture: QUOTED action ref (legal YAML, common in generated/templated workflows).
+var DS_QUALITY_QUOTED = DS_QUALITY_BETA
+    .replace("- uses: dart-lang/setup-dart@v1", '- uses: "dart-lang/setup-dart@v1"');
+
+// Fixture: the setup-dart step COMMENTED OUT (its channel must not leak in).
+var DS_QUALITY_COMMENTED_STEP = DS_QUALITY_BETA
+    .replace(/^(      - uses: dart-lang)/m, '#$1')
+    .replace(/^(          channel: beta)$/m, '#$1');
+
+// Fixture: live setup-dart step whose `channel:` line is commented out
+// (a stale comment must not win over the real input).
+var DS_QUALITY_COMMENTED_CHANNEL = DS_QUALITY_BETA
+    .replace('          channel: beta',
+        '          # channel: beta   (was beta, pinned to stable for now)\n          channel: stable');
+
+/**
+ * Run dart.sh with merged stdout+stderr and a captured exit code — for
+ * error-path assertions (usage errors) where dsParseKv is not applicable.
+ * Returns { rc, out }.
+ */
+function dsRunRaw(subcommand, opts) {
+    opts = opts || {};
+    var lines = ['r="$(pwd)"', 'd="$(mktemp -d)"'];
+    if (opts.qualityYml !== undefined) {
+        lines.push('mkdir -p "$d/.github/workflows"');
+        lines.push('printf %s ' + dsShq(opts.qualityYml) + ' > "$d/.github/workflows/quality.yml"');
+    }
+    var env = (opts.env || []).slice();
+    env.push('DART_INSTALL_DIR="$d/nodart"');
+    lines.push('cd "$d"');
+    lines.push('out="$( (' + (env.length ? env.join(' ') + ' ' : '') +
+        'bash "$r/setup/dart.sh" ' + subcommand + ') 2>&1 )"; rc=$?');
+    lines.push('printf "__RC__=%s\\n" "$rc"');
+    lines.push('printf "%s\\n" "$out"');
+    lines.push('cd /; rm -rf "$d"; exit 0');
+    var out = String(cli_execute_command({ command: 'bash -c ' + dsShq(lines.join('\n')) }));
+    var m = /^__RC__=(\d+)\n/.exec(out);
+    return { rc: m ? Number(m[1]) : -1, out: out.replace(/^__RC__=\d+\n/, '') };
+}
+
+/**
+ * Run `setup/cache.sh <args>` inside a fresh mktemp sandbox (the dart cache
+ * key must follow what dart.sh resolves FROM THE CHECKOUT — the sandbox
+ * carries the quality.yml fixture). Returns { rc, out } with merged output.
+ */
+function dsCacheRun(argsLine, opts) {
+    opts = opts || {};
+    var lines = ['r="$(pwd)"', 'd="$(mktemp -d)"'];
+    if (opts.qualityYml !== undefined) {
+        lines.push('mkdir -p "$d/.github/workflows"');
+        lines.push('printf %s ' + dsShq(opts.qualityYml) + ' > "$d/.github/workflows/quality.yml"');
+    }
+    var env = (opts.env || []).slice();
+    lines.push('cd "$d"');
+    lines.push('out="$( (' + (env.length ? env.join(' ') + ' ' : '') +
+        'bash "$r/setup/cache.sh" ' + argsLine + ') 2>&1 )"; rc=$?');
+    lines.push('printf "__RC__=%s\\n" "$rc"');
+    lines.push('printf "%s\\n" "$out"');
+    lines.push('cd /; rm -rf "$d"; exit 0');
+    var out = String(cli_execute_command({ command: 'bash -c ' + dsShq(lines.join('\n')) }));
+    var m = /^__RC__=(\d+)\n/.exec(out);
+    return { rc: m ? Number(m[1]) : -1, out: out.replace(/^__RC__=\d+\n/, '') };
+}
 
 // ── Suite ────────────────────────────────────────────────────────────────────
 
@@ -203,6 +275,28 @@ suite('setup/dart.sh: target resolution precedence (gh-918)', function () {
         assert.equal(r.channel, 'dev');
         assert.equal(r.source, 'argument');
     });
+
+    test('quoted uses: "dart-lang/setup-dart@v1" is still detected (generated/templated workflows)', function () {
+        var r = dsRun('plan', { qualityYml: DS_QUALITY_QUOTED });
+        assert.equal(r.channel, 'beta',
+            'a quoted action ref must not silently fall back to stable');
+        assert.equal(r.source, 'quality workflow');
+    });
+
+    test('a commented-out setup-dart step does not hijack detection', function () {
+        var r = dsRun('plan', { qualityYml: DS_QUALITY_COMMENTED_STEP });
+        assert.equal(r.channel, 'stable',
+            'a # - uses: dart-lang/setup-dart line is a comment, not a step');
+        assert.equal(r.source, 'default',
+            'no live step → no "quality workflow" source');
+    });
+
+    test('a commented-out channel line inside a live step does not win', function () {
+        var r = dsRun('plan', { qualityYml: DS_QUALITY_COMMENTED_CHANNEL });
+        assert.equal(r.channel, 'stable',
+            'the stale "# channel: beta" comment must not shadow channel: stable');
+        assert.equal(r.source, 'quality workflow');
+    });
 });
 
 suite('setup/dart.sh: install layout + PATH exposure contract', function () {
@@ -233,9 +327,129 @@ suite('setup/dart.sh: install layout + PATH exposure contract', function () {
         assert.equal(r.installed, '3.5.4');
     });
 
+    test('status parses the FULL token from a beta banner — 3.14.0-315.1.beta, not truncated at "-"', function () {
+        // Live dart-archive beta banner. channel_latest returns the full
+        // 3.14.0-315.1.beta from the VERSION file; truncating the banner at
+        // the first "-" makes the version-aware cache check ALWAYS mismatch
+        // on beta/dev channels → the SDK is wiped and re-downloaded per leg.
+        var r = dsRun('status', { stubDart: 'Dart SDK version: 3.14.0-315.1.beta (beta) on "linux_x64"' });
+        assert.equal(r.installed, '3.14.0-315.1.beta');
+    });
+
+    test('status parses the FULL token from a dev banner (3.15.0-27.0.dev)', function () {
+        var r = dsRun('status', { stubDart: 'Dart SDK version: 3.15.0-27.0.dev (dev) on "linux_x64"' });
+        assert.equal(r.installed, '3.15.0-27.0.dev');
+    });
+
+    test('a managed <install-dir> dart wins over a foreign PATH dart (cache-hit must describe OUR install)', function () {
+        // The cache-hit branch registers <SDK_BIN> on PATH and points DART_HOME
+        // at it — it must only fire for the SDK this script owns, never for a
+        // foreign dart that happens to sit on PATH.
+        var r = dsRun('status', {
+            stubDart: 'Dart SDK version: 3.5.4 (stable) on "linux_x64"',
+            managedBanner: 'Dart SDK version: 3.14.0-315.1.beta (beta) on "linux_x64"'
+        });
+        assert.equal(r.installed, '3.14.0-315.1.beta',
+            'installed_version must probe <SDK_BIN>/dart (the managed install) before PATH');
+    });
+
     test('status reports an empty installed version when dart is absent (the gh-918 leg state)', function () {
         var r = dsRun('status');
         assert.equal(r.installed, '');
+    });
+});
+
+suite('setup/dart.sh: mistyped targets fail fast with usage (no bogus version 404s)', function () {
+
+    if (!_dsCanRun_) {
+        console.log('  ⏭️  skipped — bash not executable here');
+        return;
+    }
+
+    test('--help fails with a usage error instead of resolving as a version target', function () {
+        var r = dsRunRaw('plan --help');
+        assert.ok(r.rc !== 0, '--help must not resolve to version mode (rc=' + r.rc + '), out: ' + r.out);
+        assert.ok(/unknown target/.test(r.out), 'must name the offending target, got: ' + r.out);
+    });
+
+    test('a typo like `instal` fails with a usage error, not a late curl 404', function () {
+        var r = dsRunRaw('plan instal');
+        assert.ok(r.rc !== 0, 'typo must be rejected up front (rc=' + r.rc + '), out: ' + r.out);
+        assert.ok(/unknown target/.test(r.out), 'got: ' + r.out);
+    });
+
+    test('garbage target (`latest-sdk`) fails with a usage error', function () {
+        var r = dsRunRaw('plan latest-sdk');
+        assert.ok(r.rc !== 0, 'got: ' + r.out);
+        assert.ok(/unknown target/.test(r.out), 'got: ' + r.out);
+    });
+
+    test('a v-prefixed version is accepted and stripped (fa.sh/dmtools.sh muscle memory)', function () {
+        var r = dsRun('plan v3.9.4');
+        assert.equal(r.mode, 'version');
+        assert.equal(r.version, '3.9.4', 'dart-archive URLs are unprefixed — v must be stripped');
+        assert.ok(String(r.sdk_url).indexOf('/release/3.9.4/sdk/') !== -1,
+            'got: ' + r.sdk_url);
+    });
+
+    test('--help as the FIRST argument prints usage and exits 0', function () {
+        var r = dsRunRaw('--help');
+        assert.equal(r.rc, 0, 'got: ' + r.out);
+        assert.ok(/Usage:/.test(r.out), 'got: ' + r.out);
+    });
+});
+
+suite('setup/cache.sh: DART_CACHE_KEY follows the target dart.sh actually resolves', function () {
+
+    if (!_dsCanRun_) {
+        console.log('  ⏭️  skipped — bash not executable here');
+        return;
+    }
+
+    test('keys dart on a beta-pinned repo keys dart-beta-… (restore/save round-trip)', function () {
+        // RED pre-fix: _cache_dart keyed on ${DART_VERSION:-stable} → dart-stable-…
+        // while dart.sh installed beta — the primary key could never hit.
+        var r = dsCacheRun('keys dart', { qualityYml: DS_QUALITY_BETA });
+        assert.equal(r.rc, 0, 'got: ' + r.out);
+        assert.ok(/key=dart-beta-/.test(r.out),
+            'restore key must follow the quality.yml-resolved channel, got: ' + r.out);
+        assert.ok(r.out.indexOf('dart-stable-') === -1,
+            'must NOT key stable when quality.yml pins beta, got: ' + r.out);
+    });
+
+    test('keys dart with an sdk-pinned repo keys on the pinned version', function () {
+        var r = dsCacheRun('keys dart', { qualityYml: DS_QUALITY_PINNED });
+        assert.equal(r.rc, 0, 'got: ' + r.out);
+        assert.ok(/key=dart-3\.9\.4-/.test(r.out), 'got: ' + r.out);
+    });
+
+    test('keys dart without any detection source still keys dart-stable-…', function () {
+        var r = dsCacheRun('keys dart', {});
+        assert.equal(r.rc, 0, 'got: ' + r.out);
+        assert.ok(/key=dart-stable-/.test(r.out), 'got: ' + r.out);
+    });
+
+    test('explicit dart:<version> argument wins over plan resolution', function () {
+        var r = dsCacheRun('keys dart:3.5.0', { qualityYml: DS_QUALITY_BETA });
+        assert.equal(r.rc, 0, 'got: ' + r.out);
+        assert.ok(/key=dart-3\.5\.0-/.test(r.out), 'got: ' + r.out);
+    });
+
+    test('DART_VERSION env (a pure input pin) keys consistently for restore AND save', function () {
+        // dart.sh must NOT re-export the installed version into DART_VERSION:
+        // the save step runs after the install, and a re-export would flip its
+        // key from dart-beta-… to dart-<installed>-… — never looked for by the
+        // restore step. With DART_VERSION kept a pure input, both steps see
+        // the same value and derive the same key.
+        var restore = dsCacheRun('keys dart', { env: ['DART_VERSION=beta'] });
+        var save = dsCacheRun('keys dart', { env: ['DART_VERSION=beta'] });
+        var keyOf = function (o) {
+            var m = /key=([^\s]+)/.exec(o.out);
+            return m ? m[1] : '(none)';
+        };
+        assert.equal(keyOf(restore), keyOf(save),
+            'restore and save must derive identical keys for the same environment');
+        assert.ok(/dart-beta-/.test(keyOf(restore)), 'got: ' + restore.out);
     });
 });
 
