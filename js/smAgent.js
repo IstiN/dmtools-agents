@@ -714,11 +714,53 @@ function smTracker(config) {
 function moveStatus(ticketKey, targetStatus) {
     try {
         if (DRY) { console.log('  [dry] 🔀 ' + ticketKey + ' → ' + targetStatus); }
-        else { smTracker().moveToStatus(ticketKey, targetStatus); }
+        else {
+            // gh-916: a rule target can be a tag-only status (sm.json moves Merged →
+            // Ready For Testing). Resolve the configured status key and fall back to
+            // the stage marker when the workflow rejects the transition. Without a
+            // configured key (status exists everywhere) this is the plain move.
+            var stageKey = stageKeyForStatusName(targetStatus);
+            if (stageKey) {
+                smTracker().moveToStatusOrMark(ticketKey, targetStatus, stageKey);
+            } else {
+                smTracker().moveToStatus(ticketKey, targetStatus);
+            }
+        }
         console.log('  ✅ ' + ticketKey + ' → ' + targetStatus);
     } catch (e) {
         console.warn('  ⚠️  Status transition failed for ' + ticketKey + ': ' + (e.message || e));
     }
+}
+
+// gh-916: reverse lookup status NAME → configured statuses KEY (e.g. 'Ready For
+// Testing' → 'READY_FOR_TESTING') so rule.targetStatus moves can leave a stage
+// marker on restricted workflows. Restricted to the test-automation stage set —
+// the only statuses that can be tag-only on a restricted workflow (#910);
+// dev-flow statuses (Backlog, In Development, In Review, Done, …) exist in every
+// supported workflow, so their transitions stay plain moves. null → plain move.
+var TAG_ONLY_STAGE_KEYS = {
+    PASSED: true,
+    FAILED: true,
+    IN_REVIEW_PASSED: true,
+    IN_REVIEW_FAILED: true,
+    SKIPPED: true,
+    IRRELEVANT: true,
+    BUG_TO_FIX: true,
+    IN_TESTING: true,
+    READY_FOR_TESTING: true,
+    MERGED: true
+};
+
+function stageKeyForStatusName(statusName) {
+    var statuses = (projectConfig && projectConfig.jira && projectConfig.jira.statuses) || {};
+    for (var key in statuses) {
+        if (Object.prototype.hasOwnProperty.call(statuses, key) &&
+            TAG_ONLY_STAGE_KEYS[key] &&
+            statuses[key] === statusName) {
+            return key;
+        }
+    }
+    return null;
 }
 
 function hasLabel(ticket, label) {

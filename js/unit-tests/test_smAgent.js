@@ -11723,3 +11723,50 @@ suite('smAgent: runLocalAction require shim (gh-908)', function() {
         assert.contains(err.message, 'Cannot read: common/ticketKeyShapes.js');
     });
 });
+
+// ── gh-916: rule.targetStatus moves fall back to the stage marker ────────────
+
+suite('smAgent: targetStatus stage-label fallback (gh-916)', function() {
+
+    test("'label' mode: a rejected Ready For Testing move marks stage_ready_for_testing — tick still triggers", function() {
+        var added = [];
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "PROJ", parentTicket: "PROJ-1", stageFallback: "label", statuses: { READY_FOR_TESTING: "Ready For Testing" } }, repository: { owner: "o", repo: "r" } };'
+            },
+            tickets: [{ key: 'T-9', fields: { labels: [] } }],
+            onMoveStatus: function() {
+                throw new Error("The field 'State' contains the value 'Ready For Testing' that is not in the list of supported values");
+            },
+            onAddLabel: function(opts) { added.push(opts); }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { targetStatus: 'Ready For Testing' })
+        ]));
+
+        assert.deepEqual(added, [{ key: 'T-9', label: 'stage_ready_for_testing' }]);
+        assert.equal(sm.capturedTriggers.length, 1, 'the tick continues after the marked fallback');
+    });
+
+    test("an unconfigured targetStatus stays a plain move even when the transition is rejected", function() {
+        var added = [];
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "PROJ", parentTicket: "PROJ-1", stageFallback: "label", statuses: { READY_FOR_TESTING: "Ready For Testing" } }, repository: { owner: "o", repo: "r" } };'
+            },
+            tickets: [{ key: 'T-10', fields: { labels: [] } }],
+            onMoveStatus: function() {
+                throw new Error('state rejected');
+            },
+            onAddLabel: function(opts) { added.push(opts); }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { targetStatus: 'In Development' })
+        ]));
+
+        assert.deepEqual(added, [], 'no configured stage key — no marker');
+        assert.equal(sm.capturedTriggers.length, 1, 'the move failure is caught, the tick continues');
+    });
+});
