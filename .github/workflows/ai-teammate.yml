@@ -78,6 +78,5 @@ jobs:
       machine-author: 'ai-teammate'
       leg: ${{ github.event.inputs.leg || '' }}
       reason: ${{ github.event.inputs.reason || github.event_name }}
-      factory_ref: ${{ github.sha }}
       flutter-version: ''  # JS/configs repo — dmtools & fa CLIs are prebuilt; no Flutter toolchain needed
     secrets: inherit
