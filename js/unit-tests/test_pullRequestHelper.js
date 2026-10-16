@@ -524,6 +524,14 @@ suite('pullRequest helper — remoteBranchExists / remoteBranchSha (gh-912 UT-1)
         assert.equal(r.sha, SHA40);
     });
 
+    test('SHA-256 repositories: 64-hex ref line → exists, SHA extracted', function() {
+        var sha64 = SHA40 + '0123456789abcdef01234567';
+        assert.equal(sha64.length, 64);
+        var r = probe(sha64 + '\trefs/heads/ai/PROJ-1\n');
+        assert.equal(r.exists, true);
+        assert.equal(r.sha, sha64);
+    });
+
     test('shortened 7-hex SHA still accepted (E1: any real form)', function() {
         var r = probe('9a7e2ae\trefs/heads/ai/PROJ-1\n');
         assert.equal(r.exists, true);
@@ -575,18 +583,24 @@ suite('pullRequest helper — remoteBranchExists / remoteBranchSha (gh-912 UT-1)
 
 });
 
-suite('pullRequest helper — cleanCommandOutput git-noise filter (gh-912 UT-3)', function() {
+suite('pullRequest helper — cleanCommandOutput / stripGitNoise (gh-912 UT-3, backward compat)', function() {
 
-    test('drops line-anchored git warning:/note: lines', function() {
+    test('cleanCommandOutput keeps `warning:`/`note:` lines — they are DATA for commit subjects, file lists, diffs', function() {
         var pr = loadPullRequestHelper();
-        var out = pr.cleanCommandOutput(
+        var out = pr.cleanCommandOutput('note: keep legacy flag\nwarning: deprecated api removed\nfix: real subject\n');
+        assert.equal(out, 'note: keep legacy flag\nwarning: deprecated api removed\nfix: real subject');
+    });
+
+    test('stripGitNoise (opt-in) drops line-anchored git warning:/note: lines', function() {
+        var pr = loadPullRequestHelper();
+        var out = pr.stripGitNoise(
             'warning: redirecting to https://git.example.com/\nSHA-LINE\nnote: some git advisory\n');
         assert.equal(out, 'SHA-LINE');
     });
 
-    test('never drops mid-line occurrences — diffs and logs may contain the words (E4)', function() {
+    test('stripGitNoise never drops mid-line occurrences (E4)', function() {
         var pr = loadPullRequestHelper();
-        var out = pr.cleanCommandOutput(
+        var out = pr.stripGitNoise(
             'diff --git a/x b/x\n+log.print("warning: weird")\n-// note: legacy\n');
         assert.contains(out, '+log.print("warning: weird")');
         assert.contains(out, '-// note: legacy');
@@ -595,7 +609,7 @@ suite('pullRequest helper — cleanCommandOutput git-noise filter (gh-912 UT-3)'
     test('script wrapper lines are still dropped', function() {
         var pr = loadPullRequestHelper();
         var out = pr.cleanCommandOutput(
-            'Script started on 2026-10-16\nCOMMAND=git status\nwarning: redirecting to https://git.example.com/\nOn branch main\nCOMMAND_EXIT_CODE=0\nScript done on 2026-10-16\n');
+            'Script started on 2026-10-16\nCOMMAND=git status\nOn branch main\nCOMMAND_EXIT_CODE=0\nScript done on 2026-10-16\n');
         assert.equal(out, 'On branch main');
     });
 
