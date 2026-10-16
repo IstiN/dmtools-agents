@@ -113,7 +113,9 @@ function setupTouched() {
       // Engine-side factory scripts ship in the factory-setup asset too —
       // a change to any of them must re-cut the asset (awf flip depends on
       // the pack landing first).
-      f === 'scripts/apply-review-verdict.sh',
+      f === 'scripts/apply-review-verdict.sh' ||
+      f === 'scripts/close-review-cycle.sh' ||
+      f === 'scripts/close-rework-cycle.sh',
   );
 }
 
@@ -130,7 +132,12 @@ function buildFactorySetup() {
     // Engine-side factory scripts (awf de-bloat 2026-10-16): these carry SM
     // cycle logic, not factory-bootstrap glue — they belong to the engine
     // pack. Keep this list in sync with awf's call sites.
-    for (const engineScript of ['git-push-guard.sh', 'apply-review-verdict.sh']) {
+    for (const engineScript of [
+      'git-push-guard.sh',
+      'apply-review-verdict.sh',
+      'close-review-cycle.sh',
+      'close-rework-cycle.sh',
+    ]) {
       copyFileSync(join(ROOT, 'scripts', engineScript), join(staging, 'scripts', engineScript));
     }
     for (const leg of FACTORY_SETUP_LEGS) {
