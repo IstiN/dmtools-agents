@@ -17,22 +17,17 @@ const { GIT_CONFIG } = require('./config.js');
 var configLoader = require('./configLoader.js');
 var prHelper = require('./common/pullRequest.js');
 
-/**
- * Clean command output from script wrapper artifacts
- * @param {string} output - Raw command output
- * @returns {string} Cleaned output
- */
+// Adapter matching the (command, workingDir) signature of the
+// common/pullRequest.js probe helpers (gh-912) — this action always runs in
+// the job root, so workingDir stays unset.
+function runCommandForProbes(command) {
+    return cli_execute_command({ command: command });
+}
+
+// Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
+// common/pullRequest.js once — this delegate keeps every local call site.
 function cleanCommandOutput(output) {
-    if (!output) {
-        return '';
-    }
-    const lines = output.split('\n').filter(function(line) {
-        return line.indexOf('Script started') === -1 &&
-               line.indexOf('Script done') === -1 &&
-               line.indexOf('COMMAND=') === -1 &&
-               line.indexOf('COMMAND_EXIT_CODE=') === -1;
-    });
-    return lines.join('\n').trim();
+    return prHelper.cleanCommandOutput(output);
 }
 
 function action(params) {
@@ -71,11 +66,11 @@ function action(params) {
             try {
                 featureLocal = cleanCommandOutput(cli_execute_command({ command: 'git branch --list "' + featureBranchName + '"' }) || '');
             } catch (e) {}
-            var featureRemote = '';
+            var featureRemoteExists = false;
             try {
-                featureRemote = cleanCommandOutput(cli_execute_command({ command: 'git ls-remote --heads origin ' + featureBranchName }) || '');
+                featureRemoteExists = prHelper.remoteBranchExists(runCommandForProbes, null, featureBranchName);
             } catch (e) {}
-            if (!featureLocal.trim() && !featureRemote.trim()) {
+            if (!featureLocal.trim() && !featureRemoteExists) {
                 var branchCreateFn = customParams.branchCreateFnPath
                     ? configLoader.loadHookFn(customParams.branchCreateFnPath, 'branchCreateFnPath')
                     : null;
@@ -100,7 +95,7 @@ function action(params) {
                     cli_execute_command({ command: 'git checkout -b ' + featureBranchName });
                     cli_execute_command({ command: 'git push -u origin ' + featureBranchName });
                 }
-            } else if (featureRemote.trim() && !featureLocal.trim()) {
+            } else if (featureRemoteExists && !featureLocal.trim()) {
                 cli_execute_command({ command: 'git checkout -b ' + featureBranchName + ' origin/' + featureBranchName });
             } else {
                 cli_execute_command({ command: 'git checkout ' + featureBranchName });
@@ -124,15 +119,17 @@ function action(params) {
             cli_execute_command({ command: 'git checkout ' + branchName });
         } else {
             // Check if branch exists on remote
-            var remoteBranches = '';
+            var remoteBranchExists = false;
             try {
-                var rawRemote = cli_execute_command({ command: 'git ls-remote --heads origin ' + branchName }) || '';
-                remoteBranches = cleanCommandOutput(rawRemote);
+                // gh-912: decide on a real refs/heads/<branch> ref line — a
+                // warning-only capture (central-mode insteadOf origin, git ≥
+                // 2.54) must classify as "branch absent".
+                remoteBranchExists = prHelper.remoteBranchExists(runCommandForProbes, null, branchName);
             } catch (e) {
                 console.warn('Error checking remote branches:', e);
             }
 
-            if (remoteBranches.trim()) {
+            if (remoteBranchExists) {
                 // Exists on remote — checkout tracking remote
                 console.log('Branch exists on remote, checking out with tracking:', branchName);
                 cli_execute_command({ command: 'git checkout -b ' + branchName + ' origin/' + branchName });

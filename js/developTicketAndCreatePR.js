@@ -72,10 +72,14 @@ function generateUniqueBranchName(branchPrefix, ticketKey) {
             command: 'git branch --list "*' + baseBranchName + '*"'
         }) || '';
 
-        // Check remote branches — direct remote query, no fetch needed
-        const remoteBranches = runCmd({
+        // Check remote branches — direct remote query, no fetch needed.
+        // gh-912: keep only real `<sha>\trefs/...` ref lines — a
+        // `warning: redirecting to …` line (central-mode insteadOf origin,
+        // git ≥ 2.54) must not read as "name already taken" and force a
+        // bogus _1 suffix onto the first run of every ticket.
+        const remoteBranches = prHelper.remoteRefLines(runCmd({
             command: 'git ls-remote --heads origin "' + baseBranchName + '*"'
-        }) || '';
+        }) || '');
 
         const allBranches = localBranches + '\n' + remoteBranches;
 
@@ -1391,5 +1395,5 @@ function action(params) {
 }
 // Export for dmtools standalone execution
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { action, throwInterruptedReset, recoverMissingResponse };
+    module.exports = { action, throwInterruptedReset, recoverMissingResponse, generateUniqueBranchName };
 }

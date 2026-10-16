@@ -6,12 +6,18 @@
 
 var NOOP_CONFIG_JS = { GIT_CONFIG: {}, STATUSES: {}, resolveStatuses: function() { return {}; } };
 
+// Real PR helper (gh-912): preCliSnapshotSetup delegates cleanCommandOutput to
+// it, so the canonical implementation must be in the require map.
+var PR_HELPER_REAL_SNAPSHOT = loadModule('js/common/pullRequest.js',
+    makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }));
+
 function loadPreCliSnapshotSetup(configLoaderStub, mocks) {
     return loadModule(
         'js/preCliSnapshotSetup.js',
         makeRequire({
             './configLoader.js': configLoaderStub || makeConfigLoaderStub(),
-            './config.js': NOOP_CONFIG_JS
+            './config.js': NOOP_CONFIG_JS,
+            './common/pullRequest.js': PR_HELPER_REAL_SNAPSHOT
         }),
         mocks || {}
     );
@@ -87,6 +93,7 @@ suite('preCliSnapshotSetup', function() {
             makeRequire({
                 './configLoader.js': makeConfigLoaderStub('develop/3.9.0'),
                 './config.js': NOOP_CONFIG_JS,
+                './common/pullRequest.js': PR_HELPER_REAL_SNAPSHOT,
                 './fetchQuestionsToInput.js': makeChainedAction(chainedCalls)
             }),
             { cli_execute_command: makeCliMock(calls, {}) }
@@ -112,6 +119,7 @@ suite('preCliSnapshotSetup', function() {
             makeRequire({
                 './configLoader.js': makeConfigLoaderStub('develop/3.9.0'),
                 './config.js': NOOP_CONFIG_JS,
+                './common/pullRequest.js': PR_HELPER_REAL_SNAPSHOT,
                 './fetchQuestionsToInput.js': makeChainedAction(chainedCalls)
             }),
             { cli_execute_command: makeCliMock(calls, {}) }

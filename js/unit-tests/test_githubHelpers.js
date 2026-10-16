@@ -17,17 +17,19 @@ function loadGithubHelpers(mocks) {
         makeRequire({
             '../config.js': configModule,
             'config': configModule,
-            './pullRequest.js': {
-                buildOriginFetchCommand: function(refSpec) {
-                    return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
-                }
-            },
+            // Real PR helper (gh-912): githubHelpers delegates cleanCommandOutput
+            // to it, so the canonical implementation must be in the map.
+            './pullRequest.js': PR_HELPER_REAL_GH,
             './gitOps.js': gitOpsStub,
             './machineNotice.js': machineNoticeModule
         }),
         mocks || {}
     );
 }
+
+// Real PR helper (gh-912) — shared by every githubHelpers load in this file.
+var PR_HELPER_REAL_GH = loadModule('js/common/pullRequest.js',
+    makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }));
 
 // Sentinel stub used to verify githubHelpers.js correctly re-exports these
 // functions from gitOps.js (real behavior for each is covered in

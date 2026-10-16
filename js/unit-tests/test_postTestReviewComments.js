@@ -33,7 +33,10 @@ function loadPostTestReviewComments(mocks, moduleMocks) {
         'js/common/githubHelpers.js',
         makeRequire({
             '../config.js': configModule,
-            './pullRequest.js': {},
+            // Real PR helper (gh-912): githubHelpers delegates cleanCommandOutput
+            // to it, so the canonical implementation must be in the map.
+            './pullRequest.js': loadModule('js/common/pullRequest.js',
+                makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') })),
             './scm.js': { createScm: function() { return {}; } },
             './gitOps.js': {},
             './machineNotice.js': loadModule('js/common/machineNotice.js')

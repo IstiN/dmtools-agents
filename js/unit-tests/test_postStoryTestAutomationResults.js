@@ -100,7 +100,7 @@ suite('postStoryTestAutomationResults: bulk result processing', function() {
                 if (opts.command === 'git branch --show-current') return 'test/TS-80';
                 if (opts.command === 'git status --short -- testing') return '?? testing/tests/TS-81/test.py';
                 if (opts.command === 'git diff --cached --stat') return ' testing/tests/TS-81/test.py | 1 +';
-                if (opts.command.indexOf('git ls-remote --heads origin test/TS-80') === 0) return 'abc\trefs/heads/test/TS-80';
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-80') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/TS-80';
                 if (opts.command.indexOf('gh pr list --head test/TS-80') === 0) return '';
                 if (opts.command.indexOf('gh pr create') === 0) {
                     prCreated = true;
@@ -215,7 +215,7 @@ suite('postStoryTestAutomationResults: bulk result processing', function() {
                 if (opts.command === 'git branch --show-current') return 'test/TS-100';
                 if (opts.command === 'git status --short -- testing') return '';
                 if (opts.command === 'git diff --cached --stat') return '';
-                if (opts.command.indexOf('git ls-remote --heads origin test/TS-100') === 0) return 'abc\trefs/heads/test/TS-100';
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-100') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/TS-100';
                 return '';
             },
             jira_move_to_status: function(args) { statusMoves.push(args); },
@@ -262,7 +262,7 @@ suite('postStoryTestAutomationResults: bulk result processing', function() {
                 if (opts.command === 'git branch --show-current') return 'test/TS-105';
                 if (opts.command === 'git status --short -- testing') return '?? testing/tests/TS-106/test.py';
                 if (opts.command === 'git diff --cached --stat') return ' testing/tests/TS-106/test.py | 1 +';
-                if (opts.command.indexOf('git ls-remote --heads origin test/TS-105') === 0) return 'abc\trefs/heads/test/TS-105';
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-105') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/TS-105';
                 if (opts.command.indexOf('gh pr list --head test/TS-105') === 0) return '';
                 if (opts.command.indexOf('gh pr create') === 0) return 'https://github.com/IstiN/trackstate/pull/105';
                 return '';
@@ -311,7 +311,7 @@ suite('postStoryTestAutomationResults: bulk result processing', function() {
                 if (opts.command === 'git branch --show-current') return 'test/TS-108';
                 if (opts.command === 'git status --short -- testing') return 'D  testing/tests/TS-110/test.py\n?? testing/tests/TS-109/test.py';
                 if (opts.command === 'git diff --cached --stat') return ' testing/tests/TS-110/test.py | 1 -';
-                if (opts.command.indexOf('git ls-remote --heads origin test/TS-108') === 0) return 'abc\trefs/heads/test/TS-108';
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-108') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/TS-108';
                 if (opts.command.indexOf('gh pr list --head test/TS-108') === 0) return '';
                 if (opts.command.indexOf('gh pr create') === 0) return 'https://github.com/IstiN/trackstate/pull/108';
                 if (opts.command.indexOf('git rm') === 0) return '';
@@ -378,7 +378,7 @@ suite('postStoryTestAutomationResults: bulk result processing', function() {
                 if (opts.command === 'git branch --show-current') return 'test/TS-110';
                 if (opts.command === 'git status --short -- testing') return '';
                 if (opts.command === 'git diff --cached --stat') return '';
-                if (opts.command.indexOf('git ls-remote --heads origin test/TS-110') === 0) return 'abc\trefs/heads/test/TS-110';
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-110') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/TS-110';
                 return '';
             },
             jira_move_to_status: function() {},
@@ -459,7 +459,7 @@ suite('postStoryTestAutomationResults: bulk result processing', function() {
                 if (opts.command === 'git branch --show-current') return 'test/TS-140';
                 if (opts.command === 'git status --short -- testing') return '?? testing/tests/TS-141/test.py';
                 if (opts.command === 'git diff --cached --stat') return ' testing/tests/TS-141/test.py | 1 +';
-                if (opts.command.indexOf('git ls-remote --heads origin test/TS-140') === 0) return 'abc\trefs/heads/test/TS-140';
+                if (opts.command.indexOf('git ls-remote --heads origin test/TS-140') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/TS-140';
                 if (opts.command.indexOf('gh pr list --head test/TS-140') === 0) return '';
                 if (opts.command.indexOf('gh pr create') === 0) return 'https://github.com/IstiN/trackstate/pull/140';
                 return '';

@@ -58,7 +58,7 @@ global.cli_execute_command = function(opts) {
     if (command.indexOf('git status --porcelain') === 0) return '';
     if (command.indexOf('git status --short') === 0) return '';
     if (command.indexOf('git branch --list') === 0) return 'feature/ticket-123';
-    if (command.indexOf('git ls-remote --heads origin') === 0) return 'abc123\trefs/heads/feature/ticket-123';
+    if (command.indexOf('git ls-remote --heads origin') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/feature/ticket-123';
     if (command.indexOf('git checkout') === 0) return '';
     if (command.indexOf('git pull') === 0) return '';
     if (command.indexOf('git config') === 0) return '';

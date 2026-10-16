@@ -39,18 +39,10 @@ function loadPreCli(mocks) {
             './common/mergeState.js': loadModule('js/common/mergeState.js'),
             './mergeState.js': loadModule('js/common/mergeState.js'),
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({ '../config.js': configModule, './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }), allMocks),
-            './common/pullRequest.js': {
-                buildTargetedOriginFetchCommand: function(branches) {
-                    var list = (branches || []).filter(function(b) { return b; });
-                    if (!list.length) return null;
-                    return 'git -c fetch.recurseSubmodules=no fetch origin ' + list.map(function(b) {
-                        return '+refs/heads/' + b + ':refs/remotes/origin/' + b;
-                    }).join(' ');
-                },
-                buildOriginFetchCommand: function(refSpec) {
-                    return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
-                }
-            }
+            // Real PR helper (gh-912): cleanCommandOutput + the remote-existence
+            // probe live there — the strict ref-line parser must be exercised.
+            './common/pullRequest.js': loadModule('js/common/pullRequest.js',
+                makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }))
         }),
         allMocks
     );

@@ -88,7 +88,7 @@ suite('postTestAutomationResults: PR creation', function() {
                 if (command === 'git branch --show-current') return 'test/DMC-898';
                 if (command === 'git status --short -- testing') return '?? testing/tests/DMC-898/test_dmc_898.py';
                 if (command === 'git diff --cached --stat') return ' testing/tests/DMC-898/test_dmc_898.py | 1 +';
-                if (command.indexOf('git ls-remote --heads origin test/DMC-898') === 0) return 'abc\trefs/heads/test/DMC-898';
+                if (command.indexOf('git ls-remote --heads origin test/DMC-898') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/DMC-898';
                 if (command.indexOf('gh pr list --head test/DMC-898') === 0) return '';
                 if (command.indexOf('gh pr create') === 0) return 'https://github.com/example-org/example.repo/pull/898';
                 return '';
@@ -137,7 +137,7 @@ suite('postTestAutomationResults: PR creation', function() {
                 if (command === 'git branch --show-current') return 'test/DMC-909';
                 if (command === 'git status --short -- testing') return ' M testing/tests/DMC-909/test_dmc_909.py';
                 if (command === 'git diff --cached --stat') return ' testing/tests/DMC-909/test_dmc_909.py | 1 +';
-                if (command.indexOf('git ls-remote --heads origin test/DMC-909') === 0) return 'abc\trefs/heads/test/DMC-909';
+                if (command.indexOf('git ls-remote --heads origin test/DMC-909') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/DMC-909';
                 if (command.indexOf('gh pr list --head test/DMC-909') === 0) return '';
                 if (command.indexOf('gh pr create') === 0) return 'https://github.com/example-org/example.repo/pull/909';
                 if (command.indexOf('gh pr view https://github.com/example-org/example.repo/pull/909 --json mergeable') === 0) {
@@ -192,7 +192,7 @@ suite('postTestAutomationResults: PR creation', function() {
                 if (command === 'git branch --show-current') return 'test/DMC-968';
                 if (command === 'git status --short -- testing') return '?? testing/tests/DMC-968/test_dmc_968.py';
                 if (command === 'git diff --cached --stat') return '';
-                if (command.indexOf('git ls-remote --heads origin test/DMC-968') === 0) return 'abc\trefs/heads/test/DMC-968';
+                if (command.indexOf('git ls-remote --heads origin test/DMC-968') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/test/DMC-968';
                 if (command.indexOf('gh pr create') === 0) throw new Error('gh pr create must not be called without branch diff');
                 return '';
             }

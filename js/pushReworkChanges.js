@@ -110,17 +110,10 @@ function resolveCustomParams(params, actualParams, config) {
     return merged;
 }
 
+// Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
+// common/pullRequest.js once — this delegate keeps every local call site.
 function cleanCommandOutput(output) {
-    if (!output) {
-        return '';
-    }
-    const lines = output.split('\n').filter(function(line) {
-        return line.indexOf('Script started') === -1 &&
-               line.indexOf('Script done') === -1 &&
-               line.indexOf('COMMAND=') === -1 &&
-               line.indexOf('COMMAND_EXIT_CODE=') === -1;
-    });
-    return lines.join('\n').trim();
+    return prHelper.cleanCommandOutput(output);
 }
 
 function getGitHubRepoInfo() {
@@ -369,8 +362,15 @@ function commitAndPush(ticketKey, config, customParams) {
         }
     }
 
-    const remoteCheck = cleanCommandOutput(cmd('git ls-remote --heads origin ' + branchName) || '');
-    if (!remoteCheck.trim()) {
+    var remoteBranchExists = false;
+    try {
+        // gh-912: verify the push produced a real refs/heads/<branch> ref
+        // line — stderr noise never counts as the branch existing.
+        remoteBranchExists = prHelper.remoteBranchExists(cmd, null, branchName);
+    } catch (lsRemoteErr) {
+        console.warn('Error checking remote branches:', lsRemoteErr);
+    }
+    if (!remoteBranchExists) {
         throw new Error('Branch was not successfully pushed to remote');
     }
 

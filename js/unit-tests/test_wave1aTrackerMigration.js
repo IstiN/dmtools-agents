@@ -120,6 +120,10 @@ function w1aLoadCommit(rec, status, cfg) {
         './common/jiraHelpers.js': { extractTicketKey: function(p) { return p.ticket.key; } },
         './configLoader.js': { loadProjectConfig: function() { return cfg; } },
         './common/gitStaging.js': { buildExclusionPathspecs: function() { return ':!factory-kit'; } },
+        // Real PR helper (gh-912): commitAndPushToBaseBranch delegates
+        // cleanCommandOutput to it — canonical implementation required.
+        './common/pullRequest.js': loadModule('js/common/pullRequest.js',
+            makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') })),
         './common/trackers.js': w1aTrackers(rec.mocks)
     }), mocks);
 }

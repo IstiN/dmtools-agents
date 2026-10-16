@@ -481,3 +481,122 @@ suite('pullRequest helper > Closes line (gh-737)', function() {
     });
 
 });
+
+// ── gh-912: strict ls-remote ref-line parsing ────────────────────────────────
+// The JS bridge hands scripts stdout+stderr merged, so a `warning: redirecting
+// to …` line (git ≥ 2.54 against a redirecting server) survives output
+// cleaning. Branch-existence probes must decide on real ref lines
+// (<sha>\trefs/heads/<name>), never on capture non-emptiness.
+
+var SHA40 = '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec';
+
+suite('pullRequest helper — remoteBranchExists / remoteBranchSha (gh-912 UT-1)', function() {
+
+    function probe(capture, branchName) {
+        var pr = loadPullRequestHelper({
+            cli_execute_command: function() { return capture; }
+        });
+        return {
+            exists: pr.remoteBranchExists(function(command) {
+                assert.ok(command.indexOf('git ls-remote --heads origin ') === 0,
+                    'probe must use `git ls-remote --heads origin <branch>`, got: ' + command);
+                return capture;
+            }, null, branchName || 'ai/PROJ-1'),
+            sha: pr.remoteBranchSha(function() { return capture; }, null, branchName || 'ai/PROJ-1')
+        };
+    }
+
+    test('empty capture → not exists (create-branch semantics preserved)', function() {
+        var r = probe('');
+        assert.equal(r.exists, false);
+        assert.equal(r.sha, null);
+    });
+
+    test('warning-only capture → not exists — the gh-912 defect (AC3/UT-1)', function() {
+        var r = probe('warning: redirecting to https://git.example.com/\n');
+        assert.equal(r.exists, false, 'stderr noise must never classify as branch existence');
+        assert.equal(r.sha, null);
+    });
+
+    test('real ref line → exists, SHA extracted (E1: full 40-hex)', function() {
+        var r = probe(SHA40 + '\trefs/heads/ai/PROJ-1\n');
+        assert.equal(r.exists, true);
+        assert.equal(r.sha, SHA40);
+    });
+
+    test('shortened 7-hex SHA still accepted (E1: any real form)', function() {
+        var r = probe('9a7e2ae\trefs/heads/ai/PROJ-1\n');
+        assert.equal(r.exists, true);
+        assert.equal(r.sha, '9a7e2ae');
+    });
+
+    test('warning BEFORE the ref line → exists (E3: merge order not guaranteed)', function() {
+        var r = probe('warning: redirecting to https://git.example.com/\n' + SHA40 + '\trefs/heads/ai/PROJ-1\n');
+        assert.equal(r.exists, true);
+        assert.equal(r.sha, SHA40);
+    });
+
+    test('warning AFTER the ref line → exists (E3: both orders)', function() {
+        var r = probe(SHA40 + '\trefs/heads/ai/PROJ-1\nwarning: redirecting to https://git.example.com/\n');
+        assert.equal(r.exists, true);
+        assert.equal(r.sha, SHA40);
+    });
+
+    test('prose/garbage (6-hex words, space separators) → not exists', function() {
+        var r = probe('9a7e2a some prose refs/heads/ai/PROJ-1\n');
+        assert.equal(r.exists, false);
+        assert.equal(r.sha, null);
+    });
+
+    test('refs/tags/ lines never satisfy the heads probe (E5)', function() {
+        var r = probe(SHA40 + '\trefs/tags/v1.0.0\n');
+        assert.equal(r.exists, false);
+        assert.equal(r.sha, null);
+    });
+
+    test('exact-name anchoring: ai/PROJ-1 does not match ai/PROJ-1_OLD', function() {
+        var r = probe(SHA40 + '\trefs/heads/ai/PROJ-1_OLD\n', 'ai/PROJ-1');
+        assert.equal(r.exists, false);
+        assert.equal(r.sha, null);
+    });
+
+    test('regex-hostile branch names are escaped (E2: feature/x.y.z vs feature/xQyz)', function() {
+        var rExists = probe(SHA40 + '\trefs/heads/feature/x.y.z\n', 'feature/x.y.z');
+        assert.equal(rExists.exists, true, 'dotted name must match itself');
+        var rNoOver = probe(SHA40 + '\trefs/heads/feature/xQyz\n', 'feature/x.y.z');
+        assert.equal(rNoOver.exists, false, 'unescaped dot would over-match a different branch');
+    });
+
+    test('trailing carriage return (CRLF bridges) still matches', function() {
+        var r = probe(SHA40 + '\trefs/heads/ai/PROJ-1\r\n');
+        assert.equal(r.exists, true);
+        assert.equal(r.sha, SHA40);
+    });
+
+});
+
+suite('pullRequest helper — cleanCommandOutput git-noise filter (gh-912 UT-3)', function() {
+
+    test('drops line-anchored git warning:/note: lines', function() {
+        var pr = loadPullRequestHelper();
+        var out = pr.cleanCommandOutput(
+            'warning: redirecting to https://git.example.com/\nSHA-LINE\nnote: some git advisory\n');
+        assert.equal(out, 'SHA-LINE');
+    });
+
+    test('never drops mid-line occurrences — diffs and logs may contain the words (E4)', function() {
+        var pr = loadPullRequestHelper();
+        var out = pr.cleanCommandOutput(
+            'diff --git a/x b/x\n+log.print("warning: weird")\n-// note: legacy\n');
+        assert.contains(out, '+log.print("warning: weird")');
+        assert.contains(out, '-// note: legacy');
+    });
+
+    test('script wrapper lines are still dropped', function() {
+        var pr = loadPullRequestHelper();
+        var out = pr.cleanCommandOutput(
+            'Script started on 2026-10-16\nCOMMAND=git status\nwarning: redirecting to https://git.example.com/\nOn branch main\nCOMMAND_EXIT_CODE=0\nScript done on 2026-10-16\n');
+        assert.equal(out, 'On branch main');
+    });
+
+});

@@ -56,14 +56,10 @@ function buildTestReworkResultComment(flavor, ctx) {
     return comment;
 }
 
+// Canonical copy (gh-823/gh-912): the warning:/note: line filter lives in
+// common/pullRequest.js once — this delegate keeps every local call site.
 function cleanCommandOutput(output) {
-    if (!output) return '';
-    return output.split('\n').filter(function(line) {
-        return line.indexOf('Script started') === -1 &&
-               line.indexOf('Script done') === -1 &&
-               line.indexOf('COMMAND=') === -1 &&
-               line.indexOf('COMMAND_EXIT_CODE=') === -1;
-    }).join('\n').trim();
+    return prHelper.cleanCommandOutput(output);
 }
 
 function readFile(path) {
@@ -290,14 +286,17 @@ function commitAndPush(ticketKey, passed, config, prIsDirty) {
         cli_execute_command({ command: 'git push -u origin ' + branchName + ' --force' });
     }
 
-    // Verify push succeeded by checking remote SHA matches local HEAD
-    const remoteCheck = cleanCommandOutput(
-        cli_execute_command({ command: 'git ls-remote --heads origin ' + branchName }) || ''
-    );
-    if (!remoteCheck.trim()) throw new Error('Branch not found on remote after push');
+    // gh-912: verify the push produced a real refs/heads/<branch> ref line and
+    // extract the SHA FROM THAT LINE — the old `capture.split(/\s+/)[0]` read
+    // `warning:` (git ≥ 2.54 prints a redirect warning on every network
+    // command against a central-mode insteadOf origin) and misreported a
+    // successful push as "Push rejected".
+    const remoteSha = prHelper.remoteBranchSha(function(command) {
+        return cli_execute_command({ command: command });
+    }, null, branchName);
+    if (!remoteSha) throw new Error('Branch not found on remote after push');
 
-    const remoteSha = remoteCheck.split(/\s+/)[0] || '';
-    if (localSha && remoteSha && !remoteSha.startsWith(localSha.substring(0, 10))) {
+    if (localSha && !remoteSha.startsWith(localSha.substring(0, 10))) {
         throw new Error('Push rejected: local HEAD ' + localSha.substring(0, 10) + ' does not match remote ' + remoteSha.substring(0, 10) + '. Branch protection may have blocked the push.');
     }
 
