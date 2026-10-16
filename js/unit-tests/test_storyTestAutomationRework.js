@@ -165,3 +165,31 @@ suite('storyTestAutomationRework — mergeMain mid-merge guard (gh-761)', functi
         assert.ok(tools.indexOf('ado_remove_work_item_label') !== -1);
     });
 });
+
+// ── gh-916: stage-label fallback for the In Testing move ──
+
+suite('storyTestAutomationRework: stage-label fallback (gh-916)', function() {
+    test("'label' mode: a rejected In Testing move marks stage_in_testing, no throw", function() {
+        var added = [];
+        var moved = [];
+        var module = loadRework({
+            jira_move_to_status: function(args) {
+                moved.push(args);
+                throw new Error("The field 'State' contains the value 'In Testing' that is not in the list of supported values");
+            },
+            jira_add_label: function(args) { added.push(args); },
+            jira_remove_label: function() {},
+            jira_post_comment: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-800' },
+            response: 'fixed flaky locator',
+            jobParams: { customParams: { stageFallback: 'label' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.deepEqual(moved, [{ key: 'TS-800', statusName: 'In Testing' }]);
+        assert.deepEqual(added, [{ key: 'TS-800', label: 'stage_in_testing' }]);
+    });
+});

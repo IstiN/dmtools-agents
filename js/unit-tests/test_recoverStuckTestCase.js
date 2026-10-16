@@ -138,3 +138,60 @@ suite('recoverStuckTestCase', function() {
     });
 
 });
+
+// ── gh-916: stage-label fallback — In Review - Passed is markable; Backlog/In Rework stay direct ──
+
+suite('recoverStuckTestCase: stage-label fallback (gh-916)', function() {
+    test("'label' mode: a rejected In Review - Passed move marks stage_in_review_passed, no throw", function() {
+        var added = [];
+        var moves = [];
+        var x = loadRecoverStuckTestCase({
+            scm: {
+                listPrs: function() {
+                    return [{ number: 44, title: 'TS-44 tests', html_url: 'u', head: { ref: 'test/TS-44' } }];
+                },
+                getPr: function() { return { mergeable: true, mergeable_state: 'clean' }; }
+            },
+            mocks: {
+                jira_move_to_status: function(args) {
+                    moves.push(args);
+                    throw new Error("The field 'State' contains the value 'In Review - Passed' that is not in the list of supported values");
+                },
+                jira_add_label: function(args) { added.push(args); },
+                jira_remove_label: function() {},
+                jira_post_comment: function() {}
+            }
+        });
+
+        var result = x.mod.action({
+            ticket: { key: 'TS-44' },
+            jobParams: { customParams: { stageFallback: 'label' } }
+        });
+
+        assert.equal(result.action, 'moved_to_review');
+        assert.deepEqual(moves, [{ key: 'TS-44', statusName: 'In Review - Passed' }]);
+        assert.deepEqual(added, [{ key: 'TS-44', label: 'stage_in_review_passed' }]);
+    });
+
+    test("'label' mode: the Backlog move stays a direct transition (no stage marker)", function() {
+        var added = [];
+        var moves = [];
+        var x = loadRecoverStuckTestCase({
+            mocks: {
+                jira_move_to_status: function(args) { moves.push(args); },
+                jira_add_label: function(args) { added.push(args); },
+                jira_remove_label: function() {},
+                jira_post_comment: function() {}
+            }
+        });
+
+        var result = x.mod.action({
+            ticket: { key: 'TS-45' },
+            jobParams: { customParams: { stageFallback: 'label' } }
+        });
+
+        assert.equal(result.action, 'moved_to_backlog');
+        assert.deepEqual(moves, [{ key: 'TS-45', statusName: 'Backlog' }]);
+        assert.deepEqual(added, [], 'Backlog is not a tag-only stage — no marker');
+    });
+});

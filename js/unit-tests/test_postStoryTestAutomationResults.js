@@ -486,3 +486,73 @@ suite('postStoryTestAutomationResults: bulk result processing', function() {
     });
 
 });
+
+// ── gh-916: stage-label fallback for per-TC final/intermediate status moves ──
+
+suite('postStoryTestAutomationResults: stage-label fallback (gh-916)', function() {
+    function gh916StoryResult(mocks) {
+        return loadPostStoryTestAutomationResults(Object.assign({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/story_test_result.json') {
+                    return JSON.stringify({ overall: 'failed', results: [{ testCaseKey: 'TS-300', status: 'failed' }] });
+                }
+                return null;
+            },
+            jira_post_comment: function() {},
+            jira_add_label: function() {},
+            jira_remove_label: function() {},
+            jira_update_field: function() {},
+            jira_attach_file_to_ticket: function() {}
+        }, mocks));
+    }
+
+    test("'label' mode: a rejected In Review - Failed move marks stage_in_review_failed, no throw", function() {
+        var added = [];
+        var moves = [];
+        var module = gh916StoryResult({
+            jira_move_to_status: function(args) {
+                moves.push(args);
+                throw new Error("The field 'State' contains the value 'In Review - Failed' that is not in the list of supported values");
+            },
+            jira_add_label: function(args) { added.push(args); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-299', fields: { issuetype: { name: 'Story' } } },
+            jobParams: { customParams: { stageFallback: 'label' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.ok(moves.some(function(m) { return m.statusName === 'In Review - Failed'; }));
+        assert.ok(added.some(function(a) { return a.key === 'TS-300' && a.label === 'stage_in_review_failed'; }));
+    });
+
+    test("'label' mode: skipped and irrelevant TCs get their stage markers when the move is rejected", function() {
+        var added = [];
+        var module = gh916StoryResult({
+            file_read: function(opts) {
+                if (opts.path === 'outputs/story_test_result.json') {
+                    return JSON.stringify({
+                        overall: 'passed',
+                        results: [
+                            { testCaseKey: 'TS-301', status: 'skipped' },
+                            { testCaseKey: 'TS-302', status: 'irrelevant' }
+                        ]
+                    });
+                }
+                return null;
+            },
+            jira_move_to_status: function() { throw new Error('state rejected'); },
+            jira_add_label: function(args) { added.push(args); }
+        });
+
+        var result = module.action({
+            ticket: { key: 'TS-299', fields: { issuetype: { name: 'Story' } } },
+            jobParams: { customParams: { stageFallback: 'label' } }
+        });
+
+        assert.equal(result.success, true);
+        assert.ok(added.some(function(a) { return a.key === 'TS-301' && a.label === 'stage_skipped'; }));
+        assert.ok(added.some(function(a) { return a.key === 'TS-302' && a.label === 'stage_irrelevant'; }));
+    });
+});

@@ -416,3 +416,80 @@ suite('checkBugTestsPassed', function() {
     });
 
 });
+
+// ── gh-916: stage-label fallback — gates recognise the stage_<key> marker in label mode ──
+
+suite('checkBugTestsPassed: stage-label fallback (gh-916)', function() {
+    function gh916DirectTc(key, status, labels) {
+        var fields = { issuetype: { name: 'Test Case' }, status: { name: status } };
+        if (labels) fields.labels = labels;
+        return { key: key, fields: fields };
+    }
+
+    function gh916BugTicket(tc) {
+        return {
+            key: 'BUG-77',
+            fields: {
+                labels: [],
+                issuelinks: [{ type: { name: 'Blocks' }, outwardIssue: tc }]
+            }
+        };
+    }
+
+    test("'none' mode: a stage_passed marker does NOT make a TC non-blocking — the Bug waits", function() {
+        var moved = [];
+        var module = loadCheckBugTestsPassed({
+            jira_get_ticket: function() { return gh916BugTicket(gh916DirectTc('TS-70', 'New', ['stage_passed'])); },
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_post_comment: function() {},
+            jira_remove_label: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'BUG-77' },
+            jobParams: { customParams: { removeLabel: 'sm_bug_done_check_triggered' } }
+        });
+
+        assert.equal(result.action, 'waiting');
+        assert.deepEqual(moved, []);
+    });
+
+    test("'label' mode: a TC marked stage_passed is non-blocking — the Bug completes", function() {
+        var moved = [];
+        var module = loadCheckBugTestsPassed({
+            jira_get_ticket: function() { return gh916BugTicket(gh916DirectTc('TS-71', 'New', ['stage_passed'])); },
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_post_comment: function() {},
+            jira_remove_label: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'BUG-77' },
+            jobParams: { customParams: { stageFallback: 'label', removeLabel: 'sm_bug_done_check_triggered' } }
+        });
+
+        assert.equal(result.action, 'moved_to_done');
+        assert.deepEqual(moved, [{ key: 'BUG-77', statusName: 'Done' }]);
+    });
+
+    test("'label' mode: a TC marked stage_bug_to_fix with another linked non-Done bug is non-blocking", function() {
+        var moved = [];
+        var module = loadCheckBugTestsPassed({
+            jira_get_ticket: function() { return gh916BugTicket(gh916DirectTc('TS-72', 'New', ['stage_bug_to_fix'])); },
+            jira_search_by_jql: function() {
+                return [{ key: 'BUG-OTHER', fields: { status: { name: 'New' } } }];
+            },
+            jira_move_to_status: function(args) { moved.push(args); },
+            jira_post_comment: function() {},
+            jira_remove_label: function() {}
+        });
+
+        var result = module.action({
+            ticket: { key: 'BUG-77' },
+            jobParams: { customParams: { stageFallback: 'label', removeLabel: 'sm_bug_done_check_triggered' } }
+        });
+
+        assert.equal(result.action, 'moved_to_done');
+        assert.deepEqual(moved, [{ key: 'BUG-77', statusName: 'Done' }]);
+    });
+});
