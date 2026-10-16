@@ -5,21 +5,30 @@
  * handling, and URL extraction in one place for all agents.
  */
 
-// gh-912: the JS bridge hands scripts stdout+stderr merged (deliberate
-// Java-parity contract in dmtools-dart's _runShellScript), and git ≥ 2.54
-// prints `warning: redirecting to <url>/` on EVERY network command against a
-// redirecting (central-mode insteadOf) server. Filters are line-ANCHORED on
-// purpose — diffs and logs legitimately contain "warning:"/"note:" mid-line,
-// and only whole stderr-noise lines must be dropped.
+// Strips script-wrapper artifacts from a captured command output. Behaviour is deliberately
+// unchanged for ALL callers (it backs ~20 delegating copies and runs on commit subjects, file
+// lists, diffs): a captured line that happens to start with `warning: ` / `note: ` is DATA there
+// and must survive. gh-912's stderr noise is handled where it matters — the strict ref-line
+// parsers below — or explicitly via stripGitNoise().
 function cleanCommandOutput(output) {
     if (!output) return '';
     return output.split('\n').filter(function(line) {
         return line.indexOf('Script started') === -1 &&
                line.indexOf('Script done') === -1 &&
                line.indexOf('COMMAND=') === -1 &&
-               line.indexOf('COMMAND_EXIT_CODE=') === -1 &&
-               !/^warning: /.test(line) &&
-               !/^note: /.test(line);
+               line.indexOf('COMMAND_EXIT_CODE=') === -1;
+    }).join('\n').trim();
+}
+
+// gh-912: the JS bridge hands scripts stdout+stderr merged (deliberate Java-parity contract in
+// dmtools-dart's _runShellScript), and git >= 2.54 prints `warning: redirecting to <url>/` on EVERY
+// network command against a redirecting (central-mode insteadOf) server. Opt-in filter for captures
+// that are known to be git network output: drops only whole LINES starting with `warning: ` /
+// `note: ` (line-anchored — mid-line occurrences in diffs/logs are untouched), after the wrapper
+// cleanup. Never use it on commit subjects, file lists or diffs.
+function stripGitNoise(output) {
+    return cleanCommandOutput(output).split('\n').filter(function(line) {
+        return !/^warning: /.test(line) && !/^note: /.test(line);
     }).join('\n').trim();
 }
 
@@ -306,8 +315,8 @@ function ensureRemoteBranchRef(runCommand, workingDir, branchName) {
 // to …` line survives cleanCommandOutput's wrapper filtering (the anchored
 // ^warning:/^note: filter above is defense in depth; the parser below is the
 // primary defense). A branch exists on origin iff the capture contains a real
-// ref line `<sha>\trefs/heads/<name>`. The {7,40} window accepts any real SHA
-// form ls-remote may print and rejects prose; the name is regex-escaped so
+// ref line `<sha>\trefs/heads/<name>`. ls-remote always prints full object
+// names — 40 hex (SHA-1) or 64 hex (SHA-256 repos); {7,64} accepts every real form and rejects prose; the name is regex-escaped so
 // dotted/special branch names match literally (E2).
 
 /**
@@ -316,7 +325,7 @@ function ensureRemoteBranchRef(runCommand, workingDir, branchName) {
  */
 function remoteRefLines(output) {
     return cleanCommandOutput(output || '').split('\n').filter(function (line) {
-        return /^[0-9a-f]{7,40}\trefs\//.test(line);
+        return /^[0-9a-f]{7,64}\trefs\//.test(line);
     }).join('\n');
 }
 
@@ -330,7 +339,7 @@ function remoteRefLines(output) {
  */
 function remoteBranchSha(runCommand, workingDir, branchName) {
     var out = cleanCommandOutput(runCommand('git ls-remote --heads origin ' + branchName, workingDir) || '');
-    var m = new RegExp('^([0-9a-f]{7,40})\\trefs/heads/' + escapeRegExp(branchName) + '\\r?$', 'm').exec(out);
+    var m = new RegExp('^([0-9a-f]{7,64})\\trefs/heads/' + escapeRegExp(branchName) + '\\r?$', 'm').exec(out);
     return m ? m[1] : null;
 }
 
@@ -662,6 +671,7 @@ module.exports = {
     buildOriginFetchCommand: buildOriginFetchCommand,
     buildTargetedOriginFetchCommand: buildTargetedOriginFetchCommand,
     ensureRemoteBranchRef: ensureRemoteBranchRef,
+    stripGitNoise: stripGitNoise,
     remoteRefLines: remoteRefLines,
     remoteBranchSha: remoteBranchSha,
     remoteBranchExists: remoteBranchExists,
