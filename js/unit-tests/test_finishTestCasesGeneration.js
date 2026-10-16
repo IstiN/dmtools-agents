@@ -65,3 +65,52 @@ suite('finishTestCasesGeneration: ado tracker provider', function() {
         assert.deepEqual(calls[1], ['rm', { id: '200', label: 'sm_test_cases_triggered' }]);
     });
 });
+
+suite('finishTestCasesGeneration: stage-label fallback (gh-916)', function() {
+    function finishGh916WithLogs(mocks) {
+        var logs = [];
+        var warns = [];
+        var withConsole = Object.assign({
+            console: {
+                log: function(msg) { logs.push(String(msg)); },
+                warn: function(msg) { warns.push(String(msg)); }
+            }
+        }, mocks);
+        return { module: loadFinishTestCasesGeneration(withConsole), logs: logs, warns: warns };
+    }
+
+    test("'label' mode: a rejected READY_FOR_TESTING move marks stage_ready_for_testing, no throw, success log", function() {
+        var added = [];
+        var x = finishGh916WithLogs({
+            jira_move_to_status: function() { throw new Error("The field 'State' contains the value 'Ready For Testing' that is not in the list of supported values"); },
+            jira_add_label: function(args) { added.push(args); },
+            jira_remove_label: function() {}
+        });
+
+        var result = x.module.action({
+            ticket: { key: 'TS-210' },
+            jobParams: { customParams: { stageFallback: 'label' } }
+        });
+
+        assert.equal(result.success, true, 'label fallback must not fail the action');
+        assert.deepEqual(added, [{ key: 'TS-210', label: 'stage_ready_for_testing' }]);
+        assert.ok(x.logs.some(function(l) { return l.indexOf('✅ Moved TS-210 to Ready For Testing') !== -1; }), 'success log printed for the marked stage');
+    });
+
+    test("'label' mode: when neither the move nor the marker works, no ✅ success log and the reason is warned", function() {
+        var x = finishGh916WithLogs({
+            jira_move_to_status: function() { throw new Error('state rejected'); },
+            jira_add_label: function() { throw new Error('label api down'); },
+            jira_remove_label: function() {}
+        });
+
+        var result = x.module.action({
+            ticket: { key: 'TS-211' },
+            jobParams: { customParams: { stageFallback: 'label' } }
+        });
+
+        assert.equal(result.success, true, 'the generator finishing itself is independent of the move');
+        assert.ok(!x.logs.some(function(l) { return l.indexOf('✅ Moved') !== -1; }), '✅ must not print when nothing worked');
+        assert.ok(x.warns.some(function(l) { return l.indexOf('Could not move Story to Ready For Testing') !== -1; }));
+    });
+});

@@ -1034,8 +1034,7 @@ function createTracker(config, customParams) {
                 ? fields.status.name : null);
         if (statusName !== undefined && status === statusName) return true;
         if (stageFallback !== 'label') return false;
-        var raw = ticket.labels || fields.labels || [];
-        return _labelNames(Array.isArray(raw) ? raw : [raw]).indexOf(_stageLabel(stageKey)) !== -1;
+        return _labelNames(ticket.labels || fields.labels || []).indexOf(_stageLabel(stageKey)) !== -1;
     }
 
     return {

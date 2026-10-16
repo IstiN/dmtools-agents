@@ -459,9 +459,13 @@ function updateFailedReasonField(tcKey, attachmentName, failureSummary, fieldNam
 
 function updateTestCaseStatus(tcKey, status, workingDir, storyKey, config) {
     try {
+        var stageKey = status === 'passed' ? 'IN_REVIEW_PASSED' : 'IN_REVIEW_FAILED';
         var targetStatus = status === 'passed' ? config.jira.statuses.IN_REVIEW_PASSED : config.jira.statuses.IN_REVIEW_FAILED;
-        getTracker().moveToStatus(tcKey, targetStatus);
-        console.log('✅ Moved', tcKey, 'to', targetStatus);
+        // gh-916: In Review - Passed/Failed can be tag-only (restricted ADO workflows) — stage-label fallback.
+        var moveResult = getTracker().moveToStatusOrMark(tcKey, targetStatus, stageKey);
+        if (moveResult.moved || moveResult.marked) {
+            console.log('✅ Moved', tcKey, 'to', targetStatus);
+        }
 
         if (status === 'failed') {
             var result = readResultJson(workingDir, storyKey);
@@ -482,9 +486,13 @@ function updateTestCaseStatus(tcKey, status, workingDir, storyKey, config) {
 
 function finalizeTestCaseStatus(tcKey, status, jiraConfig) {
     try {
+        var stageKey = status === 'passed' ? 'PASSED' : 'FAILED';
         var targetStatus = status === 'passed' ? jiraConfig.statuses.PASSED : jiraConfig.statuses.FAILED;
-        getTracker().moveToStatus(tcKey, targetStatus);
-        console.log('✅ Finalized', tcKey, 'to', targetStatus, '(no code changes)');
+        // gh-916: Passed/Failed can be tag-only (restricted ADO workflows) — stage-label fallback.
+        var moveResult = getTracker().moveToStatusOrMark(tcKey, targetStatus, stageKey);
+        if (moveResult.moved || moveResult.marked) {
+            console.log('✅ Finalized', tcKey, 'to', targetStatus, '(no code changes)');
+        }
     } catch (e) {
         console.warn('Failed to finalize Test Case', tcKey, ':', e);
     }
@@ -492,8 +500,11 @@ function finalizeTestCaseStatus(tcKey, status, jiraConfig) {
 
 function moveSkippedTcToStatus(tcKey, skippedStatus) {
     try {
-        getTracker().moveToStatus(tcKey, skippedStatus);
-        console.log('✅ Moved', tcKey, 'to', skippedStatus, '(skipped)');
+        // gh-916: Skipped can be tag-only (restricted ADO workflows) — stage-label fallback.
+        var moveResult = getTracker().moveToStatusOrMark(tcKey, skippedStatus, 'SKIPPED');
+        if (moveResult.moved || moveResult.marked) {
+            console.log('✅ Moved', tcKey, 'to', skippedStatus, '(skipped)');
+        }
     } catch (e) {
         console.warn('Failed to move skipped Test Case', tcKey, ':', e);
     }
@@ -516,8 +527,11 @@ function deleteTestCaseCode(tcKey, testFilesPath, workingDir) {
 
 function moveIrrelevantTcToStatus(tcKey, irrelevantStatus, testFilesPath, workingDir) {
     try {
-        getTracker().moveToStatus(tcKey, irrelevantStatus);
-        console.log('✅ Moved', tcKey, 'to', irrelevantStatus, '(irrelevant)');
+        // gh-916: Irrelevant can be tag-only (restricted ADO workflows) — stage-label fallback.
+        var moveResult = getTracker().moveToStatusOrMark(tcKey, irrelevantStatus, 'IRRELEVANT');
+        if (moveResult.moved || moveResult.marked) {
+            console.log('✅ Moved', tcKey, 'to', irrelevantStatus, '(irrelevant)');
+        }
     } catch (e) {
         console.warn('Failed to move irrelevant Test Case', tcKey, ':', e);
     }
@@ -764,8 +778,11 @@ function action(params) {
 
         // Step 8: Move Story to In Testing
         try {
-            getTracker().moveToStatus(storyKey, jiraConfig.statuses.IN_TESTING);
-            console.log('✅ Moved Story', storyKey, 'to', jiraConfig.statuses.IN_TESTING);
+            // gh-916: IN_TESTING can be tag-only (restricted ADO workflows) — stage-label fallback.
+            var inTestingMove = getTracker().moveToStatusOrMark(storyKey, jiraConfig.statuses.IN_TESTING, 'IN_TESTING');
+            if (inTestingMove.moved || inTestingMove.marked) {
+                console.log('✅ Moved Story', storyKey, 'to', jiraConfig.statuses.IN_TESTING);
+            }
         } catch (e) {
             console.warn('Failed to move Story to In Testing:', e);
         }

@@ -238,13 +238,20 @@ function action(params) {
         const isTestCase = params.jobParams && params.jobParams.customParams && params.jobParams.customParams.testCaseMerge;
         if (isTestCase) {
             var ticketDetail = getTracker().getIssue(ticketKey);
-            var currentStatus = ticketDetail && ticketDetail.fields && ticketDetail.fields.status && ticketDetail.fields.status.name;
-            var finalStatus = (currentStatus === jiraConfig.statuses.IN_REVIEW_PASSED) ? jiraConfig.statuses.PASSED : jiraConfig.statuses.FAILED;
-            getTracker().moveToStatus(ticketKey, finalStatus);
-            console.log('✅ Ticket moved to ' + finalStatus);
+            // gh-916: hasStage also accepts the stage_in_review_passed marker a rejected transition
+            // left (jira.stageFallback 'label'); 'none' mode compares the status only.
+            var wasReviewPassed = getTracker().hasStage(ticketDetail, 'IN_REVIEW_PASSED', jiraConfig.statuses.IN_REVIEW_PASSED);
+            var finalStatus = wasReviewPassed ? jiraConfig.statuses.PASSED : jiraConfig.statuses.FAILED;
+            // gh-916: Passed/Failed/Merged can be tag-only (restricted ADO workflows) — stage-label fallback.
+            var moved = getTracker().moveToStatusOrMark(ticketKey, finalStatus, wasReviewPassed ? 'PASSED' : 'FAILED');
+            if (moved.moved || moved.marked) {
+                console.log('✅ Ticket moved to ' + finalStatus);
+            }
         } else {
-            getTracker().moveToStatus(ticketKey, jiraConfig.statuses.MERGED);
-            console.log('✅ Ticket moved to Merged');
+            var mergedMove = getTracker().moveToStatusOrMark(ticketKey, jiraConfig.statuses.MERGED, 'MERGED');
+            if (mergedMove.moved || mergedMove.marked) {
+                console.log('✅ Ticket moved to Merged');
+            }
         }
 
         // Now safe to remove pr_approved from Jira — status is already updated

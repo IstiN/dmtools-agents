@@ -57,8 +57,11 @@ function action(params) {
         return { success: true, action: 'released_for_bulk_bug_creation', ticketKey: ticketKey };
     }
 
-    getTracker().moveToStatus(ticketKey, jiraConfig.statuses.BUG_TO_FIX);
-    console.log('Moved', ticketKey, 'to', jiraConfig.statuses.BUG_TO_FIX);
+    // gh-916: BUG_TO_FIX can be tag-only (restricted ADO workflows) — stage-label fallback.
+    var b2fMove = getTracker().moveToStatusOrMark(ticketKey, jiraConfig.statuses.BUG_TO_FIX, 'BUG_TO_FIX');
+    if (b2fMove.moved || b2fMove.marked) {
+        console.log('Moved', ticketKey, 'to', jiraConfig.statuses.BUG_TO_FIX);
+    }
 
     removeLabel(ticketKey, 'sm_bug_creation_triggered');
     removeLabel(ticketKey, 'sm_bulk_bugs_creation_triggered');

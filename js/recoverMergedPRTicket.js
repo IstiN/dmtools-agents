@@ -96,8 +96,11 @@ function action(params) {
     console.log('Recovered merged PR #' + prNumber + ' for ' + ticketKey);
 
     try {
-        getTracker().moveToStatus(ticketKey, jiraConfig.statuses.MERGED);
-        console.log('Moved', ticketKey, 'to', jiraConfig.statuses.MERGED);
+        // gh-916: MERGED can be tag-only (restricted ADO workflows) — stage-label fallback.
+        var moveResult = getTracker().moveToStatusOrMark(ticketKey, jiraConfig.statuses.MERGED, 'MERGED');
+        if (moveResult.moved || moveResult.marked) {
+            console.log('Moved', ticketKey, 'to', jiraConfig.statuses.MERGED);
+        }
     } catch (e) {
         console.warn('Could not move ticket to Merged:', e.message || e);
     }
