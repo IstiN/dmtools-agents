@@ -1,5 +1,7 @@
 # Agents — Developer Documentation
 
+[![Quality](https://github.com/IstiN/dmtools-agents/actions/workflows/quality.yml/badge.svg)](https://github.com/IstiN/dmtools-agents/actions/workflows/quality.yml)
+
 This directory contains the configuration and JavaScript logic for the **AI-powered Scrum Master (SM) agent system**. The SM agent orchestrates a fully automated software delivery pipeline: it continuously monitors Jira, triggers specialized AI agents for each workflow stage, and manages the complete lifecycle of Stories, Bugs, and Test Cases from Backlog to Done.
 
 ---
