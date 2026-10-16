@@ -6679,21 +6679,47 @@ suite('smAgent: trigger fail-open dispatch (gh-922)', function () {
 
         var markers = bodyOf(sm, 'trigger-failed');
         assert.equal(markers.length, 1);
-        assert.ok(markers[0].indexOf('\n') === -1 || markers[0].split('\n')[0].indexOf('attempt 1/3') === 0,
-            'the flattened prose stays inline — the marker line is the first line');
-        assert.equal(markers[0].indexOf('attempt 3/3'), -1,
-            'the injected marker-shaped line is gone from the body');
+        // The shipped comment shape is [marker line, prose line]: the marker
+        // sits on its own FIRST line (the triggerFailMarks reader anchors at
+        // line starts), the interpolated MESSAGE is flattened inline. Only
+        // the message is flattened — never the body.
+        var firstLine = markers[0].split('\n')[0];
+        assert.ok(firstLine.indexOf('\u26A0\uFE0F trigger-failed ' + DEAD_REF) === 0 &&
+            firstLine.indexOf('attempt 1/3') !== -1,
+            'the marker line is the body\'s FIRST line, carrying attempt 1/3');
+        assert.ok(markers[0].split('\n').every(function (line, ix) {
+            return ix === 0 || line.indexOf('\u26A0\uFE0F trigger-failed') !== 0;
+        }), 'the injected marker-shaped text survives only INLINE in the quoted ' +
+            'error prose — no line but the first is a marker line');
         assert.equal(tfMod.triggerFailMarks(markers)[DEAD_REF], 1,
             'the parsed attempt count is 1 — the injection did not accelerate the park');
-        assert.equal(markers[0].indexOf('\n'), -1,
-            'the whole comment body is one line: marker + flattened message');
+        assert.equal(markers[0].split('\n').length, 2,
+            'the body is exactly [marker line, prose line]: the raw error\'s embedded ' +
+            'newline was flattened away — the message rides inline in the prose line');
     });
 
     test('two rules failing the same dead head in ONE tick record it once — no duplicate marker, no duplicate park', function () {
         // PRRT_kwDORYAuYs6tR-Ua: the already-parked guard reads the
         // query-time label snapshot; within one tick a second rule's stale
         // snapshot posted a second marker and could duplicate the park.
-        var deadPr = tfPr(302, ['agent:review', 'agent:rework', 'priority_blocker'], DEAD_REF);
+        // The items-stub serves the NORMALIZED source-item shape — what
+        // githubSource.queryPrs produces from the raw /pulls payload
+        // (key/prNumber/branch + flat string labels). recordDispatchFailure
+        // keys on prNumber/branch, which only exist after that
+        // normalization; a raw payload here would silently bail.
+        var deadPr = (function () {
+            var raw = tfPr(302, ['agent:review', 'agent:rework', 'priority_blocker'], DEAD_REF);
+            return { key: 'pr-' + raw.number,
+                     labels: raw.labels.map(function (l) { return l.name; }),
+                     pr: null, issueNumber: null,
+                     prNumber: raw.number,
+                     draft: raw.draft,
+                     branch: raw.head.ref };
+        })();
+        // The park comment resolves the head sha via github_get_pr when the
+        // source item carries none — fixture it so 'parked-head: <sha>' is
+        // assertable.
+        var prFixture = { number: 302, head: { sha: sha40(302) } };
         function twoRules() {
             return [
                 { source: 'github', id: 'review-on-label-gh922',
@@ -6710,7 +6736,8 @@ suite('smAgent: trigger fail-open dispatch (gh-922)', function () {
         // Tick 1: both lanes fail the same dead head — ONE marker.
         var sm1 = makeSmAgent(Object.assign(tfConfig('o', 'r'), {
             captureConsole: true,
-            github: { items: function () { return [deadPr]; }, prComments: [] },
+            github: { items: function () { return [deadPr]; }, prComments: [],
+                      pr: prFixture },
             onTrigger: function () { throw new Error(NO_REF_ERR); }
         }));
         sm1.action({ jobParams: { owner: 'o', repo: 'r', machineAuthor: 'ai-teammate',
@@ -6727,7 +6754,8 @@ suite('smAgent: trigger fail-open dispatch (gh-922)', function () {
         });
         var sm2 = makeSmAgent(Object.assign(tfConfig('o', 'r'), {
             captureConsole: true,
-            github: { items: function () { return [deadPr]; }, prComments: prior },
+            github: { items: function () { return [deadPr]; }, prComments: prior,
+                      pr: prFixture },
             onTrigger: function () { throw new Error(NO_REF_ERR); }
         }));
         sm2.action({ jobParams: { owner: 'o', repo: 'r', machineAuthor: 'ai-teammate',
