@@ -64,7 +64,7 @@ warmup-session.sh --repo <git-url> --dir <target-dir> [--branch <name>] \
 | `--repo` | Git URL of the product repo (the one that has `agents` as a submodule). |
 | `--dir` | Local directory to clone into (or sync, if it already exists). |
 | `--branch` | Checkout/track this branch instead of the repo's default. |
-| `--exclude` | Space-separated tool names to skip (forwarded to `install.sh all` as `-tool1 -tool2 ...`). |
+| `--exclude` | Space-separated tool names to skip (forwarded to `install.sh all` as `-tool1 -tool2 ...`). Non-Dart targets should include `dart` in the list — `install.sh all` pulls the Dart SDK (~215 MB download, ~1 GB under `~/.dart-sdk`) for every consumer since gh-918; Dart repos keep it out of the list so legs get the same toolchain as CI. |
 | `--install-args` | Extra raw arguments appended to the `install.sh` invocation. |
 
 Idempotent: re-running against an existing `--dir` does `git fetch` + `checkout` +
@@ -93,11 +93,13 @@ set -euo pipefail
 git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
 
 git clone --recurse-submodules https://github.com/your-org/your-product-repo.git repo
+# Non-Dart target: keep dart in the exclude list — install.sh all otherwise
+# downloads the ~215 MB Dart SDK (~1 GB disk). Dart repos: drop dart from here.
 bash repo/agents/scripts/warmup-session.sh \
   --repo https://github.com/your-org/your-product-repo.git \
   --dir repo \
   --branch main \
-  --exclude "cursor codemie kimi maestro playwright"
+  --exclude "cursor codemie kimi maestro playwright dart"
 ```
 
 (The first `git clone` bootstraps the directory so `agents/scripts/warmup-session.sh`
@@ -144,7 +146,9 @@ init submodules and run the script against the existing checkout.
 {
   "name": "your-product-repo",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
-  "onCreateCommand": "git submodule update --init --recursive && bash agents/scripts/warmup-session.sh --repo https://github.com/your-org/your-product-repo.git --dir . --branch main --exclude \"cursor codemie kimi maestro playwright\"",
+  // Non-Dart target: dart stays in --exclude (install.sh all otherwise pulls
+  // the ~215 MB Dart SDK / ~1 GB disk). Dart repos: drop dart from the list.
+  "onCreateCommand": "git submodule update --init --recursive && bash agents/scripts/warmup-session.sh --repo https://github.com/your-org/your-product-repo.git --dir . --branch main --exclude \"cursor codemie kimi maestro playwright dart\"",
   "postStartCommand": "git fetch origin && git submodule update --init --recursive"
 }
 ```

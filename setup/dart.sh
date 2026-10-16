@@ -54,19 +54,26 @@ os_arch() {
 }
 
 # ── Version probes ────────────────────────────────────────────────────────────
-# Installed version from the `dart --version` banner. Checks PATH first, then
-# our own install dir — a cache-restored SDK is real even before its bin dir
-# is registered on PATH.
+# Installed version from the `dart --version` banner. Checks the MANAGED
+# install first, then PATH — a cache-restored SDK is real even before its bin
+# dir is registered on PATH, and a foreign PATH dart (not the one this script
+# installs) must never satisfy the cache-hit branch: that branch registers
+# ${SDK_BIN} on PATH and points DART_HOME at it, which would be a lie for a
+# dart the script doesn't own.
+# The banner token is captured IN FULL (`[^ )]*`) — beta/dev banners carry
+# pre-release suffixes (Dart SDK version: 3.14.0-315.1.beta (beta) ...), and
+# truncating at the first "-" makes the version-aware cache check below see a
+# permanent mismatch (SDK wiped and re-downloaded on every leg).
 installed_version() {
   local d=""
-  if command -v dart >/dev/null 2>&1; then
-    d="$(command -v dart)"
-  elif [ -x "${SDK_BIN}/dart" ]; then
+  if [ -x "${SDK_BIN}/dart" ]; then
     d="${SDK_BIN}/dart"
+  elif command -v dart >/dev/null 2>&1; then
+    d="$(command -v dart)"
   fi
   [ -n "${d}" ] || { echo ""; return 0; }
   "${d}" --version 2>&1 \
-    | sed -n 's/^Dart SDK version: \([0-9][0-9.]*\).*/\1/p' | head -1
+    | sed -n 's/^Dart SDK version: \([^ )]*\).*/\1/p' | head -1
 }
 
 # Latest concrete version of a channel (dart-lang/setup-dart resolves "latest"
@@ -91,7 +98,10 @@ quality_detection() {
       esac
     done <<EOF
 $(awk -v sq="'" '
-  /uses:[[:space:]]*dart-lang\/setup-dart/ { inb = 1; print "step=1"; next }
+  # Skip comment lines FIRST — a commented-out step (# - uses: dart-lang/…)
+  # must neither trigger detection nor leak its commented channel/sdk inputs.
+  /^[[:space:]]*#/ { next }
+  /uses:[[:space:]]*"?(dart-lang\/setup-dart)/ { inb = 1; print "step=1"; next }
   inb && /^[[:space:]]*-[[:space:]]*(name|uses|run):[[:space:]]/ { inb = 0 }
   inb && /sdk:/ {
     sub(/.*sdk:[[:space:]]*/, ""); gsub(/["]/, ""); gsub(sq, "")
@@ -136,6 +146,23 @@ resolve_target() {
     # version CI runs; its `channel:` (or stable) then carries the download.
     [ -n "${det_sdk}" ] && TARGET="${det_sdk}"
   fi
+
+  # Accept a `v`-prefixed pin (fa.sh/dmtools.sh muscle memory) — dart-archive
+  # release URLs are UNprefixed, so strip it before URL building.
+  case "${TARGET}" in v[0-9]*) TARGET="${TARGET#v}" ;; esac
+
+  # Validate the target BEFORE it becomes a URL: a mistyped argument used to
+  # fall through to version mode and die much later as a bare curl 404 on
+  # .../release/--help/sdk/dartsdk-...zip — reading like a CDN problem
+  # instead of the usage error it is.
+  case "${TARGET}" in
+    ""|latest|stable|beta|dev) ;;
+    [0-9]*.[0-9]*.[0-9]*) ;;  # 3.9.4 / 3.14.0-315.1.beta
+    *)
+      echo "❌ unknown target '${TARGET}' (stable|beta|dev|latest|<version>)" >&2
+      exit 1
+      ;;
+  esac
 
   case "${TARGET}" in
     ""|latest|stable|beta|dev)
@@ -194,6 +221,31 @@ extract_zip() {
   fi
 }
 
+# dart-archive publishes a `.sha256` sidecar next to every SDK bundle. Verify
+# the ~215MB download against it before extraction — cheap supply-chain
+# insurance for a script that runs on every Dart-repo leg.
+verify_sha256() {
+  local file="$1" sidecar="$2" sum ok=1
+  sum="$(curl -fsSL --connect-timeout 30 --max-time 30 --retry 3 --retry-delay 5 "${sidecar}" || true)"
+  if [ -z "${sum}" ]; then
+    echo "❌ could not fetch the sha256 sidecar (${sidecar})" >&2
+    exit 1
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    echo "${sum}  ${file}" | sha256sum -c - >/dev/null 2>&1 || ok=0
+  elif command -v shasum >/dev/null 2>&1; then
+    echo "${sum}  ${file}" | shasum -a 256 -c - >/dev/null 2>&1 || ok=0
+  else
+    echo "⚠️  no sha256sum/shasum on PATH — skipping archive verification" >&2
+    return 0
+  fi
+  if [ "${ok}" = "0" ]; then
+    echo "❌ sha256 mismatch for ${file} (expected ${sum})" >&2
+    exit 1
+  fi
+  echo "🔐 sha256 verified: ${file}"
+}
+
 export_dart_env() {
   export_var "DART_HOME" "${SDK_HOME}"
   export_var "DART_VERSION" "$1"
@@ -234,14 +286,19 @@ do_install() {
 
   local url tmp
   tmp="$(mktemp -d)"
+  # Clean the ~215MB scratch dir on EVERY exit path — a failed curl used to
+  # leak it (the error abort aborted the script before the rm -rf ran).
+  trap 'rm -rf "${tmp}"' EXIT
   url="$(sdk_url "${resolved}")"
   echo "📥 Installing Dart SDK (${CHANNEL} ${resolved:-latest})..."
   echo "  → ${url}"
-  curl -fsSL "${url}" -o "${tmp}/dartsdk.zip"
+  curl -fsSL --connect-timeout 30 --retry 3 --retry-delay 5 "${url}" -o "${tmp}/dartsdk.zip"
+  verify_sha256 "${tmp}/dartsdk.zip" "${url}.sha256"
   rm -rf "${DART_INSTALL_DIR}"
   mkdir -p "${DART_INSTALL_DIR}"
   extract_zip "${tmp}/dartsdk.zip" "${DART_INSTALL_DIR}"
   rm -rf "${tmp}"
+  trap - EXIT
 
   if [ ! -x "${SDK_BIN}/dart" ]; then
     echo "❌ Dart SDK bundle extracted but ${SDK_BIN}/dart is missing" >&2

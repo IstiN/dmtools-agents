@@ -162,9 +162,21 @@ _cache_konan() {
 _cache_dart() {
   # Dart SDK (gh-918: factory legs on dart repos need the same gate toolchain
   # as CI — setup/dart.sh resolves the channel/version and installs under
-  # ~/.dart-sdk/dart-sdk). Key on the requested channel/version; the restore
-  # key keeps any previously cached SDK until the channel moves.
-  local version="${1:-${DART_VERSION:-stable}}"
+  # ~/.dart-sdk/dart-sdk). Key on the target dart.sh RESOLVES — explicit
+  # dart:<version> arg first, else `dart.sh plan` (argument/env-independent
+  # detection: quality.yml channel/sdk, else stable). NOT on the DART_VERSION
+  # env var: dart.sh re-exports DART_VERSION=<installed> mid-job (GITHUB_ENV),
+  # so a save step keying on the env var derives a different key than the
+  # restore step — the primary key could never round-trip. Masking DART_VERSION
+  # inside the plan call makes restore (pre-install) and save (post-install)
+  # derive the SAME key; dart.sh's version-aware reinstall self-heals channel
+  # movement within it. The restore key keeps any previously cached SDK until
+  # the resolved target moves.
+  local version="${1:-}"
+  if [ -z "${version}" ]; then
+    version="$(env DART_VERSION= bash "${SCRIPT_DIR}/dart.sh" plan 2>/dev/null | sed -n 's/^requested=//p' || true)"
+  fi
+  [ -n "${version}" ] || version="${DART_VERSION:-stable}"
   export_var "DART_CACHE_PATH" "${HOME}/.dart-sdk"
   export_var "DART_CACHE_KEY"  "dart-${version}-${OS_TAG}"
   export_var "DART_CACHE_RESTORE_KEY" "dart-"
