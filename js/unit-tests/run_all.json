@@ -50,6 +50,8 @@
         "js/unit-tests/test_retryMergePR.js",
         "js/unit-tests/test_recoverMergedPRTicket.js",
         "js/unit-tests/test_recoverStuckTestCase.js",
+        "js/unit-tests/test_moveToInTesting.js",
+        "js/unit-tests/test_moveToReadyForTesting.js",
         "js/unit-tests/test_wave1cTrackerMigration.js",
         "js/unit-tests/test_wave2d4Tracker.js",
         "js/unit-tests/test_wave1aiiTrackerMigration.js",

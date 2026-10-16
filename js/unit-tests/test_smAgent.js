@@ -330,6 +330,7 @@ function makeSmAgent(opts) {
         makeRequire({
             './common/trackers.js': trackersForSm,
             './configLoader.js': freshConfigLoader,
+            './config.js': configModule,
             './sm/sourceResolver.js': { resolve: function () { return jiraSourceStub; } },
             './common/scm.js': mockScmModule,
             './common/buildEncodedConfig.js': buildEncodedConfigModule,
@@ -11917,5 +11918,97 @@ suite('smAgent: runLocalAction require shim (gh-908)', function() {
         catch (e) { err = e; }
         assert.ok(err, 'must throw when a helper source cannot be read');
         assert.contains(err.message, 'Cannot read: common/ticketKeyShapes.js');
+    });
+});
+
+// ── gh-916: rule.targetStatus moves fall back to the stage marker ────────────
+
+suite('smAgent: targetStatus stage-label fallback (gh-916)', function() {
+
+    test("'label' mode: a rejected Ready For Testing move marks stage_ready_for_testing — tick still triggers", function() {
+        var added = [];
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "PROJ", parentTicket: "PROJ-1", stageFallback: "label", statuses: { READY_FOR_TESTING: "Ready For Testing" } }, repository: { owner: "o", repo: "r" } };'
+            },
+            tickets: [{ key: 'T-9', fields: { labels: [] } }],
+            onMoveStatus: function() {
+                throw new Error("The field 'State' contains the value 'Ready For Testing' that is not in the list of supported values");
+            },
+            onAddLabel: function(opts) { added.push(opts); }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { targetStatus: 'Ready For Testing' })
+        ]));
+
+        assert.deepEqual(added, [{ key: 'T-9', label: 'stage_ready_for_testing' }]);
+        assert.equal(sm.capturedTriggers.length, 1, 'the tick continues after the marked fallback');
+    });
+
+    test("an unconfigured targetStatus stays a plain move even when the transition is rejected", function() {
+        var added = [];
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "PROJ", parentTicket: "PROJ-1", stageFallback: "label", statuses: { READY_FOR_TESTING: "Ready For Testing" } }, repository: { owner: "o", repo: "r" } };'
+            },
+            tickets: [{ key: 'T-10', fields: { labels: [] } }],
+            onMoveStatus: function() {
+                throw new Error('state rejected');
+            },
+            onAddLabel: function(opts) { added.push(opts); }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { targetStatus: 'In Development' })
+        ]));
+
+        assert.deepEqual(added, [], 'no configured stage key — no marker');
+        assert.equal(sm.capturedTriggers.length, 1, 'the move failure is caught, the tick continues');
+    });
+
+    test("a renamed configured status still resolves: the sm.json literal targetStatus marks the stage", function() {
+        // gh-916 review: a useConfiguredStatusesInQueries project renames the status
+        // (READY_FOR_TESTING: 'ReadyForTest') but keeps the sm.json literal
+        // targetStatus: 'Ready For Testing'. The fallback must still apply — the
+        // default (key-derived) name resolves the stage key.
+        var added = [];
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "PROJ", parentTicket: "PROJ-1", stageFallback: "label", useConfiguredStatusesInQueries: true, statuses: { READY_FOR_TESTING: "ReadyForTest" } }, repository: { owner: "o", repo: "r" } };'
+            },
+            tickets: [{ key: 'T-11', fields: { labels: [] } }],
+            onMoveStatus: function() {
+                throw new Error("The field 'State' contains the value 'Ready For Testing' that is not in the list of supported values");
+            },
+            onAddLabel: function(opts) { added.push(opts); }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { targetStatus: 'Ready For Testing' })
+        ]));
+
+        assert.deepEqual(added, [{ key: 'T-11', label: 'stage_ready_for_testing' }]);
+        assert.equal(sm.capturedTriggers.length, 1, 'the tick continues after the marked fallback');
+    });
+
+    test("a renamed configured status reached by its own name marks the stage via the configured match", function() {
+        var added = [];
+        var sm = makeSmAgent({
+            fileMap: {
+                '../.dmtools/config.js': 'module.exports = { jira: { project: "PROJ", parentTicket: "PROJ-1", stageFallback: "label", statuses: { READY_FOR_TESTING: "ReadyForTest" } }, repository: { owner: "o", repo: "r" } };'
+            },
+            tickets: [{ key: 'T-12', fields: { labels: [] } }],
+            onMoveStatus: function() {
+                throw new Error("state rejected");
+            },
+            onAddLabel: function(opts) { added.push(opts); }
+        });
+
+        sm.action(baseParams('o', 'r', [
+            makeRule("project = X", { targetStatus: 'ReadyForTest' })
+        ]));
+
+        assert.deepEqual(added, [{ key: 'T-12', label: 'stage_ready_for_testing' }]);
     });
 });

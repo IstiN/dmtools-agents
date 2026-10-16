@@ -685,9 +685,13 @@ function action(params) {
 
         // Step 8: Move ticket status
         try {
+            var stageKey = passed ? 'PASSED' : 'FAILED';
             var targetStatus = passed ? jiraConfig.statuses.PASSED : jiraConfig.statuses.FAILED;
-            tracker.moveToStatus(ticketKey, targetStatus);
-            console.log('✅ Moved', ticketKey, 'to', targetStatus);
+            // gh-916: Passed/Failed can be tag-only (restricted ADO workflows) — stage-label fallback.
+            var moveResult = tracker.moveToStatusOrMark(ticketKey, targetStatus, stageKey);
+            if (moveResult.moved || moveResult.marked) {
+                console.log('✅ Moved', ticketKey, 'to', targetStatus);
+            }
         } catch (e) {
             console.warn('Failed to move ticket status:', e);
         }

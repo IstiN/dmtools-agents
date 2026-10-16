@@ -18,9 +18,12 @@ function action(params) {
 
         console.log('Moving ' + ticketKey + ' to ' + jiraConfig.statuses.READY_FOR_TESTING);
 
-        tracker.moveToStatus(ticketKey, jiraConfig.statuses.READY_FOR_TESTING);
+        // gh-916: READY_FOR_TESTING can be tag-only (restricted ADO workflows) — stage-label fallback in 'label' mode.
+        var moveResult = tracker.moveToStatusOrMark(ticketKey, jiraConfig.statuses.READY_FOR_TESTING, 'READY_FOR_TESTING');
 
-        console.log('✅ ' + ticketKey + ' moved to ' + jiraConfig.statuses.READY_FOR_TESTING);
+        if (moveResult.moved || moveResult.marked) {
+            console.log('✅ ' + ticketKey + ' moved to ' + jiraConfig.statuses.READY_FOR_TESTING);
+        }
 
         return {
             success: true,

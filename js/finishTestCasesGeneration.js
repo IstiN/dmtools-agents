@@ -35,8 +35,12 @@ function action(params) {
     console.log('=== Finishing test case generation for', ticketKey, '===');
 
     try {
-        getTracker().moveToStatus(ticketKey, jiraConfig.statuses.READY_FOR_TESTING);
-        console.log('✅ Moved', ticketKey, 'to', jiraConfig.statuses.READY_FOR_TESTING);
+        // gh-916: tag-only status (no such state on restricted ADO workflows) — fall back to a
+        // stage_<key> label when stageFallback 'label'; 'none' keeps the exact old move + error flow.
+        var moved = getTracker().moveToStatusOrMark(ticketKey, jiraConfig.statuses.READY_FOR_TESTING, 'READY_FOR_TESTING');
+        if (moved.moved || moved.marked) {
+            console.log('✅ Moved', ticketKey, 'to', jiraConfig.statuses.READY_FOR_TESTING);
+        }
     } catch (e) {
         console.warn('Could not move Story to Ready For Testing:', e);
     }

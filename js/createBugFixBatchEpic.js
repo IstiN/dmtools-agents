@@ -117,8 +117,19 @@ function action(params) {
 
     function bugStillRelevant(bugKey) {
         // JQL text: provider-specific query (WIQL on ado)
-        var jql = 'issue in linkedIssues("' + bugKey + '") AND issuetype = "Test Case" ' +
-            'AND status in ("' + jiraConfig.statuses.FAILED + '", "' + jiraConfig.statuses.BUG_TO_FIX + '")';
+        // gh-916: 'Failed' / 'Bug To Fix' can be tag-only on Test Case (restricted ADO workflows).
+        // 'label' mode widens each status to (status OR stage label) through the shared
+        // {stage.KEY:Literal} placeholder (configLoader.interpolateStagePlaceholders, agents#855) in the
+        // syntax of the tracker in use; the 'none' default sends the exact status-only clause as before.
+        var failedName = jiraConfig.statuses.FAILED;
+        var bugToFixName = jiraConfig.statuses.BUG_TO_FIX;
+        var statusClause = 'status in ("' + failedName + '", "' + bugToFixName + '")';
+        if (getTracker().stageFallback() === 'label') {
+            statusClause = configLoader.interpolateStagePlaceholders(
+                '({stage.FAILED:' + failedName + '} OR {stage.BUG_TO_FIX:' + bugToFixName + '})',
+                projectConfig, getTracker().provider());
+        }
+        var jql = 'issue in linkedIssues("' + bugKey + '") AND issuetype = "Test Case" AND ' + statusClause;
         var tcs = searchIssues(jql, ['key', 'status'], 1);
         return tcs.length > 0;
     }
