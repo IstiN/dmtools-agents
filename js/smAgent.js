@@ -33,7 +33,11 @@
  *   the slot"): disables the validate-arm red-head skip. Recording of red heads on the
  *   fail reports continues (audit trail); only the arm-side skip goes dark. A rule can
  *   also opt out alone with rule.redHeadSkip = false. jobParams.redHeadCap (default 3)
- *   tunes how many reds on the SAME head SHA block the re-arm.
+ *   tunes how many reds on the SAME head SHA block the re-arm. The SAME budget bounds
+ *   the red-gate rework arm (rule.redHeadGated — rework-on-red-gate-unlatched, gh-917):
+ *   that arm_rework path records the shared 🔴 marker history and, at redHeadCap reds
+ *   on an unchanged head, withholds the arm and escalates the owner once per head
+ *   (🛑 marker comment — no infinite retry on unfixable-without-toolchain violations).
  *   jobParams.emptyLapMax (default 1, review #703 retune — was 2) — after this many
  *   consecutive EMPTY rework laps on the same head (a lap that closes itself successful
  *   without moving the head — live fa#1211 run 37196297279), fail_validation withholds
@@ -1355,9 +1359,62 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
             // latch before labeling; a leg already flying owns the threads,
             // and re-arming it stacked 9 arms / 8 dead legs on fa #1428.
             if (consultReworkLatch(key, ticket, effectiveRepoInfo).latched) continue;
+            // gh-917: the red-gate rule (rule.redHeadGated —
+            // rework-on-red-gate-unlatched) arms rework on ANY machine-
+            // authored red head, FIRST VALIDATION included — the same arm
+            // path must carry the same anti-loop bound as fail_validation:
+            // at redHeadCap (default 3) recorded reds on the UNCHANGED head
+            // the arm is WITHHELD and the owner is escalated once per head
+            // (no infinite retry on unfixable-without-toolchain
+            // violations). priorReds reads the SAME 🔴 marker history
+            // fail_validation writes (failMarkerState — one comment
+            // fetch), so both arming paths share one per-head budget; a
+            // head move resets it by construction (markers are head-keyed).
+            // A read failure fails OPEN (empty history → arm): a broken
+            // comment read must not strand a red head this gate exists to
+            // un-stall.
+            var redGated = rule.redHeadGated === true;
+            var redGateHead = redGated
+                ? ((ticket.pr && ticket.pr.headSha) || ticket.headSha) : null;
+            var redGateMarks = redGated
+                ? failMarkerState(effectiveRepoInfo, ticket.prNumber) : null;
+            var redGatePrior = (redGated && redGateHead)
+                ? (redGateMarks.redHeads[redGateHead] || 0) : 0;
+            var redGateCap = redHeadCapOf(RUN_JOB_PARAMS);
+            var redGateLine = (redGated && redGateHead)
+                ? redHeadMarkerLine(redGatePrior, redGateHead, redGateCap) : null;
             try {
                 if (DRY) {
-                    console.log('  🧪 [dry] ' + key + ' would arm agent:rework (unresolved review threads on PR #' + ticket.prNumber + ')');
+                    console.log('  🧪 [dry] ' + key + ' would arm agent:rework (' +
+                        (redGated ? 'red pre-merge gate, first validation included — gh-917' :
+                         'unresolved review threads') + ' on PR #' + ticket.prNumber + ')');
+                    processedKeys.push(key);
+                    continue;
+                }
+                if (redGated && redGatePrior >= redGateCap) {
+                    // Cap reached: withhold + escalate ONCE per head. The
+                    // 🛑 marker in the escalation comment is the dedup —
+                    // failMarkerState parsed it from the same fetch; a read
+                    // failure above leaves reworkWithheld empty (re-post,
+                    // fail toward visibility). Repeat ticks stay quiet (no
+                    // processedKeys — suppressed decisions don't pollute
+                    // the tick summary, same shape as the latch consult).
+                    if (redGateMarks.reworkWithheld[redGateHead]) {
+                        console.log('  ⏭️  ' + key + ' rework arm stays withheld at cap (' +
+                            redGatePrior + '/' + redGateCap + ' reds on head ' +
+                            String(redGateHead).substring(0, 7) + ') — escalation already posted (gh-917)');
+                        continue;
+                    }
+                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber,
+                        '\uD83D\uDED1 rework arm withheld on head ' + redGateHead + ' — ' +
+                        redGatePrior + '/' + redGateCap + ' red arming attempts left the head unchanged' +
+                        ' (gh-917). The rework leg keeps closing without a fix (a violation class the agent' +
+                        ' cannot repair without the local toolchain) — the machine stops retrying here.' +
+                        ' A human owns this PR: push a fix (a NEW head restarts the budget and validation)' +
+                        ' or resolve the violation at its source.');
+                    console.log('  🛑 ' + key + ' rework arm WITHHELD at cap (' + redGatePrior + '/' +
+                        redGateCap + ' reds on head ' + String(redGateHead).substring(0, 7) +
+                        ') — owner escalated (gh-917: no infinite retry)');
                     processedKeys.push(key);
                     continue;
                 }
@@ -1383,8 +1440,23 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         ' on head ' + armGate.headShort);
                 }
                 githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).addLabel(ticket.prNumber, 'agent:rework');
-                githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed ' + '(ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: ' + 'agent:rework is armed on this PR and the rework runner will work through the threads and push. ' + 'Validation re-runs automatically afterwards, and once the threads are resolved a fresh ' + 're-review is armed (review-threads-resolved).');
-                console.log('  ✅ ' + key + ' agent:rework armed (unresolved review threads on PR #' + ticket.prNumber + ')');
+                if (redGated) {
+                    // gh-917 red-gate arm: the comment LEADS with the shared
+                    // red-head marker line (the budget the next arm and the
+                    // validate-armed redHeadSkip both read), then the reason.
+                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber,
+                        (redGateLine ? redGateLine + '\n' : '') +
+                        '\uD83D\uDD34 Red pre-merge gate on the head with no armed validation — rework armed' +
+                        ' (gh-917: first validation included, review or no review). The rework runner pushes a' +
+                        ' fix and validation re-runs on the new head (validate-fresh). After ' + redGateCap +
+                        ' red arming attempts on the SAME head the arm is withheld and a human is escalated' +
+                        ' (no infinite retry).');
+                    console.log('  ✅ ' + key + ' agent:rework armed (red pre-merge gate on PR #' +
+                        ticket.prNumber + ', first validation included — gh-917)');
+                } else {
+                    githubTracker(effectiveRepoInfo.owner, effectiveRepoInfo.repo).postComment(ticket.prNumber, '🧵 Unresolved review threads — rework armed. This machine-authored PR is reviewed ' + '(ai_pr_reviewed) but still has open review threads. The rework leg owns open threads: ' + 'agent:rework is armed on this PR and the rework runner will work through the threads and push. ' + 'Validation re-runs automatically afterwards, and once the threads are resolved a fresh ' + 're-review is armed (review-threads-resolved).');
+                    console.log('  ✅ ' + key + ' agent:rework armed (unresolved review threads on PR #' + ticket.prNumber + ')');
+                }
                 armReworkLatch(ticket);
                 processedKeys.push(key);
             } catch (e) {
@@ -4363,7 +4435,7 @@ function failingCheckNames(repoInfo, headSha) {
 // next red re-reads and re-evaluates.
 function failMarkerState(repoInfo, prNumber) {
     var out = { redHeads: {}, emptyLaps: {}, zombies: {}, placeholders: null,
-                placeholderParked: false };
+                placeholderParked: false, reworkWithheld: {} };
     var bodies = [];
     try {
         var raw = github_get_pr_comments({
@@ -4414,6 +4486,26 @@ function failMarkerState(repoInfo, prNumber) {
     } catch (ePh) {
         console.warn('  ⚠️  placeholder-marker parse failed: ' + (ePh.message || ePh));
         out.placeholders = { count: 0, lastAtMs: null };
+    }
+    // gh-917 red-gate rework bookkeeping: the SAME single comment fetch —
+    // which heads already carry the 🛑 withheld-at-cap escalation (the
+    // once-per-head dedup for the redHeadGated arm_rework path; without it
+    // a stuck red head would re-post the escalation every tick). A read
+    // failure above leaves {} — the withhold branch then re-posts (fail
+    // toward visibility, same contract as conflict_rework's marker scan).
+    try {
+        out.reworkWithheld = {};
+        var wmr;
+        REWORK_WITHHELD_MARKER_RE.lastIndex = 0;
+        bodies.forEach(function (b) {
+            REWORK_WITHHELD_MARKER_RE.lastIndex = 0;
+            while ((wmr = REWORK_WITHHELD_MARKER_RE.exec(String(b == null ? '' : b))) !== null) {
+                out.reworkWithheld[wmr[1]] = true;
+            }
+        });
+    } catch (eWmr) {
+        console.warn('  ⚠️  withheld-arm marker parse failed: ' + (eWmr.message || eWmr));
+        out.reworkWithheld = {};
     }
     return out;
 }
@@ -4818,6 +4910,15 @@ var RED_HEAD_MARKER_RE = /\uD83D\uDD34 red head ([0-9a-f]{7,40}) \u2014 red (\d+
 // gh-852 AC2: the once-per-cap-hit park note under the placeholder reset
 // cap (failMarkerState.placeholderParked dedupes the comment).
 var PLACEHOLDER_PARK_MARKER = '\uD83C\uDFF7\uFE0F Placeholder resets capped';
+
+// gh-917: the once-per-head escalation marker the redHeadGated arm_rework
+// path posts when it WITHHOLDS the rework arm at redHeadCap recorded reds
+// on an unchanged head. failMarkerState parses it into
+// out.reworkWithheld[headSha] from the same single comment fetch — the
+// dedup that keeps a stuck red head from re-posting the escalation every
+// tick. Matches the 🛑 marker line + the head sha (7-40 hex, full or short
+// — the poster writes the full sha).
+var REWORK_WITHHELD_MARKER_RE = /\uD83D\uDED1 rework arm withheld on head ([0-9a-f]{7,40})/g;
 
 function redHeadCapOf(jobParams) {
     // Default 3 reds on the same head (owner directive 2026-10-04);

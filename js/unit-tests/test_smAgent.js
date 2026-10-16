@@ -790,6 +790,202 @@ suite('smAgent: localAction arm_rework (gh-683 unresolved review threads)', func
     });
 });
 
+suite('smAgent: arm_rework red-gate max attempts (gh-917 first validation)', function () {
+
+    // gh-917 (epam/dmtools-dart 2026-10-16): fresh dev PRs #413/#414 sat
+    // with red FIRST validations while the SM processed 0 — the red-gate
+    // rule required ai_pr_reviewed. The widened rule (any machine-authored
+    // red head, first validation included) arms via the SAME arm_rework
+    // action, gated by rule.redHeadGated: the arm records the SHARED 🔴
+    // red-head marker budget fail_validation writes, and at redHeadCap
+    // (default 3) recorded reds on the UNCHANGED head the arm is WITHHELD
+    // and the owner is escalated ONCE per head — no infinite retry on
+    // unfixable-without-toolchain violations.
+
+    var RULE = {
+        description: 'red pre-merge gate on ANY machine-authored PR -> arm agent:rework (first validation included)',
+        source: 'github',
+        query: {
+            type: 'pr',
+            checks: ['red'],
+            notLabels: ['ai_validating', 'validation_failed', 'agent:rework', 'chore:pin'],
+            prMachineAuthor: true,
+            notMergeState: ['BEHIND', 'DIRTY'],
+            draft: false
+        },
+        localAction: 'arm_rework',
+        redHeadGated: true,
+        limit: 1,
+        id: 'rework-on-red-gate-unlatched'
+    };
+
+    function devItem(n, head, extra) {
+        var it = { key: 'pr-' + n, labels: [], issueNumber: null, prNumber: n, draft: false,
+                   headSha: head };
+        if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) it[k] = extra[k]; } }
+        return it;
+    }
+
+    function config(owner, repo) {
+        return { fileMap: { '../.dmtools/config.js':
+            'module.exports = { repository: { owner: "' + owner + '", repo: "' + repo + '" } };' } };
+    }
+
+    function markerComment(body) { return { body: body }; }
+
+    var HEAD = 'a413a413a413a413a413a413a413a413a413a413';
+
+    test('first red validation: arms agent:rework on the PR + records the shared red-head marker', function () {
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            github: {
+                items: [devItem(413, HEAD, { pr: { number: 413, state: 'OPEN',
+                    checks: 'red', mergeState: 'BLOCKED', mergeable: false } })],
+                pr: { number: 413, body: 'Closes #412', head: { sha: HEAD } },
+                prComments: []
+            }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            machineAuthor: 'ai-teammate', rules: [RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'the arm lands');
+        assert.equal(sm.capturedPrLabelAdds[0].number, 413, 'PR carrier (rework-on-label dispatches)');
+        assert.deepEqual(sm.capturedPrLabelAdds[0].labels, ['agent:rework']);
+        assert.equal(sm.capturedPrComments.length, 1, 'one explanatory comment');
+        var body = sm.capturedPrComments[0].body;
+        assert.contains(body, '\uD83D\uDD34 red head ' + HEAD + ' \u2014 red 1/3',
+            'the shared per-head budget is recorded with the SAME marker fail_validation writes');
+        assert.contains(body, 'gh-917', 'the comment names the coverage (first validation included)');
+        assert.equal(sm.capturedTriggers.length, 0, 'arm_rework never dispatches — rework-on-label owns it');
+    });
+
+    test('second red on the same head: arms again and INCREMENTS the marker (red 2/3)', function () {
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            github: {
+                items: [devItem(413, HEAD, { pr: { number: 413, state: 'OPEN',
+                    checks: 'red', mergeState: 'BLOCKED', mergeable: false } })],
+                pr: { number: 413, body: 'Closes #412', head: { sha: HEAD } },
+                prComments: [markerComment('\uD83D\uDD34 red head ' + HEAD +
+                    ' \u2014 red 1/3 (owner directive 2026-10-04: red yields the slot)')]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            machineAuthor: 'ai-teammate', rules: [RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'below the cap the arm still fires');
+        assert.contains(sm.capturedPrComments[0].body,
+            '\uD83D\uDD34 red head ' + HEAD + ' \u2014 red 2/3',
+            'the recorded count increments toward the cap');
+    });
+
+    test('at redHeadCap recorded reds on the unchanged head the arm is WITHHELD + owner escalated', function () {
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            github: {
+                items: [devItem(413, HEAD, { pr: { number: 413, state: 'OPEN',
+                    checks: 'red', mergeState: 'BLOCKED', mergeable: false } })],
+                pr: { number: 413, body: 'Closes #412', head: { sha: HEAD } },
+                prComments: [
+                    markerComment('\uD83D\uDD34 red head ' + HEAD + ' \u2014 red 1/3'),
+                    markerComment('\uD83D\uDD34 red head ' + HEAD + ' \u2014 red 2/3'),
+                    markerComment('\uD83D\uDD34 red head ' + HEAD + ' \u2014 red 3/3')
+                ]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            machineAuthor: 'ai-teammate', rules: [RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0,
+            'NO arm at the cap — no infinite retry on unfixable-without-toolchain violations');
+        assert.equal(sm.capturedPrComments.length, 1, 'one escalation comment');
+        var body = sm.capturedPrComments[0].body;
+        assert.contains(body, '\uD83D\uDED1 rework arm withheld on head ' + HEAD,
+            'the once-per-head escalation marker (machine-parseable for the dedup)');
+        assert.contains(body, '3/3', 'the escalation names the spent budget');
+    });
+
+    test('the escalation posts ONCE per head — repeated ticks stay quiet (no comment spam)', function () {
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            github: {
+                items: [devItem(413, HEAD, { pr: { number: 413, state: 'OPEN',
+                    checks: 'red', mergeState: 'BLOCKED', mergeable: false } })],
+                pr: { number: 413, body: 'Closes #412', head: { sha: HEAD } },
+                prComments: [
+                    markerComment('\uD83D\uDD34 red head ' + HEAD + ' \u2014 red 1/3'),
+                    markerComment('\uD83D\uDD34 red head ' + HEAD + ' \u2014 red 2/3'),
+                    markerComment('\uD83D\uDD34 red head ' + HEAD + ' \u2014 red 3/3'),
+                    markerComment('\uD83D\uDED1 rework arm withheld on head ' + HEAD +
+                        ' \u2014 3/3 red arming attempts left the head unchanged (gh-917)')
+                ]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            machineAuthor: 'ai-teammate', rules: [RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 0, 'still no arm');
+        assert.equal(sm.capturedPrComments.length, 0,
+            'the escalation already stands — a withheld PR must not spam every tick');
+    });
+
+    test('a NEW head resets the budget by construction (markers are head-keyed)', function () {
+        var NEWHEAD = 'b414b414b414b414b414b414b414b414b414b414';
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            github: {
+                items: [devItem(413, NEWHEAD, { pr: { number: 413, state: 'OPEN',
+                    checks: 'red', mergeState: 'BLOCKED', mergeable: false } })],
+                pr: { number: 413, body: 'Closes #412', head: { sha: NEWHEAD } },
+                prComments: [
+                    markerComment('\uD83D\uDD34 red head ' + HEAD + ' \u2014 red 1/3'),
+                    markerComment('\uD83D\uDD34 red head ' + HEAD + ' \u2014 red 2/3'),
+                    markerComment('\uD83D\uDD34 red head ' + HEAD + ' \u2014 red 3/3'),
+                    markerComment('\uD83D\uDED1 rework arm withheld on head ' + HEAD + ' \u2014 3/3')
+                ]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            machineAuthor: 'ai-teammate', rules: [RULE] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1,
+            'the fix push moved the head — the budget restarts at red 1/3 on the NEW head');
+        assert.contains(sm.capturedPrComments[0].body,
+            '\uD83D\uDD34 red head ' + NEWHEAD + ' \u2014 red 1/3',
+            'the fresh head records its own count');
+    });
+
+    test('unwidened arm_rework (threads rule) never records red-head markers', function () {
+        // The redHeadGated gate is rule-scoped: the gh-683 threads path
+        // must stay byte-identical (no 🔴 marker, no cap, no escalation).
+        var threadsRule = {
+            description: 'unresolved review threads on a machine-authored reviewed PR -> arm agent:rework',
+            source: 'github',
+            query: { type: 'pr', labels: ['ai_pr_reviewed'],
+                     notLabels: ['agent:rework', 'agent:review', 'ai_validating', 'validation_failed'],
+                     prMachineAuthor: true, threadsResolved: false, draft: false },
+            localAction: 'arm_rework',
+            limit: 5,
+            id: 'rework-unresolved-threads'
+        };
+        var sm = makeSmAgent(Object.assign(config('epam', 'dmtools-dart'), {
+            github: {
+                items: [devItem(1211, HEAD, { labels: ['ai_pr_reviewed'], pr: { number: 1211,
+                    state: 'OPEN', checks: 'green', mergeState: 'BLOCKED', mergeable: false } })],
+                pr: { number: 1211, body: 'Closes #1210', head: { sha: HEAD } },
+                prComments: [
+                    markerComment('\uD83D\uDD34 red head ' + HEAD + ' \u2014 red 1/3'),
+                    markerComment('\uD83D\uDD34 red head ' + HEAD + ' \u2014 red 2/3'),
+                    markerComment('\uD83D\uDD34 red head ' + HEAD + ' \u2014 red 3/3')
+                ]
+            }
+        }));
+        sm.action({ jobParams: { owner: 'epam', repo: 'dmtools-dart',
+            machineAuthor: 'ai-teammate', rules: [threadsRule] } });
+
+        assert.equal(sm.capturedPrLabelAdds.length, 1, 'the threads arm fires regardless of red history');
+        assert.notContains(sm.capturedPrComments[0].body, 'red head',
+            'no red-head marker on the threads path — the budget is red-gate-only');
+        assert.notContains(sm.capturedPrComments[0].body, 'rework arm withheld',
+            'no withholding on the threads path');
+    });
+});
+
 suite('smAgent: sm_github.json rule hygiene', function () {
 
     test('every deployed github rule passes the validator (source + query + dispatch shape)', function () {
