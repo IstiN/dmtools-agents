@@ -1,25 +1,26 @@
 # Quality gate — per-function CRAP ratchet via crap4js (IstiN fork).
 #
-# Policy: CRAP may only DECREASE. crap-baseline.json records every function's
-# CRAP score; the gate fails when
-#   - a function in the baseline gets a higher CRAP, or
-#   - a function not in the baseline (new/renamed) exceeds CRAP_THRESHOLD.
-# Improvements pass and are reported; lock them in by re-baselining:
-#   crap4js . --coverage <coverage-final.json> --threshold 8 --baseline crap-baseline.json --write-baseline
+# Policy: CRAP may only DECREASE. The baseline (per-function CRAP of everything above
+# CRAP_THRESHOLD) is NOT in the repository — with many agents opening PRs a committed file
+# conflicts constantly. It lives in a rolling GitHub release asset:
 #
-# The baseline stores ONLY functions above the threshold (~570 entries, ~34 KB) — a function
-# absent from it is already held to CRAP_THRESHOLD, so recording the ~5000 compliant ones would
-# only bloat the file and create merge conflicts. Trade-off: a compliant function may drift up
-# to the threshold (8) without a regression; everything above it can only decrease.
+#   release tag  crap-baseline   (prerelease, never "latest" — agent pack consumers resolve
+#                                 releases/latest, so this one must not be it)
+#   asset        crap-baseline.json
 #
-# Coverage comes from the unit suite run in this same job (instrumented tree),
-# so the ratchet is evaluated with the unit-test results of the PR head.
+# pull_request / workflow_dispatch (the factory SM dispatches this on PR heads): measure the
+#   head and COMPARE with the released baseline. Fails when a function's CRAP grew or a new
+#   function exceeds CRAP_THRESHOLD; labels crap:regression / crap:improved.
+# push to main: after a green measurement, ratchet the released baseline DOWN
+#   (crap4js --update-baseline: min(old, now), never up, refuses on regression) and upload it.
+#   Concurrent merges are serialized by the concurrency group below.
+# No baseline asset yet (first run / fork): bootstrap from the measured main, no comparison.
 #
-# Labels: the job sets crap:regression on a failing PR and removes it when the
-# ratchet passes; crap:improved marks PRs that lowered CRAP.
+# Coverage comes from the unit suite run in the same job (instrumented tree), so the
+# ratchet is evaluated with the unit-test results of the head.
 #
-# Tool pin: IstiN/crap4js by commit SHA (fork of vabhzw17eg2qu4m9-bit/crap4js
-# v0.15.0 + --baseline ratchet, pipe-safe exit, epsilon 0.5). Installed from GitHub — the npm 'crap4js'
+# Tool pin: IstiN/crap4js by commit SHA (fork of vabhzw17eg2qu4m9-bit/crap4js v0.15.0 +
+# --baseline / --update-baseline, pipe-safe exit). Installed from GitHub — the npm 'crap4js'
 # package is an unrelated third-party project.
 name: Quality
 
@@ -30,14 +31,21 @@ on:
   workflow_dispatch:  # the Machine SM / sm-kicker dispatch validation runs
 
 permissions:
-  contents: read
+  contents: write        # push to main: update the crap-baseline release asset
   pull-requests: write   # crap:regression / crap:improved labels
+
+# Serializes baseline updates of consecutive merges (never cancels a running update).
+concurrency:
+  group: quality-${{ github.event_name == 'push' && 'baseline-update' || github.run_id }}
+  cancel-in-progress: false
 
 env:
   # Threshold for functions NOT in crap-baseline.json (new or renamed code).
   CRAP_THRESHOLD: '8'
   CRAP4JS_REPO: 'IstiN/crap4js'
-  CRAP4JS_REF: '122ff845cbe128a71637faa846d6252f1d756423'
+  CRAP4JS_REF: '83ee6201e554a91d51c298f045c5c4cb47317b6d'
+  BASELINE_TAG: 'crap-baseline'
+  BASELINE_ASSET: 'crap-baseline.json'
 
 jobs:
   crap:
@@ -80,22 +88,64 @@ jobs:
             "$RUNNER_TEMP/cov/coverage-final.json" $FILES \
             || echo "::warning::node harness has known mock gaps — coverage still collected"
 
-      - name: crap4js ratchet (per-function baseline)
+      - name: Fetch the released baseline
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release download "$BASELINE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$BASELINE_ASSET" \
+               --dir "$RUNNER_TEMP/base" --clobber 2>/dev/null && [ -s "$RUNNER_TEMP/base/$BASELINE_ASSET" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "baseline: $(node -e "const b=require('$RUNNER_TEMP/base/$BASELINE_ASSET');console.log(Object.keys(b.functions).length+' functions, max '+b.maxCrap)")"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no $BASELINE_TAG release asset yet — bootstrapping from this run"
+          fi
+
+      - name: crap4js ratchet (compare with the released baseline)
         id: ratchet
+        if: steps.baseline.outputs.present == 'true'
         run: |
           set +e
           # Redirect to a file (never a pipe): the report is ~500 KB and the verdict block comes last.
-          # The pinned crap4js sets process.exitCode, so nothing is truncated either way.
           "$RUNNER_TEMP/tools/node_modules/.bin/crap4js" . \
             --coverage "$RUNNER_TEMP/cov/coverage-final.json" \
             --threshold "${CRAP_THRESHOLD}" \
-            --baseline crap-baseline.json > "$RUNNER_TEMP/crap.txt"
+            --baseline "$RUNNER_TEMP/base/$BASELINE_ASSET" > "$RUNNER_TEMP/crap.txt"
           code=$?
-          # Full table is long: print only the verdict block (+ the worst offenders) to the log.
           head -30 "$RUNNER_TEMP/crap.txt"
           sed -n '/^CRAP Ratchet/,$p' "$RUNNER_TEMP/crap.txt" | tee -a "$GITHUB_STEP_SUMMARY"
           if grep -q '^improved ' "$RUNNER_TEMP/crap.txt"; then echo "improved=true" >> "$GITHUB_OUTPUT"; fi
           exit $code
+
+      - name: Update the released baseline (main only — ratchets down, never up)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && (steps.ratchet.outcome == 'success' || steps.baseline.outputs.present != 'true')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          CRAP="$RUNNER_TEMP/tools/node_modules/.bin/crap4js"
+          OUT="$RUNNER_TEMP/baseline-out/$BASELINE_ASSET"
+          mkdir -p "$(dirname "$OUT")"
+          if [ "${{ steps.baseline.outputs.present }}" = "true" ]; then
+            cp "$RUNNER_TEMP/base/$BASELINE_ASSET" "$OUT"
+            "$CRAP" . --coverage "$RUNNER_TEMP/cov/coverage-final.json" --threshold "$CRAP_THRESHOLD" \
+              --baseline "$OUT" --update-baseline > "$RUNNER_TEMP/update.txt"
+            sed -n '/^CRAP Ratchet/,$p' "$RUNNER_TEMP/update.txt" | tee -a "$GITHUB_STEP_SUMMARY"
+            if cmp -s "$OUT" "$RUNNER_TEMP/base/$BASELINE_ASSET"; then echo "baseline unchanged — nothing to upload"; exit 0; fi
+          else
+            "$CRAP" . --coverage "$RUNNER_TEMP/cov/coverage-final.json" --threshold "$CRAP_THRESHOLD" \
+              --baseline "$OUT" --write-baseline > "$RUNNER_TEMP/update.txt"
+          fi
+          tail -1 "$RUNNER_TEMP/update.txt"
+          if gh release view "$BASELINE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$BASELINE_TAG" "$OUT" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$BASELINE_TAG" "$OUT" --repo "$GITHUB_REPOSITORY" --prerelease --latest=false \
+              --title "CRAP baseline (rolling)" \
+              --notes "Rolling per-function CRAP baseline used by the Quality workflow. Updated after every merge to main; not a product release."
+          fi
+          echo "baseline released: $(node -e "const b=require('$OUT');console.log(Object.keys(b.functions).length+' functions, max '+b.maxCrap)")" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Label PR (crap:regression / crap:improved)
         if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
