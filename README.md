@@ -1209,19 +1209,34 @@ quality-gate violations stayed in place. The installer:
 - resolves the target exactly the way the repo's CI does — explicit
   argument/env first, then the `dart-lang/setup-dart` step's `sdk:`/`channel:`
   inputs in the checked-out repo's `.github/workflows/*.yml` ("same channel
-  the repo's quality.yml uses"), else `stable`;
+  the repo's quality.yml uses"), else `stable`; an unrecognized target
+  (`--help`, a typo) fails fast with a usage error instead of resolving as a
+  version and dying as a late CDN 404 (a leading `v` is stripped —
+  `dart.sh v3.9.4` works);
 - downloads the SDK from the same dart-archive CDN `dart-lang/setup-dart`
-  uses, so leg-local gate output matches CI gate output;
+  uses (with retries/timeouts and a `.sha256` sidecar checksum check), so
+  leg-local gate output matches CI gate output;
 - installs under `~/.dart-sdk/dart-sdk` (override `DART_INSTALL_DIR`), registers
   `bin` on PATH for the leg session (and subsequent CI steps), and exports
-  `DART_HOME` / `DART_VERSION`;
+  `DART_HOME`. `DART_VERSION` stays a pure input pin — the installed version
+  is visible via `dart --version`; re-exporting it would make a later bare
+  `dart.sh` in the same job pin to the previously installed version instead
+  of re-resolving the channel;
 - is version-aware: an installed-but-stale SDK is reinstalled on mismatch
   (pool VMs keep a persistent `$HOME` — a presence-only check lets an ancient
   binary shadow the requested toolchain forever).
 
-Cache it per resolved version with `setup/cache.sh dart` (`DART_CACHE_*`).
+Cache it with `setup/cache.sh dart` (`DART_CACHE_*`): the key is derived from
+the target `dart.sh` actually resolves (explicit `dart:<version>` argument >
+`DART_VERSION` env > quality.yml detection > stable), so `cache.sh keys dart`
+(restore, pre-install) and `cache.sh save dart` (post-install) derive the same
+key and the primary key round-trips.
 Network-free inspection: `dart.sh plan` (resolved target/URL/layout) and
 `dart.sh status`. Unit-tested in `js/unit-tests/test_dartSetup.js`.
+
+`install.sh all` includes `dart` (pattern-consistent with the other
+heavyweight toolchains `android`/`konan`): warmups of non-Dart targets can
+pass `--exclude dart` to skip the ~1 GB SDK.
 
 Dart-repo runners wire it via `customParams.setupCommands`:
 `["bash agents/setup/dart.sh"]` (see `docs/machine-factory-integration.md` §3.3).

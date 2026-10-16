@@ -113,10 +113,21 @@ $(awk -v sq="'" '
     sub(/[[:space:]]*#.*/, ""); gsub(/[[:space:]]/, ""); print "channel=" $0
   }
 ' "${f}" 2>/dev/null)
-' "${f}" 2>/dev/null)
 EOF
   done
   echo "${found}|${sdk}|${channel}"
+}
+
+# ── Usage ─────────────────────────────────────────────────────────────────────
+usage() {
+  cat <<'EOF'
+Usage: dart.sh [stable|beta|dev|latest|<version>]
+            # default target: the repo's quality.yml dart-lang/setup-dart
+            # channel/sdk detection, else stable
+       DART_VERSION=<channel|version> dart.sh
+       dart.sh plan [stable|beta|dev|latest|<version>]   # network-free preview
+       dart.sh status                                    # installed version + dir
+EOF
 }
 
 # ── Target resolution ─────────────────────────────────────────────────────────
@@ -148,6 +159,24 @@ resolve_target() {
     # version CI runs; its `channel:` (or stable) then carries the download.
     [ -n "${det_sdk}" ] && TARGET="${det_sdk}"
   fi
+
+  # Validate the target BEFORE it becomes a URL — a mistyped argument
+  # ("--help", "instal") used to resolve as a version and die much later as a
+  # bare curl 404 on .../release/--help/sdk/dartsdk-….zip, reading like a CDN
+  # problem instead of a usage error.
+  # A leading `v` is muscle memory from the v-prefixed pins of the sibling
+  # installers (fa.sh v0.1.324 / dmtools.sh) — dart-archive URLs are
+  # unprefixed, so strip it.
+  TARGET="${TARGET#v}"
+  case "${TARGET}" in
+    ""|latest|stable|beta|dev) ;;
+    [0-9]*.[0-9]*.[0-9]*) ;;  # full version tokens: 3.9.4 / 3.14.0-315.1.beta
+    *)
+      echo "❌ unknown target '${TARGET}' (stable|beta|dev|latest|<version> like 3.9.4)" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
 
   case "${TARGET}" in
     ""|latest|stable|beta|dev)
@@ -206,9 +235,39 @@ extract_zip() {
   fi
 }
 
+# dart-archive publishes a .sha256 sidecar next to every SDK bundle. Verify
+# the downloaded zip against it — cheap supply-chain insurance for a ~215 MB
+# fetch that runs on every Dart-repo leg. A mismatch is fatal; a MISSING
+# sidecar (or no sha256 tool on PATH) only warns, so a CDN hiccup cannot red
+# the whole leg on an already-downloaded artifact.
+verify_sha256() {
+  local file="$1" sum_url="$2" expected actual
+  if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+    echo "⚠️  no sha256sum/shasum on PATH — skipping SDK checksum verification" >&2
+    return 0
+  fi
+  if ! curl -fsSL --connect-timeout 30 --retry 3 --retry-delay 5 "${sum_url}" -o "${file}.sha256"; then
+    echo "⚠️  sha256 sidecar unavailable (${sum_url}) — skipping checksum verification" >&2
+    return 0
+  fi
+  expected="$(cut -d' ' -f1 "${file}.sha256" | head -1)"
+  actual="$(hash_file "${file}")"
+  if [ -z "${expected}" ] || [ "${actual}" != "${expected}" ]; then
+    echo "❌ Dart SDK checksum mismatch (expected ${expected:-<none>}, got ${actual})" >&2
+    return 1
+  fi
+  echo "🔐 Dart SDK checksum verified (${actual})"
+}
+
+# Exports DART_HOME for subsequent leg steps. DART_VERSION is deliberately NOT
+# re-exported with the installed version: it is a pure INPUT pin here.
+# Re-exporting it would (a) make a later bare `dart.sh` in the same job pin to
+# the previously installed version instead of re-resolving the channel, and
+# (b) flip the key `setup/cache.sh save dart` derives after the install to
+# dart-<installed>-… — a key the earlier `cache.sh keys dart` (restore) step
+# never looked for, breaking the cache round-trip.
 export_dart_env() {
   export_var "DART_HOME" "${SDK_HOME}"
-  export_var "DART_VERSION" "$1"
 }
 
 do_install() {
@@ -226,10 +285,15 @@ do_install() {
   local have
   have="$(installed_version)"
 
-  if [ -n "${resolved}" ] && [ "${have}" = "${resolved}" ]; then
+  # The -x guard keeps the hit honest: `have` must come from the managed
+  # install (installed_version probes <SDK_BIN>/dart first), and the managed
+  # dart must actually exist — a matching FOREIGN PATH dart never takes this
+  # branch (it would register a nonexistent <SDK_BIN> and point DART_HOME at
+  # nothing).
+  if [ -n "${resolved}" ] && [ "${have}" = "${resolved}" ] && [ -x "${SDK_BIN}/dart" ]; then
     echo "✅ Dart SDK already installed: ${have} — cache hit"
     register_path "${SDK_BIN}"
-    export_dart_env "${have}"
+    export_dart_env
     exit 0
   fi
   if [ -n "${have}" ] && [ -z "${resolved}" ]; then
@@ -237,7 +301,7 @@ do_install() {
     # usable SDK exists — keep it (unverified) rather than red the whole leg.
     echo "⚠️  could not resolve ${CHANNEL} latest — keeping installed SDK ${have} (unverified)" >&2
     register_path "${SDK_BIN}"
-    export_dart_env "${have}"
+    export_dart_env
     exit 0
   fi
   if [ -n "${have}" ]; then
@@ -246,10 +310,14 @@ do_install() {
 
   local url tmp
   tmp="$(mktemp -d)"
+  # The ~215 MB fetch must never hang the leg until the workflow-level
+  # timeout, and the temp dir must not leak on a failed transfer.
+  trap 'rm -rf "${tmp}"' EXIT
   url="$(sdk_url "${resolved}")"
   echo "📥 Installing Dart SDK (${CHANNEL} ${resolved:-latest})..."
   echo "  → ${url}"
-  curl -fsSL "${url}" -o "${tmp}/dartsdk.zip"
+  curl -fsSL --connect-timeout 30 --retry 3 --retry-delay 5 "${url}" -o "${tmp}/dartsdk.zip"
+  verify_sha256 "${tmp}/dartsdk.zip" "${url}.sha256" || exit 1
   rm -rf "${DART_INSTALL_DIR}"
   mkdir -p "${DART_INSTALL_DIR}"
   extract_zip "${tmp}/dartsdk.zip" "${DART_INSTALL_DIR}"
@@ -260,7 +328,7 @@ do_install() {
     exit 1
   fi
   register_path "${SDK_BIN}"
-  export_dart_env "$(installed_version)"
+  export_dart_env
   echo "✅ Dart SDK installed: $(dart --version 2>&1 | head -1)"
 }
 
@@ -277,6 +345,10 @@ case "${CMD}" in
   status)
     echo "installed=$(installed_version)"
     echo "install_dir=${DART_INSTALL_DIR}"
+    ;;
+  help|-h|--help)
+    usage
+    exit 0
     ;;
   *)
     os_arch

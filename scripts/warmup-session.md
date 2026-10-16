@@ -5,6 +5,12 @@ so that this repo's `agents` submodule works out of the box — clones the produ
 (with the `agents` submodule) and pre-installs/pre-warms the toolchain used by
 `setup/install.sh` (java, node, dmtools, copilot, gradle, android, konan, dart, ...).
 
+> **`dart` in `all` (gh-918)**: the Dart SDK is a heavyweight toolchain (~215 MB
+> download, ~1 GB under `~/.dart-sdk`), like `android`/`konan`. If the target repo is
+> **not** a Dart repo, add `dart` to the `--exclude` list — Dart-repo factory legs
+> provision it on demand via `setup/dart.sh` (`customParams.setupCommands`), so warmup
+> does not need it either unless you want the leg session pre-warmed.
+
 It does **not** run the agent pipeline itself. Secrets (`JIRA_EMAIL`, `JIRA_API_TOKEN`,
 `GH_TOKEN`/`PAT_TOKEN`, `COPILOT_GITHUB_TOKEN`, ...) must already be exposed as real
 environment variables by whatever platform starts the session — `run-agent.sh` /
@@ -97,12 +103,12 @@ bash repo/agents/scripts/warmup-session.sh \
   --repo https://github.com/your-org/your-product-repo.git \
   --dir repo \
   --branch main \
-  --exclude "cursor codemie kimi maestro playwright"
+  --exclude "cursor codemie kimi maestro playwright dart"
 ```
 
 (The first `git clone` bootstraps the directory so `agents/scripts/warmup-session.sh`
 exists to call; the script itself is idempotent, so this is safe even though it clones
-twice on a truly fresh session.)
+twice on a truly fresh session. Drop `dart` from the exclude list for Dart repos.)
 
 **Startup script field** (every session start/restart — just sync, no reinstall):
 
@@ -144,7 +150,7 @@ init submodules and run the script against the existing checkout.
 {
   "name": "your-product-repo",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
-  "onCreateCommand": "git submodule update --init --recursive && bash agents/scripts/warmup-session.sh --repo https://github.com/your-org/your-product-repo.git --dir . --branch main --exclude \"cursor codemie kimi maestro playwright\"",
+  "onCreateCommand": "git submodule update --init --recursive && bash agents/scripts/warmup-session.sh --repo https://github.com/your-org/your-product-repo.git --dir . --branch main --exclude \"cursor codemie kimi maestro playwright dart\"",
   "postStartCommand": "git fetch origin && git submodule update --init --recursive"
 }
 ```
