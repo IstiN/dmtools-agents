@@ -2297,3 +2297,107 @@ suite('sm github source: validate-fresh-masked-green CLEAN arm (gh-829)', functi
             'the unlatched twin precedes the latched-park twin');
     });
 });
+
+suite('sm github source: rework-on-red-gate-unlatched covers the FIRST validation (gh-917)', function () {
+
+    // gh-917 live evidence (epam/dmtools-dart, 2026-10-16 11:06Z tick): two
+    // fresh dev PRs (#413 quality 09:46Z — method_size 82/72-line test
+    // helpers; #414 quality 10:19Z — complexity CC=12 + method_size 94-line
+    // main) sat with RED first validations while the SM concluded
+    // `processed: 0, skipped: 0`. The 2026-10-15 red-gate rule required the
+    // post-review latch (ai_pr_reviewed) — a fresh dev PR carries ZERO PR
+    // labels (ai_developed lives on the linked issue, ai_validating is only
+    // stamped by validate-fresh, which never dispatches on an already-red
+    // head) — so the red first validation matched NO rule and the trunk
+    // stalled until a human intervened (hand-fixed 11:19Z). The deployed
+    // rule must match ANY machine-authored red head: first validation
+    // included, review or no review.
+
+    var h = maskedGreenHarness();
+    var load = h.load;
+    var pr = h.pr;
+
+    function deployedRule() {
+        var cfg = JSON.parse(file_read({ path: 'sm_github.json' }));
+        var rules = (cfg.rules || (cfg.params && cfg.params.jobParams && cfg.params.jobParams.rules)) || [];
+        return rules.filter(function (x) { return x.id === 'rework-on-red-gate-unlatched'; })[0];
+    }
+
+    test('a ZERO-label machine dev PR with a red first validation matches (the gh-917 dead zone)', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    pr(413),                                     // fresh dev PR, red quality wave — THE dead zone
+                    pr(408, ['ai_pr_reviewed'])                  // the original dart-408 reviewed case
+                ];
+            }
+        }, {}, {
+            413: { number: 413, state: 'OPEN', checks: 'red', mergeState: 'BLOCKED', mergeable: false },
+            408: { number: 408, state: 'OPEN', checks: 'red', mergeState: 'BLOCKED', mergeable: false }
+        });
+
+        var rule = deployedRule();
+        assert.ok(rule, 'deployed rule present');
+        var items = srcMod.query(Object.assign({}, rule, { limit: 10 }),
+            { repoInfo: { owner: 'epam', repo: 'dmtools-dart' }, machineAuthor: 'ai-teammate' });
+
+        assert.deepEqual(items.map(function (i) { return i.key; }), ['pr-408', 'pr-413'],
+            'both the reviewed red head AND the first-validation red head arm rework (gh-917)');
+    });
+
+    test('the lanes stay disjoint: armed, parked, pinned, guest, stale heads never match', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    pr(420, ['ai_validating']),                  // armed — fail-validation owns the verdict
+                    pr(421, ['validation_failed']),              // parked — the latched-park twin owns it
+                    pr(422, ['agent:rework']),                   // already armed — no double arm
+                    pr(423, ['chore:pin']),                      // factory lockstep bump — factory-gated
+                    pr(424, [], 'BLOCKED', 'vendor-guest'),      // guest — auto-rework is machine-only
+                    pr(425, [], 'BEHIND'),                       // silent-update refreshes first
+                    pr(426, [], 'DIRTY'),                        // conflict-rework owns it
+                    pr(427, [], 'CLEAN')                         // matches — red is red in every merge state but BEHIND/DIRTY
+                ];
+            }
+        }, {}, {
+            420: { number: 420, state: 'OPEN', checks: 'red', mergeState: 'BLOCKED', mergeable: false },
+            421: { number: 421, state: 'OPEN', checks: 'red', mergeState: 'BLOCKED', mergeable: false },
+            422: { number: 422, state: 'OPEN', checks: 'red', mergeState: 'BLOCKED', mergeable: false },
+            423: { number: 423, state: 'OPEN', checks: 'red', mergeState: 'BLOCKED', mergeable: false },
+            424: { number: 424, state: 'OPEN', checks: 'red', mergeState: 'BLOCKED', mergeable: false },
+            425: { number: 425, state: 'OPEN', checks: 'red', mergeState: 'BEHIND', mergeable: null },
+            426: { number: 426, state: 'OPEN', checks: 'red', mergeState: 'DIRTY', mergeable: null },
+            427: { number: 427, state: 'OPEN', checks: 'red', mergeState: 'CLEAN', mergeable: true }
+        });
+
+        var rule = deployedRule();
+        var items = srcMod.query(Object.assign({}, rule, { limit: 10 }),
+            { repoInfo: { owner: 'epam', repo: 'dmtools-dart' }, machineAuthor: 'ai-teammate' });
+
+        assert.deepEqual(items.map(function (i) { return i.key; }), ['pr-427'],
+            'only the unprotected red machine head matches — every labeled lane keeps its owner');
+    });
+
+    test('fail-closed without a machine author: the rule matches nothing (no auto legs at all)', function () {
+        var srcMod = load({
+            github_list_prs: function () { return [pr(430)]; }
+        }, {}, {
+            430: { number: 430, state: 'OPEN', checks: 'red', mergeState: 'BLOCKED', mergeable: false }
+        });
+
+        var rule = deployedRule();
+        var items = srcMod.query(rule,
+            { repoInfo: { owner: 'epam', repo: 'dmtools-dart' } });
+
+        assert.equal(items.length, 0,
+            'no machineAuthor configured → prMachineAuthor fails closed (owner rule)');
+    });
+
+    test('the rule carries the red-head max-attempt gate (redHeadGated)', function () {
+        // gh-917 ask: "the same latch/anti-loop protections (max attempts,
+        // no infinite retry on unfixable-without-toolchain violations)".
+        var rule = deployedRule();
+        assert.equal(rule.redHeadGated, true,
+            'the arming is bounded per head — the shared 🔴 red-head marker budget');
+    });
+});

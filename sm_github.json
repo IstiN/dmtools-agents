@@ -163,20 +163,18 @@
           "id": "fail-validation"
         },
         {
-          "description": "OWNER DIRECTIVE (2026-10-15): a red pre-merge gate MUST arm a rework leg — latch or no latch. The unlatched twin of fail-validation: fail-validation owns the red verdict for an ARMED validation (ai_validating); this rule covers red waves that reached the head OUTSIDE the arm (manual dispatches, rework-leg self-validation, mirror dispatches) — without it the red wave armed nothing and a follow-up green papered the failure over (live dart 408 head 01a95d5 2026-10-15 18:11Z: red CRAP-ratchet wave, no ai_validating, no arm, PR sat blocked instead of entering rework round N+1). Machine-authored only (auto-rework is machine-only, owner rule); the latched case stays with fail-validation; validation_failed notLabels keeps the failure latch fresh (no re-arm loop within one failure); agent:rework notLabels defers to an already-armed rework; BEHIND/DIRTY heads are the silent-update's business (stale waves on old heads mean nothing). localAction arm_rework stamps agent:rework on the PR (one arm per (pr,head), gh-806 AC1 in-flight guard); rework-on-label dispatches the leg next tick. Order: directly after fail-validation.",
+          "description": "OWNER DIRECTIVE (2026-10-15), extended gh-917 (live dart 2026-10-16 11:06Z tick: dev PRs #413 quality 09:46Z method_size 82/72-line test helpers + #414 quality 10:19Z complexity CC=12 + method_size 94-line main sat with red FIRST validations while the SM concluded processed: 0, skipped: 0 — hand-fixed 11:19Z): a red pre-merge gate MUST arm a rework leg — latch or no latch, REVIEW OR NO REVIEW. Covers red waves that reached the head OUTSIDE the arm (manual dispatches, rework-leg self-validation, mirror dispatches) AND the first validation of ANY machine-authored PR: a fresh dev PR carries ZERO PR labels (ai_developed lives on the linked issue; ai_validating is only stamped by validate-fresh, which never dispatches on an already-red head — checks none/pending only; validate-fresh-masked-green is green-only), so the original ai_pr_reviewed requirement left every pre-review first-validation red in a dead zone (fail-validation needs ai_validating, rework-on-validation-failed needs validation_failed — neither label exists on a fresh dev PR). Machine-authored only (auto-rework is machine-only, owner rule; fails closed when no machineAuthor is configured); chore:pin stays excluded (factory lockstep bumps are factory-gated, validate-fresh parity); the latched case stays with fail-validation (notLabels ai_validating); validation_failed notLabels keeps the latched-park twin's lane; agent:rework notLabels defers to an already-armed rework; BEHIND/DIRTY heads are the silent-update's business (stale waves on old heads mean nothing). localAction arm_rework stamps agent:rework on the PR (one arm per (pr,head), gh-806 AC1 in-flight latch); rework-on-label dispatches the leg on the PR head next tick and validate-fresh re-dispatches validation on the fixed head. redHeadGated: the arm is bounded by the SAME 🔴 red-head marker budget fail_validation writes (one shared per-head count) — at redHeadCap (default 3) recorded reds on the UNCHANGED head the arm is WITHHELD and the owner is escalated ONCE per head (no infinite retry on unfixable-without-toolchain violations; a head move resets the budget by construction). Order: directly after fail-validation.",
           "source": "github",
           "query": {
             "type": "pr",
             "checks": [
               "red"
             ],
-            "labels": [
-              "ai_pr_reviewed"
-            ],
             "notLabels": [
               "ai_validating",
               "validation_failed",
-              "agent:rework"
+              "agent:rework",
+              "chore:pin"
             ],
             "prMachineAuthor": true,
             "notMergeState": [
@@ -186,6 +184,7 @@
             "draft": false
           },
           "localAction": "arm_rework",
+          "redHeadGated": true,
           "limit": 1,
           "id": "rework-on-red-gate-unlatched"
         },
