@@ -14,7 +14,7 @@
 # ratchet passes; crap:improved marks PRs that lowered CRAP.
 #
 # Tool pin: IstiN/crap4js by commit SHA (fork of vabhzw17eg2qu4m9-bit/crap4js
-# v0.15.0 + --baseline ratchet). Installed from GitHub — the npm 'crap4js'
+# v0.15.0 + --baseline ratchet, pipe-safe exit, epsilon 0.5). Installed from GitHub — the npm 'crap4js'
 # package is an unrelated third-party project.
 name: Quality
 
@@ -32,7 +32,7 @@ env:
   # Threshold for functions NOT in crap-baseline.json (new or renamed code).
   CRAP_THRESHOLD: '8'
   CRAP4JS_REPO: 'IstiN/crap4js'
-  CRAP4JS_REF: 'b7e0fd1d58563bd52aa333a905e29342ebdfd7e8'
+  CRAP4JS_REF: 'eb4a7d6e9077589434fa2cfbba69e83ca6a37869'
 
 jobs:
   crap:
@@ -79,12 +79,16 @@ jobs:
         id: ratchet
         run: |
           set +e
+          # Redirect to a file (never a pipe): the report is ~500 KB and the verdict block comes last.
+          # The pinned crap4js sets process.exitCode, so nothing is truncated either way.
           "$RUNNER_TEMP/tools/node_modules/.bin/crap4js" . \
             --coverage "$RUNNER_TEMP/cov/coverage-final.json" \
             --threshold "${CRAP_THRESHOLD}" \
-            --baseline crap-baseline.json | tee "$RUNNER_TEMP/crap.txt"
-          code=${PIPESTATUS[0]}
-          sed -n '/^CRAP Ratchet/,$p' "$RUNNER_TEMP/crap.txt" >> "$GITHUB_STEP_SUMMARY"
+            --baseline crap-baseline.json > "$RUNNER_TEMP/crap.txt"
+          code=$?
+          # Full table is long: print only the verdict block (+ the worst offenders) to the log.
+          head -30 "$RUNNER_TEMP/crap.txt"
+          sed -n '/^CRAP Ratchet/,$p' "$RUNNER_TEMP/crap.txt" | tee -a "$GITHUB_STEP_SUMMARY"
           if grep -q '^improved ' "$RUNNER_TEMP/crap.txt"; then echo "improved=true" >> "$GITHUB_OUTPUT"; fi
           exit $code
 
