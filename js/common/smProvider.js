@@ -398,6 +398,19 @@ function githubProvider(cfg) {
         listOpenPrs: listOpenPrs,
         listMergedPrs: listMergedPrs,
 
+        // branchExists(name) — gh-922 dead-head park bench oracle: does
+        // this head ref exist on the repo right now? The branchHeads
+        // snapshot answers the common case; the #639 single-branch probe
+        // rescues a page-1 listing miss (30-branch cutoff) so a LIVE
+        // parked PR is never benched. Empty ref fails closed (nothing to
+        // dispatch against), probe failure reads as absent — the bench
+        // caller fails open on any throw.
+        branchExists: function (name) {
+            if (!name) return false;
+            if (branchHeadsMap()[name] !== undefined) return true;
+            return branchHead(name) !== null;
+        },
+
         // snapshot(kinds?) — kinds limits which cache legs to materialize:
         // the queryPrs batch only needs openPrs + branchHeads, and the
         // merged-PR list was measured at ~1.8s on a busy repo for ZERO

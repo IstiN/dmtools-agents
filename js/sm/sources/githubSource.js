@@ -129,6 +129,27 @@ var DEFAULT_PRIORITY_LABELS = {
 };
 var PRIORITY_RANKS = { blocker: 0, medium: 1, low: 2 };
 
+// gh-922: the sticky-park label (shared vocabulary with smAgent's
+// validation_failed park) — a parked item's blocker tier is voided so a
+// park can never preempt the FIFO.
+var PARKED_LABEL = 'validation_failed';
+
+// gh-922 (fail-open dispatch): how many EXTRA tier-sorted candidates
+// queryPrs returns past `limit` so the engine loop can fall through to
+// the next candidate in the same tick when a trigger fails (422 no-ref).
+// The engine's processedKeys cap still bounds successful dispatches at
+// `limit` — the reserve is only reachable when earlier candidates yield.
+//
+// BOUND (review PRRT_kwDORYAuYs6tR-Jq): the fixed 3 covers at most three
+// CONCURRENTLY UNPARKED dead heads — the shape that re-starved the FIFO
+// pre-fix. Beyond that the bench closes the loophole: a head that parks
+// validation_failed AND loses its ref (benchDeadHeadParks) leaves the
+// candidate list entirely, so accumulated dead heads stop consuming
+// reserve slots after their cap-driven park (≤ cap ticks of markers
+// each). 4+ SIMULTANEOUS UNPARKED dead heads before any of them parks
+// can still starve one tick's slice — bounded, not eliminated.
+var TRIGGER_FALLTHROUGH_RESERVE = 3;
+
 // Defensive twin of smAgent's resolvePriorityLabels: the ctx knob arrives
 // pre-validated, but this source is also called directly (tests, forges) —
 // anything that is not a non-empty string keeps the default name.
@@ -198,6 +219,50 @@ function priorityTier(item, pl, repoInfo) {
     if (issLs && issLs.indexOf(pl.blocker) !== -1) return 'blocker';
     if (prLs.indexOf(pl.low) !== -1 || (issLs && issLs.indexOf(pl.low) !== -1)) return 'low';
     return 'medium'; // no label anywhere — the default tier (label not required)
+}
+
+// gh-922 (parked items don't preempt): the sticky validation_failed park
+// voids a BLOCKER tier to medium — a parked PR waits in plain FIFO order
+// instead of jumping the queue it can no longer be dispatched against
+// (the park's existing rule: parked PRs leave the merge-window lanes).
+// Extracted from queryPrs so the query function keeps its CRAP ratchet
+// (quality gate: per-function complexity, comp tracked by baseline).
+function voidParkedBlockerTier(item) {
+    if (item.priorityTier === 'blocker' &&
+        (item.labels || []).indexOf(PARKED_LABEL) !== -1) {
+        item.priorityTier = 'medium';
+    }
+}
+
+// gh-922 (dead-head park bench, review PRRT_kwDORYAuYs6tR-Jq): a parked
+// PR whose head ref is GONE can never be dispatched against — every lane
+// that matches it burns a trigger failure plus a fallthrough-reserve slot
+// per tick, and 4+ such heads re-starve the FIFO the reserve protects.
+// The provider's branchExists verdict (branchHeads snapshot + the #639
+// single-branch probe for the page-1 listing cutoff) benches exactly the
+// dead ones. Red-parked PRs (label present, branch LIVE) stay candidates:
+// the park-reset lane must keep finding them. Fail-open — no provider
+// oracle, a probe error, or an empty branch keeps the item (today's
+// behavior; a blind tick never strands a candidate).
+function isDeadHeadParked(item, provider) {
+    if (!item.branch || item.labels.indexOf(PARKED_LABEL) === -1) return false;
+    try {
+        return provider.branchExists(item.branch) === false;
+    } catch (eBench) { return false; }
+}
+
+function benchDeadHeadParks(list, provider) {
+    if (!provider || typeof provider.branchExists !== 'function') return list;
+    var live = list.filter(function (it) {
+        if (isDeadHeadParked(it, provider)) {
+            console.log('   🪦 benched dead-head park pr-' + it.prNumber +
+                ' — head ref ' + it.branch + ' is gone (gh-922); ' +
+                'restore/re-push the branch to re-enter the queue');
+            return false;
+        }
+        return true;
+    });
+    return live.length === list.length ? list : live;
 }
 
 // `owner` (repoInfo.owner) rides through for the release-bump form of the
@@ -750,6 +815,14 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
         return matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo);
     });
 
+    // gh-922 (dead-head park bench): parked candidates whose head ref the
+    // provider cannot see never reach the dispatch loop — no burned
+    // trigger failures, no fallthrough-reserve slots, and the machine
+    // rework arm (rework-on-validation-failed) stops arming legs it can
+    // never dispatch. Red-parked PRs keep their lanes (branch live).
+    // Runs before the tier sort so the FIFO math below sees the benched list.
+    matched = benchDeadHeadParks(matched, provider);
+
     // FIFO: oldest PR first. github_list_prs returns newest-first (API
     // default), which would starve older approved PRs under limit:1 merge
     // rules — the queue drains oldest-to-newest. Blocked candidates
@@ -770,6 +843,7 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
         var pl = resolvePriorityLabels(priorityLabels);
         matched.forEach(function (item) {
             item.priorityTier = priorityTier(item, pl, repoInfo);
+            voidParkedBlockerTier(item); // gh-922: a parked blocker waits in plain FIFO order
             item.priorityRank = PRIORITY_RANKS[item.priorityTier];
         });
         matched.sort(function (a, b) {
@@ -796,7 +870,16 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
         matched.sort(function (a, b) { return (a.prNumber || 0) - (b.prNumber || 0); });
     }
 
-    return matched.slice(0, limit);
+    // gh-922 (fail-open dispatch): return the limit slots PLUS a small
+    // fallthrough reserve. The engine loop gives failed candidates no
+    // slot credit (processedKeys only grows on success), so when a
+    // candidate's trigger fails (422 no-ref — deleted head ref, live fa
+    // pr-1615) the loop walks into the reserve and the NEXT candidate
+    // gets the slot in the SAME tick; when nothing fails, the loop's
+    // processedKeys cap still bounds successful dispatches at `limit`.
+    // Pre-fix the slice stopped at `limit`, so a limit:1 rule returned
+    // ONLY the dead head and the whole FIFO starved behind it.
+    return matched.slice(0, limit + TRIGGER_FALLTHROUGH_RESERVE);
 }
 
 if (typeof module !== 'undefined' && module.exports) {

@@ -1914,8 +1914,10 @@ suite('sm github source: validate-fresh-masked-green (gh-759 dead zone)', functi
 
         var items = srcMod.query(RULE, { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
 
-        assert.deepEqual(items.map(function (i) { return i.key; }), ['pr-1305'],
+        assert.equal(items[0].key, 'pr-1305',
             'limit 1 paces the wave — the OLDEST masked-green head first (validate-fresh pacing)');
+        assert.deepEqual(items.slice(1).map(function (i) { return i.key; }), ['pr-1314'],
+            'the tail is the gh-922 fallthrough reserve — reachable only when the head candidate yields');
 
         var wave = srcMod.query(Object.assign({}, RULE, { limit: 10 }),
             { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
@@ -2045,8 +2047,10 @@ suite('sm github source: validate-fresh-masked-green CLEAN arm (gh-829)', functi
             'with and without the latch (gh-759 author-agnostic contract)');
 
         var one = srcMod.query(RULE, { repoInfo: { owner: 'IstiN', repo: 'flutter_agent_harness' } });
-        assert.deepEqual(one.map(function (i) { return i.key; }), ['pr-826'],
+        assert.equal(one[0].key, 'pr-826',
             'limit 1 paces the wave — the oldest dead-zone head first, same dev-lane pacing');
+        assert.deepEqual(one.slice(1).map(function (i) { return i.key; }), ['pr-835', 'pr-836'],
+            'the tail is the gh-922 fallthrough reserve — the engine still dispatches only the head');
     });
 
     test('the pre-gh-829 deployed query could not arm pr-826 — the bug this fixes', function () {
@@ -2399,5 +2403,186 @@ suite('sm github source: rework-on-red-gate-unlatched covers the FIRST validatio
         var rule = deployedRule();
         assert.equal(rule.redHeadGated, true,
             'the arming is bounded per head — the shared 🔴 red-head marker budget');
+    });
+});
+
+suite('sm github source: trigger fail-open overfetch (gh-922)', function () {
+    // gh-922 (live fa pr-1615 2026-10-16): a candidate whose workflow
+    // trigger 422s (deleted head ref) must not consume the dispatch slot.
+    // The SM engine loop already gives failed candidates no slot credit —
+    // the starvation came from queryPrs slicing the candidate list to
+    // `limit` BEFORE any dispatch: a limit:1 rule returned ONLY the dead
+    // head and the loop had nothing to fall through to. The source now
+    // over-fetches `limit + TRIGGER_FALLTHROUGH_RESERVE` tier-sorted
+    // candidates; the engine's processedKeys cap still bounds successful
+    // dispatches at `limit`. The 🥇 preemption marker stays keyed on the
+    // `limit` boundary (the slot count), not the overfetch boundary.
+
+    var load = function (tools, prs, statuses) {
+        var localProvider = {
+            prStatus: function (n) { return (statuses || {})[n] || null; }
+        };
+        var smAsyncMod = loadModule('js/common/smAsync.js', makeRequire({
+            './common/smProvider.js': {
+                createSmProvider: function () { return localProvider; }
+            }
+        }), tools || {});
+        return loadModule('js/sm/sources/githubSource.js', makeRequire({
+            '../../common/machineAuthor.js': loadModule('js/common/machineAuthor.js', makeRequire({}), {}),
+            '../../common/smProvider.js': {
+                createSmProvider: function () { return localProvider; }
+            },
+            '../../common/smAsync.js': smAsyncMod
+        }), tools);
+    };
+
+    function listPr(n, labels, ref) {
+        return { number: n, state: 'open', draft: false, body: '',
+                 head: { sha: 'ovsha' + n, ref: ref || ('feat/ov-' + n) },
+                 labels: (labels || []).map(function (l) { return { name: l }; }),
+                 user: { login: 'ai-teammate' } };
+    }
+
+    test('queryPrs returns limit + fallthrough-reserve candidates (the FIFO survives a dead head)', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    listPr(306, ['agent:review']),
+                    listPr(305, ['agent:review']),
+                    listPr(304, ['agent:review']),
+                    listPr(303, ['agent:review']),
+                    listPr(302, ['agent:review', 'priority_blocker']),
+                    listPr(301, ['agent:review'])
+                ];
+            }
+        });
+
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 1
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate' });
+
+        assert.equal(items.length, 4,
+            'limit 1 must still return the reserve candidates (limit + 3) for the same-tick fallthrough');
+        assert.equal(items[0].prNumber, 302,
+            'the blocker still leads the tier sort');
+        assert.deepEqual(items.slice(1).map(function (i) { return i.prNumber; }),
+            [301, 303, 304],
+            'the rest is plain FIFO — oldest mediums first');
+    });
+
+    test('a parked (validation_failed) blocker does NOT preempt — its tier is voided to medium', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    listPr(302, ['agent:review', 'priority_blocker', 'validation_failed']),
+                    listPr(301, ['agent:review'])
+                ];
+            }
+        });
+
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 1
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate' });
+
+        assert.equal(items[0].prNumber, 301,
+            'the parked blocker waits in plain FIFO order — a park can never preempt');
+    });
+
+    test('the 🥇 preemption marker still fires at the limit boundary (not the overfetch boundary)', function () {
+        var logs = [];
+        var srcMod = load({
+            console: { log: function () { logs.push(Array.prototype.map.call(arguments, String).join(' ')); },
+                       warn: function () {}, error: function () {} },
+            github_list_prs: function () {
+                return [
+                    listPr(302, ['agent:review', 'priority_blocker']),
+                    listPr(301, ['agent:review'])
+                ];
+            }
+        });
+
+        srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 1
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate' });
+
+        assert.ok(logs.some(function (l) {
+            return l.indexOf('\uD83E\uDD47') !== -1 && l.indexOf('pr-302') !== -1;
+        }), 'the blocker taking the limit:1 slot over a cut medium still logs the preemption line');
+    });
+
+    test('a dead-head park (validation_failed + gone head ref) is benched from the candidate list', function () {
+        // PRRT_kwDORYAuYs6tR-Jq: parked heads are never removed from
+        // candidacy — 4+ simultaneously dead heads burned the whole
+        // limit+3 slice every tick and re-starved the FIFO. The source
+        // benches validation_failed candidates whose head ref the
+        // provider cannot see; the reserve stays free for live failures.
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    listPr(302, ['agent:review', 'validation_failed'], 'gone/deleted-branch'),
+                    listPr(301, ['agent:review'], 'feat/alive')
+                ];
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 1
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate',
+             provider: { branchExists: function (name) { return name !== 'gone/deleted-branch'; } } });
+
+        assert.deepEqual(items.map(function (i) { return i.prNumber; }), [301],
+            'the dead-head park never reaches the dispatch loop — no burned attempts, no reserve slots');
+    });
+
+    test('a LIVE parked PR (red park, head ref present) stays a candidate — park-reset keeps its lane', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    listPr(303, ['validation_failed'], 'gone/really-deleted'),
+                    listPr(302, ['validation_failed'], 'feat/red-but-alive')
+                ];
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['validation_failed'], draft: false }, limit: 5
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate',
+             provider: { branchExists: function (name) { return name !== 'gone/really-deleted'; } } });
+
+        assert.deepEqual(items.map(function (i) { return i.prNumber; }), [302],
+            'only DEAD heads are benched — the park-reset rule must still find red-parked PRs');
+    });
+
+    test('non-parked candidates are never benched (the bench keys on the park label)', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    listPr(302, ['agent:review'], 'gone/deleted-branch'),
+                    listPr(301, ['agent:review'], 'feat/alive')
+                ];
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 1
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate',
+             provider: { branchExists: function () { return false; } } });
+
+        assert.equal(items.length, 2,
+            'an UNPARKED dead head keeps its candidacy — the marker/park ladder owns it (fail-open dispatch)');
+    });
+
+    test('fail-open: a provider without branchExists benches nothing (pre-fix behavior)', function () {
+        var srcMod = load({
+            github_list_prs: function () {
+                return [
+                    listPr(302, ['agent:review', 'validation_failed'], 'gone/deleted-branch'),
+                    listPr(301, ['agent:review'], 'feat/alive')
+                ];
+            }
+        });
+        var items = srcMod.query({
+            query: { type: 'pr', labels: ['agent:review'], draft: false }, limit: 1
+        }, { repoInfo: { owner: 'o', repo: 'r' }, machineAuthor: 'ai-teammate' });
+
+        assert.equal(items.length, 2,
+            'no branch-existence oracle → no benching (a blind tick never strands a candidate)');
     });
 });

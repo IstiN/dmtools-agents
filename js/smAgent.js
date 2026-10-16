@@ -147,6 +147,18 @@ var redConvergenceModule = require('./common/redConvergence.js');
 // processRule consumeLabels paths stamp, and the pure consumed-without-work
 // sweep decision the restore_rework_arm localAction consults.
 var reworkConsumptionModule = require('./common/reworkConsumption.js');
+// gh-922 (hoisted, never lazy — the gh-823 pack-require rule): fail-open
+// dispatch vocabulary — the no-ref/transient error classification, the
+// ⚠️ trigger-failed marker math and the dead-head park cap. The pure
+// half lives in the module; recordDispatchFailure below wires transport.
+var triggerFailuresModule = require('./common/triggerFailures.js');
+// gh-922 (same-tick dedup, review): PR numbers whose dispatch failure was
+// already recorded THIS tick. The already-parked guard in
+// recordDispatchFailure reads the query-time label snapshot — within one
+// tick it cannot see a sibling rule's label add, so two rules failing the
+// same dead head would post two markers and could duplicate the park.
+// Reset per tick in action() (the tickReworkLatch pattern).
+var tickParkedRecorded = null;
 
 // Project config loaded once in action() — used as global default for rules without configPath
 var projectConfig = null;
@@ -615,8 +627,85 @@ function triggerWorkflow(repoInfo, ticketKey, rule, effectiveConfig, workflowBud
             (projectKey ? ' [project_key=' + projectKey + ']' : ''));
         return true;
     } catch (e) {
-        console.warn('  ⚠️  Workflow trigger failed for ' + ticketKey + ': ' + (e.message || e));
+        // gh-922 fail-open dispatch: classify before swallowing. The slot
+        // accounting is already fail-open (the loop only credits
+        // processedKeys — and decrements the workflow budget — on success,
+        // so a failed candidate never consumes the slot and the loop walks
+        // to the next candidate in the same tick); what was missing is the
+        // durable record: WHICH candidate failed, WHY, and when the
+        // retries must stop (the dead-head park).
+        var failClass = triggerFailuresModule.classifyTriggerError(e && e.message);
+        console.warn('  ⚠️  Workflow trigger failed for ' + ticketKey + ' (' + failClass + '): ' + (e.message || e));
+        recordDispatchFailure(repoInfo, ticketKey, item, e, workflowRef, failClass);
         return false;
+    }
+}
+
+// gh-922 fail-open dispatch bookkeeping — the transport half of
+// js/common/triggerFailures.js. A candidate whose workflow trigger failed
+// with a NON-RETRYABLE no-ref error (422 "No ref found" — the head branch
+// was deleted on the fork; live fa pr-1615 2026-10-16) accumulates a
+// ⚠️ trigger-failed marker comment per failure, and after
+// jobParams.triggerFailParkCap (default 3) consecutive failures on the
+// same head the PR parks validation_failed with a restore/re-push comment
+// (the parked-head sha keys the existing #633 RESET probes, so a
+// restored/re-pushed branch clears the park through the sticky-park
+// ladder unchanged). Transient failures are logged only — a temporary API
+// outage must never park a fleet. PR-carrier items only (a dead head is a
+// PR concept), and only when the dispatch actually targeted the item's
+// head ref (a 'main'-ref failure is a deployment problem, not head-dead
+// evidence). NEVER throws: the slot yield already happened in the loop;
+// a recording failure must not break the dispatch loop.
+function recordDispatchFailure(repoInfo, ticketKey, item, err, expandedRef, failClass) {
+    try {
+        if (DRY || failClass !== 'no-ref') return;
+        if (!item || !item.prNumber || !item.branch) return;
+        if (String(expandedRef || '') !== String(item.branch)) return;
+        if ((item.labels || []).indexOf('validation_failed') !== -1) return; // already parked (query-time snapshot)
+        if (tickParkedRecorded && tickParkedRecorded[item.prNumber]) return; // a sibling rule already recorded this PR earlier in the SAME tick — the stale label snapshot cannot see its park (gh-922 review: no duplicate marker, no duplicate park)
+        var cap = triggerFailuresModule.capOf(RUN_JOB_PARAMS);
+        if (cap <= 0) return;
+        if (!tickParkedRecorded) tickParkedRecorded = {}; // defensive: never throws outside a tick
+        tickParkedRecorded[item.prNumber] = true; // claim the recording slot before any I/O — first recorder in the tick wins
+        var bodies = [];
+        try {
+            var raw = github_get_pr_comments({
+                workspace: repoInfo.owner, repository: repoInfo.repo,
+                pullRequestId: item.prNumber
+            });
+            var obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
+            var list = Array.isArray(obj) ? obj : (obj.comments || obj.items || []);
+            bodies = list.map(function (c) { return String((c && c.body) || ''); });
+        } catch (eRead) { bodies = []; } // degraded read → fresh count (a blind tick never parks)
+        var prior = triggerFailuresModule.triggerFailMarks(bodies)[item.branch] || 0;
+        var count = prior + 1;
+        var headSha = null;
+        try { headSha = resolveHeadSha(repoInfo, item); } catch (eSha) { headSha = null; }
+        var tr = githubTracker(repoInfo.owner, repoInfo.repo);
+        var msg = String((err && err.message) || err).replace(/\s+/g, ' ').trim(); // gh-922 review: flattened — a multi-line error must never carry a marker-shaped line into a scanned body
+        if (count >= cap) {
+            var parkBody = '🅿️ validation_failed — dispatch dead-head park (gh-922).' +
+                ' The head branch `' + item.branch + '` no longer exists — every dispatch fails (' + msg + ').' +
+                ' The PR is parked: it cannot preempt the queue and no legs are dispatched against it.' +
+                ' Restore or re-push the branch — a new human push clears the park automatically.' +
+                '\n' + triggerFailuresModule.triggerFailMarkerLine(count, item.branch, cap, new Date().toISOString());
+            if (headSha) parkBody += '\nparked-head: ' + headSha;
+            tr.addLabel(item.prNumber, 'validation_failed');
+            tr.postComment(item.prNumber, parkBody);
+            dropOpenPrsCache(repoInfo);
+            console.log('  🅿️  ' + ticketKey + ' dispatch dead-head (' + count + '/' + cap +
+                ' no-ref failures on ' + item.branch + ') — validation_failed park, slot stays open');
+        } else {
+            tr.postComment(item.prNumber,
+                triggerFailuresModule.triggerFailMarkerLine(count, item.branch, cap, new Date().toISOString()) +
+                '\nThe workflow dispatch failed with a non-retryable no-ref error (' + msg + ').' +
+                ' The dispatch slot was yielded to the next candidate in the queue (fail-open, gh-922).' +
+                ' ' + (cap - count) + ' more failure(s) on this head park the PR validation_failed.');
+            console.log('  ⏭️  ' + ticketKey + ' trigger failed (no-ref) — attempt ' + count + '/' + cap +
+                ' recorded on ' + item.branch + '; the slot yields to the next candidate (fail-open, gh-922)');
+        }
+    } catch (eRec) {
+        console.warn('  ⚠️  trigger-failure recording failed for ' + ticketKey + ': ' + (eRec.message || eRec));
     }
 }
 
@@ -2617,7 +2706,23 @@ function processRule(rule, globalRepoInfo, ruleIndex, workflowBudget) {
                         continue;
                     }
                 }
-                dispatchCiWorkflow(ticket.branch);
+                // gh-922 fail-open (validation lane): a CI dispatch that
+                // cannot fire (422 no-ref — deleted head ref) must not
+                // take the arm slot down with it. Record the dead head
+                // (marker comments + dead-head park, the same bookkeeping
+                // as the AI-leg trigger path) and CONTINUE — no arm, no
+                // stamp, the loop offers the slot to the next candidate;
+                // this PR re-matches until the ref is restored or the
+                // park's notLabels exclusions bench it.
+                try {
+                    dispatchCiWorkflow(ticket.branch);
+                } catch (eCi922) {
+                    console.warn('  ⚠️  validation dispatch failed for ' + key + ': ' +
+                        (eCi922.message || eCi922));
+                    recordDispatchFailure(effectiveRepoInfo, key, ticket, eCi922, ticket.branch,
+                        triggerFailuresModule.classifyTriggerError(eCi922 && eCi922.message));
+                    continue;
+                }
                 var vHead = vHead0;
                 if (vHead) {
                     stampValidationChecksForModule(effectiveRepoInfo, vHead, 'in_progress', null, null);
@@ -6457,6 +6562,7 @@ function action(params) {
     var p     = params.jobParams || params;
     RUN_JOB_PARAMS = p;    DRY = p.dryRun === true;
     tickReworkLatch = null;
+    tickParkedRecorded = {}; // gh-922: fresh same-tick dedup window (see recordDispatchFailure)
     if (DRY) console.log('🧪 DRY RUN — no side effects will be performed');
     var rules = p.rules;
 
