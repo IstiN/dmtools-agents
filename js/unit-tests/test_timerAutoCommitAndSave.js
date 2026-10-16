@@ -53,6 +53,10 @@ function loadTimer(mocks, opts) {
         './common/releaseArtefacts.js': releaseArtefactsMock,
         './common/gitStaging.js': gitStagingModule,
         './common/mergeState.js': loadModule('js/common/mergeState.js'),
+        // Real PR helper (gh-912): timerAutoCommitAndSave delegates
+        // cleanCommandOutput to it — canonical implementation required.
+        './common/pullRequest.js': loadModule('js/common/pullRequest.js',
+            makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') })),
         './configLoader.js': configLoaderMock
     });
 

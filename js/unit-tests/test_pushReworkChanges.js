@@ -780,7 +780,11 @@ function loadPushReworkChangesForAction(mocks, opts) {
             cliCommands.push(args.command);
             if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
             if (args.command.indexOf('git ls-remote --heads origin') === 0) {
-                return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
+                // gh-912: echo the PROBED branch — the strict ref-line parser
+                // matches refs/heads/<probed> exactly, so a fixed bug/PROJ-123
+                // ref line would (correctly) read as "other branch absent".
+                var probedBranch = args.command.substring('git ls-remote --heads origin '.length);
+                return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/' + probedBranch + '\n';
             }
             return '';
         },

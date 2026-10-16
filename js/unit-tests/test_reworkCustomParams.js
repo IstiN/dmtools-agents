@@ -4,10 +4,15 @@
 var commentMarkupModule = loadModule('js/common/commentMarkup.js',
     makeRequire({ './ticketKeyShapes.js': loadModule('js/common/ticketKeyShapes.js') }));
 var gitStagingModule = loadModule('js/common/gitStaging.js');
+// Real PR helper (gh-912): the modules under test delegate cleanCommandOutput
+// and the remote-existence probes to it — the canonical implementation must be
+// in every require map below.
+var PR_HELPER_REAL = loadModule('js/common/pullRequest.js',
+    makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }));
 var githubHelpersModule = loadModule(
     'js/common/githubHelpers.js',
     makeRequire({
-        './pullRequest.js': { buildOriginFetchCommand: function() { return 'git fetch origin'; } },
+        './pullRequest.js': PR_HELPER_REAL,
         './gitOps.js': {
             checkoutPRBranch: function() {},
             getPRDiff: function() {},
@@ -55,7 +60,7 @@ function loadPushReworkChanges() {
             './configLoader.js': configLoaderModule,
             './common/scm.js': { createScm: function() { return {}; } },
             './common/submodules.js': {},
-            './common/pullRequest.js': {},
+            './common/pullRequest.js': PR_HELPER_REAL,
             './common/githubHelpers.js': githubHelpersModule,
             './common/feedbackLoop.js': {},
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
@@ -94,7 +99,7 @@ function loadPushReworkChangesForAction(mocks) {
                 mocks.failFirstPush = false;
                 throw new Error('rejected non-fast-forward');
             }
-            if (args.command.indexOf('git ls-remote --heads origin ai/TS-1293') === 0) return 'abc123\trefs/heads/ai/TS-1293';
+            if (args.command.indexOf('git ls-remote --heads origin ai/TS-1293') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/ai/TS-1293';
             return '';
         },
         jira_post_comment: function(args) { mocks.jiraComments = (mocks.jiraComments || []).concat([args.comment]); },
@@ -123,10 +128,10 @@ function loadPushReworkChangesForAction(mocks) {
                 }
             },
             './common/submodules.js': { pushManagedSubmodules: function() {} },
-            './common/pullRequest.js': {
+            './common/pullRequest.js': Object.assign({}, PR_HELPER_REAL, {
                 readStagedDiffStat: function() { return 'lib/app.dart | 1 +'; },
                 syncBranchWithBase: function() { return { success: true }; }
-            },
+            }),
             './common/githubHelpers.js': githubHelpersModule,
             './common/feedbackLoop.js': {
                 runQualityGates: function() { return { success: true }; },
@@ -169,7 +174,7 @@ function loadPostTestReworkResults() {
             './configLoader.js': configLoaderModule,
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: function() { return false; } },
             './common/feedbackLoop.js': {},
-            './common/pullRequest.js': {},
+            './common/pullRequest.js': PR_HELPER_REAL,
             './common/tokenUsageComment.js': { postTokenUsageComments: function() {} }
         ,
             './common/commentMarkup.js': commentMarkupModule,
