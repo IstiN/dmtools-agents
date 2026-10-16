@@ -135,6 +135,10 @@ var buildEncodedConfigModule = require('./common/buildEncodedConfig.js');
 var machineAuthorModule = require('./common/machineAuthor.js');
 var smProviderModule = require('./common/smProvider.js');
 var trackersModule = require('./common/trackers.js');
+// gh-916 review: the DEFAULT status names (config.js STATUSES) back the second pass of
+// stageKeyForStatusName — a project that renames a status still keeps the sm.json literal
+// targetStatus, and the stage-key resolution must not silently lose the fallback there.
+var configModule = require('./config.js');
 // gh-807: machine review-verdict records + their reconciliation logic.
 var reviewVerdictsModule = require('./common/reviewVerdicts.js');
 var redConvergenceModule = require('./common/redConvergence.js');
@@ -718,11 +722,70 @@ function smTracker(config) {
 function moveStatus(ticketKey, targetStatus) {
     try {
         if (DRY) { console.log('  [dry] 🔀 ' + ticketKey + ' → ' + targetStatus); }
-        else { smTracker().moveToStatus(ticketKey, targetStatus); }
+        else {
+            // gh-916: a rule target can be a tag-only status (sm.json moves Merged →
+            // Ready For Testing). Resolve the configured status key and fall back to
+            // the stage marker when the workflow rejects the transition. Without a
+            // configured key (status exists everywhere) this is the plain move.
+            var stageKey = stageKeyForStatusName(targetStatus);
+            if (stageKey) {
+                smTracker().moveToStatusOrMark(ticketKey, targetStatus, stageKey);
+            } else {
+                smTracker().moveToStatus(ticketKey, targetStatus);
+            }
+        }
         console.log('  ✅ ' + ticketKey + ' → ' + targetStatus);
     } catch (e) {
         console.warn('  ⚠️  Status transition failed for ' + ticketKey + ': ' + (e.message || e));
     }
+}
+
+// gh-916: reverse lookup status NAME → configured statuses KEY (e.g. 'Ready For
+// Testing' → 'READY_FOR_TESTING') so rule.targetStatus moves can leave a stage
+// marker on restricted workflows. Restricted to the test-automation stage set —
+// the only statuses that can be tag-only on a restricted workflow (#910);
+// dev-flow statuses (Backlog, In Development, In Review, Done, …) exist in every
+// supported workflow, so their transitions stay plain moves. null → plain move.
+var TAG_ONLY_STAGE_KEYS = {
+    PASSED: true,
+    FAILED: true,
+    IN_REVIEW_PASSED: true,
+    IN_REVIEW_FAILED: true,
+    SKIPPED: true,
+    IRRELEVANT: true,
+    BUG_TO_FIX: true,
+    IN_TESTING: true,
+    READY_FOR_TESTING: true,
+    MERGED: true
+};
+
+function stageKeyForStatusName(statusName) {
+    var statuses = (projectConfig && projectConfig.jira && projectConfig.jira.statuses) || {};
+    for (var key in statuses) {
+        if (Object.prototype.hasOwnProperty.call(statuses, key) &&
+            TAG_ONLY_STAGE_KEYS[key] &&
+            statuses[key] === statusName) {
+            return key;
+        }
+    }
+    // gh-916 review: a project that renames the status (jira.statuses override, e.g.
+    // READY_FOR_TESTING: 'ReadyForTest') keeps the sm.json literal targetStatus
+    // ('Ready For Testing'), so the configured-name pass above misses and the fallback would
+    // never apply exactly where useConfiguredStatusesInQueries projects need it most. Second
+    // pass: the default (key-derived) status name, case-insensitive — the stage KEY is what the
+    // marker and the {stage.*} JQL placeholders are built from, so resolving it keeps the
+    // restricted-workflow hand-off visible even when the transition itself cannot succeed.
+    var wanted = String(statusName === undefined || statusName === null ? '' : statusName).toLowerCase();
+    if (wanted) {
+        for (var dkey in TAG_ONLY_STAGE_KEYS) {
+            if (!Object.prototype.hasOwnProperty.call(TAG_ONLY_STAGE_KEYS, dkey)) continue;
+            var derived = configModule.STATUSES[dkey];
+            if (derived && String(derived).toLowerCase() === wanted) {
+                return dkey;
+            }
+        }
+    }
+    return null;
 }
 
 function hasLabel(ticket, label) {

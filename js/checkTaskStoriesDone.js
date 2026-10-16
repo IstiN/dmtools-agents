@@ -63,14 +63,16 @@ function action(params) {
         // Step 3: All Stories/Bugs Done → move Task to Ready For Testing
         console.log('All', totalItems, 'Story/Bug(s) done — moving', ticketKey, 'to Ready For Testing');
 
-        tracker.moveToStatus(ticketKey, jiraConfig.statuses.READY_FOR_TESTING);
+        // gh-916: READY_FOR_TESTING can be tag-only (restricted ADO workflows) — stage-label fallback.
+        var moveResult = tracker.moveToStatusOrMark(ticketKey, jiraConfig.statuses.READY_FOR_TESTING, 'READY_FOR_TESTING');
+        if (moveResult.moved || moveResult.marked) {
+            tracker.postComment(ticketKey, 'h3. ✅ Task Complete — All Stories & Bugs Done\n\n' +
+                    'All *' + totalItems + '* linked Story/Bug(s) are in *Done* status.\n\n' +
+                    'The task has been automatically moved to *Ready For Testing*.'
+            );
 
-        tracker.postComment(ticketKey, 'h3. ✅ Task Complete — All Stories & Bugs Done\n\n' +
-                'All *' + totalItems + '* linked Story/Bug(s) are in *Done* status.\n\n' +
-                'The task has been automatically moved to *Ready For Testing*.'
-        );
-
-        console.log('✅ Task', ticketKey, 'moved to Ready For Testing');
+            console.log('✅ Task', ticketKey, 'moved to Ready For Testing');
+        }
 
         // Post token usage summary comments (e.g. [story_acceptance_criteria]: {...}) if any provider
         // wrote outputs/*_usage.json during the agent run.

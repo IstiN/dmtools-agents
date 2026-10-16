@@ -128,27 +128,31 @@ function action(params) {
             // All linked Bugs are Done → move Story back to Ready For Testing for re-test
             console.log('All', totalBugs, 'linked Bug(s) are Done — moving Story', ticketKey, 'to Ready For Testing');
 
-            tracker.moveToStatus(ticketKey, jiraConfig.statuses.READY_FOR_TESTING);
+            // gh-916: READY_FOR_TESTING can be tag-only (restricted ADO workflows) — stage-label fallback.
+            var rftMove = tracker.moveToStatusOrMark(ticketKey, jiraConfig.statuses.READY_FOR_TESTING, 'READY_FOR_TESTING');
+            if (rftMove.moved || rftMove.marked) {
+                // Remove the story_done_check lock so it can re-run after the Story returns to In Testing
+                try {
+                    tracker.removeLabel(ticketKey, 'sm_story_done_check_triggered');
+                    console.log('Removed sm_story_done_check_triggered — story_done_check will run after re-test');
+                } catch (e) {
+                    console.warn('Failed to remove sm_story_done_check_triggered label:', e);
+                }
 
-            // Remove the story_done_check lock so it can re-run after the Story returns to In Testing
-            try {
-                tracker.removeLabel(ticketKey, 'sm_story_done_check_triggered');
-                console.log('Removed sm_story_done_check_triggered — story_done_check will run after re-test');
-            } catch (e) {
-                console.warn('Failed to remove sm_story_done_check_triggered label:', e);
+                releaseLock();
+
+                tracker.postComment(ticketKey, 'h3. 🔄 Story Ready for Re-test\n\n' +
+                        'All *' + totalBugs + '* linked Bug(s) are now in *Done* status.\n\n' +
+                        'The Story has been automatically moved back to *Ready For Testing* to re-run all linked Test Cases.');
+
+                console.log('✅ Story', ticketKey, 'moved to Ready For Testing');
             }
-
-            releaseLock();
-
-            tracker.postComment(ticketKey, 'h3. 🔄 Story Ready for Re-test\n\n' +
-                    'All *' + totalBugs + '* linked Bug(s) are now in *Done* status.\n\n' +
-                    'The Story has been automatically moved back to *Ready For Testing* to re-run all linked Test Cases.');
-
-            console.log('✅ Story', ticketKey, 'moved to Ready For Testing');
         } else {
             // All linked Bugs are Done → move TC back to Backlog
             console.log('All', totalBugs, 'linked Bug(s) are Done — moving', ticketKey, 'to Backlog');
 
+            // gh-916: on restricted ADO workflows the TC cannot carry a "Done" state at all; Backlog is a
+            // real state on PBI workflows, so this move stays a direct transition.
             tracker.moveToStatus(ticketKey, jiraConfig.statuses.BACKLOG);
 
             // Remove test automation label so SM can re-trigger automation

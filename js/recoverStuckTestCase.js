@@ -103,8 +103,11 @@ function action(params) {
     // PR is clean/mergeable — move to In Review - Passed for review
     console.log('PR looks clean — moving ticket to In Review - Passed');
     try {
-        tracker.moveToStatus(ticketKey, jiraConfig.statuses.IN_REVIEW_PASSED);
-        console.log('✅ Moved', ticketKey, 'to In Review - Passed');
+        // gh-916: IN_REVIEW_PASSED can be tag-only (restricted ADO workflows) — stage-label fallback.
+        var moveResult = tracker.moveToStatusOrMark(ticketKey, jiraConfig.statuses.IN_REVIEW_PASSED, 'IN_REVIEW_PASSED');
+        if (moveResult.moved || moveResult.marked) {
+            console.log('✅ Moved', ticketKey, 'to In Review - Passed');
+        }
     } catch (e) {
         console.error('Failed to move to In Review - Passed:', e);
     }

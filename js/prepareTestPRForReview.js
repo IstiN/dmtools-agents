@@ -126,12 +126,14 @@ function isWip(pr, ticket) {
     return false;
 }
 
-function resolveFinalStatus(currentStatus, issueType, jiraConfig) {
+function resolveFinalStatus(ticket, issueType, jiraConfig, tracker) {
     // Test Cases finish in Passed/Failed; Stories and Bugs stay in In Testing
     // so the done-check agents (checkStoryTestsPassed / checkBugTestsPassed)
     // can evaluate all linked Test Cases and move to Done / Bug To Fix / Ready For Testing.
+    // gh-916: hasStage also accepts the stage_<key> marker a rejected In Review - Failed
+    // transition left (jira.stageFallback 'label'); 'none' mode compares the status only.
     if (issueType === jiraConfig.issueTypes.TEST_CASE) {
-        return currentStatus === jiraConfig.statuses.IN_REVIEW_FAILED
+        return tracker.hasStage(ticket, 'IN_REVIEW_FAILED', jiraConfig.statuses.IN_REVIEW_FAILED)
             ? jiraConfig.statuses.FAILED
             : jiraConfig.statuses.PASSED;
     }
@@ -151,15 +153,18 @@ function finalizeAlreadyMergedTestCase(ticketKey, branchName, issueType, jiraCon
     try {
         markTestPrMerged(ticketKey);
         const ticket = getTracker().getIssue(ticketKey);
-        const currentStatus = ticket && ticket.fields && ticket.fields.status
-            ? ticket.fields.status.name
-            : '';
-        const finalStatus = resolveFinalStatus(currentStatus, issueType, jiraConfig);
-        getTracker().moveToStatus(ticketKey, finalStatus);
-        getTracker().postComment(ticketKey, 'h3. ✅ Test Code Already Merged\n\n' +
-                'Branch {code}' + branchName + '{code} has no commits ahead of main, so the test code is already in main.\n\n' +
-                'Moved ticket to *' + finalStatus + '* and removed the stale branch.');
-        console.log('✅ Branch has no commits ahead of main — moved', ticketKey, 'to', finalStatus);
+        const finalStatus = resolveFinalStatus(ticket, issueType, jiraConfig, getTracker());
+        // gh-916: the final status (Passed/Failed/In Testing) can be tag-only — stage-label fallback.
+        const moved = getTracker().moveToStatusOrMark(ticketKey, finalStatus,
+            issueType === jiraConfig.issueTypes.TEST_CASE
+                ? (finalStatus === jiraConfig.statuses.FAILED ? 'FAILED' : 'PASSED')
+                : 'IN_TESTING');
+        if (moved.moved || moved.marked) {
+            getTracker().postComment(ticketKey, 'h3. ✅ Test Code Already Merged\n\n' +
+                    'Branch {code}' + branchName + '{code} has no commits ahead of main, so the test code is already in main.\n\n' +
+                    'Moved ticket to *' + finalStatus + '* and removed the stale branch.');
+            console.log('✅ Branch has no commits ahead of main — moved', ticketKey, 'to', finalStatus);
+        }
         try {
             cli_execute_command({ command: 'git push origin --delete ' + branchName });
             console.log('✅ Deleted stale branch:', branchName);
@@ -263,14 +268,18 @@ function action(params) {
             markTestPrMerged(ticketKey);
             try {
                 const ticket = getTracker().getIssue(ticketKey);
-                const currentStatus = ticket && ticket.fields && ticket.fields.status
-                    ? ticket.fields.status.name : '';
-                const finalStatus = resolveFinalStatus(currentStatus, issueType, jiraConfig);
-                getTracker().moveToStatus(ticketKey, finalStatus);
-                getTracker().postComment(ticketKey, 'h3. ✅ Test PR Already Merged\n\n' +
-                        'PR [#' + pr.number + '|' + pr.html_url + '] for branch {code}test/' + ticketKey + '{code} was already merged.\n\n' +
-                        'Skipping re-review — moved ticket to *' + finalStatus + '*.');
-                console.log('✅ PR already merged — moved', ticketKey, 'to', finalStatus);
+                const finalStatus = resolveFinalStatus(ticket, issueType, jiraConfig, getTracker());
+                // gh-916: the final status (Passed/Failed/In Testing) can be tag-only — stage-label fallback.
+                const moved = getTracker().moveToStatusOrMark(ticketKey, finalStatus,
+                    issueType === jiraConfig.issueTypes.TEST_CASE
+                        ? (finalStatus === jiraConfig.statuses.FAILED ? 'FAILED' : 'PASSED')
+                        : 'IN_TESTING');
+                if (moved.moved || moved.marked) {
+                    getTracker().postComment(ticketKey, 'h3. ✅ Test PR Already Merged\n\n' +
+                            'PR [#' + pr.number + '|' + pr.html_url + '] for branch {code}test/' + ticketKey + '{code} was already merged.\n\n' +
+                            'Skipping re-review — moved ticket to *' + finalStatus + '*.');
+                    console.log('✅ PR already merged — moved', ticketKey, 'to', finalStatus);
+                }
             } catch (e) {
                 console.warn('Failed to handle already-merged PR:', e);
             }

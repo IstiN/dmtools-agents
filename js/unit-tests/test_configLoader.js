@@ -1229,14 +1229,37 @@ suite('configLoader — stage placeholders, per-tracker queries and quoting (age
             'status = "say \\"hi\\""');
     });
 
-    test('SM rule: only the PO Review rule uses the stage clause; every other rule is unchanged', function() {
+    test('SM rules: every tag-only-status gate uses the stage clause (gh-916); dev-flow gates keep {status.*}', function() {
         var rules = JSON.parse(file_read({ path: 'sm.json' })).params.jobParams.rules;
         var withStage = rules.filter(function(r) { return (r.jql || '').indexOf('{stage.') !== -1; });
-        assert.equal(withStage.length, 1);
-        assert.equal(withStage[0].configFile, 'agents/story_ba_check.json');
-        // default config: identical to the previous status clause
-        assert.equal(configLoaderModule.interpolateJql(withStage[0].jql, cfg()),
+        var withPlainStatus = rules.filter(function(r) {
+            return (r.jql || '').indexOf('{status.') !== -1;
+        });
+        // gh-916: the test-automation gates (FAILED, IN_REVIEW_PASSED/FAILED, IN_TESTING,
+        // MERGED, READY_FOR_TESTING, BUG_TO_FIX) are stage clauses; PO Review was already one.
+        assert.equal(withStage.length, 17);
+        var stageKeys = {};
+        withStage.forEach(function(r) {
+            (r.jql.match(/\{stage\.([A-Z0-9_]+)/g) || []).forEach(function(m) {
+                stageKeys[m.replace('{stage.', '')] = true;
+            });
+        });
+        assert.deepEqual(Object.keys(stageKeys).sort(), [
+            'BUG_TO_FIX', 'FAILED', 'IN_REVIEW_FAILED', 'IN_REVIEW_PASSED',
+            'IN_TESTING', 'MERGED', 'PO_REVIEW', 'READY_FOR_TESTING'
+        ]);
+        // dev-flow statuses exist in every supported workflow — plain {status.*} clauses
+        withPlainStatus.forEach(function(r) {
+            assert.equal((r.jql.match(/\{status\.(FAILED|MERGED|IN_TESTING|READY_FOR_TESTING|BUG_TO_FIX|IN_REVIEW_PASSED|IN_REVIEW_FAILED)[:}]/g) || []).length, 0,
+                'rule with a tag-only status must use {stage.*}: ' + r.configFile);
+        });
+        // default ('none') config: byte-identical to the previous status clause
+        var poReview = withStage.filter(function(r) { return r.configFile === 'agents/story_ba_check.json'; })[0];
+        assert.equal(configLoaderModule.interpolateJql(poReview.jql, cfg()),
             "project = PRJ AND issuetype in ('Story') AND status in ('PO Review')");
+        var mergedStory = withStage.filter(function(r) { return r.configFile === 'agents/test_cases_generator.json'; })[0];
+        assert.equal(configLoaderModule.interpolateJql(mergedStory.jql, cfg()),
+            "project = PRJ AND issuetype in ('Story') AND status in ('Merged')");
     });
 });
 
