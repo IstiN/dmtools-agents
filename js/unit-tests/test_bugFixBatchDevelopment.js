@@ -54,6 +54,10 @@ function loadPrepareBugFixBatchContext(mocks) {
         makeRequire({
             './config.js': configModule,
             './configLoader.js': configLoaderModule,
+            // Real PR helper (gh-912): prepareBugFixBatchContext delegates
+            // cleanCommandOutput to it — canonical implementation required.
+            './common/pullRequest.js': loadModule('js/common/pullRequest.js',
+                makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') })),
             './fetchQuestionsToInput.js': fetchQuestionsStub,
             './fetchLinkedTestsToInput.js': fetchLinkedTestsStub,
             './common/trackers.js': loadModule('js/common/trackers.js', makeRequire({
@@ -94,12 +98,17 @@ function loadDevelopBugFixBatchAndCreatePR(mocks) {
         jira_get_ticket: function(args) { return makeEpic(args.key); }
     }, mocks);
 
-    var prHelperStub = {
-        createPullRequest: function(opts) {
-            prCreated.push(opts);
-            return { success: true, prUrl: 'https://github.com/IstiN/trackstate/pull/9999' };
+    var prHelperStub = Object.assign(
+        // Real helper (gh-912): the module delegates cleanCommandOutput to it.
+        loadModule('js/common/pullRequest.js',
+            makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') })),
+        {
+            createPullRequest: function(opts) {
+                prCreated.push(opts);
+                return { success: true, prUrl: 'https://github.com/IstiN/trackstate/pull/9999' };
+            }
         }
-    };
+    );
 
     var mod = loadModule(
         'js/developBugFixBatchAndCreatePR.js',
