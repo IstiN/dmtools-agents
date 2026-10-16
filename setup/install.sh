@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_common.sh"
 
 # Canonical order for "all" (node before copilot, java before dmtools)
-ALL_TOOLS="java maven node dmtools maestro copilot codemie cursor codegraph playwright kimi fa gradle android emulator konan"
+ALL_TOOLS="java maven node dmtools maestro copilot codemie cursor codegraph playwright kimi fa gradle android emulator konan dart"
 # Opt-in tools: installable by explicit name only, never part of "all"
 # (e.g. dmtools-dart — the Dart port, while dmtools Java stays the default).
 OPT_IN_TOOLS="dmtools-dart"
@@ -46,6 +46,8 @@ if [ $# -eq 0 ]; then
   echo "  android   — Android SDK cmdline.     Default compileSdk: 36"
   echo "  emulator  — Android AVD create+boot. Default: agent_avd, API 35, arch-matched ABI (needs android)"
   echo "  konan     — Kotlin/KMP native toolchain pre-warm"
+  echo "  dart      — Dart SDK (gh-918: factory legs on dart repos). Default channel:"
+  echo "              the repo's quality.yml dart-lang/setup-dart channel/sdk, else stable"
   echo ""
   echo "Examples:"
   echo "  install.sh dmtools maestro copilot playwright"
@@ -218,6 +220,7 @@ for tool in ${TOOL_LIST}; do
     android) BIN="sdkmanager" ;;
     emulator) BIN="emulator" ;;
     konan)   continue ;;  # no standalone binary — toolchain lives in ~/.konan
+    dart)    BIN="dart" ;;
     *)       continue ;;
   esac
 

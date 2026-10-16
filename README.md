@@ -864,7 +864,10 @@ warmup-session.sh --repo <git-url> --dir <target-dir> [--branch <name>] \
 - `--branch` — checkout/track this branch instead of the repo's default.
 - `--exclude` — space-separated tool names to skip (forwarded to `setup/install.sh all`
   as `-tool1 -tool2 ...`; see `setup/install.sh` for the full tool list: `java maven node
-  dmtools maestro copilot codemie cursor codegraph playwright kimi gradle android konan`).
+  dmtools maestro copilot codemie cursor codegraph playwright kimi gradle android konan dart`).
+  Non-Dart targets should pass `--exclude dart` — `install.sh all` now provisions the Dart
+  SDK everywhere (~215 MB download, ~1 GB under `~/.dart-sdk`); `install.sh <tools>` runs
+  unaffected.
 - `--install-args` — extra raw arguments appended to the `install.sh` invocation.
 
 It does **not** create or touch a `dmtools.env` file and does **not** run the agent
@@ -1198,3 +1201,47 @@ layout `install_local.sh` produces) lands in `~/.local/bin` + `~/.local/lib`
 (override with `FA_INSTALL_DIR`), pin a release with `fa.sh v0.1.324` /
 `FA_VERSION`. Fallback: the fa1.dev upstream installer. The bin dir is
 registered on PATH for subsequent CI steps.
+
+### Dart SDK (agent legs on Dart repos)
+
+`setup/install.sh dart` (or `setup/dart.sh [stable|beta|dev|<version>]`,
+env `DART_VERSION`) provisions the Dart SDK for machine-factory leg sessions —
+the same gap the golden-test Flutter toolchain covers for fa legs (gh-918):
+hosted runner images ship no `dart`, so a rework leg on a Dart repo could not
+run `dart analyze/test/format` or `crap4dart check` and claimed success while
+quality-gate violations stayed in place. The installer:
+
+- resolves the target exactly the way the repo's CI does — explicit
+  argument/env first, then the `dart-lang/setup-dart` step's `sdk:`/`channel:`
+  inputs in the checked-out repo's `.github/workflows/*.yml` ("same channel
+  the repo's quality.yml uses"), else `stable`; an unrecognized target
+  (`--help`, a typo) fails fast with a usage error instead of resolving as a
+  version and dying as a late CDN 404 (a leading `v` is stripped —
+  `dart.sh v3.9.4` works);
+- downloads the SDK from the same dart-archive CDN `dart-lang/setup-dart`
+  uses (with retries/timeouts and a `.sha256` sidecar checksum check), so
+  leg-local gate output matches CI gate output;
+- installs under `~/.dart-sdk/dart-sdk` (override `DART_INSTALL_DIR`), registers
+  `bin` on PATH for the leg session (and subsequent CI steps), and exports
+  `DART_HOME`. `DART_VERSION` stays a pure input pin — the installed version
+  is visible via `dart --version`; re-exporting it would make a later bare
+  `dart.sh` in the same job pin to the previously installed version instead
+  of re-resolving the channel;
+- is version-aware: an installed-but-stale SDK is reinstalled on mismatch
+  (pool VMs keep a persistent `$HOME` — a presence-only check lets an ancient
+  binary shadow the requested toolchain forever).
+
+Cache it with `setup/cache.sh dart` (`DART_CACHE_*`): the key is derived from
+the target `dart.sh` actually resolves (explicit `dart:<version>` argument >
+`DART_VERSION` env > quality.yml detection > stable), so `cache.sh keys dart`
+(restore, pre-install) and `cache.sh save dart` (post-install) derive the same
+key and the primary key round-trips.
+Network-free inspection: `dart.sh plan` (resolved target/URL/layout) and
+`dart.sh status`. Unit-tested in `js/unit-tests/test_dartSetup.js`.
+
+`install.sh all` includes `dart` (pattern-consistent with the other
+heavyweight toolchains `android`/`konan`): warmups of non-Dart targets can
+pass `--exclude dart` to skip the ~1 GB SDK.
+
+Dart-repo runners wire it via `customParams.setupCommands`:
+`["bash agents/setup/dart.sh"]` (see `docs/machine-factory-integration.md` §3.3).
