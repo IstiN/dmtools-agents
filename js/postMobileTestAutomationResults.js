@@ -277,10 +277,16 @@ function performGitOperations(branchName, commitMessage, workingDir, testFilesPa
         if (!stagedOutput || !stagedOutput.trim()) {
             console.warn('No new staged changes in', addPath);
             // Ensure branch exists on remote so PR can be created/found
-            var remoteBranchCheck = cleanCommandOutput(
-                runInRepo('git ls-remote --heads origin ' + branchName, workingDir) || ''
-            );
-            if (!remoteBranchCheck.trim()) {
+            var remoteBranchExists = false;
+            try {
+                // gh-912: decide on a real refs/heads/<branch> ref line — a
+                // warning-only capture (central-mode insteadOf origin, git
+                // ≥ 2.54) must classify as "branch absent" so the push runs.
+                remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
+            } catch (lsRemoteErr) {
+                console.warn('Error checking remote branches:', lsRemoteErr);
+            }
+            if (!remoteBranchExists) {
                 runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
             }
             return { success: true, branchName: branchName, noNewCommit: true };

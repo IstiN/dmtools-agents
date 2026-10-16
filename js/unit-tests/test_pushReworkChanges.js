@@ -22,6 +22,11 @@ var gitStagingModule = loadModule('js/common/gitStaging.js');
 
 // Real githubHelpers (only its own deps stubbed) — pushReworkChanges requires
 // it for the PR-anchored (pr-N) lookup path; jira keys never touch it.
+// Real PR helper (gh-912): the push-verify remote-existence probe lives
+// there — the strict ref-line parser must be exercised, not a stub.
+var PR_HELPER_REAL = loadModule('js/common/pullRequest.js',
+    makeRequire({ './mergeState.js': loadModule('js/common/mergeState.js') }));
+
 var githubHelpersModule = loadModule(
     'js/common/githubHelpers.js',
     makeRequire({
@@ -110,7 +115,7 @@ function loadPushReworkChangesModule(fileMap, opts) {
             './configLoader.js': { loadProjectConfig: function() { return {}; } },
             './common/scm.js': { createScm: function() { return scm; } },
             './common/submodules.js': {},
-            './common/pullRequest.js': {},
+            './common/pullRequest.js': PR_HELPER_REAL,
             './common/githubHelpers.js': githubHelpersModule,
             './common/feedbackLoop.js': {},
             './common/autoStart.js': { triggerConfiguredWorkflowForTicket: noop },
@@ -509,13 +514,10 @@ function loadPushReworkChangesForCommitAndPush(mocks) {
             './common/submodules.js': {
                 pushManagedSubmodules: function() { /* no-op */ }
             },
-            './common/pullRequest.js': {
+            './common/pullRequest.js': Object.assign({}, PR_HELPER_REAL, {
                 readStagedDiffStat: function() { return 'M file.txt\n'; },
-                syncBranchWithBase: function() { return { success: true, updated: false }; },
-                buildOriginFetchCommand: function(refSpec) {
-                    return 'git -c fetch.recurseSubmodules=no fetch origin' + (refSpec ? ' ' + refSpec : '');
-                }
-            },
+                syncBranchWithBase: function() { return { success: true, updated: false }; }
+            }),
             './common/githubHelpers.js': githubHelpersModule,
             './common/feedbackLoop.js': {
                 runQualityGates: function() { return { success: true }; },
@@ -595,7 +597,7 @@ suite('pushReworkChanges.commitAndPush — base-branch safety invariant', functi
                 commands.push(args.command);
                 if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
                 if (args.command.indexOf('git ls-remote --heads origin bug/PROJ-123') === 0) {
-                    return 'abc123\trefs/heads/bug/PROJ-123\n';
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
                 }
                 return '';
             }
@@ -630,7 +632,7 @@ suite('pushReworkChanges.commitAndPush — base-branch safety invariant', functi
                 commands.push(args.command);
                 if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
                 if (args.command.indexOf('git ls-remote --heads origin bug/PROJ-123') === 0) {
-                    return 'abc123\trefs/heads/bug/PROJ-123\n';
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
                 }
                 return '';
             }
@@ -662,7 +664,7 @@ suite('pushReworkChanges.commitAndPush — base-branch safety invariant', functi
                 commands.push(args.command);
                 if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
                 if (args.command.indexOf('git ls-remote --heads origin bug/PROJ-123') === 0) {
-                    return 'abc123\trefs/heads/bug/PROJ-123\n';
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
                 }
                 return '';
             }
@@ -710,7 +712,7 @@ suite('pushReworkChanges.commitAndPush — base-branch safety invariant', functi
                 commands.push(args.command);
                 if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
                 if (args.command.indexOf('git ls-remote --heads origin bug/PROJ-123') === 0) {
-                    return 'abc123\trefs/heads/bug/PROJ-123\n';
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
                 }
                 if (args.command.indexOf('git check-ignore') === 0) {
                     // gh-683 probe: not-ignored repo — check-ignore exits 1,
@@ -778,7 +780,7 @@ function loadPushReworkChangesForAction(mocks, opts) {
             cliCommands.push(args.command);
             if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
             if (args.command.indexOf('git ls-remote --heads origin') === 0) {
-                return 'abc123\trefs/heads/bug/PROJ-123\n';
+                return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
             }
             return '';
         },
@@ -815,10 +817,10 @@ function loadPushReworkChangesForAction(mocks, opts) {
             },
             './common/scm.js': { createScm: function() { return scm; } },
             './common/submodules.js': { pushManagedSubmodules: function() {} },
-            './common/pullRequest.js': {
+            './common/pullRequest.js': Object.assign({}, PR_HELPER_REAL, {
                 readStagedDiffStat: function() { return 'M file.txt\n'; },
                 syncBranchWithBase: function() { return { success: true, updated: false }; }
-            },
+            }),
             './common/githubHelpers.js': githubHelpersModule,
             './common/feedbackLoop.js': (function() {
                 var fl = (opts && opts.feedbackLoop) || {
@@ -1007,7 +1009,7 @@ function loadPushReworkChangesForResumeSafety(mocks, feedbackLoopOverrides) {
             './configLoader.js': configLoaderModule,
             './common/scm.js': { createScm: function() { return {}; } },
             './common/submodules.js': { pushManagedSubmodules: function() {} },
-            './common/pullRequest.js': {},
+            './common/pullRequest.js': PR_HELPER_REAL,
             './common/githubHelpers.js': githubHelpersModule,
             './common/feedbackLoop.js': Object.assign({
                 runQualityGates: function() { return { success: true }; },
@@ -1132,7 +1134,7 @@ suite('pushReworkChanges — no-op rework token guard (2026-09-21, epam/dmtools-
                     cliCommandsRef.push(args.command);
                     if (args.command === 'git branch --show-current') return 'ai/gh-191\n';
                     if (args.command.indexOf('git ls-remote --heads origin') === 0) {
-                        return 'abc123\trefs/heads/ai/gh-191\n';
+                        return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/ai/gh-191\n';
                     }
                     return '';
                 },
@@ -1407,7 +1409,7 @@ suite('pushReworkChanges — PR-anchored lookup & loud lookup failure (fa #1212)
             cli_execute_command: function(args) {
                 if (args.command === 'git branch --show-current') return 'ai/gh-1204\n';
                 if (args.command.indexOf('git ls-remote --heads origin') === 0) {
-                    return 'abc123\trefs/heads/ai/gh-1204\n';
+                    return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/ai/gh-1204\n';
                 }
                 return '';
             },
@@ -2024,7 +2026,7 @@ suite('pushReworkChanges.action — no-fix rework is not a success (agents#827)'
         var loaded = loadPushReworkChangesForAction({
             cli_execute_command: function(a) {
                 if (a.command === 'git branch --show-current') return 'bug/PROJ-123\n';
-                if (a.command.indexOf('git ls-remote --heads origin') === 0) return 'abc\trefs/heads/bug/PROJ-123\n';
+                if (a.command.indexOf('git ls-remote --heads origin') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
                 if (a.command.indexOf('git diff --name-only') === 0) return diffOut;
                 return '';
             },
@@ -2088,7 +2090,7 @@ suite('pushReworkChanges.commitAndPush — squashReworkWip (agents#895)', functi
                 if (args.command === 'git branch --show-current') return 'bug/PROJ-123\n';
                 if (args.command.indexOf('git rev-list --merges') === 0) return opts.merge ? 'deadbeef\n' : '';
                 if (args.command.indexOf('git log --format=%s') === 0) return subjects.join('\n') + '\n';
-                if (args.command.indexOf('git ls-remote --heads origin bug/PROJ-123') === 0) return 'abc\trefs/heads/bug/PROJ-123\n';
+                if (args.command.indexOf('git ls-remote --heads origin bug/PROJ-123') === 0) return '9a7e2aec9a7e2aec9a7e2aec9a7e2aec9a7e2aec\trefs/heads/bug/PROJ-123\n';
                 return '';
             }
         });

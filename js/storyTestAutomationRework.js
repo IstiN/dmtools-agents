@@ -158,8 +158,15 @@ function commitAndPush(storyKey, config) {
         runInRepo('git push -u origin ' + branchName + ' --force', workingDir);
     }
 
-    var remoteCheck = cleanCommandOutput(runInRepo('git ls-remote --heads origin ' + branchName, workingDir) || '');
-    if (!remoteCheck.trim()) throw new Error('Branch not found on remote after push');
+    var remoteBranchExists = false;
+    try {
+        // gh-912: verify the push produced a real refs/heads/<branch> ref
+        // line — stderr noise never counts as the branch existing.
+        remoteBranchExists = prHelper.remoteBranchExists(runInRepo, workingDir, branchName);
+    } catch (lsRemoteErr) {
+        console.warn('Error checking remote branches:', lsRemoteErr);
+    }
+    if (!remoteBranchExists) throw new Error('Branch not found on remote after push');
     console.log('✅ Pushed to remote branch:', branchName);
     return branchName;
 }
