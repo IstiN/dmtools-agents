@@ -101,6 +101,13 @@ function dsRun(subcommand, opts) {
             ' > "$d/nodart/dart-sdk/bin/dart"');
         lines.push('chmod +x "$d/nodart/dart-sdk/bin/dart"');
     }
+    if (opts.stubCurlFails) {
+        // A curl that always fails — simulates the network-hiccup degraded
+        // path (channel_latest cannot resolve) without any real network.
+        lines.push('mkdir -p "$d/bin"');
+        lines.push('printf %s ' + dsShq('#!/bin/sh\nexit 1') + ' > "$d/bin/curl"');
+        lines.push('chmod +x "$d/bin/curl"');
+    }
     var env = (opts.env || []).slice();
     // Hermetic against the HOST: the script's installed-version probe falls
     // back to <DART_INSTALL_DIR>/dart-sdk/bin/dart, so a real SDK cached on
@@ -108,13 +115,29 @@ function dsRun(subcommand, opts) {
     // of this very ticket) would leak into `status`/`plan`. Point the
     // install dir INSIDE the sandbox for every invocation.
     env.push('DART_INSTALL_DIR="$d/nodart"');
-    if (opts.stubDart !== undefined) {
+    if (opts.stubDart !== undefined || opts.stubCurlFails) {
         env.push('PATH="$d/bin:$PATH"');
+    }
+    if (opts.trailTarget !== undefined) {
+        // register_path's parent-visible trail (/tmp/_registered_paths) is
+        // how the sandbox can observe WHICH dirs the script put on PATH for
+        // the leg session — the only observable for the degraded-branch lie.
+        lines.push('touch /tmp/_registered_paths');
+        lines.push('before=$(wc -l < /tmp/_registered_paths)');
+        lines.push('dpath=' + dsShq(opts.trailTarget));
     }
     lines.push('cd "$d"');
     lines.push((env.length ? env.join(' ') + ' ' : '') +
         'bash "$r/setup/dart.sh" ' + subcommand);
-    lines.push('rc=$?; cd /; rm -rf "$d"; exit $rc');
+    lines.push('rc=$?');
+    if (opts.trailTarget !== undefined) {
+        lines.push('after=$(wc -l < /tmp/_registered_paths 2>/dev/null || echo 0)');
+        lines.push('trail_hit=0');
+        lines.push('if [ "$after" -gt "$before" ] && tail -n "+$((before + 1))" /tmp/_registered_paths 2>/dev/null | grep -qF -- "$dpath"; then trail_hit=1; fi');
+        lines.push('echo "trail_hit=$trail_hit"');
+    }
+    lines.push('cd /; rm -rf "$d"');
+    lines.push('exit $rc');
     return dsParseKv(cli_execute_command({ command: 'bash -c ' + dsShq(lines.join('\n')) }));
 }
 
@@ -471,5 +494,48 @@ suite('setup/dart.sh: factory wiring contracts', function () {
         assert.ok(/_cache_dart/.test(cache), 'cache.sh must have a _cache_dart dispatch entry');
         assert.ok(/ALL_TOOLS="[^"]*\bdart\b[^"]*"/.test(cache),
             'dart must be part of cache.sh ALL_TOOLS so cache.sh all covers it');
+    });
+
+    test('checksum sidecar is the literal .sha256sum — dart-archive has no .sha256 (it 404s live)', function () {
+        // Live-verified: ...zip.sha256 → 404, ...zip.sha256sum → 200. A \.sha256
+        // substring match cannot tell them apart, so assert the FULL extension.
+        var src = file_read({ path: 'setup/dart.sh' });
+        assert.ok(/verify_sha256[^]*?\$\{url\}\.sha256sum/.test(src),
+            'the verify call site must pass ${url}.sha256sum');
+        assert.equal(src.indexOf('.sha256"'), -1,
+            'a bare .sha256 sidecar reference 404s on dart-archive — sidecar name must always end in .sha256sum');
+        assert.ok(/cut -d' ' -f1/.test(src),
+            'the sidecar payload is a canonical sha256sum line ("<hash> *<name>") — only the hash field may be compared');
+    });
+});
+
+suite('setup/dart.sh: degraded keep never lies about the managed install (foreign PATH dart)', function () {
+
+    if (!_dsCanRun_) {
+        console.log('  ⏭️  skipped — bash not executable here');
+        return;
+    }
+
+    test('network hiccup + foreign PATH dart only → no fake <SDK_BIN> registration', function () {
+        // The degraded keep (resolved resolution failed, some dart exists) must
+        // not register <SDK_BIN> on the leg PATH / point DART_HOME at it when
+        // the only dart is a FOREIGN one — the dir does not exist.
+        var r = dsRun('status', {
+            stubDart: 'Dart SDK version: 3.5.4 (stable) on "linux_x64"',
+            stubCurlFails: true,
+            trailTarget: '$d/nodart/dart-sdk/bin'
+        });
+        assert.equal(r.trail_hit, '0',
+            'the nonexistent managed bin dir must NOT be registered for a foreign PATH dart');
+    });
+
+    test('network hiccup + MANAGED SDK → the managed bin dir is still registered (behavior preserved)', function () {
+        var r = dsRun('status', {
+            managedBanner: 'Dart SDK version: 3.14.0-315.1.beta (beta) on "linux_x64"',
+            stubCurlFails: true,
+            trailTarget: '$d/nodart/dart-sdk/bin'
+        });
+        assert.equal(r.trail_hit, '1',
+            'a real (managed/cache-restored) SDK must keep being registered in degraded mode');
     });
 });
