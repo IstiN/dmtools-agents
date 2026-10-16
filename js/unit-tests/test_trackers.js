@@ -1262,6 +1262,77 @@ suite('trackers.js — stage label cleanup on a successful move (agents#855/#856
     });
 });
 
+suite('trackers.js — hasStage: stage-gate helper for tag-only statuses (gh-916)', function () {
+    function t(mode) {
+        return loadTrackers(jiraMocks()).createTracker({}, { trackerProvider: 'jira', stageFallback: mode });
+    }
+    function flat(status, labels) {
+        return { key: 'PS-1', status: status, labels: labels || [] };
+    }
+    function shaped(status, labels) {
+        return { key: 'PS-1', fields: { status: { name: status }, labels: labels || [] } };
+    }
+
+    test("'none' mode: pure status equality — the exact comparison the gates did before", function () {
+        var tr = t('none');
+        assert.equal(tr.hasStage(flat('Passed'), 'PASSED', 'Passed'), true);
+        assert.equal(tr.hasStage(flat('Failed'), 'PASSED', 'Passed'), false);
+        // a stage marker is IGNORED in 'none' mode — no behaviour change for default deployments
+        assert.equal(tr.hasStage(flat('New', ['stage_passed']), 'PASSED', 'Passed'), false);
+    });
+
+    test("'none' mode: reads the Jira-shaped view exactly like `status === statuses.X` did", function () {
+        var tr = t('none');
+        assert.equal(tr.hasStage(shaped('In Review - Failed'), 'IN_REVIEW_FAILED', 'In Review - Failed'), true);
+        assert.equal(tr.hasStage(shaped('Passed'), 'IN_REVIEW_FAILED', 'In Review - Failed'), false);
+    });
+
+    test("'label' mode: a ticket carrying stageLabel(stageKey) counts as being in the stage", function () {
+        var tr = t('label');
+        assert.equal(tr.hasStage(flat('New', ['stage_passed']), 'PASSED', 'Passed'), true);
+        assert.equal(tr.hasStage(flat('New', ['stage_failed', 'other']), 'PASSED', 'Passed'), false);
+        assert.equal(tr.hasStage(flat('Passed'), 'PASSED', 'Passed'), true, 'a real status still matches');
+    });
+
+    test("'label' mode: works on the Jira-shaped search view ({ fields: { status, labels } })", function () {
+        var tr = t('label');
+        assert.equal(tr.hasStage(shaped('New', ['stage_in_review_passed']), 'IN_REVIEW_PASSED', 'In Review - Passed'), true);
+        assert.equal(tr.hasStage(shaped('New', ['wip']), 'IN_REVIEW_PASSED', 'In Review - Passed'), false);
+    });
+
+    test("the marker name is the one moveToStatusOrMark writes (shared stageLabel normalisation)", function () {
+        var tr = t('label');
+        assert.equal(tr.hasStage(flat('New', ['stage_in_review_passed']), 'IN_REVIEW_PASSED', 'In Review - Passed'), true);
+        assert.equal(tr.hasStage(flat('New', ['stage_bug_to_fix']), 'BUG_TO_FIX', 'Bug To Fix'), true);
+        assert.equal(tr.hasStage(flat('New', ['stage_ready_for_testing']), 'READY_FOR_TESTING', 'Ready For Testing'), true);
+    });
+
+    test('label entries in GitHub object shape ({ name }) are recognised', function () {
+        var tr = t('label');
+        assert.equal(tr.hasStage({ key: 'o/r#1', status: 'open', labels: [{ name: 'stage_failed' }] }, 'FAILED', 'Failed'), true);
+    });
+
+    test('an ADO System.Tags semicolon string is recognised', function () {
+        var tr = t('label');
+        assert.equal(tr.hasStage({ key: '42', status: 'New', labels: 'stage_skipped; ci' }, 'SKIPPED', 'Skipped'), true);
+    });
+
+    test('null/absent tickets answer false instead of throwing', function () {
+        var tr = t('label');
+        assert.equal(tr.hasStage(null, 'PASSED', 'Passed'), false);
+        assert.equal(tr.hasStage(undefined, 'PASSED', 'Passed'), false);
+    });
+
+    test('no tool call is ever made — the ticket is inspected as given (no extra reads)', function () {
+        var m = jiraMocks();
+        ['jira_get_ticket', 'jira_search_by_jql'].forEach(function (n) {
+            m[n] = recorder(n, { __throw__: new Error(n + ' must not be called by hasStage') });
+        });
+        var tr = loadTrackers(m).createTracker({}, { trackerProvider: 'jira', stageFallback: 'label' });
+        assert.equal(tr.hasStage(flat('New', []), 'PASSED', 'Passed'), false);
+    });
+});
+
 suite('trackers.js — createGithubTracker: repository-pinned tracker for the SM (agents: tracker abstraction)', function () {
     function gh() {
         var m = {

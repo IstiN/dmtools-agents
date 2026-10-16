@@ -1014,10 +1014,35 @@ function createTracker(config, customParams) {
         }
     }
 
+    /**
+     * Whether a ticket is in a stage: really in `statusName`, or (label mode only) carrying the
+     * `stage_<key>` marker that a rejected transition to it left behind (gh-916). The 'none' default
+     * never consults labels — exactly the `ticket.status === statusName` comparison the status gates
+     * did before, with no extra reads. Accepts both ticket shapes in use: the flat normalized view
+     * ({ status, labels }) and the Jira-shaped issue view ({ fields: { status: { name }, labels } }).
+     *
+     * @param {Object} ticket    - ticket as returned by getTicket/getIssue/searchIssues
+     * @param {string} stageKey  - stage name whose marker is accepted in label mode (e.g. 'PASSED')
+     * @param {string} statusName - the real status name the stage maps to (e.g. statuses.PASSED)
+     */
+    function hasStage(ticket, stageKey, statusName) {
+        if (!ticket) return false;
+        var fields = ticket.fields || {};
+        var status = (ticket.status !== undefined && ticket.status !== null)
+            ? ticket.status
+            : (fields.status && fields.status.name !== undefined && fields.status.name !== null
+                ? fields.status.name : null);
+        if (statusName !== undefined && status === statusName) return true;
+        if (stageFallback !== 'label') return false;
+        var raw = ticket.labels || fields.labels || [];
+        return _labelNames(Array.isArray(raw) ? raw : [raw]).indexOf(_stageLabel(stageKey)) !== -1;
+    }
+
     return {
         provider: provider,
         stageFallback: function () { return stageFallback; },
         moveToStatusOrMark: moveToStatusOrMark,
+        hasStage: hasStage,
         getTicket: function (k) { return impl.getTicket(k); },
         search: function (q) { return impl.search(q); },
         postComment: function (k, c) { return impl.postComment(k, c); },
