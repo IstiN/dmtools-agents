@@ -235,22 +235,26 @@ extract_zip() {
   fi
 }
 
-# dart-archive publishes a .sha256 sidecar next to every SDK bundle. Verify
-# the downloaded zip against it — cheap supply-chain insurance for a ~215 MB
-# fetch that runs on every Dart-repo leg. A mismatch is fatal; a MISSING
-# sidecar (or no sha256 tool on PATH) only warns, so a CDN hiccup cannot red
-# the whole leg on an already-downloaded artifact.
+# dart-archive publishes the checksum sidecar as <bundle>.sha256sum (NOT
+# .sha256 — that path 404s, verified live). The payload is a canonical
+# sha256sum line: "<64-hex> *<bundle-name>". Verify the downloaded zip against
+# it — cheap supply-chain insurance for a ~215 MB fetch that runs on every
+# Dart-repo leg. A mismatch is fatal; a MISSING sidecar (or no sha256 tool on
+# PATH) only warns, so a CDN hiccup cannot red the whole leg on an
+# already-downloaded artifact.
 verify_sha256() {
   local file="$1" sum_url="$2" expected actual
   if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
     echo "⚠️  no sha256sum/shasum on PATH — skipping SDK checksum verification" >&2
     return 0
   fi
-  if ! curl -fsSL --connect-timeout 30 --retry 3 --retry-delay 5 "${sum_url}" -o "${file}.sha256"; then
+  if ! curl -fsSL --connect-timeout 30 --retry 3 --retry-delay 5 "${sum_url}" -o "${file}.sha256sum"; then
     echo "⚠️  sha256 sidecar unavailable (${sum_url}) — skipping checksum verification" >&2
     return 0
   fi
-  expected="$(cut -d' ' -f1 "${file}.sha256" | head -1)"
+  # Take only the hash field — the payload line carries the bundle name
+  # ("<hash> *dartsdk-….zip"); comparing the whole line would always mismatch.
+  expected="$(cut -d' ' -f1 "${file}.sha256sum" | head -1)"
   actual="$(hash_file "${file}")"
   if [ -z "${expected}" ] || [ "${actual}" != "${expected}" ]; then
     echo "❌ Dart SDK checksum mismatch (expected ${expected:-<none>}, got ${actual})" >&2
@@ -300,8 +304,17 @@ do_install() {
     # Degraded mode: channel-latest resolution failed (network hiccup) but a
     # usable SDK exists — keep it (unverified) rather than red the whole leg.
     echo "⚠️  could not resolve ${CHANNEL} latest — keeping installed SDK ${have} (unverified)" >&2
-    register_path "${SDK_BIN}"
-    export_dart_env
+    if [ -x "${SDK_BIN}/dart" ]; then
+      register_path "${SDK_BIN}"
+      export_dart_env
+    else
+      # `have` came from a FOREIGN PATH dart (installed_version probes the
+      # managed install first). Registering the nonexistent <SDK_BIN> into
+      # PATH/GITHUB_PATH and pointing DART_HOME at it would lie to every
+      # downstream consumer — the foreign dart is already on PATH, so leave
+      # both untouched.
+      echo "⚠️  ${have} is a foreign PATH dart — DART_HOME/PATH left untouched" >&2
+    fi
     exit 0
   fi
   if [ -n "${have}" ]; then
@@ -317,7 +330,7 @@ do_install() {
   echo "📥 Installing Dart SDK (${CHANNEL} ${resolved:-latest})..."
   echo "  → ${url}"
   curl -fsSL --connect-timeout 30 --retry 3 --retry-delay 5 "${url}" -o "${tmp}/dartsdk.zip"
-  verify_sha256 "${tmp}/dartsdk.zip" "${url}.sha256" || exit 1
+  verify_sha256 "${tmp}/dartsdk.zip" "${url}.sha256sum" || exit 1
   rm -rf "${DART_INSTALL_DIR}"
   mkdir -p "${DART_INSTALL_DIR}"
   extract_zip "${tmp}/dartsdk.zip" "${DART_INSTALL_DIR}"

@@ -122,9 +122,11 @@ function dsRun(subcommand, opts) {
         // register_path's parent-visible trail (/tmp/_registered_paths) is
         // how the sandbox can observe WHICH dirs the script put on PATH for
         // the leg session — the only observable for the degraded-branch lie.
+        // trailTarget may reference the sandbox dir as $d — expanded by the
+        // wrapper shell (double-quoted), NOT by dsShq.
         lines.push('touch /tmp/_registered_paths');
         lines.push('before=$(wc -l < /tmp/_registered_paths)');
-        lines.push('dpath=' + dsShq(opts.trailTarget));
+        lines.push('dpath="' + opts.trailTarget + '"');
     }
     lines.push('cd "$d"');
     lines.push((env.length ? env.join(' ') + ' ' : '') +
@@ -520,7 +522,7 @@ suite('setup/dart.sh: degraded keep never lies about the managed install (foreig
         // The degraded keep (resolved resolution failed, some dart exists) must
         // not register <SDK_BIN> on the leg PATH / point DART_HOME at it when
         // the only dart is a FOREIGN one — the dir does not exist.
-        var r = dsRun('status', {
+        var r = dsRun('', {
             stubDart: 'Dart SDK version: 3.5.4 (stable) on "linux_x64"',
             stubCurlFails: true,
             trailTarget: '$d/nodart/dart-sdk/bin'
@@ -530,7 +532,7 @@ suite('setup/dart.sh: degraded keep never lies about the managed install (foreig
     });
 
     test('network hiccup + MANAGED SDK → the managed bin dir is still registered (behavior preserved)', function () {
-        var r = dsRun('status', {
+        var r = dsRun('', {
             managedBanner: 'Dart SDK version: 3.14.0-315.1.beta (beta) on "linux_x64"',
             stubCurlFails: true,
             trailTarget: '$d/nodart/dart-sdk/bin'
