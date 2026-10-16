@@ -815,6 +815,14 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
         return matchesGuards(item, rule, provider, machineAuthor, owner, repoInfo);
     });
 
+    // gh-922 (dead-head park bench): parked candidates whose head ref the
+    // provider cannot see never reach the dispatch loop — no burned
+    // trigger failures, no fallthrough-reserve slots, and the machine
+    // rework arm (rework-on-validation-failed) stops arming legs it can
+    // never dispatch. Red-parked PRs keep their lanes (branch live).
+    // Runs before the tier sort so the FIFO math below sees the benched list.
+    matched = benchDeadHeadParks(matched, provider);
+
     // FIFO: oldest PR first. github_list_prs returns newest-first (API
     // default), which would starve older approved PRs under limit:1 merge
     // rules — the queue drains oldest-to-newest. Blocked candidates
@@ -862,12 +870,6 @@ function queryPrs(rule, provider, repoInfo, limit, machineAuthor, owner, priorit
         matched.sort(function (a, b) { return (a.prNumber || 0) - (b.prNumber || 0); });
     }
 
-    // gh-922 (dead-head park bench): parked candidates whose head ref the
-    // provider cannot see never reach the dispatch loop — no burned
-    // trigger failures, no fallthrough-reserve slots, and the machine
-    // rework arm (rework-on-validation-failed) stops arming legs it can
-    // never dispatch. Red-parked PRs keep their lanes (branch live).
-    matched = benchDeadHeadParks(matched, provider);
     // gh-922 (fail-open dispatch): return the limit slots PLUS a small
     // fallthrough reserve. The engine loop gives failed candidates no
     // slot credit (processedKeys only grows on success), so when a

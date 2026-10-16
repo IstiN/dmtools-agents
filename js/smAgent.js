@@ -682,7 +682,7 @@ function recordDispatchFailure(repoInfo, ticketKey, item, err, expandedRef, fail
         var headSha = null;
         try { headSha = resolveHeadSha(repoInfo, item); } catch (eSha) { headSha = null; }
         var tr = githubTracker(repoInfo.owner, repoInfo.repo);
-        var msg = String((err && err.message) || err).replace(/\s+/g, ').trim(); // gh-922 review: flattened — a multi-line error must never carry a marker-shaped line into a scanned body
+        var msg = String((err && err.message) || err).replace(/\s+/g, ' ').trim(); // gh-922 review: flattened — a multi-line error must never carry a marker-shaped line into a scanned body
         if (count >= cap) {
             var parkBody = '🅿️ validation_failed — dispatch dead-head park (gh-922).' +
                 ' The head branch `' + item.branch + '` no longer exists — every dispatch fails (' + msg + ').' +
